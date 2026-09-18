@@ -1,14 +1,16 @@
 """Head-to-head on live sites: fastbrowse on a Browser Use Cloud browser vs hosted Browser Use, same prompts.
 
-    uv run --extra browser-use python -m fastbrowse.evals.live [--only TASK_ID ...] [--arms fast hosted]
-        [--repeat N] [--out artifacts/evals/live.jsonl]
+    uv run --extra browser-use python -m fastbrowse.evals.live [--only TASK_ID ...] [--category CATEGORY ...]
+        [--arms fast hosted] [--bitwarden] [--repeat N] [--out artifacts/evals/live.jsonl]
 
 Needs BROWSER_USE_API_KEY (both arms), and the Jev and LLM keys in fastbrowse.clients.environment (fast arm).
 Each run prints a WATCH line with the URL where its browser can be watched live.
 
-Truth is fetched from each site's own API at run time, so the grade tracks the live page rather than a stale
-fixture. Both arms are graded on their answer. The fast arm is also graded on the page it actually ended on;
-the hosted SDK does not expose a final URL, so its navigation tasks rest on the answer alone.
+Tasks and their grading live in fastbrowse.evals.live_tasks. With --bitwarden, the fast arm reads each login
+task's credentials from its vault item (created by scripts/eval_vault.py) instead of the task.
+
+Both arms are graded on their answer. The fast arm is also graded on the page it ended on and on its final
+status; the hosted SDK exposes neither, so its tasks rest on the answer alone.
 """
 
 import argparse
@@ -17,180 +19,20 @@ import json
 import sys
 import tempfile
 import time
-from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
-from urllib.parse import unquote, urlparse
 
 import httpx
 from pydantic import BaseModel
 
+from fastbrowse.adapters.bitwarden import bitwarden_login
 from fastbrowse.clients.environment import load_settings
-from fastbrowse.models import BrowserEvent, CostBreakdown, Limits, RunResult, Status, StepEvent
+from fastbrowse.evals.live_tasks import TASKS, Category, LiveTask, Outcome
+from fastbrowse.models import Authorization, BrowserEvent, CostBreakdown, Limits, RunResult, StepEvent
 from fastbrowse.run import run_task
 from fastbrowse.safety import ScopedSecrets, origin_of
 
 HOSTED_MAX_DOLLARS = 0.50
-
-
-class Release(BaseModel):
-    package: str
-    version: str
-
-
-@dataclass(frozen=True, slots=True)
-class Outcome:
-    answer: str | None
-    data: object
-    final_url: str | None
-    """Only the fast arm can observe where it ended."""
-    quotes: tuple[tuple[str, str], ...] | None = None
-    """(url, quote) pairs located verbatim in page captures; the fast arm's evidence, None for hosted."""
-
-
-type Truth = Callable[[httpx.AsyncClient], Awaitable[object]]
-type Check = Callable[[Outcome, object], str | None]
-
-
-@dataclass(frozen=True, slots=True)
-class LiveTask:
-    id: str
-    start: str
-    task: str
-    truth: Truth
-    check: Check
-    secrets: Mapping[str, str] = field(default_factory=dict[str, str])
-    output_schema: type[BaseModel] | None = None
-
-
-async def _json(http: httpx.AsyncClient, url: str) -> object:
-    response = await http.get(url, headers={"Accept": "application/json"})
-    response.raise_for_status()
-    return response.json()
-
-
-async def _httpx_version(http: httpx.AsyncClient) -> object:
-    body = await _json(http, "https://pypi.org/pypi/httpx/json")
-    assert isinstance(body, dict)
-    return str(body["info"]["version"])  # pyright: ignore[reportUnknownArgumentType]
-
-
-async def _hn_top_titles(http: httpx.AsyncClient) -> object:
-    ids = await _json(http, "https://hacker-news.firebaseio.com/v0/topstories.json")
-    assert isinstance(ids, list)
-    # The front page reorders during a run, so any of the leading stories counts as "the top story".
-    items = await asyncio.gather(
-        *(_json(http, f"https://hacker-news.firebaseio.com/v0/item/{i}.json") for i in ids[:5])  # pyright: ignore[reportUnknownVariableType]
-    )
-    return [str(item["title"]) for item in items if isinstance(item, dict)]  # pyright: ignore[reportUnknownArgumentType]
-
-
-async def _httpx_license(http: httpx.AsyncClient) -> object:
-    body = await _json(http, "https://api.github.com/repos/encode/httpx")
-    assert isinstance(body, dict)
-    return str(body["license"]["spdx_id"])  # pyright: ignore[reportUnknownArgumentType]
-
-
-async def _constant(value: object) -> object:
-    return value
-
-
-def _answer_has(outcome: Outcome, *needles: str) -> str | None:
-    answer = (outcome.answer or "").casefold()
-    missing = [n for n in needles if n.casefold() not in answer]
-    return f"answer lacks {missing}: {outcome.answer!r}" if missing else None
-
-
-def _ended_on(outcome: Outcome, path: str) -> str | None:
-    if outcome.final_url is None:
-        return None
-    actual = unquote(urlparse(outcome.final_url).path).rstrip("/")
-    return None if actual == path else f"ended on {outcome.final_url}, expected path {path}"
-
-
-def _version(outcome: Outcome, truth: object) -> str | None:
-    return _answer_has(outcome, str(truth))
-
-
-def _hn_top(outcome: Outcome, truth: object) -> str | None:
-    assert isinstance(truth, list)
-    answer = (outcome.answer or "").casefold()
-    titles = [str(t) for t in truth]  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
-    return None if any(t.casefold() in answer for t in titles) else f"no leading title in {outcome.answer!r}"
-
-
-def _license(outcome: Outcome, truth: object) -> str | None:
-    return _answer_has(outcome, str(truth).removesuffix("-Clause"))
-
-
-def _godel(outcome: Outcome, truth: object) -> str | None:
-    return _answer_has(outcome, str(truth)) or _ended_on(outcome, "/wiki/Gödel's_incompleteness_theorems")
-
-
-def _cart(outcome: Outcome, _: object) -> str | None:
-    if outcome.quotes is None:
-        return _answer_has(outcome, "backpack")
-    # The cart page lists only what is in the cart, so a captured quote naming the backpack there is the
-    # page's word, where "no backpack was added" in the answer would pass a text check.
-    in_cart = any(
-        "backpack" in quote.casefold() and urlparse(url).path.rstrip("/") == "/cart.html"
-        for url, quote in outcome.quotes
-    )
-    return None if in_cart else f"no quote from /cart.html names the backpack: {outcome.quotes}"
-
-
-def _release(outcome: Outcome, truth: object) -> str | None:
-    data = outcome.data
-    if not isinstance(data, dict):
-        return f"no structured data: {data!r}"
-    expected = {"package": "httpx", "version": str(truth)}
-    return None if {k: str(v).strip() for k, v in data.items()} == expected else f"data {data}, expected {expected}"  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
-
-
-TASKS: tuple[LiveTask, ...] = (
-    LiveTask(
-        "pypi-version", "https://pypi.org/", "What is the latest released version of httpx?", _httpx_version, _version
-    ),
-    LiveTask(
-        "pypi-structured",
-        "https://pypi.org/",
-        "Find the httpx package and report its name and latest released version.",
-        _httpx_version,
-        _release,
-        output_schema=Release,
-    ),
-    LiveTask(
-        "hn-top",
-        "https://news.ycombinator.com/",
-        "What is the title of the top story right now?",
-        _hn_top_titles,
-        _hn_top,
-    ),
-    LiveTask(
-        "github-license",
-        "https://github.com/encode",
-        "Open the httpx repository and tell me which license it uses.",
-        _httpx_license,
-        _license,
-    ),
-    LiveTask(
-        "wiki-godel",
-        "https://en.wikipedia.org/wiki/Main_Page",
-        "Search for Gödel's incompleteness theorems, open that article, and tell me the year they were published.",
-        lambda _: _constant("1931"),
-        _godel,
-    ),
-    LiveTask(
-        "saucedemo-cart",
-        "https://www.saucedemo.com/",
-        "Log in as standard_user with the saved password, add the Sauce Labs Backpack to the cart, open the cart, "
-        "and tell me what is in it.",
-        lambda _: _constant(None),
-        _cart,
-        secrets={"password": "secret_sauce"},
-    ),
-)
 
 
 def _watch(arm: str, task: LiveTask, live_url: str | None) -> None:
@@ -198,16 +40,24 @@ def _watch(arm: str, task: LiveTask, live_url: str | None) -> None:
         print(f"WATCH {arm:6} {task.id:18} {live_url}", flush=True)
 
 
+def _secrets(task: LiveTask, bitwarden: bool) -> ScopedSecrets | None:
+    origin = origin_of(task.start)
+    if bitwarden and task.bitwarden_item is not None:
+        return ScopedSecrets(bitwarden_login(task.bitwarden_item, origin), origin)
+    return ScopedSecrets(task.secrets, origin) if task.secrets else None
+
+
 async def fast_arm(
-    task: LiveTask, http: httpx.AsyncClient, downloads: Path
+    task: LiveTask, http: httpx.AsyncClient, downloads: Path, *, bitwarden: bool
 ) -> tuple[Outcome, RunResult, CostBreakdown]:
     result = await run_task(
         task.task,
         start=task.start,
         browser_api_key=load_settings().browser_key(),
         output_schema=task.output_schema,
-        secrets=ScopedSecrets(task.secrets, origin_of(task.start)) if task.secrets else None,
+        secrets=_secrets(task, bitwarden),
         limits=Limits(max_steps=30, max_dollars=0.25, max_seconds=300),
+        authorization=Authorization(irreversible_actions=task.authorize),
         downloads=downloads,
         http=http,
         on_event=lambda event: _on_fast_event(task, event),
@@ -250,13 +100,15 @@ async def hosted_arm(task: LiveTask) -> tuple[Outcome, str, float | None]:
     return outcome, status, None if cost is None else float(cost)
 
 
-async def run_arm(arm: str, task: LiveTask, http: httpx.AsyncClient, downloads: Path) -> dict[str, object]:
+async def run_arm(
+    arm: str, task: LiveTask, http: httpx.AsyncClient, downloads: Path, *, bitwarden: bool
+) -> dict[str, object]:
     truth = await task.truth(http)
     started = time.monotonic()
-    row: dict[str, object] = {"arm": arm, "task": task.id}
+    row: dict[str, object] = {"arm": arm, "task": task.id, "category": task.category.value}
     try:
         if arm == "fast":
-            outcome, result, cost = await fast_arm(task, http, downloads)
+            outcome, result, cost = await fast_arm(task, http, downloads, bitwarden=bitwarden)
             status = result.status.value
             row["error"] = result.error
             row["trace"] = [f"{s.operation.value} {s.target or ''} -> {s.outcome.value}" for s in result.steps]
@@ -280,8 +132,8 @@ async def run_arm(arm: str, task: LiveTask, http: httpx.AsyncClient, downloads: 
     # Right and proven are graded apart: a correct answer the agent could not back with quotes is a
     # different defect from a wrong one, and one pass/fail column hid which the suite was showing.
     correct = failure is None
-    if arm == "fast" and failure is None and status != Status.COMPLETE.value:
-        failure = f"status {status}"
+    if arm == "fast" and failure is None and status != task.expect.value:
+        failure = f"status {status}, expected {task.expect.value}"
     return row | {
         "correct": correct,
         "passed": failure is None,
@@ -298,11 +150,17 @@ async def run_arm(arm: str, task: LiveTask, http: httpx.AsyncClient, downloads: 
 async def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--only", nargs="*", default=[])
+    parser.add_argument("--category", nargs="*", default=[], choices=[c.value for c in Category])
+    parser.add_argument("--bitwarden", action="store_true", help="login credentials from the vault items")
     parser.add_argument("--arms", nargs="*", default=["fast", "hosted"], choices=["fast", "hosted"])
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--out", type=Path, default=Path("artifacts/evals/live.jsonl"))
     args = parser.parse_args(argv)
-    tasks = [t for t in TASKS if not args.only or t.id in args.only]
+    tasks = [
+        t
+        for t in TASKS
+        if (not args.only or t.id in args.only) and (not args.category or t.category.value in args.category)
+    ]
     args.out.parent.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, object]] = []
     with tempfile.TemporaryDirectory() as downloads, args.out.open("a") as out:
@@ -310,13 +168,15 @@ async def main(argv: list[str]) -> int:
             for _ in range(args.repeat):
                 for task in tasks:
                     for arm in args.arms:
-                        row = await run_arm(arm, task, http, Path(downloads))
+                        if arm == "hosted" and task.fast_only:
+                            continue
+                        row = await run_arm(arm, task, http, Path(downloads), bitwarden=args.bitwarden)
                         rows.append(row)
                         out.write(json.dumps(row, default=str) + "\n")
                         out.flush()
                         mark = "PASS" if row["passed"] else "FAIL"
                         print(
-                            f"{mark} {arm:6} {task.id:16} {row.get('seconds')!s:>6}s ${row.get('dollars')!s:<8}",
+                            f"{mark} {arm:6} {task.id:20} {row.get('seconds')!s:>6}s ${row.get('dollars')!s:<8}",
                             row["failure"] or "",
                             flush=True,
                         )
