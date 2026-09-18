@@ -173,10 +173,10 @@ async def test_a_retry_reserves_its_own_call_and_keeps_an_unreadable_attempts_co
     assert result.cost.dollars is None
 
 
-async def test_a_hedge_loser_marks_the_llm_cost_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_hedge_loser_is_charged_as_the_winner(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("fastbrowse.clients.openai_compatible.LLM_HEDGE_SECONDS", 0.01)
     calls = 0
-    ledger = Ledger(Limits(max_llm_calls=2))
+    ledger = Ledger(Limits(max_llm_calls=2, max_dollars=1.0))
 
     async def handler(_: httpx.Request) -> httpx.Response:
         nonlocal calls
@@ -198,9 +198,13 @@ async def test_a_hedge_loser_marks_the_llm_cost_unknown(monkeypatch: pytest.Monk
     ledger.record(result.cost)
     assert calls == ledger.llm_calls == 2
     assert result.data.count == 1
-    assert result.cost.basis is CostBasis.UNKNOWN and result.cost.dollars is None
-    assert (result.cost.input_tokens, result.cost.output_tokens) == (20, 5)
-    assert ledger.breakdown().has_unknown
+    assert (
+        result.cost.basis is CostBasis.ESTIMATED
+        and result.cost.dollars is not None
+        and round(result.cost.dollars, 6) == 0.02
+    )
+    assert not ledger.breakdown().has_unknown
+    ledger.check(0.0)
 
 
 async def test_a_hedge_loser_is_recorded_even_when_the_winner_fails(monkeypatch: pytest.MonkeyPatch) -> None:

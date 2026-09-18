@@ -4,7 +4,6 @@ import base64
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from time import monotonic
-from typing import assert_never
 
 import httpx
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
@@ -19,6 +18,7 @@ from fastbrowse.clients.validation import (
     object_value,
     post_with_retry,
     token_count,
+    with_discarded,
 )
 from fastbrowse.llm import Generation, LLMError, Message
 from fastbrowse.models import CostBasis, CostComponent, CostLine, LLMPurpose
@@ -72,20 +72,13 @@ def _cost(payload: dict[str, JsonValue], purpose: LLMPurpose) -> CostLine:
 
 
 def _total_cost(costs: Sequence[CostLine], purpose: LLMPurpose) -> CostLine:
-    known = True
-    for line in costs:
-        match line.basis:
-            case CostBasis.METERED:
-                pass
-            case CostBasis.ESTIMATED | CostBasis.UNKNOWN:
-                known = False
-            case _:
-                assert_never(line.basis)
+    bases = {line.basis for line in costs}
+    basis = next(b for b in (CostBasis.UNKNOWN, CostBasis.ESTIMATED, CostBasis.METERED) if b in bases)
     return CostLine(
         component=CostComponent.LLM,
         purpose=purpose,
-        basis=CostBasis.METERED if known else CostBasis.UNKNOWN,
-        dollars=sum(line.dollars or 0 for line in costs) if known else None,
+        basis=basis,
+        dollars=None if basis is CostBasis.UNKNOWN else sum(line.dollars or 0 for line in costs),
         input_tokens=sum(line.input_tokens for line in costs),
         output_tokens=sum(line.output_tokens for line in costs),
     )
@@ -174,11 +167,15 @@ class OpenAICompatibleLLM:
                 usage = RequestUsage()
                 try:
                     payload = await self._request(body, ledger, usage)
-                finally:
+                except BaseException:
+                    # With no answer to estimate from, a request that may have been billed is an unknown cost.
                     costs.extend(_cost({}, purpose) for _ in range(usage.unaccounted_requests))
+                    raise
                 # Recorded before the envelope is read: a generation we cannot parse was still billed, and
-                # dropping it would let an unaccounted request pass a dollar cap.
-                costs.append(_cost(payload, purpose))
+                # dropping it would let an unaccounted request pass a dollar cap. A hedge's discarded twin
+                # carried the same prompt, so it is charged as the answer was; charging it as unknown instead
+                # made every run with one slow call stop at its dollar cap.
+                costs.append(with_discarded(_cost(payload, purpose), usage))
                 try:
                     content = _content(payload)
                 except (ValueError, TypeError, OverflowError) as error:
