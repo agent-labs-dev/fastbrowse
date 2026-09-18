@@ -835,8 +835,8 @@ class Agent:
     async def _answer(self, state: _RunState, prepared: _Prepared) -> tuple[str, bool]:
         """The answer and whether its claims held, composing only when nothing prepared survives the check."""
         if isinstance(prepared, ComposedAnswer):
-            if await self._holds(state, prepared):
-                return self._redactor.redact(prepared.answer), True
+            if (held := await self._holds(state, prepared)) is not None:
+                return self._redactor.redact(held.answer), True
             # Jev took the reader's facts as the answer and then doubted a claim in them, which is what
             # the composer exists for.
             prepared = None
@@ -845,9 +845,10 @@ class Agent:
             if prepared is not None
             else compose(self._llm, state.task, state.plan, state.notes, ledger=state.ledger)
         )
-        return self._redactor.redact(composed.data.answer), await self._holds(state, composed.data)
+        held = await self._holds(state, composed.data)
+        return self._redactor.redact((held or composed.data).answer), held is not None
 
-    async def _holds(self, state: _RunState, answer: ComposedAnswer) -> bool:
+    async def _holds(self, state: _RunState, answer: ComposedAnswer) -> ComposedAnswer | None:
         return await check_claims(self._jev, answer, state.notes, self._config.thresholds, ledger=state.ledger)
 
     async def _extraction(self, state: _RunState, output_schema: type[BaseModel]) -> Extraction:

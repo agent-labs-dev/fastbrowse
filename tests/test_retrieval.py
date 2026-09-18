@@ -616,5 +616,36 @@ async def test_action_only_completion_never_sends_empty_claim_check(answer: str,
     jev = Mock(spec=JevClient)
     jev.evaluate = AsyncMock(side_effect=AssertionError("empty request must not reach the provider"))
     composed = ComposedAnswer(answer=answer, claims=(), dropped_claims=dropped)
-    assert await check_claims(jev, composed, Notes(), Thresholds()) is expected
+    assert (await check_claims(jev, composed, Notes(), Thresholds()) is not None) is expected
     jev.evaluate.assert_not_called()
+
+
+@pytest.mark.parametrize("omitted_after", [0.1, 0.9])
+async def test_a_doubted_claim_is_dropped_only_if_the_rest_still_answers(omitted_after: float) -> None:
+    from fastbrowse.jev import Evaluation, NoulAnswer
+    from fastbrowse.models import CostBasis, CostComponent, CostLine
+    from fastbrowse.retrieval import Claim, ComposedAnswer
+    from fastbrowse.verification import check_claims
+
+    class Jev:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
+            self.calls += 1
+            doubted = {"unsupported_1": 0.9, "requirement_omitted": 0.1 if self.calls == 1 else omitted_after}
+            answers = {key: NoulAnswer(probability=doubted.get(key, 0.05)) for key in questions}
+            free = CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0)
+            return Evaluation(model="test", answers=answers, input_tokens=1, cost=free)
+
+    requirement = Requirement(id="r1", text="What does the page say?", kind=RequirementKind.INFORMATION)
+    claims = (
+        Claim(text="It says you are logged in.", evidence_ids=("e1",)),
+        Claim(text="It has a Log out button.", evidence_ids=("e1",)),
+    )
+    composed = ComposedAnswer(answer="unused", claims=claims, requirements=(requirement,))
+    held = await check_claims(Jev(), composed, Notes(), Thresholds())
+    if omitted_after > 0.5:
+        assert held is None
+    else:
+        assert held is not None and held.answer == "It says you are logged in."

@@ -186,20 +186,47 @@ async def llm_verify(
 
 async def check_claims(
     jev: JevClient, composed: ComposedAnswer, notes: Notes, thresholds: Thresholds, *, ledger: Ledger | None = None
-) -> bool:
-    """True when no check says a claim is unsupported, contradicted, or a requirement is omitted."""
+) -> ComposedAnswer | None:
+    """The answer without any claim a check doubts, or None when a requirement is omitted from what is left.
+
+    The composer adds claims its quotes do not cover (a login page's nav links, a Log out button), and one of
+    those failed three runs in four of a correct sign-in answer. Removing a doubted claim asserts nothing new,
+    so it is honest as long as the rest still answers: the omission check is asked again of what remains.
+    """
     questions = claim_check_questions(composed, notes)
     # An action-only task can finish without factual claims. Its completion was checked already,
     # and Jev rejects an empty question batch; dropped or uncited answer text still cannot pass.
     if not questions:
-        return not composed.answer and composed.dropped_claims == 0
+        return composed if not composed.answer and composed.dropped_claims == 0 else None
+    answers = await _ask(jev, composed, questions, ledger)
+    limit = thresholds.claim_problem_above
+    if composed.dropped_claims or _probability(answers, _OMITTED) > limit:
+        return None
+    kept = tuple(
+        claim
+        for index, claim in enumerate(composed.claims)
+        if max(_probability(answers, f"unsupported_{index}"), _probability(answers, f"contradicted_{index}")) <= limit
+    )
+    if len(kept) == len(composed.claims):
+        return composed
+    if not kept:
+        return None
+    pruned = composed.model_copy(update={"claims": kept, "answer": "\n\n".join(claim.text for claim in kept)})
+    omission = {key: q for key, q in claim_check_questions(pruned, notes).items() if key == _OMITTED}
+    if omission and _probability(await _ask(jev, pruned, omission, ledger), _OMITTED) > limit:
+        return None
+    return pruned
+
+
+async def _ask(
+    jev: JevClient, composed: ComposedAnswer, questions: Mapping[str, NoulQuestion], ledger: Ledger | None
+) -> Mapping[str, object]:
     if ledger is not None:
         ledger.reserve(CostComponent.JEV)
     evaluation = await jev.evaluate({"answer": composed.answer}, questions)
     if ledger is not None:
         ledger.record(evaluation.cost)
-    worst = max((_probability(evaluation.answers, key) for key in evaluation.answers), default=0.0)
-    return worst <= thresholds.claim_problem_above and composed.dropped_claims == 0
+    return evaluation.answers
 
 
 async def extract(
@@ -261,6 +288,9 @@ async def extract(
     except ValidationError as error:
         return Extraction(data=None, evidence=tuple(evidence), problem=str(error)[:500])
     return Extraction(data=data, evidence=tuple(evidence), problem=None)
+
+
+_OMITTED = "requirement_omitted"
 
 
 def _probability(answers: Mapping[str, object], key: str) -> float:
