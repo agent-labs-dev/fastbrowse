@@ -56,6 +56,7 @@ class _HideEndpoint(logging.Filter):
 
 
 logging.getLogger("cdp_use.client").addFilter(_HideEndpoint())
+_LOG = logging.getLogger(__name__)
 
 
 def _browser_error(method: str, cause: Exception) -> BrowserError:
@@ -308,8 +309,8 @@ class BrowserSession:
 
     def _background_finished(self, task: asyncio.Task[None]) -> None:
         self._background.discard(task)
-        if not task.cancelled():
-            task.exception()
+        if not task.cancelled() and (error := task.exception()) is not None:
+            _LOG.warning("background task failed", exc_info=error)
 
     # -- Target/frame tracking -------------------------------------------------------------------------
 
@@ -331,6 +332,7 @@ class BrowserSession:
     def _on_target_created(self, event: TargetCreatedEvent, session_id: str | None) -> None:
         info = event["targetInfo"]
         opener_id = info.get("openerId")
+        _LOG.warning("PROBE created %s %s opener=%s owned=%s", info["type"], info["url"], opener_id, opener_id in self._owned)
         if not self._closing and info["type"] == "page" and opener_id in self._owned:
             self._owned.add(info["targetId"])
             self._spawn(self._adopt_popup(info["targetId"], opener_id))
@@ -350,6 +352,7 @@ class BrowserSession:
 
     def _on_target_info_changed(self, event: TargetInfoChangedEvent, session_id: str | None) -> None:
         info = event["targetInfo"]
+        _LOG.warning("PROBE changed %s %s tracked=%s", info["type"], info["url"], info["targetId"] in self._tabs)
         if info["targetId"] in self._tabs:
             self.set_tab_info(info["targetId"], info["url"], info["title"])
 

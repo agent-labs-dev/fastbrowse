@@ -176,8 +176,9 @@ async def test_covered_controls_are_not_modified(
     ) == ["First", 0]
 
 
+@pytest.mark.parametrize("attempt", range(15))
 async def test_iframe_focus_hit_testing_and_capture_scope(
-    page: CdpPage, browser_session: BrowserSession, main_site: str
+    attempt: int, page: CdpPage, browser_session: BrowserSession, main_site: str
 ) -> None:
     await page.navigate(f"{main_site}/safety.html")
 
@@ -218,7 +219,11 @@ async def test_iframe_focus_hit_testing_and_capture_scope(
     obs = await page.observe()
     opened = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Open popup").id), obs)
     assert opened.outcome is StepOutcome.EXECUTED, opened
-    await wait_until(lambda: any("popup.html" in t.url for t in browser_session.tabs()))
+    try:
+        await wait_until(lambda: any("popup.html" in t.url for t in browser_session.tabs()))
+    except AssertionError:
+        targets = await browser_session.client.send.Target.getTargets(params=None)
+        raise AssertionError((browser_session.tabs(), targets)) from None
     popup = next(t for t in browser_session.tabs() if "popup.html" in t.url)
     await browser_session.switch_tab(popup.id)
     assert browser_session.frame_sessions() == {}
