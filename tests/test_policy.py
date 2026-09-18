@@ -83,6 +83,7 @@ def context(**changes: object) -> StepContext:
         history=(),
         check_login=False,
         has_attachments=False,
+        secrets=(),
     )
     return base.model_copy(update=changes)
 

@@ -92,6 +92,10 @@ def bitwarden_login(item: str, origin: str) -> dict[str, str]:
     except FileNotFoundError:
         raise BitwardenError("the Bitwarden CLI (bw) is not installed") from None
     if done.returncode != 0:
-        # bw reports a locked vault and a missing item on stderr; neither carries a secret.
-        raise BitwardenError(f"bw get item failed: {done.stderr.strip() or 'no output'}")
+        # bw reports a locked vault and a missing item on stderr; neither carries a secret. An expired CLI
+        # login surfaces as "Not found" above a Node stack trace, which hides the one fix that works.
+        detail = done.stderr.strip()
+        if "invalid_grant" in detail:
+            raise BitwardenError("the bw CLI's login has expired: run bw login, then bw unlock")
+        raise BitwardenError(f"bw get item failed: {detail.splitlines()[0] if detail else 'no output'}")
     return login_values(done.stdout, origin)

@@ -218,7 +218,8 @@ class Agent:
             page = (raw.url, raw.document_key)
             if state.planning.done():
                 await state.await_plan()
-            context = self._context(state, check_login=page != state.last_page and not self._can_sign_in(origin))
+            secrets = self._secret_names(origin)
+            context = self._context(state, secrets, check_login=page != state.last_page and not secrets)
             state.last_page = page
             decision = await decide(self._jev, observation, context, self._config, ledger=state.ledger)
             if (decision.login_required or 0.0) > self._config.thresholds.login_required_above:
@@ -408,9 +409,11 @@ class Agent:
         by the page itself."""
         return () if self._secret_on_screen else (await self._page.screenshot(),)
 
-    def _can_sign_in(self, origin: str) -> bool:
-        """A stored secret allowed on this origin means a sign-in wall is a step to take, not a stop."""
-        return self._secrets is not None and any(secret_allowed(ref, origin) for ref in self._secrets.available())
+    def _secret_names(self, origin: str) -> tuple[str, ...]:
+        """Stored secrets this origin may receive. With any, a sign-in wall is a step to take, not a stop."""
+        if self._secrets is None:
+            return ()
+        return tuple(ref.name for ref in self._secrets.available() if secret_allowed(ref, origin))
 
     @staticmethod
     def _first_edit(state: _RunState, decision: Decision, label: str | None) -> bool:
@@ -662,6 +665,14 @@ class Agent:
         if state.recoveries > self._config.stall.max_recoveries:
             raise _Stop(Status.STUCK, reason)
         steps = "\n".join(f"- {s.operation.value} {s.target or ''} -> {s.outcome.value}" for s in state.steps[-10:])
+        # Without the names, a sign-in page reads as a wall the user must pass: a run with a stored login gave up
+        # saying no credentials were given.
+        stored = self._secret_names(origin_of(observation.url))
+        secrets = (
+            f"\n\n## Stored secrets\n{', '.join(stored)}. Filling a field with one types its hidden value."
+            if stored
+            else ""
+        )
         generation = await self._llm.generate(
             LLMPurpose.RECOVER,
             [
@@ -676,7 +687,7 @@ class Agent:
                     role="user",
                     content=(
                         f"## Task\n{state.task}\n\n## Problem\n{reason}\n\n## Recent steps\n{steps}\n\n"
-                        f"## Page\n{observation.url}\n{observation.viewport_text[:4000]}"
+                        f"## Page\n{observation.url}\n{observation.viewport_text[:4000]}{secrets}"
                     ),
                     images=await self._screenshots(),
                 ),
@@ -821,7 +832,7 @@ class Agent:
             cited.setdefault((item.url, item.quote), item)
         return self._result(state, state.ledger, status, answer=answer, data=data, evidence=tuple(cited.values()))
 
-    def _context(self, state: _RunState, *, check_login: bool) -> StepContext:
+    def _context(self, state: _RunState, secrets: tuple[str, ...], *, check_login: bool) -> StepContext:
         return StepContext(
             task=state.task,
             subgoal=state.hint,
@@ -830,6 +841,7 @@ class Agent:
             history=tuple(state.history[-self._config.observation.history_entries :]),
             check_login=check_login,
             has_attachments=bool(state.attachments),
+            secrets=secrets,
         )
 
     def _result(

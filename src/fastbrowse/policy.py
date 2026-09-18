@@ -93,6 +93,8 @@ class StepContext(Frozen):
     history: tuple[HistoryEntry, ...]
     check_login: bool
     has_attachments: bool
+    secrets: tuple[str, ...]
+    """Names of stored secrets the current origin may receive; a fill can type one without Jev seeing it."""
 
 
 class Decision(Frozen):
@@ -304,6 +306,8 @@ def _state(observation: Observation, controls: Sequence[Control], context: StepC
         "recent_actions": [entry.model_dump(mode="json", exclude_none=True) for entry in history],
         "elements": [_element(c) for c in controls],
     }
+    if context.secrets:
+        state["stored_secrets"] = list(context.secrets)
     if observation.omitted_controls:
         state["omitted_elements"] = observation.omitted_controls
     if observation.dialog is not None:
