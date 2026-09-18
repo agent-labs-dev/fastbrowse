@@ -160,8 +160,15 @@ def _ended_under(outcome: Outcome, prefix: str) -> str | None:
     return None if path.startswith(prefix) else f"ended on {outcome.final_url}, expected a path under {prefix}"
 
 
-def _signed_in(message: str, path: str) -> Check:
-    return lambda outcome, _: _answer_has(outcome, message) or _ended_on(outcome, path)
+def _signed_in(path: str, *messages: str) -> Check:
+    """Ended on the signed-in page and reported any of its wordings (a heading and its body can differ)."""
+
+    def check(outcome: Outcome, _: object) -> str | None:
+        if all(_answer_has(outcome, message) for message in messages):
+            return _answer_has(outcome, messages[0])
+        return _ended_on(outcome, path)
+
+    return check
 
 
 def _stars(outcome: Outcome, truth: object) -> str | None:
@@ -262,7 +269,7 @@ TASKS: tuple[LiveTask, ...] = (
         "https://the-internet.herokuapp.com/login",
         "Sign in and tell me the message the page shows.",
         lambda _: _constant(None),
-        _signed_in("secure area", "/secure"),
+        _signed_in("/secure", "secure area"),
         Category.LOGIN,
         secrets={"username": "tomsmith", "password": "SuperSecretPassword!"},
         bitwarden_item="fastbrowse eval: the-internet",
@@ -272,7 +279,7 @@ TASKS: tuple[LiveTask, ...] = (
         "https://practice.expandtesting.com/login",
         "Sign in and tell me the message the page shows.",
         lambda _: _constant(None),
-        _signed_in("secure area", "/secure"),
+        _signed_in("/secure", "secure area"),
         Category.LOGIN,
         secrets={"username": "practice", "password": "SuperSecretPassword!"},
         bitwarden_item="fastbrowse eval: expandtesting",
@@ -282,7 +289,7 @@ TASKS: tuple[LiveTask, ...] = (
         "https://practicetestautomation.com/practice-test-login/",
         "Sign in and tell me what the page says.",
         lambda _: _constant(None),
-        _signed_in("logged in successfully", "/logged-in-successfully"),
+        _signed_in("/logged-in-successfully", "logged in successfully", "successfully logged in"),
         Category.LOGIN,
         secrets={"username": "student", "password": "Password123"},
         bitwarden_item="fastbrowse eval: practicetestautomation",
