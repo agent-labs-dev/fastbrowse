@@ -376,6 +376,9 @@ class CdpPage(Page):
             return StepOutcome.COVERED, None
         if secret and not secret_origin:
             return StepOutcome.FAILED, "secret fill requires an authorized origin"
+        # Ported from browser-use/jev-ultrafast (MIT), browser.py: fill clicks before typing.
+        # Focus alone bypasses pointer handlers that open autocomplete and calendar pickers.
+        await self._click_point(session_id, point)
         if not await self._focus(session_id, local_id, prepare_fill=True, secret=secret):
             return StepOutcome.FAILED, "target did not receive keyboard focus"
         # A secret must be checked and inserted in one renderer task: CDP insertText would leave a

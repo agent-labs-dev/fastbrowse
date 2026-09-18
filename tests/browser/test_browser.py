@@ -337,3 +337,75 @@ async def test_page_exception_is_typed_and_does_not_echo_page_text(
     with pytest.raises(BrowserError, match=r"Runtime.evaluate failed \(JavaScriptError\)") as raised:
         await loaded_page.observe()
     assert "echoed-secret" not in str(raised.value)
+
+
+@pytest.mark.parametrize("kind", ["radio", "checkbox"])
+async def test_styled_choice_uses_visible_label_and_native_state(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, kind: str
+) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        f'document.body.innerHTML = \'<input id=choice type={kind} style="opacity:0">'
+        "<label for=choice>Direct service</label>'; true",
+    )
+    obs = await page.observe()
+    target = find(obs, "Direct service")
+    assert target.role == kind and target.checked is False
+    assert len([c for c in obs.controls if c.role == kind]) == 1
+    assert (await page.act(Action(operation=Operation.CLICK, target_id=target.id), obs)).outcome is StepOutcome.EXECUTED
+    assert find(await page.observe(), "Direct service").checked is True
+
+    await eval_value(
+        browser_session, browser_session.active_session_id, "document.querySelector('input').disabled = true"
+    )
+    assert not any(c.label == "Direct service" for c in (await page.observe()).controls)
+
+
+async def test_styled_choice_rejects_reassociated_label(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        'document.body.innerHTML = \'<input id=a type=checkbox style="opacity:0">'
+        '<input id=b type=checkbox style="opacity:0"><label for=a>Direct service</label>\'; true',
+    )
+    obs = await page.observe()
+    target = find(obs, "Direct service")
+    await eval_value(
+        browser_session, browser_session.active_session_id, "document.querySelector('label').htmlFor = 'b'"
+    )
+    assert (await page.act(Action(operation=Operation.CLICK, target_id=target.id), obs)).outcome is StepOutcome.STALE
+    assert not await eval_value(
+        browser_session, browser_session.active_session_id, "document.getElementById('b').checked"
+    )
+
+
+async def test_fill_activates_picker_before_typing_and_offers_suggestion(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        """document.body.innerHTML = '<input aria-label="Station" role="combobox" aria-controls="choices">'
+          + '<ul id="choices" role="listbox" hidden><li role="option">York Central</li></ul>';
+        const input = document.querySelector('input');
+        const choices = document.querySelector('ul');
+        input.onclick = () => { choices.hidden = false; };
+        choices.onclick = () => { input.value = 'York Central'; choices.hidden = true; };
+        true""",
+    )
+    obs = await page.observe()
+    target = find(obs, "Station")
+    assert (
+        await page.act(Action(operation=Operation.FILL, target_id=target.id, text="York"), obs)
+    ).outcome is StepOutcome.EXECUTED
+    obs = await page.observe()
+    assert find(obs, "Station").value == "York"
+    option = find(obs, "York Central")
+    assert (await page.act(Action(operation=Operation.CLICK, target_id=option.id), obs)).outcome is StepOutcome.EXECUTED
+    assert find(await page.observe(), "Station").value == "York Central"

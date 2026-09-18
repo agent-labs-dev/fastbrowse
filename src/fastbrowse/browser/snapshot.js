@@ -57,6 +57,9 @@
   const reveal = e => typeof e.value !== 'string' ? null : secret(e) ? '•'.repeat(e.value.length) : e.value;
   const visible = e => !e.closest('[aria-hidden="true"],[inert]') &&
     e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+  // Styled checkboxes and radios often hide the native input. Its visible label is the click
+  // target, but the input still owns the checked/disabled state and must participate in freshness.
+  const sourceOf = e => e.tagName === 'LABEL' && ['checkbox', 'radio'].includes(e.control?.type) ? e.control : e;
 
   const labelOf = (e, seen = new Set()) => {
     if (!e || seen.has(e)) return '';
@@ -75,10 +78,11 @@
 
   const ARIA_ROLES = ['button', 'link', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'menuitemradio',
     'option', 'gridcell', 'combobox', 'textbox', 'searchbox', 'spinbutton'];
-  const SELECTOR = 'a[href],button,input,textarea,select,summary,[contenteditable="true"],' +
+  const SELECTOR = 'a[href],button,input,textarea,select,summary,label,[contenteditable="true"],' +
     ARIA_ROLES.map(role => `[role="${role}"]`).join(',');
 
   const roleOf = e => {
+    if (sourceOf(e) !== e) return sourceOf(e).type;
     const explicit = e.getAttribute('role');
     if (ARIA_ROLES.includes(explicit)) return explicit;
     if (e.tagName === 'BUTTON' || e.tagName === 'SUMMARY') return 'button';
@@ -139,17 +143,23 @@
 
   registry.guard = e => {
     if (!e?.isConnected || !visible(e)) return null;
+    const source = sourceOf(e);
+    if (source !== e && (source.matches(':disabled') || source.closest('[aria-disabled="true"],[inert]'))) return null;
     const scope = e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
-    return [identity(e), roleOf(e), labelOf(e), reveal(e), e.checked ?? null, e.selectedIndex ?? null,
+    return [identity(e), roleOf(e), labelOf(e), reveal(source), source.checked ?? null, e.selectedIndex ?? null,
       e.readOnly ?? null, e.matches(':disabled'), e.getAttribute('aria-disabled'),
       e.getAttribute('aria-expanded'), e.getAttribute('aria-checked'), e.getAttribute('aria-selected'),
       e.getAttribute('href'), scope?.innerText?.slice(0, 6000) || '',
-      e.ownerDocument.location.origin, e.ownerDocument.defaultView.performance.timeOrigin, submitSemantics(e)];
+      e.ownerDocument.location.origin, e.ownerDocument.defaultView.performance.timeOrigin, submitSemantics(e),
+      identity(source)];
   };
 
   const controls = [];
   for (const e of walk(document)) {
     if (!safe(e) || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]')) continue;
+    const source = sourceOf(e);
+    if (source !== e && (visible(source) || source.matches(':disabled') ||
+      source.closest('[aria-disabled="true"],[inert]'))) continue;
     const r = e.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2, rname = roleOf(e);
     if (!rname || r.width <= 0 || r.height <= 0 || x < 0 || x >= innerWidth) continue;
     if (rname === 'gridcell' && e.querySelector('button,[role="button"]')) continue;
@@ -157,7 +167,7 @@
     const base = {
       id, role: rname, label: labelOf(e) || rname, offscreen: y < 0 || y >= innerHeight,
       distance: (y < 0 || y >= innerHeight) ? 1 + Math.abs(y - innerHeight / 2) : 0,
-      sensitive: secret(e), input_type: e.type || null,
+      sensitive: secret(source), input_type: source.type || null,
       frame_origin: e.ownerDocument.location.origin, frame_path: framePath(e.ownerDocument),
       submit_semantics: submitSemantics(e),
     };
@@ -169,7 +179,7 @@
       const value = e.getAttribute('aria-' + key);
       if (value !== null) base[key] = value === 'true';
     }
-    if (['checkbox', 'radio'].includes(e.type)) base.checked = e.checked;
+    if (['checkbox', 'radio'].includes(source.type)) base.checked = source.checked;
     if (e.tagName === 'SELECT') {
       base.operations = ['select'];
       base.options = [...e.options].filter(o => !o.disabled && !o.closest('optgroup[disabled]')).map(o => o.label);
@@ -182,7 +192,7 @@
         (['textbox', 'searchbox', 'spinbutton'].includes(rname) ||
           (rname === 'combobox' && ['INPUT', 'TEXTAREA'].includes(e.tagName)));
       // reveal() is null for <li>, <progress> and <meter>, whose numeric `value`s are not field contents.
-      base.value = reveal(e) ?? (e.isContentEditable || rname === 'combobox' ? e.innerText.trim() : null);
+      base.value = reveal(source) ?? (e.isContentEditable || rname === 'combobox' ? e.innerText.trim() : null);
       base.operations = editable ? ['fill', 'click', 'enter'] : ['click'];
     }
     controls.push(base);
