@@ -41,6 +41,9 @@ DOWNLOAD_PATTERNS: tuple[RequestPattern, ...] = (
 )
 _ENABLE_DOMAINS = ("Page", "Runtime", "DOM")
 _TRACK_DOCUMENT_JS = Path(__file__).with_name("snapshot.js").read_text() + "('fingerprint')"
+_REFUSE_COOKIES_JS = (Path(__file__).parent / "autoconsent" / "autoconsent.standalone.js").read_text()
+"""DuckDuckGo's autoconsent (MPL-2.0, unmodified): refuses consent banners on known platforms and hides them
+before they paint, so neither the agent's steps nor a recording are spent on one."""
 
 
 class _HideEndpoint(logging.Filter):
@@ -106,10 +109,15 @@ class BrowserSession:
         connection: BrowserConnectionModel,
         artifact_sink: ArtifactSink,
         max_download_bytes: int = 200 * 1024 * 1024,
+        *,
+        refuse_cookie_banners: bool = True,
     ) -> None:
         self._connection = connection
         self._artifact_sink = artifact_sink
         self._max_download_bytes = max_download_bytes
+        self._new_document_scripts = (
+            (_TRACK_DOCUMENT_JS, _REFUSE_COOKIES_JS) if refuse_cookie_banners else (_TRACK_DOCUMENT_JS,)
+        )
         self._client: CDPClient | None = None
         self._tabs: dict[str, _TabState] = {}
         self._owned: set[str] = set()
@@ -272,11 +280,12 @@ class BrowserSession:
                 )
                 # Track parsing and hydration before the first post-navigation read, so an already
                 # quiet document does not pay another full window just to install its observer.
-                tasks.create_task(
-                    self.client.send.Page.addScriptToEvaluateOnNewDocument(
-                        params={"source": _TRACK_DOCUMENT_JS}, session_id=session_id
+                for source in self._new_document_scripts:
+                    tasks.create_task(
+                        self.client.send.Page.addScriptToEvaluateOnNewDocument(
+                            params={"source": source}, session_id=session_id
+                        )
                     )
-                )
         except* BrowserError as errors:
             raise errors.exceptions[0] from errors
 

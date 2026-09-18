@@ -47,5 +47,7 @@ class Config(Frozen):
     observation: ObservationLimits = ObservationLimits()
     tokens: TokenBudget = TokenBudget()
     stall: StallRules = StallRules()
+    refuse_cookie_banners: bool = True
+    """Refuse cookie consent on the platforms DuckDuckGo's autoconsent knows, before the banner paints."""
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
     """Uploads move as bytes over the DevTools socket; larger files return NEEDS_INPUT with a reason."""

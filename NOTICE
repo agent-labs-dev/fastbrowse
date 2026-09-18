@@ -5,6 +5,10 @@ fastbrowse includes code adapted from the following MIT-licensed projects:
 - browser-use/browser-harness, Copyright (c) 2026 Browser Use
 - browser-use/browser-use, Copyright (c) 2024 Gregor Zunic
 
+src/fastbrowse/browser/autoconsent/autoconsent.standalone.js is DuckDuckGo's autoconsent 16.40.0
+(https://github.com/duckduckgo/autoconsent), unmodified and licensed under the Mozilla Public License 2.0,
+whose text is in the LICENSE file beside it. Its source is available at that address.
+
 The wordmark in assets/ is set in Inter, Copyright (c) 2016 The Inter Project Authors,
 licensed under the SIL Open Font License 1.1 and outlined to paths.
 

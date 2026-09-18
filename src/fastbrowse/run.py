@@ -107,7 +107,7 @@ async def run_task(
                 ) as connection:
                     if on_event is not None:
                         await on_event(BrowserEvent(live_url=connection.live_url))
-                    session = BrowserSession(connection, sink)
+                    session = BrowserSession(connection, sink, refuse_cookie_banners=config.refuse_cookie_banners)
                     async with session:
                         page = CdpPage(session, config)
                         agent = Agent(page, jev, llm, config=config, secrets=secrets, on_event=on_event)
