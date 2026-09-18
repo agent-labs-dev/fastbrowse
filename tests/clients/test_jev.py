@@ -303,3 +303,16 @@ async def test_noul_probability_is_validated(probability: JsonValue) -> None:
     ) as http:
         with pytest.raises(JevError):
             await TypeSafeJevClient("key", http=http).evaluate("state", {"q": NoulQuestion(instructions="Wrong?")})
+
+
+async def test_a_choice_one_rounding_unit_below_the_top_is_accepted() -> None:
+    # Sum-to-one rounding put escalate 0.40 as the choice over read 0.41 on a live run.
+    answer = choice_answer(choice="red", probabilities={"blue": 0.5, "red": 0.49})
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, json={"answers": {"q": answer}, "usage": {"input_tokens": 10}})
+        )
+    ) as http:
+        evaluation = await TypeSafeJevClient("key", http=http).evaluate("state", {"q": choice()})
+    result = evaluation.answers["q"]
+    assert isinstance(result, ChoiceAnswer) and result.choice == "red"

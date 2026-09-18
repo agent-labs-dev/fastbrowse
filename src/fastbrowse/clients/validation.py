@@ -284,6 +284,10 @@ def _probabilities(value: JsonValue, keys: set[str]) -> dict[str, float]:
     return result
 
 
+_ROUNDING_UNIT = 0.01
+"""The wire's two-decimal probability step."""
+
+
 def parse_answers(
     value: JsonValue,
     questions: Mapping[str, Question],
@@ -307,7 +311,9 @@ def parse_answers(
                 choice = answer.get("choice")
                 if not isinstance(choice, str) or choice not in probs:
                     raise ValueError(f"choice outside criteria for {key}")
-                if probs[choice] < max(probs.values()) - 1e-6:
+                # Probabilities are rounded to sum to one, which can move an option by one unit and put a near-tie
+                # a hundredth the wrong way round: a live run failed on escalate 0.40 chosen over read 0.41.
+                if probs[choice] < max(probs.values()) - _ROUNDING_UNIT - 1e-6:
                     raise ValueError(f"chosen option is not maximal for {key}")
                 answers[key] = ChoiceAnswer(
                     choice=choice, probabilities=probs, confidence=probability(confidence_value)
