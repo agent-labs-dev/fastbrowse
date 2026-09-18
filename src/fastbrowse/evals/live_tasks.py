@@ -29,6 +29,10 @@ class Release(BaseModel):
     version: str
 
 
+class Newer(BaseModel):
+    package: str
+
+
 @dataclass(frozen=True, slots=True)
 class Outcome:
     answer: str | None
@@ -146,11 +150,23 @@ def _release(outcome: Outcome, truth: object) -> str | None:
     return None if {k: str(v).strip() for k, v in data.items()} == expected else f"data {data}, expected {expected}"  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
 
 
-async def _more_starred(http: httpx.AsyncClient) -> object:
-    repos = ("encode/httpx", "psf/requests")
-    bodies = await asyncio.gather(*(_json(http, f"https://api.github.com/repos/{repo}") for repo in repos))
-    stars = {repo: int(body["stargazers_count"]) for repo, body in zip(repos, bodies, strict=True)}  # pyright: ignore[reportArgumentType, reportIndexIssue, reportCallIssue, reportUnknownArgumentType]
-    return max(stars, key=lambda repo: stars[repo]).split("/")[1]
+class _PyPIFile(BaseModel):
+    upload_time_iso_8601: str
+
+
+class _PyPIProject(BaseModel):
+    urls: list[_PyPIFile]
+    """The latest release's files."""
+
+
+async def _newer_release(http: httpx.AsyncClient) -> object:
+    packages = ("httpx", "requests")
+    bodies = await asyncio.gather(*(_json(http, f"https://pypi.org/pypi/{name}/json") for name in packages))
+    released = {
+        name: _PyPIProject.model_validate(body).urls[0].upload_time_iso_8601
+        for name, body in zip(packages, bodies, strict=True)
+    }
+    return max(released, key=lambda name: released[name])
 
 
 def _ended_under(outcome: Outcome, prefix: str) -> str | None:
@@ -171,8 +187,12 @@ def _signed_in(path: str, *messages: str) -> Check:
     return check
 
 
-def _stars(outcome: Outcome, truth: object) -> str | None:
-    return _answer_has(outcome, str(truth))
+def _newer(outcome: Outcome, truth: object) -> str | None:
+    data = outcome.data
+    if not isinstance(data, dict):
+        return f"no structured data: {data!r}"
+    package = str(data.get("package", "")).strip().casefold()  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    return None if package == truth else f"named {package!r}, expected {truth!r}"
 
 
 def _arxiv(outcome: Outcome, truth: object) -> str | None:
@@ -231,12 +251,15 @@ TASKS: tuple[LiveTask, ...] = (
         Category.LOOKUP,
     ),
     LiveTask(
-        "github-stars",
-        "https://github.com/",
-        "Which has more GitHub stars, encode/httpx or psf/requests?",
-        _more_starred,
-        _stars,
+        # Two pages compared. GitHub stars were tried first, but GitHub asks an anonymous cloud browser to sign
+        # in (or rate-limits it) before it will search.
+        "pypi-newer",
+        "https://pypi.org/",
+        "Which has the more recent latest release on PyPI, httpx or requests?",
+        _newer_release,
+        _newer,
         Category.LOOKUP,
+        output_schema=Newer,
     ),
     LiveTask(
         "wiki-godel",

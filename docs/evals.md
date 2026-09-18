@@ -34,7 +34,8 @@ The same prompts run through fastbrowse on a Browser Use Cloud browser and throu
 |---|---|---|
 | lookup | `pypi-version`, `pypi-structured` | the version on PyPI's JSON API; the structured task's schema fields |
 | lookup | `hn-top` | a title in the HN API's top stories |
-| lookup | `github-license`, `github-stars` | GitHub's REST API (license; which repository has more stars) |
+| lookup | `github-license` | the license on GitHub's REST API |
+| lookup | `pypi-newer` | which of two packages released last, per PyPI's JSON API (structured output) |
 | lookup | `wiki-godel`, `arxiv-title` | a fixed fact, and the page the run ended on |
 | login | `saucedemo-cart` | a quote from `/cart.html` naming the backpack |
 | login | `internet-login`, `expandtesting-login`, `practice-login` | the signed-in page's URL and its success message |
