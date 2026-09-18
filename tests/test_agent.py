@@ -11,7 +11,7 @@ from fastbrowse.agent import Agent, _follow_recovery, _history, _RunState, _Stop
 from fastbrowse.config import Config, ObservationLimits
 from fastbrowse.llm import Generation
 from fastbrowse.memory import Notes
-from fastbrowse.models import Authorization, Limits, LLMPurpose, Operation, Status, StepOutcome
+from fastbrowse.models import Authorization, Decider, Limits, LLMPurpose, Operation, Status, StepOutcome, StepResult
 from fastbrowse.page import ActResult, Control, Page
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 from fastbrowse.policy import HistoryEntry, decide
@@ -251,3 +251,36 @@ def test_earlier_actions_stay_in_view_without_their_effects() -> None:
     assert [entry.target for entry in shown] == [f"field {i}" for i in range(3, 10)]
     assert [entry.effect for entry in shown] == [None] * 4 + ["e"] * 3
     assert _history(entries[:2], ObservationLimits(history_entries=3)) == tuple(entries[:2])
+
+
+@pytest.mark.parametrize(("typed", "reads"), [(True, 1), (False, 0)])
+async def test_the_results_of_a_typed_search_are_read_once_before_leaving(typed: bool, reads: int) -> None:
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r1", text="When was httpx released?", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    home, results = "https://example.test/", "https://example.test/search?q=httpx"
+    first = Operation.FILL if typed else Operation.CLICK
+    for operation, url in ((first, home), (Operation.ENTER, home), (Operation.FILL, results)):
+        state.steps.append(
+            StepResult(
+                index=len(state.steps),
+                operation=operation,
+                decided_by=Decider.JEV,
+                outcome=StepOutcome.EXECUTED,
+                url=url,
+                duration_ms=0,
+            )
+        )
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    agent._capture = AsyncMock()
+    agent._read = AsyncMock(return_value=True)
+    button = Control(id="go", frame_id=None, role="button", label="Search", operations=frozenset({Operation.CLICK}))
+    obs = observation((button,)).model_copy(update={"url": results})
+    decision = await decide(ScriptedJev({"operation": "enter", "enter_target": "go"}), obs, context(), Config())
+    for _ in range(2):
+        state.read_here = False
+        await agent._read_before_leaving(state, obs, decision)
+    await asyncio.gather(*state.leaving)
+    assert agent._read.await_count == reads

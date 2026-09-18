@@ -76,6 +76,8 @@ _NOT_ACTING = frozenset({Operation.READ, Operation.DONE})
 _REPEATS_BEFORE_CYCLE = 2
 """Times one action may be taken from one page and still count as progress. Scrolling is exempt: a long page
 takes many scrolls, each of which shows something new."""
+_LEAVING = frozenset({Operation.CLICK, Operation.ENTER, Operation.BACK})
+"""Operations that can take the run off the page it is on."""
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +155,8 @@ class _RunState:
     ready_plan: Plan | None = None
     read_here: bool = False
     """This page has been read since it last changed."""
+    read_urls: set[str] = field(default_factory=set[str])
+    """Pages read on the way out of them, each read once."""
     leaving: list[asyncio.Task[bool]] = field(default_factory=list[asyncio.Task[bool]])
     """Reads of pages an action is leaving, run alongside it; awaited before DONE is judged."""
 
@@ -372,7 +376,7 @@ class Agent:
             act = ActResult(outcome=StepOutcome.EXECUTED, page_changed=False)
         else:
             action = await self._action(state, observation, decision)
-            await self._read_before_leaving(state, decision)
+            await self._read_before_leaving(state, observation, decision)
             act = await self._page.act(action, self._raw_observation or observation)
             if act.outcome is StepOutcome.EXECUTED and action.text is not None:
                 typed = "<secret>" if action.secret else self._redactor.mask(action.text)
@@ -795,20 +799,31 @@ class Agent:
         )
         return choice == "accept"
 
-    async def _read_before_leaving(self, state: _RunState, decision: Decision) -> None:
+    async def _read_before_leaving(self, state: _RunState, observation: Observation, decision: Decision) -> None:
         # A shop totals the order on the page before Finish and not after it, so a run that submits first can
         # never prove the total: the checkout eval finished, found no total, and went round the cart again.
         # The capture is taken now and read alongside the action, so a submit waits only for the capture.
         # Only an authorized run commits: without authorization the gate stops before any page is lost.
+        committing = state.authorization.irreversible_actions and may_be_irreversible(
+            decision.operation, decision.target
+        )
+        # The results of a search the run typed are where the answer most often is, and Jev moved on to the
+        # next search without reading them: a comparison of two packages read the second one's page four
+        # times and never had the first one's date. Read those once, whatever the action.
+        answering = (
+            decision.operation in _LEAVING
+            and observation.url not in state.read_urls
+            and _answers_input(state, observation)
+        )
         if (
-            not state.authorization.irreversible_actions
-            or state.read_here
+            state.read_here
+            or not (committing or answering)
             or state.ready_plan is None
-            or not may_be_irreversible(decision.operation, decision.target)
             or not _unread(state.ready_plan, state.notes)
         ):
             return
         state.read_here = True
+        state.read_urls.add(observation.url)
         state.leaving.append(asyncio.create_task(self._read(state, await self._capture())))
 
     async def _read(self, state: _RunState, capture: Capture | None = None) -> bool:
@@ -1075,6 +1090,17 @@ def _unread(plan: Plan, notes: Notes) -> bool:
     # owes an answer with nothing read would hand the composer empty notes: one did, and ended complete on "".
     unresolved = any(r.kind is RequirementKind.INFORMATION for r in notes.unresolved(plan))
     return unresolved or (plan.answer_expected and not notes.facts)
+
+
+def _answers_input(state: _RunState, observation: Observation) -> bool:
+    """Whether the run reached this page from the one before by submitting text it typed there."""
+    steps, end = state.steps, len(state.steps)
+    while end and steps[end - 1].url == observation.url:
+        end -= 1
+    start = end
+    while start and steps[start - 1].url == steps[end - 1].url:
+        start -= 1
+    return any(step.operation is Operation.FILL for step in steps[start:end])
 
 
 def _describe(control: Control) -> str:
