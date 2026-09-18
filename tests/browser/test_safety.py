@@ -176,7 +176,7 @@ async def test_covered_controls_are_not_modified(
     ) == ["First", 0]
 
 
-@pytest.mark.parametrize("attempt", range(15))
+@pytest.mark.parametrize("attempt", range(60))
 async def test_iframe_focus_hit_testing_and_capture_scope(
     attempt: int, page: CdpPage, browser_session: BrowserSession, main_site: str
 ) -> None:
@@ -217,13 +217,20 @@ async def test_iframe_focus_hit_testing_and_capture_scope(
     ).outcome is StepOutcome.EXECUTED
     assert find(await page.observe(), "Frame field").value == "frame value"
     obs = await page.observe()
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "window.__clicks = []; document.addEventListener('mousedown', e => __clicks.push("
+        "[e.target.id || e.target.tagName, e.clientX, e.clientY, scrollY]), true); scrollY",
+    )
     opened = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Open popup").id), obs)
     assert opened.outcome is StepOutcome.EXECUTED, opened
     try:
         await wait_until(lambda: any("popup.html" in t.url for t in browser_session.tabs()))
     except AssertionError:
         targets = await browser_session.client.send.Target.getTargets(params=None)
-        raise AssertionError((browser_session.tabs(), targets)) from None
+        clicks = await eval_value(browser_session, browser_session.active_session_id, "[__clicks, scrollY]")
+        raise AssertionError((clicks, opened, browser_session.tabs(), targets)) from None
     popup = next(t for t in browser_session.tabs() if "popup.html" in t.url)
     await browser_session.switch_tab(popup.id)
     assert browser_session.frame_sessions() == {}
