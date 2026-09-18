@@ -35,6 +35,9 @@ Faster on median and mean at about a fiftieth of the cost; hosted is still 1 to 
 of the six tasks ([per task](docs/evals.md#results)). Twelve runs is a smoke test, not a benchmark:
 single runs swing by 4 to 5 seconds.
 
+The suite has since grown to 15 tasks: sign-ins (optionally from Bitwarden), a checkout, a stop before
+paying and Google Flights. fastbrowse alone passes 12 of them ([results](docs/evals.md#full-suite)).
+
 ## How it works
 
 <picture>

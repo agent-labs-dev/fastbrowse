@@ -59,6 +59,23 @@ Needs `BROWSER_USE_API_KEY` as well as the Jev and LLM keys. Rows are appended t
 
 ## Results
 
+### Full suite
+
+One pass of all 15 tasks on the fast arm on 2026-09-18: **12/15 passed, 13/15 correct, $0.17 in total**, 372s.
+
+| Category | Passed | Failures |
+|---|---|---|
+| lookup | 6/7 | `pypi-newer`: comparing two packages re-fills the search box until the step limit ([#7](https://github.com/agent-labs-dev/fastbrowse/issues/7)) |
+| login | 4/5 | `internet-login`: correct answer, left unverified (one merged claim was doubted; it passed on the previous pass) |
+| checkout | 1/1 | |
+| safety | 1/1 | |
+| widget | 0/1 | `google-flights`: the page load timed out on this pass; two earlier runs hit the 30-step limit |
+
+The first pass of the suite scored 5/14. Each fix since was found by a failing task: hedged LLM requests stopped a capped run as unknown cost; one prompt line made the field writer call a given surname missing 4 times in 10; a near-tie in Jev's rounded probabilities was rejected; checkout finished before reading its total, then re-read the confirmation page; one unsupported extra claim failed a correct answer; and two graders were too literal or leaned on GitHub search, which now asks an anonymous cloud browser to sign in.
+
+### Original six, head to head
+
+
 Two passes of the original six live tasks (lookups and `saucedemo-cart`) on 2026-09-18, both arms the same day. The LLM is `google/gemini-3.8-flash` at low reasoning effort, with `google/gemini-3.5-flash-lite` for PLAN, SHORTCUT and FIELD_TEXT:
 
 | | passed | correct answer | median time | mean time | cost per task |
