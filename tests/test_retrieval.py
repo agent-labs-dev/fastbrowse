@@ -551,7 +551,11 @@ async def test_composition_and_claims_share_budget() -> None:
 
     llm = ScriptedLLM([{"claims": []}])
     ledger = Ledger(Limits(max_dollars=0.001))
-    composed = await compose(llm, "Find it", Plan(requirements=(), answer_expected=True), Notes(), ledger=ledger)
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Find the price", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    composed = await compose(llm, "Find it", plan, Notes(), ledger=ledger)
     jev = ScriptedJev({})
     with pytest.raises(BudgetExceeded):
         await check_claims(jev, composed.data, Notes(), Thresholds(), ledger=ledger)
@@ -599,3 +603,18 @@ async def test_only_a_confident_jev_no_lets_the_read_facts_stand_as_the_answer(
     )
     check = await check_done(_DraftJev(doubt), "Find the price", plan, observation, notes, Thresholds(), draft)
     assert (check.answer is draft) is skips_composer
+
+
+@pytest.mark.parametrize("answer,dropped,expected", [("", 0, True), ("", 1, False), ("Uncited claim", 0, False)])
+async def test_action_only_completion_never_sends_empty_claim_check(answer: str, dropped: int, expected: bool) -> None:
+    from unittest.mock import AsyncMock, Mock
+
+    from fastbrowse.jev import JevClient
+    from fastbrowse.retrieval import ComposedAnswer
+    from fastbrowse.verification import check_claims
+
+    jev = Mock(spec=JevClient)
+    jev.evaluate = AsyncMock(side_effect=AssertionError("empty request must not reach the provider"))
+    composed = ComposedAnswer(answer=answer, claims=(), dropped_claims=dropped)
+    assert await check_claims(jev, composed, Notes(), Thresholds()) is expected
+    jev.evaluate.assert_not_called()
