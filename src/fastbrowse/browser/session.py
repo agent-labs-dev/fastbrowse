@@ -332,7 +332,7 @@ class BrowserSession:
     def _on_target_created(self, event: TargetCreatedEvent, session_id: str | None) -> None:
         info = event["targetInfo"]
         opener_id = info.get("openerId")
-        _LOG.warning("PROBE created %s %s opener=%s owned=%s", info["type"], info["url"], opener_id, opener_id in self._owned)
+        _LOG.warning("PROBE created %s %s %s", info["type"], info["url"], opener_id in self._owned)
         if not self._closing and info["type"] == "page" and opener_id in self._owned:
             self._owned.add(info["targetId"])
             self._spawn(self._adopt_popup(info["targetId"], opener_id))
