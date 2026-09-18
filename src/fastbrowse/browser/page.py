@@ -77,6 +77,11 @@ _HIT_TEST_JS = (
 # A deadline, not a wait: a field with no editor to open settles on the first frame.
 _HANDOFF_SECONDS = 0.6
 _HANDOFF_QUIET_SECONDS = 0.1
+_PRESENTED_JS = (
+    "new Promise(done => { const t = setTimeout(done, 100); "
+    "requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(t); done(); })); })"
+)
+"""Resolves once the page has drawn a frame, or after 100ms where a hidden page never draws one."""
 
 # A field that opens an editor over itself when clicked (a search overlay, an airport picker) moves focus to
 # that editor; typing into the original, now hidden behind it, reaches no suggestion list. A person types
@@ -665,6 +670,14 @@ class CdpPage(Page):
         return StepOutcome.EXECUTED, None
 
     async def _move(self, session_id: str, point: tuple[float, float]) -> None:
+        """Move the pointer to a point measured in the DOM, once the browser routes input by the same layout.
+
+        Chrome sends input to a frame by the last frame the page drew, not by the DOM. A fill that scrolled a
+        cross-origin frame into view left the drawn layout a frame behind, so the click meant for the button
+        below it went to the old position and the popup it opens never appeared.
+        """
+        with suppress(Exception):
+            await asyncio.wait_for(self._evaluate(self._session.active_session_id, _PRESENTED_JS), 0.5)
         params: DispatchMouseEventParameters = {"type": "mouseMoved", "x": point[0], "y": point[1]}
         await self._input(self._session.client.send.Input.dispatchMouseEvent(params=params, session_id=session_id))
 
