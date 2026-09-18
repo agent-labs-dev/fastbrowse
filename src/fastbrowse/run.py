@@ -7,7 +7,7 @@ downloads kept when a directory is given, and the browser closed on every path o
 """
 
 from collections.abc import AsyncGenerator, Mapping, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -19,6 +19,7 @@ from fastbrowse.adapters.local_chrome import async_local_chrome
 from fastbrowse.agent import Agent
 from fastbrowse.artifacts import DirectorySink
 from fastbrowse.browser import BrowserSession, CdpPage
+from fastbrowse.browser.recording import Recording
 from fastbrowse.clients.environment import load_settings
 from fastbrowse.config import Config
 from fastbrowse.jev import JevClient
@@ -78,6 +79,7 @@ async def run_task(
     until: UntilCheck | None = None,
     config: Config | None = None,
     http: httpx.AsyncClient | None = None,
+    record: Path | None = None,
 ) -> RunResult:
     """Open `start`, pursue `task`, and return what the run could prove.
 
@@ -86,7 +88,8 @@ async def run_task(
     `llm` default to clients built from `Settings` (the environment, then `.env`), so an embedder that
     resolves its own credentials, or serves Jev from somewhere else, passes them instead.
 
-    Files the run downloads are discarded unless `downloads` names a directory to keep them in.
+    Files the run downloads are discarded unless `downloads` names a directory to keep them in. `record` saves
+    an MP4 of the tab, ending on the answer; it needs ffmpeg, and shows whatever the pages showed.
     """
     config = config or Config()
     settings = load_settings()
@@ -107,16 +110,20 @@ async def run_task(
                     session = BrowserSession(connection, sink)
                     async with session:
                         page = CdpPage(session, config)
-                        result = await Agent(page, jev, llm, config=config, secrets=secrets, on_event=on_event).run(
-                            task,
-                            start=start,
-                            output_schema=output_schema,
-                            inputs=inputs,
-                            attachments=attachments,
-                            limits=limits,
-                            authorization=authorization,
-                            until=until,
-                        )
+                        agent = Agent(page, jev, llm, config=config, secrets=secrets, on_event=on_event)
+                        async with nullcontext() if record is None else Recording(session, record) as recording:
+                            result = await agent.run(
+                                task,
+                                start=start,
+                                output_schema=output_schema,
+                                inputs=inputs,
+                                attachments=attachments,
+                                limits=limits,
+                                authorization=authorization,
+                                until=until,
+                            )
+                            if recording is not None:
+                                await recording.show_result(task, result)
             except BrowserError as exc:
                 result = result or RunResult(
                     status=Status.ERROR,

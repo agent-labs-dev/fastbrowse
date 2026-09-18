@@ -13,6 +13,7 @@ Secrets come from `--secret NAME=ENV_VAR`, read from that variable, or `--bitwar
 import argparse
 import asyncio
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -63,6 +64,9 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--max-dollars", type=float, default=None)
     parser.add_argument("--downloads", type=Path, default=None, help="directory for downloaded files")
     parser.add_argument("--json", action="store_true", help="print the full result as JSON")
+    parser.add_argument(
+        "--record", type=Path, metavar="FILE", help="save a video of the run, ending on its answer (needs ffmpeg)"
+    )
     return parser.parse_args(argv)
 
 
@@ -88,6 +92,8 @@ async def _print_step(event: StepEvent | BrowserEvent) -> None:
 
 
 async def run(args: argparse.Namespace) -> int:
+    if args.record is not None and shutil.which("ffmpeg") is None:
+        raise ConfigurationError("--record needs ffmpeg on PATH")
     result = await run_task(
         args.task,
         start=args.start,
@@ -98,12 +104,15 @@ async def run(args: argparse.Namespace) -> int:
         authorization=Authorization(irreversible_actions=args.authorize),
         downloads=args.downloads,
         on_event=_print_step,
+        record=args.record,
     )
     if args.json:
         print(result.model_dump_json(indent=2))
     else:
         print(f"{result.status.value} (${result.cost.known_dollars:.4f}, {len(result.steps)} steps)")
         print(result.answer or result.error or "")
+    if args.record is not None:
+        print(f"  recorded: {args.record}", file=sys.stderr)
     return 0 if result.succeeded else 1
 
 

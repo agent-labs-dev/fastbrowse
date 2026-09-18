@@ -107,6 +107,7 @@ answer, and cost by component.
 | `--max-steps N`, `--max-dollars N` | bound the run |
 | `--downloads DIR` | keep downloaded files |
 | `--json` | full result instead of the answer |
+| `--record FILE` | save an MP4 of the tab that ends on the answer, time and cost (needs `ffmpeg`). It shows what the pages showed, so watch it before sharing |
 
 ```sh
 export SAUCE_PASSWORD=secret_sauce
@@ -126,12 +127,13 @@ uv run fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
 ```
 
 Or sign in from your vault: with the [Bitwarden CLI](https://bitwarden.com/help/cli/) signed in, name
-the item. Its values stay in this process and are typed only on a site the item's saved URIs cover.
+the item. The models see only the names `username` and `password`; the values stay in this process and
+are typed only on a site the item's saved URIs cover. With `--profile`, later runs stay signed in.
 
 ```sh
 export BW_SESSION="$(bw unlock --raw)"
-uv run fastbrowse "Sign in with the saved login, then add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
-  --start https://www.amazon.com/ --bitwarden Amazon --headed
+uv run fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
+  --start https://www.amazon.com/ --bitwarden Amazon --profile ~/.fastbrowse/amazon --headed
 ```
 
 ### Models
