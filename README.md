@@ -24,17 +24,18 @@ candidates and has [Jev](https://typesafe.ai), a choice model, **pick one**, so 
 something that was never on the page. Every claim in an answer cites a quote stored verbatim from
 the page, and Jev checks each claim against its quote.
 
-Same six live tasks, two passes each, against hosted Browser Use measured the same day
-([method](docs/evals.md)):
+Six live tasks, two passes each, against hosted Browser Use on the same day: the latest httpx
+version on PyPI (as text and as structured output), the top Hacker News story, httpx's license on
+GitHub, the year of Gödel's incompleteness theorems via Wikipedia search, and a saucedemo login and
+add-to-cart. Each answer is graded against the live source ([method](docs/evals.md)):
 
 | | passed | correct answer | median time | mean time | cost per task |
 |:--|:--|:--|:--|:--|:--|
 | **fastbrowse** (cloud browser) | **12/12** | 12/12 | **12.9s** | **15.4s** | **$0.0072** |
-| fastbrowse, previous build | 11/12 | | 27.5s | 26.7s | $0.0160 |
 | hosted Browser Use | 11/12 | 11/12 | 14.7s | 25.8s | $0.3767 |
 
-**Speed.** This build more than halved the median, 27.5s to 12.9s, and now beats hosted Browser Use
-on median and mean at about a fiftieth of the cost. Best successful run per task, fastbrowse against hosted:
+**Speed.** fastbrowse beats hosted Browser Use on median and mean at about a fiftieth of the
+cost. Best successful run per task, fastbrowse against hosted:
 pypi-version 9.5s against 18.1s, pypi-structured 11.8s against 15.7s, saucedemo-cart 20.0s against
 90.7s; hosted is still ahead by 1 to 2.6s on hn-top, github-license and wiki-godel. What did it: a
 direct address for the task proposed while the start page loads, a plan written from the task
