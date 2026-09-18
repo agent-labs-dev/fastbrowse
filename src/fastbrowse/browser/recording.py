@@ -12,6 +12,7 @@ import asyncio
 import base64
 import html
 import itertools
+import logging
 import shutil
 import time
 from contextlib import suppress
@@ -25,13 +26,19 @@ from fastbrowse.browser.session import BrowserSession
 from fastbrowse.models import RunResult
 from fastbrowse.page import BrowserError
 
+logger = logging.getLogger(__name__)
+
 _FPS = 25
+_RECAST_SECONDS = 1.0
+"""A cast with no frame this long is restarted. A start sent while the tab swaps renderer on a cross-site
+navigation can go unanswered, and GitHub runs then recorded nothing; restarting a live cast only costs a frame."""
+_COMMAND_SECONDS = 0.5
 _RESULT_SECONDS = 4.0
 """Long enough to read a one-line answer in a shared clip."""
 
 
 class RecordingError(RuntimeError):
-    """ffmpeg is missing or could not write the video."""
+    """ffmpeg is missing. Later failures are logged instead: a video is never worth a run's result."""
 
 
 class Recording:
@@ -41,6 +48,8 @@ class Recording:
         self._session = session
         self._path = path
         self._frame: bytes | None = None
+        self._frame_at = 0.0
+        self._written = 0
         self._casting: str | None = None
         self._ffmpeg: asyncio.subprocess.Process | None = None
         self._ticker: asyncio.Task[None] | None = None
@@ -74,10 +83,15 @@ class Recording:
         await asyncio.gather(*self._acks, return_exceptions=True)
         if self._ffmpeg is None or self._ffmpeg.stdin is None:
             return
+        if not self._written:
+            self._ffmpeg.kill()
+            await self._ffmpeg.wait()
+            logger.warning("the browser sent no frames, so nothing was recorded to %s", self._path)
+            return
         self._ffmpeg.stdin.close()
         _, stderr = await self._ffmpeg.communicate()
-        if self._ffmpeg.returncode != 0 and exc_type is None:
-            raise RecordingError(f"ffmpeg failed: {stderr.decode(errors='replace').strip()[:400]}")
+        if self._ffmpeg.returncode != 0:
+            logger.warning("ffmpeg could not write %s: %s", self._path, stderr.decode(errors="replace").strip()[:400])
 
     async def show_result(self, task: str, result: RunResult) -> None:
         """End the video on the task and its outcome, in the tab being recorded."""
@@ -100,6 +114,7 @@ class Recording:
 
     def _on_frame(self, event: ScreencastFrameEvent, session_id: str | None) -> None:
         self._frame = base64.b64decode(event["data"])
+        self._frame_at = time.monotonic()
         # Chrome sends no further frames until each one is acknowledged.
         ack = asyncio.ensure_future(
             self._session.client.send_raw("Page.screencastFrameAck", {"sessionId": event["sessionId"]}, session_id)
@@ -113,17 +128,22 @@ class Recording:
         started = time.monotonic()
         for frame in itertools.count():
             active = self._session.active_session_id
-            if active != self._casting:
+            if active != self._casting or time.monotonic() - self._frame_at > _RECAST_SECONDS:
                 await self._cast(active)
             if self._frame is not None:
                 self._ffmpeg.stdin.write(self._frame)
                 await self._ffmpeg.stdin.drain()
+                self._written += 1
             await asyncio.sleep(max(0.0, started + (frame + 1) / _FPS - time.monotonic()))
 
     async def _cast(self, session_id: str) -> None:
+        # The previous tab may already be closed, taking its screencast with it; an unanswered start is retried.
         if self._casting is not None:
-            # The previous tab may already be closed; its screencast went with it.
-            with suppress(BrowserError):
-                await self._session.client.send_raw("Page.stopScreencast", None, self._casting)
-        await self._session.client.send_raw("Page.startScreencast", {"format": "jpeg", "quality": 85}, session_id)
+            await self._command("Page.stopScreencast", None, self._casting)
+        await self._command("Page.startScreencast", {"format": "jpeg", "quality": 85}, session_id)
         self._casting = session_id
+        self._frame_at = time.monotonic()
+
+    async def _command(self, method: str, params: dict[str, object] | None, session_id: str) -> None:
+        with suppress(BrowserError, TimeoutError):
+            await asyncio.wait_for(self._session.client.send_raw(method, params, session_id), _COMMAND_SECONDS)
