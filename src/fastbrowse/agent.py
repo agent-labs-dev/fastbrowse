@@ -122,6 +122,14 @@ class _RunState:
     edited: set[tuple[Operation, str | None]] = field(default_factory=set[tuple[Operation, str | None]])
     last_page: tuple[str, str] | None = None
     ready_plan: Plan | None = None
+    read_here: bool = False
+    """This page has been read since it last changed."""
+    leaving: list[asyncio.Task[bool]] = field(default_factory=list[asyncio.Task[bool]])
+    """Reads of pages an action is leaving, run alongside it; awaited before DONE is judged."""
+
+    async def settle_reads(self) -> None:
+        pending, self.leaving = self.leaving, []
+        await asyncio.gather(*pending)
 
     @property
     def plan(self) -> Plan:
@@ -207,6 +215,8 @@ class Agent:
             # A run can end before it ever needed the plan, and a plan still being written would bill it.
             if planning is not None:
                 await _discard(planning)
+            for leaving in state.leaving if state is not None else ():
+                await _discard(leaving)
 
     async def _loop(
         self, state: _RunState, output_schema: type[BaseModel] | None, until: UntilCheck | None
@@ -239,9 +249,14 @@ class Agent:
                 # Unsure without the requirements: the plan is already in flight and costs less than recovery.
                 await state.await_plan()
                 continue
-            if decision.operation is Operation.DONE and _unread(await state.await_plan(), state.notes):
+            if decision.operation in _NOT_ACTING:
+                await state.settle_reads()
+                unread = _unread(await state.await_plan(), state.notes)
                 # DONE cannot hold while the plan still needs information nobody has read; reading is the move.
-                decision = decision.model_copy(update={"operation": Operation.READ, "target": None})
+                # And a read with nothing left to find only restates the page: after a checkout, runs read the
+                # confirmation six times over, each "progress", so neither DONE nor the stall budget came.
+                operation = Operation.READ if unread else Operation.DONE
+                decision = decision.model_copy(update={"operation": operation, "target": None})
             # The confidence gate exists to stop the agent acting on a page it does not understand. READ and DONE
             # do not act: a read changes nothing, and DONE is judged again by `_finish`. Jev splitting DONE from
             # READ on the page that shows the answer sent every such run to recovery, and one spent the whole
@@ -310,9 +325,11 @@ class Agent:
         typed: str | None = None
         if decision.operation is Operation.READ:
             progressed, changed = await self._read(state), False
+            state.read_here = True
             act = ActResult(outcome=StepOutcome.EXECUTED, page_changed=False)
         else:
             action = await self._action(state, observation, decision)
+            await self._read_before_leaving(state, decision)
             act = await self._page.act(action, self._raw_observation or observation)
             if act.outcome is StepOutcome.EXECUTED and action.text is not None:
                 typed = "<secret>" if action.secret else self._redactor.mask(action.text)
@@ -320,6 +337,7 @@ class Agent:
             progressed = act.outcome is StepOutcome.EXECUTED and (changed or self._first_edit(state, decision, label))
         if changed:
             state.edited.clear()
+            state.read_here = False
         state.history.append(
             HistoryEntry(
                 operation=decision.operation, target=label, outcome=act.outcome, page_changed=changed, text=typed
@@ -666,9 +684,25 @@ class Agent:
         )
         return choice == "accept"
 
-    async def _read(self, state: _RunState) -> bool:
+    async def _read_before_leaving(self, state: _RunState, decision: Decision) -> None:
+        # A shop totals the order on the page before Finish and not after it, so a run that submits first can
+        # never prove the total: the checkout eval finished, found no total, and went round the cart again.
+        # The capture is taken now and read alongside the action, so a submit waits only for the capture.
+        # Only an authorized run commits: without authorization the gate stops before any page is lost.
+        if (
+            not state.authorization.irreversible_actions
+            or state.read_here
+            or state.ready_plan is None
+            or not may_be_irreversible(decision.operation, decision.target)
+            or not _unread(state.ready_plan, state.notes)
+        ):
+            return
+        state.read_here = True
+        state.leaving.append(asyncio.create_task(self._read(state, await self._capture())))
+
+    async def _read(self, state: _RunState, capture: Capture | None = None) -> bool:
         """Return whether reading added evidence, which is the only progress a read can make."""
-        capture = await self._capture()
+        capture = capture or await self._capture()
         plan = await state.await_plan()
         wanted = [r for r in state.notes.unresolved(plan) if r.kind is RequirementKind.INFORMATION]
         # Unresolved requirements may refer to an earlier one; keep the task's constraints in every read.
