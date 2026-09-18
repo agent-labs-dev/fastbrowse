@@ -5,10 +5,13 @@ Login tasks use published demo credentials, or a Bitwarden vault item of the sam
 """
 
 import asyncio
+import base64
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from enum import StrEnum
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 from pydantic import BaseModel
@@ -216,6 +219,23 @@ _SAUCE_CHECKOUT = (
 # Fixed by the practice site: $29.99 + $9.99 and 8% tax.
 _SAUCE_TOTAL = "43.18"
 
+# Four weeks out keeps the date bookable whenever the suite runs.
+_FLIGHT_DAY = date.today() + timedelta(days=28)
+_PRICE = re.compile(r"[£$€]\s?\d[\d,]*")
+
+
+def _flight_search(outcome: Outcome, _: object) -> str | None:
+    """Google Flights has no public API to check a fare against, so this grades the search Google ran: the
+    results URL's `tfs` parameter is base64 that spells out the travel date. The answer must name a price."""
+    if outcome.final_url is not None:
+        url = urlparse(outcome.final_url)
+        tfs = parse_qs(url.query).get("tfs", [""])[0]
+        searched = base64.urlsafe_b64decode(tfs + "=" * (-len(tfs) % 4)) if tfs else b""
+        if url.path != "/travel/flights/search" or _FLIGHT_DAY.isoformat().encode() not in searched:
+            return f"ended on {outcome.final_url}, not a flights search for {_FLIGHT_DAY}"
+    return None if _PRICE.search(outcome.answer or "") else f"answer names no price: {outcome.answer!r}"
+
+
 TASKS: tuple[LiveTask, ...] = (
     LiveTask(
         "pypi-version",
@@ -348,5 +368,14 @@ TASKS: tuple[LiveTask, ...] = (
         bitwarden_item="fastbrowse eval: saucedemo",
         expect=Status.NEEDS_CONFIRMATION,
         fast_only=True,
+    ),
+    LiveTask(
+        "google-flights",
+        "https://www.google.com/travel/flights",
+        f"Find the cheapest nonstop flight from London to New York on {_FLIGHT_DAY:%-d %B %Y} and tell me the "
+        "airline and price.",
+        lambda _: _constant(None),
+        _flight_search,
+        Category.WIDGET,
     ),
 )
