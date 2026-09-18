@@ -21,31 +21,19 @@ Jev chooses each action, an LLM plans and reads, and code owns verification, saf
 
 Most browser agents generate each action from a screenshot. fastbrowse indexes the page into
 candidates and has [Jev](https://typesafe.ai), a choice model, **pick one**, so it cannot click
-something that was never on the page. Every claim in an answer cites a quote stored verbatim from
-the page, and Jev checks each claim against its quote.
+something that was never on the page. Every claim in an answer cites a verbatim quote from the page.
 
-Six live tasks, two passes each, against hosted Browser Use on the same day: the latest httpx
-version on PyPI (as text and as structured output), the top Hacker News story, httpx's license on
-GitHub, the year of Gödel's incompleteness theorems via Wikipedia search, and a saucedemo login and
-add-to-cart. Each answer is graded against the live source ([method](docs/evals.md)):
+Six live tasks, two passes each, against hosted Browser Use on the same day, graded against each
+site's own API ([tasks and method](docs/evals.md)):
 
 | | passed | correct answer | median time | mean time | cost per task |
 |:--|:--|:--|:--|:--|:--|
 | **fastbrowse** (cloud browser) | **12/12** | 12/12 | **12.9s** | **15.4s** | **$0.0072** |
 | hosted Browser Use | 11/12 | 11/12 | 14.7s | 25.8s | $0.3767 |
 
-**Speed.** fastbrowse beats hosted Browser Use on median and mean at about a fiftieth of the
-cost. Best successful run per task, fastbrowse against hosted:
-pypi-version 9.5s against 18.1s, pypi-structured 11.8s against 15.7s, saucedemo-cart 20.0s against
-90.7s; hosted is still ahead by 1 to 2.6s on hn-top, github-license and wiki-godel. What did it: a
-direct address for the task proposed while the start page loads, a plan written from the task
-alone on a small model, settling on DOM quiet instead of every image and tracker, short facts picked
-by Jev, hedged requests against provider tails, and no low-confidence recovery for steps that do not act
-([details](docs/evals.md#results)).
-
-Twelve runs is a smoke test, not a benchmark: single runs swing by 4 to 5 seconds, and one
-wiki-godel run took 34s on a slow read. `passed` counts only `complete`; the hosted miss ended with
-"Task ended unexpectedly".
+Faster on median and mean at about a fiftieth of the cost; hosted is still 1 to 2.6s ahead on three
+of the six tasks ([per task](docs/evals.md#results)). Twelve runs is a smoke test, not a benchmark:
+single runs swing by 4 to 5 seconds.
 
 ## How it works
 
@@ -54,10 +42,9 @@ wiki-godel run took 34s on a slow read. `passed` counts only `complete`; the hos
   <img src="assets/architecture.svg" alt="The task is planned and the start page opened in parallel; each step indexes the page, Jev picks an operation and target, code gates it and acts; reads keep verbatim quotes, and the answer cites every claim.">
 </picture>
 
-Jev never writes an action, it picks one of the candidates on the page, so it cannot click something
-that is not there. The LLM plans, reads and writes. Code owns the gates: irreversible actions stop
-without `--authorize`, secrets reach models by name only, and every claim in an answer cites a
-quote from the page. More in [docs/design.md](docs/design.md).
+The LLM plans, reads and writes. Code owns the gates: irreversible actions stop without
+`--authorize`, secrets reach models by name only, and cookie banners are refused before they paint.
+More in [docs/design.md](docs/design.md).
 
 ## How it compares
 
@@ -66,14 +53,12 @@ quote from the page. More in [docs/design.md](docs/design.md).
 | Choosing an action | LLM generates from a screenshot | Jev picks from indexed controls | Jev picks from indexed controls |
 | Returns | an answer | `DONE` or `BLOCKED` | an answer with quotes, or why it stopped |
 | Reads pages | yes | no | yes, every claim cited |
-| Signing in | yes | password fields excluded | `--secret`, models see names only |
+| Signing in | yes | password fields excluded | `--secret` or a Bitwarden vault item; models see names only |
 | Irreversible actions | not gated | not gated | stop unless `--authorize` |
 | Browser | cloud | local Chrome, your profile | local Chrome or cloud |
 
-jev-ultrafast is Browser Use's navigation agent, with a measured 7.1 second Google Flights run, and
-fastbrowse shares its core techniques (one browser call per page read, operation and target chosen
-in one Jev request). The column describes its `main` branch as of 2026-09-18; an experimental
-branch adds a planner with requirement checks.
+jev-ultrafast is Browser Use's navigation agent (a measured 7.1s Google Flights run); fastbrowse
+shares its core techniques. Its column describes `main` as of 2026-09-18.
 
 ## Try it
 
@@ -107,7 +92,7 @@ answer, and cost by component.
 | `--max-steps N`, `--max-dollars N` | bound the run |
 | `--downloads DIR` | keep downloaded files |
 | `--json` | full result instead of the answer |
-| `--record FILE` | save an MP4 of the tab that ends on the answer, time and cost (needs `ffmpeg`). It shows what the pages showed, so watch it before sharing |
+| `--record FILE` | save an MP4 of the tab ending on the answer, time and cost (needs `ffmpeg`), e.g. `recordings/demo.mp4`, which git ignores. It shows what the pages showed, so watch it before sharing |
 
 ```sh
 export SAUCE_PASSWORD=secret_sauce
@@ -117,8 +102,7 @@ uv run fastbrowse "Log in as standard_user with the saved password and add the b
 
 ### Signed-in sites
 
-Sign in once by hand in a profile of its own, then point runs at it. The agent reuses the session
-and never sees a password.
+Sign in once by hand in a profile of its own, then point runs at it:
 
 ```sh
 google-chrome --user-data-dir="$HOME/.fastbrowse/amazon" https://www.amazon.com/   # sign in, then close Chrome
@@ -126,9 +110,8 @@ uv run fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
   --start https://www.amazon.com/ --profile ~/.fastbrowse/amazon --headed
 ```
 
-Or sign in from your vault: with the [Bitwarden CLI](https://bitwarden.com/help/cli/) signed in, name
-the item. The models see only the names `username` and `password`; the values stay in this process and
-are typed only on a site the item's saved URIs cover. With `--profile`, later runs stay signed in.
+Or from your vault, with the [Bitwarden CLI](https://bitwarden.com/help/cli/) unlocked. Values are typed
+only on a site the item's saved URIs cover, and models see only `username` and `password`:
 
 ```sh
 export BW_SESSION="$(bw unlock --raw)"
@@ -142,8 +125,7 @@ The LLM defaults to `google/gemini-3.8-flash` at low reasoning effort, with
 `google/gemini-3.5-flash-lite` for planning, proposing a direct address and typing field text.
 Override with `FASTBROWSE_LLM_MODEL` (every purpose), `FASTBROWSE_LLM_MODEL_<PURPOSE>` (`PLAN`,
 `READ`, `FIELD_TEXT`, `SHORTCUT`, `RECOVER`, `COMPOSE`, `VERIFY`) and `FASTBROWSE_LLM_REASONING`
-(`low`, `medium`, `high`). Flash-lite for every purpose is faster but scored 8/12 live, so it is
-used only where its output is checked downstream.
+(`low`, `medium`, `high`).
 
 ### Results
 
@@ -198,13 +180,10 @@ complete {'package': 'httpx', 'version': '0.28.1'} $0.0114
   "pip install httpx" from https://pypi.org/project/httpx/
 ```
 
-`run_task` builds the browser and clients, runs the agent, and closes the browser on every path.
-The result has `status`, `answer`, `data`, `evidence`, `final_url` and an itemized `cost`.
-
-Jev comes from Typesafe directly or through the Vercel AI Gateway, whichever key is set; with both,
-`FASTBROWSE_JEV_SOURCE` picks one, and `FASTBROWSE_JEV_BASE_URL` sends it through a proxy. Anything
-else, such as a cache or a recorded fixture, can be passed as `run_task(jev=...)`: an object with one
-`evaluate(state, questions)` method (the `JevClient` protocol in `jev.py`). The LLM works the same way.
+Jev comes from Typesafe directly or through the Vercel AI Gateway, whichever key is set
+(`FASTBROWSE_JEV_SOURCE` picks when both are, `FASTBROWSE_JEV_BASE_URL` adds a proxy). Any other source
+can be passed as `run_task(jev=...)`, an object with one `evaluate(state, questions)` method; the LLM
+works the same way.
 
 ## Safety model
 
@@ -212,9 +191,8 @@ else, such as a cache or a recorded fixture, can be passed as `run_task(jev=...)
   that cannot be undone. Without `--authorize`, a yes stops the run. This is a classifier, not a
   guarantee: a page can word a harmful control to look harmless.
 - **Secrets.** Models see secret names only. A value is resolved at the moment of typing, only for
-  its declared origin, and is redacted from everything the run returns, in raw, URL-encoded and
-  JSON-escaped form. A password field is typed only from a stored secret, never
-  generated.
+  its declared origin, and redacted from everything the run returns. A password field is typed only
+  from a stored secret, never generated.
 - **Page content is data.** Every prompt says so, and completion is judged against quotes and page
   state rather than the model's say-so.
 

@@ -9,3 +9,7 @@ dist/
 
 # Synced by `vale sync`; only the house style is tracked.
 .vale/styles/write-good/
+
+# --record output
+recordings/
+*.mp4

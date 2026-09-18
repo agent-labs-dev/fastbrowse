@@ -60,6 +60,7 @@ class Recording:
         ffmpeg = shutil.which("ffmpeg")
         if ffmpeg is None:
             raise RecordingError("recording needs ffmpeg on PATH")
+        self._path.parent.mkdir(parents=True, exist_ok=True)
         self._ffmpeg = await asyncio.create_subprocess_exec(
             ffmpeg,
             *("-loglevel", "error", "-y", "-f", "image2pipe", "-framerate", str(_FPS), "-i", "-"),
