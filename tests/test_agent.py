@@ -5,6 +5,7 @@ import json
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from pydantic import JsonValue
 
 # pyright: reportPrivateUsage=false
 from fastbrowse import agent as agent_module
@@ -482,3 +483,138 @@ async def test_a_click_on_a_redrawn_control_lands_on_its_one_twin_without_decidi
     targets = [call.args[0].target_id for call in page.act.await_args_list]
     assert targets == (["done", "done-0"] if twins == 1 else ["done"])
     assert state.steps[-1].outcome is (StepOutcome.EXECUTED if twins == 1 else StepOutcome.STALE)
+
+
+def _link(key: str, label: str, href: str) -> Control:
+    return Control(id=key, frame_id=None, role="link", label=label, href=href, operations=frozenset({Operation.CLICK}))
+
+
+def _at(url: str, *controls: Control) -> Observation:
+    return observation(controls).model_copy(update={"url": url, "page_key": url})
+
+
+@pytest.mark.parametrize(
+    ("controls", "found"),
+    [
+        ((_link("n", "Next →", "/page/2/"),), "n"),
+        ((_link("n", "next", "/c/mystery/page-2.html"), _link("m", "Mystery", "/c/mystery/index.html")), "n"),
+        # A pager above and below the list is one next page.
+        ((_link("top", "»", "/page/2/"), _link("bottom", "»", "/page/2/")), "top"),
+        # Two different next pages is doubt, left to Jev.
+        ((_link("a", "Next", "/page/2/"), _link("b", "Next", "/other/2/")), None),
+        # A load-more button keeps the earlier records on the page, so reading again would count them twice.
+        ((_button("Next"),), None),
+        ((_link("n", "Next", "/list/"),), None),
+        ((_link("n", "Next steps for your account", "/help/"),), None),
+    ],
+)
+def test_the_next_page_of_a_list_is_one_link_to_another_address(
+    controls: tuple[Control, ...], found: str | None
+) -> None:
+    control = agent_module._next_page_control(_at("https://example.test/list/", *controls))
+    assert (control.id if control else None) == found
+
+
+async def test_a_list_the_reader_needs_whole_is_read_page_by_page_without_deciding() -> None:
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(
+            Requirement(id="r1", text="The cheapest book in Mystery and its price", kind=RequirementKind.INFORMATION),
+        ),
+        answer_expected=True,
+    )
+    first = _at("https://example.test/mystery/", _link("next", "next", "/mystery/page-2.html"))
+    second = _at("https://example.test/mystery/page-2.html", _link("prev", "previous", "/mystery/"))
+    pages = [
+        capture((BlockKind.PARAGRAPH, "Sharp Objects £47.82"), (BlockKind.PARAGRAPH, "Page 1 of 2")),
+        capture((BlockKind.PARAGRAPH, "Tastes Like Fear £10.69"), (BlockKind.PARAGRAPH, "Page 2 of 2")),
+    ]
+    reads: list[JsonValue] = [
+        # Page one's winner is only the cheapest so far: tagged with the requirement, it must not close it.
+        {
+            "claims": [
+                {
+                    "requirement_id": "r1",
+                    "text": "Sharp Objects is cheapest",
+                    "source_id": "s0",
+                    "quote": "Sharp Objects £47.82",
+                }
+            ],
+            "answered": True,
+            "continues": ["r1"],
+        },
+        {
+            "claims": [
+                {
+                    "requirement_id": "r1",
+                    "text": "Tastes Like Fear is cheapest at £10.69",
+                    "source_id": "s0",
+                    "quote": "Tastes Like Fear £10.69",
+                }
+            ],
+            "answered": True,
+        },
+    ]
+    page = Mock(spec=Page)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
+    llm = ScriptedLLM(reads)
+    agent = Agent(page, ScriptedJev({"r1": "none"}), llm)
+    agent._capture = AsyncMock(side_effect=pages)
+    read = await decide(ScriptedJev({"operation": "read"}), first, context(), Config())
+
+    await agent._step(state, first, read)
+    assert not state.notes.evidenced("r1")
+    assert "next-page control ('next')" in llm.calls[0][1][-1].content
+    click = agent_module._paging(state, first, Config().max_pages)
+    assert click is not None and click.operation is Operation.CLICK and click.target is not None
+    await agent._step(state, first, click, Decider.CODE)
+    assert page.act.await_args is not None and page.act.await_args.args[0].target_id == "next"
+
+    opened = agent_module._paging(state, second, Config().max_pages)
+    assert opened is not None and opened.operation is Operation.READ
+    await agent._step(state, second, opened, Decider.CODE)
+    assert state.notes.evidenced("r1")
+    assert agent_module._paging(state, second, Config().max_pages) is None
+    assert [(s.operation, s.decided_by) for s in state.steps] == [
+        (Operation.READ, Decider.JEV),
+        (Operation.CLICK, Decider.CODE),
+        (Operation.READ, Decider.CODE),
+    ]
+
+
+async def test_a_list_goes_on_to_jev_with_a_hint_when_code_finds_no_next_page() -> None:
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r1", text="How many quotes by Einstein?", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    here = _at("https://example.test/quotes/", _button("Load more"))
+    reads: list[JsonValue] = [{"claims": [], "answered": False, "continues": ["r1"]}]
+    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "none"}), ScriptedLLM(reads))
+    await agent._read(state, capture((BlockKind.PARAGRAPH, "Einstein quote")), here)
+    assert state.next_page is None
+    assert state.hint is not None and "go on past this page" in state.hint
+
+
+async def test_the_pages_code_opens_are_capped() -> None:
+    state = await run_state()
+    here = _at("https://example.test/list/", _link("next", "next", "/list/2"))
+    state.next_page, state.pages = "next", 2
+    assert agent_module._paging(state, here, 2) is None
+    assert state.next_page is None
+
+
+async def test_a_click_that_changed_nothing_is_not_taken_again_from_the_same_page() -> None:
+    search = _button("Search")
+    form = observation((search,))
+    page = Mock(spec=Page)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=False))
+    state = await run_state()
+    state.authorization = Authorization(irreversible_actions=True)
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    decision = await decide(ScriptedJev({"operation": "click", "click_target": "search"}), form, context(), Config())
+    await agent._step(state, form, decision)
+    assert agent_module._signature(decision, form) in state.idle
+    # From a page that has since changed, the same click is a new try.
+    filled = observation((search, field("Return").model_copy(update={"value": "Fri, Oct 23"})))
+    assert agent_module._signature(decision, filled) not in state.idle

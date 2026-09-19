@@ -180,6 +180,12 @@
       if (value !== null) base[key] = value === 'true';
     }
     if (['checkbox', 'radio'].includes(source.type)) base.checked = source.checked;
+    // A field a form will not submit without: required and still empty, or marked invalid by the page.
+    if (source.getAttribute('aria-invalid') === 'true' ||
+      ((source.required || source.getAttribute('aria-required') === 'true') &&
+        !(['checkbox', 'radio'].includes(source.type) ? source.checked : (source.value ?? '').trim()))) {
+      base.blocking = true;
+    }
     if (e.tagName === 'SELECT') {
       base.operations = ['select'];
       base.options = [...e.options].filter(o => !o.disabled && !o.closest('optgroup[disabled]')).map(o => o.label);
