@@ -934,6 +934,7 @@ def _control_from_raw(control_id: str, frame_id: str | None, c: dict[str, Any]) 
         expanded=c.get("expanded"),
         sensitive=bool(c.get("sensitive", False)),
         offscreen=bool(c.get("offscreen", False)),
+        blocking=bool(c.get("blocking", False)),
     )
 
 

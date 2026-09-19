@@ -728,3 +728,23 @@ async def test_pruning_the_only_claim_for_a_requirement_is_an_omission() -> None
     )
     composed = ComposedAnswer(answer="unused", claims=claims, requirements=requirements)
     assert await check_claims(Jev(), composed, notes, Thresholds()) is None
+
+
+async def test_a_winner_from_part_of_a_list_is_kept_but_does_not_answer() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Sharp Objects £47.82"), (BlockKind.PARAGRAPH, "Page 1 of 2"))
+    notes = Notes()
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {"requirement_id": "r1", "text": "cheapest", "source_id": "s0", "quote": "Sharp Objects £47.82"}
+                ],
+                "answered": True,
+                "continues": ["r1", "not-asked"],
+            }
+        ]
+    )
+    outcome = await read(llm, page, "Cheapest mystery?", ["r1"], notes, notice="This page has a next-page control.")
+    assert outcome.continues == ("r1",)
+    assert len(notes.facts) == 1 and not notes.evidenced("r1")
+    assert "This page has a next-page control." in llm.calls[0][1][-1].content

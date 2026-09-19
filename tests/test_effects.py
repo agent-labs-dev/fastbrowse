@@ -67,3 +67,14 @@ def test_a_chosen_suggestion_that_leaves_the_typed_text_counts() -> None:
 def test_an_option_no_field_shows_afterwards_set_nothing() -> None:
     after = observation((TRIGGER.model_copy(update={"label": "Ticket type. Round trip", "expanded": False}),))
     assert not effect(observation(OPTIONS), after, OPTIONS[0]).set_something
+
+
+def test_an_action_that_set_nothing_names_the_fields_the_form_still_needs() -> None:
+    search = Control(id="s", frame_id=None, role="button", label="Search", operations=frozenset({Operation.CLICK}))
+    needed = Control(
+        id="r", frame_id=None, role="textbox", label="Return", operations=frozenset({Operation.FILL}), blocking=True
+    )
+    form = observation((search, needed))
+    assert effect(form, form).summary == "nothing visible changed; fields the form still needs: 1 control: Return"
+    filled = observation((search, needed.model_copy(update={"value": "Oct 23", "blocking": False})))
+    assert "still needs" not in effect(form, filled).summary
