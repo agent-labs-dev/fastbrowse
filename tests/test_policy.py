@@ -17,7 +17,14 @@ from fastbrowse.jev import (
 )
 from fastbrowse.models import CostBasis, CostComponent, CostLine, Operation, StepOutcome
 from fastbrowse.page import Control, Observation
-from fastbrowse.policy import HistoryEntry, ObservationTooLarge, Reduction, StepContext, decide
+from fastbrowse.policy import (
+    HistoryEntry,
+    ObservationTooLarge,
+    Reduction,
+    StepContext,
+    _element,  # pyright: ignore[reportPrivateUsage]
+    decide,
+)
 
 FREE = CostLine(component=CostComponent.JEV, basis=CostBasis.ESTIMATED, dollars=0.0)
 
@@ -144,3 +151,8 @@ async def test_duplicate_labels_reach_the_chooser_with_their_context() -> None:
     rendered = question.model_dump_json()
     assert '"context":"Sauce Labs Backpack"' in rendered
     assert '"context":"Sauce Labs Bike Light"' in rendered
+
+
+def test_a_field_the_form_will_not_submit_without_is_marked_for_jev() -> None:
+    assert _element(button(1).model_copy(update={"blocking": True}))["blocking"] is True
+    assert "blocking" not in _element(button(2))
