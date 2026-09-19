@@ -203,6 +203,47 @@ Jev comes from Typesafe directly or through the Vercel AI Gateway, whichever key
 can be passed as `run_task(jev=...)`, an object with one `evaluate(state, questions)` method; the LLM
 works the same way.
 
+## Use it from an MCP client
+
+`fastbrowse-mcp` serves one `browse` tool over [MCP](https://modelcontextprotocol.io), so Claude Code, Claude
+Desktop, Cursor or any other MCP client can hand it a task. It returns the answer, typed `fields` if asked for,
+the quotes behind them, the status and what to do about it, and reports progress on every step.
+
+```sh
+uv sync --extra mcp
+claude mcp add fastbrowse -e OPENROUTER_API_KEY=... -e AI_GATEWAY_API_KEY=...   -- uv run --directory "$PWD" fastbrowse-mcp --max-dollars 0.25
+```
+
+For a client configured by JSON, such as Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "fastbrowse": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/fastbrowse", "fastbrowse-mcp"],
+      "env": { "OPENROUTER_API_KEY": "...", "AI_GATEWAY_API_KEY": "..." }
+    }
+  }
+}
+```
+
+The server's flags decide what a calling model may do; a call can ask for less, never more.
+
+| Flag | Effect |
+|:--|:--|
+| `--cloud`, `--headed`, `--profile DIR`, `--downloads DIR` | as for the CLI, fixed for every call |
+| `--allow-authorize` | let a call pass `authorize` to go through irreversible actions; without it they always stop at `needs_confirmation` |
+| `--secret NAME=ENV_VAR@ORIGIN` | typed when a call's start page is on `ORIGIN`; the model sees `NAME` only |
+| `--bitwarden ITEM` | a vault login a call may name in `bitwarden` |
+| `--max-steps N`, `--max-dollars N`, `--max-seconds N` | ceilings per call (defaults 60, $1.00, 600s) |
+| `--max-concurrent N` | runs at once, default 1; more calls wait their turn |
+| `--transport http`, `--host`, `--port` | streamable HTTP at `/mcp` instead of stdio |
+
+Over HTTP, set `FASTBROWSE_MCP_TOKEN` and every request but `GET /healthz` needs
+`Authorization: Bearer <token>`. The server refuses to bind anything but loopback without one. A run takes
+seconds to minutes, so raise the client's tool timeout if it has one (`MCP_TOOL_TIMEOUT` in Claude Code).
+
 ## Safety model
 
 - **Irreversible actions.** Before any button or submit, Jev is asked whether it commits something

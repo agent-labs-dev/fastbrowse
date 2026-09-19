@@ -11,7 +11,8 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.14"
-      # The hosted-arm eval imports browser_use_sdk; without the extra, pyright sees a different tree than we do.
+      # The hosted-arm eval imports browser_use_sdk and the MCP server imports mcp; without the extras, pyright
+      # sees a different tree than we do.
       - run: uv sync --locked --all-extras
       - run: uv run ruff check .
       - run: uv run ruff format --check .

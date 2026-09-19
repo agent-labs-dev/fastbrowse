@@ -385,3 +385,14 @@ def test_chrome_discovery(monkeypatch: pytest.MonkeyPatch, binary: str) -> None:
 
     monkeypatch.setattr(chrome_adapter.shutil, "which", which)
     assert find_chrome(binary if binary == "/custom/chrome" else None) == binary
+
+
+def test_chrome_discovery_finds_a_windows_install_off_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", "C:/Users/me/AppData/Local")
+    installed = str(Path("C:/Users/me/AppData/Local", "Google", "Chrome", "Application", "chrome.exe"))
+
+    def which(name: str) -> str | None:
+        return name if name == installed else None
+
+    monkeypatch.setattr(chrome_adapter.shutil, "which", which)
+    assert find_chrome(None) == installed

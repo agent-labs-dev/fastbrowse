@@ -21,9 +21,12 @@ Issues = "https://github.com/agent-labs-dev/fastbrowse/issues"
 
 [project.optional-dependencies]
 browser-use = ["browser-use-sdk>=3.11.3,<3.12"]
+# The MCP server, `fastbrowse-mcp`.
+mcp = ["mcp>=1.20,<2"]
 
 [project.scripts]
 fastbrowse = "fastbrowse.cli:main"
+fastbrowse-mcp = "fastbrowse.mcp_server:main"
 
 [build-system]
 requires = ["hatchling"]

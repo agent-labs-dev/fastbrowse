@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -33,10 +34,17 @@ def find_chrome(override: str | None) -> str | None:
         "chromium-browser",
         "chrome",
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        *_windows_installs(),
     ):
         if binary := shutil.which(name):
             return binary
     return None
+
+
+def _windows_installs() -> tuple[str, ...]:
+    """Chrome's per-machine and per-user installs, which its Windows installer leaves off PATH."""
+    roots = (os.environ.get(name) for name in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"))
+    return tuple(str(Path(root, "Google", "Chrome", "Application", "chrome.exe")) for root in roots if root)
 
 
 @asynccontextmanager
