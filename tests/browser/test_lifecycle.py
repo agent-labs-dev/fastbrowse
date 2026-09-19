@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import re
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Generator
@@ -354,9 +355,12 @@ def test_chrome_is_killed_and_reaped_on_shutdown_timeout(monkeypatch: pytest.Mon
     assert process.wait.call_count == 2
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in Chrome is a shell script")
 def test_a_chrome_that_exits_at_start_fails_at_once_with_its_own_error(tmp_path: Path) -> None:
     binary = tmp_path / "chrome"
-    binary.write_text("#!/bin/sh\necho 'Running as root without --no-sandbox is not supported' >&2\nexit 1\n")
+    binary.write_text(
+        "#!/bin/sh\necho 'Running as root without --no-sandbox is not supported' >&2\nexit 1\n", encoding="utf-8"
+    )
     binary.chmod(0o755)
     started = time.monotonic()
     with (

@@ -122,7 +122,7 @@ def _wait_for_ws(active: Path, proc: subprocess.Popen[bytes], log: IO[bytes], ti
         if proc.poll() is not None:
             raise RuntimeError(f"Chrome exited with status {proc.returncode} before DevTools started{_tail(log)}")
         try:
-            port = int(active.read_text().split("\n")[0])
+            port = int(active.read_text(encoding="utf-8").split("\n")[0])
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1) as response:
                 return str(json.load(response)["webSocketDebuggerUrl"])
         except OSError, ValueError:

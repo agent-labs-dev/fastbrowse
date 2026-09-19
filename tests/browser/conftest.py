@@ -61,7 +61,9 @@ def _handler_for(directory: Path, iframe_origin: str | None = None) -> type[Base
                 return
             path = self.path.split("?", 1)[0]
             if path in ("/", "/index.html") and iframe_origin is not None:
-                content = (directory / "index.html").read_text().replace("__IFRAME_ORIGIN__", iframe_origin)
+                content = (
+                    (directory / "index.html").read_text(encoding="utf-8").replace("__IFRAME_ORIGIN__", iframe_origin)
+                )
                 body = content.encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")

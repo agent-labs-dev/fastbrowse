@@ -186,7 +186,7 @@ class Screencast:
             lines += [f"file '{frame}'", f"duration {max(after - at, 1 / FPS):.3f}"]
         lines.append(f"file '{frames[-1][1]}'")
         listing = self._folder / "frames.txt"
-        listing.write_text("\n".join(lines) + "\n")
+        listing.write_text("\n".join(lines) + "\n", encoding="utf-8")
         path.parent.mkdir(parents=True, exist_ok=True)
         done = subprocess.run(
             [

@@ -28,7 +28,7 @@ CATEGORIES = ("lookup", "login", "checkout", "safety", "widget", "navigate")
 def load(path: Path, since: float) -> list[dict[str, object]]:
     """Rows from `since` on, for the arms each task grades on equal terms (earlier runs tried every arm everywhere)."""
     arms = {task.id: task.arms for task in TASKS}
-    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     return [r for r in rows if float(r.get("at", 0) or 0) >= since and r["arm"] in arms.get(str(r["task"]), ())]
 
 

@@ -38,9 +38,9 @@ from fastbrowse.page import (
     Page,
 )
 
-_PAGE_JS = (Path(__file__).with_name("snapshot.js")).read_text()
+_PAGE_JS = (Path(__file__).with_name("snapshot.js")).read_text(encoding="utf-8")
 _SNAPSHOT_JS = _PAGE_JS + "('snapshot')"
-_CAPTURE_JS = (Path(__file__).with_name("capture.js")).read_text()
+_CAPTURE_JS = (Path(__file__).with_name("capture.js")).read_text(encoding="utf-8")
 _FINGERPRINT_JS = _PAGE_JS + "('fingerprint').fingerprint"
 _SELECT_TEXT_JS = (
     "if (typeof e.select === 'function') e.select(); else { const range = e.ownerDocument.createRange(); "
