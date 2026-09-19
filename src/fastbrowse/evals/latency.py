@@ -48,7 +48,7 @@ CANDIDATES = (
 
 def capture() -> Capture:
     """A page-sized input, taken from a fixture so the measurement needs no network."""
-    html = (Path(__file__).parent / "fixtures" / "shop.html").read_text()
+    html = (Path(__file__).parent / "fixtures" / "shop.html").read_text(encoding="utf-8")
     text = re.sub(r"<[^>]+>", " ", html)
     text = re.sub(r"\s+", " ", text).strip()
     return Capture(
