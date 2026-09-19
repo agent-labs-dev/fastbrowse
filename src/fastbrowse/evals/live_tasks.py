@@ -450,8 +450,8 @@ TASKS: tuple[LiveTask, ...] = (
     LiveTask(
         "google-flights",
         "https://www.google.com/travel/flights",
-        f"Find the cheapest nonstop flight from London to New York on {_FLIGHT_DAY:%-d %B %Y} and tell me the "
-        "airline and price.",
+        f"Find the cheapest nonstop flight from London to New York on {_FLIGHT_DAY.day} {_FLIGHT_DAY:%B %Y} "
+        "and tell me the airline and price.",
         lambda _: _constant(None),
         _flight_search,
         Category.WIDGET,
@@ -505,7 +505,7 @@ TASKS: tuple[LiveTask, ...] = (
     LiveTask(
         "flights-search",
         "https://www.google.com/travel/flights",
-        f"Search for one-way nonstop flights from London to New York on {_FLIGHT_DAY:%-d %B %Y}.",
+        f"Search for one-way nonstop flights from London to New York on {_FLIGHT_DAY.day} {_FLIGHT_DAY:%B %Y}.",
         lambda _: _constant(None),
         _flight_search_run,
         Category.NAVIGATE,

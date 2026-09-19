@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -26,6 +27,12 @@ def find_chrome(override: str | None) -> str | None:
     """`override` is `Settings.chrome`, a name or path that replaces discovery rather than joining it."""
     if override:
         return shutil.which(override)
+    # Windows installs Chrome off PATH, per machine or per user.
+    windows = [
+        str(Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe")
+        for variable in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA")
+        if (root := os.environ.get(variable))
+    ]
     for name in (
         "google-chrome-stable",
         "google-chrome",
@@ -33,6 +40,7 @@ def find_chrome(override: str | None) -> str | None:
         "chromium-browser",
         "chrome",
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        *windows,
     ):
         if binary := shutil.which(name):
             return binary
@@ -114,7 +122,7 @@ def _wait_for_ws(active: Path, proc: subprocess.Popen[bytes], log: IO[bytes], ti
         if proc.poll() is not None:
             raise RuntimeError(f"Chrome exited with status {proc.returncode} before DevTools started{_tail(log)}")
         try:
-            port = int(active.read_text().split("\n")[0])
+            port = int(active.read_text(encoding="utf-8").split("\n")[0])
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1) as response:
                 return str(json.load(response)["webSocketDebuggerUrl"])
         except OSError, ValueError:

@@ -40,8 +40,8 @@ DOWNLOAD_PATTERNS: tuple[RequestPattern, ...] = (
     {"urlPattern": "*", "resourceType": "Document", "requestStage": "Response"},
 )
 _ENABLE_DOMAINS = ("Page", "Runtime", "DOM")
-_TRACK_DOCUMENT_JS = Path(__file__).with_name("snapshot.js").read_text() + "('fingerprint')"
-_REFUSE_COOKIES_JS = (Path(__file__).parent / "autoconsent" / "autoconsent.standalone.js").read_text()
+_TRACK_DOCUMENT_JS = Path(__file__).with_name("snapshot.js").read_text(encoding="utf-8") + "('fingerprint')"
+_REFUSE_COOKIES_JS = (Path(__file__).parent / "autoconsent" / "autoconsent.standalone.js").read_text(encoding="utf-8")
 """DuckDuckGo's autoconsent (MPL-2.0, unmodified): refuses consent banners on known platforms and hides them
 before they paint, so neither the agent's steps nor a recording are spent on one."""
 

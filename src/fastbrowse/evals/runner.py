@@ -81,7 +81,7 @@ async def main(argv: list[str]) -> int:
         fixture_server() as (base_url, recorder),
         local_chrome(settings.local_chrome()) as connection,
         tempfile.TemporaryDirectory() as downloads,
-        args.out.open("a") as out,
+        args.out.open("a", encoding="utf-8") as out,
     ):
         async with httpx.AsyncClient(timeout=60) as http:
             for _ in range(args.repeat):

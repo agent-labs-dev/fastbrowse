@@ -482,7 +482,7 @@ async def main(argv: list[str]) -> int:
         await prepare_ultrafast()
     args.out.parent.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, object]] = []
-    with tempfile.TemporaryDirectory() as downloads, args.out.open("a") as out:
+    with tempfile.TemporaryDirectory() as downloads, args.out.open("a", encoding="utf-8") as out:
         async with httpx.AsyncClient(timeout=60) as http:
             for _ in range(args.repeat):
                 for task in tasks:
