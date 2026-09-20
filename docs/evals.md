@@ -25,7 +25,7 @@ Needs Jev and LLM keys (see `fastbrowse.clients.environment`). Costs about $0.00
 
 ```sh
 uv run --extra browser-use python -m fastbrowse.evals.live [--arms fast ultrafast hosted] [--category CATEGORY ...]
-    [--only TASK_ID ...] [--bitwarden] [--repeat N] [--record DIR]
+    [--suite core dev heldout] [--only TASK_ID ...] [--bitwarden] [--repeat N] [--record DIR]
 ```
 
 The same prompts run through three arms: fastbrowse on a Browser Use Cloud browser, [jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (pinned commit, run in its own environment by `scripts/ultrafast_arm.py`) on the same kind of browser, and hosted Browser Use. Every arm gets the same limits: 30 steps, $0.25 and 300s. Tasks are defined in `src/fastbrowse/evals/live_tasks.py`. Truth is fetched at run time from PyPI's JSON API, the Hacker News API and GitHub's REST API, so grades follow the live site; the rest are fixed by the site (an arXiv title, a practice shop's prices). Cost is metered: provider-reported Jev/LLM cost plus the browser and proxy cost returned when the cloud browser stops, and `total_cost_usd` for the hosted session.
@@ -59,6 +59,28 @@ Each task runs only on the arms it can grade on equal terms (`arms` in `live_tas
 `--record DIR` writes `DIR/<arm>/<task>-<n>.mp4` for every run: fastbrowse's own recording, a screencast of jev-ultrafast's tab, and hosted Browser Use's session recording, which exists only when the session opened a browser.
 
 Needs `BROWSER_USE_API_KEY` as well as the Jev and LLM keys; the jev-ultrafast arm runs its text helper on the OpenRouter key, and reaches Jev through the AI Gateway when `TYPESAFE_API_KEY` is not set. Rows are appended to `artifacts/evals/live.jsonl` with category, status, error, step trace, `correct` (the task's check) and `passed` (the check plus the expected status: `complete` for fastbrowse unless the task expects a stop, `done` for jev-ultrafast, a stopped session for hosted) and `seconds_by_call` (wall time per model call, by component and purpose). The summary prints both, per arm.
+
+## Dev and held-out tasks
+
+`--suite` picks the task sets to run: `core` (the published suite above, the default), `dev` and `heldout`. The two
+split sets live in `src/fastbrowse/evals/more_tasks.py`, on sites the agent was never tuned against, and cover
+skills the core suite barely touches: pagination, frames, new windows, hover, script-rendered pages and
+server-rendered forms. Each pair across the split exercises the same skill, so the two sets are comparable.
+
+```sh
+uv run --extra browser-use python -m fastbrowse.evals.live --arms fast --suite heldout --repeat 3
+```
+
+`--only` selects within the chosen suites, so a held-out task needs its suite as well as its id:
+
+```sh
+uv run --extra browser-use python -m fastbrowse.evals.live --arms fast --suite heldout     --only books-mystery-cheapest quotes-einstein-count --repeat 3
+```
+
+The rule that makes the split worth having: **agent changes are iterated against `dev` only.** `heldout` is run
+before and after a round of changes and never debugged, so its score says whether a round improved the agent or
+only its dev score. A change made to fix a named held-out task spends that set's value, and the next held-out
+score is no longer a clean before-and-after.
 
 **Why not a public benchmark.** Online-Mind2Web (live sites) and BU Bench are graded by an LLM judge, WebVoyager's answers have drifted with the sites, and WebArena-Verified is deterministic but needs its self-hosted sites. None covers a password manager or a confirmation stop. This suite trades breadth for grades that cannot be argued with; see [External benchmarks](#external-benchmarks) to compare on the others.
 

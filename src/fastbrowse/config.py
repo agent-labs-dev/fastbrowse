@@ -62,3 +62,11 @@ class Config(Frozen):
     """Refuse cookie consent on the platforms DuckDuckGo's autoconsent knows, before the banner paints."""
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
     """Uploads move as bytes over the DevTools socket; larger files return NEEDS_INPUT with a reason."""
+    max_pages: int = Field(default=12, ge=0)
+    """Next pages of a list code opens and reads by itself in one run; further pages are left to Jev's choice.
+
+    The ledger already bounds steps, calls and dollars, so this is not there to keep a run inside its budget. It
+    is there because walking a list is the one thing the loop does without asking a model each time: a catalogue
+    of fifty pages would spend the whole step budget on paging before anything noticed, and the run would end
+    budget_exceeded rather than saying it could not read the list.
+    """

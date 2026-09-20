@@ -58,6 +58,8 @@ TARGETED = frozenset(
 class Decider(StrEnum):
     JEV = "jev"
     LLM = "llm"
+    CODE = "code"
+    """A step code took without a model's choice, such as the next page of a list the reader said continues."""
 
 
 class StepOutcome(StrEnum):
