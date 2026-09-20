@@ -35,7 +35,7 @@ def _fixed(value: object) -> Truth:
 async def _ruff_release(http: httpx.AsyncClient) -> object:
     body = await _json(http, "https://api.github.com/repos/astral-sh/ruff/releases/latest")
     assert isinstance(body, dict)
-    return str(body["tag_name"])  # pyright: ignore[reportUnknownArgumentType]
+    return str(body["tag_name"])
 
 
 async def _serde_version(http: httpx.AsyncClient) -> object:
@@ -51,7 +51,7 @@ async def _httpx_requires(http: httpx.AsyncClient) -> object:
     body = await _json(http, "https://pypi.org/pypi/httpx/json")
     assert isinstance(body, dict)
     # ">=3.8" is answered as "3.8", "Python 3.8 or later", and so on: the version number is the fact.
-    return str(body["info"]["requires_python"]).lstrip("<>=~! ")  # pyright: ignore[reportUnknownArgumentType]
+    return str(body["info"]["requires_python"]).lstrip("<>=~! ")
 
 
 def _flat(text: str) -> str:

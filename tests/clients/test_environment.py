@@ -1,3 +1,5 @@
+from typing import Any
+
 import httpx
 import pytest
 
@@ -11,8 +13,8 @@ def no_ambient_keys(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
-def settings(**values: object) -> Settings:
-    return Settings(_env_file=None, **values)  # pyright: ignore[reportCallIssue]
+def settings(**values: Any) -> Settings:
+    return Settings(_env_file=None, **values)
 
 
 @pytest.mark.parametrize(

@@ -24,7 +24,7 @@ from fastbrowse.browser import BrowserSession, CdpPage
 from fastbrowse.config import Config
 from fastbrowse.models import BrowserConnection, CostLine, LocalChrome, Status
 from fastbrowse.page import BrowserError
-from fastbrowse.run import _browser, run_task  # pyright: ignore[reportPrivateUsage]
+from fastbrowse.run import _browser, run_task
 from tests.browser.conftest import RecordingArtifactSink
 from tests.test_policy import ScriptedJev
 from tests.test_retrieval import ScriptedLLM
@@ -168,7 +168,7 @@ async def test_cancelling_page_wait_drains_cdp_task(monkeypatch: pytest.MonkeyPa
         operation = (
             page.screenshot()
             if method == "Page.captureScreenshot"
-            else page._input(  # pyright: ignore[reportPrivateUsage]
+            else page._input(
                 session.client.send.Input.dispatchKeyEvent(
                     params={"type": "keyDown", "key": "Enter"}, session_id=session.active_session_id
                 )

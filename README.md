@@ -261,11 +261,12 @@ seconds to minutes, so raise the client's tool timeout if it has one (`MCP_TOOL_
 ## Evals and development
 
 ```sh
-uv sync --all-extras                                         # the hosted-arm SDK too, which pyright checks
+uv sync --all-extras                                         # the hosted-arm SDK too, which ty checks
+uv run pre-commit install                                    # ruff and ty before each commit
 uv run python -m fastbrowse.evals.runner                     # local fixtures, under half a cent a task
 uv run --extra browser-use python -m fastbrowse.evals.live   # live head-to-head; --arms fast skips hosted
 uv run --extra browser-use python -m fastbrowse.evals.live --suite heldout   # the never-debugged split
-uv run ruff format . && uv run ruff check . && uv run pyright && uv run pytest
+uv run ruff format . && uv run ruff check . && uv run ty check && uv run pytest
 uv run python scripts/no_slop.py && uv run vale sync && uv run vale README.md docs src scripts tests
 ```
 

@@ -83,7 +83,7 @@ async def _json(http: httpx.AsyncClient, url: str) -> object:
 async def _httpx_version(http: httpx.AsyncClient) -> object:
     body = await _json(http, "https://pypi.org/pypi/httpx/json")
     assert isinstance(body, dict)
-    return str(body["info"]["version"])  # pyright: ignore[reportUnknownArgumentType]
+    return str(body["info"]["version"])
 
 
 async def _hn_top_titles(http: httpx.AsyncClient) -> object:
@@ -91,15 +91,15 @@ async def _hn_top_titles(http: httpx.AsyncClient) -> object:
     assert isinstance(ids, list)
     # The front page reorders during a run, so any of the leading stories counts as "the top story".
     items = await asyncio.gather(
-        *(_json(http, f"https://hacker-news.firebaseio.com/v0/item/{i}.json") for i in ids[:5])  # pyright: ignore[reportUnknownVariableType]
+        *(_json(http, f"https://hacker-news.firebaseio.com/v0/item/{i}.json") for i in ids[:5])
     )
-    return [str(item["title"]) for item in items if isinstance(item, dict)]  # pyright: ignore[reportUnknownArgumentType]
+    return [str(item["title"]) for item in items if isinstance(item, dict)]
 
 
 async def _httpx_license(http: httpx.AsyncClient) -> object:
     body = await _json(http, "https://api.github.com/repos/encode/httpx")
     assert isinstance(body, dict)
-    return str(body["license"]["spdx_id"])  # pyright: ignore[reportUnknownArgumentType]
+    return str(body["license"]["spdx_id"])
 
 
 async def _constant(value: object) -> object:
@@ -126,7 +126,7 @@ def _version(outcome: Outcome, truth: object) -> str | None:
 def _hn_top(outcome: Outcome, truth: object) -> str | None:
     assert isinstance(truth, list)
     answer = (outcome.answer or "").casefold()
-    titles = [str(t) for t in truth]  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
+    titles = [str(t) for t in truth]
     return None if any(t.casefold() in answer for t in titles) else f"no leading title in {outcome.answer!r}"
 
 
@@ -155,7 +155,7 @@ def _release(outcome: Outcome, truth: object) -> str | None:
     if not isinstance(data, dict):
         return f"no structured data: {data!r}"
     expected = {"package": "httpx", "version": str(truth)}
-    return None if {k: str(v).strip() for k, v in data.items()} == expected else f"data {data}, expected {expected}"  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
+    return None if {k: str(v).strip() for k, v in data.items()} == expected else f"data {data}, expected {expected}"
 
 
 class _PyPIFile(BaseModel):
@@ -174,7 +174,7 @@ async def _newer_release(http: httpx.AsyncClient) -> object:
         name: _PyPIProject.model_validate(body).urls[0].upload_time_iso_8601
         for name, body in zip(packages, bodies, strict=True)
     }
-    return max(released, key=lambda name: released[name])
+    return max(released, key=released.__getitem__)
 
 
 def _ended_under(outcome: Outcome, prefix: str) -> str | None:
@@ -199,7 +199,7 @@ def _newer(outcome: Outcome, truth: object) -> str | None:
     data = outcome.data
     if not isinstance(data, dict):
         return f"no structured data: {data!r}"
-    package = str(data.get("package", "")).strip().casefold()  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    package = str(data.get("package", "")).strip().casefold()
     return None if package == truth else f"named {package!r}, expected {truth!r}"
 
 
@@ -298,7 +298,7 @@ def _path_is(path: str) -> Check:
 async def _hn_top_ids(http: httpx.AsyncClient) -> object:
     ids = await _json(http, "https://hacker-news.firebaseio.com/v0/topstories.json")
     assert isinstance(ids, list)
-    return [str(i) for i in ids[:5]]  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
+    return [str(i) for i in ids[:5]]
 
 
 def _hn_comments(outcome: Outcome, truth: object) -> str | None:
@@ -307,7 +307,7 @@ def _hn_comments(outcome: Outcome, truth: object) -> str | None:
     url = urlparse(outcome.final_url)
     item = parse_qs(url.query).get("id", [""])[0]
     assert isinstance(truth, list)
-    leading = [str(t) for t in truth]  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
+    leading = [str(t) for t in truth]
     # The front page reorders during a run, so any of the leading stories counts as the top one.
     if url.path == "/item" and item in leading:
         return None

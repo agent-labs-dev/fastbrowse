@@ -1,0 +1,15 @@
+# The checks CI runs, run again before each commit: `uv run pre-commit install` once, then they are automatic.
+# Prose (`scripts/no_slop.py`, Vale) and the tests stay in CI, where they can take their time.
+# The hook versions match the pinned tools in pyproject.toml; `uv run pre-commit autoupdate` moves both.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.8
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+  - repo: https://github.com/astral-sh/ty-pre-commit
+    rev: v0.0.82
+    hooks:
+      # Checks the whole project, not the staged files: a change in one file moves diagnostics in another.
+      - id: ty

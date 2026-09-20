@@ -394,7 +394,7 @@ def build_server(
     )
 
     @server.custom_route(_HEALTH_PATH, methods=["GET"])
-    async def healthz(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+    async def healthz(request: Request) -> Response:
         return JSONResponse({"status": "ok"})
 
     return server

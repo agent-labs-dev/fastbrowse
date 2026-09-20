@@ -377,7 +377,7 @@ class BrowserSession:
         params: dict[str, bool | str] = {"accept": accept}
         if prompt_text is not None:
             params["promptText"] = prompt_text
-        await self.client.send.Page.handleJavaScriptDialog(params=params, session_id=session_id)  # type: ignore[arg-type]
+        await self.client.send.Page.handleJavaScriptDialog(params=params, session_id=session_id)  # ty: ignore[invalid-argument-type]
         self._dialogs.pop(session_id, None)
 
     # -- Downloads ------------------------------------------------------------------------------------

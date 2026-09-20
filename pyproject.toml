@@ -40,9 +40,10 @@ dev = [
     "pytest>=8.4,<9",
     "pytest-asyncio>=1,<2",
     "ruff>=0.14,<1",
-    "pyright>=1.1.400",
     "vale==3.22.0.0",
     "pytest-timeout>=2.3,<3",
+    "ty==0.0.82",          # preview: pinned, and moved with the pre-commit hook
+    "pre-commit>=4.6.2",
 ]
 
 [tool.ruff]
@@ -60,7 +61,10 @@ asyncio_mode = "auto"
 # A hung browser call otherwise holds CI for its full hour with no output; this fails the test and dumps every stack.
 timeout = 120
 
-[tool.pyright]
+[tool.ty.src]
+# The package and its tests, which is the scope the checker has always had. `scripts/` runs jev-ultrafast in its own environment
+# and imports modules that are not installed here, which is the point of it.
 include = ["src", "tests"]
-pythonVersion = "3.14"
-typeCheckingMode = "strict"
+
+[tool.ty.environment]
+python-version = "3.14"

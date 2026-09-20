@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from pydantic import JsonValue
 
-# pyright: reportPrivateUsage=false
 from fastbrowse import agent as agent_module
 from fastbrowse.agent import (
     Agent,

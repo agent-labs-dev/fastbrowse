@@ -152,7 +152,7 @@ def test_a_repeated_label_passes_when_any_control_holds_the_value() -> None:
 
 
 async def test_a_hosted_session_whose_output_fails_the_schema_keeps_its_cost(monkeypatch: pytest.MonkeyPatch) -> None:
-    import browser_use_sdk.v3  # pyright: ignore[reportMissingTypeStubs] - optional extra
+    import browser_use_sdk.v3  # an optional extra
 
     session = SimpleNamespace(
         id="s1",

@@ -111,7 +111,7 @@ async def test_exactly_one_retry_then_llm_error() -> None:
 
 async def test_invalid_image_is_not_silently_dropped() -> None:
     def handler(_: httpx.Request) -> httpx.Response:
-        pytest.fail("Unsupported image must fail before sending")
+        pytest.fail("Unsupported image must fail before sending")  # ty: ignore[invalid-argument-type]
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         with pytest.raises(LLMError, match="PNG and JPEG"):

@@ -23,12 +23,12 @@ jobs:
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
           python-version: "3.14"
-      # The hosted-arm eval imports browser_use_sdk and the MCP server imports mcp; without the extras, pyright
+      # The hosted-arm eval imports browser_use_sdk and the MCP server imports mcp; without the extras, ty
       # sees a different tree than we do.
       - run: uv sync --locked --all-extras
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run pyright
+      - run: uv run ty check
       # Prose is part of the product surface: ASCII punctuation everywhere, and Vale's wording rules on prose.
       - run: uv run python scripts/no_slop.py
       - run: uv run vale sync

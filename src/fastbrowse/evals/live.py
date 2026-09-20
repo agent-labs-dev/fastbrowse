@@ -293,7 +293,7 @@ async def ultrafast_arm(
 async def hosted_arm(
     task: LiveTask, http: httpx.AsyncClient, *, record: Path | None
 ) -> tuple[Outcome, dict[str, object]]:
-    from browser_use_sdk.v3 import AsyncBrowserUse  # pyright: ignore[reportMissingTypeStubs] - optional extra
+    from browser_use_sdk.v3 import AsyncBrowserUse  # an optional extra
 
     client = AsyncBrowserUse(api_key=load_settings().browser_key())
     run = client.run(

@@ -85,7 +85,7 @@ async def test_navigation_pauses_only_documents(
 
     def on_paused(event: RequestPausedEvent, session_id: str | None) -> None:
         paused.append((event["resourceType"], event["request"]["url"]))
-        browser_session._on_request_paused(event, session_id)  # pyright: ignore[reportPrivateUsage]
+        browser_session._on_request_paused(event, session_id)
 
     monkeypatch.setattr(browser_session.client, "send_raw", counted)
     browser_session.client.register.Fetch.requestPaused(on_paused)
@@ -101,7 +101,7 @@ async def test_download_resource_types(page: CdpPage, browser_session: BrowserSe
 
     def on_paused(event: RequestPausedEvent, session_id: str | None) -> None:
         paused.append((event["resourceType"], event["request"]["url"]))
-        browser_session._on_request_paused(event, session_id)  # pyright: ignore[reportPrivateUsage]
+        browser_session._on_request_paused(event, session_id)
 
     browser_session.client.register.Fetch.requestPaused(on_paused)
     await page.navigate(main_site)
@@ -206,10 +206,10 @@ async def test_hidden_tab_requires_dom_quiet(
         await eval_value(
             browser_session, browser_session.active_session_id, "document.body.setAttribute('data-state', 'new')"
         )
-        stable, fingerprint = await page._settled_fingerprint(1)  # pyright: ignore[reportPrivateUsage]
+        stable, fingerprint = await page._settled_fingerprint(1)
         assert not stable and fingerprint is not None
         await asyncio.sleep(0.25)
-        stable, current = await page._settled_fingerprint(1)  # pyright: ignore[reportPrivateUsage]
+        stable, current = await page._settled_fingerprint(1)
         assert stable and current == fingerprint
     finally:
         await browser_session.client.send.Target.closeTarget(params={"targetId": other["targetId"]})
@@ -252,7 +252,7 @@ async def test_cancelled_settling_drains_renderer_and_dialog_waits(monkeypatch: 
     async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
         monkeypatch.setattr(session, "wait_for_dialog", wait_for_dialog)
         page = CdpPage(session, Config())
-        task = asyncio.create_task(page._changed_since("before"))  # pyright: ignore[reportPrivateUsage]
+        task = asyncio.create_task(page._changed_since("before"))
         try:
             await asyncio.wait_for(started.wait(), timeout=2)
             task.cancel()

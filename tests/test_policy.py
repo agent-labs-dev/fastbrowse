@@ -22,7 +22,7 @@ from fastbrowse.policy import (
     ObservationTooLarge,
     Reduction,
     StepContext,
-    _element,  # pyright: ignore[reportPrivateUsage]
+    _element,
     decide,
 )
 
@@ -109,7 +109,7 @@ async def test_too_many_candidates_go_group_then_element() -> None:
     jev = ScriptedJev({"operation": "click", "click_group": "2", "click_target": "b9"})
     decision = await decide(jev, observation(tuple(button(i) for i in range(12))), context(), config)
     assert decision.target is not None and decision.target.id == "b9"
-    assert set(jev.requests[1]["click_target"].criteria) == {"b8", "b9", "b10", "b11"}  # type: ignore[union-attr]
+    assert set(jev.requests[1]["click_target"].criteria) == {"b8", "b9", "b10", "b11"}  # ty: ignore[unresolved-attribute]
     assert len(decision.cost) == 2
 
 
