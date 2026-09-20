@@ -413,3 +413,9 @@ async def test_a_call_waiting_for_a_slot_does_not_spend_its_own_time_limit() -> 
         result = await waiting
         queued.cancel()
     assert not result.isError, _text(result)
+
+
+def test_a_secret_may_be_named_for_the_account_it_belongs_to() -> None:
+    """The `@` that introduces the origin is the one after the variable, not the one in an email-shaped name."""
+    args: argparse.Namespace = parse(["--secret", "user@example.com=LOGIN@https://shop.example"])
+    assert args.secret == [("user@example.com", "LOGIN", "https://shop.example")]

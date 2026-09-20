@@ -430,11 +430,16 @@ def is_loopback(host: str) -> bool:
 
 
 def _secret(value: str) -> tuple[str, str, str]:
-    """`NAME=ENV_VAR@ORIGIN`: the CLI's pair, plus the one origin this server will type it on."""
-    pair, at, origin = value.partition("@")
+    """`NAME=ENV_VAR@ORIGIN`: the CLI's pair, plus the one origin this server will type it on.
+
+    The name is taken first: a secret may be named for the account it belongs to, and `user@example.com=PW@...`
+    has an `@` in its name before the one that introduces the origin.
+    """
+    named, equals, rest = value.partition("=")
+    variable, at, origin = rest.partition("@")
     parts = urlsplit(origin)
     try:
-        name, variable = options.env_secret(pair)
+        name, variable = options.env_secret(f"{named}{equals}{variable}")
     except argparse.ArgumentTypeError:
         raise argparse.ArgumentTypeError(f"expected NAME=ENV_VAR@https://host, got {value!r}") from None
     if not at or parts.scheme not in ("http", "https") or not parts.hostname:
