@@ -748,3 +748,25 @@ async def test_a_winner_from_part_of_a_list_is_kept_but_does_not_answer() -> Non
     assert outcome.continues == ("r1",)
     assert len(notes.facts) == 1 and not notes.evidenced("r1")
     assert "This page has a next-page control." in llm.calls[0][1][-1].content
+
+
+async def test_the_choice_shortcut_is_told_the_list_continues() -> None:
+    from tests.test_policy import ScriptedJev
+
+    page = capture((BlockKind.PARAGRAPH, "Sharp Objects £47.82"))
+    jev = ScriptedJev({"r1": "none"})
+    requirement = Requirement(id="r1", text="The cheapest book", kind=RequirementKind.INFORMATION)
+    llm = ScriptedLLM([{"claims": [], "answered": False, "continues": ["r1"]}])
+    await read(
+        llm,
+        page,
+        "Cheapest?",
+        ["r1"],
+        Notes(),
+        jev=jev,
+        requirements=[requirement],
+        notice="This page has a next-page control ('next').",
+    )
+    asked = jev.requests[0]["r1"]
+    assert isinstance(asked, ChoiceQuestion)
+    assert "next-page control" in asked.instructions

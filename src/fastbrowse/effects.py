@@ -101,7 +101,6 @@ def effect(before: Observation, after: Observation, chosen: Control | None = Non
     summary = "; ".join(parts) or "nothing visible changed"
     # A submit a form refuses moves nothing or reopens a picker, and says why only in the fields it marks: Search
     # on a round trip with no return date reopened the date picker, and the run clicked Done and Search in turn.
-    blocking = [c for c in after.controls if c.blocking]
-    if blocking and not (navigated or setting):
+    if not (navigated or setting) and (blocking := [c for c in after.controls if c.blocking]):
         summary += f"; fields the form still needs: {_listed(blocking)}"
     return Effect(summary=summary, set_something=navigated or setting)

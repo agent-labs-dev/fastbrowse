@@ -174,6 +174,8 @@
     if (rname === 'link' && e.href) {
       const u = new URL(e.href, location.href);
       base.href = (u.origin === location.origin ? u.pathname + u.search : u.host + u.pathname).slice(0, 200);
+      // The page's own word for "the next page of this list", which survives an icon label or another language.
+      if (e.rel && e.rel.split(/\s+/).includes('next')) base.next_page = true;
     }
     for (const key of ['checked', 'selected', 'expanded']) {
       const value = e.getAttribute('aria-' + key);
@@ -181,9 +183,11 @@
     }
     if (['checkbox', 'radio'].includes(source.type)) base.checked = source.checked;
     // A field a form will not submit without: required and still empty, or marked invalid by the page.
-    if (source.getAttribute('aria-invalid') === 'true' ||
-      ((source.required || source.getAttribute('aria-required') === 'true') &&
-        !(['checkbox', 'radio'].includes(source.type) ? source.checked : (source.value ?? '').trim()))) {
+    // A custom widget marks the element the user sees, not the input underneath it, so both are asked.
+    if (e.getAttribute('aria-invalid') === 'true' || source.getAttribute('aria-invalid') === 'true' ||
+      (['INPUT', 'SELECT', 'TEXTAREA'].includes(source.tagName) &&
+        (source.required || source.getAttribute('aria-required') === 'true') &&
+        !(base.checked ?? (source.value ?? '').trim()))) {
       base.blocking = true;
     }
     if (e.tagName === 'SELECT') {

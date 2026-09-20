@@ -36,8 +36,10 @@ class Control(Frozen):
     expanded: bool | None = None
     sensitive: bool = False
     offscreen: bool = False
-    blocking: bool = False
+    blocking: bool | None = None
     """A field its form will not submit without: required and still empty, or marked invalid by the page."""
+    next_page: bool | None = None
+    """A link the page marks `rel="next"`: the next page of the list it belongs to."""
 
 
 class Tab(Frozen):

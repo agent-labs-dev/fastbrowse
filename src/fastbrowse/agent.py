@@ -101,6 +101,9 @@ logger = logging.getLogger(__name__)
 type _Prepared = ComposedAnswer | asyncio.Task[Generation[ComposedAnswer]] | None
 """An answer ready before conclusion: the reader's facts Jev accepted as written, or a composer in flight."""
 
+type Signature = tuple[Operation, str | None, str]
+"""One action on one target, from one page state: the key both the cycle count and the no-op memory are kept by."""
+
 
 class _FieldText(Frozen):
     missing: bool = Field(
@@ -183,13 +186,16 @@ class _RunState:
     """Pages read on the way out of them, each read once."""
     leaving: list[asyncio.Task[bool]] = field(default_factory=list[asyncio.Task[bool]])
     """Reads of pages an action is leaving, run alongside it; awaited before DONE is judged."""
-    next_page: str | None = None
-    """The next-page control to open, set when the reader says a list it needs goes on past the page it read."""
+    next_page: bool = False
+    """Open this page's next page, set when the reader says a list the run needs goes on past the page it read."""
     paged_from: str | None = None
     """The page state a next-page click left, so the page it opens is read without a decision."""
     pages: int = 0
     """Next pages opened by code this run."""
-    idle: set[tuple[Operation, str | None, str]] = field(default_factory=set[tuple[Operation, str | None, str]])
+    continuing: set[str] = field(default_factory=set[str])
+    """Requirements the reader said range over a list that goes on past the page it read. A scalar choice cannot
+    answer one of those, so it is not asked about them again on the next page."""
+    idle: set[Signature] = field(default_factory=set[Signature])
     """Actions that changed nothing, with the page state they were taken from; taking one again is a loop."""
 
     async def settle_reads(self) -> None:
@@ -293,7 +299,7 @@ class Agent:
             if (stalled := self._settle(state, observation)) is not None:
                 await self._recover(state, observation, stalled)
                 continue
-            if (paging := _paging(state, observation, self._config.max_pages)) is not None:
+            if (paging := _paging(state, observation)) is not None:
                 await self._step(state, observation, paging, Decider.CODE)
                 continue
             raw = self._raw_observation or observation
@@ -351,8 +357,10 @@ class Agent:
                 # Done and Search clicked three times each on a form that would not submit. Recovery is told so once:
                 # a click can also do nothing because the page had not wired it up yet, and a retry it asks for stands.
                 state.idle.discard(signature)
-                label = _describe(decision.target) if decision.target else decision.operation.value
-                await self._recover(state, observation, f"{decision.operation.value} {label} already did nothing here")
+                _, named, _ = signature
+                await self._recover(
+                    state, observation, f"{decision.operation.value} {named or ''} already did nothing here".strip()
+                )
                 continue
             try:
                 await self._step(state, observation, decision, decided_by)
@@ -433,24 +441,25 @@ class Agent:
             # Moving between two pages changes the page every time, and a run went round "open the author,
             # back to the list" to its step limit with its stall budget reset at every hop. The same action
             # from the same page a third time is going round, not forward.
-            signature = (decision.operation, label, state_key(observation))
+            signature = _signature(decision, observation)
             state.taken[signature] += 1
             if decision.operation is not Operation.SCROLL and state.taken[signature] > _REPEATS_BEFORE_CYCLE:
                 progressed = False
             state.acted_from = observation
             target = decision.target
+            effective = changed
             if act.outcome is StepOutcome.EXECUTED and target is not None and target.role in SETTING_ROLES:
                 # Choosing an option has an intended effect to check: a menu that closed without the value
                 # changing still changes the page, and Google Flights' "One way" was clicked to the step limit.
                 done = effect(observation, await self._observe(), target)
                 state.acted_from = None
+                effective = done.set_something
                 if not done.set_something:
                     progressed = False
                     act = act.model_copy(update={"detail": f"no effect: {done.summary}"})
-                    state.idle.add(_signature(decision, observation))
                 effect_now = done.summary
-            if act.outcome is StepOutcome.EXECUTED and not changed and decision.operation in _IDLE_CHECKED:
-                state.idle.add(_signature(decision, observation))
+            if act.outcome is StepOutcome.EXECUTED and not effective and decision.operation in _IDLE_CHECKED:
+                state.idle.add(signature)
         if changed:
             state.edited.clear()
             state.read_here = False
@@ -940,8 +949,7 @@ class Agent:
     ) -> bool:
         """Return whether reading added evidence, which is the only progress a read can make.
 
-        With the `observation` the page was read from, a list the reader says goes on past it is followed: its
-        next-page control is opened and read by code, a page at a time, until the reader has the whole list.
+        With the `observation` the page was read from, a list the reader says goes on past it is followed.
         """
         capture = capture or await self._capture()
         plan = await state.await_plan()
@@ -970,6 +978,7 @@ class Agent:
             jev=self._jev,
             requirements=wanted,
             notice=notice,
+            continuing=state.continuing,
         )
         progressed = len(state.notes.facts) > before or any(state.notes.evidenced(r.id) for r in wanted)
         continues = [key for key in outcome.continues if not state.notes.evidenced(key)]
@@ -982,16 +991,23 @@ class Agent:
             evidenced=[r.id for r in wanted if state.notes.evidenced(r.id)],
             continues=continues,
         )
-        if continues and observation is not None:
-            if following is not None and state.pages < self._config.max_pages:
-                # Deciding each hop costs a Jev call to pick a link code has already found, on every page of the list.
-                state.next_page = following.id
-            else:
-                state.hint = (
-                    "The reader saw the list this task needs go on past this page. If a next page or load-more "
-                    "control shows the rest, open it and READ it; otherwise finish with what was read."
-                )
+        if observation is not None:
+            self._follow_pages(state, continues, following)
         return progressed
+
+    def _follow_pages(self, state: _RunState, continues: Sequence[str], following: Control | None) -> None:
+        """Arrange for the rest of a list the reader says it needs: the next page by code, or a word to Jev."""
+        state.continuing = set(continues)
+        if not continues:
+            return
+        if following is not None and state.pages < self._config.max_pages:
+            # Deciding each hop costs a Jev call to pick a link code has already found, on every page of the list.
+            state.next_page = True
+            return
+        state.hint = (
+            "The reader saw the list this task needs go on past this page. If a next page or load-more "
+            "control shows the rest, open it and READ it; otherwise finish with what was read."
+        )
 
     async def _recover(self, state: _RunState, observation: Observation, reason: str) -> None:
         state.recoveries += 1
@@ -1312,7 +1328,7 @@ def _controls_text(observation: Observation) -> str:
     )
 
 
-def _signature(decision: Decision, observation: Observation) -> tuple[Operation, str | None, str]:
+def _signature(decision: Decision, observation: Observation) -> Signature:
     label = _describe(decision.target) if decision.target else decision.tab_id
     return decision.operation, label, state_key(observation)
 
@@ -1326,12 +1342,10 @@ def _next_page_control(observation: Observation) -> Control | None:
     here = urlsplit(observation.url)
     found: dict[str, Control] = {}
     for control in observation.controls:
-        if (
-            control.role != "link"
-            or Operation.CLICK not in control.operations
-            or not control.href
-            or not _NEXT_PAGE.fullmatch(" ".join(control.label.split()))
-        ):
+        if control.role != "link" or Operation.CLICK not in control.operations or not control.href:
+            continue
+        # The page's own rel="next" says so in any language and behind an icon; the label is the fallback.
+        if not control.next_page and not _NEXT_PAGE.fullmatch(" ".join(control.label.split())):
             continue
         # The snapshot gives a same-site link as its path and query, and another site's as host and path.
         if control.href.startswith("/"):
@@ -1342,12 +1356,16 @@ def _next_page_control(observation: Observation) -> Control | None:
     return next(iter(found.values())) if len(found) == 1 else None
 
 
-def _paging(state: _RunState, observation: Observation, max_pages: int) -> Decision | None:
-    """The step code takes to walk a list the reader needs whole: open its next page, then read what that opened."""
-    if (control_id := state.next_page) is not None:
-        state.next_page = None
-        target = next((c for c in observation.controls if c.id == control_id), None)
-        if target is None or state.pages >= max_pages:
+def _paging(state: _RunState, observation: Observation) -> Decision | None:
+    """The step code takes to walk a list the reader needs whole: open its next page, then read what that opened.
+
+    The control is found again on the observation the click will be dispatched against, rather than kept from the
+    one that was read, so a page that redrew its pager between the two is still followed.
+    """
+    if state.next_page:
+        state.next_page = False
+        target = _next_page_control(observation)
+        if target is None:
             return None
         state.pages += 1
         state.paged_from = state_key(observation)

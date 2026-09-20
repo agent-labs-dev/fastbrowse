@@ -565,16 +565,17 @@ async def test_a_list_the_reader_needs_whole_is_read_page_by_page_without_decidi
     await agent._step(state, first, read)
     assert not state.notes.evidenced("r1")
     assert "next-page control ('next')" in llm.calls[0][1][-1].content
-    click = agent_module._paging(state, first, Config().max_pages)
+    assert state.next_page
+    click = agent_module._paging(state, first)
     assert click is not None and click.operation is Operation.CLICK and click.target is not None
     await agent._step(state, first, click, Decider.CODE)
     assert page.act.await_args is not None and page.act.await_args.args[0].target_id == "next"
 
-    opened = agent_module._paging(state, second, Config().max_pages)
+    opened = agent_module._paging(state, second)
     assert opened is not None and opened.operation is Operation.READ
     await agent._step(state, second, opened, Decider.CODE)
     assert state.notes.evidenced("r1")
-    assert agent_module._paging(state, second, Config().max_pages) is None
+    assert agent_module._paging(state, second) is None
     assert [(s.operation, s.decided_by) for s in state.steps] == [
         (Operation.READ, Decider.JEV),
         (Operation.CLICK, Decider.CODE),
@@ -592,16 +593,25 @@ async def test_a_list_goes_on_to_jev_with_a_hint_when_code_finds_no_next_page() 
     reads: list[JsonValue] = [{"claims": [], "answered": False, "continues": ["r1"]}]
     agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "none"}), ScriptedLLM(reads))
     await agent._read(state, capture((BlockKind.PARAGRAPH, "Einstein quote")), here)
-    assert state.next_page is None
+    assert not state.next_page
     assert state.hint is not None and "go on past this page" in state.hint
 
 
 async def test_the_pages_code_opens_are_capped() -> None:
+    """Past the cap the reader's continuation goes to Jev with a hint, rather than another silent hop."""
     state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r1", text="How many books?", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    state.pages = Config().max_pages
     here = _at("https://example.test/list/", _link("next", "next", "/list/2"))
-    state.next_page, state.pages = "next", 2
-    assert agent_module._paging(state, here, 2) is None
-    assert state.next_page is None
+    reads: list[JsonValue] = [{"claims": [], "answered": False, "continues": ["r1"]}]
+    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "none"}), ScriptedLLM(reads))
+    await agent._read(state, capture((BlockKind.PARAGRAPH, "a book")), here)
+    assert not state.next_page
+    assert state.hint is not None
+    assert agent_module._paging(state, here) is None
 
 
 async def test_a_click_that_changed_nothing_is_not_taken_again_from_the_same_page() -> None:
@@ -618,3 +628,10 @@ async def test_a_click_that_changed_nothing_is_not_taken_again_from_the_same_pag
     # From a page that has since changed, the same click is a new try.
     filled = observation((search, field("Return").model_copy(update={"value": "Fri, Oct 23"})))
     assert agent_module._signature(decision, filled) not in state.idle
+
+
+def test_a_pager_the_page_marks_rel_next_is_followed_whatever_its_label() -> None:
+    # A pager drawn as an icon, or in another language, says so only in the markup.
+    icon = _link("n", "→→→", "/page/2/").model_copy(update={"label": "Weiter", "next_page": True})
+    found = agent_module._next_page_control(_at("https://example.test/list/", icon))
+    assert found is not None and found.id == "n"
