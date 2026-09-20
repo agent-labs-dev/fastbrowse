@@ -15,6 +15,9 @@ Jev chooses each action, an LLM plans and reads, and code owns verification, saf
 
 </div>
 
+> **Warning**  
+> This project is highly experimental and not recommended for production use yet.
+
 ---
 
 ## Why
