@@ -53,9 +53,28 @@ def irreversible_question(task: str, operation: Operation, control: Control) -> 
     )
 
 
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
 def origin_of(url: str) -> str:
-    parts = urlsplit(url)
-    return f"{parts.scheme}://{parts.netloc}".lower()
+    """The web origin, with a port the scheme implies dropped rather than carried.
+
+    `https://shop.example.com` and `https://shop.example.com:443` are one origin, and a secret declared for one
+    must be typed on the other: a browser writes the port back either way after a navigation, and comparing the
+    two as strings dropped the secret and ended the run at needs_login. Credentials in the URL are dropped too,
+    so `https://user@host` cannot pass itself off as another origin.
+    """
+    parts = urlsplit(url.strip())
+    try:
+        host, port = (parts.hostname or "").lower(), parts.port
+    except ValueError:
+        # A port that is not a number: not an origin this can normalize, and never one a secret is declared for.
+        return f"{parts.scheme}://{parts.netloc}".lower()
+    if not host:
+        return f"{parts.scheme}://{parts.netloc}".lower()
+    if port == _DEFAULT_PORTS.get(parts.scheme.lower()):
+        port = None
+    return f"{parts.scheme.lower()}://{host}" + (f":{port}" if port else "")
 
 
 def secret_allowed(ref: SecretRef, origin: str) -> bool:

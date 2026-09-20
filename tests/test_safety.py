@@ -1,8 +1,8 @@
 import pytest
 
-from fastbrowse.models import Operation
+from fastbrowse.models import Operation, SecretRef
 from fastbrowse.page import Control
-from fastbrowse.safety import Redactor, may_be_irreversible
+from fastbrowse.safety import Redactor, may_be_irreversible, origin_of, secret_allowed
 
 
 def control(label: str, *, role: str = "button", href: str | None = None, input_type: str | None = None) -> Control:
@@ -39,3 +39,24 @@ def test_a_secret_is_caught_in_every_encoding_a_page_or_log_carries_it_in() -> N
     for text in ('p@ss w"ord', "p%40ss%20w%22ord", "p%40ss+w%22ord", '{"v": "p@ss w\\"ord"}'):
         assert redactor.reveals(text), text
         assert "ss" not in redactor.redact(text).replace("[secret:password]", ""), text
+
+
+@pytest.mark.parametrize(
+    ("url", "origin"),
+    [
+        ("https://shop.example.test:443/cart", "https://shop.example.test"),
+        ("http://shop.example.test:80/", "http://shop.example.test"),
+        ("https://SHOP.example.test/", "https://shop.example.test"),
+        ("https://shop.example.test:8443/", "https://shop.example.test:8443"),
+        ("http://shop.example.test:443/", "http://shop.example.test:443"),
+        ("https://user:pw@shop.example.test/", "https://shop.example.test"),
+    ],
+)
+def test_a_port_the_scheme_implies_is_not_part_of_the_origin(url: str, origin: str) -> None:
+    assert origin_of(url) == origin
+
+
+def test_a_secret_declared_without_the_port_is_typed_on_the_url_that_carries_it() -> None:
+    ref = SecretRef(name="password", origins=("https://shop.example.test",))
+    assert secret_allowed(ref, origin_of("https://shop.example.test:443/login"))
+    assert not secret_allowed(ref, origin_of("https://shop.example.test:8443/login"))

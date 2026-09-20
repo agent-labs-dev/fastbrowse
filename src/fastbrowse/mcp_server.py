@@ -347,8 +347,13 @@ def build_server(
 
         if slots.locked() and ctx is not None:
             await ctx.info("waiting for another browse call to finish")
-        deadline = asyncio.timeout(None if limits.max_seconds is None else limits.max_seconds + _OVERRUN_GRACE_SECONDS)
         async with slots:
+            # `asyncio.timeout` fixes its deadline when it is built, not when it is entered, so building it above
+            # would spend a queued call's own time waiting for the slot: with one slot, a call asking for 10s
+            # behind a 70s run would enter already expired and be cancelled before it opened a browser.
+            deadline = asyncio.timeout(
+                None if limits.max_seconds is None else limits.max_seconds + _OVERRUN_GRACE_SECONDS
+            )
             try:
                 async with deadline:
                     result = await runner(

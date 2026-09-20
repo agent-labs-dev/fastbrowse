@@ -382,3 +382,34 @@ async def test_a_run_that_overruns_its_deadline_is_abandoned(monkeypatch: pytest
         result = await client.call_tool("browse", {"task": "t", "start": START, "max_seconds": 0.05})
     assert result.isError
     assert "overran max_seconds=0.05" in _text(result)
+
+
+async def test_a_call_waiting_for_a_slot_does_not_spend_its_own_time_limit() -> None:
+    """The deadline is fixed when it is built, so building it before the wait would expire in the queue."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def first(task: str, **_: Any) -> RunResult:
+        started.set()
+        await release.wait()
+        return _result()
+
+    async def second(task: str, **_: Any) -> RunResult:
+        return _result()
+
+    async def runner(task: str, **kwargs: Any) -> RunResult:
+        return await (first if task == "first" else second)(task, **kwargs)
+
+    server = build_server(ServerConfig(max_concurrent=1), runner=runner)
+    async with create_connected_server_and_client_session(server) as client:
+        queued = asyncio.create_task(client.call_tool("browse", {"task": "first", "start": START}))
+        # The waiting call's whole limit passes while the slot is held.
+        waiting = asyncio.create_task(
+            client.call_tool("browse", {"task": "second", "start": START, "max_seconds": 0.2})
+        )
+        await started.wait()
+        await asyncio.sleep(0.5)
+        release.set()
+        result = await waiting
+        queued.cancel()
+    assert not result.isError, _text(result)
