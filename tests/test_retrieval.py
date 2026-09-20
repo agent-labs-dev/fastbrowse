@@ -796,3 +796,32 @@ async def test_a_later_chunk_saying_the_list_goes_on_reopens_an_earlier_chunks_c
     assert len(llm.calls) > 1, "a chunk claiming to have answered cannot end a read of a list that goes on"
     assert outcome.continues == ("r1",)
     assert len(notes.facts) == 1 and not notes.evidenced("r1")
+
+
+async def test_a_later_chunk_is_read_against_what_earlier_chunks_of_the_page_found() -> None:
+    """The notes are written once the page is read, so the read carries its own findings between chunks."""
+    page = capture(
+        (BlockKind.PARAGRAPH, "Einstein: the world as we have created it"),
+        (BlockKind.PARAGRAPH, "b" * 13000),
+        (BlockKind.PARAGRAPH, "Einstein: there are two ways to live"),
+    )
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "requirement_id": None,
+                        "text": "an Einstein quote",
+                        "source_id": "s0",
+                        "quote": "Einstein: the world as we have created it",
+                    }
+                ],
+                "answered": False,
+            },
+            {"claims": [], "answered": False},
+            {"claims": [], "answered": False},
+        ]
+    )
+    await read(llm, page, "How many Einstein quotes?", ["r1"], Notes())
+    later = llm.calls[1][1][-1].content
+    assert "the world as we have created it" in later, "chunk two cannot count what chunk one found unseen"
