@@ -770,3 +770,29 @@ async def test_the_choice_shortcut_is_told_the_list_continues() -> None:
     asked = jev.requests[0]["r1"]
     assert isinstance(asked, ChoiceQuestion)
     assert "next-page control" in asked.instructions
+
+
+async def test_a_later_chunk_saying_the_list_goes_on_reopens_an_earlier_chunks_claim() -> None:
+    # The pager sits at the foot of a long listing, so the chunk that names it is read after the winner.
+    page = capture(
+        (BlockKind.PARAGRAPH, "Sharp Objects £47.82"),
+        (BlockKind.PARAGRAPH, "a" * 13000),
+        (BlockKind.PARAGRAPH, "Page 1 of 2"),
+    )
+    notes = Notes()
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {"requirement_id": "r1", "text": "cheapest", "source_id": "s0", "quote": "Sharp Objects £47.82"}
+                ],
+                "answered": True,
+            },
+            {"claims": [], "answered": False, "continues": ["r1"]},
+            {"claims": [], "answered": False, "continues": ["r1"]},
+        ]
+    )
+    outcome = await read(llm, page, "Cheapest?", ["r1"], notes, notice="This page has a next-page control.")
+    assert len(llm.calls) > 1, "a chunk claiming to have answered cannot end a read of a list that goes on"
+    assert outcome.continues == ("r1",)
+    assert len(notes.facts) == 1 and not notes.evidenced("r1")

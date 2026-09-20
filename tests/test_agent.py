@@ -624,10 +624,10 @@ async def test_a_click_that_changed_nothing_is_not_taken_again_from_the_same_pag
     agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
     decision = await decide(ScriptedJev({"operation": "click", "click_target": "search"}), form, context(), Config())
     await agent._step(state, form, decision)
-    assert agent_module._signature(decision, form) in state.idle
+    assert state.attempts[agent_module._signature(decision, form)].idle
     # From a page that has since changed, the same click is a new try.
     filled = observation((search, field("Return").model_copy(update={"value": "Fri, Oct 23"})))
-    assert agent_module._signature(decision, filled) not in state.idle
+    assert agent_module._signature(decision, filled) not in state.attempts
 
 
 def test_a_pager_the_page_marks_rel_next_is_followed_whatever_its_label() -> None:

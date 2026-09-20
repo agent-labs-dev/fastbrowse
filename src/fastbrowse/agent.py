@@ -10,7 +10,6 @@ import json
 import logging
 import re
 import time
-from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit
@@ -149,6 +148,15 @@ class _Unsure(Exception):
 
 
 @dataclass(slots=True)
+class _Attempts:
+    """One action on one target, from one page state: how often it was taken, and what the last one did."""
+
+    count: int = 0
+    idle: bool = False
+    """The last attempt left the page as it was, so taking it again is a loop rather than a retry."""
+
+
+@dataclass(slots=True)
 class _RunState:
     task: str
     inputs: Mapping[str, str]
@@ -165,10 +173,8 @@ class _RunState:
     unchanged: int = 0
     recoveries: int = 0
     edited: set[tuple[Operation, str | None]] = field(default_factory=set[tuple[Operation, str | None]])
-    taken: Counter[tuple[Operation, str | None, str]] = field(
-        default_factory=Counter[tuple[Operation, str | None, str]]
-    )
-    """How often each action was taken from each page state, to tell a cycle from progress."""
+    attempts: dict[Signature, _Attempts] = field(default_factory=dict[Signature, "_Attempts"])
+    """What became of each action taken from each page state, which is how a cycle is told from progress."""
     last_page: tuple[str, str] | None = None
     reached: dict[str, int] = field(default_factory=dict[str, int])
     """Each page state the run has been in, with how many actions had been taken when it was first reached. Only
@@ -195,8 +201,6 @@ class _RunState:
     continuing: set[str] = field(default_factory=set[str])
     """Requirements the reader said range over a list that goes on past the page it read. A scalar choice cannot
     answer one of those, so it is not asked about them again on the next page."""
-    idle: set[Signature] = field(default_factory=set[Signature])
-    """Actions that changed nothing, with the page state they were taken from; taking one again is a loop."""
 
     async def settle_reads(self) -> None:
         pending, self.leaving = self.leaving, []
@@ -299,6 +303,11 @@ class Agent:
             if (stalled := self._settle(state, observation)) is not None:
                 await self._recover(state, observation, stalled)
                 continue
+            # Walking a list is dispatched before Jev is asked, because not asking is the point: the link is
+            # already found and a decision would buy nothing. It therefore passes none of the gates below, which
+            # is safe only because of what it can be. A CLICK still goes through `_action`, so the irreversible
+            # gate stands. The login check needs a decision Jev has not made yet, and the page it opens is judged
+            # on the next turn. The confidence gates judge Jev's uncertainty, and there is none to judge here.
             if (paging := _paging(state, observation)) is not None:
                 await self._step(state, observation, paging, Decider.CODE)
                 continue
@@ -352,12 +361,13 @@ class Agent:
                 if result is not None:
                     return result
                 continue
-            if (signature := _signature(decision, observation)) in state.idle:
+            attempted = state.attempts.get(_signature(decision, observation))
+            if attempted is not None and attempted.idle:
                 # The same click from the same page already did nothing; taking it again is the loop #12 names,
                 # Done and Search clicked three times each on a form that would not submit. Recovery is told so once:
                 # a click can also do nothing because the page had not wired it up yet, and a retry it asks for stands.
-                state.idle.discard(signature)
-                _, named, _ = signature
+                attempted.idle = False
+                named = _describe(decision.target) if decision.target else decision.tab_id
                 await self._recover(
                     state, observation, f"{decision.operation.value} {named or ''} already did nothing here".strip()
                 )
@@ -442,8 +452,9 @@ class Agent:
             # back to the list" to its step limit with its stall budget reset at every hop. The same action
             # from the same page a third time is going round, not forward.
             signature = _signature(decision, observation)
-            state.taken[signature] += 1
-            if decision.operation is not Operation.SCROLL and state.taken[signature] > _REPEATS_BEFORE_CYCLE:
+            attempt = state.attempts.setdefault(signature, _Attempts())
+            attempt.count += 1
+            if decision.operation is not Operation.SCROLL and attempt.count > _REPEATS_BEFORE_CYCLE:
                 progressed = False
             state.acted_from = observation
             target = decision.target
@@ -458,8 +469,7 @@ class Agent:
                     progressed = False
                     act = act.model_copy(update={"detail": f"no effect: {done.summary}"})
                 effect_now = done.summary
-            if act.outcome is StepOutcome.EXECUTED and not effective and decision.operation in _IDLE_CHECKED:
-                state.idle.add(signature)
+            attempt.idle = act.outcome is StepOutcome.EXECUTED and not effective and decision.operation in _IDLE_CHECKED
         if changed:
             state.edited.clear()
             state.read_here = False

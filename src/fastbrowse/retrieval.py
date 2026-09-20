@@ -233,6 +233,7 @@ async def read(
     coverage: list[int] = []
     costs: list[CostLine] = []
     continues: dict[str, None] = {}
+    found: list[Fact] = []
     rejected = 0
     wanted = [
         r
@@ -302,21 +303,26 @@ async def read(
             if evidence is None:
                 rejected_here += 1
                 continue
-            # A winner or total from part of a list is not the answer: the cheapest on page one of two is only
-            # the cheapest so far. The fact is kept for the comparison; the requirement stays open.
-            requirement_id = (
-                claim.requirement_id
-                if claim.requirement_id in requirement_ids and claim.requirement_id not in continues
-                else None
-            )
-            fact = Fact(requirement_id=requirement_id, text=claim.text, evidence=evidence)
-            notes.add(fact)
-            facts[(evidence_id(evidence), requirement_id)] = fact
+            requirement_id = claim.requirement_id if claim.requirement_id in requirement_ids else None
+            found.append(Fact(requirement_id=requirement_id, text=claim.text, evidence=evidence))
             accepted += 1
         rejected += rejected_here
-        # An unsupported assertion of completion cannot suppress reading the remaining chunks.
-        if result.data.answered and accepted and not rejected_here and not continues:
+        # An unsupported assertion of completion cannot suppress reading the remaining chunks. Nor can it end a
+        # read of a page whose list goes on, whether this chunk said so or the caller's notice did: the rest of
+        # this page is part of the set being counted or compared, and a pager sits at the foot of a listing,
+        # in the last chunk, after the chunk that believes it has the answer.
+        if result.data.answered and accepted and not rejected_here and not continues and not notice:
             break
+    # Which requirements a claim may close is settled once every chunk has been read, because the pager that says
+    # the list goes on sits at its foot, in the last one. A winner or total from part of a list is not the answer:
+    # cheapest on page one of two is only the cheapest so far. The fact is kept for the comparison; the
+    # requirement stays open. The notes take the claims here rather than per chunk, which is also why the
+    # collected evidence above can be rendered once.
+    for fact in found:
+        if fact.requirement_id in continues:
+            fact = fact.model_copy(update={"requirement_id": None})
+        notes.add(fact)
+        facts[(evidence_id(fact.evidence), fact.requirement_id)] = fact
     return ReadOutcome(
         facts=tuple(facts.values()),
         coverage=tuple(coverage),
