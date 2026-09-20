@@ -1,6 +1,6 @@
 [project]
 name = "fastbrowse"
-version = "0.2.0"
+version = "0.3.0"
 description = "A browser agent that picks instead of generating: Jev chooses, an LLM reads and plans, code verifies."
 readme = "README.md"
 license = "MIT"
