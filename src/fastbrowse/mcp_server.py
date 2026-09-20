@@ -46,6 +46,7 @@ try:
 except ModuleNotFoundError as exc:  # pragma: no cover - depends on how fastbrowse was installed
     raise SystemExit("fastbrowse-mcp needs the mcp extra: pip install 'fastbrowse[mcp]'") from exc
 
+from fastbrowse import options
 from fastbrowse.adapters.bitwarden import BitwardenError, bitwarden_login
 from fastbrowse.adapters.local_chrome import find_chrome
 from fastbrowse.clients.environment import ConfigurationError, Settings, load_settings
@@ -65,7 +66,8 @@ type Runner = Callable[..., Awaitable[RunResult]]
 """`run_task`'s shape; tests pass a fake so the tool can be driven without a browser or model keys."""
 
 TOKEN_VARIABLE = "FASTBROWSE_MCP_TOKEN"
-_LOOPBACK_NAMES = frozenset({"localhost"})
+_HEALTH_PATH = "/healthz"
+
 # Past this many fields a schema is a scraping job, which one cited extraction per field is not built for.
 _MAX_FIELDS = 20
 # A run past its own max_seconds is given this long to wind down (close the browser, bill the cloud
@@ -104,11 +106,17 @@ class OutputField(BaseModel):
 
 
 class Citation(BaseModel):
+    """`models.Evidence` as a caller needs it: the words and where they were, without the capture offsets and
+    hashes that only mean something inside a run."""
+
     quote: str
     url: str
 
 
 class Download(BaseModel):
+    """`models.Artifact` without its `kind` (every artifact here is a download) or its `sha256`, which a caller
+    cannot check against bytes it never receives."""
+
     name: str
     mime_type: str
     size_bytes: int
@@ -219,9 +227,10 @@ async def _secrets(config: ServerConfig, origin: str, bitwarden: str | None) -> 
             vault = await asyncio.to_thread(bitwarden_login, bitwarden, origin)
         except BitwardenError as exc:
             raise ToolError(str(exc)) from None
-        if clash := values.keys() & vault.keys():
-            raise ToolError(f"a --secret and the Bitwarden item both set {', '.join(sorted(clash))} on {origin}")
-        values |= vault
+        try:
+            values = options.merged_secrets(values, vault)
+        except ValueError as exc:
+            raise ToolError(f"{exc} on {origin}") from None
     return ScopedSecrets(values, origin) if values else None
 
 
@@ -255,6 +264,12 @@ def _description(config: ServerConfig) -> str:
 
 
 def _result(result: RunResult, *, live_url: str | None, config: ServerConfig) -> BrowseResult:
+    # Without a downloads directory the files went with the run's scratch space, so there is nothing to point at.
+    downloads = (
+        [Download(name=a.name, mime_type=a.mime_type, size_bytes=a.size_bytes, uri=a.uri) for a in result.artifacts]
+        if config.downloads is not None
+        else []
+    )
     return BrowseResult(
         status=result.status,
         answer=result.answer,
@@ -267,12 +282,7 @@ def _result(result: RunResult, *, live_url: str | None, config: ServerConfig) ->
         steps=len(result.steps),
         dollars=round(result.cost.known_dollars, 6),
         cost_complete=not result.cost.has_unknown,
-        # Without a downloads directory the files went with the run's scratch space, so there is nothing to point at.
-        downloads=[
-            Download(name=a.name, mime_type=a.mime_type, size_bytes=a.size_bytes, uri=a.uri) for a in result.artifacts
-        ]
-        if config.downloads is not None
-        else [],
+        downloads=downloads,
     )
 
 
@@ -331,8 +341,9 @@ def build_server(
                     await ctx.info(f"watch live: {live_url}")
                 return
             step = event.step
-            label = f"{step.operation.value} {step.target or ''}".strip()
-            await ctx.report_progress(step.index + 1, limits.max_steps, f"{label} -> {step.outcome.value}")
+            await ctx.report_progress(
+                step.index + 1, limits.max_steps, f"{options.step_label(step)} -> {step.outcome.value}"
+            )
 
         if slots.locked() and ctx is not None:
             await ctx.info("waiting for another browse call to finish")
@@ -361,12 +372,14 @@ def build_server(
                 raise ToolError(f"the run overran max_seconds={limits.max_seconds} and was abandoned") from None
         return _result(result, live_url=live_url, config=config)
 
+    # A client shows one or the other, so they cannot be allowed to drift apart.
+    title = "Browse the web"
     server.add_tool(
         browse,
-        title="Browse the web",
+        title=title,
         description=_description(config),
         annotations=ToolAnnotations(
-            title="Browse the web",
+            title=title,
             readOnlyHint=False,
             destructiveHint=config.allow_authorize,
             idempotentHint=False,
@@ -375,7 +388,7 @@ def build_server(
         structured_output=True,
     )
 
-    @server.custom_route("/healthz", methods=["GET"])
+    @server.custom_route(_HEALTH_PATH, methods=["GET"])
     async def healthz(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
         return JSONResponse({"status": "ok"})
 
@@ -385,13 +398,12 @@ def build_server(
 class BearerAuth:
     """Rejects any HTTP request without the shared token, except the health check."""
 
-    def __init__(self, app: ASGIApp, token: str, *, open_paths: frozenset[str] = frozenset({"/healthz"})) -> None:
+    def __init__(self, app: ASGIApp, token: str) -> None:
         self._app = app
         self._expected = f"Bearer {token}".encode()
-        self._open_paths = open_paths
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http" and scope["path"] not in self._open_paths:
+        if scope["type"] == "http" and scope["path"] != _HEALTH_PATH:
             supplied = dict(scope["headers"]).get(b"authorization", b"")
             # Constant time, so the token cannot be recovered a byte at a time from response timings.
             if not hmac.compare_digest(supplied, self._expected):
@@ -404,7 +416,7 @@ class BearerAuth:
 
 
 def is_loopback(host: str) -> bool:
-    if host in _LOOPBACK_NAMES:
+    if host == "localhost":
         return True
     try:
         return ip_address(host.strip("[]")).is_loopback
@@ -413,10 +425,14 @@ def is_loopback(host: str) -> bool:
 
 
 def _secret(value: str) -> tuple[str, str, str]:
-    name, sep, rest = value.partition("=")
-    variable, at, origin = rest.partition("@")
+    """`NAME=ENV_VAR@ORIGIN`: the CLI's pair, plus the one origin this server will type it on."""
+    pair, at, origin = value.partition("@")
     parts = urlsplit(origin)
-    if not (sep and at and name and variable) or parts.scheme not in ("http", "https") or not parts.hostname:
+    try:
+        name, variable = options.env_secret(pair)
+    except argparse.ArgumentTypeError:
+        raise argparse.ArgumentTypeError(f"expected NAME=ENV_VAR@https://host, got {value!r}") from None
+    if not at or parts.scheme not in ("http", "https") or not parts.hostname:
         raise argparse.ArgumentTypeError(f"expected NAME=ENV_VAR@https://host, got {value!r}")
     if parts.path not in ("", "/") or parts.query or parts.fragment:
         raise argparse.ArgumentTypeError(f"{origin!r} is not an origin: drop everything after the host")
@@ -454,16 +470,12 @@ async def configure(args: argparse.Namespace, settings: Settings, environ: Mappi
             raise ConfigurationError(f"{flag} must be above 0")
     if args.cloud and (args.headed or args.profile is not None):
         raise ConfigurationError("--headed and --profile are for local Chrome, not --cloud")
-    chrome = settings.local_chrome()
-    chrome = chrome.model_copy(
-        update={"headed": args.headed or chrome.headed, "profile": args.profile or chrome.profile}
-    )
+    chrome = options.chrome(settings, args.headed, args.profile)
     if not args.cloud and find_chrome(chrome.binary) is None:
         raise ConfigurationError("Chrome was not found: install it, name it in FASTBROWSE_CHROME, or use --cloud")
     if not args.cloud and chrome.profile is not None and args.max_concurrent > 1:
         raise ConfigurationError("a --profile can be open in one Chrome at a time: drop --max-concurrent or --profile")
-    missing = sorted({variable for _, variable, _ in args.secret if variable not in environ})
-    if missing:
+    if missing := options.unset_variables([(name, variable) for name, variable, _ in args.secret], environ):
         raise ConfigurationError(f"--secret names unset variables: {', '.join(missing)}")
     secrets = tuple(DeclaredSecret(name, environ[variable], origin) for name, variable, origin in args.secret)
     seen: set[tuple[str, str]] = set()
@@ -477,7 +489,7 @@ async def configure(args: argparse.Namespace, settings: Settings, environ: Mappi
     async with httpx.AsyncClient() as http:
         settings.jev(http)
     return ServerConfig(
-        browser_api_key=settings.browser_key() if args.cloud else None,
+        browser_api_key=options.browser_key(settings, args.cloud),
         chrome=chrome,
         ceilings=Limits(max_steps=args.max_steps, max_dollars=args.max_dollars, max_seconds=args.max_seconds),
         allow_authorize=args.allow_authorize,

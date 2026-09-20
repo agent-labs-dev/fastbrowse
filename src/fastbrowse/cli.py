@@ -17,17 +17,17 @@ import shutil
 import sys
 from pathlib import Path
 
+from fastbrowse import options
 from fastbrowse.adapters.bitwarden import BitwardenError, bitwarden_login
 from fastbrowse.clients.environment import ConfigurationError, load_settings
-from fastbrowse.models import Authorization, BrowserEvent, Limits, LocalChrome, StepEvent
+from fastbrowse.models import Authorization, BrowserEvent, Limits, StepEvent
 from fastbrowse.run import run_task
 from fastbrowse.safety import ScopedSecrets, origin_of
 
 
 def _secrets(pairs: list[tuple[str, str]], bitwarden: str | None, start: str) -> ScopedSecrets | None:
     """Values read now, so a missing one fails before a browser is opened."""
-    missing = [variable for _, variable in pairs if variable not in os.environ]
-    if missing:
+    if missing := options.unset_variables(pairs):
         raise ConfigurationError(f"--secret names unset variables: {', '.join(missing)}")
     values = {name: os.environ[variable] for name, variable in pairs}
     if bitwarden is not None:
@@ -35,17 +35,11 @@ def _secrets(pairs: list[tuple[str, str]], bitwarden: str | None, start: str) ->
             vault = bitwarden_login(bitwarden, origin_of(start))
         except BitwardenError as exc:
             raise ConfigurationError(str(exc)) from None
-        if clash := values.keys() & vault.keys():
-            raise ConfigurationError(f"--secret and --bitwarden both set {', '.join(sorted(clash))}")
-        values |= vault
+        try:
+            values = options.merged_secrets(values, vault)
+        except ValueError as exc:
+            raise ConfigurationError(str(exc)) from None
     return ScopedSecrets(values, origin_of(start)) if values else None
-
-
-def _secret(pair: str) -> tuple[str, str]:
-    name, sep, variable = pair.partition("=")
-    if not (sep and name and variable):
-        raise argparse.ArgumentTypeError(f"expected NAME=ENV_VAR, got {pair!r}")
-    return name, variable
 
 
 def _parse(argv: list[str]) -> argparse.Namespace:
@@ -56,7 +50,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--headed", action="store_true", help="show the local Chrome window")
     parser.add_argument("--profile", type=Path, default=None, help="Chrome profile directory kept between runs")
     parser.add_argument("--authorize", action="store_true", help="allow submit/pay/delete/send without pausing")
-    parser.add_argument("--secret", action="append", default=[], type=_secret, metavar="NAME=ENV_VAR")
+    parser.add_argument("--secret", action="append", default=[], type=options.env_secret, metavar="NAME=ENV_VAR")
     parser.add_argument(
         "--bitwarden", metavar="ITEM", help="type this vault login's username and password (unlocked bw CLI)"
     )
@@ -70,25 +64,13 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _browser_key(cloud: bool) -> str | None:
-    if not cloud:
-        return None
-    return load_settings().browser_key()
-
-
-def _chrome(headed: bool, profile: Path | None) -> LocalChrome:
-    """The flags add to FASTBROWSE_HEADED and FASTBROWSE_PROFILE; they cannot unset them."""
-    chrome = load_settings().local_chrome()
-    return chrome.model_copy(update={"headed": headed or chrome.headed, "profile": profile or chrome.profile})
-
-
 async def _print_step(event: StepEvent | BrowserEvent) -> None:
     if isinstance(event, BrowserEvent):
         if event.live_url:
             print(f"  watch live: {event.live_url}", file=sys.stderr)
         return
     step = event.step
-    print(f"  {step.index:>2} {step.operation.value} {step.target or ''} -> {step.outcome.value}", file=sys.stderr)
+    print(f"  {step.index:>2} {options.step_label(step)} -> {step.outcome.value}", file=sys.stderr)
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -97,8 +79,8 @@ async def run(args: argparse.Namespace) -> int:
     result = await run_task(
         args.task,
         start=args.start,
-        browser_api_key=_browser_key(args.cloud),
-        chrome=_chrome(args.headed, args.profile),
+        browser_api_key=options.browser_key(load_settings(), args.cloud),
+        chrome=options.chrome(load_settings(), args.headed, args.profile),
         secrets=_secrets(args.secret, args.bitwarden, args.start),
         limits=Limits(max_steps=args.max_steps, max_dollars=args.max_dollars),
         authorization=Authorization(irreversible_actions=args.authorize),
