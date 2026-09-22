@@ -11,10 +11,14 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A link's name no longer includes a nested stylesheet.** Amazon puts a `<style>` block inside a result's link,
+  and the element's name was built from every child's text, so Jev was offered a control named by a page of CSS
+  and tried to click it. Style, script, noscript and template children no longer contribute to a name.
+
 - **A dense results page is compacted rather than refused.** Amazon's signed-in search results offered Jev 112
   products with ~200-character titles and ~480-character tracking links, and the run stopped at
   `observation_limit` before it could pick one. When a page does not fit even on-screen only, its elements are now
-  sent with labels shortened and links cut to their path before fastbrowse gives up.
+  sent with labels and links shortened before fastbrowse gives up.
 - **`--bitwarden` signs in past an authenticator-app code.** A vault item that holds an authenticator key now
   also offers `one_time_code`, the current code computed from the key at the moment it is typed, scoped to the
   same origin as the username and password. Amazon's two-step sign-in had stopped a run at "Enter OTP" with the

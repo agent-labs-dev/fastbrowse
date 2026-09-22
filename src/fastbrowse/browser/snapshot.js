@@ -124,6 +124,8 @@
   // target, but the input still owns the checked/disabled state and must participate in freshness.
   const sourceOf = e => e.tagName === 'LABEL' && ['checkbox', 'radio'].includes(e.control?.type) ? e.control : e;
 
+  // Their text is code, not a name: Amazon nests a <style> inside a result card's link.
+  const CODE = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
   const labelOf = (e, seen = new Set()) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
@@ -135,7 +137,8 @@
       [...(e.labels || [])].map(l => labelOf(l, seen)).filter(Boolean).join(' ') ||
       (['button', 'submit', 'reset'].includes(e.type) ? e.value : '') || e.getAttribute('alt') ||
       (e.tagName === 'INPUT' ? '' : [...e.childNodes].map(n => n.nodeType === 3 ? n.textContent :
-        n.nodeType === 1 && n.getAttribute('aria-hidden') !== 'true' ? labelOf(n, seen) : '').join(' ').trim()) ||
+        n.nodeType === 1 && !CODE.has(n.tagName) && n.getAttribute('aria-hidden') !== 'true' ? labelOf(n, seen) : '')
+        .join(' ').trim()) ||
       e.getAttribute('title') || e.getAttribute('placeholder') || '';
   };
 

@@ -485,6 +485,20 @@ async def test_styled_choice_rejects_reassociated_label(
     )
 
 
+async def test_link_label_ignores_nested_style_and_script(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        """document.body.innerHTML = '<a href="/pen"><style>.tw-reset * { box-sizing: border-box; }</style>'
+          + '<script>window.x = 1;</script><span>Parker Jotter</span></a>';
+        true""",
+    )
+    assert find(await page.observe(), "Parker Jotter").label == "Parker Jotter"
+
+
 async def test_fill_activates_picker_before_typing_and_offers_suggestion(
     page: CdpPage, browser_session: BrowserSession, main_site: str
 ) -> None:
