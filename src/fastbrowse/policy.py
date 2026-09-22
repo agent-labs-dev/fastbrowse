@@ -10,6 +10,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import assert_never
+from urllib.parse import urlsplit
 
 from pydantic import JsonValue
 
@@ -83,6 +84,13 @@ OPERATION_LABELS: Mapping[Operation, str] = {
 class Reduction(StrEnum):
     NONE = "none"
     ONSCREEN_ONLY = "onscreen_only"
+    COMPACT = "compact"
+    """On-screen elements with long labels shortened and links cut to their path. Amazon's signed-in results
+    page offered 112 products with ~200-character titles and ~480-character tracking links, twice over (state
+    and target question), and the run stopped at `observation_limit` before it could pick one."""
+
+
+COMPACT_CHARS = 80
 
 
 class ReadAssessment(StrEnum):
@@ -165,16 +173,23 @@ async def decide(
     controls = observation.controls
     reduction = Reduction.NONE
     while True:
-        request = build_request(observation, controls, context, config)
+        request = build_request(observation, controls, context, config, compact=reduction is Reduction.COMPACT)
         if fits(request, config):
             try:
                 return await _evaluate(jev, request, controls, reduction, ledger)
             except JevInputTooLarge:
                 pass
-        if reduction is Reduction.ONSCREEN_ONLY or not any(c.offscreen for c in controls):
-            raise ObservationTooLarge(f"{len(controls)} controls on {observation.url} exceed Jev's input limits")
-        controls = tuple(c for c in controls if not c.offscreen)
-        reduction = Reduction.ONSCREEN_ONLY
+        match reduction:
+            case Reduction.NONE if any(c.offscreen for c in controls):
+                controls = tuple(c for c in controls if not c.offscreen)
+                reduction = Reduction.ONSCREEN_ONLY
+            case Reduction.NONE | Reduction.ONSCREEN_ONLY:
+                controls = tuple(c for c in controls if not c.offscreen)
+                reduction = Reduction.COMPACT
+            case Reduction.COMPACT:
+                raise ObservationTooLarge(f"{len(controls)} controls on {observation.url} exceed Jev's input limits")
+            case _:
+                assert_never(reduction)
 
 
 def _index_controls(controls: Sequence[Control]) -> dict[Operation, tuple[Control, ...]]:
@@ -215,7 +230,12 @@ def _offered_operations(
 
 
 def build_request(
-    observation: Observation, controls: Sequence[Control], context: StepContext, config: Config
+    observation: Observation,
+    controls: Sequence[Control],
+    context: StepContext,
+    config: Config,
+    *,
+    compact: bool = False,
 ) -> _Request:
     indexed = _index_controls(controls)
     offered = _offered_operations(observation, indexed, context)
@@ -258,7 +278,7 @@ def build_request(
         head = f"{operation.value}_target"
         if len(candidates) <= limit:
             targets[operation] = candidates
-            questions[head] = _target_question(operation, candidates)
+            questions[head] = _target_question(operation, candidates, compact)
             continue
         size = config.observation.group_size
         chunks = tuple(candidates[i : i + size] for i in range(0, len(candidates), size))
@@ -285,7 +305,7 @@ def build_request(
             "The page is a CAPTCHA, a browser verification or a similar bot check.",
             "The page is a sign-in form or an ordinary page.",
         )
-    return _Request(_state(observation, controls, context), questions, targets, groups)
+    return _Request(_state(observation, controls, context, compact), questions, targets, groups)
 
 
 def fits(request: _Request, config: Config) -> bool:
@@ -328,7 +348,7 @@ async def _evaluate(
             ledger.reserve(CostComponent.JEV)
         inner = await jev.evaluate(
             request.state,
-            {f"{operation.value}_target": _target_question(operation, group)},
+            {f"{operation.value}_target": _target_question(operation, group, reduction is Reduction.COMPACT)},
         )
         if ledger is not None:
             ledger.record(inner.cost)
@@ -362,7 +382,7 @@ async def _evaluate(
     )
 
 
-def _state(observation: Observation, controls: Sequence[Control], context: StepContext) -> JsonValue:
+def _state(observation: Observation, controls: Sequence[Control], context: StepContext, compact: bool) -> JsonValue:
     state: dict[str, JsonValue] = {
         "task": context.task,
         "subgoal": context.subgoal,
@@ -371,7 +391,7 @@ def _state(observation: Observation, controls: Sequence[Control], context: StepC
         "unread_requirements": (list(context.unread_requirements) if context.unread_requirements is not None else None),
         "notes": context.notes,
         "recent_actions": [entry.model_dump(mode="json", exclude_none=True) for entry in context.history],
-        "elements": [_element(c) for c in controls],
+        "elements": [_element(c, compact=compact) for c in controls],
     }
     if context.secrets:
         state["stored_secrets"] = list(context.secrets)
@@ -384,17 +404,26 @@ def _state(observation: Observation, controls: Sequence[Control], context: StepC
     return state
 
 
-def _element(control: Control) -> dict[str, JsonValue]:
+def _shortened(text: str) -> str:
+    return text if len(text) <= COMPACT_CHARS else text[:COMPACT_CHARS] + "..."
+
+
+def _element(control: Control, *, compact: bool = False) -> dict[str, JsonValue]:
+    label, context, href = control.label, control.context, control.href
+    if compact:
+        label = _shortened(label)
+        context = None if context is None else _shortened(context)
+        href = None if href is None else _shortened(urlsplit(href).path or href)
     element: dict[str, JsonValue] = {
         "id": control.id,
-        "label": control.label,
+        "label": label,
         "role": control.role,
         "operations": [op.value for op in sorted(control.operations)],
     }
     optional: dict[str, JsonValue] = {
-        "context": control.context,
+        "context": context,
         "value": control.value,
-        "href": control.href,
+        "href": href,
         "checked": control.checked,
         "selected": control.selected,
         "expanded": control.expanded,
@@ -410,7 +439,7 @@ def _element(control: Control) -> dict[str, JsonValue]:
     return element
 
 
-def _target_question(operation: Operation, candidates: Sequence[Control]) -> ChoiceQuestion:
+def _target_question(operation: Operation, candidates: Sequence[Control], compact: bool) -> ChoiceQuestion:
     return ChoiceQuestion(
         instructions=json.dumps(
             {
@@ -422,19 +451,19 @@ def _target_question(operation: Operation, candidates: Sequence[Control]) -> Cho
         # on a dense page, and it was tried. It bought no measured latency, because the request was never
         # the slow part, and a criterion the model has to go and look up is a worse criterion: the choice
         # is what this whole design rests on, so it gets the attributes in front of it.
-        criteria={c.id: _target_element(c, operation) for c in candidates},
+        criteria={c.id: _target_element(c, operation, compact) for c in candidates},
     )
 
 
-def _target_element(control: Control, operation: Operation) -> JsonValue:
+def _target_element(control: Control, operation: Operation, compact: bool) -> JsonValue:
     # Ported from browser-use/jev-ultrafast (MIT), snapshot.js: name opening a field separately
     # from typing in it so a picker is a useful click target even when its value is already filled.
-    element = _element(control)
+    element = _element(control, compact=compact)
     if Operation.FILL in control.operations:
         if operation is Operation.CLICK:
-            element["label"] = f"Open {control.label}"
+            element["label"] = f"Open {element['label']}"
         elif operation is Operation.ENTER:
-            element["label"] = f"Press Enter in {control.label}"
+            element["label"] = f"Press Enter in {element['label']}"
     return element
 
 

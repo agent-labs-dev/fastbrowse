@@ -148,6 +148,27 @@ async def test_oversized_request_drops_offscreen_then_gives_up() -> None:
         await decide(ScriptedJev({}), observation(controls), context(), tiny)
 
 
+async def test_a_results_page_of_long_titles_and_tracking_links_compacts_instead_of_giving_up() -> None:
+    # The shape of Amazon's signed-in results page, which stopped a purchase run at observation_limit.
+    title = "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, " * 2
+    links = tuple(
+        Control(
+            id=f"l{i}",
+            frame_id=None,
+            role="link",
+            label=f"{title}listing {i}",
+            operations=frozenset({Operation.CLICK}),
+            href=f"/Zebra-Ballpoint-Retractable-Reliable-Multipack/dp/B0CT3JS5{i:02d}/ref=sr_1_{i}?dib={'x' * 420}",
+        )
+        for i in range(112)
+    )
+    jev = ScriptedJev({"operation": "click", "click_target": "l7"})
+    decision = await decide(jev, observation(links), context(), Config())
+    assert decision.target is not None and decision.target.id == "l7"
+    assert decision.reduction is Reduction.COMPACT
+    assert "/dp/B0CT3JS507/" in str(jev.requests[-1]["click_target"])
+
+
 @pytest.mark.parametrize("retry", [False, True])
 async def test_each_request_including_groups_and_retries_needs_budget(retry: bool) -> None:
     from fastbrowse.models import Limits
