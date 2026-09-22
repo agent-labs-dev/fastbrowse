@@ -79,7 +79,9 @@ the Browser Use agent is faster on four of the seven lookups.
 
 Needs [uv](https://docs.astral.sh/uv/); uv fetches Python itself (3.13 or newer). Runs use a
 [Browser Use Cloud](https://cloud.browser-use.com) browser (`BROWSER_USE_API_KEY`) by default: it passes bot checks
-a fresh local Chrome fails. Local Chrome is fully supported with `--local`.
+a fresh local Chrome fails. Local Chrome is fully supported with `--local`. A browser already running anywhere,
+from a container to a hosted browser with a CDP endpoint, is driven in place with `--cdp-url ws://…`: the run
+opens one tab and leaves the browser as it was found.
 
 ```sh
 export AI_GATEWAY_API_KEY=...   # or TYPESAFE_API_KEY, for Jev

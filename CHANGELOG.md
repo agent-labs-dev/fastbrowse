@@ -25,6 +25,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   products with ~200-character titles and ~480-character tracking links, and the run stopped at
   `observation_limit` before it could pick one. When a page does not fit even on-screen only, its elements are now
   sent with labels and links shortened before fastbrowse gives up.
+- **The CLI attaches to a browser already running.** `--cdp-url ws://…` drives any browser exposing CDP: a
+  container, a VM, a hosted browser. The run opens one tab and closes only the tabs it owns, so the browser is
+  left as it was found. The Python API's `cdp_url` gains its command-line surface; flags that shape a browser
+  fastbrowse starts (`--local`, `--headed`, `--profile`, `--cloud-profile`, and their FASTBROWSE_* environment
+  counterparts) are refused alongside it.
 - **`--bitwarden` signs in past an authenticator-app code.** A vault item that holds an authenticator key now
   also offers `one_time_code`, the current code computed from the key at the moment it is typed, scoped to the
   same origin as the username and password. Amazon's two-step sign-in had stopped a run at "Enter OTP" with the

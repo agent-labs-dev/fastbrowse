@@ -3,6 +3,7 @@ import json
 import pytest
 
 from fastbrowse import cli
+from fastbrowse.models import CostBreakdown, RunResult, Status
 
 
 def test_a_preflight_error_under_json_still_leaves_a_result_on_stdout(
@@ -59,6 +60,84 @@ def test_a_credential_without_a_start_page_is_refused_rather_than_dropped(
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "error" and "--start" in result["error"]
     assert "--start" in str(exit_.value.code)
+
+
+def test_cdp_url_hands_run_task_the_url_and_no_cloud_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The browser is the caller's: `run_task` gets the URL, and nothing starts a second one."""
+    seen = {}
+
+    async def fake_run_task(task: str, **kwargs: object) -> RunResult:
+        seen.update(kwargs)
+        return RunResult(
+            status=Status.COMPLETE,
+            answer="ok",
+            data=None,
+            evidence=(),
+            steps=(),
+            cost=CostBreakdown(lines=()),
+            artifacts=(),
+            error=None,
+        )
+
+    monkeypatch.setattr(cli, "run_task", fake_run_task)
+    monkeypatch.setattr(
+        "sys.argv", ["fastbrowse", "t", "--start", "https://example.com", "--cdp-url", "ws://browser.test/devtools"]
+    )
+    with pytest.raises(SystemExit) as exit_:
+        cli.main()
+    assert exit_.value.code == 0
+    assert seen["cdp_url"] == "ws://browser.test/devtools"
+    assert seen["browser_api_key"] is None
+
+
+@pytest.mark.parametrize("flag", [["--local"], ["--headed"], ["--profile", "/tmp/kept"], ["--cloud-profile", "prof_1"]])
+def test_cdp_url_refuses_flags_that_shape_a_started_browser(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], flag: list[str]
+) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "fastbrowse",
+            "t",
+            "--start",
+            "https://example.com",
+            "--json",
+            "--cdp-url",
+            "ws://browser.test/devtools",
+            *flag,
+        ],
+    )
+    with pytest.raises(SystemExit) as exit_:
+        cli.main()
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "error" and "--cdp-url" in result["error"] and flag[0] in result["error"]
+    assert flag[0] in str(exit_.value.code)
+
+
+def test_cdp_url_counts_a_profile_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # FASTBROWSE_PROFILE implies --profile; a handed-over browser refuses it just the same.
+    monkeypatch.setenv("FASTBROWSE_PROFILE", "/tmp/kept")
+    monkeypatch.setattr(
+        "sys.argv",
+        ["fastbrowse", "t", "--start", "https://example.com", "--json", "--cdp-url", "ws://browser.test/devtools"],
+    )
+    with pytest.raises(SystemExit):
+        cli.main()
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "error" and "--profile" in result["error"]
+
+
+def test_cdp_url_requires_a_websocket_url(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        ["fastbrowse", "t", "--start", "https://example.com", "--json", "--cdp-url", "https://browser.test/devtools"],
+    )
+    with pytest.raises(SystemExit):
+        cli.main()
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "error" and "ws://" in result["error"]
 
 
 def test_version_prints_the_installed_version_without_a_task(capsys: pytest.CaptureFixture[str]) -> None:
