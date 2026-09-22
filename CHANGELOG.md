@@ -14,7 +14,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - **Every step is credited to Jev or the LLM, never to "code".** A step code dispatches carries out a model's
   choice, and is now recorded as that model's: the next page of a list is the reader's, since the reader asked for
   the rest of the list, and the read taken before an interaction is Jev's, since Jev judged the page to be
-  evidence. `decided_by` no longer takes the value `code`, and recording captions name only Jev or the LLM.
+  evidence. A refused finish is the verifier's when it ran, and Jev's otherwise. `decided_by` no longer takes the value `code`, and recording captions name only Jev or the LLM.
 - **`fastbrowse --version`** prints the installed version, which bug reports now ask for.
 - **A field the task has no value for is skipped before it ends the run.** Most such fields are optional: Google
   Flights opens a "Where else?" box beside the origin, and a run that picked it stopped `needs_input` with

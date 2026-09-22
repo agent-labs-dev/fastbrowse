@@ -1539,7 +1539,9 @@ class Agent:
                         effect=reason,
                     )
                 )
-                await self._record_failure(state, observation, Operation.DONE, reason, decided_by=Decider.LLM)
+                # The verifier only runs when Jev's done check doubts; otherwise Jev's verdict is the last word.
+                judge = Decider.LLM if check.verdict is DoneVerdict.VERIFY else Decider.JEV
+                await self._record_failure(state, observation, Operation.DONE, reason, decided_by=judge)
                 await self._recover(state, observation, reason)
                 return None
             handed, drafting = drafting, None
