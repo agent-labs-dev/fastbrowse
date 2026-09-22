@@ -116,66 +116,68 @@ Both suites write per-run `would_fire` counts for shadow tripwires. The live sum
 with at least one signal, divided by all passing runs, separately for each tripwire. Repeated signals within
 one run count once in that summary. The local suite stores the counts without printing that rate.
 
-### 0.5.1, 2026-09-21
+### 0.5.2, 2026-09-22
 
 Every arm on the same day, 8 runs in flight in total, three passes of each task. fastbrowse and jev-ultrafast
 share the 30-step limit.
 
 | | passed | correct answer | median time | mean time | median cost | mean cost | suite total |
 |:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.2) | 41/42 | 41/42 | 20.6s | 27.0s | $0.0041 | $0.0086 | $0.36 |
+| Browser Use agent | 39/42 | 39/42 | 21.6s | 57.4s | $0.3668 | $0.6193 | $26.01 |
 | fastbrowse (0.5.1) | 42/42 | 42/42 | 20.4s | 26.3s | $0.0044 | $0.0067 | $0.28 |
-| Browser Use agent | 41/42 | 41/42 | 31.4s | 75.2s | $0.5569 | $0.6266 | $26.32 |
-| fastbrowse (0.5.0) | 42/42 | 42/42 | 20.4s | 29.7s | $0.0042 | $0.0091 | $0.38 |
 
 Per task, median of three passes:
 
 | task | fastbrowse | Browser Use agent | cost ratio |
 |:--|:--|:--|:--|
-| `saucedemo-checkout` | 3/3, 38.4s, $0.0047 | 3/3, 121.5s, $0.6872 | 147x |
-| `expandtesting-login` | 3/3, 19.4s, $0.0028 | 3/3, 89.2s, $0.5696 | 206x |
-| `practice-login` | 3/3, 19.0s, $0.0035 | 3/3, 156.1s, $0.9692 | 275x |
-| `saucedemo-cart` | 3/3, 22.3s, $0.0044 | 3/3, 117.2s, $0.6594 | 149x |
-| `saucedemo-locked-out` | 3/3, 18.5s, $0.0024 | 3/3, 127.8s, $0.6929 | 288x |
-| `internet-login` | 3/3, 20.5s, $0.0033 | 3/3, 119.0s, $0.6156 | 189x |
-| `hn-top` | 3/3, 20.9s, $0.0051 | 3/3, 8.8s, $0.2127 | 41x |
-| `pypi-newer` | 3/3, 39.5s, $0.0122 | 3/3, 24.0s, $0.5702 | 47x |
-| `pypi-version` | 3/3, 17.5s, $0.0014 | 3/3, 17.0s, $0.3322 | 243x |
-| `github-license` | 3/3, 16.5s, $0.0050 | 3/3, 8.6s, $0.2228 | 45x |
-| `arxiv-title` | 3/3, 11.3s, $0.0031 | 3/3, 17.2s, $0.3044 | 99x |
-| `wiki-godel` | 3/3, 20.6s, $0.0070 | 3/3, 21.3s, $0.5594 | 80x |
-| `pypi-structured` | 3/3, 19.2s, $0.0052 | 3/3, 17.5s, $0.3656 | 70x |
-| `google-flights` | 3/3, 69.8s, $0.0328 | 2/3, 160.2s, $1.3057 | 40x |
+| `saucedemo-checkout` | 3/3, 38.1s, $0.0039 | 3/3, 113.3s, $0.7634 | 195x |
+| `expandtesting-login` | 3/3, 20.5s, $0.0036 | 2/3, 102.8s, $0.6397 | 178x |
+| `practice-login` | 3/3, 22.0s, $0.0040 | 3/3, 102.7s, $0.6708 | 170x |
+| `saucedemo-cart` | 3/3, 20.2s, $0.0026 | 3/3, 86.1s, $0.5910 | 228x |
+| `saucedemo-locked-out` | 3/3, 20.2s, $0.0037 | 3/3, 93.8s, $0.5666 | 153x |
+| `internet-login` | 3/3, 19.6s, $0.0027 | 3/3, 25.9s, $0.1721 | 65x |
+| `hn-top` | 3/3, 20.7s, $0.0041 | 3/3, 13.2s, $0.2132 | 52x |
+| `pypi-newer` | 3/3, 33.9s, $0.0121 | 3/3, 23.8s, $0.4784 | 39x |
+| `pypi-version` | 3/3, 12.5s, $0.0015 | 3/3, 14.8s, $0.3281 | 223x |
+| `github-license` | 3/3, 16.6s, $0.0051 | 3/3, 10.8s, $0.2226 | 44x |
+| `arxiv-title` | 3/3, 11.1s, $0.0031 | 3/3, 12.9s, $0.3059 | 98x |
+| `wiki-godel` | 3/3, 19.2s, $0.0060 | 3/3, 19.4s, $0.5552 | 93x |
+| `pypi-structured` | 3/3, 20.5s, $0.0053 | 3/3, 17.1s, $0.3664 | 70x |
+| `google-flights` | 2/3, 85.0s, $0.0640 | 1/3, 17.2s, $0.2544 | 4x |
 
 Per category, median time and cost:
 
 | category | fastbrowse | Browser Use agent | cost ratio |
 |:--|:--|:--|:--|
-| lookup | 21/21, 19.2s, $0.0051 | 21/21, 17.2s, $0.3322 | 65x |
-| login | 15/15, 20.2s, $0.0033 | 15/15, 119.0s, $0.6458 | 198x |
-| checkout | 3/3, 38.4s, $0.0047 | 3/3, 121.5s, $0.6872 | 147x |
-| widget | 3/3, 69.8s, $0.0328 | 2/3, 160.2s, $1.3057 | 40x |
+| lookup | 21/21, 19.2s, $0.0051 | 21/21, 16.5s, $0.3281 | 65x |
+| login | 15/15, 20.5s, $0.0033 | 14/15, 86.1s, $0.5776 | 173x |
+| checkout | 3/3, 38.1s, $0.0039 | 3/3, 113.3s, $0.7634 | 195x |
+| widget | 2/3, 85.0s, $0.0640 | 1/3, 17.2s, $0.2544 | 4x |
 
 Navigation tasks, fastbrowse against jev-ultrafast, three passes:
 
 | | passed | median time | median cost |
 |:--|:--|:--|:--|
-| fastbrowse | 18/18 | 11.4s | $0.0014 |
-| jev-ultrafast | 11/18 | 11.4s | $0.0004 |
+| fastbrowse | 18/18 | 13.6s | $0.0014 |
+| jev-ultrafast | 12/18 | 11.2s | $0.0004 |
 
-jev-ultrafast failed `arxiv-open` 0/3 and `flights-search` 0/3 (it ended on the start page, or on a search with no
-nonstop filter), and one `pypi-open` run ended on the search results. It is cheaper on every task both arms
-finish. `saucedemo-pause`, graded on fastbrowse alone, passed 3/3.
+jev-ultrafast failed `arxiv-open` 0/3, ending on the start page, and `flights-search` 0/3, ending on a search
+with no nonstop filter. It is cheaper on every task both arms finish. `saucedemo-pause`, graded on fastbrowse
+alone, passed 3/3.
 
-**Dev and held-out**, three passes on fastbrowse: dev 24/24 (median 18.8s, $0.12 in total) and held-out 27/27
-(median 17.0s, $0.46 in total). Held-out was run before and after this round of changes and not debugged.
-`quotes-einstein-count` was used with the probe to develop the cited-block reader, so it no longer measures
-that change cleanly. Across all three suites fastbrowse passed 114/114, median 19.0s, $0.90 in total.
+**Dev and held-out**, three passes on fastbrowse: dev 24/24 (median 16.6s, $0.11 in total) and held-out 27/27
+(median 14.3s, $0.43 in total). Two held-out tasks helped develop changes, so they no longer measure those
+changes cleanly: `quotes-einstein-count` for the cited-block reader and `countries-mongolia` for reading a page
+before scrolling it. Across all three suites fastbrowse passed 113/114, median 19.5s, $0.94 in total.
 
-**Reading it.** Against 0.5.0, the pass rate held at 42/42 and the mean cost fell by a quarter. Google Flights
-took 69.8s against 109.3s, and checkout 38.4s against 53.6s. The Browser Use agent's one failure is Google
-Flights, where it fetched the page, found only the app shell and answered with no price. It is faster on
-five of the seven lookups: by 8 to 16 seconds on `hn-top`, `github-license` and `pypi-newer`, and by under
-two on `pypi-version` and `pypi-structured`.
+**Reading it.** fastbrowse's one miss is Google Flights, where it added a second origin airport to the search.
+That task passes about four runs in five on both 0.5.1 and 0.5.2
+([#101](https://github.com/agent-labs-dev/fastbrowse/issues/101)), so 42/42 last round and 41/42 here are
+the same build behaviour. It also sets the mean cost, $0.0640 median against $0.0051 for a lookup. The
+Browser Use agent failed Google Flights twice, answering from the landing page with no price, which is why its
+median there is 17.2s. Its sign-in miss reported "Your username is invalid!" in place of the signed-in page.
+It is faster on four of the seven lookups: `hn-top`, `pypi-newer`, `github-license` and `pypi-structured`.
 
 ## External benchmarks
 

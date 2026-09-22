@@ -32,45 +32,45 @@ something that was never on the page. Every claim in an answer cites a verbatim 
 
 ### Against Browser Use
 
-Measured on 2026-09-21 with the build released as 0.5.1: the same 14 answer tasks (lookups, sign-ins,
+Measured on 2026-09-22 with the build released as 0.5.2: the same 14 answer tasks (lookups, sign-ins,
 checkout, Google Flights), three passes each, on the same kind of cloud browser.
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| **fastbrowse** | **42/42** | **$0.0044** (median), $0.0067 mean | **20.4s** |
-| Browser Use agent | 41/42 | $0.5569 (median), $0.6266 mean | 31.4s |
+| **fastbrowse** | **41/42** | **$0.0041** (median), $0.0086 mean | **20.6s** |
+| Browser Use agent | 39/42 | $0.3668 (median), $0.6193 mean | 21.6s |
 
-The whole suite cost $0.28 here and $26.32 there. The Browser Use agent's one failure is Google Flights,
-where it read the page's HTML, found no results table and answered with no price.
+The whole suite cost $0.36 here and $26.01 there. fastbrowse's one miss and two of the Browser Use agent's
+three are Google Flights, which passes about four runs in five for fastbrowse; the Browser Use agent's
+failures answered from the landing page with no price.
 
-Median cost ratios by category: 65x for lookups, 147x for checkout and 198x for sign-ins.
+Median cost ratios by category: 65x for lookups, 173x for sign-ins and 195x for checkout.
 Jev selects actions through classification; planning, field text and reading can still require LLM generation.
 
 Task medians show where time went:
 
 | task | fastbrowse | Browser Use agent |
 |:--|:--|:--|
-| `saucedemo-checkout` two items, a shipping form and Finish | **38.4s** | 121.5s |
-| `saucedemo-cart` sign in, find a product, add it | **22.3s** | 117.2s |
-| `saucedemo-locked-out` report the site's error rather than claim success | **18.5s** | 127.8s |
-| `expandtesting-login` sign in and confirm the signed-in page | **19.4s** | 89.2s |
-| `internet-login` the same on another practice site | **20.5s** | 119.0s |
-| `google-flights` search a route and date, answer with a price | **69.8s** | 160.2s |
+| `saucedemo-checkout` two items, a shipping form and Finish | **38.1s** | 113.3s |
+| `saucedemo-cart` sign in, find a product, add it | **20.2s** | 86.1s |
+| `saucedemo-locked-out` report the site's error rather than claim success | **20.2s** | 93.8s |
+| `expandtesting-login` sign in and confirm the signed-in page | **20.5s** | 102.8s |
+| `practice-login` the same on another practice site | **22.0s** | 102.7s |
 
-Lookup medians included `arxiv-title` at 11.3s, `pypi-version` at 17.5s and `github-license` at 16.5s,
-where the Browser Use agent is faster on some.
+Lookup medians included `arxiv-title` at 11.1s, `pypi-version` at 12.5s and `github-license` at 16.6s;
+the Browser Use agent is faster on four of the seven lookups.
 
-[Every run, what it cost, and how a failure is counted](docs/evals.md#051-2026-09-21).
+[Every run, what it cost, and how a failure is counted](docs/evals.md#052-2026-09-22).
 
 ### Why fastbrowse, against each kind of agent
 
 - **LLM agents that generate actions** (Browser Use and similar): Jev picks each action from the controls
   that are on the page, so there is no invented selector to retry. A task costs a fraction as much (a lookup,
-  $0.0051 against $0.3322 median across the lookup category), and every claim in the answer links to the
+  $0.0051 against $0.3281 median across the lookup category), and every claim in the answer links to the
   page text it came from.
 - **Choice-model navigators** ([jev-ultrafast](https://github.com/browser-use/jev-ultrafast)): the same
   core technique, with page reading, cited answers, scoped secrets and an authorization gate. On the six
-  navigation tasks both can run, fastbrowse passed 18/18 against 11/18, and jev-ultrafast is cheaper on
+  navigation tasks both can run, fastbrowse passed 18/18 against 12/18, and jev-ultrafast is cheaper on
   every task both finish.
 - **Scripts:** there are no selectors to maintain. The same agent handles a date picker, a checkout and
   a search box it has never seen.
