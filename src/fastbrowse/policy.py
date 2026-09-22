@@ -10,7 +10,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import assert_never
-from urllib.parse import urlsplit
 
 from pydantic import JsonValue
 
@@ -91,6 +90,9 @@ class Reduction(StrEnum):
 
 
 COMPACT_CHARS = 80
+COMPACT_HREF_CHARS = 120
+"""Longer than a label: a link's identity can sit in its query (`/item?id=123`), so it is trimmed, not cut to the
+path. Amazon's product id sits in the path's first 70 characters, ahead of the tracking query."""
 
 
 class ReadAssessment(StrEnum):
@@ -285,7 +287,10 @@ def build_request(
         groups[operation] = chunks
         questions[f"{operation.value}_group"] = ChoiceQuestion(
             instructions=json.dumps({"rules": [TARGET, GROUP], "operation": operation.value}),
-            criteria={str(i): " | ".join(c.label for c in chunk) for i, chunk in enumerate(chunks)},
+            criteria={
+                str(i): " | ".join(_shortened(c.label) if compact else c.label for c in chunk)
+                for i, chunk in enumerate(chunks)
+            },
         )
     if Operation.SWITCH_TAB in offered:
         questions["switch_tab_target"] = ChoiceQuestion(
@@ -404,8 +409,8 @@ def _state(observation: Observation, controls: Sequence[Control], context: StepC
     return state
 
 
-def _shortened(text: str) -> str:
-    return text if len(text) <= COMPACT_CHARS else text[:COMPACT_CHARS] + "..."
+def _shortened(text: str, limit: int = COMPACT_CHARS) -> str:
+    return text if len(text) <= limit else text[:limit] + "..."
 
 
 def _element(control: Control, *, compact: bool = False) -> dict[str, JsonValue]:
@@ -413,7 +418,7 @@ def _element(control: Control, *, compact: bool = False) -> dict[str, JsonValue]
     if compact:
         label = _shortened(label)
         context = None if context is None else _shortened(context)
-        href = None if href is None else _shortened(urlsplit(href).path or href)
+        href = None if href is None else _shortened(href, COMPACT_HREF_CHARS)
     element: dict[str, JsonValue] = {
         "id": control.id,
         "label": label,

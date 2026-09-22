@@ -167,6 +167,11 @@ async def test_a_results_page_of_long_titles_and_tracking_links_compacts_instead
     assert decision.target is not None and decision.target.id == "l7"
     assert decision.reduction is Reduction.COMPACT
     assert "/dp/B0CT3JS507/" in str(jev.requests[-1]["click_target"])
+    # A link told apart only by its query keeps it.
+    query_link = Control(
+        id="q", frame_id=None, role="link", label="Item", operations=frozenset({Operation.CLICK}), href="/item?id=456"
+    )
+    assert _element(query_link, compact=True)["href"] == "/item?id=456"
 
 
 @pytest.mark.parametrize("retry", [False, True])
