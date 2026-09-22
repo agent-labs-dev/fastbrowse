@@ -113,6 +113,7 @@ the quotes behind the answer, and cost by component.
 | `--headed` | show the local Chrome window (implies `--local`) |
 | `--profile DIR` | keep the local Chrome profile in `DIR`, so a site signed into there stays signed in (implies `--local`) |
 | `--cloud-profile ID` | run on a Browser Use Cloud profile, signed in as whoever set it up |
+| `--proxy-country CC` | browse from that country (Browser Use's codes: `uk`, `de`, ...; default `us`), so a shop shows its local delivery and prices |
 | `--authorize` | allow submit, pay, delete and send; without it the run stops at `needs_confirmation` first |
 | `--secret NAME=ENV_VAR[@ORIGIN]` | let the agent type `$ENV_VAR` on the declared origin, or the `--start` origin if omitted; models only see `NAME`. An explicit origin needs no `--start` |
 | `--bitwarden ITEM` | match the vault login's saved URIs against `--start`, then allow its `username`, `password` and, when the item holds an authenticator key, `one_time_code` only on that start origin |

@@ -4,10 +4,10 @@
     fastbrowse "Send the form" --start https://example.com/contact --authorize --json
 
 A Browser Use Cloud browser by default (BROWSER_USE_API_KEY), with a URL printed to watch it live;
-`--cloud-profile ID` starts it with the cookies that profile holds. `--local` runs a headless local Chrome
-instead; `--headed` shows it, and `--profile DIR` keeps its profile so a site signed into there once stays
-signed in. Either of those implies `--local`. `--cdp-url ws://…` instead attaches to a browser already running
-anywhere, opening one tab and leaving the browser as it was found.
+`--cloud-profile ID` starts it with the cookies that profile holds, and `--proxy-country CC` browsing from that
+country. `--local` runs a headless local Chrome instead; `--headed` shows it, and `--profile DIR` keeps its profile
+so a site signed into there once stays signed in. Either of those implies `--local`. `--cdp-url ws://…` instead
+attaches to a browser already running anywhere, opening one tab and leaving the browser as it was found.
 Secrets come from `--secret NAME=ENV_VAR`, read from that variable, or `--bitwarden ITEM`, a vault login's
 `username` and `password`, and its `one_time_code` when the item holds an authenticator key.
 `--secret NAME=ENV_VAR@ORIGIN` declares an exact or wildcard origin; without it, the scope is the `--start`
@@ -110,6 +110,13 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         default=None,
         help="attach to a browser already running at this CDP websocket URL, instead of starting one",
     )
+    parser.add_argument(
+        "--proxy-country",
+        metavar="CC",
+        default=None,
+        type=options.country_code,
+        help="country the cloud browser browses from, as Browser Use's two-letter code, e.g. uk (default: us)",
+    )
     parser.add_argument("--authorize", action="store_true", help="allow irreversible actions without confirmation")
     parser.add_argument(
         "--secret",
@@ -171,6 +178,7 @@ def _cdp_url(args: argparse.Namespace, chrome: LocalChrome) -> str | None:
             ("--headed", chrome.headed),
             ("--profile", chrome.profile is not None),
             ("--cloud-profile", args.cloud_profile is not None),
+            ("--proxy-country", args.proxy_country is not None),
         )
         if on
     ]
@@ -179,6 +187,17 @@ def _cdp_url(args: argparse.Namespace, chrome: LocalChrome) -> str | None:
     if not args.cdp_url.startswith(("ws://", "wss://")):
         raise ConfigurationError(f"--cdp-url expects a ws:// or wss:// URL, got {args.cdp_url!r}")
     return args.cdp_url
+
+
+def _cloud(args: argparse.Namespace, chrome: LocalChrome) -> bool:
+    """Whether a started browser is the cloud one; a country on local Chrome would browse from this machine's IP."""
+    on_cloud = options.cloud(args.local, chrome, args.cloud_profile)
+    if args.proxy_country is not None and not on_cloud:
+        raise ConfigurationError(
+            "--proxy-country needs the cloud browser: drop it, or drop --local, --headed and --profile "
+            "(and FASTBROWSE_HEADED / FASTBROWSE_PROFILE)"
+        )
+    return on_cloud
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -194,12 +213,11 @@ async def run(args: argparse.Namespace) -> int:
     result = await run_task(
         args.task,
         start=args.start,
-        browser_api_key=None
-        if cdp_url is not None
-        else options.browser_key(settings, options.cloud(args.local, chrome, args.cloud_profile)),
+        browser_api_key=None if cdp_url is not None else options.browser_key(settings, _cloud(args, chrome)),
         chrome=chrome,
         cloud_profile=args.cloud_profile,
         cdp_url=cdp_url,
+        proxy_country="us" if args.proxy_country is None else args.proxy_country,
         secrets=secrets,
         limits=limits,
         authorization=Authorization(irreversible_actions=args.authorize),

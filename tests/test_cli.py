@@ -90,7 +90,10 @@ def test_cdp_url_hands_run_task_the_url_and_no_cloud_key(monkeypatch: pytest.Mon
     assert seen["browser_api_key"] is None
 
 
-@pytest.mark.parametrize("flag", [["--local"], ["--headed"], ["--profile", "/tmp/kept"], ["--cloud-profile", "prof_1"]])
+@pytest.mark.parametrize(
+    "flag",
+    [["--local"], ["--headed"], ["--profile", "/tmp/kept"], ["--cloud-profile", "prof_1"], ["--proxy-country", "uk"]],
+)
 def test_cdp_url_refuses_flags_that_shape_a_started_browser(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], flag: list[str]
 ) -> None:
@@ -112,6 +115,19 @@ def test_cdp_url_refuses_flags_that_shape_a_started_browser(
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "error" and "--cdp-url" in result["error"] and flag[0] in result["error"]
     assert flag[0] in str(exit_.value.code)
+
+
+def test_proxy_country_refuses_local_chrome(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Local Chrome browses from this machine's IP, so a requested country would be silently ignored.
+    monkeypatch.setattr(
+        "sys.argv", ["fastbrowse", "t", "--start", "https://example.com", "--json", "--local", "--proxy-country", "uk"]
+    )
+    with pytest.raises(SystemExit):
+        cli.main()
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "error" and "--proxy-country" in result["error"]
 
 
 def test_cdp_url_counts_a_profile_from_the_environment(

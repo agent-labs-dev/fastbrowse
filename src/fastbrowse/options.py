@@ -31,6 +31,17 @@ def cloud(local: bool, chrome: LocalChrome, cloud_profile: str | None) -> bool:
     return on_cloud
 
 
+def country_code(value: str) -> str:
+    """A two-letter code, lowercased as Browser Use Cloud expects; a shop serves the visitor's country from it."""
+    code = value.strip().lower()
+    if len(code) != 2 or not code.isalpha():
+        raise argparse.ArgumentTypeError(f"{value!r} is not a two-letter country code, e.g. uk")
+    if code == "gb":
+        # ISO says gb; Browser Use's code for the United Kingdom is uk, and it would reject gb only at browser start.
+        raise argparse.ArgumentTypeError("Browser Use's code for the United Kingdom is uk, not gb")
+    return code
+
+
 def browser_key(settings: Settings, cloud: bool) -> str | None:
     """The cloud browser's key when the run wants one; None runs local Chrome."""
     return settings.browser_key() if cloud else None

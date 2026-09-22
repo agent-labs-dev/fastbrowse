@@ -18,6 +18,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   Jev's 64k limit allows made each one about 26k tokens, and the gateway answered most of those with 503 until
   the retries ran out, adding up to 25s a pass or ending the run `unavailable`. Questions now go in requests of
   about 8k tokens, sent together.
+- **`--proxy-country CC` picks where the cloud browser browses from.** It always browsed from the US, so
+  amazon.co.uk opened on "Deliver to United States" and a dispatch-country prompt. `--proxy-country uk` shows the
+  UK storefront as a UK visitor sees it. A country on a local or attached browser is refused, since that
+  browses from the machine's own IP. The Python API's `proxy_country` gains its command-line surface.
 - **A link's name no longer includes a nested stylesheet.** Amazon puts a `<style>` block inside a result's link,
   and the element's name was built from every child's text, so Jev was offered a control named by a page of CSS
   and tried to click it. Style, script, noscript and template children no longer contribute to a name.
