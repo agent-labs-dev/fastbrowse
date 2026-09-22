@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A stored username is typed into an email or phone sign-in field.** Amazon's sign-in field is labelled
+  "Enter mobile number or email", and Jev, seeing only a secret named `username`, chose to write new text,
+  so the run stopped `needs_input` before signing in. The field question now says that stored secrets are the
+  site's sign-in credentials, named by role.
 - **Every step is credited to Jev or the LLM, never to "code".** A step code dispatches carries out a model's
   choice, and is now recorded as that model's: the next page of a list is the reader's, since the reader asked for
   the rest of the list, and the read taken before an interaction is Jev's, since Jev judged the page to be
