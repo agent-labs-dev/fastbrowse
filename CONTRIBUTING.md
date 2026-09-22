@@ -60,6 +60,10 @@ will not be merged. Fix the general cause in the prompt, the choice or the check
 
 - Keep one change per PR. The title is a conventional commit (`fix:`, `feat:`, `docs:`, `perf:`, `chore:`)
   and becomes the commit subject, since every PR is squash-merged.
+- Sign every commit (`git commit -S`, or set `commit.gpgsign`) with a GPG or SSH key added to your GitHub
+  account. `main` accepts only commits GitHub shows as Verified, so a PR with an unsigned commit cannot merge.
+  [GitHub's guide](https://docs.github.com/en/authentication/managing-commit-signature-verification) covers
+  the setup.
 - CI on a first-time contributor's PR waits for a maintainer to approve it, so expect a short delay before
   checks appear.
 - We aim to reply to every issue and PR within a few days: to merge, to ask for specific changes, or to close
