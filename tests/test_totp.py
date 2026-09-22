@@ -72,6 +72,8 @@ def test_defaults_zero_pad_six_digits() -> None:
         f"{URI}&period=invalid",
         f"{URI}&period=",
         f"{URI}&period={KEY}",
+        f"{URI}&period=86401",
+        f"{URI}&period={'9' * 400}",
     ],
 )
 def test_unusable_keys_fail_before_use_without_disclosing_secrets(key: str) -> None:

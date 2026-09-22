@@ -62,8 +62,11 @@ def _parse_key(key: str) -> _Totp:
         case _:
             raise TotpError("authenticator digits must be 6 or 8")
     period_text = options.get("period", "30")
-    if not (period_text.isascii() and period_text.isdecimal()) or int(period_text) <= 0:
-        raise TotpError("authenticator period must be a positive integer")
+    # Bounded before `int`, which a vault URI with thousands of digits would make raise or overflow later.
+    if not (period_text.isascii() and period_text.isdecimal() and len(period_text) <= 5) or not (
+        0 < int(period_text) <= 86400
+    ):
+        raise TotpError("authenticator period must be a whole number of seconds up to a day")
     period = int(period_text)
 
     try:
