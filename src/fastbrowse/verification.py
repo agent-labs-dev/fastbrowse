@@ -258,7 +258,12 @@ async def llm_verify(
     stateful = [c for c in observation.controls if c.checked or c.selected or c.value]
     instruction = (
         "\n\n## Verdict\nDecide from the screenshot, set controls, page text and notes whether the task is finished. "
-        "Be strict and name every requirement id that is not visibly satisfied. A requirement to "
+        "Be strict and name every requirement id that is not visibly satisfied. An action requirement (clicking a "
+        "link or button, filling a field, submitting a form, navigating) is satisfied when the steps taken show it "
+        "executed on the control the task meant. The task may paraphrase the control's label; the acted-on control "
+        "is its equivalent when the page offered no closer match, which is the match the agent made when it acted. "
+        "The steps are the run's own record, and a click that navigated is not visible on the page it left. Be "
+        "strict about whether the action happened, not about the task's wording of the label. A requirement to "
         "compare, count or conclude from facts is satisfied when the notes hold those facts: the answer "
         "draws the conclusion, and no page shows it. A requirement to narrow a search or listing (a filter, "
         "option or sort) is satisfied when the page shows it applied, in a set control, the address or the "
