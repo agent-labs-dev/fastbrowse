@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-09-22
+
 - **Eval times leave out provider outages.** A run's `seconds` in the live and local evals no longer counts time
   spent retrying a provider's 503s and dropped requests, which says nothing about the agent; the row's
   `transient_seconds` holds what was left out.
@@ -362,7 +364,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.2...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.3
 [0.5.2]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.2
 [0.5.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.1
 [0.5.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.0
