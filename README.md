@@ -41,8 +41,8 @@ checkout, Google Flights), three passes each, on the same kind of cloud browser.
 | Browser Use agent | 39/42 | $0.3668 (median), $0.6193 mean | 21.6s |
 
 The whole suite cost $0.36 here and $26.01 there. fastbrowse's one miss and two of the Browser Use agent's
-three are Google Flights, which passes about four runs in five for fastbrowse; the Browser Use agent's
-failures answered from the landing page with no price.
+three are Google Flights, which passes about four runs in five for fastbrowse; the Browser Use agent
+answered those two from the landing page with no price.
 
 Median cost ratios by category: 65x for lookups, 173x for sign-ins and 195x for checkout.
 Jev selects actions through classification; planning, field text and reading can still require LLM generation.
@@ -342,7 +342,7 @@ uv run pre-commit install                                    # ruff and ty befor
 uv run python -m fastbrowse.evals.runner                     # local fixtures, about $0.005 a task
 uv run --extra browser-use python -m fastbrowse.evals.live                     # live head-to-head, 8 at a time
 uv run --extra browser-use python -m fastbrowse.evals.live --arms fastbrowse        # ours alone
-uv run --extra browser-use python -m fastbrowse.evals.live --suite heldout   # the never-debugged split
+uv run --extra browser-use python -m fastbrowse.evals.live --suite heldout   # the held-out split
 uv run ruff format . && uv run ruff check . && uv run ty check && uv run pytest
 uv run python scripts/no_slop.py && uv run vale sync && uv run vale README.md CHANGELOG.md AGENTS.md docs src scripts tests
 ```
