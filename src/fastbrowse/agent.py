@@ -350,13 +350,13 @@ class Agent:
             if (stalled := self._settle(state, observation)) is not None:
                 await self._recover(state, observation, stalled)
                 continue
-            # Walking a list is dispatched before Jev is asked, because not asking is the point: the link is
-            # already found and a decision would buy nothing. It therefore passes none of the gates below, which
-            # is safe only because of what it can be: a pager link to another address. The login check needs a
-            # decision Jev has not made yet, and the page it opens is judged on the next turn. The confidence gates
-            # judge Jev's uncertainty, and there is none to judge here.
+            # Walking a list is dispatched before Jev is asked, because not asking is the point: the reader asked for
+            # the rest of the list and the link is already found, so a decision would buy nothing. It therefore passes
+            # none of the gates below, which is safe only because of what it can be: a pager link to another address.
+            # The login check needs a decision Jev has not made yet, and the page it opens is judged on the next turn.
+            # The confidence gates judge Jev's uncertainty, and there is none to judge here.
             if (paging := _paging(state, observation)) is not None:
-                if await self._step(state, observation, paging, Decider.CODE):
+                if await self._step(state, observation, paging, Decider.LLM, gate=False):
                     await self._recover(state, observation, _read_exhausted(state))
                 continue
             raw = self._raw_observation or observation
@@ -395,7 +395,7 @@ class Agent:
                 directed := _follow_recovery(state, observation, decision, uncertain=uncertain)
             ) is not None:
                 decision, uncertain, decided_by = directed, False, Decider.LLM
-            if await self._read_before_interaction(state, observation, decision):
+            if await self._read_before_interaction(state, observation, decision, decided_by):
                 continue
             pager = (
                 decision.operation is Operation.CLICK and decision.target is not None and pages_forward(decision.target)
@@ -411,12 +411,15 @@ class Agent:
                     # Everything asked to be found is evidenced, so another page is wandering: Jev, offered the pager,
                     # kept turning pages through a whole catalogue after the two the task named had been read. DONE
                     # is judged again by `_finish`, which carries on if it does not hold.
-                    decision, uncertain, decided_by = _code_decision(Operation.DONE, None), False, Decider.CODE
+                    decision, uncertain, decided_by = _code_decision(Operation.DONE, None), False, Decider.LLM
                 elif pager and not state.read_here and _unread(plan, state.notes):
                     # Turning the page of a list nobody has read loses that page: with the pager in view Jev opened
                     # the next page from the first, and a task over "this page and the next" was answered from the
                     # second and third. Read here first, which also tells code whether the list goes on.
-                    decision, uncertain, decided_by = _code_decision(Operation.READ, None), False, Decider.CODE
+                    decision, uncertain = (
+                        decision.model_copy(update={"operation": Operation.READ, "target": None}),
+                        False,
+                    )
             if uncertain and not raw.controls and await self._outwait(raw):
                 # Nothing to act on and no idea what to do is a page still rendering: a script-built app settles
                 # before it draws, and recovery on it saw an empty login form and spent 5 to 13s saying so.
@@ -604,11 +607,12 @@ class Agent:
         decided_by: Decider = Decider.JEV,
         *,
         capture: Capture | None = None,
+        gate: bool = True,
     ) -> bool:
         """Return whether a duplicate read was skipped, so callers can recover or continue the interaction."""
         started = time.monotonic()
         facts_before = len(state.notes.facts)
-        reason = state.hint if decided_by is Decider.LLM else None
+        reason = state.hint if decision.directed else None
         label = _describe(decision.target) if decision.target else decision.tab_id
         typed: str | None = None
         effect_now: str | None = None
@@ -624,7 +628,7 @@ class Agent:
             act = ActResult(outcome=StepOutcome.EXECUTED, page_changed=False, detail=effect_now)
         else:
             action = await self._unless_redrawn(
-                state, self._action(state, observation, decision, decided_by), observation, decision.target
+                state, self._action(state, observation, decision, gate=gate), observation, decision.target
             )
             if action is None:
                 return False
@@ -908,13 +912,14 @@ class Agent:
         target: str | None = None,
         confidence: float | None = None,
         page_changed: bool | None = None,
+        decided_by: Decider,
     ) -> None:
         await self._record_step(
             state,
             StepResult(
                 index=len(state.steps),
                 operation=operation,
-                decided_by=Decider.CODE,
+                decided_by=decided_by,
                 outcome=StepOutcome.FAILED,
                 url=observation.url,
                 target=target,
@@ -943,15 +948,13 @@ class Agent:
         self._page.withhold_frames(revealed)
         return revealed
 
-    async def _action(
-        self, state: _RunState, observation: Observation, decision: Decision, decided_by: Decider
-    ) -> Action:
+    async def _action(self, state: _RunState, observation: Observation, decision: Decision, *, gate: bool) -> Action:
         target = decision.target
         match decision.operation:
             case Operation.CLICK | Operation.ENTER:
-                # Code only ever clicks a pager link to another address (`next_page_control`), which opens a page
-                # and commits nothing, so asking Jev would buy a call per page and nothing else.
-                if decided_by is not Decider.CODE:
+                # Only a pager link to another address (`next_page_control`) goes ungated: it opens a page and
+                # commits nothing, so asking Jev would buy a call per page and nothing else.
+                if gate:
                     await self._gate_irreversible(state, observation, decision)
                 return Action(operation=decision.operation, target_id=target.id if target else None)
             case Operation.FILL:
@@ -1059,6 +1062,7 @@ class Agent:
             target=self._redactor.redact(label),
             confidence=None if decision.directed else decision.confidence,
             page_changed=False,
+            decided_by=Decider.LLM if decision.directed else Decider.JEV,
         )
         if unsure:
             raise _Unsure(reason)
@@ -1251,7 +1255,9 @@ class Agent:
         )
         return choice == "accept"
 
-    async def _read_before_interaction(self, state: _RunState, observation: Observation, decision: Decision) -> bool:
+    async def _read_before_interaction(
+        self, state: _RunState, observation: Observation, decision: Decision, decided_by: Decider = Decider.JEV
+    ) -> bool:
         # A read takes in the whole page, so a scroll over one never read only spends steps: Jev judges evidence from
         # the viewport, and scrolled a country list for Mongolia until recovery ran out and the run stopped stuck.
         unread_scroll = decision.operation is Operation.SCROLL and not any(
@@ -1265,7 +1271,8 @@ class Agent:
         if not _unread(plan, state.notes):
             return False
         # An interaction can remove evidence, so read first and reconsider before authorizing the next action.
-        return not await self._step(state, observation, _code_decision(Operation.READ, None), Decider.CODE)
+        reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
+        return not await self._step(state, observation, reading, decided_by)
 
     async def _read(
         self, state: _RunState, capture: Capture | None = None, observation: Observation | None = None
@@ -1532,7 +1539,7 @@ class Agent:
                         effect=reason,
                     )
                 )
-                await self._record_failure(state, observation, Operation.DONE, reason)
+                await self._record_failure(state, observation, Operation.DONE, reason, decided_by=Decider.LLM)
                 await self._recover(state, observation, reason)
                 return None
             handed, drafting = drafting, None

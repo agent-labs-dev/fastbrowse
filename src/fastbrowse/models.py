@@ -87,10 +87,11 @@ TARGETED = frozenset(
 
 
 class Decider(StrEnum):
+    """The model whose choice a step carries out, even when code dispatches it: the next page of a list is the
+    reader's, because the reader asked for the rest of the list."""
+
     JEV = "jev"
     LLM = "llm"
-    CODE = "code"
-    """A step code took without a model's choice, such as the next page of a list the reader said continues."""
 
 
 class StepOutcome(StrEnum):

@@ -336,7 +336,7 @@ async def test_an_unsure_pick_that_may_commit_something_recovers_rather_than_ask
     with pytest.raises(raised) as refused:
         await agent._step(state, obs, decision)
     step = state.steps[-1]
-    assert step.decided_by is Decider.CODE and step.outcome is StepOutcome.FAILED
+    assert step.decided_by is Decider.JEV and step.outcome is StepOutcome.FAILED
     assert step.note == agent._redactor.redact(str(refused.value))
     assert step.facts == ()
     on_event.assert_awaited_once_with(StepEvent(step=step))
@@ -961,18 +961,18 @@ async def test_a_list_the_reader_needs_whole_is_read_page_by_page_without_decidi
     assert state.next_page
     click = agent_module._paging(state, first)
     assert click is not None and click.operation is Operation.CLICK and click.target is not None
-    await agent._step(state, first, click, Decider.CODE)
+    await agent._step(state, first, click, Decider.LLM, gate=False)
     assert page.act.await_args is not None and page.act.await_args.args[0].target_id == "next"
 
     opened = agent_module._paging(state, second)
     assert opened is not None and opened.operation is Operation.READ
-    await agent._step(state, second, opened, Decider.CODE)
+    await agent._step(state, second, opened, Decider.LLM)
     assert state.notes.evidenced("r1")
     assert agent_module._paging(state, second) is None
     assert [(s.operation, s.decided_by) for s in state.steps] == [
         (Operation.READ, Decider.JEV),
-        (Operation.CLICK, Decider.CODE),
-        (Operation.READ, Decider.CODE),
+        (Operation.CLICK, Decider.LLM),
+        (Operation.READ, Decider.LLM),
     ]
 
 
@@ -1406,7 +1406,7 @@ async def test_a_secret_quoted_by_a_citation_is_redacted_from_its_links_too(read
     assert "hunter" not in events[0].model_dump_json()
     assert len(state.notes.facts) == 2
     assert [*state.notes.evidence.values()][-1].quote == quote
-    await agent._step(state, observation(()), _code_decision(Operation.SCROLL, None), Decider.CODE)
+    await agent._step(state, observation(()), _code_decision(Operation.SCROLL, None))
     assert events[1].step.facts == ()
     assert events[1].step.note is None
 

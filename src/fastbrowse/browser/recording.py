@@ -268,9 +268,7 @@ def _describe(step: StepResult) -> str:
         case Decider.JEV:
             by = "picked by Jev"
         case Decider.LLM:
-            by = "LLM"
-        case Decider.CODE:
-            by = "code"
+            by = "picked by the LLM"
         case _:
             assert_never(step.decided_by)
     match step.operation:
