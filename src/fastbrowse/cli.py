@@ -6,7 +6,8 @@
 A Browser Use Cloud browser by default (BROWSER_USE_API_KEY), with a URL printed to watch it live;
 `--cloud-profile ID` starts it with the cookies that profile holds. `--local` runs a headless local Chrome
 instead; `--headed` shows it, and `--profile DIR` keeps its profile so a site signed into there once stays
-signed in. Either of those implies `--local`.
+signed in. Either of those implies `--local`. `--cdp-url ws://…` instead attaches to a browser already running
+anywhere, opening one tab and leaving the browser as it was found.
 Secrets come from `--secret NAME=ENV_VAR`, read from that variable, or `--bitwarden ITEM`, a vault login's
 `username` and `password`. `--secret NAME=ENV_VAR@ORIGIN` declares an exact or wildcard origin; without it,
 the scope is the `--start` origin. A secret with neither is refused. Bitwarden matches the item against
@@ -26,7 +27,16 @@ from pydantic import ValidationError
 from fastbrowse import options
 from fastbrowse.adapters.bitwarden import BitwardenError, bitwarden_login
 from fastbrowse.clients.environment import ConfigurationError, load_settings
-from fastbrowse.models import Authorization, BrowserEvent, CostBreakdown, Limits, RunResult, Status, StepEvent
+from fastbrowse.models import (
+    Authorization,
+    BrowserEvent,
+    CostBreakdown,
+    Limits,
+    LocalChrome,
+    RunResult,
+    Status,
+    StepEvent,
+)
 from fastbrowse.run import run_task
 from fastbrowse.safety import ScopedSecrets, origin_of
 
@@ -90,6 +100,12 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--cloud-profile", metavar="ID", default=None, help="a Browser Use Cloud profile to run signed in as"
     )
+    parser.add_argument(
+        "--cdp-url",
+        metavar="URL",
+        default=None,
+        help="attach to a browser already running at this CDP websocket URL, instead of starting one",
+    )
     parser.add_argument("--authorize", action="store_true", help="allow irreversible actions without confirmation")
     parser.add_argument(
         "--secret",
@@ -133,6 +149,32 @@ def _limits(args: argparse.Namespace) -> Limits:
         raise ConfigurationError(f"{bad or 'a limit'} must be greater than zero") from None
 
 
+def _cdp_url(args: argparse.Namespace, chrome: LocalChrome) -> str | None:
+    """A browser the operator already runs, or None for one fastbrowse starts.
+
+    Attaching replaces every flag that shapes a started browser, so combining them is refused the way
+    `--cloud-profile` on local Chrome is: as a configuration error, before any browser work. `--headed` and
+    `--profile` count from FASTBROWSE_HEADED / FASTBROWSE_PROFILE too, which `chrome` already reflects.
+    """
+    if args.cdp_url is None:
+        return None
+    conflicts = [
+        flag
+        for flag, on in (
+            ("--local", args.local),
+            ("--headed", chrome.headed),
+            ("--profile", chrome.profile is not None),
+            ("--cloud-profile", args.cloud_profile is not None),
+        )
+        if on
+    ]
+    if conflicts:
+        raise ConfigurationError(f"--cdp-url attaches to a browser already running; drop {', '.join(conflicts)}")
+    if not args.cdp_url.startswith(("ws://", "wss://")):
+        raise ConfigurationError(f"--cdp-url expects a ws:// or wss:// URL, got {args.cdp_url!r}")
+    return args.cdp_url
+
+
 async def run(args: argparse.Namespace) -> int:
     if args.record is not None and shutil.which("ffmpeg") is None:
         raise ConfigurationError("--record needs ffmpeg on PATH")
@@ -142,12 +184,16 @@ async def run(args: argparse.Namespace) -> int:
     secrets = _secrets(args.secret, args.bitwarden, args.start)
     settings = load_settings()
     chrome = options.chrome(settings, args.headed, args.profile)
+    cdp_url = _cdp_url(args, chrome)
     result = await run_task(
         args.task,
         start=args.start,
-        browser_api_key=options.browser_key(settings, options.cloud(args.local, chrome, args.cloud_profile)),
+        browser_api_key=None
+        if cdp_url is not None
+        else options.browser_key(settings, options.cloud(args.local, chrome, args.cloud_profile)),
         chrome=chrome,
         cloud_profile=args.cloud_profile,
+        cdp_url=cdp_url,
         secrets=secrets,
         limits=limits,
         authorization=Authorization(irreversible_actions=args.authorize),

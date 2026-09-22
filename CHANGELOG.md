@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **The CLI attaches to a browser already running.** `--cdp-url ws://…` drives any browser exposing CDP: a
+  container, a VM, a hosted browser. The run opens one tab and closes only the tabs it owns, so the browser is
+  left as it was found. The Python API's `cdp_url` gains its command-line surface; flags that shape a browser
+  fastbrowse starts (`--local`, `--headed`, `--profile`, `--cloud-profile`, and their FASTBROWSE_* environment
+  counterparts) are refused alongside it.
+
 ## [0.5.2] - 2026-09-22
 
 - **A page is read before it is scrolled.** A read takes in the whole page, so scrolling one nobody has read only
