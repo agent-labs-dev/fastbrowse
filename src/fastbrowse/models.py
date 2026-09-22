@@ -299,6 +299,10 @@ class Authorization(Frozen):
     """Allow submit/pay/delete/send style actions without pausing for confirmation."""
 
 
+type SecretValue = str | Callable[[], Awaitable[str]]
+"""A secret's value, or what computes it when it is typed: an authenticator code is good for seconds."""
+
+
 class SecretRef(Frozen):
     name: str
     origins: tuple[str, ...]

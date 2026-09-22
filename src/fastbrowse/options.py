@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastbrowse.clients.environment import ConfigurationError, Settings
-from fastbrowse.models import LocalChrome, StepResult
+from fastbrowse.models import LocalChrome, SecretValue, StepResult
 
 
 def cloud(local: bool, chrome: LocalChrome, cloud_profile: str | None) -> bool:
@@ -78,7 +78,7 @@ def unset_variables(pairs: list[tuple[str, str, str | None]], environ: Mapping[s
     return sorted({variable for _, variable, _ in pairs if variable not in environ})
 
 
-def merged_secrets(values: Mapping[str, str], vault: Mapping[str, str]) -> dict[str, str]:
+def merged_secrets(values: Mapping[str, SecretValue], vault: Mapping[str, SecretValue]) -> dict[str, SecretValue]:
     """Declared secrets and a vault item's, refusing a name both supply rather than letting one win silently.
 
     Raises `ValueError`, which each entry point reports in its own terms: the CLI as a configuration error before

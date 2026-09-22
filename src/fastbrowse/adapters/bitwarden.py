@@ -13,6 +13,9 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from fastbrowse.adapters.totp import TotpError, one_time_code
+from fastbrowse.models import SecretValue
+
 
 class BitwardenError(RuntimeError):
     """The vault is locked, the item is missing, or it does not belong to the start origin."""
@@ -39,6 +42,7 @@ class _Login(BaseModel):
     model_config = ConfigDict(extra="ignore")
     username: str | None = None
     password: str | None = None
+    totp: str | None = None
     uris: list[_Uri] | None = None
 
 
@@ -68,8 +72,8 @@ def covers(uri: str, detection: UriMatch | None, origin: str) -> bool:
             assert_never(detection)
 
 
-def login_values(item_json: str, origin: str) -> dict[str, str]:
-    """The item's username and password, keyed by the secret names the agent sees."""
+def login_values(item_json: str, origin: str) -> dict[str, SecretValue]:
+    """The item's username, password and authenticator code, keyed by the secret names the agent sees."""
     try:
         item = _Item.model_validate_json(item_json)
     except ValidationError:
@@ -79,11 +83,22 @@ def login_values(item_json: str, origin: str) -> dict[str, str]:
         raise BitwardenError(f"Bitwarden item {item.name!r} is not a login")
     if not any(u.uri and covers(u.uri, u.match, origin) for u in item.login.uris or ()):
         raise BitwardenError(f"Bitwarden item {item.name!r} is not saved for {origin}")
-    values = {"username": item.login.username, "password": item.login.password}
-    return {name: value for name, value in values.items() if value}
+    values: dict[str, SecretValue] = {
+        name: value for name, value in (("username", item.login.username), ("password", item.login.password)) if value
+    }
+    if item.login.totp:
+        # Amazon's two-step sign-in stopped a run at "Enter OTP" with the key in the vault. The code is made
+        # when it is typed, and a key that cannot make one fails here rather than at that prompt.
+        try:
+            values["one_time_code"] = one_time_code(item.login.totp)
+        except TotpError as exc:
+            raise BitwardenError(
+                f"Bitwarden item {item.name!r} has an authenticator key fastbrowse cannot use: {exc}"
+            ) from None
+    return values
 
 
-def bitwarden_login(item: str, origin: str) -> dict[str, str]:
+def bitwarden_login(item: str, origin: str) -> dict[str, SecretValue]:
     """Read `item` (a name or id) from the unlocked vault; `BW_SESSION` must be in the environment."""
     try:
         done = subprocess.run(

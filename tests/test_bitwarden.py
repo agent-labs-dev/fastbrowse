@@ -1,12 +1,22 @@
+import base64
 import json
 
 import pytest
 
 from fastbrowse.adapters.bitwarden import BitwardenError, UriMatch, covers, login_values
+from fastbrowse.safety import ScopedSecrets, resolve_secret
+
+# RFC 6238's SHA1 seed, encoded here rather than written out so a secret scanner does not read it as a key.
+KEY = base64.b32encode(b"12345678901234567890").decode()
 
 
-def item(*uris: str, password: str | None = "hunter2", match: int | None = None) -> str:
-    login = {"username": "me@example.com", "password": password, "uris": [{"match": match, "uri": u} for u in uris]}
+def item(*uris: str, password: str | None = "hunter2", match: int | None = None, totp: str | None = None) -> str:
+    login = {
+        "username": "me@example.com",
+        "password": password,
+        "totp": totp,
+        "uris": [{"match": match, "uri": u} for u in uris],
+    }
     return json.dumps({"id": "1", "name": "Amazon", "type": 1, "login": login})
 
 
@@ -50,3 +60,19 @@ def test_a_malformed_item_error_does_not_echo_the_password() -> None:
     with pytest.raises(BitwardenError) as raised:
         login_values(malformed, "https://www.amazon.com")
     assert "hunter2" not in str(raised.value)
+
+
+async def test_an_authenticator_key_offers_a_code_made_only_where_the_login_is_scoped() -> None:
+    values = login_values(item("amazon.co.uk", totp=KEY), "https://www.amazon.co.uk")
+    assert values.keys() == {"username", "password", "one_time_code"}
+    secrets = ScopedSecrets(values, "https://www.amazon.co.uk")
+    code = await resolve_secret(secrets, "one_time_code", "https://www.amazon.co.uk")
+    assert code is not None and code.isdigit() and len(code) == 6
+    assert await resolve_secret(secrets, "one_time_code", "https://evil.test") is None
+
+
+def test_an_unusable_authenticator_key_fails_at_load_without_echoing_it() -> None:
+    for key in ("steam://" + KEY, "otpauth://hotp/Amazon?secret=" + KEY, "zz-garbage-key-zz"):
+        with pytest.raises(BitwardenError, match="authenticator key") as raised:
+            login_values(item("amazon.co.uk", totp=key), "https://www.amazon.co.uk")
+        assert KEY not in str(raised.value) and "zz-garbage-key-zz" not in str(raised.value)

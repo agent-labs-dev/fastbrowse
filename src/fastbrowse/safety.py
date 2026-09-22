@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from urllib.parse import quote, quote_plus, urlsplit
 
 from fastbrowse.jev import NoulQuestion
-from fastbrowse.models import UNTRUSTED, Operation, SecretRef, SecretResolver
+from fastbrowse.models import UNTRUSTED, Operation, SecretRef, SecretResolver, SecretValue
 from fastbrowse.page import Control
 
 
@@ -135,13 +135,13 @@ class ScopedSecrets:
     answered on a wider origin than it declared would put the gate in two places with two answers.
     """
 
-    def __init__(self, values: Mapping[str, str], origin: str) -> None:
-        self._secrets: dict[str, tuple[str, tuple[str, ...]]] = {
+    def __init__(self, values: Mapping[str, SecretValue], origin: str) -> None:
+        self._secrets: dict[str, tuple[SecretValue, tuple[str, ...]]] = {
             name: (value, (origin,)) for name, value in values.items()
         }
 
     @classmethod
-    def per_secret(cls, secrets: Mapping[str, tuple[str, Sequence[str]]]) -> "ScopedSecrets":
+    def per_secret(cls, secrets: Mapping[str, tuple[SecretValue, Sequence[str]]]) -> "ScopedSecrets":
         """`{name: (value, origins)}`. A secret left with no origins is held by nobody and offered nowhere."""
         scoped = cls({}, "")
         scoped._secrets = {
@@ -156,7 +156,9 @@ class ScopedSecrets:
         held = self._secrets.get(name)
         if held is None or not secret_allowed(SecretRef(name=name, origins=held[1]), origin):
             return None
-        return held[0]
+        value = held[0]
+        # A computed value is made only once the origin is allowed, and afresh each time it is typed.
+        return value if isinstance(value, str) else await value()
 
 
 class Redactor:

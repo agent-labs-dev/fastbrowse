@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **`--bitwarden` signs in past an authenticator-app code.** A vault item that holds an authenticator key now
+  also offers `one_time_code`, the current code computed from the key at the moment it is typed, scoped to the
+  same origin as the username and password. Amazon's two-step sign-in had stopped a run at "Enter OTP" with the
+  key in the vault. Base32 keys and `otpauth://totp` URIs are read locally, so Bitwarden Premium is not needed; a
+  code with a few seconds left waits for the next one, and a key fastbrowse cannot use (`steam://`, HOTP) is
+  refused when the item is read.
 - **A stored username is typed into an email or phone sign-in field.** Amazon's sign-in field is labelled
   "Enter mobile number or email", and Jev, seeing only a secret named `username`, chose to write new text,
   so the run stopped `needs_input` before signing in. The field question now says that stored secrets are the

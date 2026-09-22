@@ -8,9 +8,10 @@ A Browser Use Cloud browser by default (BROWSER_USE_API_KEY), with a URL printed
 instead; `--headed` shows it, and `--profile DIR` keeps its profile so a site signed into there once stays
 signed in. Either of those implies `--local`.
 Secrets come from `--secret NAME=ENV_VAR`, read from that variable, or `--bitwarden ITEM`, a vault login's
-`username` and `password`. `--secret NAME=ENV_VAR@ORIGIN` declares an exact or wildcard origin; without it,
-the scope is the `--start` origin. A secret with neither is refused. Bitwarden matches the item against
-`--start` and limits its values to that origin.
+`username` and `password`, and its `one_time_code` when the item holds an authenticator key.
+`--secret NAME=ENV_VAR@ORIGIN` declares an exact or wildcard origin; without it, the scope is the `--start`
+origin. A secret with neither is refused. Bitwarden matches the item against `--start` and limits its values to
+that origin.
 """
 
 import argparse
@@ -27,7 +28,16 @@ from pydantic import ValidationError
 from fastbrowse import options
 from fastbrowse.adapters.bitwarden import BitwardenError, bitwarden_login
 from fastbrowse.clients.environment import ConfigurationError, load_settings
-from fastbrowse.models import Authorization, BrowserEvent, CostBreakdown, Limits, RunResult, Status, StepEvent
+from fastbrowse.models import (
+    Authorization,
+    BrowserEvent,
+    CostBreakdown,
+    Limits,
+    RunResult,
+    SecretValue,
+    Status,
+    StepEvent,
+)
 from fastbrowse.run import run_task
 from fastbrowse.safety import ScopedSecrets, origin_of
 
@@ -56,7 +66,7 @@ def _secrets(
     if missing := options.unset_variables(pairs):
         raise ConfigurationError(f"--secret names unset variables: {', '.join(missing)}")
     fallback = origin_of(start) if start is not None else None
-    scoped: dict[str, tuple[str, tuple[str, ...]]] = {}
+    scoped: dict[str, tuple[SecretValue, tuple[str, ...]]] = {}
     for name, variable, origin in pairs:
         where = origin or fallback
         # Unreachable while the guard above stands, and it is here so that relaxing that guard cannot silently
@@ -101,7 +111,9 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         metavar="NAME=ENV_VAR[@ORIGIN]",
     )
     parser.add_argument(
-        "--bitwarden", metavar="ITEM", help="type this vault login's username and password (unlocked bw CLI)"
+        "--bitwarden",
+        metavar="ITEM",
+        help="type this vault login's username, password and authenticator code (unlocked bw CLI)",
     )
     parser.add_argument("--max-steps", type=int, default=60)
     parser.add_argument("--max-dollars", type=float, default=None)

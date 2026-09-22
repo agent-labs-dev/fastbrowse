@@ -57,6 +57,7 @@ from fastbrowse.models import (
     LocalChrome,
     RunResult,
     SecretRef,
+    SecretValue,
     Status,
     StepEvent,
 )
@@ -251,7 +252,7 @@ async def _secrets(config: ServerConfig, origin: str | None, bitwarden: str | No
         for secret in config.secrets
         if secret_allowed(SecretRef(name=secret.name, origins=(secret.origin,)), origin)
     }
-    values = {secret.name: secret.value for secret in config.secrets if secret.name in declared}
+    values: dict[str, SecretValue] = {s.name: s.value for s in config.secrets if s.name in declared}
     if bitwarden is not None:
         if bitwarden not in config.bitwarden:
             allowed = ", ".join(config.bitwarden) or "none"
