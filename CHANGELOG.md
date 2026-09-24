@@ -61,6 +61,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   new fact restores the budget. Each page of a list paged in place keeps a budget of its own, and the same
   records read again off a ticking page are not new facts.
 
+- **A Cloudflare edge error is retried like a 503.** A provider behind Cloudflare answered a 503, which was
+  retried, and then a 520 seconds later in the same outage, which ended the run in error and failed its eval
+  row for good, although a re-run of the task passed. Statuses 520 to 524 are now retried with backoff, and
+  once the retries run out the run ends `unavailable`, so the live eval retries the row rather than scoring it.
+
 - **A value is still the page's when the model retypes its punctuation.** A field the page writes with a curly
   apostrophe, an en dash or an ellipsis was dropped when the model quoted it with a straight apostrophe, a
   hyphen or three dots, so the fact never landed, the requirement stayed open, and the run read the same page

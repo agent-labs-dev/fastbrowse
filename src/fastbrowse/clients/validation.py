@@ -150,7 +150,11 @@ RETRY_DELAYS_SECONDS = (0.5, 1.5, 4.0, 8.0, 8.0)
 """About 22s in all. With 6s, a Jev 503 ended 5 of 311 eval runs, and each time the next run, started 0 to 15s
 later, got through: the outages are brief, and a run lost to one costs far more than the wait. Only a longer
 outage moves the run to the backup provider (`clients/failover.py`)."""
-RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 529})
+RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529})
+"""Statuses that say nothing about the request, so a repeat can clear them. 520 to 524 are Cloudflare's edge failing
+to reach the provider behind it: a 520 arrived seconds after a retried 503 from the same outage and, unlisted, failed
+its eval row for good. A status still listed once the retries run out ends the run unavailable, not in error, so
+the eval harness retries the row too."""
 TRANSIENT_TRANSPORT = (
     httpx.TimeoutException,
     httpx.NetworkError,
