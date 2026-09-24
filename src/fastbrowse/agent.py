@@ -470,9 +470,13 @@ class Agent:
                 # nothing to read, and finishes without waiting.
                 if _unread(plan, state.notes) or (state.owes_read and plan.answer_expected):
                     reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
+                    # A read that ran spends the direction it was sent on, but may leave one of its own: the control
+                    # the reader named to show more was cleared right after the read that named it, and Flights
+                    # runs went to recovery without clicking View more flights. A skipped read spends nothing.
+                    held, state.directed = state.directed, None
                     if not await self._step(state, observation, reading, decided_by):
-                        state.directed = None
                         continue
+                    state.directed = held
                     directed = (
                         decision
                         if decision.directed
@@ -1466,8 +1470,8 @@ class Agent:
         state: _RunState,
         continues: Sequence[str],
         following: Control | None,
-        observation: Observation | None = None,
-        expands: str | None = None,
+        observation: Observation,
+        expands: str | None,
     ) -> None:
         """Arrange for the rest of a list the reader says it needs: the next page by code, the control the
         reader named, or a word to Jev."""
@@ -1478,19 +1482,21 @@ class Agent:
             # Deciding each hop costs a Jev call to pick a link code has already found, on every page of the list.
             state.next_page = True
             return
+        # "Otherwise finish" was a dead end: the reader withholds a list it has not seen the end of, so the done check
+        # refused every such finish, and Flights runs spent their recoveries finding "View more flights" instead.
+        show = "open the control that loads or pages through more of the list"
         # The reader saw which control shows the rest. Matched against the page's own labels rather than
-        # trusted, so a label the reader invented directs nothing and the hint below still applies.
-        if expands is not None and observation is not None:
+        # trusted, so a label the reader invented directs nothing. The hint names it too, so Jev is still told
+        # where the rest is when a confident decision elsewhere drops the direction.
+        if expands is not None:
             named = [c for c in observation.controls if c.label == expands and Operation.CLICK in c.operations]
             if len(named) == 1:
                 state.directed = (Operation.CLICK, named[0].id)
-                return
-        # "Otherwise finish" was a dead end: the reader withholds a list it has not seen the end of, so the done check
-        # refused every such finish, and Flights runs spent their recoveries finding "View more flights" instead.
+                show = f'open "{expands}"'
         state.hint = (
             "The reader saw the list this task needs go on past what the page shows, so what was read cannot settle "
-            "it. Show the rest and READ it: open the control that loads or pages through more of the list, or narrow "
-            "the list with the page's own filter or sort so the answer is in view."
+            f"it. Show the rest and READ it: {show}, or narrow the list with the page's own filter or sort so the "
+            "answer is in view."
         )
 
     async def _recover(

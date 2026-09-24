@@ -1391,6 +1391,41 @@ async def test_the_control_the_reader_names_opens_the_rest_of_the_list() -> None
     assert not state.next_page
 
 
+async def test_a_read_jev_chose_opens_the_control_its_reader_named() -> None:
+    """The direction a read leaves outlives the read: cleared straight after it, Flights runs went to recovery
+    and never clicked the View more flights the reader had named."""
+    more = _button("View more flights")
+    here = _at("https://example.test/flights/", more)
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r1", text="The cheapest fare", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=here)
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "From 1061 US dollars")))
+    page.screenshot = AsyncMock(return_value=b"")
+    page.artifacts = ()
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
+    jev = ScriptedJev({"operation": "read", "read_assessment": "evidence", "r1": "none"}, noul=0.0)
+    reads: list[JsonValue] = [
+        {
+            "claims": [],
+            "answered": False,
+            "continues": [{"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}], "expands": more.label}],
+        }
+    ]
+    agent = Agent(page, jev, ScriptedLLM(reads))
+    agent._recover = AsyncMock(side_effect=_Stop(Status.STUCK, "recovering"))
+    state.ledger.limits = Limits(max_steps=3)
+    from fastbrowse.telemetry import BudgetExceeded
+
+    with pytest.raises((_Stop, BudgetExceeded)):
+        await agent._loop(state, None, None)
+    page.act.assert_awaited_once()
+    assert [step.target for step in state.steps if step.operation is Operation.CLICK] == [more.label]
+
+
 async def test_a_control_the_reader_invents_directs_nothing() -> None:
     state = await run_state()
     state.ready_plan = Plan(
