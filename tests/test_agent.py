@@ -1065,22 +1065,25 @@ def test_the_verifier_cannot_hold_open_a_requirement_the_notes_cite(
         Fact(reader=FactReader.LLM, requirement_id=r, text=r, evidence=evidence(start=i))
         for i, r in enumerate(("httpx", "compare"))
     )
-    assert _verified(LLMVerdict(complete=complete, missing=missing), plan, notes) is accepted
+    assert _verified(LLMVerdict(complete=complete, missing=missing), plan, notes, set()) is accepted
 
 
 @pytest.mark.parametrize(
-    ("ungrounded", "accepted"),
+    ("ungrounded", "invented", "accepted"),
     [
-        ((), True),
-        # The citing excusal above cannot see this: the requirement has evidence, from the wrong page.
-        (("compare",), False),
-        (("httpx",), False),
+        ((), {"https://example.test/"}, True),
+        # The citing excusal cannot see this: the requirement has evidence, read on an address the run guessed.
+        (("httpx",), {"https://example.test/?q=httpx"}, False),
+        # Read on the page the caller named or one the run clicked to, the doubt is the verifier's alone. The
+        # synthesis requirement is satisfied from notes, and no page ever shows a comparison.
+        (("httpx",), set(), True),
+        (("compare",), set(), True),
         # A verdict naming something the plan never asked for says nothing about this run.
-        (("invented-id",), True),
+        (("invented-id",), {"https://example.test/"}, True),
     ],
 )
-def test_evidence_does_not_excuse_a_requirement_read_off_the_wrong_page(
-    ungrounded: tuple[str, ...], accepted: bool
+def test_evidence_does_not_excuse_a_requirement_read_off_a_guessed_address(
+    ungrounded: tuple[str, ...], invented: set[str], accepted: bool
 ) -> None:
     """A proposed address opened a flights summary, the reader quoted a price from it, and the requirement
     counted as cited, so the verifier could not hold it open however plainly it was the wrong search."""
@@ -1097,7 +1100,71 @@ def test_evidence_does_not_excuse_a_requirement_read_off_the_wrong_page(
         for i, r in enumerate(("httpx", "compare"))
     )
     verdict = LLMVerdict(complete=True, missing=(), ungrounded=ungrounded)
-    assert _verified(verdict, plan, notes) is accepted
+    assert _verified(verdict, plan, notes, invented) is accepted
+
+
+async def _finishing(state: _RunState, llm: ScriptedLLM, *, noul: float) -> tuple[Agent, Observation]:
+    on = _at("https://example.test/flights/results")
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=on)
+    page.screenshot = AsyncMock(return_value=b"")
+    page.artifacts = ()
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="The cheapest nonstop fare", kind=RequirementKind.INFORMATION),),
+        answer_expected=False,
+    )
+
+    async def planned() -> Generation[Plan]:
+        return Generation(data=plan, cost=FREE)
+
+    state.planning = asyncio.create_task(planned())
+    await state.planning
+    state.ready_plan = plan
+    return Agent(page, ScriptedJev({}, noul=noul), llm), on
+
+
+def _fare(url: str, sha: str) -> Fact:
+    read = evidence(sha=sha).model_copy(update={"url": url})
+    return Fact(reader=FactReader.LLM, requirement_id="r1", text="$320", evidence=read)
+
+
+async def test_a_requirement_read_off_a_guessed_address_reopens_until_the_right_page_is_read() -> None:
+    """Refused as read off the wrong page with the fare left as the answer, every click after became DONE and
+    every DONE the same refusal, told only "completion not confirmed", until the run stopped stuck."""
+    summary = "https://example.test/flights/summary"
+    state = await run_state()
+    state.invented = {summary}
+    state.notes.add(_fare(f"{summary}?from=BRS", "summary"))
+    recovery: JsonValue = {
+        "diagnosis": "the fare came from a summary",
+        "next_subgoal": "Run the real search",
+        "give_up": False,
+    }
+    llm = ScriptedLLM(
+        [{"missing": [], "ungrounded": ["r1"], "complete": True}, recovery, {"missing": [], "complete": True}]
+    )
+    agent, on = await _finishing(state, llm, noul=0.5)
+
+    assert await agent._finish(state, on, None, None) is None
+    assert state.notes.unresolved(state.plan) == state.plan.requirements
+    assert f"r1: The cheapest nonstop fare (read off {summary}?from=BRS" in (state.history[-1].effect or "")
+
+    state.notes.add(_fare("https://example.test/flights/results?from=BRS", "results"))
+    result = await agent._finish(state, on, None, None)
+    assert result is not None and result.status is Status.COMPLETE
+
+
+async def test_a_confident_finish_resting_on_a_guessed_address_is_still_verified() -> None:
+    state = await run_state()
+    state.invented = {"https://example.test/flights/summary"}
+    state.notes.add(_fare("https://example.test/flights/summary", "summary"))
+    llm = ScriptedLLM([{"missing": [], "complete": True}])
+    agent, on = await _finishing(state, llm, noul=0.99)
+
+    result = await agent._finish(state, on, None, None)
+
+    assert result is not None and result.status is Status.COMPLETE
+    assert [purpose for purpose, _ in llm.calls] == [LLMPurpose.VERIFY]
 
 
 @pytest.mark.parametrize("draws", [True, False])
@@ -1579,7 +1646,9 @@ async def test_a_shortcut_the_site_does_not_serve_returns_to_the_start_page(stat
     start, guessed = "https://books.test/", "https://books.test/catalogue/mysteryfile_3/index.html"
     page = Mock(spec=Page)
     page.navigate = AsyncMock()
-    page.origin = AsyncMock(return_value="https://books.test")
+    # The site redirects the guess, and the facts will cite where it landed.
+    landed = "https://books.test/catalogue/category/books/mystery_3/index.html"
+    page.address = AsyncMock(return_value=landed)
     page.response_status = AsyncMock(return_value=status)
     agent = Agent(page, ScriptedJev({}), ScriptedLLM([{"url": guessed}]))
 
@@ -1588,7 +1657,7 @@ async def test_a_shortcut_the_site_does_not_serve_returns_to_the_start_page(stat
     assert bool(history) is stays
     assert page.navigate.await_args_list[-1].args == ((guessed,) if stays else (start,))
     # Only an address the run actually stayed on is one the verifier has to weigh.
-    assert invented == ({guessed} if stays else set())
+    assert invented == ({guessed, landed} if stays else set())
 
 
 @pytest.mark.parametrize(

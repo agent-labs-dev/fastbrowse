@@ -233,7 +233,9 @@ class Page(Protocol):
         """Hold back live and recorded frames while the page may show a secret, which pixels cannot mask."""
         ...
 
-    async def origin(self) -> str: ...
+    async def address(self) -> str:
+        """The address the current document was served from, after any redirect."""
+        ...
 
     async def response_status(self) -> int | None:
         """The HTTP status the current document was served with, or None when the browser does not say."""

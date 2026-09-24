@@ -606,11 +606,11 @@ class Agent:
         try:
             await self._page.navigate(shortcut)
             # `accept` saw only the proposed address; a redirect can still land on another site.
-            landed = origin_of(await self._page.origin())
+            landed = await self._page.address()
             status = await self._page.response_status()
         except BrowserError:
             landed, status = None, None
-        if landed != origin_of(start):
+        if landed is None or origin_of(landed) != origin_of(start):
             logger.warning("shortcut %s did not stay on %s; returning to the start page", shortcut, start)
             await self._page.navigate(start)
             return [], set()
@@ -622,7 +622,8 @@ class Agent:
             return [], set()
         note = f"opened {shortcut} directly instead of clicking there; the start page {start} is one BACK away"
         opened = HistoryEntry(operation=None, target=None, outcome=StepOutcome.EXECUTED, page_changed=True, note=note)
-        return [opened], {shortcut}
+        # The facts cite where the page landed, so a redirect's address is the one they can be matched against.
+        return [opened], {shortcut, landed}
 
     async def _propose(self, task: str, start: str, ledger: Ledger) -> Shortcut:
         # Recorded here, not by the caller: a proposal that finished is billed even when the run ends first.
@@ -1641,7 +1642,12 @@ class Agent:
             requirements={r.id: r.text for r in state.plan.requirements},
         )
         state.ledger.record(check.cost)
+        if check.verdict is DoneVerdict.ACCEPT and _guessed(state.plan, state.notes, state.invented):
+            # Jev judges the notes, not where they were read, so only the verifier is shown the guessed addresses.
+            check = check.model_copy(update={"verdict": DoneVerdict.VERIFY})
         accepted = check.verdict is DoneVerdict.ACCEPT
+        missing: tuple[str, ...] = ()
+        misread: set[str] = set()
         drafting: asyncio.Task[Generation[ComposedAnswer]] | None = None
         # Whoever still holds the draft when this returns is responsible for it. `finally` covers the
         # paths that are not a decision at all: the verifier raising, `until` raising, the caller
@@ -1677,7 +1683,8 @@ class Agent:
                     ledger=state.ledger,
                 )
                 state.ledger.record(verdict.cost)
-                accepted = _verified(verdict.data, state.plan, state.notes)
+                accepted = _verified(verdict.data, state.plan, state.notes, state.invented)
+                missing, misread = verdict.data.missing, _misread(verdict.data, state.plan, state.notes, state.invented)
                 trace(
                     "verify",
                     complete=verdict.data.complete,
@@ -1688,9 +1695,21 @@ class Agent:
                 accepted = await until((self._raw_observation or fresh).url)
             if not accepted:
                 requirements = {r.id: r.text for r in state.plan.requirements}
-                unmet = "; ".join(f"{key}: {requirements.get(key, key)}" for key in check.unmet)
-                reason = f"DONE rejected: {unmet or 'completion not confirmed'}"
-                reason = self._redactor.redact(reason)
+                unmet = [
+                    f"{key}: {requirements.get(key, key)}"
+                    for key in dict.fromkeys((*check.unmet, *missing))
+                    if key not in misread
+                ]
+                # Naming the page is what gives recovery something to do: told only "completion not confirmed",
+                # it sent the run to finish again from the same notes until the recoveries ran out.
+                unmet += [
+                    f"{key}: {requirements[key]} (read off "
+                    + ", ".join(dict.fromkeys(f.evidence.url for _, f in state.notes.supporting(key) if f.evidence))
+                    + ", an address built from the task, not the page it describes)"
+                    for key in sorted(misread)
+                ]
+                state.notes.unevidence(misread)
+                reason = self._redactor.redact(f"DONE rejected: {'; '.join(unmet) or 'completion not confirmed'}")
                 state.history.append(
                     HistoryEntry(
                         operation=Operation.DONE,
@@ -1961,20 +1980,44 @@ def _describe(control: Control) -> str:
     return f"{control.label} ({control.context})" if control.context else control.label
 
 
-def _verified(verdict: LLMVerdict, plan: Plan, notes: Notes) -> bool:
+def _place(url: str) -> tuple[str, str]:
+    """An address as origin and path: the query and fragment a site writes back do not make it another page."""
+    return origin_of(url), urlsplit(url).path or "/"
+
+
+def _guessed(plan: Plan, notes: Notes, invented: Set[str]) -> set[str]:
+    """The requirements with a fact read on an address the run built from the task rather than clicked to."""
+    places = {_place(url) for url in invented}
+    return {
+        r.id
+        for r in plan.requirements
+        if any(f.evidence is not None and _place(f.evidence.url) in places for _, f in notes.supporting(r.id))
+    }
+
+
+def _misread(verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str]) -> set[str]:
+    """The requirements the verifier says were read off the wrong page, where that page was a guessed address.
+
+    A guessed address is the one that can land on a page of the right shape and the wrong search: a proposed
+    address opened a flights summary, the reader quoted a price from it, and the requirement counted as cited.
+    A page reached by clicking was chosen off the site itself, so there the verifier's doubt is only doubt.
+    """
+    return set(verdict.ungrounded) & _guessed(plan, notes, invented)
+
+
+def _verified(verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str]) -> bool:
     """Whether the verifier's doubts leave the run finished.
 
     An information requirement the notes cite facts for is not left open by the verifier: the answer's claims are
     checked against those quotes before it is given. On flash-lite the verifier named "compare the two release
-    dates" missing with both dates in the notes, one run in three, until the run stopped stuck.
+    dates" missing with both dates in the notes, one run in three, until the run stopped stuck. Only evidence read
+    on a guessed address is not excused, since that is the wrong page the citing check cannot see.
     """
     cited = {r.id for r in plan.requirements if r.kind is RequirementKind.INFORMATION and notes.evidenced(r.id)}
-    doubted = set(verdict.missing) - cited
-    # Evidence cannot excuse a requirement the verifier says was read off the wrong page: that is the case the
-    # excusal above cannot see. A proposed address opened a flights summary, the reader quoted a price from it,
-    # and the requirement counted as cited, so even a verifier naming it missing was overruled.
-    ungrounded = {key for key in verdict.ungrounded if key in {r.id for r in plan.requirements}}
-    return not doubted and not ungrounded and (verdict.complete or bool(verdict.missing))
+    misread = _misread(verdict, plan, notes, invented)
+    named = set(verdict.missing) | (set(verdict.ungrounded) & {r.id for r in plan.requirements})
+    doubted = named - (cited - misread)
+    return not doubted and (verdict.complete or bool(verdict.missing))
 
 
 def _described(entry: HistoryEntry) -> str:

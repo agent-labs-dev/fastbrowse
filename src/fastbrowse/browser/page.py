@@ -919,6 +919,10 @@ class CdpPage(Page):
         raw = await self._evaluate(self._session.active_session_id, "location.origin")
         return str(raw) if raw is not None else ""
 
+    async def address(self) -> str:
+        raw = await self._evaluate(self._session.active_session_id, "location.href")
+        return str(raw) if raw is not None else ""
+
     async def response_status(self) -> int | None:
         raw = await self._evaluate(
             self._session.active_session_id,
