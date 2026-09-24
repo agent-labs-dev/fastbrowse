@@ -22,7 +22,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   Three reads of a filtered results page returned nothing while the cheapest row was on screen: the reader saw
   the list go on and never assigned the requirement, so the done check refused and the run stuck. A page that
   states it is ordered or filtered by the quantity being compared now settles the superlative on its leading
-  record, citing that statement so the claim rests on it. Where the list really does go on, the reader names
+  record, citing that statement so the claim rests on it. A count or total over a list that goes on is not
+  settled this way. Where the list really does go on, the reader names
   the control that shows the rest, and the run opens it when the page offers that label.
 
 - **A page that cannot settle a list now has to say what it compared.** The reader's prompt asked a continuing
@@ -60,8 +61,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   apostrophe, an en dash or an ellipsis was dropped when the model quoted it with a straight apostrophe, a
   hyphen or three dots, so the fact never landed, the requirement stayed open, and the run read the same page
   until it stalled. A value now matches across a punctuation family, and across the backslash a capture puts
-  before a table cell's own pipe. The quote kept as evidence is still the page's own bytes, and the words,
-  their order and their spacing all still have to be there.
+  before a table cell's own pipe. The value returned and the quote kept as evidence are both the page's own
+  text, not the model's retyping, and the words, their order and their spacing all still have to be there.
 
 ## [0.5.3] - 2026-09-22
 

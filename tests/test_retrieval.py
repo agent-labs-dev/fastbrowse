@@ -674,15 +674,15 @@ async def test_a_text_field_survives_the_punctuation_shape_a_model_rewrites(type
     llm = ScriptedLLM([{"fields": [{"field": "label", "value": typed, "source_id": "s0"}]}])
     found, _ = await propose_text_fields(llm, "Get the title", page, {"label": Fields.model_fields["label"]})
     assert found.keys() == {"label"}
-    # The page's own bytes are the evidence however the model typed it: a model's shape never becomes evidence.
-    assert found["label"][1].quote == _HEADLINE
+    # The page's own bytes are the value and the evidence however the model typed it: a model's shape never is.
+    assert found["label"] == (_HEADLINE, block_evidence(page, "s0"))
 
 
 async def test_a_text_field_in_a_table_cell_survives_the_backslash_the_capture_adds_to_a_pipe() -> None:
     page = capture((BlockKind.TABLE, r"| Mystery \| 12.99 |"))
     llm = ScriptedLLM([{"fields": [{"field": "label", "value": "Mystery | 12.99", "source_id": "s0"}]}])
     found, _ = await propose_text_fields(llm, "Get the row", page, {"label": Fields.model_fields["label"]})
-    assert found.keys() == {"label"}
+    assert found["label"][0] == "Mystery | 12.99"
 
 
 @pytest.mark.parametrize(
@@ -741,6 +741,17 @@ async def test_a_text_field_off_the_final_page_is_taken_from_a_note_that_quotes_
     found = await propose_text_fields_from_notes(llm, "Which is newer?", notes, fields)
     # A value the cited quote does not contain is not taken, whatever the model says.
     assert found == {"label": ("requests", quote)}
+
+
+async def test_a_text_field_from_a_note_keeps_the_notes_punctuation_not_the_models() -> None:
+    earlier = capture((BlockKind.HEADING, _HEADLINE))
+    quote = block_evidence(earlier, "s0")
+    notes = Notes((Fact(reader=FactReader.LLM, text=_HEADLINE, evidence=quote),))
+    typed = _HEADLINE.replace(_APOSTROPHE, "'").replace(_EN_DASH, "-")
+    proposal: dict[str, JsonValue] = {"field": "label", "value": typed, "source_id": next(iter(notes.evidence))}
+    fields = {"label": Fields.model_fields["label"]}
+    found = await propose_text_fields_from_notes(ScriptedLLM([{"fields": [proposal]}]), "Title?", notes, fields)
+    assert found == {"label": (_HEADLINE, quote)}
 
 
 async def test_a_name_the_task_gives_can_be_chosen_on_a_note_that_quotes_only_a_date() -> None:
@@ -1065,6 +1076,60 @@ async def test_a_record_naming_blocks_the_page_did_not_offer_is_counted_not_cred
     assert [fact.evidence.quote for fact in notes.facts if fact.evidence is not None] == ["Sharp Objects 47.82"]
 
 
+async def test_a_reply_listing_more_records_than_the_cap_is_read_not_rejected() -> None:
+    """A dense results table lists more rows than the cap in one chunk. Rejecting the reply ended the run with an
+    error over a page that read fine; the records past the cap are counted as uncovered instead."""
+    page = capture((BlockKind.PARAGRAPH, "Sharp Objects 47.82"))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [],
+                "answered": False,
+                "continues": [{"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}] * 65}],
+            }
+        ]
+    )
+    outcome = await read(llm, page, "Cheapest?", ["r1"], Notes())
+    assert outcome.continues == ("r1",)
+    assert outcome.uncovered == 5
+
+
+async def test_a_count_over_a_list_that_goes_on_is_not_settled_by_the_pages_sort_order() -> None:
+    """The page's order settles only the leading record. A count draws on every record it counts, and page one
+    of two holds only some of them however the site sorts them."""
+    page = capture(
+        (BlockKind.PARAGRAPH, "Sort: price, low to high"),
+        (BlockKind.PARAGRAPH, "Book A 12.00"),
+        (BlockKind.PARAGRAPH, "Book B 15.00"),
+        (BlockKind.PARAGRAPH, "Page 1 of 2"),
+    )
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {"text": "Book A 12.00", "cite": {"first": "s1", "last": "s1"}},
+                    {"text": "Book B 15.00", "cite": {"first": "s2", "last": "s2"}},
+                    {
+                        "cite": None,
+                        "draws_on": ["claim:0", "claim:1"],
+                        "orders_list": {"first": "s0", "last": "s0"},
+                        "text": "2 books cost under 20.",
+                        "requirement_id": "r1",
+                    },
+                ],
+                "answered": False,
+                "continues": [
+                    {"requirement_id": "r1", "records": [{"first": "s1", "last": "s1"}, {"first": "s2", "last": "s2"}]}
+                ],
+            }
+        ]
+    )
+    notes = Notes()
+    outcome = await read(llm, page, "How many books cost under 20?", ["r1"], notes)
+    assert outcome.continues == ("r1",)
+    assert not notes.evidenced("r1")
+
+
 async def test_a_page_that_states_its_own_order_settles_a_superlative_on_the_leading_record() -> None:
     """Three reads of a filtered results page returned nothing while the cheapest row was on screen, because
     the reader saw the list go on and never assigned the requirement. A site that sorts by the quantity being
@@ -1220,6 +1285,28 @@ async def test_a_later_chunk_saying_the_list_goes_on_reopens_an_earlier_chunks_c
     assert len(llm.calls) > 1, "a chunk claiming to have answered cannot end a read of a list that goes on"
     assert outcome.continues == ("r1",)
     assert len(notes.facts) == 1 and not notes.evidenced("r1")
+
+
+async def test_only_the_last_chunk_names_the_control_that_shows_the_rest() -> None:
+    # An early chunk's label named a control that shows more of what it held, a filter drawer or a review toggle;
+    # opening it on the strength of the last chunk's "the list goes on" clicks the wrong thing.
+    page = capture(
+        (BlockKind.PARAGRAPH, "Virgin $1,200"),
+        (BlockKind.PARAGRAPH, "a" * 13000),
+        (BlockKind.PARAGRAPH, "Page 1 of 2"),
+    )
+    carried: dict[str, JsonValue] = {"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}]}
+    llm = ScriptedLLM(
+        [
+            {"claims": [], "answered": False, "continues": [{**carried, "expands": "Filters"}]},
+            {"claims": [], "answered": False, "continues": [carried]},
+            {"claims": [], "answered": False, "continues": [carried]},
+        ]
+    )
+    outcome = await read(llm, page, "Cheapest?", ["r1"], Notes())
+    assert len(llm.calls) == 3
+    assert outcome.continues == ("r1",)
+    assert outcome.expands is None
 
 
 async def test_a_list_that_runs_on_into_the_next_chunk_is_settled_by_the_last_one() -> None:

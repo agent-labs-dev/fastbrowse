@@ -241,9 +241,11 @@ def _loose(value: str) -> re.Pattern[str]:
     return re.compile("".join(parts))
 
 
-def _holds(text: str, value: str) -> bool:
-    """Whether `text` writes `value`, allowing for the punctuation shape and the markdown escaping."""
-    return _loose(value).search(" ".join(text.split())) is not None
+def _found(text: str, value: str) -> str | None:
+    """How `text` itself writes `value`, allowing for the punctuation shape and the markdown escaping. The match is
+    what gets kept, so a field carries the page's own punctuation and never the model's retyping of it."""
+    match = _loose(value).search(" ".join(text.split()))
+    return None if match is None else match.group(0).replace("\\|", "|")
 
 
 class _Cite(Frozen):
@@ -274,7 +276,7 @@ class _ReadClaim(Frozen):
             "ordered or filtered, by the very quantity being compared (a sort control reading 'price, low to "
             "high', a heading naming the filter in force). Only when the page says it; never inferred from the "
             "order the records happen to appear in. With this, the leading record answers even though the list "
-            "goes on."
+            "goes on, so it settles only a claim that cites that record and draws on nothing."
         ),
     )
     text: str
@@ -338,7 +340,8 @@ def _remember(
 
 
 # A page of a list costs two short block labels a record. The cap is what one capture can plausibly show, and
-# bounds the output a reader can be asked for when a page turns out to list far more than it compares.
+# bounds what one page adds to the notes. It is applied in code, not the schema: a reply over it, or a pager-only
+# chunk with no records, would otherwise fail validation and end the run over a page that read fine.
 _MAX_CONTINUING_RECORDS = 60
 
 
@@ -357,8 +360,7 @@ class _Continuation(Frozen):
         ),
     )
     records: tuple[_Cite, ...] = Field(
-        min_length=1,
-        max_length=_MAX_CONTINUING_RECORDS,
+        default=(),
         description=(
             "Every record this capture adds to that comparison, each as the run of source blocks holding it and "
             "the value being compared. A later page cannot show what its winner beat unless this page names the "
@@ -373,6 +375,11 @@ class _ReadResponse(Frozen):
     continues: tuple[_Continuation, ...] = ()
 
 
+def _quoted(evidence: Evidence) -> Fact:
+    """A fact that is only the page's own text, kept as context a claim can rest on."""
+    return Fact(text=evidence.quote, evidence=evidence, reader=FactReader.LLM)
+
+
 class ReadOutcome(Frozen):
     facts: tuple[Fact, ...]
     coverage: tuple[int, ...]
@@ -381,8 +388,8 @@ class ReadOutcome(Frozen):
     continues: tuple[str, ...] = ()
     """Requirements whose list goes on past this capture, so no claim from it closes them."""
     uncovered: int = 0
-    """Records a continuation named that no run of offered blocks resolved, so this page's comparison is
-    incomplete in the notes even though the reader believed it had listed them."""
+    """Records a continuation named that no run of offered blocks resolved, or that fell past the cap, so this
+    page's comparison is incomplete in the notes even though the reader believed it had listed them."""
     expands: str | None = None
     """The label the reader gave for the control that shows the rest of the list, so the run can open it
     instead of being told only that the list goes on."""
@@ -500,7 +507,7 @@ async def read(
                     "to that comparison, each as the blocks holding it and the value compared. "
                     "Name in expands the control on this page that shows the rest, when one is offered. "
                     "If instead the page states that the list is ordered or filtered by the very quantity "
-                    "being compared, the leading record answers: give the claim its requirement id and cite "
+                    "being compared, the leading record answers: give the claim citing it its requirement id and cite "
                     "that statement in orders_list rather than listing the requirement in continues. "
                     "Once the collected evidence and this capture cover every page, the "
                     "conclusion takes the requirement id and draws on each record once. A task that bounds the "
@@ -531,6 +538,7 @@ async def read(
         # "continues" meant the list went on into this chunk; a union let it block the last chunk's conclusion.
         carried = [c for c in result.data.continues if c.requirement_id in requirement_ids]
         continues = dict.fromkeys(c.requirement_id for c in carried)
+        expands = next((c.expands for c in carried if c.expands), None)
         references = {key: key for key in offered.evidence_ids}
         for index, claim in enumerate(result.data.claims):
             # Carried to the next chunk without its requirement id, which only the whole page can settle.
@@ -542,17 +550,13 @@ async def read(
             requirement_id = claim.requirement_id if claim.requirement_id in requirement_ids else None
             # A site that sorts or filters its own list by the quantity compared settles the superlative on its
             # leading record: the rest of the list cannot beat it. The page has to say so, in its own text, and
-            # that statement is kept as a fact so the claim rests on it and the claim check can judge it.
-            if requirement_id is not None and claim.orders_list is not None:
+            # that statement is kept as a fact so the claim rests on it and the claim check can judge it. Only a
+            # claim resting on that one record qualifies: a count or total draws on every record it counts, and
+            # the part of a list one page shows does not settle it however the site sorts it.
+            if requirement_id is not None and claim.orders_list is not None and not claim.draws_on:
                 ordering = _cited(capture, part, claim.orders_list)
                 if ordering is not None:
-                    stated = Fact(
-                        requirement_id=None,
-                        text=ordering.quote,
-                        evidence=ordering,
-                        basis=(),
-                        reader=FactReader.LLM,
-                    )
+                    stated = _quoted(ordering)
                     so_far.add(stated)
                     found.append(stated)
                     fact = fact.model_copy(update={"basis": (*fact.basis, fact_id(stated))})
@@ -563,19 +567,13 @@ async def read(
         # Code copies each quote from the blocks named, exactly as it does for a claim, so a record is the
         # page's own text and never the reader's retyping of it.
         for continuation in carried:
-            expands = expands or continuation.expands
-            for cite in continuation.records:
+            uncovered += max(0, len(continuation.records) - _MAX_CONTINUING_RECORDS)
+            for cite in continuation.records[:_MAX_CONTINUING_RECORDS]:
                 evidence = _cited(capture, part, cite)
                 if evidence is None:
                     uncovered += 1
                     continue
-                record = Fact(
-                    requirement_id=None,
-                    text=evidence.quote,
-                    evidence=evidence,
-                    basis=(),
-                    reader=FactReader.LLM,
-                )
+                record = _quoted(evidence)
                 so_far.add(record)
                 found.append(record)
         rejected += rejected_here
@@ -806,8 +804,8 @@ async def propose_text_fields(
             if proposal.field not in missing or not value:
                 continue
             evidence = _cited(capture, part, _Cite(first=proposal.source_id, last=proposal.source_id))
-            if evidence is not None and _holds(evidence.quote, value):
-                found[proposal.field] = (value, evidence)
+            if evidence is not None and (written := _found(evidence.quote, value)):
+                found[proposal.field] = (written, evidence)
     return found, tuple(costs)
 
 
@@ -866,14 +864,10 @@ async def propose_text_fields_from_notes(
         evidence = cited.get(proposal.source_id)
         if evidence is None and notes.derived(proposal.source_id) and _names(task, value):
             evidence = _compared(notes, proposal.source_id, value)
-        if (
-            proposal.field in fields
-            and proposal.field not in found
-            and value
-            and evidence is not None
-            and (_holds(evidence.quote, value) or _names(task, value))
-        ):
-            found[proposal.field] = (value, evidence)
+        if proposal.field not in fields or proposal.field in found or not value or evidence is None:
+            continue
+        if written := _found(evidence.quote, value) or _names(task, value):
+            found[proposal.field] = (written, evidence)
     return found
 
 
@@ -885,9 +879,10 @@ def _compared(notes: Notes, key: str, name: str) -> Evidence | None:
     return next((fact.evidence for fact in records if fact.evidence is not None and _names(fact.text, name)), None)
 
 
-def _names(task: str, value: str) -> bool:
-    """Whether the task gives `value` as a whole word or phrase, not just as part of a longer word."""
-    return re.search(rf"(?<!\w){_loose(value).pattern}(?!\w)", " ".join(task.split())) is not None
+def _names(task: str, value: str) -> str | None:
+    """How the task writes `value` when it gives it as a whole word or phrase, not just as part of a longer word."""
+    match = re.search(rf"(?<!\w){_loose(value).pattern}(?!\w)", " ".join(task.split()))
+    return None if match is None else match.group(0)
 
 
 def copy_field(answer: ChoiceAnswer, candidates: Sequence[Candidate]) -> tuple[ScalarValue, Evidence] | None:
