@@ -73,8 +73,46 @@ async def test_each_table_row_repeats_its_header(page: CdpPage, main_site: str) 
         ("<tr><td>A</td><td>1</td></tr><tr><th>B</th><td>2</td></tr>", ["| A | 1 |", "| B | 2 |"]),
         ("<thead><tr><th>Name</th></tr><tr><th>Person</th></tr></thead>", ["| Name |\n| Person |\n| --- |"]),
         ("<tr><th>Name | alias</th></tr>", ["| Name \\| alias |\n| --- |"]),
+        (
+            "<thead><tr hidden><th>Group</th></tr><tr><th>Name</th></tr></thead>"
+            "<tbody><tr style='display:none'><td>X</td></tr><tr><td>A</td></tr>"
+            "<tr style='visibility:collapse'><td>Y</td></tr></tbody>"
+            "<tfoot><tr style='visibility:hidden'><td>Z</td></tr><tr><td>Total</td></tr></tfoot>",
+            ["| Name |\n| --- |\n| A |", "| Name |\n| --- |\n| Total |"],
+        ),
+        (
+            "<thead style='display:none'><tr><th>Name</th></tr></thead><tbody><tr><td>A</td></tr></tbody>"
+            "<tfoot style='visibility:collapse'><tr><td>Total</td></tr></tfoot>",
+            ["| A |"],
+        ),
+        (
+            "<tr><th>Name</th></tr><tr hidden><td>Ada</td></tr><tr style='display:none'><td>Grace</td></tr>",
+            ["| Name |\n| --- |"],
+        ),
+        ("<tr hidden><td>Ada</td></tr>", []),
+        (
+            "<tr><th>Name</th><th style='display:none'>Id</th></tr>"
+            "<tr><td>Ada</td><td style='display:none'>7</td></tr>",
+            ["| Name |\n| --- |\n| Ada |"],
+        ),
+        (
+            "<tr><th>Name</th><th>Id</th><th>Team</th></tr>"
+            "<tr><td>Ada</td><td style='visibility:hidden'>7</td><td>North</td></tr>",
+            ["| Name | Id | Team |\n| --- | --- | --- |\n| Ada |  | North |"],
+        ),
     ],
-    ids=["multiple-header-rows", "no-header", "header-only", "leading-header-only"],
+    ids=[
+        "multiple-header-rows",
+        "no-header",
+        "header-only",
+        "leading-header-only",
+        "hidden-rows",
+        "hidden-sections",
+        "every-data-row-hidden",
+        "every-row-hidden",
+        "hidden-column",
+        "invisible-cell-keeps-its-column",
+    ],
 )
 async def test_table_header_variants(
     page: CdpPage, browser_session: BrowserSession, main_site: str, rows: str, expected: list[str]
@@ -87,6 +125,25 @@ async def test_table_header_variants(
     )
     capture = await page.capture()
     assert [capture.text[block.start : block.end] for block in capture.blocks] == expected
+    assert all(block.kind is BlockKind.TABLE for block in capture.blocks)
+
+
+async def test_table_rows_below_the_viewport_are_captured(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/icons.html")
+    markup = '<table style="margin-top:200vh"><tr><td>Below the viewport</td></tr></table>'
+    await eval_value(
+        browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
+    )
+    assert await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.querySelector('tr').getBoundingClientRect().top > innerHeight",
+    )
+    capture = await page.capture()
+    assert [capture.text[block.start : block.end] for block in capture.blocks] == ["| Below the viewport |"]
+    assert capture.text == "| Below the viewport |\n\n"
     assert all(block.kind is BlockKind.TABLE for block in capture.blocks)
 
 

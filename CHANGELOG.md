@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A table filtered on the page is read as filtered.** Rows a filter hid, with `hidden`, `display:none` or
+  `visibility`, and rows in a hidden header, body or footer still entered the capture, so a reader could answer
+  from a row the page no longer showed. They are left out now, and so are cells a column toggle hid.
+
 ## [0.5.3] - 2026-09-22
 
 - **Eval times leave out provider outages.** A run's `seconds` in the live and local evals no longer counts time
