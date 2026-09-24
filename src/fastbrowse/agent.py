@@ -120,10 +120,6 @@ _PAGE_OPERATIONS = frozenset({Operation.READ, Operation.SCROLL, Operation.BACK, 
 _CYCLE_SHOWN = 4
 """Actions named when a run arrives back at a page state, the most recent last."""
 _REVERSAL_WINDOW = 6
-_DONE_SETTLE_SECONDS = 2.0
-"""How long a done check waits for the results an interaction is still drawing. A run clicked a filter and
-declared itself finished against the page as it was before the filter applied, so the check read results that
-had not refreshed and the answer described a list the run never saw."""
 _RECOVERY_RECORDS = 4
 _RECOVERY_CHARS = 240
 _IDLE_CHECKED = frozenset({Operation.CLICK, Operation.ENTER})
@@ -250,9 +246,10 @@ class _RunState:
     """Addresses this run built from the task rather than reached by clicking: an accepted shortcut, or a start
     page worked out from the task. These are the ones that can land on a page of the right shape and the wrong
     search, so the verifier is told which they were."""
-    interacted: bool = False
-    """An interaction has executed and changed the page since the last read, so what it did has not been
-    observed. A done check made now would judge the page as it was before the change settled."""
+    owes_read: bool = False
+    """An interaction changed the page after the notes last read it. A run clicked a filter and declared itself
+    done, and the check judged notes read off the list before the filter applied, so an answer is not finished
+    until a read of what the interaction produced has run."""
     read_here: bool = False
     """This page has been read since it last changed."""
     tried_unsure: set[str] = field(default_factory=set[str])
@@ -469,7 +466,11 @@ class Agent:
                 await state.await_plan()
                 continue
             if decision.operation in _NOT_ACTING:
-                if _unread(await state.await_plan(), state.notes):
+                plan = await state.await_plan()
+                # Notes that evidence every requirement can still describe the page before the last interaction
+                # redrew it, so an answer owed after one is read off what it drew. A plan that only acts has
+                # nothing to read, and finishes without waiting.
+                if _unread(plan, state.notes) or (state.owes_read and plan.answer_expected):
                     reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
                     if not await self._step(state, observation, reading, decided_by):
                         state.directed = None
@@ -660,8 +661,6 @@ class Agent:
         if decision.operation is Operation.READ:
             progressed, skipped = await self._read(state, capture or await self._capture(), observation)
             state.read_here = True
-            # What the last interaction did has now been looked at, so a done check may judge this page.
-            state.interacted = False
             if skipped:
                 return True
             changed = False
@@ -685,7 +684,7 @@ class Agent:
             if act.outcome is StepOutcome.EXECUTED and action.text is not None:
                 typed = "<secret>" if action.secret else self._redactor.mask(action.text)
             changed = act.page_changed
-            state.interacted = state.interacted or (act.outcome is StepOutcome.EXECUTED and changed)
+            state.owes_read = state.owes_read or (act.outcome is StepOutcome.EXECUTED and changed)
             # A value edit answers "was this progress" itself, and its answer beats `changed`: the popup a fill
             # draws IS a page change, so `changed` alone kept crediting the identical re-fill even once the
             # written-value check had stopped doing so. `changed` decides every other operation.
@@ -880,20 +879,6 @@ class Agent:
                 break
         state.moves.append((at, made))
         return note, renews, put_back
-
-    async def _still_drawing(self, state: _RunState, fresh: Observation) -> bool:
-        """Whether the page is still producing what the last interaction asked for. A run that clicked a filter
-        and called itself done judged the results as they were before the filter applied. The wait is bought by
-        one interaction: reading the page spends it, so a run cannot be held here twice for the same click."""
-        if not state.interacted:
-            return False
-        state.interacted = False
-        if not await self._page.redrawn(fresh, _DONE_SETTLE_SECONDS):
-            return False
-        # Read what the interaction actually produced before deciding the run is finished.
-        state.read_here = False
-        trace("done_deferred", reason="the page was still drawing what the last interaction changed")
-        return True
 
     @staticmethod
     def _note_effect(state: _RunState, observation: Observation) -> None:
@@ -1390,6 +1375,10 @@ class Agent:
         capture = capture or await self._capture()
         plan = await state.await_plan()
         wanted = [r for r in state.notes.unresolved(plan) if r.kind is RequirementKind.INFORMATION]
+        if not wanted and state.owes_read and plan.answer_expected:
+            # Every requirement was evidenced off the page before the last interaction redrew it, so they are
+            # asked again of what it drew: a reader asked nothing would leave the pre-filter fare answering.
+            wanted = [r for r in plan.requirements if r.kind is RequirementKind.INFORMATION]
         budget: ReadKey | None = None
         if observation is not None:
             wanted_ids = tuple(r.id for r in wanted)
@@ -1399,6 +1388,9 @@ class Agent:
                 # run could read it until the step budget ran out. What it can do here has paid out nothing.
                 trace("read_skipped", reason="no_new_facts_from_this_page_state")
                 return False, True
+            # Past the barren budget this exact content is either read now or was read before, so the notes hold
+            # what the last interaction drew. A barren skip read nothing, and leaves the read owed.
+            state.owes_read = False
             key = observation.document_key, capture.sha256, wanted_ids
             if key in state.reads:
                 trace("read_skipped", reason="unchanged_content_and_requirements")
@@ -1622,8 +1614,6 @@ class Agent:
     ) -> RunResult | None:
         """Return the final result when DONE holds up; None sends the loop back to work."""
         fresh = await self._observe()
-        if await self._still_drawing(state, fresh):
-            return None
         state.ledger.reserve(CostComponent.JEV)
         await state.await_plan()
         draft = draft_answer(state.plan, state.notes) if state.plan.answer_expected else None

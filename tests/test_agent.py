@@ -24,6 +24,7 @@ from fastbrowse.agent import (
 )
 from fastbrowse.citations import text_fragment
 from fastbrowse.config import Config, ObservationLimits, StallRules, Thresholds
+from fastbrowse.effects import content_key
 from fastbrowse.jev import Answer, Evaluation, JevError, JevRetriesExhausted, NoulAnswer, NoulQuestion, Question
 from fastbrowse.llm import Generation
 from fastbrowse.memory import Fact, Notes, evidence_id
@@ -902,64 +903,91 @@ async def test_a_setting_given_a_value_its_page_has_not_held_is_still_progress()
     assert not any(purpose is LLMPurpose.RECOVER for purpose, _ in llm.calls)
 
 
-def _settling(redrawing: bool) -> tuple[Agent, Mock]:
+async def _filtered_fares(*, answer_expected: bool) -> tuple[Agent, Mock, _RunState, ScriptedLLM]:
+    """A fare list read unfiltered, then a click on Nonstop only that redraws it, with Jev picking DONE."""
+    nonstop = _button("Nonstop only")
+    here = observation((nonstop,)).model_copy(update={"document_key": "results"})
     page = Mock(spec=Page)
-    page.redrawn = AsyncMock(return_value=redrawing)
-    return Agent(page, ScriptedJev({}), ScriptedLLM([])), page
-
-
-async def test_a_done_after_an_interaction_waits_for_the_results_it_changed() -> None:
-    """A run clicked a filter and called itself done against the results as they were before it applied."""
-    agent, page = _settling(redrawing=True)
-    state = await run_state()
-    state.interacted, state.read_here = True, True
-    here = observation((_button("Stops"),))
-    assert await agent._still_drawing(state, here) is True
-    # The run goes back to read what the click produced rather than judging the page it has not seen.
-    assert state.read_here is False
-    page.redrawn.assert_awaited_once()
-    # One interaction buys one wait, so a page that keeps drawing cannot hold the run here.
-    assert await agent._still_drawing(state, here) is False
-
-
-async def test_a_page_that_has_settled_lets_the_done_check_judge_it() -> None:
-    agent, page = _settling(redrawing=False)
-    state = await run_state()
-    state.interacted, state.read_here = True, True
-    assert await agent._still_drawing(state, observation((_button("Stops"),))) is False
-    assert state.read_here is True
-    page.redrawn.assert_awaited_once()
-
-
-async def test_a_done_after_a_read_pays_no_wait() -> None:
-    agent, page = _settling(redrawing=True)
-    state = await run_state()
-    state.interacted = False
-    assert await agent._still_drawing(state, observation((_button("Stops"),))) is False
-    page.redrawn.assert_not_awaited()
-
-
-async def test_an_executed_interaction_owes_a_look_and_a_read_pays_it() -> None:
-    stops = _button("Stops")
-    here = observation((stops,)).model_copy(update={"document_key": "results"})
-    page = Mock(spec=Page)
-    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
     page.observe = AsyncMock(return_value=here)
-    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "7 results")))
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "$320 1 stop")))
     page.screenshot = AsyncMock(return_value=b"")
     page.artifacts = ()
-    llm = ScriptedLLM([{"claims": [], "answered": False}])
-    agent = Agent(page, ScriptedJev({"r1": "synthesis"}), llm)
-    state = await run_state()
-    state.ready_plan = Plan(
-        requirements=(Requirement(id="r1", text="Find the fare", kind=RequirementKind.INFORMATION),),
-        answer_expected=True,
+
+    async def settled(*args: object, **kwargs: object) -> bool:
+        await asyncio.sleep(5)  # a real watch on a settled page polls until its deadline
+        return False
+
+    page.redrawn = AsyncMock(side_effect=settled)
+
+    async def filtered(*args: object) -> ActResult:
+        page.capture.return_value = capture((BlockKind.PARAGRAPH, "$410 nonstop"))
+        return ActResult(outcome=StepOutcome.EXECUTED, page_changed=True)
+
+    page.act = AsyncMock(side_effect=filtered)
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [{"text": fare, "cite": {"first": "s0", "last": "s0"}, "requirement_id": "r1"}],
+                "answered": True,
+            }
+            for fare in ("$320 1 stop", "$410 nonstop")
+        ]
     )
+    agent = Agent(page, ScriptedJev({"operation": "done", "r1": "synthesis"}, noul=0.0), llm)
+    state = await run_state()
     state.authorization = Authorization(irreversible_actions=True)
-    await agent._step(state, here, _code_decision(Operation.CLICK, stops))
-    assert state.interacted is True
-    await agent._step(state, here, _code_decision(Operation.READ, None))
-    assert state.interacted is False
+    requirements = (Requirement(id="r1", text="Find the cheapest nonstop fare", kind=RequirementKind.INFORMATION),)
+    state.ready_plan = Plan(requirements=requirements if answer_expected else (), answer_expected=answer_expected)
+    if answer_expected:
+        await agent._read(state, await page.capture(), here)
+    await agent._step(state, here, _code_decision(Operation.CLICK, nonstop))
+    return agent, page, state, llm
+
+
+async def _finished(agent: Agent, state: _RunState) -> list[str]:
+    """Run the loop to its first finish, returning the quotes the done check would have judged."""
+    judged: list[str] = []
+
+    async def finish(*args: object) -> agent_module.RunResult:
+        judged.extend(e.quote for e in state.notes.evidence.values())
+        return agent._result(state, state.ledger, Status.COMPLETE)
+
+    agent._finish = AsyncMock(side_effect=finish)
+    await asyncio.wait_for(agent._loop(state, None, None), timeout=1)
+    return judged
+
+
+async def test_a_finish_after_an_interaction_reads_what_it_drew() -> None:
+    """A run clicked a filter and called itself done on notes read off the list before the filter applied."""
+    agent, _, state, llm = await _filtered_fares(answer_expected=True)
+    judged = await _finished(agent, state)
+    assert [purpose for purpose, _ in llm.calls] == [LLMPurpose.READ, LLMPurpose.READ]
+    assert "$410 nonstop" in judged
+
+
+async def test_a_finish_that_owes_no_answer_neither_reads_nor_waits() -> None:
+    """A submit then DONE finishes at once: the redraw watch on a settled page runs to its deadline, and waiting
+    on it held every such run for two seconds."""
+    agent, page, state, llm = await _filtered_fares(answer_expected=False)
+    finish = agent._finish
+    await _finished(agent, state)
+    llm.responses = [{"missing": [], "complete": True}]
+    result = await asyncio.wait_for(finish(state, await page.observe(), None, None), timeout=1)
+    assert result is not None and result.status is Status.COMPLETE
+    assert LLMPurpose.READ not in [purpose for purpose, _ in llm.calls]
+
+
+async def test_a_read_skipped_as_barren_still_owes_the_read() -> None:
+    """A skipped read looked at nothing, so it cannot be what makes the redrawn page safe to finish on."""
+    agent, page, state, llm = await _filtered_fares(answer_expected=True)
+    here = await page.observe()
+    state.barren[here.document_key, content_key(here), ("r1",)] = agent._config.stall.barren_reads
+    assert await agent._step(state, here, _code_decision(Operation.READ, None)) is True
+    assert len(llm.calls) == 1
+    # Once the page is readable again, the finish still reads what the click drew.
+    state.barren.clear()
+    assert "$410 nonstop" in await _finished(agent, state)
+    assert len(llm.calls) == 2
 
 
 async def test_scrolling_controls_in_and_out_of_view_is_not_a_reversal() -> None:

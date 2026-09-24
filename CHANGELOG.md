@@ -35,9 +35,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - **A run reads what its last interaction changed before it calls itself finished.** A run clicked a filter
   and declared itself done against the results as they were before the filter applied, so the check read a
-  list the run never saw. A done check that follows an interaction now waits for the page to settle, and a
-  page still drawing sends the run back to read it. The wait is bought by one interaction, so a page that
-  keeps redrawing cannot hold a run in the check.
+  list the run never saw. A run that owes an answer now reads the page its last interaction drew before the
+  done check judges it, asking the reader again for what it had already found. A run that only acts
+  finishes without reading or waiting.
 
 - **A filter put back to a state its page already held is not progress.** On a results page, turning a filter
   on and off redraws the rows underneath it, so every click reached a page state the run had never seen and
