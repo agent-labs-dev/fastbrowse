@@ -84,6 +84,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   until it stalled. A value now matches across a punctuation family, and across the backslash a capture puts
   before a table cell's own pipe. The value returned and the quote kept as evidence are both the page's own
   text, not the model's retyping, and the words, their order and their spacing all still have to be there.
+- **A table filtered on the page is read as filtered.** Rows a filter hid, with `hidden`, `display:none` or
+  `visibility`, and rows in a hidden header, body or footer still entered the capture, so a reader could answer
+  from a row the page no longer showed. They are left out now, and so are cells a column toggle hid.
 
 ## [0.5.3] - 2026-09-22
 
