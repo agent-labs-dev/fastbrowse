@@ -1163,6 +1163,29 @@ async def test_a_requirement_read_off_a_guessed_address_reopens_until_the_right_
     assert result is not None and result.status is Status.COMPLETE
 
 
+async def test_a_run_that_has_not_acted_is_not_talked_past_an_action_jev_holds_undone() -> None:
+    """Asked to open a project page, a run chose DONE on the start page, Jev held the requirement unmet and the
+    verifier called it complete, so it reported complete on the wrong page."""
+    state = await run_state()
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Open httpx's project page", kind=RequirementKind.ACTION),),
+        answer_expected=False,
+    )
+    state.ready_plan = plan
+    on = _at("https://pypi.org/")
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=on)
+    page.screenshot = AsyncMock(return_value=b"")
+    page.artifacts = ()
+    llm = ScriptedLLM([{"missing": [], "complete": True}, {"diagnosis": "", "next_subgoal": "", "give_up": False}])
+    agent = Agent(page, ScriptedJev({}, noul=0.99), llm)
+
+    result = await agent._finish(state, on, None, None)
+
+    assert result is None or result.status is not Status.COMPLETE
+    assert llm.calls[0][0] is LLMPurpose.VERIFY
+
+
 class _ConfirmingJev(ScriptedJev):
     """Confirms every requirement and the task as complete, so the done check accepts outright."""
 

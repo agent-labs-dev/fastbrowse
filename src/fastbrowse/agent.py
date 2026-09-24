@@ -1701,6 +1701,14 @@ class Agent:
                 )
                 state.ledger.record(verdict.cost)
                 accepted = _verified(verdict.data, state.plan, state.notes, state.invented)
+                # Asked to open httpx's project page, a run picked DONE on pypi.org before acting, Jev held the one
+                # requirement unmet, and flash-lite called it complete. Only an action can do what Jev says is
+                # undone, so a run that has taken none cannot be talked past it.
+                idle = not any(
+                    s.outcome is StepOutcome.EXECUTED and s.operation not in _NOT_ACTING for s in state.steps
+                )
+                undone = {r.id for r in state.plan.requirements if r.kind is RequirementKind.ACTION} & set(check.unmet)
+                accepted = accepted and not (idle and undone)
                 missing, misread = verdict.data.missing, _misread(verdict.data, state.plan, state.notes, state.invented)
                 trace(
                     "verify",

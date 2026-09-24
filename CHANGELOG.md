@@ -11,6 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A run that has not acted cannot be talked past an action Jev holds undone.** Asked to open a project page,
+  a run chose DONE on the start page, Jev's done check held the requirement unmet, and the verifier called it
+  complete, so the run reported `complete` on the wrong page. With no action taken, an action requirement Jev
+  holds unmet now keeps the run going.
+
 - **A secret that is also part of a site's hostname no longer breaks the reported address.** A username of
   `practice` signed in at `https://practice.expandtesting.com/secure`, and redaction rewrote the host as well,
   so the run reported `https://[secret:username].expandtesting.com/secure`, which is not an address. Final
