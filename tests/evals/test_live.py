@@ -104,6 +104,56 @@ async def test_ultrafast_passes_only_on_a_correct_outcome_it_called_done(
     assert row.seconds == 3.0
 
 
+async def test_a_grader_that_raises_fails_only_its_own_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The agent chooses where a run ends, and urlparse raises on a bracket in the host: one such run once
+    discarded 59 of 63 runs in a live suite."""
+
+    async def ultrafast_arm(
+        _: LiveTask, __: httpx.AsyncClient, *, record: Path | None
+    ) -> tuple[Outcome, live.ArmReport]:
+        return Outcome("Done.", None, "http://[not-an-address/page"), live.ArmReport(
+            status="done", dollars=0.001, seconds=3.0
+        )
+
+    monkeypatch.setattr(live, "ultrafast_arm", ultrafast_arm)
+    async with httpx.AsyncClient() as http:
+        row = await live.run_arm("jev-ultrafast", task("wiki-open"), None, http, Path(), bitwarden=False, record=None)
+    assert row.correct is False
+    assert row.failure is not None
+    assert row.failure.startswith("check raised ValueError")
+
+
+async def test_an_answer_key_that_will_not_come_back_fails_only_its_task(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A 403 from a rate-limited answer-key API is not worth retrying, and it used to end the whole suite."""
+
+    async def truth(task: LiveTask, _: httpx.AsyncClient) -> object:
+        if task.id == "wiki-open":
+            raise httpx.HTTPStatusError(
+                "rate limited", request=httpx.Request("GET", "https://api.test"), response=httpx.Response(403)
+            )
+        return None
+
+    async def ultrafast_arm(
+        _: LiveTask, __: httpx.AsyncClient, *, record: Path | None
+    ) -> tuple[Outcome, live.ArmReport]:
+        outcome = Outcome("Done.", None, "https://pypi.org/project/httpx/")
+        return outcome, live.ArmReport(status="done", dollars=0.001, seconds=3.0)
+
+    monkeypatch.setattr(live, "_truth", truth)
+    monkeypatch.setattr(live, "ultrafast_arm", ultrafast_arm)
+    monkeypatch.setattr(live, "prepare_ultrafast", AsyncMock())
+    out = tmp_path / "live.jsonl"
+    argv = ["--only", "wiki-open", "pypi-open", "--arms", "jev-ultrafast", "--out", str(out)]
+    assert await live.main(argv) == 0
+    rows = {row.task: row for row in map(live.EvalRow.model_validate_json, out.read_text().splitlines())}
+    assert rows["pypi-open"].passed is True
+    assert rows["wiki-open"].passed is False
+    assert rows["wiki-open"].failure is not None
+    assert rows["wiki-open"].failure.startswith("truth raised HTTPStatusError")
+
+
 def test_gateway_answers_take_the_direct_api_shape() -> None:
     payload = {
         "answers": {"operation": {"type": "choice", "choice": "CLICK", "probabilities": {"CLICK": 0.50, "DONE": 0.51}}},

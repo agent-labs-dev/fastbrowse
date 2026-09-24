@@ -114,24 +114,10 @@ def _answer_has(outcome: Outcome, *needles: str) -> str | None:
     return f"answer lacks {missing}: {outcome.answer!r}" if missing else None
 
 
-def _path_of(url: str) -> str | None:
-    """The path of an address the agent ended on, or None when it is not an address at all. The agent chooses
-    where it ends, so a grader is handed anything a page can navigate to, and urlparse raises on some of it
-    (a bracket in the host reads as a malformed IPv6 literal). A run that ended nowhere parseable did not end
-    on the page the task named, which is a failed check rather than a crashed suite."""
-    try:
-        return urlparse(url).path
-    except ValueError:
-        return None
-
-
 def _ended_on(outcome: Outcome, path: str) -> str | None:
     if outcome.final_url is None:
         return None
-    found = _path_of(outcome.final_url)
-    if found is None:
-        return f"ended on {outcome.final_url!r}, which is not an address, expected path {path}"
-    actual = unquote(found).rstrip("/")
+    actual = unquote(urlparse(outcome.final_url).path).rstrip("/")
     return None if actual == path else f"ended on {outcome.final_url}, expected path {path}"
 
 
@@ -196,9 +182,7 @@ async def _newer_release(http: httpx.AsyncClient) -> object:
 def _ended_under(outcome: Outcome, prefix: str) -> str | None:
     if outcome.final_url is None:
         return None
-    path = _path_of(outcome.final_url)
-    if path is None:
-        return f"ended on {outcome.final_url!r}, which is not an address, expected a path under {prefix}"
+    path = urlparse(outcome.final_url).path
     return None if path.startswith(prefix) else f"ended on {outcome.final_url}, expected a path under {prefix}"
 
 

@@ -446,6 +446,24 @@ async def _truth(task: LiveTask, http: httpx.AsyncClient) -> object:
             await asyncio.sleep(wait)
 
 
+def _crashed(
+    arm: str, task: LiveTask, failure: str, *, at: float, seconds: float, status: str | None, record: Path | None
+) -> EvalRow:
+    return EvalRow(
+        arm=arm,
+        task=task.id,
+        category=task.category.value,
+        at=at,
+        status=status,
+        correct=False,
+        passed=False,
+        failure=failure,
+        seconds=round(seconds, 1),
+        dollars=None,
+        video=_video(record),
+    )
+
+
 async def run_arm(
     arm: str,
     task: LiveTask,
@@ -470,18 +488,14 @@ async def run_arm(
             outcome, report = await hosted_arm(task, http, record=record)
     except Exception as exc:  # a crashed arm is a failed task, recorded rather than aborting the comparison
         unavailable = isinstance(exc, (Unavailable, *TRANSIENT_TRANSPORT))
-        return EvalRow(
-            arm=arm,
-            task=task.id,
-            category=task.category.value,
+        return _crashed(
+            arm,
+            task,
+            f"{type(exc).__name__}: {exc}",
             at=at,
+            seconds=time.monotonic() - started,
             status=Status.UNAVAILABLE.value if unavailable else None,
-            correct=False,
-            passed=False,
-            failure=f"{type(exc).__name__}: {exc}",
-            seconds=round(time.monotonic() - started, 1),
-            dollars=None,
-            video=_video(record),
+            record=record,
         )
     try:
         failure = task.check(outcome, truth)
@@ -665,7 +679,14 @@ async def main(argv: list[str]) -> int:
                 # A provider outage says nothing about the agent, so a run it ended is run again until one ends
                 # on its own, however long that takes; the slot is released while waiting, and for the answer key.
                 for retries in itertools.count():
-                    truth = await _truth(task, http)
+                    try:
+                        truth = await _truth(task, http)
+                    except Exception as exc:
+                        # An answer key that will not come back (a 403 from a rate-limited API, a body missing
+                        # the field it is read from) fails this task alone: gather would discard every run.
+                        failure = f"truth raised {type(exc).__name__}: {exc}"
+                        row = _crashed(arm, task, failure, at=time.time(), seconds=0.0, status=None, record=None)
+                        break
                     async with gate:
                         row = await run_arm(
                             arm, task, truth, http, Path(downloads), bitwarden=args.bitwarden, record=record

@@ -2,7 +2,7 @@
 
 import pytest
 
-from fastbrowse.evals.live_tasks import TASKS, LiveTask, Outcome
+from fastbrowse.evals.live_tasks import LiveTask, Outcome
 from fastbrowse.evals.more_tasks import DEV, HELDOUT
 
 RIGHT = {
@@ -48,13 +48,3 @@ def test_an_order_that_never_reached_the_server_fails() -> None:
     (task,) = [t for t in DEV if t.id == "pizza-order"]
     outcome = Outcome(answer="Size large.", data=None, final_url="https://httpbin.org/forms/post")
     assert task.check(outcome, None) is not None
-
-
-@pytest.mark.parametrize(
-    "task", [t for t in TASKS if t.id in {"wiki-open", "pypi-open", "github-open"}], ids=lambda t: t.id
-)
-def test_a_navigation_grader_fails_a_run_that_ended_nowhere_parseable(task: LiveTask) -> None:
-    """The agent chooses where it ends, so a grader is handed anything a page can navigate to. urlparse raises
-    on a bracket in the host, and one grader raising used to discard every other run in the suite."""
-    ended = Outcome(answer="Done.", data=None, final_url="http://[not-an-address/page")
-    assert task.check(ended, "anything") is not None

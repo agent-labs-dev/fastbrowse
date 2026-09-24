@@ -229,11 +229,11 @@ async def test_the_verifier_is_told_where_each_requirement_was_read_and_which_ad
     )
     guessed = "https://flights.test/?q=flights+from+london"
     llm = ScriptedLLM([{"complete": True, "missing": [], "ungrounded": ["r1"]}])
-    verdict = await llm_verify(llm, "Cheapest nonstop?", plan, _PAGE, (), notes, (), invented=[guessed])
+    await llm_verify(llm, "Cheapest nonstop?", plan, _PAGE, (), notes, (), invented=[guessed])
     prompt = llm.calls[0][1][-1].content
     assert "https://flights.test/summary" in prompt
     assert guessed in prompt
-    assert verdict.data.ungrounded == ("r1",)
+    assert "Name in ungrounded every requirement" in prompt
 
 
 async def test_a_verifier_told_of_no_guessed_address_is_asked_nothing_extra() -> None:

@@ -50,8 +50,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - **A live eval survives a grader that raises.** The agent chooses where a run ends, so a grader is handed any
   address a page can navigate to, and one that could not be parsed took down the whole suite: 59 of 63 runs
-  were discarded after four had finished. A run that ended nowhere parseable now fails its own check, and a
-  grader that raises fails that row and nobody else's.
+  were discarded after four had finished. A grader that raises now fails that row and nobody else's, and so
+  does an answer key that cannot be fetched for a reason a retry would not cure.
 
 - **A page that rewrites its own text cannot be read for ever.** Reads were remembered by the page's exact
   content, so a ticker, a rotating advert or a live counter minted a key the run had never seen on every
