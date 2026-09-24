@@ -92,20 +92,6 @@ def state_key(observation: Observation) -> str:
     return hashlib.sha256(json.dumps([observation.url, _controls(observation)]).encode()).hexdigest()
 
 
-def holding(made: Move) -> tuple[str, frozenset[tuple[ControlKey, ControlValue]]]:
-    """The committed state a move left its document in. A page that has held this before has been here, however
-    much its results redrew underneath, which is what tells a setting put back from a setting newly chosen."""
-    return made.document, frozenset(made.values_after.items())
-
-
-def content_key(observation: Observation) -> str:
-    """What a reader would find here, without the address: a page that rewrites its own text between
-    observations (a ticker, rotating ads, a live counter) keys the same, so reading it again is the same read.
-    The address is left out because a site rewrites its own query as a list is paged or filtered, which is why
-    a read has always been kept by document rather than by URL."""
-    return hashlib.sha256(json.dumps(_controls(observation)).encode()).hexdigest()
-
-
 def _short(value: object) -> str:
     text = " ".join(str(value).split()) if value is not None else ""
     text = text or "empty"

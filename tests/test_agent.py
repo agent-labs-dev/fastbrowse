@@ -24,7 +24,7 @@ from fastbrowse.agent import (
 )
 from fastbrowse.citations import text_fragment
 from fastbrowse.config import Config, ObservationLimits, StallRules, Thresholds
-from fastbrowse.effects import content_key
+from fastbrowse.effects import state_key
 from fastbrowse.jev import Answer, Evaluation, JevError, JevRetriesExhausted, NoulAnswer, NoulQuestion, Question
 from fastbrowse.llm import Generation
 from fastbrowse.memory import Fact, Notes, evidence_id
@@ -981,7 +981,7 @@ async def test_a_read_skipped_as_barren_still_owes_the_read() -> None:
     """A skipped read looked at nothing, so it cannot be what makes the redrawn page safe to finish on."""
     agent, page, state, llm = await _filtered_fares(answer_expected=True)
     here = await page.observe()
-    state.barren[here.document_key, content_key(here), ("r1",)] = agent._config.stall.barren_reads
+    state.barren[here.document_key, state_key(here), ("r1",)] = agent._config.stall.barren_reads
     assert await agent._step(state, here, _code_decision(Operation.READ, None)) is True
     assert len(llm.calls) == 1
     # Once the page is readable again, the finish still reads what the click drew.
@@ -1766,6 +1766,41 @@ async def test_a_spent_read_budget_belongs_to_one_page_state_not_to_the_run() ->
     changed = _at("https://example.test/live/", _button("Refresh"), _button("Show all"))
     _, was_skipped = await agent._read(state, _ticker(3), changed)
     assert not was_skipped
+    assert len(llm.calls) == Config().stall.barren_reads + 1
+
+
+async def test_a_list_paged_in_place_gives_each_page_its_own_read_budget() -> None:
+    """A client-side pager keeps its document and its buttons, so only the address tells the pages apart."""
+    state, _ = await _reading_state()
+    llm = ScriptedLLM([{"claims": [], "answered": False}] * 3)
+    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
+    skipped = []
+    for nth in (1, 2, 3):
+        here = _at(f"https://example.test/orders?page={nth}", _button("Previous"), _button("Next"))
+        _, was_skipped = await agent._read(state, capture((BlockKind.PARAGRAPH, f"Order {nth}00")), here)
+        skipped.append(was_skipped)
+    assert skipped == [False, False, False]
+    assert len(llm.calls) == 3
+
+
+async def test_rereading_the_same_records_off_a_ticking_page_is_not_payout() -> None:
+    """Each capture of a ticking page mints the records it quotes afresh, though the notes already hold them."""
+    state, _ = await _reading_state()
+    here = _at("https://example.test/flights/", _button("Refresh"))
+    carried: JsonValue = {
+        "claims": [],
+        "answered": False,
+        "continues": [{"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}]}],
+    }
+    llm = ScriptedLLM([carried] * 6)
+    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
+    for nth in range(6):
+        flights = capture(
+            (BlockKind.PARAGRAPH, "AB12 London to Paris $410"),
+            (BlockKind.PARAGRAPH, f"Prices updated {nth} seconds ago"),
+        )
+        await agent._read(state, flights, here)
+    # The first read's records are new to the notes and pay out; the same records again do not.
     assert len(llm.calls) == Config().stall.barren_reads + 1
 
 

@@ -23,9 +23,7 @@ from fastbrowse.effects import (
     ControlKey,
     ControlValue,
     Move,
-    content_key,
     effect,
-    holding,
     move,
     reversal,
     state_key,
@@ -863,7 +861,7 @@ class Agent:
             or state.history[-1].operation in _PAGE_OPERATIONS
         ):
             return None, True, False
-        held = holding(made)
+        held = made.document, frozenset(made.values_after.items())
         renews = held not in state.settings_held
         # Nothing committed means nothing was put anywhere, so there is no earlier state to have returned to.
         put_back = bool(made.values_after) and not renews
@@ -1382,7 +1380,9 @@ class Agent:
         budget: ReadKey | None = None
         if observation is not None:
             wanted_ids = tuple(r.id for r in wanted)
-            budget = observation.document_key, content_key(observation), wanted_ids
+            # Keyed by address too: a list paged in place keeps its document and its Previous and Next, and only
+            # its URL says the third page is not the two barren ones before it.
+            budget = observation.document_key, state_key(observation), wanted_ids
             if state.barren.get(budget, 0) >= self._config.stall.barren_reads:
                 # The page keeps rewriting its own text, so the exact-content key below never matches and the
                 # run could read it until the step budget ran out. What it can do here has paid out nothing.
@@ -1421,6 +1421,8 @@ class Agent:
         question = read_question(state.task, wanted, began_at=None if began is None else self._redactor.redact(began))
         notice = next_page_notice(following)
         before = len(state.notes.facts)
+        known = {fact.text for fact in state.notes.facts}
+        evidenced = {r.id for r in wanted if state.notes.evidenced(r.id)}
         outcome = await read(
             self._llm,
             capture,
@@ -1434,7 +1436,11 @@ class Agent:
             notice=notice,
             continuing=state.continuing,
         )
-        progressed = len(state.notes.facts) > before or any(state.notes.evidenced(r.id) for r in wanted)
+        # Payout is what the notes did not already say. A fact is keyed by the capture it was read from, so a
+        # page that rewrites a line re-mints the same records as new facts, and counting them read it for ever.
+        progressed = any(fact.text not in known for fact in state.notes.facts) or any(
+            state.notes.evidenced(r.id) for r in wanted if r.id not in evidenced
+        )
         continues = [key for key in outcome.continues if not state.notes.evidenced(key)]
         trace(
             "read",

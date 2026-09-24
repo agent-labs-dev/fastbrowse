@@ -2,9 +2,9 @@
 
 import pytest
 
-from fastbrowse.effects import content_key, effect, holding, move, reversal, state_key
+from fastbrowse.effects import effect, move, reversal, state_key
 from fastbrowse.models import Operation
-from fastbrowse.page import Control, Observation
+from fastbrowse.page import Control
 from tests.test_policy import observation
 
 
@@ -141,40 +141,3 @@ def test_an_action_that_set_nothing_names_the_fields_the_form_still_needs() -> N
     assert effect(form, form).summary == "nothing visible changed; fields the form still needs: 1 control: Return"
     filled = observation((search, needed.model_copy(update={"value": "Oct 23", "blocking": False})))
     assert "still needs" not in effect(form, filled).summary
-
-
-def test_a_page_state_keeps_its_address_but_what_a_reader_finds_does_not() -> None:
-    """A read is kept by document, not by URL: a site rewrites its own query as a list is paged or filtered."""
-    refresh = control("refresh", "Refresh")
-    here = observation((refresh,))
-    elsewhere = here.model_copy(update={"url": "https://example.test/other"})
-    assert state_key(here) != state_key(elsewhere)
-    assert content_key(here) == content_key(elsewhere)
-
-
-def test_text_that_rewrites_itself_is_the_same_page_to_a_reader_but_a_new_control_is_not() -> None:
-    refresh = control("refresh", "Refresh")
-    here = observation((refresh,))
-    ticking = here.model_copy(update={"viewport_text": "updated 4 seconds ago"})
-    assert content_key(here) == content_key(ticking)
-    assert content_key(here) != content_key(observation((refresh, control("all", "Show all"))))
-    assert content_key(here) != content_key(observation((refresh.model_copy(update={"checked": True}),)))
-
-
-def test_a_document_holds_the_same_state_however_its_results_redraw() -> None:
-    """The point of holding: a filter toggled on and off redraws the rows beneath it every time, so the page
-    state is always one never seen, and only the committed values say the run has been here before."""
-    box = control("stops", "Direct only", "checkbox", checked=False)
-
-    def at(checked: bool, rows: str) -> Observation:
-        return observation((box.model_copy(update={"checked": checked}), control("rows", rows))).model_copy(
-            update={"document_key": "results"}
-        )
-
-    first_on = move(at(False, "0 results"), at(True, "7 results"))
-    again_on = move(at(False, "12 results"), at(True, "5 results"))
-    back_off = move(at(True, "5 results"), at(False, "12 results"))
-    assert first_on is not None and again_on is not None and back_off is not None
-    # The rows differ every time, so only the committed values can say the page has held this before.
-    assert holding(first_on) == holding(again_on)
-    assert holding(back_off) != holding(first_on)

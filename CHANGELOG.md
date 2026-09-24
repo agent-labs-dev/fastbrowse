@@ -54,8 +54,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - **A page that rewrites its own text cannot be read for ever.** Reads were remembered by the page's exact
   content, so a ticker, a rotating advert or a live counter minted a key the run had never seen on every
   observation, and the agent could read one page until its step budget ran out instead of acting. Reads are
-  now also budgeted by what the page lets you do rather than by its text, and two reads of one page state
-  that add no fact make the run act instead. A read that does add a fact restores the budget.
+  now also budgeted by the page's address and what it lets you do rather than by its text, and two reads of
+  one page state that add nothing the notes did not already hold make the run act instead. A read that adds a
+  new fact restores the budget. Each page of a list paged in place keeps a budget of its own, and the same
+  records read again off a ticking page are not new facts.
 
 - **A value is still the page's when the model retypes its punctuation.** A field the page writes with a curly
   apostrophe, an en dash or an ellipsis was dropped when the model quoted it with a straight apostrophe, a
