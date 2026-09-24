@@ -186,6 +186,34 @@ class Redactor:
             text = text.replace(value, f"[secret:{self._values[value]}]")
         return text
 
+    def redact_url(self, url: str) -> str:
+        """Redact an address everywhere but its host and port, so what is reported is still an address.
+
+        A secret that is an ordinary word (`practice`) also names hosts: redacting it out of
+        `https://practice.expandtesting.com/secure` left `https://[secret:username].expandtesting.com/secure`,
+        which no parser reads back. A value that sits wholly inside the host was published by the site in its
+        own address, so leaving it there tells nobody anything. Userinfo, path, query and fragment are still
+        redacted, and a value that runs across the host's edge, or anything that does not parse as an
+        address, is redacted as plain text.
+        """
+        try:
+            netloc = urlsplit(url).netloc
+        except ValueError:
+            return self.redact(url)
+        host = netloc.rpartition("@")[2]
+        at = url.find(f"//{netloc}")
+        if not host or at < 0:
+            return self.redact(url)
+        end = at + 2 + len(netloc)
+        start = end - len(host)
+        for value in self._values:
+            found = url.find(value)
+            while found >= 0:
+                if found < end and found + len(value) > start and not start <= found <= end - len(value):
+                    return self.redact(url)
+                found = url.find(value, found + 1)
+        return self.redact(url[:start]) + url[start:end] + self.redact(url[end:])
+
     def mask(self, text: str) -> str:
         """Blank secret values at equal length, so offsets into the text (capture blocks) stay valid."""
         for value in sorted(self._values, key=len, reverse=True):

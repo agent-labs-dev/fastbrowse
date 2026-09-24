@@ -11,6 +11,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A secret that is also part of a site's hostname no longer breaks the reported address.** A username of
+  `practice` signed in at `https://practice.expandtesting.com/secure`, and redaction rewrote the host as well,
+  so the run reported `https://[secret:username].expandtesting.com/secure`, which is not an address. Final
+  addresses, trace addresses, fact and citation links now keep their host and port, since a value there was
+  published by the site itself; a secret in the path, query, fragment or sign-in part of an address is still
+  redacted, as is every other appearance of it in the run's text.
+
 - **Evidence from the wrong page no longer counts as an answer.** A proposed address opened a flights summary
   rather than the search the task described, the reader quoted a price from it, and the requirement counted as
   evidenced, so the verifier could not hold it open however plainly it was the wrong page. The verifier is now

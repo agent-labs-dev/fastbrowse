@@ -2019,6 +2019,20 @@ async def test_a_link_sharing_another_links_start_is_still_redacted() -> None:
     assert all(p.deep_link in answer for p in public)
 
 
+async def test_a_secret_the_site_uses_as_its_hostname_leaves_the_cited_address_readable() -> None:
+    # The username `practice` is also the site's subdomain; redacting it there left links no browser opens.
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    agent._redactor.register("username", "practice")
+    url, quote = "https://practice.example.test/secure?user=practice", "Welcome, practice"
+    cited = Citation(id=1, text=quote, url=url, quote=quote, deep_link=text_fragment(url, quote))
+    linked = f"Signed in as practice [1](<{cited.deep_link}>)"
+    answer, (public,) = agent._public_answer(
+        ComposedAnswer(answer="", linked_answer=linked, claims=(), citations=(cited,))
+    )
+    assert public.url == "https://practice.example.test/secure?user=[secret:username]"
+    assert answer == f"Signed in as [secret:username] [1](<{public.deep_link}>)"
+
+
 @pytest.mark.parametrize(
     ("failure", "status"),
     [
