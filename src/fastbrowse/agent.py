@@ -477,15 +477,20 @@ class Agent:
                     if not await self._step(state, observation, reading, decided_by):
                         continue
                     state.directed = held
-                    directed = (
-                        decision
-                        if decision.directed
-                        else _follow_recovery(state, observation, decision, uncertain=True)
-                    )
-                    if directed is None:
-                        await self._recover(state, observation, _read_exhausted(state))
-                        continue
-                    decision, uncertain, decided_by = directed, False, Decider.LLM
+                    if not _unread(plan, state.notes):
+                        # Only an owed read gets here: a scroll changes the page but not its text, so the read
+                        # found content already read, and the notes already describe what the interaction drew.
+                        decision = decision.model_copy(update={"operation": Operation.DONE, "target": None})
+                    else:
+                        directed = (
+                            decision
+                            if decision.directed
+                            else _follow_recovery(state, observation, decision, uncertain=True)
+                        )
+                        if directed is None:
+                            await self._recover(state, observation, _read_exhausted(state))
+                            continue
+                        decision, uncertain, decided_by = directed, False, Decider.LLM
                 else:
                     state.directed = None
                     decision = decision.model_copy(update={"operation": Operation.DONE, "target": None})
@@ -2032,7 +2037,7 @@ def _verified(verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str])
     misread = _misread(verdict, plan, notes, invented)
     named = set(verdict.missing) | (set(verdict.ungrounded) & {r.id for r in plan.requirements})
     doubted = named - (cited - misread)
-    return not doubted and (verdict.complete or bool(verdict.missing))
+    return not doubted and (verdict.complete or bool(named))
 
 
 def _described(entry: HistoryEntry) -> str:

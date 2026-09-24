@@ -233,7 +233,10 @@ async def test_the_verifier_is_told_where_each_requirement_was_read_and_which_ad
     prompt = llm.calls[0][1][-1].content
     assert "https://flights.test/summary" in prompt
     assert guessed in prompt
-    assert "Name in ungrounded every requirement" in prompt
+    # Grounding placed after the address left the page text under "## Addresses this run built from the task".
+    page = prompt[prompt.index("## Page\n") :]
+    assert page.startswith(f"## Page\n{_PAGE.url}\n{_PAGE.viewport_text}")
+    assert guessed not in page
 
 
 async def test_a_verifier_told_of_no_guessed_address_is_asked_nothing_extra() -> None:

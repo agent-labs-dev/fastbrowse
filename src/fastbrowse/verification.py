@@ -254,7 +254,7 @@ def _grounding(notes: Notes, plan: Plan, invented: Sequence[str]) -> str:
         parts.append("## Where each requirement's facts were read\n" + "\n".join(lines))
     if invented:
         parts.append("## Addresses this run built from the task\n" + "\n".join(f"- {u}" for u in invented))
-    return ("\n\n".join(parts) + "\n") if parts else ""
+    return ("\n\n".join(parts) + "\n\n") if parts else ""
 
 
 async def llm_verify(
@@ -317,8 +317,8 @@ async def llm_verify(
             role="user",
             content=(
                 f"## Task\n{task}\n\n## Requirements\n{requirements}\n\n## Steps taken\n{history}\n\n"
-                f"## Set controls\n{json.dumps(_controls(stateful))}\n\n## Page\n{observation.url}\n"
-                f"{_grounding(notes, plan, invented)}"
+                f"## Set controls\n{json.dumps(_controls(stateful))}\n\n{_grounding(notes, plan, invented)}"
+                f"## Page\n{observation.url}\n"
             ),
             images=screenshots,
         ),

@@ -78,7 +78,8 @@ The run loop is `src/fastbrowse/agent.py`, and everything else is a seam it call
 - **`retrieval.py`** routes short facts through Jev and other reads through the LLM. A read claim cites source
   blocks and code copies its quote from them; a count the page does not state rests on its basis facts; `memory.py` holds notes with citation ids, and `citations.py` builds deep links.
 - **`verification.py`** decides whether a run may finish: Jev's done check against the plan's requirements,
-  then the LLM verifier only for what Jev doubted, then the answer's claims checked against the quotes.
+  then the LLM verifier for what Jev doubted and for any requirement evidenced on an address the run guessed
+  from the task, then the answer's claims checked against the quotes.
 - **`safety.py`** owns secrets and irreversible actions. **`effects.py`** says what an action actually did,
   which is how a no-op is told from progress. **`telemetry.py`** is the ledger: steps, calls, dollars.
 - **`cli.py`**, **`mcp_server.py`** and **`run_task`** are the three entry points; `options.py` holds the rules

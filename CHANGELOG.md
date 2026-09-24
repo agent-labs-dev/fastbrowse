@@ -22,8 +22,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   rather than the search the task described, the reader quoted a price from it, and the requirement counted as
   evidenced, so the verifier could not hold it open however plainly it was the wrong page. The verifier is now
   told where each requirement's facts were read and which addresses the run built from the task rather than
-  reached by clicking, even when Jev's own check accepts, and it can name a requirement whose evidence came
-  from the wrong page. When that evidence was read on a guessed address, the requirement is not excused by
+  reached by clicking, and it can name a requirement whose evidence came from the wrong page. A requirement
+  evidenced on such an address goes to the verifier even when Jev's own check accepts. When that evidence was read on a guessed address, the requirement is not excused by
   having it: the requirement reopens, and the refusal names the page it was read off, so the run goes to find
   the right one rather than finishing again from the same notes.
 

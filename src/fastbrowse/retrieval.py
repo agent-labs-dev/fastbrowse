@@ -769,8 +769,9 @@ async def propose_text_fields(
     ledger: Ledger | None = None,
 ) -> tuple[dict[str, tuple[str, Evidence]], tuple[CostLine, ...]]:
     """The LLM names each text value and the block it is in; code keeps it only if that block, offered in this
-    chunk, contains the value verbatim. A text value is often part of a block ("httpx 0.28.1"), which a copy of
-    whole blocks cannot express, so the block is its evidence.
+    chunk, contains the value up to its punctuation's shape, and keeps the block's own spelling. A text value is
+    often part of a block ("httpx 0.28.1"), which a copy of whole blocks cannot express, so the block is its
+    evidence.
     """
     wanted = "\n".join(f"- {name}: {field.description or field.title or name}" for name, field in fields.items())
     found: dict[str, tuple[str, Evidence]] = {}
@@ -823,10 +824,10 @@ async def propose_text_fields_from_notes(
 
     A comparison ends on one of the pages it compared: pypi-newer answered "requests" correctly three runs in
     three and returned no data, because it ended on httpx's results, and taken from that page the field came
-    back "httpx". A value is kept only when the note it cites quotes it verbatim, or when it is a name the task
-    itself gives: a choice between the task's own entities ("httpx or requests"), made on a cited note whose
-    quote is a date, invents nothing. Cited on the derived comparison itself, which quotes nothing, such a name is
-    evidenced by the record the comparison read for it.
+    back "httpx". A value is kept only when the note it cites quotes it, up to its punctuation's shape, or when
+    it is a name the task itself gives: a choice between the task's own entities ("httpx or requests"), made on a
+    cited note whose quote is a date, invents nothing. Cited on the derived comparison itself, which quotes
+    nothing, such a name is evidenced by the record the comparison read for it.
     """
     if not notes.facts:
         return {}

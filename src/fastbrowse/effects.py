@@ -80,16 +80,13 @@ def _control_name(key: ControlKey) -> str:
     return f"{key[3]} ({key[4]})" if key[4] else key[3]
 
 
-def _controls(observation: Observation) -> list[str]:
-    return sorted(
+def state_key(observation: Observation) -> str:
+    """Identify a page state by what can be done on it, ignoring text that changes on its own (clocks, ads)."""
+    controls = sorted(
         json.dumps([c.role, c.label, c.context, c.value, c.checked, c.selected, c.expanded])
         for c in observation.controls
     )
-
-
-def state_key(observation: Observation) -> str:
-    """Identify a page state by what can be done on it, ignoring text that changes on its own (clocks, ads)."""
-    return hashlib.sha256(json.dumps([observation.url, _controls(observation)]).encode()).hexdigest()
+    return hashlib.sha256(json.dumps([observation.url, controls]).encode()).hexdigest()
 
 
 def _short(value: object) -> str:

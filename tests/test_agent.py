@@ -957,6 +957,16 @@ async def _finished(agent: Agent, state: _RunState) -> list[str]:
     return judged
 
 
+async def test_an_owed_read_of_unchanged_text_finishes_rather_than_recovering() -> None:
+    """A scroll changes the page but not its text, so the owed read repeats one already made."""
+    agent, page, state, llm = await _filtered_fares(answer_expected=True)
+    page.capture.return_value = capture((BlockKind.PARAGRAPH, "$320 1 stop"))
+    await agent._read(state, await page.capture(), await page.observe())
+    state.owes_read = True
+    assert "$320 1 stop" in await _finished(agent, state)
+    assert [purpose for purpose, _ in llm.calls] == [LLMPurpose.READ]
+
+
 async def test_a_finish_after_an_interaction_reads_what_it_drew() -> None:
     """A run clicked a filter and called itself done on notes read off the list before the filter applied."""
     agent, _, state, llm = await _filtered_fares(answer_expected=True)
@@ -1066,21 +1076,23 @@ def test_the_verifier_cannot_hold_open_a_requirement_the_notes_cite(
 
 
 @pytest.mark.parametrize(
-    ("ungrounded", "invented", "accepted"),
+    ("ungrounded", "invented", "accepted", "complete"),
     [
-        ((), {"https://example.test/"}, True),
+        ((), {"https://example.test/"}, True, True),
         # The citing excusal cannot see this: the requirement has evidence, read on an address the run guessed.
-        (("httpx",), {"https://example.test/?q=httpx"}, False),
+        (("httpx",), {"https://example.test/?q=httpx"}, False, True),
         # Read on the page the caller named or one the run clicked to, the doubt is the verifier's alone. The
         # synthesis requirement is satisfied from notes, and no page ever shows a comparison.
-        (("httpx",), set(), True),
-        (("compare",), set(), True),
+        (("httpx",), set(), True, True),
+        (("compare",), set(), True, True),
+        # A verifier that calls the run incomplete only for the excused doubt is excused with it, as for missing.
+        (("httpx",), set(), True, False),
         # A verdict naming something the plan never asked for says nothing about this run.
-        (("invented-id",), {"https://example.test/"}, True),
+        (("invented-id",), {"https://example.test/"}, True, True),
     ],
 )
 def test_evidence_does_not_excuse_a_requirement_read_off_a_guessed_address(
-    ungrounded: tuple[str, ...], invented: set[str], accepted: bool
+    ungrounded: tuple[str, ...], invented: set[str], accepted: bool, complete: bool
 ) -> None:
     """A proposed address opened a flights summary, the reader quoted a price from it, and the requirement
     counted as cited, so the verifier could not hold it open however plainly it was the wrong search."""
@@ -1096,7 +1108,7 @@ def test_evidence_does_not_excuse_a_requirement_read_off_a_guessed_address(
         Fact(reader=FactReader.LLM, requirement_id=r, text=r, evidence=evidence(start=i))
         for i, r in enumerate(("httpx", "compare"))
     )
-    verdict = LLMVerdict(complete=True, missing=(), ungrounded=ungrounded)
+    verdict = LLMVerdict(complete=complete, missing=(), ungrounded=ungrounded)
     assert _verified(verdict, plan, notes, invented) is accepted
 
 
@@ -1834,16 +1846,16 @@ def _ticker(nth: int) -> Capture:
     return capture((BlockKind.PARAGRAPH, f"Live results, updated {nth} seconds ago"))
 
 
-async def _reading_state() -> tuple[_RunState, Requirement]:
+async def _reading_state() -> _RunState:
     state = await run_state()
     requirement = Requirement(id="r1", text="Find the total", kind=RequirementKind.INFORMATION)
     state.ready_plan = Plan(requirements=(requirement,), answer_expected=True)
-    return state, requirement
+    return state
 
 
 async def test_a_page_that_rewrites_its_own_text_is_read_only_while_it_pays_out() -> None:
     """The exact-content key never matches on a ticker, so without a budget the run reads it for ever."""
-    state, _ = await _reading_state()
+    state = await _reading_state()
     here = _at("https://example.test/live/", _button("Refresh"))
     llm = ScriptedLLM([{"claims": [], "answered": False}] * 6)
     agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
@@ -1856,22 +1868,23 @@ async def test_a_page_that_rewrites_its_own_text_is_read_only_while_it_pays_out(
 
 
 async def test_a_read_that_pays_out_restores_the_budget_of_the_page_state_it_read() -> None:
-    state, _ = await _reading_state()
+    state = await _reading_state()
     here = _at("https://example.test/live/", _button("Refresh"))
     paid: JsonValue = {"claims": [{"text": "Total: 12", "cite": {"first": "s0", "last": "s0"}}], "answered": False}
-    llm = ScriptedLLM([{"claims": [], "answered": False}, paid, {"claims": [], "answered": False}])
+    barren: JsonValue = {"claims": [], "answered": False}
+    llm = ScriptedLLM([barren, paid, barren, barren])
     agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
-    await agent._read(state, _ticker(0), here)
-    await agent._read(state, _ticker(1), here)
+    for nth in range(3):
+        await agent._read(state, _ticker(nth), here)
     assert state.notes.facts, "the second read added a fact"
-    # The budget the first barren read spent is cleared, so the page is readable again.
-    _, was_skipped = await agent._read(state, _ticker(2), here)
+    # Without the payout clearing the first barren read, the third would have spent the budget.
+    _, was_skipped = await agent._read(state, _ticker(3), here)
     assert not was_skipped
-    assert len(llm.calls) == 3
+    assert len(llm.calls) == 4
 
 
 async def test_a_spent_read_budget_belongs_to_one_page_state_not_to_the_run() -> None:
-    state, _ = await _reading_state()
+    state = await _reading_state()
     llm = ScriptedLLM([{"claims": [], "answered": False}] * 4)
     agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
     here = _at("https://example.test/live/", _button("Refresh"))
@@ -1887,7 +1900,7 @@ async def test_a_spent_read_budget_belongs_to_one_page_state_not_to_the_run() ->
 
 async def test_a_list_paged_in_place_gives_each_page_its_own_read_budget() -> None:
     """A client-side pager keeps its document and its buttons, so only the address tells the pages apart."""
-    state, _ = await _reading_state()
+    state = await _reading_state()
     llm = ScriptedLLM([{"claims": [], "answered": False}] * 3)
     agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
     skipped = []
@@ -1901,7 +1914,7 @@ async def test_a_list_paged_in_place_gives_each_page_its_own_read_budget() -> No
 
 async def test_rereading_the_same_records_off_a_ticking_page_is_not_payout() -> None:
     """Each capture of a ticking page mints the records it quotes afresh, though the notes already hold them."""
-    state, _ = await _reading_state()
+    state = await _reading_state()
     here = _at("https://example.test/flights/", _button("Refresh"))
     carried: JsonValue = {
         "claims": [],
@@ -1922,7 +1935,7 @@ async def test_rereading_the_same_records_off_a_ticking_page_is_not_payout() -> 
 
 async def test_a_starved_read_lets_the_interaction_jev_chose_proceed() -> None:
     """The point of the budget: the run stops reading the ticker and does the thing the task needs."""
-    state, _ = await _reading_state()
+    state = await _reading_state()
     refresh = _button("Refresh")
     here = _at("https://example.test/live/", refresh)
     jev = ScriptedJev(
