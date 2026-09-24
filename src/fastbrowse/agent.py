@@ -1703,9 +1703,12 @@ class Agent:
                 accepted = _verified(verdict.data, state.plan, state.notes, state.invented)
                 # Asked to open httpx's project page, a run picked DONE on pypi.org before acting, Jev held the one
                 # requirement unmet, and flash-lite called it complete. Only an action can do what Jev says is
-                # undone, so a run that has taken none cannot be talked past it.
+                # undone, so a run that has taken none cannot be talked past it. The history, not the steps, since
+                # an opened shortcut acts too: counting only steps held a run already on /project/httpx idle, and
+                # its recovery clicked through to GitHub.
                 idle = not any(
-                    s.outcome is StepOutcome.EXECUTED and s.operation not in _NOT_ACTING for s in state.steps
+                    h.outcome is StepOutcome.EXECUTED and h.operation not in {*_NOT_ACTING, Operation.ESCALATE}
+                    for h in state.history
                 )
                 undone = {r.id for r in state.plan.requirements if r.kind is RequirementKind.ACTION} & set(check.unmet)
                 accepted = accepted and not (idle and undone)

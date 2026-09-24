@@ -1163,10 +1163,24 @@ async def test_a_requirement_read_off_a_guessed_address_reopens_until_the_right_
     assert result is not None and result.status is Status.COMPLETE
 
 
-async def test_a_run_that_has_not_acted_is_not_talked_past_an_action_jev_holds_undone() -> None:
-    """Asked to open a project page, a run chose DONE on the start page, Jev held the requirement unmet and the
-    verifier called it complete, so it reported complete on the wrong page."""
+_SHORTCUT = HistoryEntry(operation=None, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
+
+
+@pytest.mark.parametrize(
+    ("history", "complete"),
+    [
+        # A run chose DONE on the start page, Jev held the requirement unmet and the verifier called it complete,
+        # so it reported complete on the wrong page.
+        pytest.param((), False, id="nothing-acted"),
+        # A shortcut had already opened the project page; held idle, the run clicked on through to GitHub.
+        pytest.param((_SHORTCUT,), True, id="shortcut-opened"),
+    ],
+)
+async def test_only_a_run_that_has_not_acted_is_held_to_an_action_jev_holds_undone(
+    history: tuple[HistoryEntry, ...], complete: bool
+) -> None:
     state = await run_state()
+    state.history.extend(history)
     plan = Plan(
         requirements=(Requirement(id="r1", text="Open httpx's project page", kind=RequirementKind.ACTION),),
         answer_expected=False,
@@ -1182,7 +1196,7 @@ async def test_a_run_that_has_not_acted_is_not_talked_past_an_action_jev_holds_u
 
     result = await agent._finish(state, on, None, None)
 
-    assert result is None or result.status is not Status.COMPLETE
+    assert (result is not None and result.status is Status.COMPLETE) is complete
     assert llm.calls[0][0] is LLMPurpose.VERIFY
 
 
