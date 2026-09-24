@@ -99,9 +99,9 @@ These are the things a change must not quietly break.
   and page state rather than the model's say-so.
 - **A model never sees a secret value.** Secrets reach a page by name, resolved at the moment of typing and
   only for their declared origin (which may be `https://*.site.com`, covering that site's hosts and nothing
-  that merely ends with the same letters), and are redacted from the run's text results. A reported address
-  keeps its host and port, since a value there is one the site published; the rest of it is redacted. No model screenshot or
-  PNG step frame is taken while a resolved secret is showing as page text. The step-frame check is made
+  that merely ends with the same letters), and are redacted from the run's text results. A reported address on
+  an origin the secret was typed on keeps its host and port, since a value there is one that site published;
+  the rest of it, and any other host, is redacted. No model screenshot or PNG step frame is taken while a resolved secret is showing as page text. The step-frame check is made
   against the page as it is when the image is taken, never against an earlier reading of it - the action being
   recorded may be the one that put the secret there. Live JPEG frames and recordings show the rendered page
   without this check.

@@ -977,17 +977,14 @@ async def test_a_finish_that_owes_no_answer_neither_reads_nor_waits() -> None:
     assert LLMPurpose.READ not in [purpose for purpose, _ in llm.calls]
 
 
-async def test_a_read_skipped_as_barren_still_owes_the_read() -> None:
-    """A skipped read looked at nothing, so it cannot be what makes the redrawn page safe to finish on."""
+async def test_an_owed_read_is_not_skipped_by_a_budget_the_page_spent_before_the_interaction() -> None:
+    """A filter that keeps its address and controls shares the barren budget of the page before it."""
     agent, page, state, llm = await _filtered_fares(answer_expected=True)
     here = await page.observe()
     state.barren[here.document_key, state_key(here), ("r1",)] = agent._config.stall.barren_reads
-    assert await agent._step(state, here, _code_decision(Operation.READ, None)) is True
-    assert len(llm.calls) == 1
-    # Once the page is readable again, the finish still reads what the click drew.
-    state.barren.clear()
     assert "$410 nonstop" in await _finished(agent, state)
     assert len(llm.calls) == 2
+    assert not state.owes_read
 
 
 async def test_scrolling_controls_in_and_out_of_view_is_not_a_reversal() -> None:
@@ -1154,17 +1151,32 @@ async def test_a_requirement_read_off_a_guessed_address_reopens_until_the_right_
     assert result is not None and result.status is Status.COMPLETE
 
 
-async def test_a_confident_finish_resting_on_a_guessed_address_is_still_verified() -> None:
+class _ConfirmingJev(ScriptedJev):
+    """Confirms every requirement and the task as complete, so the done check accepts outright."""
+
+    async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        return Evaluation(
+            model="test",
+            answers={key: NoulAnswer(probability=0.0 if key.startswith("unmet_") else 0.99) for key in questions},
+            input_tokens=10,
+            cost=FREE,
+        )
+
+
+@pytest.mark.parametrize("guessed", [True, False])
+async def test_a_confident_finish_resting_on_a_guessed_address_is_still_verified(guessed: bool) -> None:
+    summary = "https://example.test/flights/summary"
     state = await run_state()
-    state.invented = {"https://example.test/flights/summary"}
-    state.notes.add(_fare("https://example.test/flights/summary", "summary"))
+    state.invented = {summary} if guessed else set()
+    state.notes.add(_fare(summary, "summary"))
     llm = ScriptedLLM([{"missing": [], "complete": True}])
     agent, on = await _finishing(state, llm, noul=0.99)
+    agent._jev = _ConfirmingJev({})
 
     result = await agent._finish(state, on, None, None)
 
     assert result is not None and result.status is Status.COMPLETE
-    assert [purpose for purpose, _ in llm.calls] == [LLMPurpose.VERIFY]
+    assert [purpose for purpose, _ in llm.calls] == ([LLMPurpose.VERIFY] if guessed else [])
 
 
 @pytest.mark.parametrize("draws", [True, False])
@@ -2022,7 +2034,7 @@ async def test_a_link_sharing_another_links_start_is_still_redacted() -> None:
 async def test_a_secret_the_site_uses_as_its_hostname_leaves_the_cited_address_readable() -> None:
     # The username `practice` is also the site's subdomain; redacting it there left links no browser opens.
     agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
-    agent._redactor.register("username", "practice")
+    agent._redactor.register("username", "practice", "https://practice.example.test")
     url, quote = "https://practice.example.test/secure?user=practice", "Welcome, practice"
     cited = Citation(id=1, text=quote, url=url, quote=quote, deep_link=text_fragment(url, quote))
     linked = f"Signed in as practice [1](<{cited.deep_link}>)"

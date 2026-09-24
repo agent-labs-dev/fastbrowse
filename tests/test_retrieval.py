@@ -1076,22 +1076,26 @@ async def test_a_record_naming_blocks_the_page_did_not_offer_is_counted_not_cred
     assert [fact.evidence.quote for fact in notes.facts if fact.evidence is not None] == ["Sharp Objects 47.82"]
 
 
-async def test_a_reply_listing_more_records_than_the_cap_is_read_not_rejected() -> None:
-    """A dense results table lists more rows than the cap in one chunk. Rejecting the reply ended the run with an
-    error over a page that read fine; the records past the cap are counted as uncovered instead."""
+@pytest.mark.parametrize(("records", "uncovered"), [(65, 5), (0, 0)])
+async def test_a_reply_listing_more_records_than_the_cap_or_none_is_read_not_rejected(
+    records: int, uncovered: int
+) -> None:
+    """A dense results table lists more rows than the cap in one chunk, and a chunk holding only the pager lists
+    none. Rejecting either reply ended the run with an error over a page that read fine; the records past the cap
+    are counted as uncovered instead."""
     page = capture((BlockKind.PARAGRAPH, "Sharp Objects 47.82"))
     llm = ScriptedLLM(
         [
             {
                 "claims": [],
                 "answered": False,
-                "continues": [{"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}] * 65}],
+                "continues": [{"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}] * records}],
             }
         ]
     )
     outcome = await read(llm, page, "Cheapest?", ["r1"], Notes())
     assert outcome.continues == ("r1",)
-    assert outcome.uncovered == 5
+    assert outcome.uncovered == uncovered
 
 
 async def test_a_count_over_a_list_that_goes_on_is_not_settled_by_the_pages_sort_order() -> None:

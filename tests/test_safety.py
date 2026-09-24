@@ -50,15 +50,14 @@ def test_a_secret_is_caught_in_every_encoding_a_page_or_log_carries_it_in() -> N
             "https://practice:pw@x.com:8443/practice#practice",
             "https://[secret:username]:pw@x.com:8443/[secret:username]#[secret:username]",
         ),
-        ("https://x.practice/y", "https://x.practice/y"),
+        ("https://practice.expandtesting.com:443/", "https://practice.expandtesting.com:443/"),
+        ("https://practice.attacker.test/", "https://[secret:username].attacker.test/"),
         ("https://[secret", "https://[secret"),
     ],
 )
-def test_a_secret_is_redacted_from_an_address_everywhere_but_the_host_the_site_published(
-    url: str, redacted: str
-) -> None:
+def test_a_secret_is_redacted_from_an_address_everywhere_but_the_host_it_was_typed_on(url: str, redacted: str) -> None:
     redactor = Redactor()
-    redactor.register("username", "practice")
+    redactor.register("username", "practice", "https://practice.expandtesting.com/login")
     assert redactor.redact_url(url) == redacted
     assert redactor.redact("sign in as practice") == "sign in as [secret:username]"
 

@@ -1213,7 +1213,7 @@ class Agent:
         value = await resolve_secret(self._secrets, name, origin) if self._secrets else None
         if value is None:
             raise _Stop(Status.NEEDS_INPUT, f"secret {name} is not available for {origin}")
-        self._redactor.register(name, value)
+        self._redactor.register(name, value, origin)
         return value
 
     async def _generate_text(self, state: _RunState, observation: Observation, target: Control) -> str:
@@ -1378,7 +1378,8 @@ class Agent:
         capture = capture or await self._capture()
         plan = await state.await_plan()
         wanted = [r for r in state.notes.unresolved(plan) if r.kind is RequirementKind.INFORMATION]
-        if not wanted and state.owes_read and plan.answer_expected:
+        owed = not wanted and state.owes_read and plan.answer_expected
+        if owed:
             # Every requirement was evidenced off the page before the last interaction redrew it, so they are
             # asked again of what it drew: a reader asked nothing would leave the pre-filter fare answering.
             wanted = [r for r in plan.requirements if r.kind is RequirementKind.INFORMATION]
@@ -1388,7 +1389,10 @@ class Agent:
             # Keyed by address too: a list paged in place keeps its document and its Previous and Next, and only
             # its URL says the third page is not the two barren ones before it.
             budget = observation.document_key, state_key(observation), wanted_ids
-            if state.barren.get(budget, 0) >= self._config.stall.barren_reads:
+            # An owed read is exempt: a filter that keeps its address and controls shares the budget of the page
+            # before it, and a skip there either finished on the pre-filter fare or turned every later DONE into
+            # a skipped read and recovery. It is owed at most once per interaction, so it cannot read for ever.
+            if not owed and state.barren.get(budget, 0) >= self._config.stall.barren_reads:
                 # The page keeps rewriting its own text, so the exact-content key below never matches and the
                 # run could read it until the step budget ran out. What it can do here has paid out nothing.
                 trace("read_skipped", reason="no_new_facts_from_this_page_state")

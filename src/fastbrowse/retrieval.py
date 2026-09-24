@@ -364,7 +364,8 @@ class _Continuation(Frozen):
         description=(
             "Every record this capture adds to that comparison, each as the run of source blocks holding it and "
             "the value being compared. A later page cannot show what its winner beat unless this page names the "
-            "records it was compared against, so this is required rather than asked for in prose."
+            "records it was compared against, so list every one this capture shows; a capture holding only the "
+            "pager lists none."
         ),
     )
 
