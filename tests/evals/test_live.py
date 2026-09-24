@@ -430,3 +430,19 @@ async def test_a_hosted_outage_retries_without_quoting_the_key(monkeypatch: pyte
     with pytest.raises(Unavailable) as error:
         await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
     assert "bu_secret_key" not in str(error.value) and "HTTP 503" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("url", "sent"),
+    [("https://api.github.com/repos/encode/httpx", "Bearer t0k"), ("https://pypi.org/pypi/httpx/json", None)],
+)
+async def test_the_github_token_goes_only_to_the_github_api(
+    url: str, sent: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retried row refetches its answer key, which ran the anonymous GitHub limit out during a Jev outage."""
+    monkeypatch.setenv("GITHUB_TOKEN", "t0k")
+    request = httpx.Request("GET", url)
+
+    await live._github_token(request)
+
+    assert request.headers.get("Authorization") == sent

@@ -14,7 +14,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - **A run that has not acted cannot be talked past an action Jev holds undone.** Asked to open a project page,
   a run chose DONE on the start page, Jev's done check held the requirement unmet, and the verifier called it
   complete, so the run reported `complete` on the wrong page. With no action taken, an action requirement Jev
-  holds unmet now keeps the run going.
+  holds unmet now keeps the run going. Opening a shortcut address counts as acting, so a run the shortcut
+  already took to the page is not held back.
+- **The live evals send `GITHUB_TOKEN` to the GitHub API when it is set.** A row's answer key is fetched again
+  on every retry, so a long provider outage spent the anonymous 60 requests an hour and failed `github-license`
+  on a 403 that said nothing about the agent.
 
 - **A secret that is also part of a site's hostname no longer breaks the reported address.** A username of
   `practice` signed in at `https://practice.expandtesting.com/secure`, and redaction rewrote the host as well,

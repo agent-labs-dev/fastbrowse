@@ -432,6 +432,14 @@ def _video(record: Path | None) -> str | None:
     return str(record) if record is not None and record.exists() and record.stat().st_size else None
 
 
+async def _github_token(request: httpx.Request) -> None:
+    # An answer key is fetched again on every retry, and a Jev outage retries rows for hours, so the anonymous
+    # 60 an hour ran out and failed github-license on a 403. A token raises that to 5000.
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token and request.url.host == "api.github.com":
+        request.headers["Authorization"] = f"Bearer {token}"
+
+
 async def _truth(task: LiveTask, http: httpx.AsyncClient) -> object:
     # Answer keys come from public APIs that rate-limit, so a transient failure is waited out, never a crashed eval.
     for retries in itertools.count():
@@ -673,7 +681,7 @@ async def main(argv: list[str]) -> int:
         tempfile.TemporaryDirectory() as downloads,
         args.out.open("a", encoding="utf-8") as out,
     ):
-        async with httpx.AsyncClient(timeout=60) as http:
+        async with httpx.AsyncClient(timeout=60, event_hooks={"request": [_github_token]}) as http:
 
             async def one(arm: str, task: LiveTask, record: Path | None) -> EvalRow:
                 # A provider outage says nothing about the agent, so a run it ended is run again until one ends
