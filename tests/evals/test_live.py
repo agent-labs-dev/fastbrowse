@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import runpy
 from base64 import urlsafe_b64decode, urlsafe_b64encode
@@ -173,6 +174,32 @@ def test_a_real_gap_in_probabilities_is_left_alone() -> None:
     answer, cost = RUNNER["systemone_answer"](payload)
     assert answer["answers"]["op"]["probabilities"] == {"A": 0.3, "B": 0.7}
     assert cost is None
+
+
+def test_the_runner_answers_a_choice_of_one_option_without_asking_jev(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[dict[str, Any]] = []
+
+    def post(_model: Any, _url: str, _headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        sent.append(body)
+        return {"answers": {"operation": {"choice": "TYPE_TEXT"}}, "usage": {"cost": 0.0001}}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "key")
+    monkeypatch.setitem(RUNNER["patch_transport"].__globals__, "_post", post)
+    model = SimpleNamespace()
+    RUNNER["patch_transport"](model, RUNNER["Meter"]())
+    questions = {
+        "operation": {"type": "choice", "criteria": {"TYPE_TEXT": "", "DONE": "", "BLOCKED": ""}},
+        "type_text_target": {"type": "choice", "criteria": {"search": "the search box"}},
+    }
+    result = model.post_json("https://api.typesafe.ai/v1/evaluate", "key", {"state": {}, "questions": questions})
+    assert list(sent[0]["questions"]) == ["operation"]
+    assert result["answers"]["type_text_target"]["choice"] == "search"
+    assert result["answers"]["operation"]["choice"] == "TYPE_TEXT"
+
+
+@pytest.mark.parametrize("content", ['{"text": "httpx"}\n```', '```json\n{"text": "httpx"}\n```', '{"text": "httpx"}'])
+def test_the_runner_reads_the_text_helpers_json_past_a_stray_fence(content: str) -> None:
+    assert json.loads(RUNNER["unfenced"](content)) == {"text": "httpx"}
 
 
 def test_each_task_runs_only_where_it_grades_on_equal_terms() -> None:
@@ -378,6 +405,7 @@ async def test_a_hosted_session_whose_output_fails_the_schema_keeps_its_cost(mon
         output="[Session cost limit reached]",
         total_cost_usd=0.37,
         status=SimpleNamespace(value="stopped"),
+        is_task_successful=False,
         model="claude-opus-4.7",
         step_count=4,
         live_url="https://live",
@@ -404,6 +432,45 @@ async def test_a_hosted_session_whose_output_fails_the_schema_keeps_its_cost(mon
     outcome, report = await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
     assert outcome.answer == "[Session cost limit reached]"
     assert report.dollars == 0.37 and report.status == "stopped"
+
+
+async def test_a_hosted_session_is_graded_on_the_verdict_that_lands_after_it_stops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import browser_use_sdk.v3  # an optional extra
+
+    def session(verdict: bool | None) -> SimpleNamespace:
+        return SimpleNamespace(
+            id="s1",
+            is_task_successful=verdict,
+            total_cost_usd=0.1,
+            status=SimpleNamespace(value="stopped"),
+            model="m",
+            step_count=2,
+            live_url=None,
+        )
+
+    class Run:
+        session_id = "s1"
+
+        def __await__(self) -> Any:
+            async def finish() -> SimpleNamespace:
+                return SimpleNamespace(session=session(None), output="0.28.1")
+
+            return finish().__await__()
+
+    class Client:
+        def __init__(self, **_: object) -> None:
+            self.sessions = SimpleNamespace(get=AsyncMock(side_effect=[session(None), session(None), session(True)]))
+
+        def run(self, *_: object, **__: object) -> Run:
+            return Run()
+
+    monkeypatch.setattr(browser_use_sdk.v3, "AsyncBrowserUse", Client)
+    monkeypatch.setattr(live, "load_settings", lambda: SimpleNamespace(browser_key=lambda: "key"))
+    monkeypatch.setattr(live.asyncio, "sleep", AsyncMock())
+    _, report = await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
+    assert report.task_successful is True
 
 
 async def test_a_hosted_outage_retries_without_quoting_the_key(monkeypatch: pytest.MonkeyPatch) -> None:

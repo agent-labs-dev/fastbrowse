@@ -87,6 +87,29 @@ def patch_transport(model: Any, meter: Meter) -> None:
         os.environ["TYPESAFE_API_KEY"] = os.environ["AI_GATEWAY_API_KEY"]
 
     def post_json(url: str, key: str, body: dict[str, Any]) -> dict[str, Any]:
+        if "api.typesafe.ai" not in url:
+            # The text helper's model wraps its JSON in a stray code fence despite `json_object`, and upstream's
+            # strict parse then types nothing: the fence is dropped so the arm is graded on what it chose to type.
+            result = ask(url, key, body)
+            for choice in result.get("choices") or []:
+                message = choice.get("message") or {}
+                if isinstance(message.get("content"), str):
+                    message["content"] = unfenced(message["content"])
+            return result
+        # Jev refuses a choice of one option, so it is answered here, as fastbrowse's `asking_open` does. The
+        # operation choice always offers DONE and BLOCKED, so a question is always left to send.
+        questions = body["questions"]
+        forced = {
+            name: {"choice": only, "probabilities": {only: 1.0}, "confidence": 1.0}
+            for name, question in questions.items()
+            if question.get("type") == "choice" and len(question.get("criteria") or {}) == 1
+            for only in question["criteria"]
+        }
+        rest = {name: question for name, question in questions.items() if name not in forced}
+        result = ask(url, key, {**body, "questions": rest})
+        return {**result, "answers": {**result.get("answers", {}), **forced}}
+
+    def ask(url: str, key: str, body: dict[str, Any]) -> dict[str, Any]:
         if "api.typesafe.ai" in url and via_gateway:
             payload = _post(
                 model,
@@ -103,6 +126,11 @@ def patch_transport(model: Any, meter: Meter) -> None:
         return result
 
     model.post_json = post_json
+
+
+def unfenced(content: str) -> str:
+    text = content.strip().removeprefix("```json").removeprefix("```").removesuffix("```")
+    return text.strip()
 
 
 def _meter(meter: Meter, kind: str, cost: object) -> None:

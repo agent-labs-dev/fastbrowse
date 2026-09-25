@@ -68,6 +68,8 @@ ULTRAFAST_RUNNER = Path(__file__).resolve().parents[3] / "scripts" / "ultrafast_
 ULTRAFAST_COMMAND = ("uv", "run", "--no-project", "--quiet", "--python", "3.14", "--with", ULTRAFAST, "python")
 ULTRAFAST_TEXT_MODEL = "inception/mercury-2.5"
 """jev-ultrafast's own configuration (.env.example): its text helper on OpenRouter, reasoning off."""
+VERDICT_WAIT = 90.0
+"""Seconds to wait for Browser Use to judge a stopped session; a verdict still missing then grades as a failure."""
 
 
 def _watch(arm: str, task: LiveTask, live_url: str | None) -> None:
@@ -347,6 +349,16 @@ async def hosted_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | 
         raise failed(f"Browser Use API request failed ({type(error).__name__})") from None
 
 
+async def _judged(client: Any, session: Any) -> Any:
+    """The session once Browser Use has judged it. The verdict lands after the session stops, so a session read
+    as soon as the run returns is ungraded, and the grader would read that as a failure."""
+    deadline = time.monotonic() + VERDICT_WAIT
+    while getattr(session, "is_task_successful", None) is None and time.monotonic() < deadline:
+        await asyncio.sleep(2)
+        session = await client.sessions.get(session.id)
+    return session
+
+
 async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path | None) -> tuple[Outcome, ArmReport]:
     from browser_use_sdk.v3 import AsyncBrowserUse, BrowserUseError  # an optional extra
 
@@ -378,6 +390,7 @@ async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
         output = session.output
     else:
         raise error
+    session = await _judged(client, session)
     if isinstance(output, BaseModel):
         outcome = Outcome(output.model_dump_json(), output.model_dump(), None, unobservable=True)
     elif isinstance(output, dict):
