@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-09-25
+
 - **A cheapest or highest from part of a list needs the page to state its order.** A reader that cited the
   page's sort order to settle a superlative on the leading row still settled it when that citation named no block
   on the page; the row alone no longer answers it.
@@ -452,7 +454,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.3...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.4
 [0.5.3]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.3
 [0.5.2]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.2
 [0.5.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.1

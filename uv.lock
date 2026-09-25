@@ -237,7 +237,7 @@ wheels = [
 
 [[package]]
 name = "fastbrowse"
-version = "0.5.3"
+version = "0.5.4"
 source = { editable = "." }
 dependencies = [
     { name = "cdp-use" },
