@@ -522,6 +522,16 @@ def test_pairs_take_a_value_named_before_its_item_only_when_it_says_so() -> None
     assert check(Outcome("Mother 12.51, Agnostic 16.89.", None, None), None) is not None
 
 
+def test_a_date_stated_in_iso_form_is_stated() -> None:
+    truth = {"nights": "9", "start": "2026-09-28", "end": "2026-10-07"}
+    iso = "Start 2026-09-28 (Monday), end 2026-10-07. The page says: You selected a range of 9 days."
+    assert more_tasks._date_range_check(Outcome(iso, None, None), truth) is None
+    assert more_tasks._date_range_check(Outcome(iso.replace("2026-10-07", "2026-10-08"), None, None), truth)
+    friday = {"date": "2026-10-02", "mdy": "10/02/2026"}
+    assert more_tasks._first_friday_check(Outcome("Friday, 2026-10-02", None, None), friday) is None
+    assert more_tasks._first_friday_check(Outcome("2026-10-02", None, None), friday)
+
+
 def test_the_first_friday_grader_takes_the_date_as_the_page_shows_it() -> None:
     truth = {"date": "2026-10-02", "mdy": "10/02/2026"}
     shown = "The date shown is 10/02/2026. The day shown is Friday. The month shown is October."
