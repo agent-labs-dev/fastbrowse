@@ -283,5 +283,7 @@ async def test_the_checks_are_shown_the_date_and_what_each_action_typed_and_did(
     assert steps.index("fill First Name = 'Ada' -> executed") < steps.index("click Back -> executed")
     assert "fill First Name = 'Adam' -> executed (First Name: Ada -> Adam)" in steps
     jev = _Jev({"complete": 0.9})
-    await check_done(jev, "Sign up", plan, _PAGE, Notes(), Thresholds())
+    # Jev's check can accept outright, so it sees the record too, not only the page a process ended on.
+    await check_done(jev, "Sign up", plan, _PAGE, Notes(), Thresholds(), history=history)
     assert isinstance(jev.state, dict) and jev.state["date"] == today
+    assert "fill First Name = 'Ada' -> executed" in str(jev.state["actions"])

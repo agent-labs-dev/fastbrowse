@@ -18,6 +18,7 @@ from fastbrowse.agent import (
     _follow_recovery,
     _guessed,
     _history,
+    _record,
     _RunState,
     _Stop,
     _try_unsure,
@@ -122,6 +123,18 @@ async def test_field_writer_receives_popup_context_and_other_field_values() -> N
     assert prompt["page"]["text"] == "Choose a station"
     # In order: told only the task, the writer typed a later correction on the first pass.
     assert prompt["requirements"] == list(steps)
+
+
+def test_a_value_typed_before_the_recent_window_stays_in_the_record() -> None:
+    """A long wizard pushed its first fill out of the recent actions, and the correction then showed no order."""
+    first = HistoryEntry(
+        operation=Operation.FILL, target="Name", outcome=StepOutcome.EXECUTED, page_changed=False, text="Ada"
+    )
+    click = HistoryEntry(operation=Operation.CLICK, target="Next", outcome=StepOutcome.EXECUTED, page_changed=True)
+    limits = ObservationLimits(history_entries=2, earlier_history_entries=1)
+    record = _record([first, *[click] * 5], limits)
+    assert record[0].text == "Ada"
+    assert len(record) == 4
 
 
 async def test_a_step_abandoned_while_waiting_for_the_plan_leaves_the_plan_to_the_rest_of_the_run() -> None:

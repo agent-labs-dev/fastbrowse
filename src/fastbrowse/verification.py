@@ -138,8 +138,12 @@ async def check_done(
     draft: ComposedAnswer | None = None,
     *,
     tokens: TokenBudget = _DEFAULT_CONFIG.tokens,
+    history: Sequence[HistoryEntry] = (),
 ) -> DoneCheck:
-    """Judge completion, and whether `draft` answers the task as written, in the one Jev call."""
+    """Judge completion, and whether `draft` answers the task as written, in the one Jev call.
+
+    `history` is the run's action record. A page shows only where a process ended, so an accepted check that never
+    saw the record would pass "enter one name, go back and correct it" on a run that typed the correction first."""
     questions: dict[str, Question] = {
         "complete": NoulQuestion(
             instructions=(
@@ -160,7 +164,11 @@ async def check_done(
         match requirement.kind:
             case RequirementKind.ACTION:
                 questions[f"unmet_{requirement.id}"] = NoulQuestion(
-                    instructions=f"{UNTRUSTED}\nIs this requirement not visibly satisfied?\n\n{requirement.text}",
+                    instructions=(
+                        f"{UNTRUSTED}\nIs this requirement not visibly satisfied? The actions in state are the run's "
+                        "own record; a requirement that orders actions is satisfied only when they show that order."
+                        f"\n\n{requirement.text}"
+                    ),
                     true="It is not satisfied, or there is no visible confirmation.",
                     false="The page visibly confirms it is satisfied.",
                 )
@@ -195,6 +203,8 @@ async def check_done(
         )
     # "The next Monday after today" cannot be confirmed by someone who does not know today.
     context: dict[str, JsonValue] = {"task": task, "date": observation.captured_at.date().isoformat()}
+    if history:
+        context["actions"] = "\n".join(map(_step, history))
     if draft is not None:
         context["draft"] = draft.answer
     evaluation = await jev.evaluate(

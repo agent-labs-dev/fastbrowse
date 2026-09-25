@@ -1300,7 +1300,7 @@ class Agent:
             },
             "recent_actions": [
                 entry.model_dump(mode="json", exclude_none=True)
-                for entry in _history(state.history, self._config.observation)
+                for entry in _record(state.history, self._config.observation)
             ],
             "notes": state.notes.render(self._config.observation.working_notes_chars),
         }
@@ -1710,6 +1710,7 @@ class Agent:
             self._config.thresholds,
             draft,
             tokens=self._config.tokens,
+            history=_record(state.history, self._config.observation),
         )
         trace(
             "done_check",
@@ -1754,7 +1755,7 @@ class Agent:
                     fresh,
                     await self._screenshots(),
                     state.notes,
-                    _history(state.history, self._config.observation),
+                    _record(state.history, self._config.observation),
                     doubted=check.doubted,
                     invented=sorted(state.invented),
                     config=self._config,
@@ -2170,6 +2171,14 @@ def _history(history: Sequence[HistoryEntry], limits: ObservationLimits) -> tupl
     split = len(history) - limits.history_entries
     earlier = history[max(0, split - limits.earlier_history_entries) : max(0, split)]
     return (*(entry.model_copy(update={"effect": None}) for entry in earlier), *history[max(0, split) :])
+
+
+def _record(history: Sequence[HistoryEntry], limits: ObservationLimits) -> tuple[HistoryEntry, ...]:
+    """The recent actions, after every value typed before them: a correction is judged against the first value,
+    which a long wizard can push out of the recent window."""
+    recent = _history(history, limits)
+    typed = (e.model_copy(update={"effect": None}) for e in history[: len(history) - len(recent)] if e.text is not None)
+    return (*typed, *recent)
 
 
 def _recovery_text(text: str) -> str:
