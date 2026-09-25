@@ -562,10 +562,13 @@ def protocol_docs() -> str:
         "",
         "`browser-use-oss` is opt-in and installed in an isolated uv environment only when selected.",
         "Its Pydantic pin conflicts with the hosted SDK, so it is not a project extra.",
+        "The jev-ultrafast runner answers a one-option choice itself, as fastbrowse does, because Jev refuses it, "
+        "and drops a code fence its text helper's model wraps around JSON, which upstream's strict parse rejects.",
         "Rows keep raw `status`, `task_successful` and `normalized_status`: "
         "`done`, `stopped`, `budget`, `timeout`, `error`, `blocked` or `unavailable`.",
         "A pass requires a correct grade and `done`, or the exact expected fastbrowse stop.",
         "The hosted SDK maps to `done` only for a stopped session with `is_task_successful=true`.",
+        "That verdict lands after the session stops; the harness waits up to 90 seconds for it.",
         "Provider-unavailable attempts are retried at most twice; the final failed row and retry count remain.",
         "`seconds` includes retries within the reported attempt; fastbrowse records `transient_seconds` separately.",
         "Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the row.",
