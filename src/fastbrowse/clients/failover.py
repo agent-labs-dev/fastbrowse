@@ -5,9 +5,14 @@ from collections.abc import Mapping
 
 from pydantic import JsonValue
 
-from fastbrowse.clients.validation import estimated_cost
+from fastbrowse.clients.validation import (
+    estimated_cost,
+    jev_spend,
+    merged_cost,
+    record_jev_spend,
+)
 from fastbrowse.jev import Evaluation, JevClient, JevRetriesExhausted, Question
-from fastbrowse.models import CostBasis
+from fastbrowse.models import CostBasis, CostLine
 from fastbrowse.telemetry import trace
 
 logger = logging.getLogger(__name__)
@@ -19,6 +24,19 @@ class FailoverJevClient:
         self._backup = backup
 
     async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        paid: list[CostLine] = []
+        try:
+            with jev_spend(paid):
+                result = await self._evaluate(state, questions)
+        except BaseException:
+            record_jev_spend(paid)
+            raise
+        if paid:
+            cost = merged_cost([*paid, result.cost]).model_copy(update={"seconds": result.cost.seconds})
+            result = result.model_copy(update={"cost": cost})
+        return result
+
+    async def _evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
         client = self._active
         try:
             return await client.evaluate(state, questions)
@@ -29,8 +47,11 @@ class FailoverJevClient:
             self._active = self._backup
             logger.warning("jev: %s; moving this run to the backup provider", error)
             trace("jev_failover", reason=str(error))
+            answered = error.answered
+            held = {key: answer for result in answered for key, answer in result.answers.items()}
+            remaining = {key: question for key, question in questions.items() if key not in held}
             try:
-                result = await self._backup.evaluate(state, questions)
+                result = await self._backup.evaluate(state, remaining)
             except JevRetriesExhausted as backup_error:
                 raise JevRetriesExhausted(
                     str(backup_error),
@@ -49,6 +70,10 @@ class FailoverJevClient:
                         "input_tokens": cost.input_tokens + discarded.input_tokens,
                     }
                 )
-            return result.model_copy(
-                update={"cost": cost.model_copy(update={"seconds": error.seconds + (cost.seconds or 0)})}
+            return Evaluation(
+                model=result.model,
+                answers={**held, **result.answers},
+                input_tokens=result.input_tokens + sum(part.input_tokens for part in answered),
+                requests=result.requests + error.requests,
+                cost=cost.model_copy(update={"seconds": error.seconds + (cost.seconds or 0)}),
             )

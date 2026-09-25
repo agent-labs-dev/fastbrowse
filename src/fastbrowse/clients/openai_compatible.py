@@ -113,14 +113,14 @@ def strict_schema(schema: JsonValue) -> JsonValue:
     return result
 
 
-def _grow_cap(body: dict[str, JsonValue], attempt: int, cap: int) -> None:
+def _grow_cap(body: dict[str, JsonValue], attempt: int, cap: int, purpose: LLMPurpose) -> None:
     """Make room for a response that ran into the output cap, or report it as truncated when it did so again.
 
     Repairing the JSON would send the same prompt under the same cap and be cut off again, so the one retry is
     spent on more room instead, and a second truncation is reported as what it is.
     """
     if attempt == 1:
-        raise LLMError(f"LLM response truncated at the {body['max_tokens']} token output cap")
+        raise LLMError(f"LLM response truncated at the {body['max_tokens']} token output cap ({purpose.value})")
     body["max_tokens"] = cap * _TRUNCATION_RETRY_FACTOR
 
 
@@ -266,7 +266,7 @@ class OpenAICompatibleLLM:
                 # made every run with one slow call stop at its dollar cap.
                 costs.append(with_discarded(_cost(payload, purpose), usage))
                 if _truncated(payload):
-                    _grow_cap(body, attempt, max_output_tokens)
+                    _grow_cap(body, attempt, max_output_tokens, purpose)
                     continue
                 try:
                     content = _content(payload)
@@ -283,7 +283,7 @@ class OpenAICompatibleLLM:
                     detail = self._scrubbed(error_detail(error))
                     if _ends_mid_json(error):
                         if (written := _short_of_cap(payload, body["max_tokens"])) is None:
-                            _grow_cap(body, attempt, max_output_tokens)
+                            _grow_cap(body, attempt, max_output_tokens, purpose)
                         elif short_retried:
                             raise LLMRetriesExhausted(
                                 f"LLM response ended mid-JSON at {written} of {body['max_tokens']} output tokens twice"

@@ -595,6 +595,49 @@ async def test_a_fill_follows_focus_to_the_editor_its_click_opened(page: CdpPage
     assert [c.label for c in after.controls if c.role == "option"] == ["London", "Londonderry"]
 
 
+async def test_an_anchor_with_no_destination_but_click_semantics_is_offered_as_a_button(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    # jQuery UI's datepicker appends its Next/Prev anchors to <body> once the field is focused, with a click
+    # handler and no href: they carry no destination, so they must never be offered, or capped, as a pager.
+    await page.navigate(f"{main_site}/icons.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        'document.body.innerHTML = \'<a class="ui-datepicker-next" data-handler="next" '
+        'data-event="click" title="Next" onclick="this.dataset.clicked = String(1)">Next</a>\'',
+    )
+    obs = await observe_until(page, "Next")
+    control = find(obs, "Next")
+    assert control.role == "button"
+    assert control.href is None
+    result = await page.act(Action(operation=Operation.CLICK, target_id=control.id), obs)
+    assert result.outcome is StepOutcome.EXECUTED
+    clicked = await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.querySelector('.ui-datepicker-next').dataset.clicked",
+    )
+    assert clicked == "1"
+
+
+async def test_a_uniquely_named_date_field_still_gets_its_section_heading(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/icons.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.body.innerHTML = '<section><h2>Date Picker 3</h2>"
+        '<label>Start Date<input type="date" id="start"></label>'
+        '<label>End Date<input type="date" id="end"></label></section>\'',
+    )
+    obs = await observe_until(page, "Start Date")
+    start = find(obs, "Start Date")
+    assert start.input_type == "date"
+    assert start.context == "Date Picker 3"
+
+
 async def test_a_browser_handed_over_by_cdp_url_drives_and_survives_the_run(
     chrome_connection: BrowserConnection, artifact_sink: RecordingArtifactSink, main_site: str
 ) -> None:

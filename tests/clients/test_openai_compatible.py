@@ -384,3 +384,18 @@ async def test_a_short_reply_after_another_retry_is_still_asked_for_again(replie
             "key", http=http, base_url="https://llm.test", models={LLMPurpose.READ: "reader"}
         ).generate(LLMPurpose.READ, [], Result, max_output_tokens=100)
     assert result.data.count == 5 and calls == 3
+
+
+async def test_complete_json_marked_truncated_never_becomes_a_citable_read() -> None:
+    caps = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        caps.append(TypeAdapter(dict[str, JsonValue]).validate_json(request.content)["max_tokens"])
+        return httpx.Response(200, json=_truncated('{"count":5}'))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(LLMError, match=r"truncated.*read"):
+            await OpenAICompatibleLLM(
+                "key", http=http, base_url="https://llm.test", models={LLMPurpose.READ: "reader"}
+            ).generate(LLMPurpose.READ, [], Result, max_output_tokens=100)
+    assert caps == [100, 400]

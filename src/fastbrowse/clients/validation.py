@@ -4,7 +4,9 @@ import asyncio
 import logging
 import math
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from time import monotonic
 from typing import assert_never
@@ -180,6 +182,8 @@ the rest took 2s; hedging here duplicates only that tail, and these calls cost a
 
 @dataclass(slots=True)
 class RequestUsage:
+    requests: int = 0
+    consecutive_5xx: int = 0
     unaccounted_requests: int = 0
     """Requests that may have been billed but whose usage was not returned to the caller."""
     failures: list[str] = field(default_factory=list[str])
@@ -216,6 +220,8 @@ async def post_with_retry(
     hedge_seconds: float,
     before_retry: Callable[[], None] | None = None,
     usage: RequestUsage | None = None,
+    start_attempt: int = 0,
+    split_batch: bool = False,
 ) -> httpx.Response | None:
     """Retry an overloaded or dropped request, which produced nothing and is always safe to repeat.
 
@@ -229,7 +235,9 @@ async def post_with_retry(
     usage = usage if usage is not None else RequestUsage()
     response: httpx.Response | None = None
     began = time.monotonic()
-    for attempt, delay in enumerate((*RETRY_DELAYS_SECONDS, None)):
+    request_limit = len(RETRY_DELAYS_SECONDS) + 1 - start_attempt if start_attempt else None
+    for attempt in range(start_attempt, len(RETRY_DELAYS_SECONDS) + 1):
+        delay = RETRY_DELAYS_SECONDS[attempt] if attempt < len(RETRY_DELAYS_SECONDS) else None
         if attempt and before_retry is not None:
             before_retry()
         attempted = time.monotonic()
@@ -242,11 +250,17 @@ async def post_with_retry(
             hedge_seconds=hedge_seconds,
             before_hedge=before_retry,
             usage=usage,
+            allow_hedge=request_limit is None or usage.requests + 1 < request_limit,
         )
         if response is not None and response.status_code not in RETRYABLE_STATUS:
             if attempt:
                 _transient(call, began, attempted)
             return response
+        if request_limit is not None and usage.requests >= request_limit:
+            break
+        if split_batch and usage.consecutive_5xx >= 2 and delay is not None:
+            _transient(call, began, time.monotonic())
+            raise _SplitBatch(attempt + 1, usage)
         if delay is not None:
             wait = _backoff(response, delay)
             reason = usage.failures[-1] if usage.failures else "no usable response"
@@ -292,13 +306,14 @@ async def _hedged(
     hedge_seconds: float,
     before_hedge: Callable[[], None] | None,
     usage: RequestUsage,
+    allow_hedge: bool = True,
 ) -> httpx.Response | None:
     """The first usable response from one request, raced by a second if the first outlasts `hedge_seconds`."""
     requests = {asyncio.create_task(_send(http, url, body, headers, attempt_seconds, usage))}
     winner: asyncio.Task[httpx.Response | None] | None = None
     try:
         done, _ = await asyncio.wait(requests, timeout=hedge_seconds)
-        if not done:
+        if not done and allow_hedge:
             if before_hedge is not None:
                 before_hedge()
             requests.add(asyncio.create_task(_send(http, url, body, headers, attempt_seconds, usage)))
@@ -334,6 +349,7 @@ async def _send(
     attempt_seconds: float,
     usage: RequestUsage,
 ) -> httpx.Response | None:
+    usage.requests += 1
     try:
         response = await http.post(url, json=body, headers=headers, timeout=attempt_seconds)
     except httpx.TimeoutException as error:
@@ -347,6 +363,7 @@ async def _send(
         if response.status_code not in RETRYABLE_STATUS:
             return response
         failure = describe(response)
+    usage.consecutive_5xx = usage.consecutive_5xx + 1 if response is not None and response.status_code >= 500 else 0
     usage.failures.append(failure)
     return response
 
@@ -359,6 +376,8 @@ async def post(
     headers: Mapping[str, str] | None = None,
     *,
     usage: RequestUsage | None = None,
+    start_attempt: int = 0,
+    split_batch: bool = False,
 ) -> httpx.Response:
     started = monotonic()
     usage = usage if usage is not None else RequestUsage()
@@ -373,6 +392,8 @@ async def post(
             attempt_seconds=JEV_ATTEMPT_SECONDS,
             hedge_seconds=JEV_HEDGE_SECONDS,
             usage=usage,
+            start_attempt=start_attempt,
+            split_batch=split_batch,
         )
     except httpx.HTTPError as error:
         raise JevError(f"Jev request could not be sent ({type(error).__name__})") from None
@@ -382,6 +403,7 @@ async def post(
     if response.status_code in RETRYABLE_STATUS:
         raise JevRetriesExhausted(
             f"Jev request failed after {usage.history(seconds)}; last: {describe(response)}",
+            requests=usage.requests,
             seconds=seconds,
             unaccounted_requests=usage.unaccounted_requests,
         )
@@ -455,6 +477,86 @@ def parse_answers(
     return answers
 
 
+class _SplitBatch(Exception):
+    def __init__(self, start_attempt: int, usage: RequestUsage) -> None:
+        self.start_attempt = start_attempt
+        self.usage = usage
+
+
+_partial_spend: ContextVar[list[CostLine] | None] = ContextVar("jev_partial_spend", default=None)
+
+
+@contextmanager
+def jev_spend(lines: list[CostLine]) -> Generator[None]:
+    """Keep answered singles billable when another single fails or the caller cancels the batch."""
+    token = _partial_spend.set(lines)
+    try:
+        yield
+    finally:
+        _partial_spend.reset(token)
+
+
+def record_jev_spend(costs: Sequence[CostLine]) -> None:
+    if (lines := _partial_spend.get()) is not None:
+        lines.extend(costs)
+
+
+def merged_cost(lines: Sequence[CostLine]) -> CostLine:
+    basis = next(
+        (basis for basis in (CostBasis.UNKNOWN, CostBasis.ESTIMATED) if any(c.basis is basis for c in lines)),
+        CostBasis.METERED,
+    )
+    return CostLine(
+        component=CostComponent.JEV,
+        basis=basis,
+        dollars=None if any(c.dollars is None for c in lines) else sum(c.dollars or 0 for c in lines),
+        input_tokens=sum(c.input_tokens for c in lines),
+        output_tokens=sum(c.output_tokens for c in lines),
+        seconds=sum(c.seconds or 0 for c in lines),
+    )
+
+
+async def asking_split(
+    questions: Mapping[str, Question],
+    ask: Callable[[Mapping[str, Question], int, bool], Awaitable[Evaluation]],
+) -> Evaluation:
+    """Ask a batch, then its questions one at a time within the retries left once it failed twice with a 5xx."""
+    if len(questions) < 2:
+        return await ask(questions, 0, False)
+    started = monotonic()
+    try:
+        return await ask(questions, 0, True)
+    except _SplitBatch as split:
+        start_attempt, usage = split.start_attempt, split.usage
+    answered: list[Evaluation] = []
+    try:
+        for key, question in questions.items():
+            answered.append(await ask({key: question}, start_attempt, False))
+    except BaseException as error:
+        record_jev_spend([result.cost for result in answered])
+        if isinstance(error, JevRetriesExhausted):
+            raise JevRetriesExhausted(
+                str(error),
+                seconds=monotonic() - started,
+                unaccounted_requests=error.unaccounted_requests + usage.unaccounted_requests,
+                requests=usage.requests + sum(result.requests for result in answered) + error.requests,
+                answered=answered,
+            ) from error
+        raise
+    cost = merged_cost([result.cost for result in answered])
+    if usage.unaccounted_requests:
+        # The failed batch carried all questions; estimate its unanswered hedges from the answered singles.
+        discarded = estimated_cost(sum(result.input_tokens for result in answered) * usage.unaccounted_requests)
+        cost = merged_cost([cost, discarded])
+    return Evaluation(
+        model=answered[0].model,
+        answers={key: answer for result in answered for key, answer in result.answers.items()},
+        input_tokens=sum(result.input_tokens for result in answered),
+        cost=cost.model_copy(update={"seconds": monotonic() - started}),
+        requests=usage.requests + sum(result.requests for result in answered),
+    )
+
+
 async def asking_open(
     questions: Mapping[str, Question], ask: Callable[[Mapping[str, Question]], Awaitable[Evaluation]], model: str
 ) -> Evaluation:
@@ -474,7 +576,7 @@ async def asking_open(
         return await ask(questions)
     rest = {key: question for key, question in questions.items() if key not in forced}
     if not rest:
-        return Evaluation(model=model, answers=forced, input_tokens=0, cost=estimated_cost(0))
+        return Evaluation(model=model, answers=forced, input_tokens=0, cost=estimated_cost(0), requests=0)
     evaluation = await ask(rest)
     return evaluation.model_copy(update={"answers": {**evaluation.answers, **forced}})
 

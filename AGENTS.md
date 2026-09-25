@@ -61,6 +61,13 @@ that set's value; say so in the PR when it happens.
 Both suites need Jev and LLM keys; the live suite also needs `BROWSER_USE_API_KEY`. Upstream outages look
 exactly like regressions, so re-read a red run before believing it.
 
+Every result row records its build (`run`: version, commit, dirty tree, models) and the `task_version` it ran;
+compare rows only at equal task versions. Changing what a task asks or how it grades means
+`python -m fastbrowse.evals.versions --bump TASK_ID --docs`, and a test fails until you do. Results are published as
+committed rows (`--publish`). The README headline, the results and task tables and the suite versions in
+`docs/evals.md` are generated from the code and those rows, and a test fails when they differ; regenerate them in the
+same PR ([docs/evals.md#versions](docs/evals.md#versions)).
+
 ## Architecture
 
 The run loop is `src/fastbrowse/agent.py`, and everything else is a seam it calls.

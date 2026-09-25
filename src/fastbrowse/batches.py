@@ -6,6 +6,7 @@ from collections.abc import Mapping
 
 from pydantic import JsonValue
 
+from fastbrowse.clients.validation import jev_spend
 from fastbrowse.config import TokenBudget
 from fastbrowse.jev import JEV_DOLLARS_PER_INPUT_TOKEN, Answer, JevClient, JevError, Question
 from fastbrowse.models import CostComponent, CostLine, Frozen
@@ -64,15 +65,18 @@ async def evaluate_batches(
 
     async def evaluate(questions: Mapping[str, Question]) -> Mapping[str, Answer] | None:
         try:
-            evaluation = await jev.evaluate(state, questions)
+            with jev_spend(paid):
+                evaluation = await jev.evaluate(state, questions)
         except JevError:
             return None
         paid.append(evaluation.cost)
-        nonlocal input_tokens
+        nonlocal input_tokens, requests
         input_tokens += evaluation.input_tokens
+        requests += evaluation.requests
         return evaluation.answers
 
     input_tokens = 0
+    requests = 0
     try:
         results = await asyncio.gather(*(evaluate(batch) for batch in batches))
     finally:
@@ -88,5 +92,5 @@ async def evaluate_batches(
         answers={key: answer for result in results if result for key, answer in result.items()},
         cost=tuple(paid),
         input_tokens=input_tokens,
-        requests=len(batches),
+        requests=requests,
     )

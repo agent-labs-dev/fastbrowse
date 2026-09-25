@@ -22,6 +22,7 @@ from pydantic import JsonValue
 from fastbrowse.clients.validation import (
     RequestUsage,
     asking_open,
+    asking_split,
     dollars,
     error_detail,
     estimated_cost,
@@ -47,9 +48,15 @@ class VercelGatewayJevClient:
         self._base_url = base_url.rstrip("/")
 
     async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
-        return await asking_open(questions, lambda asked: self._ask(state, asked), "typesafe-ai/jev")
+        return await asking_open(
+            questions,
+            lambda asked: asking_split(asked, lambda batch, attempt, split: self._ask(state, batch, attempt, split)),
+            "typesafe-ai/jev",
+        )
 
-    async def _ask(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+    async def _ask(
+        self, state: JsonValue, questions: Mapping[str, Question], start_attempt: int, split_batch: bool
+    ) -> Evaluation:
         started = monotonic()
         sent = RequestUsage()
         response = await post(
@@ -64,6 +71,8 @@ class VercelGatewayJevClient:
                 "ai-evaluation-model-specification-version": "4",
             },
             usage=sent,
+            start_attempt=start_attempt,
+            split_batch=split_batch,
         )
         try:
             payload = json_object(response)
@@ -85,6 +94,7 @@ class VercelGatewayJevClient:
                 )
             )
             return Evaluation(
+                requests=sent.requests,
                 model="typesafe-ai/jev",
                 answers=parse_answers(payload.get("answers"), questions, gateway=True, confidence=confidence),
                 input_tokens=tokens,

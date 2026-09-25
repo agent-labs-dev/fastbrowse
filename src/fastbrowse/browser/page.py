@@ -18,6 +18,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, assert_never
+from urllib.parse import SplitResult, urlsplit
 
 from cdp_use.cdp.input.commands import DispatchMouseEventParameters
 from cdp_use.cdp.page.commands import CaptureScreenshotParameters
@@ -35,6 +36,7 @@ from fastbrowse.page import (
     Capture,
     Control,
     Dialog,
+    NavigationTimeout,
     Observation,
     Page,
     cut_marker,
@@ -225,6 +227,9 @@ _SUGGESTION_SECONDS = 1.2
 # Paid only by a control that advertised a popup and had not opened one yet.
 _POPUP_SECONDS = 1.2
 
+_DATE_INPUT_TYPES = ("date", "datetime-local", "month", "week", "time")
+"""Types whose committed value is the type's own ISO shape, set through the value setter, not typed keystrokes."""
+
 _MAIN = "main"
 """Frame key used for the top frame; OOPIF frames key on their CDP target id, per the browser session."""
 
@@ -247,6 +252,25 @@ class _ObservedState:
         self.page_key = page_key
         # control_id -> (session_id, frame_key, local_node_id, guard snapshot)
         self.controls = controls
+
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _same_http_origin(previous_url: str, current_url: str) -> bool:
+    """Whether `previous_url` is http(s) and shares scheme, host and effective port with `current_url`.
+
+    A wizard that never leaves its one URL has no earlier entry but `about:blank`, and a link out to another
+    site sits before an entry on this one: neither is a page BACK can return the task to.
+    """
+    previous, current = urlsplit(previous_url), urlsplit(current_url)
+    if previous.scheme not in _DEFAULT_PORTS:
+        return False
+
+    def origin(parts: SplitResult) -> tuple[str, str | None, int | None]:
+        return parts.scheme, parts.hostname, parts.port or _DEFAULT_PORTS.get(parts.scheme)
+
+    return origin(previous) == origin(current)
 
 
 def _capped(controls: list[Control], limit: int) -> list[Control]:
@@ -280,6 +304,7 @@ class CdpPage(Page):
         if dialog is not None:
             # A JavaScript dialog blocks the renderer, so any page evaluate would hang until it is handled.
             return self._dialog_observation(dialog)
+        can_go_back = await self._can_go_back()
         frames, inaccessible = await self._snapshot_all_frames()
         main = frames.get(_MAIN)
         controls: list[Control] = []
@@ -321,7 +346,18 @@ class CdpPage(Page):
             tabs=self._session.tabs(),
             dialog=self._session.pending_dialog(),
             inaccessible_frames=inaccessible,
+            can_go_back=can_go_back,
         )
+
+    async def _can_go_back(self) -> bool:
+        history = await self._session.client.send.Page.getNavigationHistory(
+            params=None, session_id=self._session.active_session_id
+        )
+        index = history["currentIndex"]
+        if index <= 0:
+            return False
+        entries = history["entries"]
+        return _same_http_origin(entries[index - 1]["url"], entries[index]["url"])
 
     def _dialog_observation(self, dialog: Dialog) -> Observation:
         active = next((t for t in self._session.tabs() if t.active), None)
@@ -600,6 +636,8 @@ class CdpPage(Page):
         if handed is None:
             return StepOutcome.FAILED, "clicked field has no replacement in the same document and position"
         local_id = handed
+        if not secret and await self._is_native_date(session_id, local_id):
+            return await self._fill_native_date(session_id, local_id, text)
         for attempt in range(2):
             if not await self._focus(session_id, local_id, prepare_fill=True, secret=secret):
                 return StepOutcome.FAILED, "target did not receive keyboard focus"
@@ -652,6 +690,39 @@ class CdpPage(Page):
                 return StepOutcome.FAILED, "field did not retain the supplied text"
             local_id = handed
         await self._await_suggestions(session_id, local_id)
+        return StepOutcome.EXECUTED, None
+
+    async def _is_native_date(self, session_id: str, local_id: int) -> bool:
+        return bool(
+            await self._evaluate(
+                session_id,
+                f"(id => {{ const e = window.__fastbrowse?.nodes.get(id); "
+                f"return !!e && {json.dumps(_DATE_INPUT_TYPES)}.includes(e.type); }})({local_id})",
+            )
+        )
+
+    async def _fill_native_date(self, session_id: str, local_id: int, value: str) -> tuple[StepOutcome, str | None]:
+        """Commit an ISO value to a native date/time input the way its own picker would.
+
+        Typed keystrokes land in whichever locale-formatted segment the picker's shadow UI has focused, so the
+        value the field writer produces (told the input's type) is set directly through the property setter
+        React and friends also patch over, then the input/change events a form's own handlers expect to see.
+        """
+        script = (
+            "((id, value) => { const e = window.__fastbrowse?.nodes.get(id); "
+            "if (!e?.isConnected) return null; "
+            "const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set; "
+            "setter.call(e, value); "
+            "e.dispatchEvent(new Event('input', {bubbles: true})); "
+            "e.dispatchEvent(new Event('change', {bubbles: true})); "
+            "return e.value === value; })"
+            f"({local_id}, {json.dumps(value)})"
+        )
+        result = await self._evaluate(session_id, script)
+        if result is None:
+            return StepOutcome.STALE, "target disconnected"
+        if result is not True:
+            return StepOutcome.FAILED, "field did not retain the supplied ISO value"
         return StepOutcome.EXECUTED, None
 
     async def _await_suggestions(self, session_id: str, local_id: int) -> None:
@@ -754,11 +825,13 @@ class CdpPage(Page):
         )
 
     async def _back(self) -> tuple[StepOutcome, str | None]:
+        # History can change between the observation that offered BACK and this dispatch, so the predicate that
+        # gated it is checked again against the live history rather than trusted from the stale observation.
         session_id = self._session.active_session_id
         history = await self._session.client.send.Page.getNavigationHistory(params=None, session_id=session_id)
         index = history["currentIndex"]
-        if index <= 0:
-            return StepOutcome.FAILED, "no earlier history entry"
+        if index <= 0 or not _same_http_origin(history["entries"][index - 1]["url"], history["entries"][index]["url"]):
+            return StepOutcome.FAILED, "no same-origin earlier history entry"
         entry_id = history["entries"][index - 1]["id"]
         await self._session.client.send.Page.navigateToHistoryEntry(params={"entryId": entry_id}, session_id=session_id)
         return StepOutcome.EXECUTED, None
@@ -945,19 +1018,24 @@ class CdpPage(Page):
         # that never started was scored as a failed task. Chrome's error names (net::ERR_...) carry no page
         # content, so they are shown.
         failure = "NavigationError"
+        timed_out = False
         for attempt in range(_NAVIGATE_ATTEMPTS):
             if attempt:
                 await asyncio.sleep(_NAVIGATE_RETRY_SECONDS)
             result = await self._session.client.send.Page.navigate(params={"url": url}, session_id=session_id)
             if error := result.get("errorText"):
-                failure = error if _NET_ERROR.fullmatch(error) else "NavigationError"
+                failure, timed_out = (error if _NET_ERROR.fullmatch(error) else "NavigationError"), False
                 continue
             if await self._ready(session_id, load_timeout_seconds):
                 # Unsettled by the deadline is still a usable page, and a redirect destroys the promise mid-wait.
                 with suppress(BrowserError):
                     await self._settled_fingerprint(_SETTLE_SECONDS)
                 return
-            failure = "TimeoutError"
+            failure, timed_out = "TimeoutError", True
+        # A timeout says nothing about the page's content; a caller with no step of its own yet needs the
+        # distinct type, not this message, to tell a slow site or session from its own broken navigation.
+        if timed_out:
+            raise NavigationTimeout(f"Page.navigate failed ({failure})")
         raise BrowserError(f"Page.navigate failed ({failure})")
 
     async def _ready(self, session_id: str, timeout_seconds: float) -> bool:

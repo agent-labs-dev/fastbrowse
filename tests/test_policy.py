@@ -70,7 +70,7 @@ def button(i: int, *, offscreen: bool = False) -> Control:
     )
 
 
-def observation(controls: tuple[Control, ...]) -> Observation:
+def observation(controls: tuple[Control, ...], *, can_go_back: bool = False) -> Observation:
     return Observation(
         url="https://example.test/",
         title="t",
@@ -80,6 +80,7 @@ def observation(controls: tuple[Control, ...]) -> Observation:
         omitted_controls=0,
         viewport_text="",
         tabs=(),
+        can_go_back=can_go_back,
     )
 
 
@@ -222,6 +223,23 @@ async def test_duplicate_labels_reach_the_chooser_with_their_context() -> None:
 def test_a_field_the_form_will_not_submit_without_is_marked_for_jev() -> None:
     assert _element(button(1).model_copy(update={"blocking": True}))["blocking"] is True
     assert "blocking" not in _element(button(2))
+
+
+async def test_back_is_offered_only_when_the_observation_can_go_back() -> None:
+    # A wizard that shares one URL for every step has taken actions but has no earlier same-origin entry, so
+    # history alone must never be what puts `back` on the operation menu.
+    history = (HistoryEntry(operation=Operation.CLICK, target="b0", outcome=StepOutcome.EXECUTED, page_changed=True),)
+    jev = ScriptedJev({"operation": "click", "click_target": "b0"})
+    await decide(jev, observation((button(0),), can_go_back=False), context(history=history), Config())
+    question = jev.requests[0]["operation"]
+    assert isinstance(question, ChoiceQuestion)
+    assert "back" not in question.criteria
+
+    jev = ScriptedJev({"operation": "click", "click_target": "b0"})
+    await decide(jev, observation((button(0),), can_go_back=True), context(history=()), Config())
+    question = jev.requests[0]["operation"]
+    assert isinstance(question, ChoiceQuestion)
+    assert "back" in question.criteria
 
 
 async def test_a_page_checked_for_a_wall_is_also_asked_whether_it_is_a_bot_check() -> None:

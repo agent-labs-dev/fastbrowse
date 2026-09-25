@@ -1,10 +1,13 @@
 import asyncio
+import json
 from collections.abc import Mapping
 
+import httpx
 import pytest
 from pydantic import JsonValue
 
 from fastbrowse.batches import evaluate_batches
+from fastbrowse.clients.typesafe import TypeSafeJevClient
 from fastbrowse.config import TokenBudget
 from fastbrowse.jev import Evaluation, NoulAnswer, NoulQuestion, Question
 from fastbrowse.models import CostBasis, CostComponent, CostLine, Limits
@@ -66,3 +69,27 @@ async def test_many_questions_go_as_small_requests_even_when_one_would_fit() -> 
     answered = await evaluate_batches(jev, {}, questions, tokens=TokenBudget(batch_tokens=1000), ledger=None)
     assert answered is not None and len(answered.answers) == 40
     assert len(jev.sent) > 1 and all(len(sent) < 40 for sent in jev.sent)
+
+
+async def test_split_requests_and_partial_spend_survive_batch_accounting(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("fastbrowse.clients.validation.RETRY_DELAYS_SECONDS", (0, 0, 0))
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        keys = tuple(json.loads(request.content)["questions"])
+        if len(keys) > 1:
+            return httpx.Response(503)
+        return httpx.Response(
+            200, json={"answers": {key: {"type": "noul", "noul": 1} for key in keys}, "usage": {"input_tokens": 100}}
+        )
+
+    ledger = Ledger(Limits())
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await evaluate_batches(
+            TypeSafeJevClient("key", http=http), {}, _QUESTIONS, tokens=TokenBudget(), ledger=ledger
+        )
+    assert result is not None and result.requests == calls == 4
+    assert result.input_tokens == 200
+    assert sum(line.input_tokens for line in ledger.lines) == 200

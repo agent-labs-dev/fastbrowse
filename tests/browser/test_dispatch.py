@@ -264,6 +264,41 @@ async def test_fill_follows_a_replacement_only_at_the_original_position(
     assert await eval_value(browser_session, browser_session.active_session_id, f"{view}.clicks") == ["target"]
 
 
+async def test_a_native_date_field_is_committed_through_the_value_setter(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    # Typing into a native date input lands in whichever locale segment its own picker has focused, not the ISO
+    # value a field writer produces, so the value is set the way the picker itself would commit one.
+    await page.navigate(f"{main_site}/dispatch.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        'document.body.innerHTML = \'<label>Start Date<input type="date" id="start"></label>\'',
+    )
+    obs = await observe_until(page, "Start Date")
+    target = find(obs, "Start Date")
+    assert target.input_type == "date"
+    result = await page.act(Action(operation=Operation.FILL, target_id=target.id, text="2026-09-28"), obs)
+    assert result.outcome is StepOutcome.EXECUTED
+    assert find(await page.observe(), "Start Date").value == "2026-09-28"
+
+
+async def test_a_native_date_field_that_refuses_a_malformed_value_fails(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/dispatch.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        'document.body.innerHTML = \'<label>Start Date<input type="date" id="start"></label>\'',
+    )
+    obs = await observe_until(page, "Start Date")
+    target = find(obs, "Start Date")
+    # A native date input silently keeps an empty value for anything that is not its own ISO shape.
+    result = await page.act(Action(operation=Operation.FILL, target_id=target.id, text="28 September 2026"), obs)
+    assert result.outcome is StepOutcome.FAILED
+
+
 async def test_secret_fill_does_not_follow_a_replacement(
     page: CdpPage, browser_session: BrowserSession, main_site: str
 ) -> None:

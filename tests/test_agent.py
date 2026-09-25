@@ -14,6 +14,7 @@ from fastbrowse.agent import (
     _answered,
     _code_decision,
     _follow_recovery,
+    _guessed,
     _history,
     _RunState,
     _Stop,
@@ -27,7 +28,7 @@ from fastbrowse.config import Config, ObservationLimits, StallRules, Thresholds
 from fastbrowse.effects import state_key
 from fastbrowse.jev import Answer, Evaluation, JevError, JevRetriesExhausted, NoulAnswer, NoulQuestion, Question
 from fastbrowse.llm import Generation
-from fastbrowse.memory import Fact, Notes, evidence_id
+from fastbrowse.memory import Fact, Notes, NotesTooLarge, Tally, evidence_id, fact_id
 from fastbrowse.models import (
     Authorization,
     BrowserEvent,
@@ -37,18 +38,20 @@ from fastbrowse.models import (
     Limits,
     LLMPurpose,
     Operation,
+    RunResult,
     Status,
     StepEvent,
     StepOutcome,
+    StepResult,
 )
-from fastbrowse.page import Action, ActResult, BlockKind, Capture, Control, Dialog, Observation, Page
+from fastbrowse.page import Action, ActResult, BlockKind, Capture, Control, Dialog, NavigationTimeout, Observation, Page
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 from fastbrowse.policy import Decision, HistoryEntry, ReadAssessment, build_request, decide
 from fastbrowse.retrieval import TRANSACTION_CONTRADICTED, ComposedAnswer
 from fastbrowse.safety import ScopedSecrets
 from fastbrowse.telemetry import Ledger
 from fastbrowse.tripwires import Tripwire
-from fastbrowse.verification import LLMVerdict
+from fastbrowse.verification import LLMVerdict, _grounding
 from tests.test_memory import evidence
 from tests.test_policy import FREE, ScriptedJev, context, observation
 from tests.test_retrieval import ScriptedLLM, capture
@@ -2408,3 +2411,84 @@ async def test_a_page_nobody_read_is_read_before_it_is_scrolled() -> None:
     assert len(llm.calls) == 1
     # Once this document is read, scrolling it is how the rest of a lazily drawn list comes in.
     assert not await agent._read_before_interaction(state, obs, decision)
+
+
+@pytest.mark.parametrize("opening", [True, False])
+async def test_navigation_timeout_is_unavailable_only_while_opening(
+    monkeypatch: pytest.MonkeyPatch, opening: bool
+) -> None:
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    page.navigate = AsyncMock(side_effect=NavigationTimeout("navigation timed out"))
+    llm = ScriptedLLM([])
+    agent = Agent(page, ScriptedJev({}), llm)
+
+    async def loop(state: _RunState, output_schema: object, until: object) -> RunResult:
+        state.steps.append(
+            StepResult(
+                index=0,
+                operation=Operation.READ,
+                decided_by=Decider.JEV,
+                outcome=StepOutcome.EXECUTED,
+                url="https://example.test",
+                duration_ms=0,
+            )
+        )
+        await page.navigate("https://example.test/next")
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(agent, "_loop", loop)
+    result = await agent.run("Open the page", start="https://example.test" if opening else None)
+    assert result.status is (Status.UNAVAILABLE if opening else Status.ERROR)
+    assert result.error == "navigation timed out"
+    assert len(result.steps) == (0 if opening else 1)
+
+
+async def test_opening_deadline_still_exhausts_the_budget() -> None:
+    page = Mock(spec=Page)
+    page.artifacts = ()
+
+    async def navigate(url: str) -> None:
+        await asyncio.Event().wait()
+
+    page.navigate = navigate
+    result = await Agent(page, ScriptedJev({}), ScriptedLLM([])).run(
+        "Open the page", start="https://example.test", limits=Limits(max_seconds=0.01)
+    )
+    assert result.status is Status.BUDGET_EXCEEDED
+
+
+async def test_notes_overflow_returns_bounded_grounded_partial_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    agent = Agent(
+        page, ScriptedJev({}), ScriptedLLM([]), config=Config(observation=ObservationLimits(working_notes_chars=800))
+    )
+
+    async def loop(state: _RunState, output_schema: object, until: object) -> RunResult:
+        state.notes.add(Fact(text="A supported fact", evidence=evidence(), reader=FactReader.LLM))
+        state.notes.add(
+            Fact(text="Too long " * 1000, evidence=evidence(sha="large"), requirement_id="r", reader=FactReader.LLM)
+        )
+        raise NotesTooLarge("Requirement evidence exceeds the 800 character notes budget")
+
+    monkeypatch.setattr(agent, "_loop", loop)
+    result = await agent.run("Read the records")
+    assert result.status is Status.OBSERVATION_LIMIT
+    assert result.answer and "fact" in result.answer and "omitted" in result.answer.lower()
+    assert result.citations and result.evidence
+    assert len(result.answer) < 800
+    assert "Too long" not in result.answer
+
+
+async def test_tallies_keep_guessed_sources_subject_to_verification() -> None:
+    source = evidence().model_copy(update={"quote": "A quote by Ada"})
+    record = Fact(text=source.quote, evidence=source, reader=FactReader.LLM)
+    notes = Notes((record,))
+    notes.add_tally(Tally(requirement_id="r", key="Ada", records=(fact_id(record),)))
+    notes.complete_tallies("r")
+    plan = Plan(
+        requirements=(Requirement(id="r", text="Count quotes", kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    assert _guessed(plan, notes, {source.url}) == {"r"}
+    assert source.url in _grounding(notes, plan, ())

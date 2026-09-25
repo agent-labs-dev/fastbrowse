@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from fastbrowse.browser.page import _capped
+from fastbrowse.browser.page import _capped, _same_http_origin
 from fastbrowse.models import Operation
 from fastbrowse.page import Control, cut_text, pager_link, pages_forward
 
@@ -62,11 +62,38 @@ def test_only_a_link_turns_the_page_so_only_a_link_is_exempt_from_the_cap() -> N
     assert [c.id for c in kept] == ["l0", "l1", "l2", "l20"]
 
 
+def test_a_calendar_next_without_a_destination_is_not_a_pager() -> None:
+    # A jQuery UI datepicker's Next is a hrefless anchor snapshot.js now offers as a button, not a link, so it
+    # never competes with the list's own pager for the cap or a "keep going" choice.
+    assert not pager_link(link("Next").model_copy(update={"role": "button", "href": None}))
+
+
 def test_a_control_that_only_looks_like_a_pager_is_not_one() -> None:
     assert not pager_link(link("next").model_copy(update={"role": "button"}))
     assert not pager_link(link("next").model_copy(update={"href": None}))
     assert not pager_link(link("next").model_copy(update={"operations": frozenset()}))
     assert pager_link(link("next"))
+
+
+def test_a_wizard_with_no_earlier_entry_but_blank_cannot_go_back() -> None:
+    assert not _same_http_origin("about:blank", "https://example.test/wizard")
+
+
+def test_a_cross_origin_predecessor_cannot_go_back() -> None:
+    assert not _same_http_origin("https://other.test/", "https://example.test/")
+    # Same host, different scheme or port is a different origin too.
+    assert not _same_http_origin("http://example.test/", "https://example.test/")
+    assert not _same_http_origin("https://example.test:8443/", "https://example.test/")
+
+
+def test_an_empty_predecessor_cannot_go_back() -> None:
+    assert not _same_http_origin("", "https://example.test/")
+
+
+def test_a_same_origin_predecessor_can_go_back() -> None:
+    assert _same_http_origin("https://example.test/start", "https://example.test/next")
+    # The default port for the scheme is the effective one when neither writes it out.
+    assert _same_http_origin("https://example.test:443/start", "https://example.test/next")
 
 
 def test_escaped_text_keeps_every_character_that_fits() -> None:
