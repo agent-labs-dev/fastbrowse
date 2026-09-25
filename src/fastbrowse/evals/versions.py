@@ -697,6 +697,8 @@ def protocol_docs() -> str:
         "The hosted SDK maps to `done` only for a stopped session with `is_task_successful=true`.",
         "That verdict lands after the session stops; the harness waits up to 90 seconds for it. A verdict still "
         "missing then is the provider's silence, and the attempt counts as an outage.",
+        "That verdict can be false on a correct answer whose session shows no sign of failing or giving up; the "
+        "`correct` column counts those answers.",
         "An attempt that fails while the task's site answers its start URL with a 5xx, or not at all, is an outage "
         "too: a site serving errors fails every arm alike.",
         "An attempt an outage ended is waited out and run again, up to five times over about 25 minutes.",
@@ -704,6 +706,8 @@ def protocol_docs() -> str:
         "other arm at that task: each comparison scores its arms on the same attempts at the same tasks.",
         "Time is wall time for every arm. fastbrowse records the outage waits inside a run (`transient_seconds`), "
         "but the other arms cannot, so no arm's are subtracted.",
+        "The hosted arm's time runs until its API reports the session stopped, which can come well after its "
+        "agent's last message.",
         "Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the row.",
         "Existing timing includes browser setup. These rows do not claim the planned handoff-only timing protocol.",
         "Jev is priced at list ($0.042 per million input tokens) whenever the gateway meters a request at $0, for "
