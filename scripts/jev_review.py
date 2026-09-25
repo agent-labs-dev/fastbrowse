@@ -6,10 +6,12 @@ notice that the changelog's Unreleased entries leave out. Jev answers each as a 
 diff, for about a hundredth of a cent.
 
 A model's doubt is a prompt for the reviewer, never a gate: this prints a report (appended to the job summary
-in CI), raises a warning annotation per doubt, and exits 0. Without a Jev key, as on a fork's pull request, it
-says so and skips.
+in CI), raises a warning annotation per doubt, and exits 0. Without a Jev key it says so and skips.
 
-    uv run python scripts/jev_review.py --base origin/main
+The pull request is only ever data here: CI runs this file from the base branch and reads the head as a ref, so
+the key is never in reach of code the pull request changed.
+
+    uv run python scripts/jev_review.py --base origin/main --head HEAD
 """
 
 import argparse
@@ -35,6 +37,9 @@ _MAX_DOCS = 8
 _DOUBT = 0.5
 # Generated from the code or the published rows, and checked by tests: nothing for a model to judge.
 _GENERATED = ("docs/results/",)
+# What a user of the package or its CLI can notice: the code, and the metadata that names its entry points and
+# the Pythons and dependencies it installs with.
+_USER_VISIBLE = ("src/", "pyproject.toml")
 
 
 def _git(*args: str) -> str:
@@ -50,8 +55,8 @@ def added_lines(diff: str) -> str:
     return "\n".join(line[1:] for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
 
 
-def questions(code_diff: str, prose: Mapping[str, str]) -> dict[str, NoulQuestion]:
-    """One question per changed prose file, and the changelog question when the code changed."""
+def questions(prose: Mapping[str, str], *, user_visible: bool) -> dict[str, NoulQuestion]:
+    """One question per changed prose file, and the changelog question when the package or its metadata changed."""
     asked: dict[str, NoulQuestion] = {}
     for path, added in prose.items():
         if path == "CHANGELOG.md":
@@ -65,7 +70,7 @@ def questions(code_diff: str, prose: Mapping[str, str]) -> dict[str, NoulQuestio
             true="Yes, it claims something the change does not support.",
             false="No, it is consistent with the change.",
         )
-    if code_diff.strip():
+    if user_visible:
         entry = prose.get("CHANGELOG.md", "")
         asked["CHANGELOG.md"] = NoulQuestion(
             instructions=(
@@ -93,16 +98,25 @@ def report(answers: Mapping[str, NoulAnswer]) -> tuple[str, list[str]]:
     return "\n".join(lines) + "\n", warnings
 
 
-async def review(base: str) -> str:
-    settings = Settings()
-    if not (settings.typesafe_api_key or settings.ai_gateway_api_key):
-        return "### Jev review (advisory)\n\nSkipped: no Jev key is set (a fork's pull request has none).\n"
-    changed = [p for p in _git("diff", "--name-only", f"{base}...HEAD").split() if not p.startswith(_GENERATED)]
+def changes(span: str) -> tuple[str, bool, dict[str, str]]:
+    """Over a `base...head` span: the diff of everything but docs, whether a user could notice it, and the
+    prose each changed doc adds. Prose about CI or scripts is judged against those files too, not only `src`."""
+    changed = [p for p in _git("diff", "--name-only", span).split() if not p.startswith(_GENERATED)]
     docs = [p for p in changed if p.endswith(".md") and p != "CHANGELOG.md"][:_MAX_DOCS]
     docs += [p for p in changed if p == "CHANGELOG.md"]
-    code_diff = _git("diff", f"{base}...HEAD", "--", "src") if any(p.startswith("src/") for p in changed) else ""
-    prose = {p: added_lines(_git("diff", f"{base}...HEAD", "--", p)) for p in docs}
-    asked = questions(code_diff, {p: text for p, text in prose.items() if text.strip() or p == "CHANGELOG.md"})
+    code = [p for p in changed if not p.endswith(".md")]
+    code_diff = _git("diff", span, "--", *code) if code else ""
+    prose = {p: added_lines(_git("diff", span, "--", p)) for p in docs}
+    visible = any(p.startswith(_USER_VISIBLE) for p in code)
+    return code_diff, visible, {p: text for p, text in prose.items() if text.strip() or p == "CHANGELOG.md"}
+
+
+async def review(base: str, head: str = "HEAD") -> str:
+    settings = Settings()
+    if not (settings.typesafe_api_key or settings.ai_gateway_api_key):
+        return "### Jev review (advisory)\n\nSkipped: no Jev key is set.\n"
+    code_diff, visible, prose = changes(f"{base}...{head}")
+    asked = questions(prose, user_visible=visible)
     if not asked:
         return "### Jev review (advisory)\n\nNothing to judge: the change touches no prose and no code.\n"
     state: JsonValue = {"code_diff": _clip(code_diff, _CODE_CHARS) or "(no code changes)"}
@@ -125,7 +139,9 @@ async def review(base: str) -> str:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base", default="origin/main", help="the ref the pull request merges into")
-    text = asyncio.run(review(parser.parse_args(argv).base))
+    parser.add_argument("--head", default="HEAD", help="the pull request's head, read only as a git ref")
+    args = parser.parse_args(argv)
+    text = asyncio.run(review(args.base, args.head))
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as out:

@@ -150,9 +150,11 @@ three stories about one version. `.github/workflows/site.yml` asks for the same 
 needs `SITE_DEPLOY_HOOK` (a Vercel deploy hook for `agent-labs-dev/fastbrowse-site`) in this repository's
 secrets; without it the workflows still succeed and warn that the site was not rebuilt.
 
-Pull requests also get an advisory `jev-review` job (`scripts/jev_review.py`): Jev judges whether changed
-prose is true to the diff and whether the changelog misses a user-visible change. Its doubts are warnings for
-the reviewer; it never blocks a merge. It reads `AI_GATEWAY_API_KEY` from the repository's secrets.
+Pull requests also get an advisory Jev review (`.github/workflows/jev-review.yml`, `scripts/jev_review.py`):
+Jev judges whether changed prose is true to the diff and whether the changelog misses a user-visible change.
+Its doubts are warnings for the reviewer; it never blocks a merge. It reads `AI_GATEWAY_API_KEY` from the
+repository's secrets, so it runs on `pull_request_target` from the base branch's code and reads the pull
+request only as a git ref: a change to the script takes effect once it is on `main`.
 
 PR titles are conventional commits (`feat:`, `fix:`, `perf:`, `docs:`, `build:`, `ci:`, `chore:`) and become
 the squash-merge subject. `main` requires the `check` status and resolved review threads.
