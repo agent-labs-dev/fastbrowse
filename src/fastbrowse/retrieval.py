@@ -556,7 +556,11 @@ async def read(
             # the part of a list one page shows does not settle it however the site sorts it.
             if requirement_id is not None and claim.orders_list is not None and not claim.draws_on:
                 ordering = _cited(capture, part, claim.orders_list)
-                if ordering is not None:
+                if ordering is None:
+                    # The reader cites the order instead of saying the list goes on, so an order that resolves to
+                    # no block leaves the leading row settling "cheapest" on nothing the page said.
+                    requirement_id = None
+                else:
                     stated = _quoted(ordering)
                     so_far.add(stated)
                     found.append(stated)

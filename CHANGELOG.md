@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A cheapest or highest from part of a list needs the page to state its order.** A reader that cited the
+  page's sort order to settle a superlative on the leading row still settled it when that citation named no block
+  on the page; the row alone no longer answers it.
 - **A step with one possible target no longer fails.** Jev now refuses a choice of only one option, and the
   typesafe-ai route reports that refusal as a 503, so a page with one field to fill ended the run, or in the evals
   retried it for hours as an outage: `wiki-godel` never finished. A choice of one option is answered without

@@ -1170,7 +1170,10 @@ async def test_a_page_that_states_its_own_order_settles_a_superlative_on_the_lea
     assert any(f.evidence is not None and f.evidence.quote == "Sorted by price, lowest first" for f in notes.facts)
 
 
-async def test_an_order_the_page_does_not_state_cannot_settle_a_superlative() -> None:
+@pytest.mark.parametrize("said_it_continues", [True, False])
+async def test_an_order_the_page_does_not_state_cannot_settle_a_superlative(said_it_continues: bool) -> None:
+    """The reader is told to cite the order rather than say the list goes on, so an order cited from a block that
+    does not exist cannot close the superlative whether or not it also said so."""
     from tests.test_policy import ScriptedJev
 
     page = capture((BlockKind.PARAGRAPH, "From 1061 US dollars. Nonstop flight"))
@@ -1186,10 +1189,12 @@ async def test_an_order_the_page_does_not_state_cannot_settle_a_superlative() ->
                         "requirement_id": "r1",
                     }
                 ],
-                "answered": False,
+                "answered": not said_it_continues,
                 "continues": [
                     {"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}], "expands": "View more"}
-                ],
+                ]
+                if said_it_continues
+                else [],
             }
         ]
     )
@@ -1197,9 +1202,8 @@ async def test_an_order_the_page_does_not_state_cannot_settle_a_superlative() ->
     outcome = await read(
         llm, page, "Cheapest nonstop?", ["r1"], notes, jev=ScriptedJev({"r1": "none"}), requirements=[requirement]
     )
-    assert outcome.continues == ("r1",)
     assert not notes.evidenced("r1")
-    assert outcome.expands == "View more"
+    assert outcome.continues == (("r1",) if said_it_continues else ())
 
 
 async def test_a_read_that_settles_a_list_carries_no_records() -> None:
