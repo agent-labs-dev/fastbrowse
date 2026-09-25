@@ -81,6 +81,10 @@ and where fastbrowse follows it:
   choice; otherwise the LLM reader reads the whole page. An `absent` answer from a narrowed page is not trusted.
   Requests stay small because the gateway sheds large ones: measured on Wikipedia windows, a 26k-token Noul
   batch returned 503 until its retries ran out on five of eight tries, a 4k-token batch on none.
+  The step request cannot be split that way, since its state is shared: when one larger than a batch runs out
+  of retries, the policy asks it again with the on-screen controls only, then with half of those left. Replayed
+  against the gateway, a 27k-token step from a Wikipedia article was answered four times in ten, while requests
+  under 10k tokens were answered in all but two of 29 (**ours**).
 - **Match state to the question.** Navigation uses the redacted viewport, controls and working notes;
   short-fact selection sees the full capture. Counts and comparisons go to the LLM reader.
 

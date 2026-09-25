@@ -11,6 +11,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A dense page's step is asked again smaller when Jev sheds it.** The gateway answers large Jev requests with
+  503s far more often than small ones, and a step on a Wikipedia article (160 controls, about 27k tokens) ran out
+  of retries in six runs of six, ending each one `unavailable`. When that happens to a large step request, it is
+  now asked again with the on-screen controls only, then with half of those left; a small request that is still
+  refused ends the run `unavailable` as before. The error for a request that split into single questions now
+  counts every request the call sent, not only the last question's.
+
 ## [0.5.6] - 2026-09-25
 
 - **Correcting a wizard step is not a loop.** Going Back through a multi-step form to fix an earlier step reached
