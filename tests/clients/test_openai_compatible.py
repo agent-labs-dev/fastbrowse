@@ -3,10 +3,10 @@ import base64
 
 import httpx
 import pytest
-from pydantic import JsonValue, TypeAdapter
+from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 
 from fastbrowse.clients import validation
-from fastbrowse.clients.openai_compatible import OpenAICompatibleLLM
+from fastbrowse.clients.openai_compatible import OpenAICompatibleLLM, strict_schema
 from fastbrowse.llm import LLMError, LLMRetriesExhausted, Message
 from fastbrowse.models import CostBasis, Frozen, Limits, LLMPurpose, Unavailable
 from fastbrowse.telemetry import BudgetExceeded, Ledger
@@ -399,3 +399,14 @@ async def test_complete_json_marked_truncated_never_becomes_a_citable_read() -> 
                 "key", http=http, base_url="https://llm.test", models={LLMPurpose.READ: "reader"}
             ).generate(LLMPurpose.READ, [], Result, max_output_tokens=100)
     assert caps == [100, 400]
+
+
+def test_a_strict_schema_leaves_array_caps_to_validation() -> None:
+    # A provider answered HTTP 400 to every read whose claims list carried `maxItems: 60`.
+    class Capped(Frozen):
+        items: tuple[str, ...] = Field(default=(), max_length=60)
+
+    schema = str(strict_schema(Capped.model_json_schema()))
+    assert "maxItems" not in schema and "default" not in schema
+    with pytest.raises(ValidationError):
+        Capped.model_validate({"items": ["x"] * 61})

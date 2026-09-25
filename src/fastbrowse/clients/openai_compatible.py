@@ -93,7 +93,8 @@ def strict_schema(schema: JsonValue) -> JsonValue:
     """The schema with every property required and no defaults, as strict structured output demands.
 
     A field with a default is optional to pydantic, which strict mode rejects; the model instead writes the
-    empty value, and validation accepts it as it would the default.
+    empty value, and validation accepts it as it would the default. An array's `maxItems` is left to validation
+    too: a provider behind OpenRouter answered HTTP 400 to every read whose claims list carried `maxItems: 60`.
     """
     if isinstance(schema, list):
         return [strict_schema(item) for item in schema]
@@ -101,7 +102,7 @@ def strict_schema(schema: JsonValue) -> JsonValue:
         return schema
     result: dict[str, JsonValue] = {}
     for key, value in schema.items():
-        if key == "default":
+        if key in ("default", "maxItems"):
             continue
         # These map names to schemas, so a property called "default" is a name, not a keyword.
         if key in ("properties", "$defs") and isinstance(value, dict):

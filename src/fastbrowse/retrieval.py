@@ -387,7 +387,7 @@ class _Continuation(Frozen):
 
 class _ReadResponse(Frozen):
     tallies: tuple[_TallyRead, ...] = ()
-    claims: tuple[_ReadClaim, ...] = Field(max_length=_MAX_CONTINUING_RECORDS)
+    claims: tuple[_ReadClaim, ...]
     answered: bool
     continues: tuple[_Continuation, ...] = ()
 
