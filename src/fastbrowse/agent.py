@@ -16,6 +16,7 @@ from urllib.parse import urljoin, urlsplit
 
 from pydantic import BaseModel, Field, JsonValue
 
+from fastbrowse.batches import evaluate_batches
 from fastbrowse.citations import ANSWER_LINK, text_fragment
 from fastbrowse.config import Config, ObservationLimits
 from fastbrowse.effects import (
@@ -61,6 +62,7 @@ from fastbrowse.page import (
     BrowserError,
     Capture,
     Control,
+    Dialog,
     Observation,
     Page,
     pager_link,
@@ -197,6 +199,14 @@ class _Attempts:
 
 
 @dataclass(slots=True)
+class _TransactionCandidate:
+    question: NoulQuestion
+    from_url: str
+    landed_url: str | None = None
+    committing: bool | None = None
+
+
+@dataclass(slots=True)
 class _RunState:
     task: str
     inputs: Mapping[str, str]
@@ -276,14 +286,8 @@ class _RunState:
     incomplete: set[str] = field(default_factory=set[str])
     """Comparisons a page of their list lost a record from. No later claim closes one: its winner could be the
     record that was lost."""
-    transaction_documents: set[str] = field(default_factory=set[str])
-    """Capture URLs on either side of an executed committing action, matched to the notes' evidence."""
-    transaction_pending: bool = False
-    """A committing action ran and the page it landed on is not observed yet."""
-
-    @property
-    def transaction_evidence_ids(self) -> tuple[str, ...]:
-        return tuple(key for key, evidence in self.notes.evidence.items() if evidence.url in self.transaction_documents)
+    transaction_candidates: list[_TransactionCandidate] = field(default_factory=list[_TransactionCandidate])
+    """Authorized clicks can just navigate, so only candidates with notes are classified when answering."""
 
     @property
     def plan(self) -> Plan:
@@ -700,9 +704,16 @@ class Agent:
             act = await self._page.act(action, self._raw_observation or observation)
             if act.outcome is StepOutcome.STALE and decision.target is not None:
                 act = await self._act_on_twin(action, observation, decision.target) or act
-            if act.outcome is StepOutcome.EXECUTED and may_be_irreversible(decision.operation, decision.target):
-                state.transaction_documents.add(observation.url)
-                state.transaction_pending = True
+            if act.outcome is StepOutcome.EXECUTED and state.authorization.irreversible_actions:
+                question = None
+                if decision.target is not None and may_be_irreversible(decision.operation, decision.target):
+                    question = irreversible_question(state.task, decision.operation, decision.target)
+                elif decision.operation is Operation.DIALOG and action.accept_dialog:
+                    question = _dialog_question(state.task, observation.dialog)
+                if question is not None:
+                    state.transaction_candidates.append(
+                        _TransactionCandidate(question=question, from_url=observation.url)
+                    )
             if act.outcome is StepOutcome.EXECUTED and action.text is not None:
                 typed = "<secret>" if action.secret else self._redactor.mask(action.text)
             changed = act.page_changed
@@ -905,9 +916,8 @@ class Agent:
     @staticmethod
     def _note_effect(state: _RunState, observation: Observation) -> None:
         """Record on the last action what it did, which the next choice and recovery both read."""
-        if state.transaction_pending:
-            state.transaction_documents.add(observation.url)
-            state.transaction_pending = False
+        if state.transaction_candidates and state.transaction_candidates[-1].landed_url is None:
+            state.transaction_candidates[-1].landed_url = observation.url
         before, state.acted_from = state.acted_from, None
         if before is None or not state.history or state.history[-1].effect is not None:
             return
@@ -1103,22 +1113,14 @@ class Agent:
                 return Action(operation=Operation.UPLOAD, target_id=_require(target).id, files=files)
             case Operation.DIALOG:
                 accept = await self._accept_dialog(state, observation)
-                if accept and observation.dialog and observation.dialog.kind in {"confirm", "prompt", "beforeunload"}:
+                question = _dialog_question(state.task, observation.dialog)
+                if accept and observation.dialog and question is not None:
                     await self._gate_question(
                         state,
                         observation,
                         decision,
                         observation.dialog.message,
-                        NoulQuestion(
-                            instructions=(
-                                f"{UNTRUSTED}\nTask: {state.task}\nThe agent is about to accept this "
-                                f"{observation.dialog.kind} dialog: {observation.dialog.message!r}. Would accepting "
-                                "commit an irreversible or externally visible change, such as deleting data, sending a "
-                                "message or spending money?"
-                            ),
-                            true="Acceptance commits a destructive or externally visible change.",
-                            false="Acceptance only navigates, reveals information or edits a reversible draft.",
-                        ),
+                        question,
                     )
                 return Action(operation=Operation.DIALOG, accept_dialog=accept)
             case Operation.SWITCH_TAB:
@@ -1706,7 +1708,7 @@ class Agent:
                             state.notes,
                             tokens=self._config.tokens,
                             ledger=state.ledger,
-                            transaction_evidence_ids=state.transaction_evidence_ids,
+                            transaction_evidence_ids=await self._transaction_evidence_ids(state),
                         )
                     )
                 verdict = await llm_verify(
@@ -1802,7 +1804,7 @@ class Agent:
                         state.notes,
                         tokens=self._config.tokens,
                         ledger=state.ledger,
-                        transaction_evidence_ids=state.transaction_evidence_ids,
+                        transaction_evidence_ids=await self._transaction_evidence_ids(state),
                     )
                 )
             ).data
@@ -1820,6 +1822,44 @@ class Agent:
             held = await self._holds(state, facts)
         return held or composed, held is not None
 
+    async def _transaction_evidence_ids(self, state: _RunState) -> tuple[str, ...]:
+        if not state.authorization.irreversible_actions or not state.transaction_candidates:
+            return ()
+        evidence = state.notes.evidence
+        urls = {item.url for item in evidence.values()}
+        pending = {
+            f"irreversible_{index}": candidate
+            for index, candidate in enumerate(state.transaction_candidates)
+            if candidate.committing is None and (candidate.from_url in urls or candidate.landed_url in urls)
+        }
+        if pending:
+            pages = dict.fromkeys(
+                url
+                for candidate in pending.values()
+                for url in (candidate.from_url, candidate.landed_url)
+                if url is not None
+            )
+            answered = await evaluate_batches(
+                self._jev,
+                {"pages": [{"url": url} for url in pages]},
+                {key: candidate.question for key, candidate in pending.items()},
+                tokens=self._config.tokens,
+                ledger=state.ledger,
+            )
+            if answered is not None:
+                for key, candidate in pending.items():
+                    verdict = answered.answers.get(key)
+                    if isinstance(verdict, NoulAnswer):
+                        candidate.committing = verdict.probability > self._config.thresholds.irreversible_above
+        committed = {
+            url
+            for candidate in state.transaction_candidates
+            if candidate.committing
+            for url in (candidate.from_url, candidate.landed_url)
+            if url is not None
+        }
+        return tuple(key for key, item in evidence.items() if item.url in committed)
+
     async def _holds(self, state: _RunState, answer: ComposedAnswer) -> ComposedAnswer | None:
         return await check_claims(
             self._jev,
@@ -1828,7 +1868,7 @@ class Agent:
             self._config.thresholds,
             tokens=self._config.tokens,
             ledger=state.ledger,
-            transaction_evidence_ids=state.transaction_evidence_ids,
+            transaction_evidence_ids=await self._transaction_evidence_ids(state),
         )
 
     async def _extraction(self, state: _RunState, output_schema: type[BaseModel]) -> Extraction:
@@ -2195,6 +2235,21 @@ def _paging(state: _RunState, observation: Observation) -> Decision | None:
         if state_key(observation) != left and not state.read_here:
             return _code_decision(Operation.READ, None)
     return None
+
+
+def _dialog_question(task: str, dialog: Dialog | None) -> NoulQuestion | None:
+    if dialog is None or dialog.kind not in {"confirm", "prompt", "beforeunload"}:
+        return None
+    return NoulQuestion(
+        instructions=(
+            f"{UNTRUSTED}\nTask: {task}\nThe agent is about to accept this "
+            f"{dialog.kind} dialog: {dialog.message!r}. Would accepting "
+            "commit an irreversible or externally visible change, such as deleting data, sending a "
+            "message or spending money?"
+        ),
+        true="Acceptance commits a destructive or externally visible change.",
+        false="Acceptance only navigates, reveals information or edits a reversible draft.",
+    )
 
 
 def _code_decision(operation: Operation, target: Control | None) -> Decision:

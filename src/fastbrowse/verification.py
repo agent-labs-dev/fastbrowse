@@ -4,6 +4,7 @@ Jev checks completion, individual action requirements and draft quality. An LLM 
 when those answers leave completion uncertain.
 """
 
+import asyncio
 import json
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from enum import StrEnum
@@ -29,6 +30,7 @@ from fastbrowse.retrieval import (
     field_question,
     propose_text_fields,
     propose_text_fields_from_notes,
+    transaction_check_question,
 )
 from fastbrowse.telemetry import Ledger, trace
 
@@ -361,12 +363,22 @@ async def check_claims(
     those failed three runs in four of a correct sign-in answer. Removing a doubted claim asserts nothing new,
     so it is honest as long as the rest still answers: the omission check is asked again of what remains.
     """
-    questions = claim_check_questions(composed, notes, tokens=tokens, transaction_evidence_ids=transaction_evidence_ids)
+    questions = claim_check_questions(composed, notes, tokens=tokens)
     # An action-only task can finish without factual claims. Its completion was checked already,
     # and Jev rejects an empty question batch; dropped or uncited answer text still cannot pass.
     if not questions:
         return composed if not composed.answer and composed.dropped_claims == 0 else None
-    answers = await _ask(jev, composed, questions, ledger)
+    transaction = transaction_check_question(composed, notes, transaction_evidence_ids, tokens=tokens)
+    if transaction is None:
+        answers = await _ask(jev, composed, questions, ledger)
+    else:
+        # Asked apart so the committed pages cannot take the omission check's notes budget.
+        checked = {TRANSACTION_CONTRADICTED: transaction}
+        claimed, committed = await asyncio.gather(
+            _ask(jev, composed, questions, ledger), _ask(jev, composed, checked, ledger)
+        )
+        answers = {**claimed, **committed}
+        questions = {**questions, **checked}
     limit = thresholds.claim_problem_above
     trace(
         "claims",

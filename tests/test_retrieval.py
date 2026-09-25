@@ -41,6 +41,7 @@ from fastbrowse.retrieval import (
     propose_text_fields_from_notes,
     read,
     read_candidates,
+    transaction_check_question,
 )
 from fastbrowse.telemetry import BudgetExceeded, Ledger
 from fastbrowse.verification import check_done
@@ -631,12 +632,12 @@ async def test_committed_action_evidence_is_named_to_the_composer_and_contradict
     listed, committed = tuple(notes.evidence)
     answer = assemble_answer((Claim(text="Bought a black pen for £7", evidence_ids=(listed,)),), notes, ())
     ordinary = claim_check_questions(answer, notes)
-    checked = claim_check_questions(answer, notes, transaction_evidence_ids=(committed,))
+    checked = transaction_check_question(answer, notes, (committed,))
 
-    assert checkout.text in checked[TRANSACTION_CONTRADICTED].instructions
-    assert listing.text not in checked[TRANSACTION_CONTRADICTED].instructions
+    assert checked is not None
+    assert checkout.text in checked.instructions
+    assert listing.text not in checked.instructions
     assert TRANSACTION_CONTRADICTED not in ordinary
-    assert {key: q for key, q in checked.items() if key != TRANSACTION_CONTRADICTED} == ordinary
     llm = ScriptedLLM([{"claims": []}])
     await compose(
         llm,
@@ -651,7 +652,7 @@ async def test_committed_action_evidence_is_named_to_the_composer_and_contradict
     assert "cites" in transaction and "committed" in transaction
 
 
-def test_transaction_evidence_keeps_the_latest_pages_within_the_claim_check_budget() -> None:
+def test_transaction_evidence_keeps_the_latest_pages_within_its_own_budget() -> None:
     page = capture(
         (BlockKind.PARAGRAPH, "Black pen £7"),
         (BlockKind.PARAGRAPH, "Basket\n" * 1000),
@@ -663,11 +664,47 @@ def test_transaction_evidence_keeps_the_latest_pages_within_the_claim_check_budg
     )
     listed, basket, placed = tuple(notes.evidence)
     answer = assemble_answer((Claim(text="Bought a black pen for £7", evidence_ids=(listed,)),), notes, ())
-    questions = claim_check_questions(
-        answer, notes, transaction_evidence_ids=(basket, placed), tokens=TokenBudget(state_plus_largest_question=3000)
+    question = transaction_check_question(
+        answer, notes, (basket, placed), tokens=TokenBudget(state_plus_largest_question=3000)
     )
-    instructions = questions[TRANSACTION_CONTRADICTED].instructions
+    assert question is not None
+    instructions = question.instructions
     assert "Order placed" in instructions and "Basket" not in instructions
+    assert (
+        transaction_check_question(answer, notes, (placed,), tokens=TokenBudget(state_plus_largest_question=1)) is None
+    )
+    assert transaction_check_question(answer, notes, ()) is None
+
+
+async def test_transaction_evidence_does_not_spend_the_omission_notes_budget() -> None:
+    from fastbrowse.verification import check_claims
+    from tests.test_policy import ScriptedJev
+
+    page = capture(*((BlockKind.PARAGRAPH, f"Item {index}: " + "x" * 510) for index in range(40)))
+    notes = Notes(
+        Fact(
+            reader=FactReader.LLM,
+            requirement_id="r1",
+            text=page.text[block.start : block.end],
+            evidence=block_evidence(page, block.source_id),
+        )
+        for block in page.blocks
+    )
+    ids = tuple(notes.evidence)
+    requirement = Requirement(id="r1", text="What was bought?", kind=RequirementKind.INFORMATION)
+    answer = assemble_answer((Claim(text="Bought the items", evidence_ids=(ids[0],)),), notes, (requirement,))
+    ordinary = claim_check_questions(answer, notes)
+    jev = ScriptedJev({}, noul=0.0)
+    ledger = Ledger(Limits())
+
+    assert await check_claims(jev, answer, notes, Thresholds(), ledger=ledger, transaction_evidence_ids=ids) == answer
+
+    assert len(jev.requests) == ledger.jev_calls == len(ledger.lines) == 2
+    claims = next(q for q in jev.requests if "requirement_omitted" in q)
+    assert claims == ordinary
+    omission = claims["requirement_omitted"].instructions
+    assert all(fact.text in omission for fact in notes.facts)
+    assert any(set(q) == {TRANSACTION_CONTRADICTED} for q in jev.requests)
 
 
 def test_currency_sentence_punctuation_and_candidate_context() -> None:

@@ -18,9 +18,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   states its own order still settles it on the leading record.
   ([#129](https://github.com/agent-labs-dev/fastbrowse/issues/129))
 - **An answer about what the run bought is checked against the page it bought on.** An Amazon run bought one pen
-  and reported another, citing the search listing; the checkout page it had read named the right one. Claims are
-  now also checked against what the pages where the run took a possibly irreversible action say, and the composer
-  is told which notes come from them. ([#117](https://github.com/agent-labs-dev/fastbrowse/issues/117))
+  and reported another, citing the search listing; the checkout page it had read named the right one. In a run authorized to commit, Jev
+  now judges which of its clicks, Enters and accepted dialogs committed something, once the run answers and only
+  for those whose pages it read; the answer is checked against those pages, and the composer is told which notes
+  come from them. Other runs make no extra call. ([#117](https://github.com/agent-labs-dev/fastbrowse/issues/117))
 - **A click that found its element redrawn no longer spends a step.** A date picker that redraws under a click
   dispatches nothing, but the stale step counted toward `max_steps`, and Google Flights runs spent two to four of
   them. It still counts toward the stall budget, which bounds a page that never stops redrawing.

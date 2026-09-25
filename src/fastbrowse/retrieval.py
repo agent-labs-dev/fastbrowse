@@ -1299,12 +1299,44 @@ def draft_answer(plan: Plan, notes: Notes) -> ComposedAnswer | None:
 TRANSACTION_CONTRADICTED = "transaction_contradicted"
 
 
+def transaction_check_question(
+    composed: ComposedAnswer,
+    notes: Notes,
+    ids: Collection[str],
+    *,
+    tokens: TokenBudget = _DEFAULT_TOKENS,
+) -> NoulQuestion | None:
+    if not ids or not composed.claims:
+        return None
+    committed = [item.model_dump_json() for key, item in notes.evidence.items() if key in ids]
+    if not committed:
+        return None
+    # A claim can cite a listing for something the run did not buy; the answer must agree with the receipt too.
+    context = f"{UNTRUSTED}\n\n# Answer\n{composed.answer}\n\n# Pages where the run committed an action\n"
+    question = (
+        "\n\nDoes the answer contradict what these pages show the run's action bought, submitted or booked, "
+        "or its price?"
+    )
+    transaction = NoulQuestion(
+        instructions=context + question,
+        true="Yes, the answer contradicts the pages the run committed an action on.",
+        false="No, the answer agrees with the pages the run committed an action on.",
+    )
+    room = tokens.remaining_chars(json.dumps({"answer": composed.answer}), [transaction.model_dump_json()])
+    # The latest pages are the confirmation and the review before it, so the budget keeps them first.
+    kept: list[str] = []
+    for line in reversed(committed):
+        if len(json.dumps("\n".join([line, *kept]))) - len('""') > room:
+            break
+        kept.insert(0, line)
+    return transaction.model_copy(update={"instructions": context + "\n".join(kept) + question}) if kept else None
+
+
 def claim_check_questions(
     composed: ComposedAnswer,
     notes: Notes,
     *,
     tokens: TokenBudget = _DEFAULT_TOKENS,
-    transaction_evidence_ids: Collection[str] = (),
 ) -> Mapping[str, NoulQuestion]:
     questions: dict[str, NoulQuestion] = {}
     known = notes.evidence
@@ -1323,33 +1355,6 @@ def claim_check_questions(
                 ),
                 true=f"Yes, the claim is {issue}.",
                 false=f"No, the claim is not {issue}.",
-            )
-    # A claim is judged against what it cites, and an Amazon answer cited the search listing for a pen the run did
-    # not buy. The pages where the run committed an action are asked about once, against the whole answer.
-    committed = [known[key].model_dump_json() for key in transaction_evidence_ids if key in known]
-    if committed and composed.claims:
-        context = f"{UNTRUSTED}\n\n# Answer\n{composed.answer}\n\n# Pages where the run committed an action\n"
-        question = (
-            "\n\nDoes the answer contradict what these pages show the run's action bought, submitted or booked, "
-            "or its price?"
-        )
-        transaction = NoulQuestion(
-            instructions=context + question,
-            true="Yes, the answer contradicts the pages the run committed an action on.",
-            false="No, the answer agrees with the pages the run committed an action on.",
-        )
-        room = tokens.remaining_chars(
-            json.dumps({"answer": composed.answer}), [q.model_dump_json() for q in (*questions.values(), transaction)]
-        )
-        # The latest pages are the confirmation and the review before it, so the budget keeps them first.
-        kept: list[str] = []
-        for line in reversed(committed):
-            if len(json.dumps("\n".join([line, *kept]))) - len('""') > room:
-                break
-            kept.insert(0, line)
-        if kept:
-            questions[TRANSACTION_CONTRADICTED] = transaction.model_copy(
-                update={"instructions": context + "\n".join(kept) + question}
             )
     # Actions are evidenced by the page, which the done check already judged; quotes only evidence information.
     information = [r for r in composed.requirements if r.kind is RequirementKind.INFORMATION]

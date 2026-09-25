@@ -41,7 +41,7 @@ from fastbrowse.models import (
     StepEvent,
     StepOutcome,
 )
-from fastbrowse.page import Action, ActResult, BlockKind, Capture, Control, Observation, Page
+from fastbrowse.page import Action, ActResult, BlockKind, Capture, Control, Dialog, Observation, Page
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 from fastbrowse.policy import Decision, HistoryEntry, ReadAssessment, build_request, decide
 from fastbrowse.retrieval import TRANSACTION_CONTRADICTED, ComposedAnswer
@@ -1950,6 +1950,7 @@ async def test_stale_clicks_exceed_the_step_limit_but_still_stall() -> None:
     ("operation", "outcome"),
     [
         (Operation.CLICK, StepOutcome.EXECUTED),
+        (Operation.ENTER, StepOutcome.EXECUTED),
         (Operation.CLICK, StepOutcome.STALE),
         (Operation.HOVER, StepOutcome.EXECUTED),
     ],
@@ -1959,7 +1960,9 @@ async def test_only_executed_committing_actions_supply_transaction_evidence_to_t
 ) -> None:
     state = await _reading_state()
     state.authorization = Authorization(irreversible_actions=True)
-    target = _button("Pay").model_copy(update={"operations": frozenset({Operation.CLICK, Operation.HOVER})})
+    target = _button("Pay").model_copy(
+        update={"operations": frozenset({Operation.CLICK, Operation.ENTER, Operation.HOVER})}
+    )
     checkout = _at("https://shop.test/checkout", target)
     receipt = _at("https://shop.test/receipt")
     for index, (url, quote) in enumerate(
@@ -1978,27 +1981,162 @@ async def test_only_executed_committing_actions_supply_transaction_evidence_to_t
     page.observe = AsyncMock(return_value=receipt)
     page.redrawn = AsyncMock(return_value=False)
     page.act = AsyncMock(return_value=ActResult(outcome=outcome, page_changed=outcome is StepOutcome.EXECUTED))
-    jev = ScriptedJev({"operation": operation.value, f"{operation.value}_target": target.id}, noul=0.0)
+    jev = TransactionJev(0.9)
     llm = ScriptedLLM([{"claims": [{"text": "Bought a black pen for £7", "evidence_ids": [listed]}]}])
     composing = AsyncMock(wraps=agent_module.compose)
     monkeypatch.setattr(agent_module, "compose", composing)
     agent = Agent(page, jev, llm)
-    decision = await decide(jev, checkout, context(), Config())
+    decision = _code_decision(operation, target)
 
     await agent._step(state, checkout, decision)
     agent._note_effect(state, receipt)
     agent._note_effect(state, _at("https://shop.test/help"))
     _, held = await agent._answer(state, None)
 
-    committing = operation is Operation.CLICK and outcome is StepOutcome.EXECUTED
-    assert state.transaction_documents == ({checkout.url, receipt.url} if committing else set())
+    committing = operation in {Operation.CLICK, Operation.ENTER} and outcome is StepOutcome.EXECUTED
+    assert len(state.transaction_candidates) == len(jev.classifications) == int(committing)
     assert held and composing.await_args is not None
     assert composing.await_args.kwargs["transaction_evidence_ids"] == (tuple(committed) if committing else ())
-    questions = next(questions for questions in jev.requests if "contradicted_0" in questions)
+    questions = {key: question for request in jev.requests for key, question in request.items()}
     assert (TRANSACTION_CONTRADICTED in questions) is committing
     if committing:
         assert "Red pen £11.55" in questions[TRANSACTION_CONTRADICTED].instructions
         assert "Paid £11.55" in questions[TRANSACTION_CONTRADICTED].instructions
+
+
+class TransactionJev(ScriptedJev):
+    def __init__(self, probability: float) -> None:
+        super().__init__({}, noul=0.0)
+        self.probability = probability
+        self.classifications: list[tuple[JsonValue, Mapping[str, Question]]] = []
+
+    async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        result = await super().evaluate(state, questions)
+        if isinstance(state, dict) and "pages" in state:
+            self.classifications.append((state, questions))
+            return result.model_copy(
+                update={"answers": {key: NoulAnswer(probability=self.probability) for key in questions}}
+            )
+        return result
+
+
+async def _transaction_run(
+    monkeypatch: pytest.MonkeyPatch, *, authorized: bool = True, probability: float = 0.9
+) -> tuple[_RunState, Agent, TransactionJev, AsyncMock]:
+    state = await _reading_state()
+    state.authorization = Authorization(irreversible_actions=authorized)
+    state.task = "Buy a pen"
+    for index, (path, quote) in enumerate(
+        (("search", "Black pen £7"), ("checkout", "Red pen £11.55"), ("receipt", "Paid £11.55"))
+    ):
+        state.notes.add(
+            Fact(
+                reader=FactReader.LLM,
+                requirement_id="r1" if index == 0 else None,
+                text=quote,
+                evidence=evidence(sha=str(index)).model_copy(
+                    update={"url": f"https://shop.test/{path}", "quote": quote}
+                ),
+            )
+        )
+    listed = next(iter(state.notes.evidence))
+    page = Mock(spec=Page)
+    page.redrawn = AsyncMock(return_value=False)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
+    jev = TransactionJev(probability)
+    llm = ScriptedLLM([{"claims": [{"text": "Bought a black pen for £7", "evidence_ids": [listed]}]}] * 3)
+    composing = AsyncMock(wraps=agent_module.compose)
+    monkeypatch.setattr(agent_module, "compose", composing)
+    return state, Agent(page, jev, llm), jev, composing
+
+
+async def test_reversible_navigation_contributes_no_transaction_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    state, agent, jev, composing = await _transaction_run(monkeypatch, probability=0.1)
+    await _click(agent, state, _at("https://shop.test/search", _button("Details")), "Details")
+    agent._note_effect(state, _at("https://shop.test/checkout"))
+
+    _, held = await agent._answer(state, None)
+
+    assert held and composing.await_args is not None
+    assert composing.await_args.kwargs["transaction_evidence_ids"] == ()
+    assert len(jev.classifications) == 1
+    assert all(TRANSACTION_CONTRADICTED not in questions for questions in jev.requests)
+
+
+async def test_unauthorized_navigation_records_no_candidates_or_extra_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    state, agent, jev, composing = await _transaction_run(monkeypatch, authorized=False)
+    await _click(agent, state, _at("https://shop.test/search", _button("Details")), "Details")
+    agent._note_effect(state, _at("https://shop.test/checkout"))
+
+    _, held = await agent._answer(state, None)
+
+    assert held and composing.await_args is not None
+    assert composing.await_args.kwargs["transaction_evidence_ids"] == ()
+    assert not state.transaction_candidates
+    assert len(jev.requests) == 2
+    assert not jev.classifications
+    assert all(TRANSACTION_CONTRADICTED not in questions for questions in jev.requests)
+
+
+@pytest.mark.parametrize("kind", ["confirm", "prompt", "beforeunload"])
+async def test_committing_click_and_dialog_include_checkout_and_receipt(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    state, agent, jev, composing = await _transaction_run(monkeypatch)
+    checkout = _at("https://shop.test/checkout", _button("Buy"))
+    dialog = checkout.model_copy(update={"dialog": Dialog(kind=kind, message="Pay £11.55?")})
+    await _click(agent, state, checkout, "Buy")
+    agent._note_effect(state, dialog)
+    await agent._step(state, dialog, _code_decision(Operation.DIALOG, None))
+    agent._note_effect(state, _at("https://shop.test/receipt"))
+    agent._note_effect(state, _at("https://shop.test/help"))
+
+    _, held = await agent._answer(state, None)
+
+    assert held and composing.await_args is not None
+    assert composing.await_args.kwargs["transaction_evidence_ids"] == tuple(state.notes.evidence)[1:]
+    assert len(jev.classifications) == 1
+    pages, questions = jev.classifications[0]
+    assert pages == {"pages": [{"url": checkout.url}, {"url": "https://shop.test/receipt"}]}
+    assert len(questions) == 2
+    assert any(f"{kind} dialog" in question.instructions for question in questions.values())
+    transaction = next(q[TRANSACTION_CONTRADICTED] for q in jev.requests if TRANSACTION_CONTRADICTED in q)
+    assert "Red pen £11.55" in transaction.instructions and "Paid £11.55" in transaction.instructions
+
+
+async def test_candidates_without_evidence_are_classified_only_when_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    state, agent, jev, composing = await _transaction_run(monkeypatch)
+    await _click(agent, state, _at("https://shop.test/unread", _button("Buy")), "Buy")
+    agent._note_effect(state, _at("https://shop.test/unread-receipt"))
+    await agent._answer(state, None)
+    assert not jev.classifications
+    assert composing.await_args is not None
+    assert composing.await_args.kwargs["transaction_evidence_ids"] == ()
+
+    receipt = evidence(sha="later").model_copy(update={"url": "https://shop.test/unread-receipt", "quote": "Paid £7"})
+    state.notes.add(Fact(reader=FactReader.LLM, text=receipt.quote, evidence=receipt))
+    await agent._answer(state, None)
+
+    assert len(jev.classifications) == 1
+    assert composing.await_args.kwargs["transaction_evidence_ids"] == (evidence_id(receipt),)
+
+
+@pytest.mark.parametrize("probability", [0.1, 0.9])
+async def test_transaction_verdicts_are_cached_across_answer_attempts(
+    monkeypatch: pytest.MonkeyPatch, probability: float
+) -> None:
+    state, agent, jev, composing = await _transaction_run(monkeypatch, probability=probability)
+    await _click(agent, state, _at("https://shop.test/checkout", _button("Buy")), "Buy")
+    agent._note_effect(state, _at("https://shop.test/receipt"))
+
+    await agent._answer(state, None)
+    await agent._answer(state, None)
+
+    assert len(jev.classifications) == 1
+    ids = tuple(state.notes.evidence)[1:] if probability > Config().thresholds.irreversible_above else ()
+    assert [call.kwargs["transaction_evidence_ids"] for call in composing.await_args_list] == [ids, ids]
+    assert state.ledger.jev_calls == len(jev.requests) == (5 if ids else 3)
+    assert state.ledger.lines.count(FREE) == len(jev.requests)
 
 
 async def test_a_page_that_rewrites_its_own_text_is_read_only_while_it_pays_out() -> None:
