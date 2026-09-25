@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-09-25
+
 - **Correcting a wizard step is not a loop.** Going Back through a multi-step form to fix an earlier step reached
   pages the run had seen before, and it was stopped as stuck. A return now counts as a loop only when it repeats a
   move the run already made. ([#132](https://github.com/agent-labs-dev/fastbrowse/issues/132))
@@ -516,7 +518,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.5...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.6...HEAD
+[0.5.6]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.6
 [0.5.5]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.5
 [0.5.4]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.4
 [0.5.3]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.3
