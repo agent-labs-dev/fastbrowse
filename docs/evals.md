@@ -49,8 +49,8 @@ A pass requires a correct grade and `done`, or the exact expected fastbrowse sto
 The hosted SDK maps to `done` only for a stopped session with `is_task_successful=true`.
 That verdict lands after the session stops; the harness waits up to 90 seconds for it.
 An attempt a provider outage ended is waited out and run again, up to five times over about 25 minutes.
-A row still unavailable after that is recorded but left out of every pass rate, time and cost.
-Median time excludes the outage waits fastbrowse measured within a run (`transient_seconds`).
+A row still unavailable after that is recorded but scores nothing, and neither does one attempt of every other arm at that task: each comparison scores its arms on the same attempts at the same tasks.
+Time is wall time for every arm. fastbrowse records the outage waits inside a run (`transient_seconds`), but the other arms cannot, so no arm's are subtracted.
 Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the row.
 Existing timing includes browser setup. These rows do not claim the planned handoff-only timing protocol.
 <!-- /evals:protocol -->
@@ -259,55 +259,55 @@ one run count once in that summary. The local suite stores the counts without pr
 ### 0.5.6, 2026-09-25
 
 <!-- evals:results:0.5.6 -->
-`core` `9b765b1a`: fastbrowse against Browser Use agent, on the same 14 tasks.
+`core` `9b765b1a`: fastbrowse against Browser Use agent, on the same 13 tasks.
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 36/37 | 36/37 | 20.7s | 28.4s | $0.0041 | $0.0069 | $0.25 |
-| Browser Use agent | 37/42 | 42/42 | 35.8s | 59.7s | $0.4758 | $0.4899 | $20.58 |
+| fastbrowse (0.5.6) | 36/37 | 36/37 | 22.7s | 34.9s | $0.0041 | $0.0069 | $0.25 |
+| Browser Use agent | 33/37 | 37/37 | 40.7s | 64.5s | $0.4775 | $0.4973 | $18.40 |
 
-Each arm made 42 attempts; left out as provider outages: fastbrowse 5. Runs: `993506e34fd9` at `cfefd89`.
+Each arm made 42 attempts. Provider outages ended 5 of fastbrowse's, so each arm is scored on the same 37: an attempt one arm lost is dropped for every arm at that task. `wiki-godel` is left out, with no fastbrowse attempt measured. Runs: `993506e34fd9` at `cfefd89`.
 
-`core` `9b765b1a`: fastbrowse against jev-ultrafast, on the same 6 tasks.
+`core` `9b765b1a`: fastbrowse against jev-ultrafast, on the same 5 tasks.
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 16/16 | 16/16 | 15.0s | 27.9s | $0.0019 | $0.0036 | $0.06 |
-| jev-ultrafast | 11/15 | 11/15 | 13.0s | 31.2s | unknown | unknown | $0.01 (1 unpriced) |
+| fastbrowse (0.5.6) | 13/13 | 13/13 | 32.7s | 40.9s | $0.0031 | $0.0043 | $0.06 |
+| jev-ultrafast | 9/13 | 9/13 | 13.2s | 34.7s | unknown | unknown | $0.00 (1 unpriced) |
 
-Each arm made 18 attempts; left out as provider outages: fastbrowse 2, jev-ultrafast 3. Runs: `993506e34fd9` at `cfefd89`.
+Each arm made 18 attempts. Provider outages ended 2 of fastbrowse's and 3 of jev-ultrafast's, so each arm is scored on the same 13: an attempt one arm lost is dropped for every arm at that task. `arxiv-open` is left out, with no jev-ultrafast attempt measured. Runs: `993506e34fd9` at `cfefd89`.
 
 `core` `9b765b1a`: fastbrowse alone, on the 1 task no other arm is graded on.
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 3/3 | 3/3 | 37.8s | 43.9s | $0.0025 | $0.0062 | $0.02 |
+| fastbrowse (0.5.6) | 3/3 | 3/3 | 38.8s | 45.2s | $0.0025 | $0.0062 | $0.02 |
 
 Each arm made 3 attempts. Runs: `993506e34fd9` at `cfefd89`.
 
-`dev` `d562020d`: fastbrowse against Browser Use agent, on the same 8 tasks.
+`dev` `d562020d`: fastbrowse against Browser Use agent, on the same 7 tasks.
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 21/21 | 21/21 | 18.2s | 17.7s | $0.0051 | $0.0068 | $0.14 |
-| Browser Use agent | 22/24 | 24/24 | 12.9s | 13.2s | $0.1353 | $0.1884 | $4.52 |
+| fastbrowse (0.5.6) | 21/21 | 21/21 | 18.2s | 19.8s | $0.0051 | $0.0068 | $0.14 |
+| Browser Use agent | 19/21 | 21/21 | 12.8s | 12.5s | $0.1308 | $0.1440 | $3.02 |
 
-Each arm made 24 attempts; left out as provider outages: fastbrowse 3. Runs: `993506e34fd9` at `cfefd89`.
+Each arm made 24 attempts. Provider outages ended 3 of fastbrowse's, so each arm is scored on the same 21: an attempt one arm lost is dropped for every arm at that task. `ruff-release` is left out, with no fastbrowse attempt measured. Runs: `993506e34fd9` at `cfefd89`.
 
 `heldout` `18b64a73`: fastbrowse against Browser Use agent, on the same 9 tasks.
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 25/25 | 25/25 | 19.3s | 27.8s | $0.0072 | $0.0174 | $0.43 |
-| Browser Use agent | 26/27 | 27/27 | 15.0s | 20.2s | $0.1970 | $0.2329 | $6.29 |
+| fastbrowse (0.5.6) | 25/25 | 25/25 | 19.5s | 29.8s | $0.0072 | $0.0174 | $0.43 |
+| Browser Use agent | 24/25 | 25/25 | 14.8s | 20.3s | $0.1962 | $0.2256 | $5.64 |
 
-Each arm made 27 attempts; left out as provider outages: fastbrowse 2. Runs: `993506e34fd9` at `cfefd89`.
+Each arm made 27 attempts. Provider outages ended 2 of fastbrowse's, so each arm is scored on the same 25: an attempt one arm lost is dropped for every arm at that task. Runs: `993506e34fd9` at `cfefd89`.
 
 `stretch-dev` `69abd819`: fastbrowse against Browser Use agent, on the same 5 tasks.
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 12/15 | 12/15 | 44.9s | 57.6s | $0.0271 | $0.0366 | $0.55 |
+| fastbrowse (0.5.6) | 12/15 | 12/15 | 57.0s | 78.8s | $0.0271 | $0.0366 | $0.55 |
 | Browser Use agent | 15/15 | 15/15 | 59.9s | 79.2s | $0.3732 | $0.5790 | $8.69 |
 
 Each arm made 15 attempts. Runs: `98ef8dc21156` at `2304b2c`.
@@ -316,10 +316,10 @@ Each arm made 15 attempts. Runs: `98ef8dc21156` at `2304b2c`.
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 6/8 | 6/8 | 70.6s | 76.7s | $0.0283 | $0.0990 | $0.79 |
-| Browser Use agent | 8/9 | 9/9 | 42.6s | 78.0s | $0.2579 | $0.4980 | $4.48 |
+| fastbrowse (0.5.6) | 6/8 | 6/8 | 101.5s | 94.3s | $0.0283 | $0.0990 | $0.79 |
+| Browser Use agent | 8/8 | 8/8 | 38.4s | 67.0s | $0.2395 | $0.4367 | $3.49 |
 
-Each arm made 9 attempts; left out as provider outages: fastbrowse 1. Runs: `98ef8dc21156` at `2304b2c`.
+Each arm made 9 attempts. Provider outages ended 1 of fastbrowse's, so each arm is scored on the same 8: an attempt one arm lost is dropped for every arm at that task. Runs: `98ef8dc21156` at `2304b2c`.
 <!-- /evals:results:0.5.6 -->
 
 ### 0.5.2, 2026-09-22
@@ -373,10 +373,10 @@ Schema version 1. Each releases entry represents one release, suite and suite ve
 | `TaskChange` | `task`, `previous`, `current` |
 
 `releases` is newest first, and within a release the suites run in their defined order, `core` first. `date` is the latest UTC run date in that group.
-Each entry is one comparison: `compared` names the arms that ran its `tasks`, every arm on all of them, since a task runs only on the arms it grades on equal terms. A suite has one entry per comparison, those with most arms first; the first `core` entry is fastbrowse against Browser Use.
+Each entry is one comparison: `compared` names the arms scored on its `tasks`, every arm on all of them, since a task runs only on the arms it grades on equal terms. A suite has one entry per comparison, those with most arms first; the first `core` entry is fastbrowse against Browser Use.
 Schema version 2 added `compared` and `tasks`; version 1 pooled a suite's comparisons into one entry.
-`arms` maps registry names to statistics across every attempt, including failures, except those a provider outage ended: `excluded` counts those, and `total` leaves them out.
-`seconds` and `dollars` contain numeric median and mean values; dollars are USD. `seconds` excludes measured outage waits (`transient_seconds`).
+`arms` maps registry names to statistics across the scored attempts, failures included. `total` counts them; `excluded` counts attempts made but not scored, ended by an outage or matched to one.
+`seconds` and `dollars` contain numeric median and mean values; dollars are USD. Seconds are wall time.
 `priced` counts attempts with known cost. Both dollar statistics are null if any attempt is unpriced.
 `task_versions_changed` compares observed task versions with the previous published release:
 `task`, `previous` and `current` version lists. New tasks have an empty previous list;

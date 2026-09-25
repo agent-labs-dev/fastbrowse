@@ -10,7 +10,7 @@
         "fastbrowse",
         "browser-use"
       ],
-      "tasks": 14,
+      "tasks": 13,
       "arms": {
         "fastbrowse": {
           "passed": 36,
@@ -18,8 +18,8 @@
           "excluded": 5,
           "priced": 37,
           "seconds": {
-            "median": 20.7,
-            "mean": 28.37027027027027
+            "median": 22.7,
+            "mean": 34.921621621621625
           },
           "dollars": {
             "median": 0.00407,
@@ -27,17 +27,17 @@
           }
         },
         "browser-use": {
-          "passed": 37,
-          "total": 42,
-          "excluded": 0,
-          "priced": 42,
+          "passed": 33,
+          "total": 37,
+          "excluded": 5,
+          "priced": 37,
           "seconds": {
-            "median": 35.75,
-            "mean": 59.66904761904762
+            "median": 40.7,
+            "mean": 64.46486486486486
           },
           "dollars": {
-            "median": 0.475835,
-            "mean": 0.48991428571428575
+            "median": 0.47755,
+            "mean": 0.49733405405405406
           }
         }
       },
@@ -52,30 +52,30 @@
         "fastbrowse",
         "jev-ultrafast"
       ],
-      "tasks": 6,
+      "tasks": 5,
       "arms": {
         "fastbrowse": {
-          "passed": 16,
-          "total": 16,
-          "excluded": 2,
-          "priced": 16,
+          "passed": 13,
+          "total": 13,
+          "excluded": 5,
+          "priced": 13,
           "seconds": {
-            "median": 15.0,
-            "mean": 27.9075
+            "median": 32.7,
+            "mean": 40.91538461538462
           },
           "dollars": {
-            "median": 0.00195,
-            "mean": 0.003615
+            "median": 0.00307,
+            "mean": 0.0042746153846153845
           }
         },
         "jev-ultrafast": {
-          "passed": 11,
-          "total": 15,
-          "excluded": 3,
-          "priced": 14,
+          "passed": 9,
+          "total": 13,
+          "excluded": 5,
+          "priced": 12,
           "seconds": {
-            "median": 13.0,
-            "mean": 31.24
+            "median": 13.2,
+            "mean": 34.684615384615384
           },
           "dollars": {
             "median": null,
@@ -101,8 +101,8 @@
           "excluded": 0,
           "priced": 3,
           "seconds": {
-            "median": 37.769999999999996,
-            "mean": 43.89666666666666
+            "median": 38.8,
+            "mean": 45.233333333333334
           },
           "dollars": {
             "median": 0.0025,
@@ -121,7 +121,7 @@
         "fastbrowse",
         "browser-use"
       ],
-      "tasks": 8,
+      "tasks": 7,
       "arms": {
         "fastbrowse": {
           "passed": 21,
@@ -130,7 +130,7 @@
           "priced": 21,
           "seconds": {
             "median": 18.2,
-            "mean": 17.70904761904762
+            "mean": 19.79047619047619
           },
           "dollars": {
             "median": 0.00513,
@@ -138,17 +138,17 @@
           }
         },
         "browser-use": {
-          "passed": 22,
-          "total": 24,
-          "excluded": 0,
-          "priced": 24,
+          "passed": 19,
+          "total": 21,
+          "excluded": 3,
+          "priced": 21,
           "seconds": {
-            "median": 12.850000000000001,
-            "mean": 13.204166666666667
+            "median": 12.8,
+            "mean": 12.457142857142857
           },
           "dollars": {
-            "median": 0.1353,
-            "mean": 0.18835083333333333
+            "median": 0.13075,
+            "mean": 0.14404142857142857
           }
         }
       },
@@ -171,8 +171,8 @@
           "excluded": 2,
           "priced": 25,
           "seconds": {
-            "median": 19.3,
-            "mean": 27.8436
+            "median": 19.5,
+            "mean": 29.844
           },
           "dollars": {
             "median": 0.00716,
@@ -180,17 +180,17 @@
           }
         },
         "browser-use": {
-          "passed": 26,
-          "total": 27,
-          "excluded": 0,
-          "priced": 27,
+          "passed": 24,
+          "total": 25,
+          "excluded": 2,
+          "priced": 25,
           "seconds": {
-            "median": 15.0,
-            "mean": 20.22222222222222
+            "median": 14.8,
+            "mean": 20.34
           },
           "dollars": {
-            "median": 0.19698,
-            "mean": 0.2329451851851852
+            "median": 0.19622,
+            "mean": 0.225554
           }
         }
       },
@@ -213,8 +213,8 @@
           "excluded": 0,
           "priced": 15,
           "seconds": {
-            "median": 44.9,
-            "mean": 57.57333333333333
+            "median": 57.0,
+            "mean": 78.79333333333334
           },
           "dollars": {
             "median": 0.02709,
@@ -255,8 +255,8 @@
           "excluded": 1,
           "priced": 8,
           "seconds": {
-            "median": 70.585,
-            "mean": 76.70375
+            "median": 101.55,
+            "mean": 94.3125
           },
           "dollars": {
             "median": 0.028325000000000003,
@@ -265,16 +265,16 @@
         },
         "browser-use": {
           "passed": 8,
-          "total": 9,
-          "excluded": 0,
-          "priced": 9,
+          "total": 8,
+          "excluded": 1,
+          "priced": 8,
           "seconds": {
-            "median": 42.6,
-            "mean": 77.9888888888889
+            "median": 38.35,
+            "mean": 66.9625
           },
           "dollars": {
-            "median": 0.25788,
-            "mean": 0.49801
+            "median": 0.23953,
+            "mean": 0.4367075
           }
         }
       },

@@ -248,18 +248,22 @@ def test_the_feed_leads_each_release_with_the_core_suite() -> None:
     ]
 
 
-def test_provider_outages_count_in_no_figure() -> None:
-    """An outage says nothing about the agent: 0.5.6 read 55/63 at 28.6s on core, 55/56 at 20.6s without them."""
-    waited = _row("pypi-version") | {"seconds": 40.0, "transient_seconds": 30.0}
+def test_an_outage_scores_no_arm_and_takes_a_matching_attempt_from_each() -> None:
+    """0.5.6 dropped fastbrowse's outages alone, leaving it on 13 core tasks beside Browser Use on 14. Time is wall
+    time: only fastbrowse measures its outage waits, so subtracting them would favour it."""
+    waited = _row("pypi-version") | {"seconds": 40.0, "transient_seconds": 30.0, "at": 1.0}
     outage = _row("pypi-version") | {"normalized_status": "unavailable", "passed": False, "seconds": 300.0}
-    feed = versions.summary([("1.0.0", [waited, outage])])
-    arm = feed.releases[0].arms["fastbrowse"]
-    assert (arm.passed, arm.total, arm.excluded) == (1, 1, 1)
-    assert arm.seconds.median == 10.0 and arm.dollars.mean == 0.01
-    rows = [waited, outage, *[_row("pypi-version", arm="browser-use")] * 2]
-    assert "Each arm made 2 attempts; left out as provider outages: fastbrowse 1." in versions.headline("1.0.0", rows)
-    only = versions.summary([("1.0.0", [outage])]).releases[0].arms["fastbrowse"]
-    assert (only.total, only.excluded, only.seconds.median) == (0, 1, None)
+    first = _row("pypi-version", arm="browser-use") | {"at": 1.0}
+    later = _row("pypi-version", arm="browser-use", passed=False) | {"at": 2.0}
+    lost = [_row("hn-top") | {"normalized_status": "unavailable"}, _row("hn-top", arm="browser-use")]
+    rows = [waited, outage, first, later, *lost]
+    arms = versions.summary([("1.0.0", rows)]).releases[0]
+    assert arms.tasks == 1
+    assert [(a.passed, a.total, a.excluded) for a in arms.arms.values()] == [(1, 1, 2), (1, 1, 2)]
+    assert arms.arms["fastbrowse"].seconds.median == 40.0
+    note = versions.headline("1.0.0", rows)
+    assert "so each arm is scored on the same 1: an attempt one arm lost is dropped for every arm" in note
+    assert "`hn-top` is left out, with no fastbrowse attempt measured." in note
 
 
 def test_every_comparison_sets_arms_on_the_same_tasks() -> None:

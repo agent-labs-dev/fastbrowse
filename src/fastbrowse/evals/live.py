@@ -737,7 +737,7 @@ def summarize(rows: list[EvalRow], arms: list[str]) -> None:
         passed = sum(r.passed for r in arm_rows)
         correct = sum(r.correct for r in arm_rows)
         priced = [r.dollars for r in arm_rows if r.dollars is not None]
-        seconds = [max(r.seconds - r.transient_seconds, 0.0) for r in arm_rows]
+        seconds = [r.seconds for r in arm_rows]
         unknown = len(arm_rows) - len(priced)
         print(
             f"{arm}: {passed}/{len(arm_rows)} passed, {correct} correct, median {statistics.median(seconds):.1f}s, "
@@ -746,7 +746,7 @@ def summarize(rows: list[EvalRow], arms: list[str]) -> None:
         if excluded := len(ran) - len(arm_rows):
             print(f"  {excluded} runs ended by a provider outage, excluded")
         if lost := sum(r.transient_seconds for r in arm_rows):
-            print(f"  {'transient':18} {lost / len(arm_rows):5.1f}s a task, excluded from the median")
+            print(f"  {'transient':18} {lost / len(arm_rows):5.1f}s a task, included in the median")
         calls: dict[str, float] = {}
         for r in arm_rows:
             for label, spent in r.seconds_by_call.items():

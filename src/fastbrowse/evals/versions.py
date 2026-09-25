@@ -230,7 +230,7 @@ def all_tasks() -> tuple[dict[str, tuple[Any, ...]], tuple[Any, ...]]:
 
 _KEPT = ("arm", "task", "category", "suite", "suite_version", "task_version", "status",
          "normalized_status", "task_successful", "passed", "correct",
-         "seconds", "dollars", "retries", "failure", "model", "text_model", "transient_seconds")  # fmt: skip
+         "seconds", "dollars", "retries", "failure", "model", "text_model", "transient_seconds", "at")  # fmt: skip
 _RUN_KEPT = ("run_id", "run_started", "fastbrowse_version", "git_sha", "git_dirty", "providers", "max_steps",
              "concurrency", "jev_ultrafast", "arms", "python", "argv")  # fmt: skip
 
@@ -316,37 +316,16 @@ def published() -> list[tuple[str, list[dict[str, Any]]]]:
 
 def _measured(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     """The attempts that measured the arm. One that ended `unavailable` was stopped by a provider outage outlasting
-    every retry, so it says nothing about the arm and counts in no pass rate, time or cost."""
+    every retry, so it says nothing about the arm."""
     return [r for r in rows if r.get("normalized_status") != "unavailable"]
 
 
-def _agent_seconds(row: Mapping[str, Any]) -> float:
-    """The run's time without the outage waits it measured (`transient_seconds`): failed requests and the backoff
-    between them are the provider's time, not the arm's."""
-    return max(row["seconds"] - (row.get("transient_seconds") or 0.0), 0.0)
-
-
-def _attempts(rows: Sequence[Mapping[str, Any]]) -> str:
-    """The note under a comparison saying how many attempts each arm made and which a provider outage ended, so a
-    difference in the counts shown is accounted for rather than left to look like unequal testing."""
-    arms = _by_arm(rows)
-    made = {len(arm_rows) for arm_rows in arms.values()}
-    lost = {arm: len(arm_rows) - len(_measured(arm_rows)) for arm, arm_rows in arms.items()}
-    named = ", ".join(f"{_label(arm)} {n}" for arm, n in lost.items() if n)
-    if len(made) == 1:
-        note = f"Each arm made {made.pop()} attempts"
-    else:
-        note = "Attempts made: " + ", ".join(f"{_label(arm)} {len(arm_rows)}" for arm, arm_rows in arms.items())
-    return note + (f"; left out as provider outages: {named}." if named else ".")
-
-
 def _arm_stats(rows: Sequence[Mapping[str, Any]]) -> dict[str, str]:
-    rows = _measured(rows)
     if not rows:
         return dict.fromkeys(
             ("passed", "correct", "median time", "mean time", "median cost", "mean cost", "total cost"), "-"
         )
-    seconds = [_agent_seconds(r) for r in rows]
+    seconds = [r["seconds"] for r in rows]
     dollars = [r["dollars"] for r in rows if r["dollars"] is not None]
     unpriced = f" ({len(rows) - len(dollars)} unpriced)" if len(dollars) < len(rows) else ""
     return {
@@ -375,32 +354,86 @@ def _by_arm(rows: Sequence[Mapping[str, Any]]) -> dict[str, list[Mapping[str, An
     return dict(sorted(arms.items(), key=lambda item: _arm_rank(item[0])))
 
 
-def _by_comparison(rows: Sequence[Mapping[str, Any]]) -> dict[tuple[str, ...], list[Mapping[str, Any]]]:
-    """`rows` split by the arms their task ran on. A task runs only on the arms it grades on equal terms
-    (`LiveTask.arms`): pooled, a suite set fastbrowse on 21 tasks beside Browser Use on 14. Within a group every
-    arm ran the same tasks. Groups with most arms first, then in the arms' registry order."""
+@dataclasses.dataclass(frozen=True)
+class _Comparison:
+    """Arms set against each other on the same attempts at the same tasks."""
+
+    arms: tuple[str, ...]
+    rows: list[Mapping[str, Any]]
+    """Every attempt made, outages included."""
+    scored: list[Mapping[str, Any]]
+    """The attempts every figure is taken from: as many per arm at each task."""
+    left_out: list[str]
+    """Tasks some arm has no measured attempt at, so none of their attempts are scored."""
+
+    @property
+    def title(self) -> str:
+        tasks = len({r["task"] for r in self.scored})
+        noun = "task" if tasks == 1 else "tasks"
+        if len(self.arms) == 1:
+            return f"{_label(self.arms[0])} alone, on the {tasks} {noun} no other arm is graded on"
+        return " against ".join(_label(a) for a in self.arms) + f", on the same {tasks} {noun}"
+
+    @property
+    def note(self) -> str:
+        """How many attempts each arm made and why fewer are scored, so no gap in the counts is left unexplained."""
+        made = {arm: len(attempts) for arm, attempts in _by_arm(self.rows).items()}
+        same = len(set(made.values())) == 1
+        note = (
+            f"Each arm made {next(iter(made.values()))} attempts."
+            if same
+            else "Attempts made: " + ", ".join(f"{_label(arm)} {n}" for arm, n in made.items()) + "."
+        )
+        outages = {arm: len(a) - len(_measured(a)) for arm, a in _by_arm(self.rows).items()}
+        if not any(outages.values()):
+            return note
+        named = " and ".join(f"{n} of {_label(arm)}'s" for arm, n in outages.items() if n)
+        note += (
+            f" Provider outages ended {named}, so each arm is scored on the same {len(self.scored) // len(self.arms)}"
+        )
+        note += ": an attempt one arm lost is dropped for every arm at that task." if len(self.arms) > 1 else "."
+        for task in self.left_out:
+            missing = [
+                a for a in self.arms if not _measured([r for r in self.rows if r["task"] == task and r["arm"] == a])
+            ]
+            note += f" `{task}` is left out, with no {' or '.join(map(_label, missing))} attempt measured."
+        return note
+
+
+def _by_comparison(rows: Sequence[Mapping[str, Any]]) -> list[_Comparison]:
+    """`rows` split by the arms their task ran on, each scored on matched attempts.
+
+    A task runs only on the arms it grades on equal terms (`LiveTask.arms`): pooled, a suite set fastbrowse on 21
+    tasks beside Browser Use on 14. An attempt a provider outage ended measured nothing; dropping it from one arm
+    alone would score the arms on different tasks, so at each task every arm keeps as many attempts as the arm with
+    fewest measured, its earliest, and a task some arm has none at is left out. Groups with most arms first."""
     ran: dict[str, set[str]] = {}
     for row in rows:
         ran.setdefault(row["task"], set()).add(row["arm"])
     groups: dict[tuple[str, ...], list[Mapping[str, Any]]] = {}
     for row in rows:
         groups.setdefault(tuple(sorted(ran[row["task"]], key=_arm_rank)), []).append(row)
-    return dict(sorted(groups.items(), key=lambda item: (-len(item[0]), [_arm_rank(a) for a in item[0]])))
-
-
-def _compared(arms: tuple[str, ...], rows: Sequence[Mapping[str, Any]]) -> str:
-    tasks = len({r["task"] for r in rows})
-    noun = "task" if tasks == 1 else "tasks"
-    if len(arms) == 1:
-        return f"{_label(arms[0])} alone, on the {tasks} {noun} no other arm is graded on"
-    return " against ".join(_label(a) for a in arms) + f", on the same {tasks} {noun}"
+    comparisons = []
+    for arms, group in sorted(groups.items(), key=lambda item: (-len(item[0]), [_arm_rank(a) for a in item[0]])):
+        tasks: dict[str, dict[str, list[Mapping[str, Any]]]] = {}
+        for row in _measured(group):
+            tasks.setdefault(row["task"], {}).setdefault(row["arm"], []).append(row)
+        scored: list[Mapping[str, Any]] = []
+        for per_arm in tasks.values():
+            if len(per_arm) == len(arms):
+                fewest = min(map(len, per_arm.values()))
+                for attempts in per_arm.values():
+                    scored += sorted(attempts, key=lambda r: r.get("at") or 0.0)[:fewest]
+        left_out = sorted({r["task"] for r in group} - {r["task"] for r in scored})
+        comparisons.append(_Comparison(arms, group, scored, left_out))
+    return comparisons
 
 
 def results_table(release: str, rows: Sequence[Mapping[str, Any]]) -> str:
     return "\n\n".join(
-        _results_table(release, arms, group)
+        _results_table(release, comparison)
         for suite in _by_suite(rows).values()
-        for arms, group in _by_comparison(suite).items()
+        for comparison in _by_comparison(suite)
     )
 
 
@@ -411,19 +444,21 @@ def _by_suite(rows: Sequence[Mapping[str, Any]]) -> dict[tuple[str, str], list[M
     return dict(sorted(groups.items()))
 
 
-def _results_table(release: str, arms: tuple[str, ...], rows: Sequence[Mapping[str, Any]]) -> str:
+def _results_table(release: str, comparison: _Comparison) -> str:
     """One comparison in `release`'s published rows as a results table, with the suite version and runs behind it
     and any task changed since, so an old score cannot pass for one of the tasks as they stand."""
     columns = ["passed", "correct", "median time", "mean time", "median cost", "mean cost", "total cost"]
+    rows = comparison.rows
     (suite, revision), *_ = _by_suite(rows)
-    lines = [f"`{suite}` `{revision}`: {_compared(arms, rows)}.", "",
+    lines = [f"`{suite}` `{revision}`: {comparison.title}.", "",
              "| | " + " | ".join(columns) + " |", "|:--|" + ":--|" * len(columns)]  # fmt: skip
-    for arm, arm_rows in _by_arm(rows).items():
-        stats = _arm_stats(arm_rows)
+    scored = _by_arm(comparison.scored)
+    for arm in comparison.arms:
+        stats = _arm_stats(scored.get(arm, []))
         label = f"{_label(arm)} ({release})" if arm == "fastbrowse" else _label(arm)
         lines.append(f"| {label} | " + " | ".join(stats[c] for c in columns) + " |")
     runs = sorted({(r["run"]["run_id"], (r["run"]["git_sha"] or "")[:7]) for r in rows})
-    lines += ["", _attempts(rows) + " Runs: " + ", ".join(f"`{run}` at `{sha}`" for run, sha in runs) + "."]
+    lines += ["", comparison.note + " Runs: " + ", ".join(f"`{run}` at `{sha}`" for run, sha in runs) + "."]
     lock = load_lock()
     changed = sorted(
         {(r["task"], r["task_version"], task_version(r["task"], lock)) for r in rows}
@@ -444,22 +479,23 @@ def headline(release: str, rows: Sequence[Mapping[str, Any]]) -> str:
     tasks = {r["task"] for r in rows}
     lines = [
         f"Measured on {days[-1]} with the build released as {release}: {len(tasks)} tasks, "
-        f"{len(_measured(rows))} attempts across all arms, on cloud browsers.",
+        f"{len(rows)} attempts across all arms, on cloud browsers.",
         "",
     ]
     alone = 0
     for (suite, revision), suite_rows in _by_suite(rows).items():
-        for arms, group in _by_comparison(suite_rows).items():
-            if len(arms) == 1:
-                alone += len({r["task"] for r in group})
+        for comparison in _by_comparison(suite_rows):
+            if len(comparison.arms) == 1:
+                alone += len({r["task"] for r in comparison.rows})
                 continue
-            lines += [f"Suite `{suite}` `{revision}`: {_compared(arms, group)}.", "",
+            lines += [f"Suite `{suite}` `{revision}`: {comparison.title}.", "",
                       "| | passed | cost per task | median time |", "|:--|:--|:--|:--|"]  # fmt: skip
-            for arm, arm_rows in _by_arm(group).items():
-                s = _arm_stats(arm_rows)
+            scored = _by_arm(comparison.scored)
+            for arm in comparison.arms:
+                s = _arm_stats(scored.get(arm, []))
                 cost = f"{s['median cost']} (median), {s['mean cost']} mean"
                 lines.append(f"| {_label(arm)} | {s['passed']} | {cost} | {s['median time']} |")
-            lines += ["", _attempts(group), ""]
+            lines += ["", comparison.note, ""]
     if alone:
         lines.append(f"{alone} {'task' if alone == 1 else 'tasks'} graded on fastbrowse alone "
                      f"{'is' if alone == 1 else 'are'} in [docs/evals.md](docs/evals.md#results).")  # fmt: skip
@@ -532,7 +568,8 @@ class ArmSummary(BaseModel):
     passed: int
     total: int
     excluded: int = 0
-    """Attempts left out of every figure here because a provider outage outlasted their retries."""
+    """Attempts made but not scored: those a provider outage ended, and as many of this arm's at the same task when
+    another arm lost one, so every arm is scored on the same attempts."""
     priced: int
     seconds: MetricSummary
     dollars: MetricSummary
@@ -578,21 +615,23 @@ def summary(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) 
             for task in sorted({r["task"] for r in rows})
         }
         comparisons = [
-            (suite, revision, compared, group)
+            (suite, revision, comparison)
             for (suite, revision), suite_rows in _by_suite(rows).items()
-            for compared, group in _by_comparison(suite_rows).items()
+            for comparison in _by_comparison(suite_rows)
         ]
-        for suite, revision, compared, group in comparisons:
+        for suite, revision, comparison in comparisons:
+            group = comparison.rows
             arms = {}
+            scored = _by_arm(comparison.scored)
             for arm, attempts in _by_arm(group).items():
-                arm_rows = _measured(attempts)
+                arm_rows = scored.get(arm, [])
                 prices = [r["dollars"] for r in arm_rows if r["dollars"] is not None]
                 arms[arm] = ArmSummary(
                     passed=sum(bool(r["passed"]) for r in arm_rows),
                     total=len(arm_rows),
                     excluded=len(attempts) - len(arm_rows),
                     priced=len(prices),
-                    seconds=_metrics([_agent_seconds(r) for r in arm_rows]),
+                    seconds=_metrics([r["seconds"] for r in arm_rows]),
                     dollars=_metrics(prices if len(prices) == len(arm_rows) else []),
                 )
             changes = [
@@ -607,8 +646,8 @@ def summary(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) 
                     date=max(r["run"]["run_started"][:10] for r in group),
                     suite=suite,
                     suite_version=revision,
-                    compared=list(compared),
-                    tasks=len({r["task"] for r in group}),
+                    compared=list(comparison.arms),
+                    tasks=len({r["task"] for r in comparison.scored}),
                     arms=arms,
                     task_versions_changed=changes,
                 )
@@ -658,8 +697,10 @@ def protocol_docs() -> str:
         "The hosted SDK maps to `done` only for a stopped session with `is_task_successful=true`.",
         "That verdict lands after the session stops; the harness waits up to 90 seconds for it.",
         "An attempt a provider outage ended is waited out and run again, up to five times over about 25 minutes.",
-        "A row still unavailable after that is recorded but left out of every pass rate, time and cost.",
-        "Median time excludes the outage waits fastbrowse measured within a run (`transient_seconds`).",
+        "A row still unavailable after that is recorded but scores nothing, and neither does one attempt of every "
+        "other arm at that task: each comparison scores its arms on the same attempts at the same tasks.",
+        "Time is wall time for every arm. fastbrowse records the outage waits inside a run (`transient_seconds`), "
+        "but the other arms cannot, so no arm's are subtracted.",
         "Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the row.",
         "Existing timing includes browser setup. These rows do not claim the planned handoff-only timing protocol.",
     ]
@@ -680,14 +721,13 @@ def feed_schema_docs() -> str:
         "",
         "`releases` is newest first, and within a release the suites run in their defined order, `core` first. "
         "`date` is the latest UTC run date in that group.",
-        "Each entry is one comparison: `compared` names the arms that ran its `tasks`, every arm on all of them, "
+        "Each entry is one comparison: `compared` names the arms scored on its `tasks`, every arm on all of them, "
         "since a task runs only on the arms it grades on equal terms. A suite has one entry per comparison, "
         "those with most arms first; the first `core` entry is fastbrowse against Browser Use.",
         "Schema version 2 added `compared` and `tasks`; version 1 pooled a suite's comparisons into one entry.",
-        "`arms` maps registry names to statistics across every attempt, including failures, except those a provider "
-        "outage ended: `excluded` counts those, and `total` leaves them out.",
-        "`seconds` and `dollars` contain numeric median and mean values; dollars are USD. "
-        "`seconds` excludes measured outage waits (`transient_seconds`).",
+        "`arms` maps registry names to statistics across the scored attempts, failures included. `total` counts "
+        "them; `excluded` counts attempts made but not scored, ended by an outage or matched to one.",
+        "`seconds` and `dollars` contain numeric median and mean values; dollars are USD. Seconds are wall time.",
         "`priced` counts attempts with known cost. Both dollar statistics are null if any attempt is unpriced.",
         "`task_versions_changed` compares observed task versions with the previous published release:",
         "`task`, `previous` and `current` version lists. New tasks have an empty previous list;",
