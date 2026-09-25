@@ -145,9 +145,16 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
 The tag builds, creates the GitHub release with **the changelog entry as its notes**, publishes to PyPI by
 trusted publishing, and then asks fastbrowse.ai to rebuild, since its changelog page reads this file at build
 time. `scripts/changelog.py` is what reads the entry, so the repository, the release and the site never tell
-three stories about one version. The rebuild needs `SITE_DEPLOY_HOOK` (a Vercel deploy hook for
-`agent-labs-dev/fastbrowse-site`) in this repository's secrets; without it the release still succeeds and the
-site catches up on its own next deploy.
+three stories about one version. `.github/workflows/site.yml` asks for the same rebuild whenever
+`CHANGELOG.md`, `README.md` or `docs/` change on `main`, so the site never waits for a release to catch up. It
+needs `SITE_DEPLOY_HOOK` (a Vercel deploy hook for `agent-labs-dev/fastbrowse-site`) in this repository's
+secrets; without it the workflows still succeed and warn that the site was not rebuilt.
+
+Pull requests also get an advisory Jev review (`.github/workflows/jev-review.yml`, `scripts/jev_review.py`):
+Jev judges whether changed prose is true to the diff and whether the changelog misses a user-visible change.
+Its doubts are warnings for the reviewer; it never blocks a merge. It reads `AI_GATEWAY_API_KEY` from the
+repository's secrets, so it runs on `pull_request_target` from the base branch's code and reads the pull
+request only as a git ref: a change to the script takes effect once it is on `main`.
 
 PR titles are conventional commits (`feat:`, `fix:`, `perf:`, `docs:`, `build:`, `ci:`, `chore:`) and become
 the squash-merge subject. `main` requires the `check` status and resolved review threads.
