@@ -57,6 +57,9 @@ Choose the best observed target if the next operation is the one this question n
 Use the task, field values, nearby text and recent actions. Another question decides which operation runs.
 Do not choose a field that already contains the requested value. Choose only an offered element.
 Do not toggle a checkbox, switch or radio already in the requested state.
+While the form's mode (a trip or ticket type, a tab) is not the one the task needs, the control that sets
+the mode is the target, not the form's submit. A control that explores or browses broadly does not run the
+search the task asked for.
 Elements marked offscreen can be targeted directly. A link's href shows where it leads.
 Elements that read alike carry a `context`: the card, row or section each one belongs to. When the task
 or subgoal names one of those, choose the element whose context matches it."""
@@ -384,7 +387,9 @@ def build_request(
                 "collected notes and recent actions; while planning, judge from the task. Evidence can answer "
                 "part of a comparison or explain a failed action. A relevant error, refusal, result or total "
                 "must be preserved even when the page also has an editable form. Field values, suggestions "
-                "and previews are inputs, not results. A review page before a final "
+                "and previews are inputs, not results, and so are the prices or availability a picker shows beside "
+                "its options (a calendar's fare per day) while a value is still being chosen. A review page before "
+                "a final "
                 "submit is evidence: the totals it shows may not appear again once the submit commits. A "
                 "rewritten URL alone proves nothing. Judge the content regardless of control labels or roles."
             ),

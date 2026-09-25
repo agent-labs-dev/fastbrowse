@@ -388,6 +388,8 @@ class ReadOutcome(Frozen):
     cost_lines: tuple[CostLine, ...]
     continues: tuple[str, ...] = ()
     """Requirements whose list goes on past this capture, so no claim from it closes them."""
+    incomplete: tuple[str, ...] = ()
+    """Requirements whose continuation lost a record, so later comparisons cannot settle them."""
     uncovered: int = 0
     """Records a continuation named that no run of offered blocks resolved, or that fell past the cap, so this
     page's comparison is incomplete in the notes even though the reader believed it had listed them."""
@@ -442,14 +444,17 @@ async def read(
     requirements: Sequence[Requirement] = (),
     notice: str = "",
     continuing: Collection[str] = (),
+    incomplete: Collection[str] = (),
 ) -> ReadOutcome:
     """`notice` is what the caller knows about the page that its text does not say, such as its next-page control;
     it goes with every question the reader is asked, however the question is narrowed. `continuing` names the
-    requirements an earlier page already said run past it: no scalar choice can answer one, so it is not asked."""
+    requirements an earlier page already said run past it. Neither those nor `incomplete` comparisons can be
+    answered by scalar choice, so they go to the reader."""
     facts: dict[tuple[str, str | None], Fact] = {}
     coverage: list[int] = []
     costs: list[CostLine] = []
     continues: dict[str, None] = {}
+    lost: dict[str, None] = {}
     found: list[Fact] = []
     rejected = 0
     uncovered = 0
@@ -458,7 +463,10 @@ async def read(
     wanted = [
         r
         for r in requirements
-        if r.id in requirement_ids and r.kind is RequirementKind.INFORMATION and r.id not in continuing
+        if r.id in requirement_ids
+        and r.kind is RequirementKind.INFORMATION
+        and r.id not in continuing
+        and r.id not in incomplete
     ]
     # A pager notice is a caveat on what this page can answer, and the choice model picks quotes without weighing one.
     if jev is not None and wanted and not notice:
@@ -572,15 +580,18 @@ async def read(
         # Code copies each quote from the blocks named, exactly as it does for a claim, so a record is the
         # page's own text and never the reader's retyping of it.
         for continuation in carried:
-            uncovered += max(0, len(continuation.records) - _MAX_CONTINUING_RECORDS)
+            missing = max(0, len(continuation.records) - _MAX_CONTINUING_RECORDS)
             for cite in continuation.records[:_MAX_CONTINUING_RECORDS]:
                 evidence = _cited(capture, part, cite)
                 if evidence is None:
-                    uncovered += 1
+                    missing += 1
                     continue
                 record = _quoted(evidence)
                 so_far.add(record)
                 found.append(record)
+            uncovered += missing
+            if missing:
+                lost[continuation.requirement_id] = None
         rejected += rejected_here
         # An unsupported assertion of completion cannot suppress reading the remaining chunks. Nor can it end a
         # read of a page whose list goes on, whether this chunk said so or the caller's notice did: the rest of
@@ -593,11 +604,12 @@ async def read(
     # cheapest on page one of two is only the cheapest so far. The fact is kept for the comparison; the
     # requirement stays open. The notes take the claims here rather than per chunk, which is also why the
     # collected evidence above stays separate from this read's final requirement assignments.
-    # A requirement the page settled by stating its own order is not reopened by the list going on.
+    # A lost record leaves later comparisons incomplete too; the page's own stated order can still settle a winner.
     for key in ordered:
         continues.pop(key, None)
+    blocked = (set(incomplete) | lost.keys()) - ordered
     for fact in found:
-        if fact.requirement_id in continues:
+        if fact.requirement_id in continues or fact.requirement_id in blocked:
             fact = fact.model_copy(update={"requirement_id": None})
         # Its quote was verified against this capture when the chunk was read.
         notes.add(fact)
@@ -608,6 +620,7 @@ async def read(
         rejected_claims=rejected,
         cost_lines=tuple(costs),
         continues=tuple(continues),
+        incomplete=tuple(lost),
         uncovered=uncovered,
         expands=expands if continues else None,
     )
@@ -1208,7 +1221,15 @@ async def compose(
     *,
     tokens: TokenBudget = _DEFAULT_TOKENS,
     ledger: Ledger | None = None,
+    transaction_evidence_ids: Collection[str] = (),
 ) -> Generation[ComposedAnswer]:
+    transaction = (
+        "# Transaction evidence\nThese evidence ids come from pages where the run committed an action: "
+        + ", ".join(transaction_evidence_ids)
+        + ". A claim about what that action bought, submitted or booked, including its price, cites these.\n\n"
+        if transaction_evidence_ids
+        else ""
+    )
     messages = [
         Message(
             role="system",
@@ -1225,7 +1246,7 @@ async def compose(
         ),
         Message(
             role="user",
-            content=f"# Task\n{task}\n\n# Plan\n{plan.model_dump_json()}\n\n# Notes\n",
+            content=f"# Task\n{task}\n\n# Plan\n{plan.model_dump_json()}\n\n{transaction}# Notes\n",
         ),
     ]
     room = _notes_room(tokens, messages, _AnswerDraft)
@@ -1275,8 +1296,15 @@ def draft_answer(plan: Plan, notes: Notes) -> ComposedAnswer | None:
     return assemble_answer(tuple(claims.values()), notes, plan.requirements)
 
 
+TRANSACTION_CONTRADICTED = "transaction_contradicted"
+
+
 def claim_check_questions(
-    composed: ComposedAnswer, notes: Notes, *, tokens: TokenBudget = _DEFAULT_TOKENS
+    composed: ComposedAnswer,
+    notes: Notes,
+    *,
+    tokens: TokenBudget = _DEFAULT_TOKENS,
+    transaction_evidence_ids: Collection[str] = (),
 ) -> Mapping[str, NoulQuestion]:
     questions: dict[str, NoulQuestion] = {}
     known = notes.evidence
@@ -1295,6 +1323,33 @@ def claim_check_questions(
                 ),
                 true=f"Yes, the claim is {issue}.",
                 false=f"No, the claim is not {issue}.",
+            )
+    # A claim is judged against what it cites, and an Amazon answer cited the search listing for a pen the run did
+    # not buy. The pages where the run committed an action are asked about once, against the whole answer.
+    committed = [known[key].model_dump_json() for key in transaction_evidence_ids if key in known]
+    if committed and composed.claims:
+        context = f"{UNTRUSTED}\n\n# Answer\n{composed.answer}\n\n# Pages where the run committed an action\n"
+        question = (
+            "\n\nDoes the answer contradict what these pages show the run's action bought, submitted or booked, "
+            "or its price?"
+        )
+        transaction = NoulQuestion(
+            instructions=context + question,
+            true="Yes, the answer contradicts the pages the run committed an action on.",
+            false="No, the answer agrees with the pages the run committed an action on.",
+        )
+        room = tokens.remaining_chars(
+            json.dumps({"answer": composed.answer}), [q.model_dump_json() for q in (*questions.values(), transaction)]
+        )
+        # The latest pages are the confirmation and the review before it, so the budget keeps them first.
+        kept: list[str] = []
+        for line in reversed(committed):
+            if len(json.dumps("\n".join([line, *kept]))) - len('""') > room:
+                break
+            kept.insert(0, line)
+        if kept:
+            questions[TRANSACTION_CONTRADICTED] = transaction.model_copy(
+                update={"instructions": context + "\n".join(kept) + question}
             )
     # Actions are evidenced by the page, which the done check already judged; quotes only evidence information.
     information = [r for r in composed.requirements if r.kind is RequirementKind.INFORMATION]

@@ -44,7 +44,7 @@ from fastbrowse.models import (
 from fastbrowse.page import Action, ActResult, BlockKind, Capture, Control, Observation, Page
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 from fastbrowse.policy import Decision, HistoryEntry, ReadAssessment, build_request, decide
-from fastbrowse.retrieval import ComposedAnswer
+from fastbrowse.retrieval import TRANSACTION_CONTRADICTED, ComposedAnswer
 from fastbrowse.safety import ScopedSecrets
 from fastbrowse.telemetry import Ledger
 from fastbrowse.tripwires import Tripwire
@@ -1888,6 +1888,117 @@ async def _reading_state() -> _RunState:
     requirement = Requirement(id="r1", text="Find the total", kind=RequirementKind.INFORMATION)
     state.ready_plan = Plan(requirements=(requirement,), answer_expected=True)
     return state
+
+
+async def test_a_read_carries_incomplete_comparisons_to_later_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = await _reading_state()
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [],
+                "answered": False,
+                "continues": [{"requirement_id": "r1", "records": [{"first": "s9", "last": "s9"}]}],
+            },
+            {"claims": [], "answered": False},
+            {
+                "claims": [{"text": "The total is 12", "cite": {"first": "s0", "last": "s0"}, "requirement_id": "r1"}],
+                "answered": True,
+            },
+        ]
+    )
+    calls: list[set[str]] = []
+    original = agent_module.read
+
+    async def reading(*args, **kwargs):
+        calls.append(set(kwargs.get("incomplete", ())))
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(agent_module, "read", reading)
+    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
+    for text in ("First page", "Second page", "The total is 12"):
+        await agent._read(state, capture((BlockKind.PARAGRAPH, text)))
+
+    assert calls == [set(), {"r1"}, {"r1"}]
+    assert state.incomplete == {"r1"}
+    assert not state.notes.evidenced("r1")
+
+
+async def test_stale_clicks_exceed_the_step_limit_but_still_stall() -> None:
+    target = _button("Continue")
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=observation((target,)))
+    page.redrawn = AsyncMock(return_value=False)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.STALE, page_changed=False))
+    page.artifacts = ()
+    llm = ScriptedLLM([{"requirements": [], "answer_expected": False}])
+    agent = Agent(
+        page,
+        ScriptedJev({"operation": "click", "click_target": target.id}, noul=0.0),
+        llm,
+        config=Config(stall=StallRules(unchanged_actions=4, max_recoveries=0)),
+    )
+
+    result = await agent.run("Continue", limits=Limits(max_steps=2))
+
+    assert result.status is Status.STUCK
+    assert len(result.steps) == 4
+    assert [step.index for step in result.steps] == list(range(4))
+    assert all(step.outcome is StepOutcome.STALE for step in result.steps)
+
+
+@pytest.mark.parametrize(
+    ("operation", "outcome"),
+    [
+        (Operation.CLICK, StepOutcome.EXECUTED),
+        (Operation.CLICK, StepOutcome.STALE),
+        (Operation.HOVER, StepOutcome.EXECUTED),
+    ],
+)
+async def test_only_executed_committing_actions_supply_transaction_evidence_to_the_answer(
+    monkeypatch: pytest.MonkeyPatch, operation: Operation, outcome: StepOutcome
+) -> None:
+    state = await _reading_state()
+    state.authorization = Authorization(irreversible_actions=True)
+    target = _button("Pay").model_copy(update={"operations": frozenset({Operation.CLICK, Operation.HOVER})})
+    checkout = _at("https://shop.test/checkout", target)
+    receipt = _at("https://shop.test/receipt")
+    for index, (url, quote) in enumerate(
+        (("https://shop.test/search", "Black pen £7"), (checkout.url, "Red pen £11.55"), (receipt.url, "Paid £11.55"))
+    ):
+        state.notes.add(
+            Fact(
+                reader=FactReader.LLM,
+                requirement_id="r1" if index == 0 else None,
+                text=quote,
+                evidence=evidence(sha=str(index)).model_copy(update={"url": url, "quote": quote}),
+            )
+        )
+    listed, *committed = state.notes.evidence
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=receipt)
+    page.redrawn = AsyncMock(return_value=False)
+    page.act = AsyncMock(return_value=ActResult(outcome=outcome, page_changed=outcome is StepOutcome.EXECUTED))
+    jev = ScriptedJev({"operation": operation.value, f"{operation.value}_target": target.id}, noul=0.0)
+    llm = ScriptedLLM([{"claims": [{"text": "Bought a black pen for £7", "evidence_ids": [listed]}]}])
+    composing = AsyncMock(wraps=agent_module.compose)
+    monkeypatch.setattr(agent_module, "compose", composing)
+    agent = Agent(page, jev, llm)
+    decision = await decide(jev, checkout, context(), Config())
+
+    await agent._step(state, checkout, decision)
+    agent._note_effect(state, receipt)
+    agent._note_effect(state, _at("https://shop.test/help"))
+    _, held = await agent._answer(state, None)
+
+    committing = operation is Operation.CLICK and outcome is StepOutcome.EXECUTED
+    assert state.transaction_documents == ({checkout.url, receipt.url} if committing else set())
+    assert held and composing.await_args is not None
+    assert composing.await_args.kwargs["transaction_evidence_ids"] == (tuple(committed) if committing else ())
+    questions = next(questions for questions in jev.requests if "contradicted_0" in questions)
+    assert (TRANSACTION_CONTRADICTED in questions) is committing
+    if committing:
+        assert "Red pen £11.55" in questions[TRANSACTION_CONTRADICTED].instructions
+        assert "Paid £11.55" in questions[TRANSACTION_CONTRADICTED].instructions
 
 
 async def test_a_page_that_rewrites_its_own_text_is_read_only_while_it_pays_out() -> None:

@@ -11,6 +11,26 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A comparison missing one of its records no longer names a winner.** When a page of a list named a record the
+  reader could not tie to the page's text, or more records than one page holds, the record was dropped and a later
+  page could still settle "the cheapest" without it. That requirement now stays open for the rest of the run, so
+  the run reports it could not settle the comparison instead of answering from part of the list. A page that
+  states its own order still settles it on the leading record.
+  ([#129](https://github.com/agent-labs-dev/fastbrowse/issues/129))
+- **An answer about what the run bought is checked against the page it bought on.** An Amazon run bought one pen
+  and reported another, citing the search listing; the checkout page it had read named the right one. Claims are
+  now also checked against what the pages where the run took a possibly irreversible action say, and the composer
+  is told which notes come from them. ([#117](https://github.com/agent-labs-dev/fastbrowse/issues/117))
+- **A click that found its element redrawn no longer spends a step.** A date picker that redraws under a click
+  dispatches nothing, but the stale step counted toward `max_steps`, and Google Flights runs spent two to four of
+  them. It still counts toward the stall budget, which bounds a page that never stops redrawing.
+  ([#101](https://github.com/agent-labs-dev/fastbrowse/issues/101), [#94](https://github.com/agent-labs-dev/fastbrowse/issues/94))
+- **Fewer wasted steps on forms and lists.** The target question now sets a form's mode (a trip type) before its
+  submit, and knows that a broad "Explore" control is not the search asked for; a calendar's fare per day is an
+  input, not evidence to stop and read; a plan no longer turns "report the total" into "the total once the order
+  is finished"; and a shortcut for a count over records goes to the page listing them, not a page about one of
+  them. ([#99](https://github.com/agent-labs-dev/fastbrowse/issues/99), [#101](https://github.com/agent-labs-dev/fastbrowse/issues/101))
+
 ## [0.5.4] - 2026-09-25
 
 - **A cheapest or highest from part of a list needs the page to state its order.** A reader that cited the

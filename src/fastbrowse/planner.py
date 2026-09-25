@@ -51,7 +51,9 @@ def _instructions() -> Message:
             "at least one requirement. Answering is not a requirement either: say whether the user expects an "
             "answer.\n\n"
             "Each information requirement must retain the relevant constraints from the task, including dates, "
-            "filters and comparison criteria. Keep related output fields together when they identify one result. "
+            "filters and comparison criteria, and adds none the task did not state: a total the user wants "
+            "reported is the order's total, not the total once the order is finished. Keep related output fields "
+            "together when they identify one result. "
             "Do not create a separate requirement to find that same result again.\n\n"
             "# Secrets\nNever write a password, token or other secret value into a requirement."
         ),

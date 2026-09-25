@@ -273,6 +273,17 @@ class _RunState:
     continuing: set[str] = field(default_factory=set[str])
     """Requirements the reader said range over a list that goes on past the page it read. A scalar choice cannot
     answer one of those, so it is not asked about them again on the next page."""
+    incomplete: set[str] = field(default_factory=set[str])
+    """Comparisons a page of their list lost a record from. No later claim closes one: its winner could be the
+    record that was lost."""
+    transaction_documents: set[str] = field(default_factory=set[str])
+    """Capture URLs on either side of an executed committing action, matched to the notes' evidence."""
+    transaction_pending: bool = False
+    """A committing action ran and the page it landed on is not observed yet."""
+
+    @property
+    def transaction_evidence_ids(self) -> tuple[str, ...]:
+        return tuple(key for key, evidence in self.notes.evidence.items() if evidence.url in self.transaction_documents)
 
     @property
     def plan(self) -> Plan:
@@ -689,6 +700,9 @@ class Agent:
             act = await self._page.act(action, self._raw_observation or observation)
             if act.outcome is StepOutcome.STALE and decision.target is not None:
                 act = await self._act_on_twin(action, observation, decision.target) or act
+            if act.outcome is StepOutcome.EXECUTED and may_be_irreversible(decision.operation, decision.target):
+                state.transaction_documents.add(observation.url)
+                state.transaction_pending = True
             if act.outcome is StepOutcome.EXECUTED and action.text is not None:
                 typed = "<secret>" if action.secret else self._redactor.mask(action.text)
             changed = act.page_changed
@@ -891,6 +905,9 @@ class Agent:
     @staticmethod
     def _note_effect(state: _RunState, observation: Observation) -> None:
         """Record on the last action what it did, which the next choice and recovery both read."""
+        if state.transaction_pending:
+            state.transaction_documents.add(observation.url)
+            state.transaction_pending = False
         before, state.acted_from = state.acted_from, None
         if before is None or not state.history or state.history[-1].effect is not None:
             return
@@ -993,7 +1010,9 @@ class Agent:
 
     async def _record_step(self, state: _RunState, step: StepResult) -> None:
         state.steps.append(step)
-        state.ledger.steps += 1
+        # A stale step dispatched nothing; the stall budget bounds redraw loops.
+        if step.outcome is not StepOutcome.STALE:
+            state.ledger.steps += 1
         if self._on_event is None:
             return
         # Taken from the page the step acted on, before the next observation moves it on.
@@ -1451,7 +1470,9 @@ class Agent:
             requirements=wanted,
             notice=notice,
             continuing=state.continuing,
+            incomplete=state.incomplete,
         )
+        state.incomplete.update(outcome.incomplete)
         # Payout is what the notes did not already say. A fact is keyed by the capture it was read from, so a
         # page that rewrites a line re-mints the same records as new facts, and counting them read it for ever.
         progressed = any(fact.text not in known for fact in state.notes.facts) or any(
@@ -1467,6 +1488,7 @@ class Agent:
             rejected_claims=outcome.rejected_claims,
             evidenced=[r.id for r in wanted if state.notes.evidenced(r.id)],
             continues=continues,
+            incomplete=sorted(state.incomplete),
             # Records the reader said this page compared that no run of blocks resolved. A comparison carried
             # forward with these missing is incomplete in the notes, which the trace should say out loud.
             uncovered=outcome.uncovered,
@@ -1684,6 +1706,7 @@ class Agent:
                             state.notes,
                             tokens=self._config.tokens,
                             ledger=state.ledger,
+                            transaction_evidence_ids=state.transaction_evidence_ids,
                         )
                     )
                 verdict = await llm_verify(
@@ -1773,7 +1796,13 @@ class Agent:
                     prepared
                     if prepared is not None
                     else compose(
-                        self._llm, state.task, state.plan, state.notes, tokens=self._config.tokens, ledger=state.ledger
+                        self._llm,
+                        state.task,
+                        state.plan,
+                        state.notes,
+                        tokens=self._config.tokens,
+                        ledger=state.ledger,
+                        transaction_evidence_ids=state.transaction_evidence_ids,
                     )
                 )
             ).data
@@ -1793,7 +1822,13 @@ class Agent:
 
     async def _holds(self, state: _RunState, answer: ComposedAnswer) -> ComposedAnswer | None:
         return await check_claims(
-            self._jev, answer, state.notes, self._config.thresholds, tokens=self._config.tokens, ledger=state.ledger
+            self._jev,
+            answer,
+            state.notes,
+            self._config.thresholds,
+            tokens=self._config.tokens,
+            ledger=state.ledger,
+            transaction_evidence_ids=state.transaction_evidence_ids,
         )
 
     async def _extraction(self, state: _RunState, output_schema: type[BaseModel]) -> Extraction:
