@@ -140,28 +140,28 @@ For example, `--only books-mystery-cheapest quotes-einstein-count` selects those
 <!-- evals:tasks:dev -->
 | Task | Category | Version | Asks |
 |---|---|---|---|
-| `books-travel-priciest` | lookup | 2 | Which is the most expensive book in the Travel category, and what does it cost? |
-| `hockey-bruins-1990` | lookup | 2 | How many games did the Boston Bruins win in the 1990 season? |
-| `oscars-2012` | lookup | 2 | Of the 2012 films listed here, which one won Best Picture? |
-| `dynamic-loading` | widget | 2 | Start the example and tell me the text that appears when loading finishes. |
-| `nested-frames` | widget | 2 | What text does the frame in the middle of the top row show? |
-| `hover-profile` | widget | 2 | Which user name is revealed when you hover over the second profile picture? |
-| `ruff-release` | lookup | 2 | What is the latest release of ruff on GitHub? |
-| `pizza-order` | checkout | 2 | Order a large pizza with mushroom for Ada Lovelace, telephone 020 7946 0000, email ada@example.com, and submit it. Tell me which size the server received. |
+| `books-travel-priciest` | lookup | 3 | Which is the most expensive book in the Travel category, and what does it cost? |
+| `hockey-bruins-1990` | lookup | 3 | How many games did the Boston Bruins win in the 1990 season? |
+| `oscars-2012` | lookup | 3 | Of the 2012 films listed here, which one won Best Picture? |
+| `dynamic-loading` | widget | 3 | Start the example and tell me the text that appears when loading finishes. |
+| `nested-frames` | widget | 3 | What text does the frame in the middle of the top row show? |
+| `hover-profile` | widget | 3 | Which user name is revealed when you hover over the second profile picture? |
+| `ruff-release` | lookup | 3 | What is the latest release of ruff on GitHub? |
+| `pizza-order` | checkout | 3 | Order a large pizza with mushroom for Ada Lovelace, telephone 020 7946 0000, email ada@example.com, and submit it. Tell me which size the server received. |
 <!-- /evals:tasks:dev -->
 
 <!-- evals:tasks:heldout -->
 | Task | Category | Version | Asks |
 |---|---|---|---|
-| `books-mystery-cheapest` | lookup | 2 | Which is the cheapest book in the Mystery category, and what does it cost? |
-| `quotes-einstein-count` | lookup | 2 | How many quotes by Albert Einstein are there across the whole site? |
-| `countries-mongolia` | lookup | 2 | What population does this page list for Mongolia? |
-| `quotes-js-page2` | lookup | 2 | Who wrote the first quote on the second page? |
-| `crates-serde` | lookup | 2 | What is the latest stable version of the serde crate? |
-| `new-window` | widget | 2 | Follow the link that opens a new window and tell me that window's heading. |
-| `table-largest-due` | widget | 2 | In the first table, whose amount due is the largest? |
-| `httpx-requires-python` | lookup | 2 | What is the oldest Python version the latest httpx release supports? |
-| `quotes-search` | lookup | 2 | Use the search form to find Albert Einstein's quote tagged success, and tell me what it says. |
+| `books-mystery-cheapest` | lookup | 3 | Which is the cheapest book in the Mystery category, and what does it cost? |
+| `quotes-einstein-count` | lookup | 3 | How many quotes by Albert Einstein are there across the whole site? |
+| `countries-mongolia` | lookup | 3 | What population does this page list for Mongolia? |
+| `quotes-js-page2` | lookup | 3 | Who wrote the first quote on the second page? |
+| `crates-serde` | lookup | 3 | What is the latest stable version of the serde crate? |
+| `new-window` | widget | 3 | Follow the link that opens a new window and tell me that window's heading. |
+| `table-largest-due` | widget | 3 | In the first table, whose amount due is the largest? |
+| `httpx-requires-python` | lookup | 3 | What is the oldest Python version the latest httpx release supports? |
+| `quotes-search` | lookup | 3 | Use the search form to find Albert Einstein's quote tagged success, and tell me what it says. |
 <!-- /evals:tasks:heldout -->
 
 The rule that makes the split worth having: **agent changes are iterated against `dev` only.** `heldout` is run
@@ -186,19 +186,19 @@ Date truth is computed when the attempt runs, and form and date tasks are graded
 <!-- evals:tasks:stretch-dev -->
 | Task | Category | Version | Asks |
 |---|---|---|---|
-| `stretch-wizard-review` | checkout | 2 | In the Automation Practice Lab section, fill out the Multi-Step Wizard: Full Name 'Ada Lovelace', Email 'ada.lovelace@example.com', City 'London', ZIP Code 'SW1A 1AA'. Review your details, submit, and tell me what the page says. |
-| `stretch-date-range-monday` | widget | 2 | Find Date Picker 3, the date range picker. Book a stay starting the next Monday that is strictly after today, for nine nights, then submit. Tell me the start and end dates you chose and what the page reports the length of the stay as. |
-| `stretch-books-nonfiction-five-star` | lookup | 4 | Across every page of the Nonfiction category, which three five-star-rated books are the cheapest, and what does each cost? |
-| `stretch-bstack-apple-google` | widget | 3 | Filter the product list to Apple and Google together. Then remove the Apple filter, so only Google remains. Sort by price lowest to highest, and tell me the two cheapest Google phones and their prices. |
-| `stretch-wizard-correction` | checkout | 3 | In the Live Interactive Form widget, fill First Name 'Priya Sharma', Email 'priya.sharma@example.com', Address '221B Baker Street', City 'Manchester', Language 'Turkish', and check the QA newsletter box. Reach the Review step, then go back and correct the first name to 'Priya Sharman' before continuing through Submit. Tell me the first name the Review step showed last and what the confirmation says. |
+| `stretch-wizard-review` | checkout | 3 | In the Automation Practice Lab section, fill out the Multi-Step Wizard: Full Name 'Ada Lovelace', Email 'ada.lovelace@example.com', City 'London', ZIP Code 'SW1A 1AA'. Review your details, submit, and tell me what the page says. |
+| `stretch-date-range-monday` | widget | 3 | Find Date Picker 3, the date range picker. Book a stay starting the next Monday that is strictly after today, for nine nights, then submit. Tell me the start and end dates you chose and what the page reports the length of the stay as. |
+| `stretch-books-nonfiction-five-star` | lookup | 5 | Across every page of the Nonfiction category, which three five-star-rated books are the cheapest, and what does each cost? |
+| `stretch-bstack-apple-google` | widget | 4 | Filter the product list to Apple and Google together. Then remove the Apple filter, so only Google remains. Sort by price lowest to highest, and tell me the two cheapest Google phones and their prices. |
+| `stretch-wizard-correction` | checkout | 4 | In the Live Interactive Form widget, fill First Name 'Priya Sharma', Email 'priya.sharma@example.com', Address '221B Baker Street', City 'Manchester', Language 'Turkish', and check the QA newsletter box. Reach the Review step, then go back and correct the first name to 'Priya Sharman' before continuing through Submit. Tell me the first name the Review step showed last and what the confirmation says. |
 <!-- /evals:tasks:stretch-dev -->
 
 <!-- evals:tasks:stretch-heldout -->
 | Task | Category | Version | Asks |
 |---|---|---|---|
-| `stretch-calendar-first-friday` | widget | 3 | Using the jQuery UI Datepicker (the calendar popup, not the native date input), navigate to next month and select its first Friday. Tell me the date, day, and month it shows. |
-| `stretch-quotes-top-authors` | lookup | 3 | Across every page of this site, which three authors have the most quotes attributed to them, and how many quotes does each have? |
-| `stretch-bstack-apple-samsung` | widget | 3 | Filter the product list to Apple and Samsung together, then remove the Apple filter so only Samsung remains. Sort by price highest to lowest, and tell me the three most expensive phones and their prices. |
+| `stretch-calendar-first-friday` | widget | 4 | Using the jQuery UI Datepicker (the calendar popup, not the native date input), navigate to next month and select its first Friday. Tell me the date, day, and month it shows. |
+| `stretch-quotes-top-authors` | lookup | 4 | Across every page of this site, which three authors have the most quotes attributed to them, and how many quotes does each have? |
+| `stretch-bstack-apple-samsung` | widget | 4 | Filter the product list to Apple and Samsung together, then remove the Apple filter so only Samsung remains. Sort by price highest to lowest, and tell me the three most expensive phones and their prices. |
 <!-- /evals:tasks:stretch-heldout -->
 
 ## Versions
@@ -226,14 +226,14 @@ when they differ:
 <!-- evals:versions -->
 | Suite | Tasks | Version |
 |---|---|---|
-| `core` | 21 | `6e85816d` |
-| `dev` | 8 | `c07d79d0` |
-| `heldout` | 9 | `45bdce8f` |
-| `stretch-dev` | 5 | `f08d4b25` |
-| `stretch-heldout` | 3 | `232fc3bf` |
+| `core` | 21 | `9b765b1a` |
+| `dev` | 8 | `d562020d` |
+| `heldout` | 9 | `18b64a73` |
+| `stretch-dev` | 5 | `8e7bcba8` |
+| `stretch-heldout` | 3 | `8f74e206` |
 | local fixtures | 6 | `dda8ba89` |
 
-Tasks past version 1: `arxiv-open` v2, `arxiv-title` v2, `books-mystery-cheapest` v2, `books-travel-priciest` v2, `countries-mongolia` v2, `crates-serde` v2, `dynamic-loading` v2, `expandtesting-login` v2, `flights-search` v2, `github-license` v2, `github-open` v2, `google-flights` v2, `hn-comments` v2, `hn-top` v2, `hockey-bruins-1990` v2, `hover-profile` v2, `httpx-requires-python` v2, `internet-login` v2, `nested-frames` v2, `new-window` v2, `oscars-2012` v2, `pizza-order` v2, `practice-login` v2, `pypi-newer` v2, `pypi-open` v2, `pypi-structured` v2, `pypi-version` v2, `quotes-einstein-count` v2, `quotes-js-page2` v2, `quotes-search` v2, `ruff-release` v2, `saucedemo-cart` v2, `saucedemo-checkout` v2, `saucedemo-locked-out` v2, `saucedemo-pause` v2, `stretch-books-nonfiction-five-star` v4, `stretch-bstack-apple-google` v3, `stretch-bstack-apple-samsung` v3, `stretch-calendar-first-friday` v3, `stretch-date-range-monday` v2, `stretch-quotes-top-authors` v3, `stretch-wizard-correction` v3, `stretch-wizard-review` v2, `table-largest-due` v2, `wiki-godel` v2, `wiki-open` v2.
+Tasks past version 1: `arxiv-open` v2, `arxiv-title` v3, `books-mystery-cheapest` v3, `books-travel-priciest` v3, `countries-mongolia` v3, `crates-serde` v3, `dynamic-loading` v3, `expandtesting-login` v3, `flights-search` v2, `github-license` v3, `github-open` v2, `google-flights` v3, `hn-comments` v2, `hn-top` v3, `hockey-bruins-1990` v3, `hover-profile` v3, `httpx-requires-python` v3, `internet-login` v3, `nested-frames` v3, `new-window` v3, `oscars-2012` v3, `pizza-order` v3, `practice-login` v3, `pypi-newer` v3, `pypi-open` v2, `pypi-structured` v3, `pypi-version` v3, `quotes-einstein-count` v3, `quotes-js-page2` v3, `quotes-search` v3, `ruff-release` v3, `saucedemo-cart` v3, `saucedemo-checkout` v3, `saucedemo-locked-out` v3, `saucedemo-pause` v2, `stretch-books-nonfiction-five-star` v5, `stretch-bstack-apple-google` v4, `stretch-bstack-apple-samsung` v4, `stretch-calendar-first-friday` v4, `stretch-date-range-monday` v3, `stretch-quotes-top-authors` v4, `stretch-wizard-correction` v4, `stretch-wizard-review` v3, `table-largest-due` v3, `wiki-godel` v3, `wiki-open` v2.
 <!-- /evals:versions -->
 
 Published results are rows, not tables typed by hand. A release's rows are committed to
