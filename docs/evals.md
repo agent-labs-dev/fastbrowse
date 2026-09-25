@@ -259,45 +259,67 @@ one run count once in that summary. The local suite stores the counts without pr
 ### 0.5.6, 2026-09-25
 
 <!-- evals:results:0.5.6 -->
-| | passed | correct | median time | mean time | median cost | mean cost | suite total |
+`core` `9b765b1a`: fastbrowse against Browser Use agent, on the same 14 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 55/56 | 55/56 | 20.6s | 29.1s | $0.0034 | $0.0059 | $0.33 |
+| fastbrowse (0.5.6) | 36/37 | 36/37 | 20.7s | 28.4s | $0.0041 | $0.0069 | $0.25 |
 | Browser Use agent | 37/42 | 42/42 | 35.8s | 59.7s | $0.4758 | $0.4899 | $20.58 |
+
+Each arm made 42 attempts; left out as provider outages: fastbrowse 5. Runs: `993506e34fd9` at `cfefd89`.
+
+`core` `9b765b1a`: fastbrowse against jev-ultrafast, on the same 6 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.6) | 16/16 | 16/16 | 15.0s | 27.9s | $0.0019 | $0.0036 | $0.06 |
 | jev-ultrafast | 11/15 | 11/15 | 13.0s | 31.2s | unknown | unknown | $0.01 (1 unpriced) |
 
-Suites: `core` `9b765b1a`. Runs: `993506e34fd9` at `cfefd89`.
-Excluded as provider outages: fastbrowse 7, jev-ultrafast 3.
+Each arm made 18 attempts; left out as provider outages: fastbrowse 2, jev-ultrafast 3. Runs: `993506e34fd9` at `cfefd89`.
 
-| | passed | correct | median time | mean time | median cost | mean cost | suite total |
+`core` `9b765b1a`: fastbrowse alone, on the 1 task no other arm is graded on.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.6) | 3/3 | 3/3 | 37.8s | 43.9s | $0.0025 | $0.0062 | $0.02 |
+
+Each arm made 3 attempts. Runs: `993506e34fd9` at `cfefd89`.
+
+`dev` `d562020d`: fastbrowse against Browser Use agent, on the same 8 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
 | fastbrowse (0.5.6) | 21/21 | 21/21 | 18.2s | 17.7s | $0.0051 | $0.0068 | $0.14 |
 | Browser Use agent | 22/24 | 24/24 | 12.9s | 13.2s | $0.1353 | $0.1884 | $4.52 |
 
-Suites: `dev` `d562020d`. Runs: `993506e34fd9` at `cfefd89`.
-Excluded as provider outages: fastbrowse 3.
+Each arm made 24 attempts; left out as provider outages: fastbrowse 3. Runs: `993506e34fd9` at `cfefd89`.
 
-| | passed | correct | median time | mean time | median cost | mean cost | suite total |
+`heldout` `18b64a73`: fastbrowse against Browser Use agent, on the same 9 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
 | fastbrowse (0.5.6) | 25/25 | 25/25 | 19.3s | 27.8s | $0.0072 | $0.0174 | $0.43 |
 | Browser Use agent | 26/27 | 27/27 | 15.0s | 20.2s | $0.1970 | $0.2329 | $6.29 |
 
-Suites: `heldout` `18b64a73`. Runs: `993506e34fd9` at `cfefd89`.
-Excluded as provider outages: fastbrowse 2.
+Each arm made 27 attempts; left out as provider outages: fastbrowse 2. Runs: `993506e34fd9` at `cfefd89`.
 
-| | passed | correct | median time | mean time | median cost | mean cost | suite total |
+`stretch-dev` `69abd819`: fastbrowse against Browser Use agent, on the same 5 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
 | fastbrowse (0.5.6) | 12/15 | 12/15 | 44.9s | 57.6s | $0.0271 | $0.0366 | $0.55 |
 | Browser Use agent | 15/15 | 15/15 | 59.9s | 79.2s | $0.3732 | $0.5790 | $8.69 |
 
-Suites: `stretch-dev` `69abd819`. Runs: `98ef8dc21156` at `2304b2c`.
+Each arm made 15 attempts. Runs: `98ef8dc21156` at `2304b2c`.
 
-| | passed | correct | median time | mean time | median cost | mean cost | suite total |
+`stretch-heldout` `f3f5c3f7`: fastbrowse against Browser Use agent, on the same 3 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
 | fastbrowse (0.5.6) | 6/8 | 6/8 | 70.6s | 76.7s | $0.0283 | $0.0990 | $0.79 |
 | Browser Use agent | 8/9 | 9/9 | 42.6s | 78.0s | $0.2579 | $0.4980 | $4.48 |
 
-Suites: `stretch-heldout` `f3f5c3f7`. Runs: `98ef8dc21156` at `2304b2c`.
-Excluded as provider outages: fastbrowse 1.
+Each arm made 9 attempts; left out as provider outages: fastbrowse 1. Runs: `98ef8dc21156` at `2304b2c`.
 <!-- /evals:results:0.5.6 -->
 
 ### 0.5.2, 2026-09-22
@@ -345,12 +367,14 @@ Schema version 1. Each releases entry represents one release, suite and suite ve
 | Object | Fields |
 |---|---|
 | `ResultsSummary` | `schema_version`, `releases` |
-| `ReleaseSummary` | `fastbrowse_version`, `date`, `suite`, `suite_version`, `arms`, `task_versions_changed` |
+| `ReleaseSummary` | `fastbrowse_version`, `date`, `suite`, `suite_version`, `compared`, `tasks`, `arms`, `task_versions_changed` |
 | `ArmSummary` | `passed`, `total`, `excluded`, `priced`, `seconds`, `dollars` |
 | `MetricSummary` | `median`, `mean` |
 | `TaskChange` | `task`, `previous`, `current` |
 
 `releases` is newest first, and within a release the suites run in their defined order, `core` first. `date` is the latest UTC run date in that group.
+Each entry is one comparison: `compared` names the arms that ran its `tasks`, every arm on all of them, since a task runs only on the arms it grades on equal terms. A suite has one entry per comparison, those with most arms first; the first `core` entry is fastbrowse against Browser Use.
+Schema version 2 added `compared` and `tasks`; version 1 pooled a suite's comparisons into one entry.
 `arms` maps registry names to statistics across every attempt, including failures, except those a provider outage ended: `excluded` counts those, and `total` leaves them out.
 `seconds` and `dollars` contain numeric median and mean values; dollars are USD. `seconds` excludes measured outage waits (`transient_seconds`).
 `priced` counts attempts with known cost. Both dollar statistics are null if any attempt is unpriced.
