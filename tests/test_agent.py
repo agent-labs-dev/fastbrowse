@@ -2440,6 +2440,29 @@ async def test_a_secret_the_site_uses_as_its_hostname_leaves_the_cited_address_r
     assert answer == f"Signed in as [secret:username] [1](<{public.deep_link}>)"
 
 
+async def test_what_the_model_sees_keeps_the_host_a_secret_was_typed_on_and_blanks_it_everywhere_else() -> None:
+    # Masking the observed address as `https://••••••••.example.test/secure` put that broken address in every step,
+    # fact and citation link the run reported, since those are built from what the model saw.
+    page = Mock(spec=Page)
+    url = "https://practice.example.test/secure?user=practice"
+    links = (_link("home", "Home", "https://practice.example.test/"), _link("x", "x", "https://practice.evil.test/"))
+    seen = _at(url, *links).model_copy(update={"viewport_text": "practice hunter2 at https://practice.example.test/"})
+    page.observe = AsyncMock(return_value=seen)
+    page.capture = AsyncMock(
+        return_value=capture((BlockKind.PARAGRAPH, "Welcome, practice")).model_copy(update={"url": url})
+    )
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    agent._redactor.register("username", "practice", "https://practice.example.test/login")
+    agent._redactor.register("password", "hunter2", "https://practice.example.test/login")
+
+    observed, captured = await agent._observe(), await agent._capture()
+
+    assert observed.url == captured.url == "https://practice.example.test/secure?user=••••••••"
+    assert [c.href for c in observed.controls] == ["https://practice.example.test/", "https://••••••••.evil.test/"]
+    assert observed.viewport_text == "•••••••• ••••••• at https://practice.example.test/"
+    assert captured.text.endswith("Welcome, ••••••••")
+
+
 @pytest.mark.parametrize(
     ("failure", "status"),
     [
