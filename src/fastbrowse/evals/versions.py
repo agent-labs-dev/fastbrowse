@@ -531,7 +531,12 @@ def summary(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) 
                 )
             )
         previous = versions
-    result.sort(key=lambda r: (_release_key(r.fastbrowse_version), r.suite, r.suite_version), reverse=True)
+    # Newest release first, and within it the suites in their defined order, core first: a reader of the feed that
+    # takes its first entry gets the head-to-head, not whichever suite sorts last by name.
+    order = list(all_tasks()[0])
+    rank = {suite: i for i, suite in enumerate(order)}
+    result.sort(key=lambda r: (rank.get(r.suite, len(order)), r.suite, r.suite_version))
+    result.sort(key=lambda r: _release_key(r.fastbrowse_version), reverse=True)
     return ResultsSummary(releases=result)
 
 
@@ -589,7 +594,8 @@ def feed_schema_docs() -> str:
         lines.append(f"| `{model.__name__}` | " + ", ".join(f"`{name}`" for name in model.model_fields) + " |")
     lines += [
         "",
-        "`releases` is newest first. `date` is the latest UTC run date in that group.",
+        "`releases` is newest first, and within a release the suites run in their defined order, `core` first. "
+        "`date` is the latest UTC run date in that group.",
         "`arms` maps registry names to statistics across every attempt, including failures.",
         "`seconds` and `dollars` contain numeric median and mean values; dollars are USD.",
         "`priced` counts attempts with known cost. Both dollar statistics are null if any attempt is unpriced.",

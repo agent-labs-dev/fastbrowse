@@ -233,6 +233,20 @@ def test_summary_groups_suites_and_preserves_unknown_costs() -> None:
     assert old.arms["fastbrowse"].dollars.mean == 0.01
 
 
+def test_the_feed_leads_each_release_with_the_core_suite() -> None:
+    """The site headlines the feed's first entry; stretch-heldout sorting last by name put 3 hard tasks there."""
+    rows = [_row("pypi-version") | {"suite": suite} for suite in ("stretch-heldout", "dev", "core", "stretch-dev")]
+    feed = versions.summary([("1.0.0", [_row("pypi-version") | {"suite": "stretch-heldout"}]), ("1.0.1", rows)])
+    order = [(r.fastbrowse_version, r.suite) for r in feed.releases]
+    assert order == [
+        ("1.0.1", "core"),
+        ("1.0.1", "dev"),
+        ("1.0.1", "stretch-dev"),
+        ("1.0.1", "stretch-heldout"),
+        ("1.0.0", "stretch-heldout"),
+    ]
+
+
 def test_summary_does_not_mix_suite_versions_or_invent_legacy_rows() -> None:
     assert versions.summary([]).model_dump() == {"schema_version": 1, "releases": []}
     row = _row("pypi-version")

@@ -345,7 +345,7 @@ Schema version 1. Each releases entry represents one release, suite and suite ve
 | `MetricSummary` | `median`, `mean` |
 | `TaskChange` | `task`, `previous`, `current` |
 
-`releases` is newest first. `date` is the latest UTC run date in that group.
+`releases` is newest first, and within a release the suites run in their defined order, `core` first. `date` is the latest UTC run date in that group.
 `arms` maps registry names to statistics across every attempt, including failures.
 `seconds` and `dollars` contain numeric median and mean values; dollars are USD.
 `priced` counts attempts with known cost. Both dollar statistics are null if any attempt is unpriced.
