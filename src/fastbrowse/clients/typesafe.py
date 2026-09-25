@@ -8,6 +8,7 @@ from pydantic import JsonValue
 
 from fastbrowse.clients.validation import (
     RequestUsage,
+    asking_open,
     error_detail,
     estimated_cost,
     json_object,
@@ -39,6 +40,9 @@ class TypeSafeJevClient:
         self._model = model
 
     async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        return await asking_open(questions, lambda asked: self._ask(state, asked), self._model)
+
+    async def _ask(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
         started = monotonic()
         sent = RequestUsage()
         response = await post(

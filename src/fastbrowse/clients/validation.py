@@ -4,7 +4,7 @@ import asyncio
 import logging
 import math
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from time import monotonic
 from typing import assert_never
@@ -17,6 +17,7 @@ from fastbrowse.jev import (
     Answer,
     ChoiceAnswer,
     ChoiceQuestion,
+    Evaluation,
     JevError,
     JevInputTooLarge,
     JevRetriesExhausted,
@@ -452,6 +453,30 @@ def parse_answers(
             case _:
                 assert_never(question)
     return answers
+
+
+async def asking_open(
+    questions: Mapping[str, Question], ask: Callable[[Mapping[str, Question]], Awaitable[Evaluation]], model: str
+) -> Evaluation:
+    """Answer each choice of one option here and send `ask` only the rest.
+
+    Jev began refusing a choice with a single option ("choice requires at least 2 options"), which the
+    typesafe-ai route reported as a 503: wiki-godel's shortcut opened the article with one field to fill, and the
+    run retried that refusal as an outage for hours. Such a choice was never in doubt, so it is not asked.
+    """
+    forced = {
+        key: ChoiceAnswer(choice=only, probabilities={only: 1.0}, confidence=1.0)
+        for key, question in questions.items()
+        if isinstance(question, ChoiceQuestion) and len(question.criteria) == 1
+        for only in question.criteria
+    }
+    if not forced:
+        return await ask(questions)
+    rest = {key: question for key, question in questions.items() if key not in forced}
+    if not rest:
+        return Evaluation(model=model, answers=forced, input_tokens=0, cost=estimated_cost(0))
+    evaluation = await ask(rest)
+    return evaluation.model_copy(update={"answers": {**evaluation.answers, **forced}})
 
 
 def estimated_cost(input_tokens: int, output_tokens: int = 0) -> CostLine:

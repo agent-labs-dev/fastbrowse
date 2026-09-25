@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A step with one possible target no longer fails.** Jev now refuses a choice of only one option, and the
+  typesafe-ai route reports that refusal as a 503, so a page with one field to fill ended the run, or in the evals
+  retried it for hours as an outage: `wiki-godel` never finished. A choice of one option is answered without
+  asking, and a request left with no open question is not sent.
 - **A run that has not acted cannot be talked past an action Jev holds undone.** Asked to open a project page,
   a run chose DONE on the start page, Jev's done check held the requirement unmet, and the verifier called it
   complete, so the run reported `complete` on the wrong page. With no action taken, an action requirement Jev
