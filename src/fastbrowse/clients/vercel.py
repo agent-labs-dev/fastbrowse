@@ -82,9 +82,10 @@ class VercelGatewayJevClient:
             metadata = object_value(payload.get("providerMetadata", {}))
             confidence = object_value(object_value(metadata.get("typesafe", {})).get("confidence", {}))
             cost_value = object_value(metadata.get("gateway", {})).get("cost")
+            # The gateway meters Jev at $0 while tokens flow: a request is then priced at list, not as free.
             cost = (
                 estimated_cost(tokens, output_tokens)
-                if cost_value is None
+                if cost_value is None or (not dollars(cost_value) and tokens)
                 else CostLine(
                     component=CostComponent.JEV,
                     basis=CostBasis.METERED,

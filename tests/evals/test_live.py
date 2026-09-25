@@ -539,3 +539,21 @@ def test_the_first_friday_grader_takes_the_date_as_the_page_shows_it() -> None:
     assert more_tasks._first_friday_check(Outcome("Friday 2 October 2026", None, None), truth) is None
     assert more_tasks._first_friday_check(Outcome("It shows 10/09/2026, Friday, October.", None, None), truth)
     assert more_tasks._first_friday_check(Outcome("It shows 10/02/2026.", None, None), truth)
+
+
+def test_the_runner_prices_jev_at_list_when_the_gateway_meters_it_free() -> None:
+    """Every 0.5.6 Jev request was metered at $0 by the gateway, so both Jev-backed arms read as free of it."""
+    meter = RUNNER["Meter"](0.042 / 1_000_000)
+    RUNNER["_meter"](meter, "jev", 0.0, 1_000_000)
+    RUNNER["_meter"](meter, "jev", "0.0005", 1_000_000)
+    RUNNER["_meter"](meter, "text", 0.0, 1_000_000)
+    assert meter.jev == pytest.approx(0.042 + 0.0005) and meter.text == 0.0
+
+
+def test_an_error_sent_with_http_200_is_not_an_answer() -> None:
+    """OpenRouter held a wiki-open request open, then sent its error in a 200; upstream failed the run on it."""
+    for code, raised in ((503, RUNNER["Unavailable"]), (400, RuntimeError)):
+        response = SimpleNamespace(status_code=200, is_error=False, json=lambda code=code: {"error": {"code": code}})
+        model = SimpleNamespace(CLIENT=SimpleNamespace(post=lambda *_, response=response, **__: response))
+        with pytest.raises(raised, match=f"error {code} in HTTP 200"):
+            RUNNER["_post"](model, "https://openrouter.ai/api/v1/chat/completions", {}, {})

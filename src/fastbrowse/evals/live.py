@@ -54,6 +54,7 @@ from fastbrowse.evals.observe import GradedPage as _GradedPage
 from fastbrowse.evals.observe import observe_browser
 from fastbrowse.evals.status import Ending, normalize, status_matches
 from fastbrowse.evals.versions import load_lock, provenance, suite_version, task_version
+from fastbrowse.jev import JEV_DOLLARS_PER_INPUT_TOKEN
 from fastbrowse.models import Authorization, BrowserEvent, Limits, RunResult, Status, StepEvent, Unavailable
 from fastbrowse.run import run_task
 from fastbrowse.safety import ScopedSecrets, origin_of
@@ -72,7 +73,7 @@ OUTAGE_RETRIES = 5
 """Runs of a row a provider outage ended, after the first, waiting 1, 2, 4, 8 then 10 minutes: about 25 minutes, past
 the 503 spells seen so far. A row still unavailable then is recorded, and left out of every published figure."""
 VERDICT_WAIT = 90.0
-"""Seconds to wait for Browser Use to judge a stopped session; a verdict still missing then grades as a failure."""
+"""Seconds to wait for Browser Use to judge a stopped session; a verdict still missing then counts as an outage."""
 
 
 def _watch(arm: str, task: LiveTask, live_url: str | None) -> None:
@@ -308,6 +309,7 @@ async def ultrafast_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path
             "cdp_ws": cloud.connection.cdp_url,
             "max_steps": MAX_STEPS,
             "record": None if record is None else str(record),
+            "jev_dollars_per_input_token": JEV_DOLLARS_PER_INPUT_TOKEN,
         }
         with tempfile.TemporaryDirectory(prefix="bh-") as runtime:
             ran = _UltrafastReport.model_validate_json(
@@ -350,6 +352,18 @@ async def hosted_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | 
     except httpx.HTTPError as error:
         failed = Unavailable if isinstance(error, TRANSIENT_TRANSPORT) else RuntimeError
         raise failed(f"Browser Use API request failed ({type(error).__name__})") from None
+
+
+async def _down(task: LiveTask, http: httpx.AsyncClient) -> str | None:
+    """Why the task's site is down, or None. A site serving errors (Heroku's Application Error is a 503) fails
+    every arm alike and measures none, so a run it failed is an outage to wait out, not the agent's failure."""
+    try:
+        response = await http.get(task.start, follow_redirects=True, timeout=20)
+    except httpx.TransportError as error:
+        return f"site unavailable: {task.start} unreachable ({type(error).__name__})"
+    if response.status_code >= 500:
+        return f"site unavailable: {task.start} answered HTTP {response.status_code}"
+    return None
 
 
 async def _judged(client: Any, session: Any) -> Any:
@@ -854,18 +868,26 @@ async def main(argv: list[str]) -> int:
             async def one(arm: str, task: LiveTask, record: Path | None) -> EvalRow:
                 # An outage is waited out and the row run again; bounded, so a dead provider cannot hold a run forever.
                 for retries in itertools.count():
-                    try:
-                        truth = await _truth(task, http)
-                    except Exception as exc:
-                        # An answer key that will not come back (a 403 from a rate-limited API, a body missing
-                        # the field it is read from) fails this task alone: gather would discard every run.
-                        failure = f"truth raised {type(exc).__name__}: {exc}"
-                        row = _crashed(arm, task, failure, at=time.time(), seconds=0.0, status=None, record=None)
-                        break
+                    # The answer key is read once the row holds its slot: read while it queued, a live key (the
+                    # top story, the newest release) could move on before the run began.
                     async with gate:
+                        try:
+                            truth = await _truth(task, http)
+                        except Exception as exc:
+                            # An answer key that will not come back (a 403 from a rate-limited API, a body missing
+                            # the field it is read from) fails this task alone: gather would discard every run.
+                            failure = f"truth raised {type(exc).__name__}: {exc}"
+                            row = _crashed(arm, task, failure, at=time.time(), seconds=0.0, status=None, record=None)
+                            break
                         row = await run_arm(
                             arm, task, truth, http, Path(downloads), bitwarden=args.bitwarden, record=record
                         )
+                    if (
+                        not row.passed
+                        and row.normalized_status != Ending.UNAVAILABLE
+                        and (down := await _down(task, http))
+                    ):
+                        row = row.model_copy(update={"normalized_status": Ending.UNAVAILABLE, "failure": down})
                     if row.normalized_status != Ending.UNAVAILABLE or retries >= OUTAGE_RETRIES:
                         break
                     wait = min(60 * 2**retries, 600)

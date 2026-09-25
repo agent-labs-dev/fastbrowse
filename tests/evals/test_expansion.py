@@ -57,9 +57,10 @@ def test_an_idle_hosted_session_that_succeeded_is_done() -> None:
     assert normalize("idle", hosted=True, hosted_success=False) != Ending.DONE
 
 
-def test_cart_requires_product_on_final_cart_not_answer_or_old_quote() -> None:
+def test_cart_requires_product_in_the_answer_and_on_the_final_cart() -> None:
+    """The hosted arm is graded on its answer; fastbrowse answering nothing, or denying it, passed on the page."""
     page = Outcome(
-        "No backpack was added",
+        "The cart holds the Sauce Labs Backpack",
         None,
         "https://www.saucedemo.com/cart.html",
         quotes=(("https://www.saucedemo.com/cart.html", "Sauce Labs Backpack"),),
@@ -67,6 +68,7 @@ def test_cart_requires_product_on_final_cart_not_answer_or_old_quote() -> None:
     assert live_tasks._cart(page, None)
     page = dataclasses.replace(page, controls=(("Sauce Labs Backpack", None),))
     assert live_tasks._cart(page, None) is None
+    assert live_tasks._cart(dataclasses.replace(page, answer="No backpack was added"), None)
     assert live_tasks._cart(dataclasses.replace(page, final_url="https://www.saucedemo.com/inventory.html"), None)
 
 
@@ -376,3 +378,32 @@ async def test_local_rows_keep_unknown_cost_and_raw_time(monkeypatch: pytest.Mon
     row = await runner.run_task(runner.TASKS[0], "https://fixture.test", recorder, Mock(), Mock(), Mock(), settings)
     assert row["arm"] == "fastbrowse" and row["correct"] is True
     assert row["seconds"] == 5 and row["transient_seconds"] == 2 and row["dollars"] is None
+
+
+def test_a_hosted_run_never_judged_is_an_outage_not_a_failure() -> None:
+    """A dynamic-loading answer was correct, but Browser Use gave no verdict within the wait and it graded failed."""
+    assert normalize("stopped", hosted=True, hosted_success=None) == Ending.UNAVAILABLE
+    assert normalize("idle", hosted=True, hosted_success=None) == Ending.UNAVAILABLE
+    assert normalize("stopped", hosted=True, hosted_success=False) == Ending.STOPPED
+
+
+async def test_a_run_failed_on_a_site_serving_errors_is_an_outage() -> None:
+    """the-internet.herokuapp.com served Heroku's Application Error (a 503) and every arm failed its tasks."""
+    task = live_tasks.TASKS[0]
+    responses = iter([httpx.Response(503), httpx.Response(403)])
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: next(responses))) as http:
+        assert "answered HTTP 503" in (await live._down(task, http) or "")
+        # A site that answers, even to refuse a bot, is up: the run's failure stands.
+        assert await live._down(task, http) is None
+
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(unreachable)) as http:
+        assert "unreachable" in (await live._down(task, http) or "")
+
+
+def test_new_window_needs_the_heading_not_the_prompt_echoed() -> None:
+    (task,) = [t for t in more_tasks.HELDOUT if t.id == "new-window"]
+    assert task.check(Outcome("It opens a new window", None, None), None)
+    assert task.check(Outcome('The heading is "New Window"', None, None), None) is None

@@ -695,14 +695,19 @@ def protocol_docs() -> str:
         "`done`, `stopped`, `budget`, `timeout`, `error`, `blocked` or `unavailable`.",
         "A pass requires a correct grade and `done`, or the exact expected fastbrowse stop.",
         "The hosted SDK maps to `done` only for a stopped session with `is_task_successful=true`.",
-        "That verdict lands after the session stops; the harness waits up to 90 seconds for it.",
-        "An attempt a provider outage ended is waited out and run again, up to five times over about 25 minutes.",
+        "That verdict lands after the session stops; the harness waits up to 90 seconds for it. A verdict still "
+        "missing then is the provider's silence, and the attempt counts as an outage.",
+        "An attempt that fails while the task's site answers its start URL with a 5xx, or not at all, is an outage too: "
+        "a site serving errors fails every arm alike.",
+        "An attempt an outage ended is waited out and run again, up to five times over about 25 minutes.",
         "A row still unavailable after that is recorded but scores nothing, and neither does one attempt of every "
         "other arm at that task: each comparison scores its arms on the same attempts at the same tasks.",
         "Time is wall time for every arm. fastbrowse records the outage waits inside a run (`transient_seconds`), "
         "but the other arms cannot, so no arm's are subtracted.",
         "Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the row.",
         "Existing timing includes browser setup. These rows do not claim the planned handoff-only timing protocol.",
+        "Jev is priced at list ($0.042 per million input tokens) whenever the gateway meters a request at $0, for "
+        "fastbrowse and jev-ultrafast alike.",
     ]
     return "\n\n".join(lines[:4]) + "\n" + "\n".join(lines[4:])
 
