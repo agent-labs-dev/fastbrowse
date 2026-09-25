@@ -398,7 +398,8 @@ STRETCH_HELDOUT: tuple[LiveTask, ...] = (
         "In the Live Interactive Form widget, fill First Name 'Priya Sharma', Email "
         "'priya.sharma@example.com', Address '221B Baker Street', City 'Manchester', Language 'Turkish', and "
         "check the QA newsletter box. Reach the Review step, then go back and correct the first name to "
-        "'Priya Sharman' before continuing through Submit. Tell me what the confirmation says.",
+        "'Priya Sharman' before continuing through Submit. Tell me the first name the Review step showed last "
+        "and what the confirmation says.",
         _fixed(None),
         _has("Priya Sharman", "submitted successfully"),
         Category.CHECKOUT,

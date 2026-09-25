@@ -192,7 +192,7 @@ Date truth is computed when the attempt runs, and form and date tasks are graded
 <!-- evals:tasks:stretch-heldout -->
 | Task | Category | Version | Asks |
 |---|---|---|---|
-| `stretch-wizard-correction` | checkout | 2 | In the Live Interactive Form widget, fill First Name 'Priya Sharma', Email 'priya.sharma@example.com', Address '221B Baker Street', City 'Manchester', Language 'Turkish', and check the QA newsletter box. Reach the Review step, then go back and correct the first name to 'Priya Sharman' before continuing through Submit. Tell me what the confirmation says. |
+| `stretch-wizard-correction` | checkout | 3 | In the Live Interactive Form widget, fill First Name 'Priya Sharma', Email 'priya.sharma@example.com', Address '221B Baker Street', City 'Manchester', Language 'Turkish', and check the QA newsletter box. Reach the Review step, then go back and correct the first name to 'Priya Sharman' before continuing through Submit. Tell me the first name the Review step showed last and what the confirmation says. |
 | `stretch-calendar-first-friday` | widget | 3 | Using the jQuery UI Datepicker (the calendar popup, not the native date input), navigate to next month and select its first Friday. Tell me the date, day, and month it shows. |
 | `stretch-quotes-top-authors` | lookup | 3 | Across every page of this site, which three authors have the most quotes attributed to them, and how many quotes does each have? |
 | `stretch-bstack-apple-samsung` | widget | 3 | Filter the product list to Apple and Samsung together, then remove the Apple filter so only Samsung remains. Sort by price highest to lowest, and tell me the three most expensive phones and their prices. |
@@ -227,10 +227,10 @@ when they differ:
 | `dev` | 8 | `c07d79d0` |
 | `heldout` | 9 | `45bdce8f` |
 | `stretch-dev` | 4 | `cfbbe3a1` |
-| `stretch-heldout` | 4 | `5e3bc643` |
+| `stretch-heldout` | 4 | `8e2973fe` |
 | local fixtures | 6 | `dda8ba89` |
 
-Tasks past version 1: `arxiv-open` v2, `arxiv-title` v2, `books-mystery-cheapest` v2, `books-travel-priciest` v2, `countries-mongolia` v2, `crates-serde` v2, `dynamic-loading` v2, `expandtesting-login` v2, `flights-search` v2, `github-license` v2, `github-open` v2, `google-flights` v2, `hn-comments` v2, `hn-top` v2, `hockey-bruins-1990` v2, `hover-profile` v2, `httpx-requires-python` v2, `internet-login` v2, `nested-frames` v2, `new-window` v2, `oscars-2012` v2, `pizza-order` v2, `practice-login` v2, `pypi-newer` v2, `pypi-open` v2, `pypi-structured` v2, `pypi-version` v2, `quotes-einstein-count` v2, `quotes-js-page2` v2, `quotes-search` v2, `ruff-release` v2, `saucedemo-cart` v2, `saucedemo-checkout` v2, `saucedemo-locked-out` v2, `saucedemo-pause` v2, `stretch-books-nonfiction-five-star` v4, `stretch-bstack-apple-google` v3, `stretch-bstack-apple-samsung` v3, `stretch-calendar-first-friday` v3, `stretch-date-range-monday` v2, `stretch-quotes-top-authors` v3, `stretch-wizard-correction` v2, `stretch-wizard-review` v2, `table-largest-due` v2, `wiki-godel` v2, `wiki-open` v2.
+Tasks past version 1: `arxiv-open` v2, `arxiv-title` v2, `books-mystery-cheapest` v2, `books-travel-priciest` v2, `countries-mongolia` v2, `crates-serde` v2, `dynamic-loading` v2, `expandtesting-login` v2, `flights-search` v2, `github-license` v2, `github-open` v2, `google-flights` v2, `hn-comments` v2, `hn-top` v2, `hockey-bruins-1990` v2, `hover-profile` v2, `httpx-requires-python` v2, `internet-login` v2, `nested-frames` v2, `new-window` v2, `oscars-2012` v2, `pizza-order` v2, `practice-login` v2, `pypi-newer` v2, `pypi-open` v2, `pypi-structured` v2, `pypi-version` v2, `quotes-einstein-count` v2, `quotes-js-page2` v2, `quotes-search` v2, `ruff-release` v2, `saucedemo-cart` v2, `saucedemo-checkout` v2, `saucedemo-locked-out` v2, `saucedemo-pause` v2, `stretch-books-nonfiction-five-star` v4, `stretch-bstack-apple-google` v3, `stretch-bstack-apple-samsung` v3, `stretch-calendar-first-friday` v3, `stretch-date-range-monday` v2, `stretch-quotes-top-authors` v3, `stretch-wizard-correction` v3, `stretch-wizard-review` v2, `table-largest-due` v2, `wiki-godel` v2, `wiki-open` v2.
 <!-- /evals:versions -->
 
 Published results are rows, not tables typed by hand. A release's rows are committed to
