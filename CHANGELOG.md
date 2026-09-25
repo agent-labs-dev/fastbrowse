@@ -11,6 +11,14 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **An answer states the value, not the requirement ahead of it.** A value read straight off the page was answered
+  as the requirement it met followed by the value ("Find the latest released version of httpx." then
+  "httpx 0.28.1"); the answer is now the value alone.
+- **The page a run began on counts as visited.** A task saying "Start at" an address could be planned as a
+  requirement to go there, and a run that opened a deeper page from it was sent back because nothing it was checked
+  against showed it had been there. The done check and verifier now see every address the run has been on, first
+  the one it began on, and the planner no longer makes a start address a requirement of its own.
+
 ## [0.5.6] - 2026-09-25
 
 - **Correcting a wizard step is not a loop.** Going Back through a multi-step form to fix an earlier step reached

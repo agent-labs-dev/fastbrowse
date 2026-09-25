@@ -287,3 +287,20 @@ async def test_the_checks_are_shown_the_date_and_what_each_action_typed_and_did(
     await check_done(jev, "Sign up", plan, _PAGE, Notes(), Thresholds(), history=history)
     assert isinstance(jev.state, dict) and jev.state["date"] == today
     assert "fill First Name = 'Ada' -> executed" in str(jev.state["actions"])
+
+
+async def test_the_checks_see_every_address_the_run_has_been_on_first_where_it_began() -> None:
+    """A task's "start at" address can be planned as a requirement, and no action records the page a run began on."""
+    start = "https://example.test/encode"
+    plan = Plan(
+        requirements=(Requirement(id="r1", text=f"Navigate to {start}", kind=RequirementKind.ACTION),),
+        answer_expected=False,
+    )
+    visited = (start, _PAGE.url)
+    jev = _Jev({"complete": 0.9})
+    await check_done(jev, "Open httpx", plan, _PAGE, Notes(), Thresholds(), visited=visited)
+    assert isinstance(jev.state, dict) and jev.state["visited"] == list(visited)
+    assert "the first of which is where the run began" in jev.questions["unmet_r1"].instructions
+    llm = ScriptedLLM([{"complete": True, "missing": []}])
+    await llm_verify(llm, "Open httpx", plan, _PAGE, (), Notes(), (), visited=visited)
+    assert f"## Visited addresses\n- {start}\n- {_PAGE.url}\n" in llm.calls[0][1][-1].content
