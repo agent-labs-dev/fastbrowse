@@ -91,11 +91,14 @@ class JevRetriesExhausted(JevError, Unavailable):
         unaccounted_requests: int,
         requests: int = 0,
         answered: Sequence[Evaluation] = (),
+        last: str = "",
     ) -> None:
         super().__init__(message)
         self.seconds = seconds
         self.unaccounted_requests = unaccounted_requests
         self.requests = requests
+        self.last = last
+        """The last failed response, so a caller that sent more requests can restate the count around it."""
         self.answered = tuple(answered)
         """Singles answered before a split batch ran out of retries; paid for, and kept by a failover."""
 

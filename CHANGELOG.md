@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A dense page's step is asked again smaller when Jev sheds it.** The gateway answers large Jev requests with
+  503s far more often than small ones, and a step on a Wikipedia article (160 controls, about 27k tokens) ran out
+  of retries in six runs of six, ending each one `unavailable`. When that happens to a large step request, it is
+  now asked again with the on-screen controls only, then with half of those left; a small request that is still
+  refused ends the run `unavailable` as before. The error for a request that split into single questions now
+  counts every request the call sent, not only the last question's.
 - **A secret that is also part of a site's hostname no longer breaks the addresses a run cites.** 0.5.6 kept such
   a host readable in reported addresses, but the model's own view of the page was blanked first, so steps, facts
   and citations after signing in as `practice` still linked to `https://••••••••.expandtesting.com/secure`.

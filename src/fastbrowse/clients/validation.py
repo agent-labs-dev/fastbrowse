@@ -194,7 +194,17 @@ class RequestUsage:
 
     def history(self, seconds: float) -> str:
         """How the call went before it gave up, so an error says whether it was one blip or a sustained outage."""
-        return f"{len(self.failures)} failed requests in {seconds:.1f}s"
+        return attempts(self.requests, seconds)
+
+
+def attempts(requests: int, seconds: float) -> str:
+    # Every request sent, hedges included: counting only this request's failures, a batch that split into singles
+    # reported "1 failed requests" for a call that had sent five.
+    return f"{requests} request{'' if requests == 1 else 's'} in {seconds:.1f}s"
+
+
+def exhausted(requests: int, seconds: float, last: str) -> str:
+    return f"Jev request failed after {attempts(requests, seconds)}; last: {last}"
 
 
 def with_discarded(cost: CostLine, usage: RequestUsage) -> CostLine:
@@ -412,11 +422,13 @@ async def post(
     if response is None:
         raise JevTransportFailed(f"Jev transport failed after {usage.history(seconds)}; last: {usage.failures[-1]}")
     if response.status_code in RETRYABLE_STATUS:
+        last = describe(response)
         raise JevRetriesExhausted(
-            f"Jev request failed after {usage.history(seconds)}; last: {describe(response)}",
+            exhausted(usage.requests, seconds, last),
             requests=usage.requests,
             seconds=seconds,
             unaccounted_requests=usage.unaccounted_requests,
+            last=last,
         )
     if response.status_code == 400 and "max_tokens_exceeded" in response.text:
         raise JevInputTooLarge(f"Jev input too large; {describe(response)}")
@@ -579,12 +591,15 @@ async def asking_split(
     except BaseException as error:
         record_jev_spend(paid)
         if isinstance(error, JevRetriesExhausted):
+            requests = usage.requests + sum(result.requests for result in answered) + error.requests
+            seconds = monotonic() - started
             raise JevRetriesExhausted(
-                str(error),
-                seconds=monotonic() - started,
+                exhausted(requests, seconds, error.last),
+                seconds=seconds,
                 unaccounted_requests=error.unaccounted_requests + usage.unaccounted_requests,
-                requests=usage.requests + sum(result.requests for result in answered) + error.requests,
+                requests=requests,
                 answered=answered,
+                last=error.last,
             ) from error
         raise
     cost = merged_cost([result.cost for result in answered])

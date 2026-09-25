@@ -22,6 +22,7 @@ from fastbrowse.jev import (
     Evaluation,
     JevClient,
     JevInputTooLarge,
+    JevRetriesExhausted,
     NoulAnswer,
     NoulQuestion,
     Question,
@@ -218,6 +219,13 @@ async def decide(
                 )
             except JevInputTooLarge:
                 pass
+            except JevRetriesExhausted as error:
+                smaller = _shed(request, observation, controls, context, config, reduction)
+                if smaller is None:
+                    raise
+                trace("decide_shed", offered=len(controls), retry_with=len(smaller[0]), reason=str(error)[:300])
+                controls, reduction = smaller
+                continue
         if not compact:
             compact = True
             if reduction is Reduction.NONE:
@@ -240,6 +248,33 @@ async def decide(
         if capped is None:
             raise ObservationTooLarge(f"the state on {observation.url} exceeds Jev's input limits with no controls")
         controls, reduction = capped, Reduction.CAPPED
+
+
+def _shed(
+    request: _Request,
+    observation: Observation,
+    controls: Sequence[Control],
+    context: StepContext,
+    config: Config,
+    reduction: Reduction,
+) -> tuple[tuple[Control, ...], Reduction] | None:
+    """Fewer controls to offer after the provider answered a large request with 503s until its retries ran out.
+
+    The gateway sheds large Jev requests. A Wikipedia article's step offered 160 controls, twice over (state and
+    target question), in 27k input tokens, and it failed six runs in six as unavailable; replayed, that same request
+    was answered four times in ten while every request under 10k tokens but two in 29 was. So a large request
+    is asked again smaller: off-screen controls first, as the fitting ladder drops them, then half of those left.
+    A request already as small as a batch is not the reason, so its failure stays an outage.
+    """
+    ratio = config.tokens.chars_per_token
+    state = len(json.dumps(request.state)) / ratio
+    largest = max(len(question.model_dump_json()) for question in request.questions.values()) / ratio
+    if state + largest <= config.tokens.batch_tokens:
+        return None
+    if reduction not in (Reduction.ONSCREEN_ONLY, Reduction.CAPPED) and any(c.offscreen for c in controls):
+        return tuple(c for c in controls if not c.offscreen), Reduction.ONSCREEN_ONLY
+    capped = _cap(observation, controls, context, config, below=len(controls) // 2)
+    return None if capped is None else (capped, Reduction.CAPPED)
 
 
 def _cap(

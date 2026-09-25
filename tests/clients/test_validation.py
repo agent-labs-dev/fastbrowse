@@ -104,6 +104,35 @@ async def test_batch_hedges_consume_the_split_retry_budget(
     assert caught.value.requests == len(sent) == len(RETRY_DELAYS_SECONDS) + 1
 
 
+@pytest.mark.parametrize("client_type", [TypeSafeJevClient, VercelGatewayJevClient])
+async def test_an_exhausted_split_counts_every_request_it_sent(
+    client_type: type[TypeSafeJevClient] | type[VercelGatewayJevClient],
+) -> None:
+    # A wiki-godel row said "after 1 failed requests in 0.7s" for a call whose events showed five: the message
+    # counted only the last single's own failures, not the batch and the singles before it.
+    sent: list[tuple[str, ...]] = []
+    gateway = client_type is VercelGatewayJevClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        keys = tuple(json.loads(request.content)["questions"])
+        sent.append(keys)
+        if keys != ("a",):
+            return httpx.Response(503, json={"error": {"message": "Service temporarily unavailable"}})
+        answer = {"type": "boolean", "probability": 1} if gateway else {"type": "noul", "noul": 1}
+        return httpx.Response(
+            200, json={"answers": {"a": answer}, "usage": {"inputTokens" if gateway else "input_tokens": 1}}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(JevRetriesExhausted) as caught:
+            await client_type("key", http=http).evaluate(
+                "page", {key: NoulQuestion(instructions="Is it?") for key in ("a", "b")}
+            )
+    assert len(sent) > 3
+    assert f"after {len(sent)} requests in " in str(caught.value)
+    assert str(caught.value).endswith("last: HTTP 503: Service temporarily unavailable")
+
+
 async def test_retry_waits_for_the_servers_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:
     waits: list[float] = []
 

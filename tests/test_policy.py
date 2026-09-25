@@ -11,6 +11,7 @@ from fastbrowse.jev import (
     ChoiceQuestion,
     Evaluation,
     JevInputTooLarge,
+    JevRetriesExhausted,
     NoulAnswer,
     NoulQuestion,
     Question,
@@ -147,6 +148,46 @@ async def test_oversized_request_drops_offscreen_then_gives_up() -> None:
     tiny = Config(tokens=TokenBudget(state_plus_largest_question=1, state_plus_all_questions=1))
     with pytest.raises(ObservationTooLarge):
         await decide(ScriptedJev({}), observation(controls), context(), tiny)
+
+
+class SheddingJev(ScriptedJev):
+    """Answers 503 until its retries run out for any request offering more than `answers_up_to` elements."""
+
+    def __init__(self, pick: Mapping[str, str], answers_up_to: int) -> None:
+        super().__init__(pick)
+        self.answers_up_to = answers_up_to
+        self.shed: list[int] = []
+
+    async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        offered = len(state["elements"])  # ty: ignore[invalid-argument-type, not-subscriptable]
+        if offered > self.answers_up_to:
+            self.shed.append(offered)
+            raise JevRetriesExhausted("HTTP 503", seconds=1.0, unaccounted_requests=0, requests=6)
+        return await super().evaluate(state, questions)
+
+
+async def test_a_large_request_the_provider_sheds_is_asked_again_smaller() -> None:
+    # A Wikipedia article offered 160 controls in 27k tokens, and the gateway shed that request in six runs of six.
+    config = Config(tokens=TokenBudget(batch_tokens=200))
+    onscreen = tuple(button(i) for i in range(10))
+    controls = (*onscreen, *(button(i, offscreen=True) for i in range(10, 40)))
+    jev = SheddingJev({"operation": "click", "click_target": "b3"}, answers_up_to=10)
+    decision = await decide(jev, observation(controls), context(), config)
+    assert jev.shed == [40]
+    assert decision.reduction is Reduction.ONSCREEN_ONLY and decision.offered_controls == 10
+    assert decision.target is not None and decision.target.id == "b3"
+
+    halving = SheddingJev({"operation": "click"}, answers_up_to=5)
+    decision = await decide(halving, observation(onscreen), context(), config)
+    assert halving.shed == [10]
+    assert decision.reduction is Reduction.CAPPED and decision.offered_controls < 5
+
+
+async def test_a_small_request_that_is_shed_is_still_an_outage() -> None:
+    jev = SheddingJev({"operation": "click"}, answers_up_to=0)
+    with pytest.raises(JevRetriesExhausted):
+        await decide(jev, observation((button(0), button(1, offscreen=True))), context(), Config())
+    assert jev.shed == [2]
 
 
 async def test_a_page_too_dense_on_screen_offers_what_fits_and_scrolls_for_the_rest() -> None:

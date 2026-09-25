@@ -7,6 +7,7 @@ from pydantic import JsonValue
 
 from fastbrowse.clients.validation import (
     estimated_cost,
+    exhausted,
     jev_spend,
     merged_cost,
     record_jev_spend,
@@ -53,12 +54,15 @@ class FailoverJevClient:
             try:
                 result = await self._backup.evaluate(state, remaining)
             except JevRetriesExhausted as backup_error:
+                requests = error.requests + backup_error.requests
+                seconds = error.seconds + backup_error.seconds
                 raise JevRetriesExhausted(
-                    str(backup_error),
-                    seconds=error.seconds + backup_error.seconds,
+                    exhausted(requests, seconds, backup_error.last),
+                    seconds=seconds,
                     unaccounted_requests=error.unaccounted_requests + backup_error.unaccounted_requests,
-                    requests=error.requests + backup_error.requests,
+                    requests=requests,
                     answered=(*error.answered, *backup_error.answered),
+                    last=backup_error.last,
                 ) from backup_error
 
             cost = result.cost
