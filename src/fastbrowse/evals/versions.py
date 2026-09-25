@@ -697,8 +697,8 @@ def protocol_docs() -> str:
         "The hosted SDK maps to `done` only for a stopped session with `is_task_successful=true`.",
         "That verdict lands after the session stops; the harness waits up to 90 seconds for it. A verdict still "
         "missing then is the provider's silence, and the attempt counts as an outage.",
-        "An attempt that fails while the task's site answers its start URL with a 5xx, or not at all, is an outage too: "
-        "a site serving errors fails every arm alike.",
+        "An attempt that fails while the task's site answers its start URL with a 5xx, or not at all, is an outage "
+        "too: a site serving errors fails every arm alike.",
         "An attempt an outage ended is waited out and run again, up to five times over about 25 minutes.",
         "A row still unavailable after that is recorded but scores nothing, and neither does one attempt of every "
         "other arm at that task: each comparison scores its arms on the same attempts at the same tasks.",
