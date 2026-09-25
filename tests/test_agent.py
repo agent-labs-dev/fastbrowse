@@ -97,6 +97,13 @@ async def test_field_writer_receives_popup_context_and_other_field_values() -> N
     other = field("Destination").model_copy(update={"id": "destination", "value": "York"})
     obs = observation((target, other)).model_copy(update={"viewport_text": "Choose a station"})
     state = await run_state()
+    steps = ("Set the origin to Bath and search.", "Go back and change the origin to Bristol.")
+    state.ready_plan = Plan(
+        requirements=tuple(
+            Requirement(id=f"r{i}", text=text, kind=RequirementKind.ACTION) for i, text in enumerate(steps)
+        ),
+        answer_expected=False,
+    )
     state.hint = "Replace the origin"
     state.history.append(
         HistoryEntry(operation=Operation.CLICK, target="Origin", outcome=StepOutcome.EXECUTED, page_changed=True)
@@ -113,6 +120,8 @@ async def test_field_writer_receives_popup_context_and_other_field_values() -> N
     assert prompt["recent_actions"][0]["target"] == "Origin"
     assert prompt["subgoal"] == "Replace the origin"
     assert prompt["page"]["text"] == "Choose a station"
+    # In order: told only the task, the writer typed a later correction on the first pass.
+    assert prompt["requirements"] == list(steps)
 
 
 async def test_missing_personal_information_stops_once_recovery_returns_to_it() -> None:

@@ -293,29 +293,31 @@
   const firstLine = text => (text || '').split('\n').map(s => s.replace(/\s+/g, ' ').trim()).find(Boolean) || '';
   // A label tied to no control titles what follows it, as a heading would: a blog post's "Date Picker 3" is one,
   // and the post's first heading ("Data Entry Form") named that picker's Submit when only headings counted.
+  // A hidden title names nothing on screen: innerText still returns a `hidden` label's text.
   const titles = scope => [...scope.querySelectorAll(`${HEADINGS},label`)].filter(
-    e => e.localName !== 'label' || !(e.htmlFor || e.querySelector('input,select,textarea,button'))
+    e => (e.localName !== 'label' || !e.control) && e.checkVisibility({ checkVisibilityCSS: true })
   );
-  // The title nearest before the element names its section; the scope's first title is the fallback.
-  const sectionOf = (scope, element, label) => {
-    let first = '', nearest = '';
+  // The title nearest before the element names its section; the scope's first title is the fallback, and the
+  // only answer when `nearest` is false.
+  const sectionOf = (scope, element, label, nearest = true) => {
+    let first = '', before = '';
     for (const title of titles(scope)) {
       const text = firstLine(title.innerText);
       if (!text || text === label || title.contains(element)) continue;
       first ||= text;
-      if (title.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) nearest = text;
+      if (title.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) before = text;
     }
-    return nearest || first;
+    return (nearest && before) || first;
   };
-  const nameOf = (scope, element, label) => {
+  const nameOf = (scope, element, label, nearest) => {
     const aria = (scope.getAttribute('aria-label') || '').trim();
     if (aria && aria !== label) return aria;
-    const section = sectionOf(scope, element, label);
+    const section = sectionOf(scope, element, label, nearest);
     if (section) return section;
     const text = scope.innerText || '';
     return firstLine(label ? text.split(label).join(' ') : text);
   };
-  const contextOf = (element, twins, label) => {
+  const contextOf = (element, twins, label, nearest = true) => {
     // The widest twin-free ancestor is the card, row or section the twins repeat over. A narrower one names
     // the button's own wrapper, which on a shop is its price rather than the product it belongs to.
     let scope = null;
@@ -323,7 +325,7 @@
       if (twins.some(twin => twin !== element && e.contains(twin))) break;
       scope = e;
     }
-    return scope ? excerpt(nameOf(scope, element, label), CONTROL_CONTEXT_CHARS) : '';
+    return scope ? excerpt(nameOf(scope, element, label, nearest), CONTROL_CONTEXT_CHARS) : '';
   };
   // Content a stylesheet shows only under the pointer (`.card:hover .caption`) is out of reach of every other
   // operation. An element whose hover rule would reveal something now hidden is offered as a hover target.
@@ -413,10 +415,14 @@
   for (const group of byLabel.values()) {
     if (group.length < 2) continue;
     const twins = group.map(c => registry.nodes.get(c.id));
-    for (const c of group) {
-      const context = contextOf(registry.nodes.get(c.id), twins, c.label);
+    const nearest = group.map(c => contextOf(registry.nodes.get(c.id), twins, c.label));
+    group.forEach((c, i) => {
+      // Cards that each end in an "Options" heading share their nearest title, which would name every twin
+      // alike; a twin whose nearest title another twin shares is named by its card's first title instead.
+      const shared = nearest.indexOf(nearest[i]) !== nearest.lastIndexOf(nearest[i]);
+      const context = shared ? contextOf(registry.nodes.get(c.id), twins, c.label, false) : nearest[i];
       if (context) c.context = context;
-    }
+    });
     // Twins whose surroundings name none of them, like a row of identical avatars, still differ by position.
     if (group.every(c => !c.context)) {
       twins.sort((a, b) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);

@@ -681,6 +681,25 @@ async def test_a_control_is_named_by_the_title_nearest_before_it_not_the_posts_f
     assert sorted(c.context or "" for c in submits) == ["Contact", "Date Picker 3"]
 
 
+async def test_twins_keep_their_card_names_past_shared_hidden_and_control_labels(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    """A shared "Options" heading, a hidden label and a label holding an output are not what names a card."""
+    card = (
+        "<div><h2>{name}</h2><label hidden>Unavailable</label><label>Total <output>12</output></label>"
+        "<h3>Options</h3><label>Quantity<input></label><button>Add to cart</button></div>"
+    )
+    await page.navigate(f"{main_site}/icons.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        f"document.body.innerHTML = '{card.format(name='Brass Kettle')}{card.format(name='Copper Pan')}'",
+    )
+    obs = await observe_until(page, "Add to cart")
+    for label in ("Add to cart", "Quantity"):
+        assert [c.context for c in obs.controls if c.label == label] == ["Brass Kettle", "Copper Pan"]
+
+
 async def test_a_browser_handed_over_by_cdp_url_drives_and_survives_the_run(
     chrome_connection: BrowserConnection, artifact_sink: RecordingArtifactSink, main_site: str
 ) -> None:

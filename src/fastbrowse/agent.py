@@ -155,8 +155,9 @@ _FIELD_WRITER = (
     "week or time, which takes ISO 8601 (2026-09-25, 2026-09-25T14:30, 2026-09, 2026-W39, 14:30). "
     "A fact the task states in another shape is given, not missing: take the part of a "
     "stated name, address or date this field asks for and write it in the field's shape. "
-    "When the task has a field take one value and later be changed to another, write the value the recent "
-    "actions have reached: the first until it has been entered, the later one only once it has.\n\n"
+    "The requirements are the task's steps in the order it wants them done. When more than one gives this field "
+    "a value (enter one, later change it), write the value of the earliest such requirement that no recent "
+    "action has already typed into this field; a later value is written only after the earlier one was.\n\n"
     f"# Trust\n{UNTRUSTED}"
 )
 
@@ -1277,6 +1278,9 @@ class Agent:
         # can have a generic label; the opening action and surrounding values explain its purpose.
         context = {
             "task": state.task,
+            # Given only the task, the writer typed "enter X, later correct it to Y" as Y on the first pass every
+            # time, and no Back could then show a correction; in order, it typed X first and Y after going back.
+            "requirements": [r.text for r in (await state.await_plan()).requirements],
             "subgoal": state.hint,
             "field": target.model_dump(mode="json", exclude_none=True),
             "other_fields": [
