@@ -308,7 +308,9 @@ class _RunState:
 
     async def await_plan(self) -> Plan:
         if self.ready_plan is None:
-            planned = await self.planning
+            # Shielded: a caller cancelled mid-wait (a fill a redraw abandoned) must not cancel the one plan every
+            # later step needs. Teardown still cancels the task itself.
+            planned = await asyncio.shield(self.planning)
             self.ledger.record(planned.cost)
             self.ready_plan = planned.data
         return self.ready_plan

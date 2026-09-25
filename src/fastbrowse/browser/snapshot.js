@@ -295,7 +295,7 @@
   // and the post's first heading ("Data Entry Form") named that picker's Submit when only headings counted.
   // A hidden title names nothing on screen: innerText still returns a `hidden` label's text.
   const titles = scope => [...scope.querySelectorAll(`${HEADINGS},label`)].filter(
-    e => (e.localName !== 'label' || !e.control) && e.checkVisibility({ checkVisibilityCSS: true })
+    e => (e.localName !== 'label' || !e.control) && e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
   );
   // The title nearest before the element names its section; the scope's first title is the fallback, and the
   // only answer when `nearest` is false.

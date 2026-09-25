@@ -124,6 +124,26 @@ async def test_field_writer_receives_popup_context_and_other_field_values() -> N
     assert prompt["requirements"] == list(steps)
 
 
+async def test_a_step_abandoned_while_waiting_for_the_plan_leaves_the_plan_to_the_rest_of_the_run() -> None:
+    """A fill waits for the plan, and a redraw cancels the fill: the plan every later step needs survives."""
+    plan = Plan(requirements=(), answer_expected=False)
+    release = asyncio.Event()
+
+    async def planned() -> Generation[Plan]:
+        await release.wait()
+        return Generation(data=plan, cost=FREE)
+
+    state = await run_state()
+    state.ready_plan, state.planning = None, asyncio.create_task(planned())
+    waiting = asyncio.create_task(state.await_plan())
+    await asyncio.sleep(0)
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    release.set()
+    assert await state.await_plan() is plan
+
+
 async def test_missing_personal_information_stops_once_recovery_returns_to_it() -> None:
     """The first missing verdict is recovery's to route around, since most such fields are optional; a field
     recovery sends the run back to is required, and ends it."""

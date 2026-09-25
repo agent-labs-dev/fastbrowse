@@ -698,6 +698,15 @@ async def test_twins_keep_their_card_names_past_shared_hidden_and_control_labels
     obs = await observe_until(page, "Add to cart")
     for label in ("Add to cart", "Quantity"):
         assert [c.context for c in obs.controls if c.label == label] == ["Brass Kettle", "Copper Pan"]
+    # One card's transparent label is not shared, so the shared-title fallback cannot be what skips it.
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        'document.body.innerHTML = \'<div><h2>Brass Kettle</h2><label style="opacity:0">Sold out</label>'
+        "<button>Add to cart</button></div><div><h2>Copper Pan</h2><button>Add to cart</button></div>'",
+    )
+    obs = await observe_until(page, "Add to cart")
+    assert [c.context for c in obs.controls if c.label == "Add to cart"] == ["Brass Kettle", "Copper Pan"]
 
 
 async def test_a_browser_handed_over_by_cdp_url_drives_and_survives_the_run(
