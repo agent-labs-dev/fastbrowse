@@ -49,6 +49,9 @@ class Outcome:
     controls: tuple[tuple[str, str | None], ...] | None = None
     """(label, value) of every control on the page the run ended on, observed after the run by the harness, not
     reported by the agent; None where an arm has no final page."""
+    unobservable: bool = False
+    """The arm cannot say where its browser ended (the hosted Browser Use SDK), so an answer task's page half is
+    not graded for it. Every other arm's final page is observed by the harness, and a missing one fails."""
 
 
 type Truth = Callable[[httpx.AsyncClient], Awaitable[object]]
@@ -77,6 +80,11 @@ class LiveTask:
     rolling: Mapping[str, str] = field(default_factory=dict[str, str])
     """Text that changes from run to run by design, such as a date four weeks out, and the name its version
     fingerprint uses in its place, so the task keeps its version from one day to the next."""
+
+
+def prompt(task: LiveTask) -> str:
+    """What every arm is asked; part of each task's version fingerprint, since it is what the task asks."""
+    return f"Start at {task.start}. {task.task}"
 
 
 async def _json(http: httpx.AsyncClient, url: str) -> object:
@@ -117,9 +125,13 @@ def _answer_has(outcome: Outcome, *needles: str) -> str | None:
     return f"answer lacks {missing}: {outcome.answer!r}" if missing else None
 
 
+def _no_page(outcome: Outcome) -> str | None:
+    return None if outcome.unobservable else "no final page to grade"
+
+
 def _ended_on(outcome: Outcome, path: str) -> str | None:
-    if outcome.final_url is None:
-        return None
+    if not outcome.final_url:
+        return _no_page(outcome)
     actual = unquote(urlparse(outcome.final_url).path).rstrip("/")
     return None if actual == path else f"ended on {outcome.final_url}, expected path {path}"
 
@@ -144,15 +156,13 @@ def _godel(outcome: Outcome, truth: object) -> str | None:
 
 
 def _cart(outcome: Outcome, _: object) -> str | None:
-    if outcome.quotes is None:
-        return _answer_has(outcome, "backpack")
-    # The cart page lists only what is in the cart, so a captured quote naming the backpack there is the
-    # page's word, where "no backpack was added" in the answer would pass a text check.
-    in_cart = any(
-        "backpack" in quote.casefold() and urlparse(url).path.rstrip("/") == "/cart.html"
-        for url, quote in outcome.quotes
-    )
-    return None if in_cart else f"no quote from /cart.html names the backpack: {outcome.quotes}"
+    if outcome.unobservable:
+        return _answer_has(outcome, "Sauce Labs Backpack")
+    if failure := _ended_on(outcome, "/cart.html"):
+        return failure
+    # Product links on the cart page name its contents; answer text can deny adding the same product.
+    in_cart = any("sauce labs backpack" in label.casefold() for label, _ in outcome.controls or ())
+    return None if in_cart else "no backpack control on the final cart page"
 
 
 def _release(outcome: Outcome, truth: object) -> str | None:
@@ -183,8 +193,8 @@ async def _newer_release(http: httpx.AsyncClient) -> object:
 
 
 def _ended_under(outcome: Outcome, prefix: str) -> str | None:
-    if outcome.final_url is None:
-        return None
+    if not outcome.final_url:
+        return _no_page(outcome)
     path = urlparse(outcome.final_url).path
     return None if path.startswith(prefix) else f"ended on {outcome.final_url}, expected a path under {prefix}"
 
@@ -217,6 +227,8 @@ def _order_total(outcome: Outcome, truth: object) -> str | None:
 
 
 def _paused_before_paying(outcome: Outcome, _: object) -> str | None:
+    if not outcome.final_url:
+        return "no final page to grade"
     ended = urlparse(outcome.final_url or "").path
     return f"the order was placed: ended on {outcome.final_url}" if ended == "/checkout-complete.html" else None
 
@@ -315,7 +327,7 @@ def _flight_search_url(url: str | None) -> _FlightSearch | None:
 def _flight_results(outcome: Outcome, *, one_way_nonstop: bool) -> str | None:
     """The encoded search or rendered fields, plus results: either can exist before Search is pressed."""
     if outcome.controls is None:
-        return None
+        return None if outcome.unobservable else "no final controls to grade"
     # A label can repeat (an overlay editor over the field it edits), so any control holding the value counts.
     values: dict[str, list[str]] = {}
     for label, value in outcome.controls:

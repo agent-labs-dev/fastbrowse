@@ -1,0 +1,31 @@
+{
+  "release": "0.5.2",
+  "date": "2026-09-22",
+  "tasks": 14,
+  "repeats": 3,
+  "concurrency": 8,
+  "max_steps": 30,
+  "source": "https://github.com/agent-labs-dev/fastbrowse/blob/7411edac06680500db9fb3e96008982dff4ff85f/docs/evals.md#052-2026-09-22",
+  "arms": {
+    "fastbrowse": {
+      "passed": 41,
+      "total": 42,
+      "correct": 41,
+      "median_seconds": 20.6,
+      "mean_seconds": 27.0,
+      "median_dollars": 0.0041,
+      "mean_dollars": 0.0086,
+      "total_dollars": 0.36
+    },
+    "browser-use": {
+      "passed": 39,
+      "total": 42,
+      "correct": 39,
+      "median_seconds": 21.6,
+      "mean_seconds": 57.4,
+      "median_dollars": 0.3668,
+      "mean_dollars": 0.6193,
+      "total_dollars": 26.01
+    }
+  }
+}

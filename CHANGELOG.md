@@ -17,6 +17,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - **What a form holds can be quoted.** A filled field, date or select now reads as `Label: value` in the page text,
   so an answer about the dates or options chosen can cite them. Password and secret values are never read.
   ([#136](https://github.com/agent-labs-dev/fastbrowse/issues/136))
+- **Live evals require the evidence they grade.** A missing final page fails any arm whose page the harness can
+  observe (the hosted agent, which cannot report one, is graded on its answer), unfinished hosted sessions no
+  longer pass, subprocess arms get only allowed environment values, and all arms share one prompt. An opt-in
+  browser-use OSS adapter and pinned external task loaders support preparing independent comparisons.
+- **Eval results have a site feed.** Regenerating docs also writes `docs/results/summary.json` from published
+  rows, with release and suite versions, per-arm time and cost, and changed task versions. Just recipes run,
+  publish and regenerate without editing totals.
 
 ## [0.5.5] - 2026-09-25
 

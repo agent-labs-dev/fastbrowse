@@ -14,7 +14,6 @@ is also how the fastbrowse arm reaches Jev. Its text helper uses TEXT_MODEL_API_
 
 import base64
 import contextlib
-import html
 import json
 import os
 import shutil
@@ -37,7 +36,6 @@ ROUNDING_UNIT = 0.01
 """The gateway rounds probabilities to hundredths so they sum to one, which can leave Jev's choice a hundredth
 below another option. fastbrowse accepts that near-tie; jev-ultrafast, written against unrounded direct-API
 answers, would reject the whole response, so the chosen option is lifted to the top before it checks."""
-RESULT_SECONDS = 4.0
 RECAST_SECONDS = 1.0
 FPS = 25
 
@@ -221,19 +219,6 @@ class Screencast:
         return None if done.returncode == 0 else done.stderr.strip()[:400]
 
 
-def show_result(browser: Any, goal: str, headline: str, summary: str) -> None:
-    """End the video on the outcome, as fastbrowse's recordings do."""
-    card = (
-        "<meta charset=utf-8><body style='margin:0;height:100vh;display:grid;place-content:center;gap:28px;"
-        "padding:0 8vw;background:#0d1117;color:#e6edf3;font:24px system-ui,sans-serif'>"
-        f"<div style='color:#8b949e'>{html.escape(goal)}</div>"
-        f"<div style='font-size:40px;font-weight:600'>{html.escape(headline)}</div>"
-        f"<div style='color:#3fb950'>{html.escape(summary)}</div></body>"
-    )
-    browser.call("Page.navigate", url="data:text/html;base64," + base64.b64encode(card.encode()).decode())
-    time.sleep(RESULT_SECONDS)
-
-
 def run(request: dict[str, Any]) -> dict[str, Any]:
     from jev_ultrafast import Agent, model
 
@@ -265,13 +250,6 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
                 status = "unavailable" if isinstance(exc, Unavailable) else status
             seconds = time.monotonic() - started
             if cast is not None:
-                steps = len(agent.state["decisions"])
-                show_result(
-                    agent.browser,
-                    request["goal"],
-                    {"done": "DONE", "blocked": "BLOCKED"}.get(status, error or status),
-                    f"{status} in {seconds:.1f}s, {steps} steps, ${meter.dollars:.4f}",
-                )
                 cast.__exit__()
                 problem = cast.render(Path(request["record"]))
                 if problem:
@@ -279,20 +257,14 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         error = error or f"{type(exc).__name__}: {exc}"
         seconds = time.monotonic() - started
-    final_url, controls = None, None
     if agent is not None:
         state = agent.state
-        final_url = state["page"]["url"]
-        # The controls it last observed, as the fastbrowse arm's harness observes them: for graders that read the form.
-        controls = [[a["label"], a.get("value")] for a in state["page"].get("actions", [])]
-        agent.close()
+        # The harness observes this tab after exit and owns the cloud browser cleanup.
     history = state["history"] if state else []
     return {
         "status": status,
         "error": error,
         "seconds": round(seconds, 2),
-        "final_url": final_url,
-        "controls": controls,
         "steps": len(state["decisions"]) if state else 0,
         "actions": len(history),
         "trace": [f"{h['kind']} {h['action']} -> {'changed' if h['page_changed'] else 'unchanged'}" for h in history],
