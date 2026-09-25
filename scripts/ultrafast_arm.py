@@ -68,9 +68,11 @@ class Unavailable(RuntimeError):
 class Meter:
     """Every model request's metered dollars; a request whose cost the provider did not report is counted."""
 
-    def __init__(self) -> None:
+    def __init__(self, jev_price: float = 0.0) -> None:
         self.jev = 0.0
         self.text = 0.0
+        self.jev_price = jev_price
+        """Dollars per Jev input token (`fastbrowse.jev.JEV_DOLLARS_PER_INPUT_TOKEN`), for a request metered at $0."""
         self.unmetered = 0
 
     @property
@@ -118,11 +120,12 @@ def patch_transport(model: Any, meter: Meter) -> None:
                 {"state": body["state"], "questions": body["questions"]},
             )
             result, cost = systemone_answer(payload)
-            _meter(meter, "jev", cost)
+            _meter(meter, "jev", cost, (payload.get("usage") or {}).get("inputTokens"))
             return result
         result = _post(model, url, {"Authorization": f"Bearer {key}"}, body)
         usage = result.get("usage") or {}
-        _meter(meter, "jev" if "api.typesafe.ai" in url else "text", usage.get("cost"))
+        kind = "jev" if "api.typesafe.ai" in url else "text"
+        _meter(meter, kind, usage.get("cost"), usage.get("inputTokens", usage.get("input_tokens")))
         return result
 
     model.post_json = post_json
@@ -133,10 +136,13 @@ def unfenced(content: str) -> str:
     return text.strip()
 
 
-def _meter(meter: Meter, kind: str, cost: object) -> None:
+def _meter(meter: Meter, kind: str, cost: object, tokens: object = None) -> None:
     if not isinstance(cost, int | float | str):
         meter.unmetered += 1
         return
+    if kind == "jev" and not float(cost) and isinstance(tokens, int) and tokens > 0:
+        # The gateway meters Jev at $0 while tokens flow; priced at list, as fastbrowse prices its own requests.
+        cost = tokens * meter.jev_price
     if kind == "jev":
         meter.jev += float(cost)
     else:
@@ -165,7 +171,13 @@ def _post(model: Any, url: str, headers: dict[str, str], body: dict[str, Any]) -
         if response.is_error:
             failed = Unavailable if response.status_code in RETRYABLE else RuntimeError
             raise failed(f"Model provider returned HTTP {response.status_code}; no action executed.")
-        return response.json()
+        payload = response.json()
+        # OpenRouter can hold a request open, then send its error in a 200: that body is no answer to act on.
+        if isinstance(payload, dict) and isinstance(error := payload.get("error"), dict):
+            code = error.get("code")
+            failed = Unavailable if code in RETRYABLE else RuntimeError
+            raise failed(f"Model provider returned error {code} in HTTP {response.status_code}; no action executed.")
+        return payload
     raise Unavailable("Model unavailable")
 
 
@@ -250,7 +262,7 @@ class Screencast:
 def run(request: dict[str, Any]) -> dict[str, Any]:
     from jev_ultrafast import Agent, model
 
-    meter = Meter()
+    meter = Meter(request.get("jev_dollars_per_input_token", 0.0))
     patch_transport(model, meter)
     started = time.monotonic()
     status, error, agent, state = "error", None, None, None

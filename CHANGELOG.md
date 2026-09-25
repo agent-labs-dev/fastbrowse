@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A secret that is also part of a site's hostname no longer breaks the addresses a run cites.** 0.5.6 kept such
+  a host readable in reported addresses, but the model's own view of the page was blanked first, so steps, facts
+  and citations after signing in as `practice` still linked to `https://••••••••.expandtesting.com/secure`.
+  Masking and redaction now share one rule: a value that sits wholly inside the host of an address on an origin
+  it was typed on is left, wherever the address appears, and every other appearance of it, a password's
+  included, is still blanked or redacted.
 - **An answer states the value, not the requirement ahead of it.** A value read straight off the page was answered
   as the requirement it met followed by the value ("Find the latest released version of httpx." then
   "httpx 0.28.1"); the answer is now the value alone.

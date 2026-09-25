@@ -21,6 +21,9 @@ def normalize(status: str | None, *, hosted: bool = False, hosted_success: bool 
         # The SDK ends a finished session as `stopped`, or `idle` where it keeps the session open.
         if value in {"stopped", "idle"} and hosted_success is True:
             return Ending.DONE
+        if value in {"stopped", "idle"} and hosted_success is None:
+            # Browser Use never said how its run ended: that is the provider's silence, not the agent's failure.
+            return Ending.UNAVAILABLE
         if value in {"complete", "done"}:
             return Ending.ERROR
     if value in {"complete", "done"}:

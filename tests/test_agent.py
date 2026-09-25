@@ -1326,7 +1326,7 @@ def test_visited_addresses_are_redacted_when_shown_and_keep_where_the_run_began(
     redactor = Redactor()
     visited = dict.fromkeys(["https://a.test/?user=ada", *(f"https://a.test/{i}" for i in range(5))])
     redactor.register("username", "ada")
-    shown = _visited(visited, ObservationLimits(history_entries=1, earlier_history_entries=1), redactor.redact_url)
+    shown = _visited(visited, ObservationLimits(history_entries=1, earlier_history_entries=1), redactor.redact)
     assert shown == ("https://a.test/?user=[secret:username]", "https://a.test/3", "https://a.test/4")
 
 
@@ -2495,6 +2495,29 @@ async def test_a_secret_the_site_uses_as_its_hostname_leaves_the_cited_address_r
     )
     assert public.url == "https://practice.example.test/secure?user=[secret:username]"
     assert answer == f"Signed in as [secret:username] [1](<{public.deep_link}>)"
+
+
+async def test_what_the_model_sees_keeps_the_host_a_secret_was_typed_on_and_blanks_it_everywhere_else() -> None:
+    # Masking the observed address as `https://••••••••.example.test/secure` put that broken address in every step,
+    # fact and citation link the run reported, since those are built from what the model saw.
+    page = Mock(spec=Page)
+    url = "https://practice.example.test/secure?user=practice"
+    links = (_link("home", "Home", "https://practice.example.test/"), _link("x", "x", "https://practice.evil.test/"))
+    seen = _at(url, *links).model_copy(update={"viewport_text": "practice hunter2 at https://practice.example.test/"})
+    page.observe = AsyncMock(return_value=seen)
+    page.capture = AsyncMock(
+        return_value=capture((BlockKind.PARAGRAPH, "Welcome, practice")).model_copy(update={"url": url})
+    )
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    agent._redactor.register("username", "practice", "https://practice.example.test/login")
+    agent._redactor.register("password", "hunter2", "https://practice.example.test/login")
+
+    observed, captured = await agent._observe(), await agent._capture()
+
+    assert observed.url == captured.url == "https://practice.example.test/secure?user=••••••••"
+    assert [c.href for c in observed.controls] == ["https://practice.example.test/", "https://••••••••.evil.test/"]
+    assert observed.viewport_text == "•••••••• ••••••• at https://practice.example.test/"
+    assert captured.text.endswith("Welcome, ••••••••")
 
 
 @pytest.mark.parametrize(

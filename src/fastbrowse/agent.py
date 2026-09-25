@@ -597,7 +597,7 @@ class Agent:
         try:
             await asyncio.wait({working, watching}, return_when=asyncio.FIRST_COMPLETED)
             if not working.done() and watching.result():
-                trace("redecide", url=self._redactor.redact_url(observation.url))
+                trace("redecide", url=self._redactor.redact(observation.url))
                 state.redecided = True
                 return None
             return await working
@@ -1491,14 +1491,12 @@ class Agent:
                 if drawn.text.strip():
                     return await self._read(state, drawn, observation)
             # Nothing on the page can evidence anything, so the reader is not asked.
-            trace("read", url=self._redactor.redact_url(capture.url), chars=0, wanted=[r.id for r in wanted])
+            trace("read", url=self._redactor.redact(capture.url), chars=0, wanted=[r.id for r in wanted])
             spent(False)
             return False, False
         following = next_page_control(observation) if observation is not None else None
         began = state.first_url if following is not None or state.pages else None
-        question = read_question(
-            state.task, wanted, began_at=None if began is None else self._redactor.redact_url(began)
-        )
+        question = read_question(state.task, wanted, began_at=None if began is None else self._redactor.redact(began))
         notice = next_page_notice(following)
         before = len(state.notes.facts)
         known = {fact.text for fact in state.notes.facts}
@@ -1526,7 +1524,7 @@ class Agent:
         continues = [key for key in outcome.continues if not state.notes.evidenced(key)]
         trace(
             "read",
-            url=self._redactor.redact_url(capture.url),
+            url=self._redactor.redact(capture.url),
             chars=len(capture.text),
             wanted=[r.id for r in wanted],
             facts_added=len(state.notes.facts) - before,
@@ -1718,7 +1716,7 @@ class Agent:
             draft,
             tokens=self._config.tokens,
             history=_record(state.history, self._config.observation),
-            visited=_visited(state.visited, self._config.observation, self._redactor.redact_url),
+            visited=_visited(state.visited, self._config.observation, self._redactor.redact),
         )
         trace(
             "done_check",
@@ -1766,7 +1764,7 @@ class Agent:
                     _record(state.history, self._config.observation),
                     doubted=check.doubted,
                     invented=sorted(state.invented),
-                    visited=_visited(state.visited, self._config.observation, self._redactor.redact_url),
+                    visited=_visited(state.visited, self._config.observation, self._redactor.redact),
                     config=self._config,
                     ledger=state.ledger,
                 )
@@ -1984,7 +1982,7 @@ class Agent:
         requirement_id = redact(fact.requirement_id) if fact.requirement_id is not None else None
         if fact.evidence is None:
             return StepFact(text=text, requirement_id=requirement_id, reader=fact.reader)
-        url, quote = self._redactor.redact_url(fact.evidence.url), redact(fact.evidence.quote)
+        url, quote = self._redactor.redact(fact.evidence.url), redact(fact.evidence.quote)
         return StepFact(
             text=text,
             requirement_id=requirement_id,
@@ -1998,14 +1996,13 @@ class Agent:
         """The answer and its citations with secrets redacted, links included.
 
         A link percent-encodes its quote, where redacting the text cannot see a secret, so each link is rebuilt
-        from the redacted address and quote, and only the prose between links is redacted as text: redacting a
-        rebuilt link again would rewrite a secret the site published in its own hostname.
+        from the redacted address and quote, and only the prose between links is redacted as text.
         """
         redact = self._redactor.redact
         citations = []
         links: dict[str, str] = {}
         for citation in composed.citations:
-            url, quote = self._redactor.redact_url(citation.url), redact(citation.quote)
+            url, quote = self._redactor.redact(citation.url), redact(citation.quote)
             public = citation.model_copy(
                 update={
                     "text": redact(citation.text),
@@ -2089,7 +2086,7 @@ class Agent:
             steps=tuple(state.steps) if state else (),
             cost=ledger.breakdown(),
             artifacts=self._page.artifacts[self._artifact_start :],
-            final_url=self._redactor.redact_url(state.last_page[0]) if state and state.last_page else None,
+            final_url=self._redactor.redact(state.last_page[0]) if state and state.last_page else None,
             error=error,
             would_fire=tuple(state.would_fire) if state else (),
         )
