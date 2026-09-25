@@ -448,6 +448,13 @@ async def test_the_github_token_goes_only_to_the_github_api(
     assert request.headers.get("Authorization") == sent
 
 
+def test_pairs_take_a_value_named_before_its_item_only_when_it_says_so() -> None:
+    check = more_tasks._pairs(("Agnostic", "12.51"), ("Mother", "16.89"))
+    assert check(Outcome("£12.51 for Agnostic and £16.89 for 'Mother'.", None, None), None) is None
+    assert check(Outcome("Agnostic £12.51, Mother £16.89.", None, None), None) is None
+    assert check(Outcome("Mother 12.51, Agnostic 16.89.", None, None), None) is not None
+
+
 def test_the_first_friday_grader_takes_the_date_as_the_page_shows_it() -> None:
     truth = {"date": "2026-10-02", "mdy": "10/02/2026"}
     shown = "The date shown is 10/02/2026. The day shown is Friday. The month shown is October."

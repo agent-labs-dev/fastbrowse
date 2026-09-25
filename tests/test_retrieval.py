@@ -1986,23 +1986,34 @@ def test_tallied_quotes_fit_protected_notes_budget(author_tallies: Notes, json_e
     )
 
 
-def test_tally_claim_checks_expand_only_the_cited_groups(author_tallies: Notes) -> None:
+def test_tally_claim_checks_judge_counted_records_by_their_tally(author_tallies: Notes) -> None:
     notes = author_tallies
     groups = notes.supporting("counts")[:3]
     answer = assemble_answer([Claim(text=fact.text, evidence_ids=(key,)) for key, fact in groups], notes, ())
     assert len(answer.citations) == 27
     questions = claim_check_questions(answer, notes)
-    for index, (key, _) in enumerate(groups):
-        cited = notes.expand_evidence_ids((key,))
-        for record, item in notes.evidence.items():
-            for issue in ("unsupported", "contradicted"):
-                assert (item.model_dump_json() in questions[f"{issue}_{index}"].instructions) is (record in cited)
+    for index, (_, fact) in enumerate(groups):
+        for issue in ("unsupported", "contradicted"):
+            instructions = questions[f"{issue}_{index}"].instructions
+            assert f"TALLY: {json.dumps(fact.text)}" in instructions
+            assert not any(item.model_dump_json() in instructions for item in notes.evidence.values())
     assert {citation.quote for citation in answer.citations} == {
         item.quote
         for key, _ in groups
         for record in notes.expand_evidence_ids((key,))
         if (item := notes.evidence.get(record)) is not None
     }
+
+
+def test_a_ranking_over_every_counted_record_leaves_the_omission_check_its_notes(author_tallies: Notes) -> None:
+    notes = author_tallies
+    plan = tuple(Requirement(id=key, text=key, kind=RequirementKind.INFORMATION) for key in ("counts", "ranking"))
+    claims = [Claim(text=fact.text, evidence_ids=(key,)) for key, fact in notes.supporting("counts")[:3]]
+    # The live answer ranked each leading author in its own claim, each citing every record.
+    claims += [Claim(text=fact.text, evidence_ids=(key,)) for key, fact in notes.supporting("ranking")] * 3
+    questions = claim_check_questions(assemble_answer(claims, notes, plan), notes)
+    omitted = questions["requirement_omitted"].instructions.split("# Notes\n", 1)[1]
+    assert "Author 00: 10" in omitted and "without a tag filter" in omitted
 
 
 @pytest.mark.parametrize("caller", ["read", "compose", "fields", "done", "verify", "claims"])

@@ -268,10 +268,13 @@ def _pairs(*pairs: tuple[str, str]) -> Check:
             (name, answer[end : next((s for s, _, _ in mentions if s >= end), len(answer))])
             for _, end, name in mentions
         ]
+        # "£12.51 for Agnostic" names its value first; only that exact phrasing, so a list's previous value is not
+        # read as the next name's.
         wrong = [
             f"{name} {value}"
             for name, value in pairs
             if not any(said == name and re.search(_number(value), span) for said, span in spans)
+            and not re.search(rf"{_number(value)}\s+for\s+['\"]?{re.escape(_flat(name))}", answer)
         ]
         return f"answer lacks {wrong}: {outcome.answer!r}" if wrong else None
 

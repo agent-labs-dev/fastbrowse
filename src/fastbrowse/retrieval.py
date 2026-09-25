@@ -1461,12 +1461,21 @@ def claim_check_questions(
 ) -> Mapping[str, NoulQuestion]:
     questions: dict[str, NoulQuestion] = {}
     known = notes.evidence
+    # A counted record is shown as its tally's line: code checked each quote against the group when it was read and
+    # counted them, and a ranking citing every record put a hundred quotes into each of its questions.
+    counted = {record: fact.text for fact in notes.facts if fact.tally is not None for record in fact.basis}
     for index, claim in enumerate(composed.claims):
         # A derived fact is judged from the records it expands to, never from the reader's own conclusion.
+        keys = [key for key in notes.expand_evidence_ids(claim.evidence_ids) if not notes.derived(key)]
         evidence = "\n".join(
-            known[key].model_dump_json() if key in known else f"MISSING: {key}"
-            for key in notes.expand_evidence_ids(claim.evidence_ids)
-            if not notes.derived(key)
+            dict.fromkeys(
+                f"TALLY: {json.dumps(counted[key], ensure_ascii=False)}"
+                if key in counted
+                else known[key].model_dump_json()
+                if key in known
+                else f"MISSING: {key}"
+                for key in keys
+            )
         )
         for issue in ("unsupported", "contradicted"):
             questions[f"{issue}_{index}"] = NoulQuestion(
