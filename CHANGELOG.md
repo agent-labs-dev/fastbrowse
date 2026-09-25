@@ -11,6 +11,14 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-09-25
+
+- **Every eval comparison sets its arms on the same attempts, and an outage scores no arm.** Each suite is split
+  into comparisons of the arms that ran the same tasks. At each task every arm keeps as many attempts as the arm
+  with fewest measured, all timed in wall time. A missing hosted verdict, a site answering 5xx and an error sent
+  with HTTP 200 now count as outages, rerun up to five times. The gateway's $0 Jev metering is priced at list for
+  both Jev-backed arms. The feed moves to `schema_version` 2.
+  ([#153](https://github.com/agent-labs-dev/fastbrowse/pull/153), [#154](https://github.com/agent-labs-dev/fastbrowse/pull/154))
 - **A dense page's step is asked again smaller when Jev sheds it.** The gateway answers large Jev requests with
   503s far more often than small ones, and a step on a Wikipedia article (160 controls, about 27k tokens) ran out
   of retries in six runs of six, ending each one `unavailable`. When that happens to a large step request, it is
@@ -538,7 +546,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.6...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.7...HEAD
+[0.5.7]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.7
 [0.5.6]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.6
 [0.5.5]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.5
 [0.5.4]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.4
