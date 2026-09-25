@@ -207,6 +207,8 @@
     }
     if (el.tagName === 'TABLE') {
       for (const text of renderTable(el)) push('table', text);
+      // A form laid out in a table: its cells render as text, which holds none of the controls' values.
+      for (const field of fields(el)) push('paragraph', field);
       return;
     }
     if (el.tagName === 'PRE') return push('code', textOf(el));

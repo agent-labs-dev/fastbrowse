@@ -633,9 +633,11 @@ async def test_what_a_form_holds_is_quotable_but_a_password_is_not(
         '<p><label for="end">End Date</label><input id="end" type="date" value="2026-10-07"></p>'
         '<select aria-label="Size"><option>Small</option><option selected>Large</option></select>'
         '<label>Password<input type="password" value="hunter2"></label>'
-        '<input type="text" value="" placeholder="Empty">\'',
+        '<input type="text" value="" placeholder="Empty">'
+        '<table><tr><td><label for="guests">Guests</label></td><td><input id="guests" value="2"></td></tr></table>\'',
     )
     text = (await page.capture()).text
+    assert "Guests: 2" in text
     assert "Start Date: 2026-09-28" in text
     assert "End Date: 2026-10-07" in text
     assert "Size: Large" in text
