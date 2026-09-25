@@ -86,6 +86,35 @@
   };
   const cellText = c => withRating(textOf(c) || drawn(c), c);
 
+  // What a form holds is in its controls' values, which no text node carries: a task that asked for dates to be
+  // chosen was refused as unanswered because "the dates chosen" had nothing to quote. A filled control reads as
+  // "Label: value" after the text around it. Password and agent-typed secret values never leave the page.
+  const CONTROLS = new Set(['INPUT', 'SELECT', 'TEXTAREA']);
+  const UNFILLED = new Set(['hidden', 'password', 'checkbox', 'radio', 'button', 'submit', 'reset', 'image', 'file']);
+  const nameOf = (e, seen = new Set()) => {
+    if (!e || seen.has(e)) return '';
+    seen.add(e);
+    const root = e.getRootNode?.() ?? document;
+    const byId = id => (root.getElementById ? root : document).getElementById(id);
+    const referenced = (e.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)
+      .map(id => nameOf(byId(id), seen)).filter(Boolean).join(' ');
+    return clean(referenced || e.getAttribute('aria-label') ||
+      [...(e.labels || [])].map(l => nameOf(l, seen)).filter(Boolean).join(' ') ||
+      (CONTROLS.has(e.tagName) ? '' : [...e.childNodes].map(n => n.nodeType === 3 ? n.textContent :
+        n.nodeType === 1 && !SKIP.has(n.tagName) && !CONTROLS.has(n.tagName) ? nameOf(n, seen) : '').join(' ')) ||
+      e.getAttribute('title') || e.getAttribute('placeholder') || e.getAttribute('name') || '');
+  };
+  const valueOf = e => {
+    if (e.tagName === 'SELECT') return [...e.selectedOptions].map(o => clean(o.label || o.text)).join(', ');
+    if (UNFILLED.has(e.type) || e.dataset?.fastbrowseSecret === '1') return '';
+    return clean(e.value ?? '');
+  };
+  const fields = el => (CONTROLS.has(el.tagName) ? [el] : [...el.querySelectorAll('input,select,textarea')])
+    .filter(e => e.checkVisibility ? e.checkVisibility({ visibilityProperty: true }) : !hidden(e))
+    .map(e => [nameOf(e), valueOf(e)])
+    .filter(([, value]) => value)
+    .map(([name, value]) => (name ? `${name}: ${value}` : value));
+
   const renderTable = table => {
     // A table filter hides what it excludes with `hidden`, display or visibility (`collapse` is the one CSS made
     // for rows), and a column toggle hides cells; read as rows, a filtered table answered from rows not shown.
@@ -115,6 +144,7 @@
     for (const e of elements) text = withRating(text, e);
     if (onlyLink) push('link', text, { href: hrefOf(elements[0]) });
     else push('paragraph', text);
+    for (const e of elements) for (const field of fields(e)) push('paragraph', field);
     run.length = 0;
   }
 
@@ -177,14 +207,22 @@
     }
     if (el.tagName === 'TABLE') {
       for (const text of renderTable(el)) push('table', text);
+      // A form laid out in a table: its cells render as text, which holds none of the controls' values.
+      for (const field of fields(el)) push('paragraph', field);
       return;
     }
     if (el.tagName === 'PRE') return push('code', textOf(el));
     const record = recordText(el);
     if ((el.tagName === 'LI' && leaf(el)) || record !== null) {
       const links = el.querySelectorAll('a[href]');
-      return push(el.tagName === 'LI' ? 'list_item' : 'record', record ?? withRating(textOf(el), el),
+      push(el.tagName === 'LI' ? 'list_item' : 'record', record ?? withRating(textOf(el), el),
         links.length === 1 ? { href: hrefOf(links[0]) } : {});
+      for (const field of fields(el)) push('paragraph', field);
+      return;
+    }
+    if (CONTROLS.has(el.tagName)) {
+      for (const field of fields(el)) push('paragraph', field);
+      return;
     }
     walk(el);
   }
