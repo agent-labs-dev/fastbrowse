@@ -16,9 +16,10 @@ from fastbrowse.config import Config, Thresholds, TokenBudget
 from fastbrowse.jev import JevClient, NoulAnswer, NoulQuestion, Question
 from fastbrowse.llm import Generation, LLMClient, Message
 from fastbrowse.memory import Notes, NotesTooLarge
-from fastbrowse.models import UNTRUSTED, CostComponent, CostLine, Evidence, Frozen, LLMPurpose, StepResult
+from fastbrowse.models import UNTRUSTED, CostComponent, CostLine, Evidence, Frozen, LLMPurpose
 from fastbrowse.page import Capture, Control, Observation, cut_text
 from fastbrowse.planner import Plan, RequirementKind
+from fastbrowse.policy import HistoryEntry
 from fastbrowse.retrieval import (
     TRANSACTION_CONTRADICTED,
     ComposedAnswer,
@@ -192,7 +193,8 @@ async def check_done(
             true="Yes, it needs rewriting before it answers the task.",
             false="No, it answers the task as written.",
         )
-    context: dict[str, JsonValue] = {"task": task}
+    # "The next Monday after today" cannot be confirmed by someone who does not know today.
+    context: dict[str, JsonValue] = {"task": task, "date": observation.captured_at.date().isoformat()}
     if draft is not None:
         context["draft"] = draft.answer
     evaluation = await jev.evaluate(
@@ -260,6 +262,14 @@ def _grounding(notes: Notes, plan: Plan, invented: Sequence[str]) -> str:
     return ("\n\n".join(parts) + "\n\n") if parts else ""
 
 
+def _step(entry: HistoryEntry) -> str:
+    """One action as the run recorded it: the value typed and what it visibly did, both already redacted."""
+    action = f"{entry.operation.value if entry.operation else 'open'} {entry.target or ''}".strip()
+    typed = f" = {entry.text!r}" if entry.text is not None else ""
+    effect = f" ({entry.effect})" if entry.effect else ""
+    return f"- {action}{typed} -> {entry.outcome.value}{effect}"
+
+
 async def llm_verify(
     llm: LLMClient,
     task: str,
@@ -267,7 +277,7 @@ async def llm_verify(
     observation: Observation,
     screenshots: tuple[bytes, ...],
     notes: Notes,
-    steps: Sequence[StepResult],
+    history: Sequence[HistoryEntry],
     *,
     doubted: Sequence[str] = (),
     invented: Sequence[str] = (),
@@ -284,10 +294,9 @@ async def llm_verify(
         f"- {r.id}: {r.text}{' (doubted: show it is satisfied, or name it missing)' if r.id in doubted else ''}"
         for r in plan.requirements
     )
-    count = config.observation.history_entries + config.observation.earlier_history_entries
-    history = "\n".join(
-        f"- {s.operation.value} {s.target or ''} -> {s.outcome.value}" for s in steps[max(0, len(steps) - count) :]
-    )
+    # What was typed and what each action visibly did, not only that it ran: told "fill First Name -> executed",
+    # the verifier could not tell a run that corrected a value from one that typed the correction first.
+    steps = "\n".join(map(_step, history))
     # A filter's checked state is absent from page text, and a screenshot shows it only when it is in view: a flights
     # search the verifier passed had matching rows and no nonstop filter applied.
     # Only what is set: every empty field on a long form would crowd the request without saying anything.
@@ -299,7 +308,9 @@ async def llm_verify(
         "executed on the control the task meant. The task may paraphrase the control's label; the acted-on control "
         "is its equivalent when the page offered no closer match, which is the match the agent made when it acted. "
         "The steps are the run's own record, and a click that navigated is not visible on the page it left. Be "
-        "strict about whether the action happened, not about the task's wording of the label. A requirement to "
+        "strict about whether the action happened, not about the task's wording of the label. A requirement that "
+        "orders actions (enter one value, then go back and change it) is satisfied only when the steps show that "
+        "order. A date relative to today is judged against the current date. A requirement to "
         "compare, count or conclude from facts is satisfied when the notes hold those facts: the answer "
         "draws the conclusion, and no page shows it. A requirement to narrow a search or listing (a filter, "
         "option or sort) is satisfied when the page shows it applied, in a set control, the address or the "
@@ -319,7 +330,8 @@ async def llm_verify(
         Message(
             role="user",
             content=(
-                f"## Task\n{task}\n\n## Requirements\n{requirements}\n\n## Steps taken\n{history}\n\n"
+                f"## Task\n{task}\n\n## Current date\n{observation.captured_at.date().isoformat()}\n\n"
+                f"## Requirements\n{requirements}\n\n## Steps taken\n{steps}\n\n"
                 f"## Set controls\n{json.dumps(_controls(stateful))}\n\n{_grounding(notes, plan, invented)}"
                 f"## Page\n{observation.url}\n"
             ),

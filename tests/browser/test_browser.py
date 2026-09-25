@@ -662,6 +662,25 @@ async def test_a_uniquely_named_date_field_still_gets_its_section_heading(
     assert start.context == "Date Picker 3"
 
 
+async def test_a_control_is_named_by_the_title_nearest_before_it_not_the_posts_first_heading(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    """A post's heading ("Data Entry Form") named a date picker's Submit, and the verifier read the wrong form."""
+    await page.navigate(f"{main_site}/icons.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.body.innerHTML = '<article><h3>Data Entry Form</h3><p>Pick dates below.</p>"
+        '<label>Date Picker 3</label><div><label>Start Date<input type="date"></label>'
+        "<button>Submit</button></div></article>"
+        '<form><h3>Contact</h3><label for="n">Name</label><input id="n"><button>Submit</button></form>\'',
+    )
+    obs = await observe_until(page, "Start Date")
+    assert find(obs, "Start Date").context == "Date Picker 3"
+    submits = [c for c in obs.controls if c.label == "Submit"]
+    assert sorted(c.context or "" for c in submits) == ["Contact", "Date Picker 3"]
+
+
 async def test_a_browser_handed_over_by_cdp_url_drives_and_survives_the_run(
     chrome_connection: BrowserConnection, artifact_sink: RecordingArtifactSink, main_site: str
 ) -> None:

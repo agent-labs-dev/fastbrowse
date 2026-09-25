@@ -17,6 +17,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - **What a form holds can be quoted.** A filled field, date or select now reads as `Label: value` in the page text,
   so an answer about the dates or options chosen can cite them. Password and secret values are never read.
   ([#136](https://github.com/agent-labs-dev/fastbrowse/issues/136))
+- **Finishing is judged on what was typed, in order.** The completion checks now see today's date and each action's
+  typed value and effect, so "enter one name, then go back and correct it" or "the next Monday" can be confirmed or
+  refused. A field asked to change later now gets its first value first. A control is named by the nearest title
+  before it, so a date picker's Submit is no longer named after the post around it.
+  ([#143](https://github.com/agent-labs-dev/fastbrowse/issues/143),
+  [#144](https://github.com/agent-labs-dev/fastbrowse/issues/144))
 - **Live evals require the evidence they grade.** A missing final page fails any arm whose page the harness can
   observe (the hosted agent, which cannot report one, is graded on its answer), unfinished hosted sessions no
   longer pass, subprocess arms get only allowed environment values, and all arms share one prompt. An opt-in

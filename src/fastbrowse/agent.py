@@ -154,7 +154,9 @@ _FIELD_WRITER = (
     "Use the field's displayed format for dates, except in a field whose input_type is date, datetime-local, month, "
     "week or time, which takes ISO 8601 (2026-09-25, 2026-09-25T14:30, 2026-09, 2026-W39, 14:30). "
     "A fact the task states in another shape is given, not missing: take the part of a "
-    "stated name, address or date this field asks for and write it in the field's shape.\n\n"
+    "stated name, address or date this field asks for and write it in the field's shape. "
+    "When the task has a field take one value and later be changed to another, write the value the recent "
+    "actions have reached: the first until it has been entered, the later one only once it has.\n\n"
     f"# Trust\n{UNTRUSTED}"
 )
 
@@ -1746,7 +1748,7 @@ class Agent:
                     fresh,
                     await self._screenshots(),
                     state.notes,
-                    state.steps,
+                    _history(state.history, self._config.observation),
                     doubted=check.doubted,
                     invented=sorted(state.invented),
                     config=self._config,

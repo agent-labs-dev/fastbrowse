@@ -291,13 +291,27 @@
   // Only labels that actually collide pay for it.
   const HEADINGS = 'h1,h2,h3,h4,h5,h6,[role="heading"],legend,caption,th,dt,summary';
   const firstLine = text => (text || '').split('\n').map(s => s.replace(/\s+/g, ' ').trim()).find(Boolean) || '';
-  const nameOf = (scope, label) => {
+  // A label tied to no control titles what follows it, as a heading would: a blog post's "Date Picker 3" is one,
+  // and the post's first heading ("Data Entry Form") named that picker's Submit when only headings counted.
+  const titles = scope => [...scope.querySelectorAll(`${HEADINGS},label`)].filter(
+    e => e.localName !== 'label' || !(e.htmlFor || e.querySelector('input,select,textarea,button'))
+  );
+  // The title nearest before the element names its section; the scope's first title is the fallback.
+  const sectionOf = (scope, element, label) => {
+    let first = '', nearest = '';
+    for (const title of titles(scope)) {
+      const text = firstLine(title.innerText);
+      if (!text || text === label || title.contains(element)) continue;
+      first ||= text;
+      if (title.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) nearest = text;
+    }
+    return nearest || first;
+  };
+  const nameOf = (scope, element, label) => {
     const aria = (scope.getAttribute('aria-label') || '').trim();
     if (aria && aria !== label) return aria;
-    for (const heading of scope.querySelectorAll(HEADINGS)) {
-      const text = firstLine(heading.innerText);
-      if (text && text !== label) return text;
-    }
+    const section = sectionOf(scope, element, label);
+    if (section) return section;
     const text = scope.innerText || '';
     return firstLine(label ? text.split(label).join(' ') : text);
   };
@@ -309,7 +323,7 @@
       if (twins.some(twin => twin !== element && e.contains(twin))) break;
       scope = e;
     }
-    return scope ? excerpt(nameOf(scope, label), CONTROL_CONTEXT_CHARS) : '';
+    return scope ? excerpt(nameOf(scope, element, label), CONTROL_CONTEXT_CHARS) : '';
   };
   // Content a stylesheet shows only under the pointer (`.card:hover .caption`) is out of reach of every other
   // operation. An element whose hover rule would reveal something now hidden is offered as a hover target.
@@ -420,10 +434,8 @@
     for (let e = element.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
       const aria = (e.getAttribute('aria-label') || '').trim();
       if (aria && aria !== label) return excerpt(aria, CONTROL_CONTEXT_CHARS);
-      for (const heading of e.querySelectorAll(HEADINGS)) {
-        const text = firstLine(heading.innerText);
-        if (text && text !== label) return excerpt(text, CONTROL_CONTEXT_CHARS);
-      }
+      const section = sectionOf(e, element, label);
+      if (section) return excerpt(section, CONTROL_CONTEXT_CHARS);
     }
     return '';
   };

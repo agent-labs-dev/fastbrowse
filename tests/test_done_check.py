@@ -8,9 +8,10 @@ from pydantic import JsonValue
 from fastbrowse.config import Config, Thresholds, TokenBudget
 from fastbrowse.jev import Answer, Evaluation, NoulAnswer, Question
 from fastbrowse.memory import Fact, Notes, fact_id
-from fastbrowse.models import CostBasis, CostComponent, CostLine, FactReader, Operation
+from fastbrowse.models import CostBasis, CostComponent, CostLine, FactReader, Operation, StepOutcome
 from fastbrowse.page import Control, Observation
 from fastbrowse.planner import Plan, Requirement, RequirementKind
+from fastbrowse.policy import HistoryEntry
 from fastbrowse.retrieval import claim_check_questions, compose
 from fastbrowse.verification import DoneVerdict, check_done, llm_verify, page_state
 from tests.test_memory import evidence
@@ -248,3 +249,39 @@ async def test_a_verifier_told_of_no_guessed_address_is_asked_nothing_extra() ->
     llm = ScriptedLLM([{"complete": True, "missing": []}])
     await llm_verify(llm, "Cheapest nonstop?", plan, _PAGE, (), notes, ())
     assert "## Addresses this run built from the task" not in llm.calls[0][1][-1].content
+
+
+async def test_the_checks_are_shown_the_date_and_what_each_action_typed_and_did() -> None:
+    """A correction ("type Ada, go back, make it Adam") is only visible in the order of the values typed, and
+    "the next Monday after today" only against today."""
+    plan = Plan(
+        requirements=(
+            Requirement(id="r1", text="Enter Ada, go back and correct it to Adam", kind=RequirementKind.ACTION),
+        ),
+        answer_expected=False,
+    )
+    history = (
+        HistoryEntry(
+            operation=Operation.FILL, target="First Name", outcome=StepOutcome.EXECUTED, page_changed=False, text="Ada"
+        ),
+        HistoryEntry(operation=Operation.CLICK, target="Back", outcome=StepOutcome.EXECUTED, page_changed=True),
+        HistoryEntry(
+            operation=Operation.FILL,
+            target="First Name",
+            outcome=StepOutcome.EXECUTED,
+            page_changed=False,
+            text="Adam",
+            effect="First Name: Ada -> Adam",
+        ),
+    )
+    llm = ScriptedLLM([{"complete": True, "missing": []}])
+    await llm_verify(llm, "Sign up", plan, _PAGE, (), Notes(), history)
+    prompt = llm.calls[0][1][-1].content
+    today = _PAGE.captured_at.date().isoformat()
+    assert f"## Current date\n{today}" in prompt
+    steps = prompt[prompt.index("## Steps taken\n") :]
+    assert steps.index("fill First Name = 'Ada' -> executed") < steps.index("click Back -> executed")
+    assert "fill First Name = 'Adam' -> executed (First Name: Ada -> Adam)" in steps
+    jev = _Jev({"complete": 0.9})
+    await check_done(jev, "Sign up", plan, _PAGE, Notes(), Thresholds())
+    assert isinstance(jev.state, dict) and jev.state["date"] == today
