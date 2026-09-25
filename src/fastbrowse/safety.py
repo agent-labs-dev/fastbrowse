@@ -4,6 +4,7 @@ Models only ever see secret names. Values are resolved here, at dispatch time, f
 """
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from urllib.parse import quote, quote_plus, urlsplit
 
@@ -64,6 +65,8 @@ def irreversible_question(task: str, operation: Operation, control: Control) -> 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 # A declared origin whose host starts with this covers that host and everything under it.
 _WILDCARD = "*."
+# The scheme and authority of an address wherever it sits in text; the authority ends where the path would begin.
+_ADDRESS = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*)://(?P<netloc>[^\s/?#\\<>\"'`]*)")
 
 
 def origin_of(url: str) -> str:
@@ -184,51 +187,68 @@ class Redactor:
                     self._typed_on.setdefault(form, set()).add(origin_of(origin))
 
     def redact(self, text: str) -> str:
-        # Longest first, so a secret containing another secret is replaced whole.
-        for value in sorted(self._values, key=len, reverse=True):
-            text = text.replace(value, f"[secret:{self._values[value]}]")
-        return text
-
-    def redact_url(self, url: str) -> str:
-        """Redact an address everywhere but its host and port, so what is reported is still an address.
-
-        A secret that is an ordinary word (`practice`) also names hosts: redacting it out of
-        `https://practice.expandtesting.com/secure` left `https://[secret:username].expandtesting.com/secure`,
-        which no parser reads back. A value that sits wholly inside the host was published by the site in its
-        own address, so leaving it there tells nobody anything. That holds only on an origin the secret was
-        typed on: a page that sends the run to `https://hunter2.attacker.test/` put the password in a host, and
-        it is redacted. Userinfo, path, query and fragment are always redacted, and a value that runs across the
-        host's edge, or anything that does not parse as an address, is redacted as plain text.
-        """
-        try:
-            netloc = urlsplit(url).netloc
-        except ValueError:
-            return self.redact(url)
-        host = netloc.rpartition("@")[2]
-        at = url.find(f"//{netloc}")
-        if not host or at < 0:
-            return self.redact(url)
-        end = at + 2 + len(netloc)
-        start = end - len(host)
-        origin = origin_of(url)
-        for value in self._values:
-            found = url.find(value)
-            while found >= 0:
-                inside = start <= found <= end - len(value)
-                if (
-                    found < end
-                    and found + len(value) > start
-                    and not (inside and origin in self._typed_on.get(value, ()))
-                ):
-                    return self.redact(url)
-                found = url.find(value, found + 1)
-        return self.redact(url[:start]) + url[start:end] + self.redact(url[end:])
+        """Replace each secret value with its name, except inside a host the secret was typed on (`_spans`)."""
+        out, at = [], 0
+        for start, end, name in self._spans(text):
+            out += [text[at:start], f"[secret:{name}]"]
+            at = end
+        return "".join([*out, text[at:]])
 
     def mask(self, text: str) -> str:
         """Blank secret values at equal length, so offsets into the text (capture blocks) stay valid."""
-        for value in sorted(self._values, key=len, reverse=True):
-            text = text.replace(value, "•" * len(value))
-        return text
+        chars = list(text)
+        for start, end, _ in self._spans(text):
+            chars[start:end] = "•" * (end - start)
+        return "".join(chars)
 
     def reveals(self, text: str) -> bool:
-        return any(value in text for value in self._values)
+        return bool(self._spans(text))
+
+    def _spans(self, text: str) -> list[tuple[int, int, str]]:
+        """Where secret values sit in `text`, merged where they overlap, each named for the longest value in it.
+
+        A secret that is an ordinary word (`practice`) also names hosts: blanking it out of
+        `https://practice.expandtesting.com/secure` left `https://••••••••.expandtesting.com/secure` in every
+        address the model saw, and from there in every step, fact and citation link the run reported. An
+        occurrence that sits wholly inside the host of an address on an origin the secret was typed on is left:
+        the run read that address, host and all, before the secret was ever typed there, and the site publishes
+        its own host, so blanking it hides nothing and breaks the address. The value is still found everywhere
+        else, a password or a token included: in ordinary words, in the userinfo, path, query and fragment of
+        every address, in any host it was not typed on (`https://hunter2.attacker.test/`), and where it runs
+        across a host's edge. Nothing here guesses from the value which secrets matter, since a weak password is
+        as short and as ordinary as a username.
+        """
+        hosts = self._hosts(text) if self._typed_on else []
+        found: list[tuple[int, int, str]] = []
+        for value, name in self._values.items():
+            typed_on = self._typed_on.get(value, set())
+            at = text.find(value)
+            while at >= 0:
+                end = at + len(value)
+                if not any(lo <= at and end <= hi and origin in typed_on for lo, hi, origin in hosts):
+                    found.append((at, end, name))
+                at = text.find(value, at + 1)
+        merged: list[tuple[int, int, str]] = []
+        # Longest first at each start, so a secret containing another secret is named for the whole.
+        for start, end, name in sorted(found, key=lambda span: (span[0], span[0] - span[1])):
+            if merged and start < merged[-1][1]:
+                if end > merged[-1][1]:
+                    merged[-1] = (merged[-1][0], end, merged[-1][2])
+            else:
+                merged.append((start, end, name))
+        return merged
+
+    @staticmethod
+    def _hosts(text: str) -> list[tuple[int, int, str]]:
+        """The host (and port) of every address in `text`, as a span with the origin it belongs to."""
+        hosts = []
+        for address in _ADDRESS.finditer(text):
+            # A sentence's full stop or a closing bracket is not part of the host it follows.
+            netloc = address["netloc"].rstrip(".,;:!?)}'\"")
+            try:
+                origin = origin_of(f"{address['scheme']}://{netloc}")
+            except ValueError:
+                continue
+            end = address.start("netloc") + len(netloc)
+            hosts.append((end - len(netloc.rpartition("@")[2]), end, origin))
+        return hosts

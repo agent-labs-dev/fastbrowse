@@ -10,7 +10,7 @@ import json
 import logging
 import time
 from collections import deque
-from collections.abc import Coroutine, Mapping, Sequence, Set
+from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence, Set
 from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit
 
@@ -284,6 +284,9 @@ class _RunState:
     pages: int = 0
     """Next pages opened by code this run."""
     first_url: str | None = None
+    visited: dict[str, None] = field(default_factory=dict[str, None])
+    """Every address the run has been on, in order, first the one it began on. The action record starts after that
+    first page, so without this a task's "start at" address was one the checks could not see the run had reached."""
     """The first page the run looked at, which is what a task's "this page" means once the run has moved on."""
     redecided: bool = False
     """A decision was dropped because the page redrew under it, so nothing is watched until an action is taken."""
@@ -378,6 +381,9 @@ class Agent:
                     )
                     state.history.extend(history)
                     state.invented = invented
+                    if opening is not None:
+                        # A shortcut leaves the start page before the loop observes anything.
+                        state.visited[opening] = None
                     return await self._loop(state, output_schema, until)
             except _Stop as stop:
                 return self._result(state, ledger, stop.status, error=stop.error)
@@ -422,6 +428,7 @@ class Agent:
             state.ledger.check()
             observation = await self._observe()
             state.first_url = state.first_url or observation.url
+            state.visited[(self._raw_observation or observation).url] = None
             self._note_effect(state, observation)
             undone, renews, put_back = self._reversal(state)
             stalled = self._settle(state, observation, renews=renews, put_back=put_back)
@@ -590,7 +597,7 @@ class Agent:
         try:
             await asyncio.wait({working, watching}, return_when=asyncio.FIRST_COMPLETED)
             if not working.done() and watching.result():
-                trace("redecide", url=self._redactor.redact_url(observation.url))
+                trace("redecide", url=self._redactor.redact(observation.url))
                 state.redecided = True
                 return None
             return await working
@@ -1484,14 +1491,12 @@ class Agent:
                 if drawn.text.strip():
                     return await self._read(state, drawn, observation)
             # Nothing on the page can evidence anything, so the reader is not asked.
-            trace("read", url=self._redactor.redact_url(capture.url), chars=0, wanted=[r.id for r in wanted])
+            trace("read", url=self._redactor.redact(capture.url), chars=0, wanted=[r.id for r in wanted])
             spent(False)
             return False, False
         following = next_page_control(observation) if observation is not None else None
         began = state.first_url if following is not None or state.pages else None
-        question = read_question(
-            state.task, wanted, began_at=None if began is None else self._redactor.redact_url(began)
-        )
+        question = read_question(state.task, wanted, began_at=None if began is None else self._redactor.redact(began))
         notice = next_page_notice(following)
         before = len(state.notes.facts)
         known = {fact.text for fact in state.notes.facts}
@@ -1519,7 +1524,7 @@ class Agent:
         continues = [key for key in outcome.continues if not state.notes.evidenced(key)]
         trace(
             "read",
-            url=self._redactor.redact_url(capture.url),
+            url=self._redactor.redact(capture.url),
             chars=len(capture.text),
             wanted=[r.id for r in wanted],
             facts_added=len(state.notes.facts) - before,
@@ -1711,6 +1716,7 @@ class Agent:
             draft,
             tokens=self._config.tokens,
             history=_record(state.history, self._config.observation),
+            visited=_visited(state.visited, self._config.observation, self._redactor.redact),
         )
         trace(
             "done_check",
@@ -1758,6 +1764,7 @@ class Agent:
                     _record(state.history, self._config.observation),
                     doubted=check.doubted,
                     invented=sorted(state.invented),
+                    visited=_visited(state.visited, self._config.observation, self._redactor.redact),
                     config=self._config,
                     ledger=state.ledger,
                 )
@@ -1975,7 +1982,7 @@ class Agent:
         requirement_id = redact(fact.requirement_id) if fact.requirement_id is not None else None
         if fact.evidence is None:
             return StepFact(text=text, requirement_id=requirement_id, reader=fact.reader)
-        url, quote = self._redactor.redact_url(fact.evidence.url), redact(fact.evidence.quote)
+        url, quote = self._redactor.redact(fact.evidence.url), redact(fact.evidence.quote)
         return StepFact(
             text=text,
             requirement_id=requirement_id,
@@ -1989,14 +1996,13 @@ class Agent:
         """The answer and its citations with secrets redacted, links included.
 
         A link percent-encodes its quote, where redacting the text cannot see a secret, so each link is rebuilt
-        from the redacted address and quote, and only the prose between links is redacted as text: redacting a
-        rebuilt link again would rewrite a secret the site published in its own hostname.
+        from the redacted address and quote, and only the prose between links is redacted as text.
         """
         redact = self._redactor.redact
         citations = []
         links: dict[str, str] = {}
         for citation in composed.citations:
-            url, quote = self._redactor.redact_url(citation.url), redact(citation.quote)
+            url, quote = self._redactor.redact(citation.url), redact(citation.quote)
             public = citation.model_copy(
                 update={
                     "text": redact(citation.text),
@@ -2080,7 +2086,7 @@ class Agent:
             steps=tuple(state.steps) if state else (),
             cost=ledger.breakdown(),
             artifacts=self._page.artifacts[self._artifact_start :],
-            final_url=self._redactor.redact_url(state.last_page[0]) if state and state.last_page else None,
+            final_url=self._redactor.redact(state.last_page[0]) if state and state.last_page else None,
             error=error,
             would_fire=tuple(state.would_fire) if state else (),
         )
@@ -2179,6 +2185,16 @@ def _record(history: Sequence[HistoryEntry], limits: ObservationLimits) -> tuple
     recent = _history(history, limits)
     typed = (e.model_copy(update={"effect": None}) for e in history[: len(history) - len(recent)] if e.text is not None)
     return (*typed, *recent)
+
+
+def _visited(visited: Iterable[str], limits: ObservationLimits, redact: Callable[[str], str]) -> tuple[str, ...]:
+    """Where the run began, then the addresses it has been on since, as many as the actions shown with them.
+
+    Redacted as they are shown, not as they were stored: a value in an early address can become a secret only
+    when a later page asks for it."""
+    urls = tuple(dict.fromkeys(map(redact, visited)))
+    shown = limits.history_entries + limits.earlier_history_entries
+    return urls[:1] + urls[max(1, len(urls) - shown) :]
 
 
 def _recovery_text(text: str) -> str:

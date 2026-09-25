@@ -156,8 +156,9 @@ def _godel(outcome: Outcome, truth: object) -> str | None:
 
 
 def _cart(outcome: Outcome, _: object) -> str | None:
-    if outcome.unobservable:
-        return _answer_has(outcome, "Sauce Labs Backpack")
+    # Every arm must answer; the page, where there is one, must also bear the answer out.
+    if (failure := _answer_has(outcome, "Sauce Labs Backpack")) or outcome.unobservable:
+        return failure
     if failure := _ended_on(outcome, "/cart.html"):
         return failure
     # Product links on the cart page name its contents; answer text can deny adding the same product.

@@ -25,6 +25,7 @@ from fastbrowse.agent import (
     _unread,
     _Unsure,
     _verified,
+    _visited,
 )
 from fastbrowse.batches import evaluate_batches
 from fastbrowse.citations import text_fragment
@@ -54,7 +55,8 @@ from fastbrowse.page import Action, ActResult, BlockKind, Capture, Control, Dial
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 from fastbrowse.policy import Decision, HistoryEntry, ReadAssessment, build_request, decide
 from fastbrowse.retrieval import TRANSACTION_CONTRADICTED, ComposedAnswer
-from fastbrowse.safety import ScopedSecrets
+from fastbrowse.safety import Redactor, ScopedSecrets
+from fastbrowse.shortcut import Shortcut
 from fastbrowse.telemetry import Ledger
 from fastbrowse.tripwires import Tripwire
 from fastbrowse.verification import LLMVerdict, _grounding
@@ -1273,6 +1275,61 @@ async def test_only_a_run_that_has_not_acted_is_held_to_an_action_jev_holds_undo
     assert llm.calls[0][0] is LLMPurpose.VERIFY
 
 
+async def test_the_page_a_run_began_on_is_shown_to_the_checks_after_a_shortcut_leaves_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ruff-release: "Start at https://github.com/astral-sh/ruff." was planned as a requirement to navigate there,
+    the shortcut opened the release page straight from it, and the verifier rejected DONE because nothing it saw
+    said the run had ever been on the repository page."""
+    start, release = "https://github.test/astral-sh/ruff", "https://github.test/astral-sh/ruff/releases/tag/0.16.9"
+    plan = Plan(
+        requirements=(
+            Requirement(id="req-1", text=f"Navigate to {start}", kind=RequirementKind.ACTION),
+            Requirement(id="req-2", text="Find the latest release of ruff", kind=RequirementKind.INFORMATION),
+        ),
+        answer_expected=True,
+    )
+
+    async def planned(*args: object, **kwargs: object) -> Generation[Plan]:
+        return Generation(data=plan, cost=FREE)
+
+    monkeypatch.setattr(agent_module, "make_plan", planned)
+    on = _at(release)
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    page.navigate = AsyncMock()
+    page.address = AsyncMock(return_value=release)
+    page.response_status = AsyncMock(return_value=200)
+    page.observe = AsyncMock(return_value=on)
+    page.screenshot = AsyncMock(return_value=b"")
+    llm = ScriptedLLM(
+        [{"missing": ["req-1"], "complete": False}, {"diagnosis": "", "next_subgoal": "", "give_up": False}]
+    )
+    agent = Agent(page, ScriptedJev({}, noul=0.5), llm)
+    monkeypatch.setattr(agent, "_propose", AsyncMock(return_value=Shortcut(url=release)))
+
+    async def finish(state: _RunState, output_schema: object, until: object) -> RunResult:
+        state.notes.add(_fare(release, "release").model_copy(update={"requirement_id": "req-2", "text": "0.16.9"}))
+        await agent._finish(state, on, None, None)
+        raise _Stop(Status.STUCK, "checked")
+
+    monkeypatch.setattr(agent, "_loop", finish)
+    await agent.run("Start at https://github.test/astral-sh/ruff. What is the latest release?", start=start)
+
+    purpose, messages = llm.calls[0][:2]
+    assert purpose is LLMPurpose.VERIFY
+    assert f"## Visited addresses\n- {start}\n" in messages[-1].content
+
+
+def test_visited_addresses_are_redacted_when_shown_and_keep_where_the_run_began() -> None:
+    """A value in an early address can become a secret only when a later page asks for it."""
+    redactor = Redactor()
+    visited = dict.fromkeys(["https://a.test/?user=ada", *(f"https://a.test/{i}" for i in range(5))])
+    redactor.register("username", "ada")
+    shown = _visited(visited, ObservationLimits(history_entries=1, earlier_history_entries=1), redactor.redact)
+    assert shown == ("https://a.test/?user=[secret:username]", "https://a.test/3", "https://a.test/4")
+
+
 class _ConfirmingJev(ScriptedJev):
     """Confirms every requirement and the task as complete, so the done check accepts outright."""
 
@@ -2387,7 +2444,7 @@ async def test_a_secret_quoted_by_a_citation_is_redacted_from_its_links_too(read
     (fact,) = events[0].step.facts
     assert events[0].step == state.steps[0]
     assert fact.quote == "signed in as [secret:password] today"
-    assert fact.text == (f"Who is signed in?\n{fact.quote}" if reader is FactReader.JEV_CHOICE else fact.quote)
+    assert fact.text == fact.quote
     assert fact.requirement_id == "r1 [secret:password]"
     assert fact.url == "https://example.test/account?token=[secret:password]"
     assert fact.reader is reader
@@ -2438,6 +2495,29 @@ async def test_a_secret_the_site_uses_as_its_hostname_leaves_the_cited_address_r
     )
     assert public.url == "https://practice.example.test/secure?user=[secret:username]"
     assert answer == f"Signed in as [secret:username] [1](<{public.deep_link}>)"
+
+
+async def test_what_the_model_sees_keeps_the_host_a_secret_was_typed_on_and_blanks_it_everywhere_else() -> None:
+    # Masking the observed address as `https://••••••••.example.test/secure` put that broken address in every step,
+    # fact and citation link the run reported, since those are built from what the model saw.
+    page = Mock(spec=Page)
+    url = "https://practice.example.test/secure?user=practice"
+    links = (_link("home", "Home", "https://practice.example.test/"), _link("x", "x", "https://practice.evil.test/"))
+    seen = _at(url, *links).model_copy(update={"viewport_text": "practice hunter2 at https://practice.example.test/"})
+    page.observe = AsyncMock(return_value=seen)
+    page.capture = AsyncMock(
+        return_value=capture((BlockKind.PARAGRAPH, "Welcome, practice")).model_copy(update={"url": url})
+    )
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    agent._redactor.register("username", "practice", "https://practice.example.test/login")
+    agent._redactor.register("password", "hunter2", "https://practice.example.test/login")
+
+    observed, captured = await agent._observe(), await agent._capture()
+
+    assert observed.url == captured.url == "https://practice.example.test/secure?user=••••••••"
+    assert [c.href for c in observed.controls] == ["https://practice.example.test/", "https://••••••••.evil.test/"]
+    assert observed.viewport_text == "•••••••• ••••••• at https://practice.example.test/"
+    assert captured.text.endswith("Welcome, ••••••••")
 
 
 @pytest.mark.parametrize(

@@ -47,12 +47,14 @@ The jev-ultrafast runner answers a one-option choice itself, as fastbrowse does,
 Rows keep raw `status`, `task_successful` and `normalized_status`: `done`, `stopped`, `budget`, `timeout`, `error`, `blocked` or `unavailable`.
 A pass requires a correct grade and `done`, or the exact expected fastbrowse stop.
 The hosted SDK maps to `done` only for a stopped session with `is_task_successful=true`.
-That verdict lands after the session stops; the harness waits up to 90 seconds for it.
-An attempt a provider outage ended is waited out and run again, up to five times over about 25 minutes.
-A row still unavailable after that is recorded but left out of every pass rate, time and cost.
-Median time excludes the outage waits fastbrowse measured within a run (`transient_seconds`).
+That verdict lands after the session stops; the harness waits up to 90 seconds for it. A verdict still missing then is the provider's silence, and the attempt counts as an outage.
+An attempt that fails while the task's site answers its start URL with a 5xx, or not at all, is an outage too: a site serving errors fails every arm alike.
+An attempt an outage ended is waited out and run again, up to five times over about 25 minutes.
+A row still unavailable after that is recorded but scores nothing, and neither does one attempt of every other arm at that task: each comparison scores its arms on the same attempts at the same tasks.
+Time is wall time for every arm. fastbrowse records the outage waits inside a run (`transient_seconds`), but the other arms cannot, so no arm's are subtracted.
 Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the row.
 Existing timing includes browser setup. These rows do not claim the planned handoff-only timing protocol.
+Jev is priced at list ($0.042 per million input tokens) whenever the gateway meters a request at $0, for fastbrowse and jev-ultrafast alike.
 <!-- /evals:protocol -->
 
 Use `--suite`, `--only` and `--category` to select tasks, `--bitwarden` for vault credentials, and
@@ -141,28 +143,28 @@ For example, `--only books-mystery-cheapest quotes-einstein-count` selects those
 <!-- evals:tasks:dev -->
 | Task | Category | Version | Asks |
 |---|---|---|---|
-| `books-travel-priciest` | lookup | 3 | Which is the most expensive book in the Travel category, and what does it cost? |
-| `hockey-bruins-1990` | lookup | 3 | How many games did the Boston Bruins win in the 1990 season? |
-| `oscars-2012` | lookup | 3 | Of the 2012 films listed here, which one won Best Picture? |
-| `dynamic-loading` | widget | 3 | Start the example and tell me the text that appears when loading finishes. |
-| `nested-frames` | widget | 3 | What text does the frame in the middle of the top row show? |
-| `hover-profile` | widget | 3 | Which user name is revealed when you hover over the second profile picture? |
-| `ruff-release` | lookup | 3 | What is the latest release of ruff on GitHub? |
-| `pizza-order` | checkout | 3 | Order a large pizza with mushroom for Ada Lovelace, telephone 020 7946 0000, email ada@example.com, and submit it. Tell me which size the server received. |
+| `books-travel-priciest` | lookup | 4 | Which is the most expensive book in the Travel category, and what does it cost? |
+| `hockey-bruins-1990` | lookup | 4 | How many games did the Boston Bruins win in the 1990 season? |
+| `oscars-2012` | lookup | 4 | Of the 2012 films listed here, which one won Best Picture? |
+| `dynamic-loading` | widget | 4 | Start the example and tell me the text that appears when loading finishes. |
+| `nested-frames` | widget | 4 | What text does the frame in the middle of the top row show? |
+| `hover-profile` | widget | 4 | Which user name is revealed when you hover over the second profile picture? |
+| `ruff-release` | lookup | 4 | What is the latest release of ruff on GitHub? |
+| `pizza-order` | checkout | 4 | Order a large pizza with mushroom for Ada Lovelace, telephone 020 7946 0000, email ada@example.com, and submit it. Tell me which size the server received. |
 <!-- /evals:tasks:dev -->
 
 <!-- evals:tasks:heldout -->
 | Task | Category | Version | Asks |
 |---|---|---|---|
-| `books-mystery-cheapest` | lookup | 3 | Which is the cheapest book in the Mystery category, and what does it cost? |
-| `quotes-einstein-count` | lookup | 3 | How many quotes by Albert Einstein are there across the whole site? |
-| `countries-mongolia` | lookup | 3 | What population does this page list for Mongolia? |
-| `quotes-js-page2` | lookup | 3 | Who wrote the first quote on the second page? |
-| `crates-serde` | lookup | 3 | What is the latest stable version of the serde crate? |
-| `new-window` | widget | 3 | Follow the link that opens a new window and tell me that window's heading. |
-| `table-largest-due` | widget | 3 | In the first table, whose amount due is the largest? |
-| `httpx-requires-python` | lookup | 3 | What is the oldest Python version the latest httpx release supports? |
-| `quotes-search` | lookup | 3 | Use the search form to find Albert Einstein's quote tagged success, and tell me what it says. |
+| `books-mystery-cheapest` | lookup | 4 | Which is the cheapest book in the Mystery category, and what does it cost? |
+| `quotes-einstein-count` | lookup | 4 | How many quotes by Albert Einstein are there across the whole site? |
+| `countries-mongolia` | lookup | 4 | What population does this page list for Mongolia? |
+| `quotes-js-page2` | lookup | 4 | Who wrote the first quote on the second page? |
+| `crates-serde` | lookup | 4 | What is the latest stable version of the serde crate? |
+| `new-window` | widget | 4 | Follow the link that opens a new window and tell me that window's heading. |
+| `table-largest-due` | widget | 4 | In the first table, whose amount due is the largest? |
+| `httpx-requires-python` | lookup | 4 | What is the oldest Python version the latest httpx release supports? |
+| `quotes-search` | lookup | 4 | Use the search form to find Albert Einstein's quote tagged success, and tell me what it says. |
 <!-- /evals:tasks:heldout -->
 
 The rule that makes the split worth having: **agent changes are iterated against `dev` only.** `heldout` is run
@@ -187,19 +189,19 @@ Date truth is computed when the attempt runs, and form and date tasks are graded
 <!-- evals:tasks:stretch-dev -->
 | Task | Category | Version | Asks |
 |---|---|---|---|
-| `stretch-wizard-review` | checkout | 3 | In the Automation Practice Lab section, fill out the Multi-Step Wizard: Full Name 'Ada Lovelace', Email 'ada.lovelace@example.com', City 'London', ZIP Code 'SW1A 1AA'. Review your details, submit, and tell me what the page says. |
-| `stretch-date-range-monday` | widget | 4 | Find Date Picker 3, the date range picker. Book a stay starting the next Monday that is strictly after today, for nine nights, then submit. Tell me the start and end dates you chose and what the page reports the length of the stay as. |
-| `stretch-books-nonfiction-five-star` | lookup | 5 | Across every page of the Nonfiction category, which three five-star-rated books are the cheapest, and what does each cost? |
-| `stretch-bstack-apple-google` | widget | 4 | Filter the product list to Apple and Google together. Then remove the Apple filter, so only Google remains. Sort by price lowest to highest, and tell me the two cheapest Google phones and their prices. |
-| `stretch-wizard-correction` | checkout | 4 | In the Live Interactive Form widget, fill First Name 'Priya Sharma', Email 'priya.sharma@example.com', Address '221B Baker Street', City 'Manchester', Language 'Turkish', and check the QA newsletter box. Reach the Review step, then go back and correct the first name to 'Priya Sharman' before continuing through Submit. Tell me the first name the Review step showed last and what the confirmation says. |
+| `stretch-wizard-review` | checkout | 4 | In the Automation Practice Lab section, fill out the Multi-Step Wizard: Full Name 'Ada Lovelace', Email 'ada.lovelace@example.com', City 'London', ZIP Code 'SW1A 1AA'. Review your details, submit, and tell me what the page says. |
+| `stretch-date-range-monday` | widget | 5 | Find Date Picker 3, the date range picker. Book a stay starting the next Monday that is strictly after today, for nine nights, then submit. Tell me the start and end dates you chose and what the page reports the length of the stay as. |
+| `stretch-books-nonfiction-five-star` | lookup | 6 | Across every page of the Nonfiction category, which three five-star-rated books are the cheapest, and what does each cost? |
+| `stretch-bstack-apple-google` | widget | 5 | Filter the product list to Apple and Google together. Then remove the Apple filter, so only Google remains. Sort by price lowest to highest, and tell me the two cheapest Google phones and their prices. |
+| `stretch-wizard-correction` | checkout | 5 | In the Live Interactive Form widget, fill First Name 'Priya Sharma', Email 'priya.sharma@example.com', Address '221B Baker Street', City 'Manchester', Language 'Turkish', and check the QA newsletter box. Reach the Review step, then go back and correct the first name to 'Priya Sharman' before continuing through Submit. Tell me the first name the Review step showed last and what the confirmation says. |
 <!-- /evals:tasks:stretch-dev -->
 
 <!-- evals:tasks:stretch-heldout -->
 | Task | Category | Version | Asks |
 |---|---|---|---|
-| `stretch-calendar-first-friday` | widget | 5 | Using the jQuery UI Datepicker (the calendar popup, not the native date input), navigate to next month and select its first Friday. Tell me the date, day, and month it shows. |
-| `stretch-quotes-top-authors` | lookup | 4 | Across every page of this site, which three authors have the most quotes attributed to them, and how many quotes does each have? |
-| `stretch-bstack-apple-samsung` | widget | 4 | Filter the product list to Apple and Samsung together, then remove the Apple filter so only Samsung remains. Sort by price highest to lowest, and tell me the three most expensive phones and their prices. |
+| `stretch-calendar-first-friday` | widget | 6 | Using the jQuery UI Datepicker (the calendar popup, not the native date input), navigate to next month and select its first Friday. Tell me the date, day, and month it shows. |
+| `stretch-quotes-top-authors` | lookup | 5 | Across every page of this site, which three authors have the most quotes attributed to them, and how many quotes does each have? |
+| `stretch-bstack-apple-samsung` | widget | 5 | Filter the product list to Apple and Samsung together, then remove the Apple filter so only Samsung remains. Sort by price highest to lowest, and tell me the three most expensive phones and their prices. |
 <!-- /evals:tasks:stretch-heldout -->
 
 ## Versions
@@ -227,14 +229,14 @@ when they differ:
 <!-- evals:versions -->
 | Suite | Tasks | Version |
 |---|---|---|
-| `core` | 21 | `9b765b1a` |
-| `dev` | 8 | `d562020d` |
-| `heldout` | 9 | `18b64a73` |
-| `stretch-dev` | 5 | `69abd819` |
-| `stretch-heldout` | 3 | `f3f5c3f7` |
+| `core` | 21 | `391f8d42` |
+| `dev` | 8 | `fe57fc77` |
+| `heldout` | 9 | `0e3d5bb8` |
+| `stretch-dev` | 5 | `63ceceeb` |
+| `stretch-heldout` | 3 | `456fd056` |
 | local fixtures | 6 | `dda8ba89` |
 
-Tasks past version 1: `arxiv-open` v2, `arxiv-title` v3, `books-mystery-cheapest` v3, `books-travel-priciest` v3, `countries-mongolia` v3, `crates-serde` v3, `dynamic-loading` v3, `expandtesting-login` v3, `flights-search` v2, `github-license` v3, `github-open` v2, `google-flights` v3, `hn-comments` v2, `hn-top` v3, `hockey-bruins-1990` v3, `hover-profile` v3, `httpx-requires-python` v3, `internet-login` v3, `nested-frames` v3, `new-window` v3, `oscars-2012` v3, `pizza-order` v3, `practice-login` v3, `pypi-newer` v3, `pypi-open` v2, `pypi-structured` v3, `pypi-version` v3, `quotes-einstein-count` v3, `quotes-js-page2` v3, `quotes-search` v3, `ruff-release` v3, `saucedemo-cart` v3, `saucedemo-checkout` v3, `saucedemo-locked-out` v3, `saucedemo-pause` v2, `stretch-books-nonfiction-five-star` v5, `stretch-bstack-apple-google` v4, `stretch-bstack-apple-samsung` v4, `stretch-calendar-first-friday` v5, `stretch-date-range-monday` v4, `stretch-quotes-top-authors` v4, `stretch-wizard-correction` v4, `stretch-wizard-review` v3, `table-largest-due` v3, `wiki-godel` v3, `wiki-open` v2.
+Tasks past version 1: `arxiv-open` v3, `arxiv-title` v4, `books-mystery-cheapest` v4, `books-travel-priciest` v4, `countries-mongolia` v4, `crates-serde` v4, `dynamic-loading` v4, `expandtesting-login` v4, `flights-search` v3, `github-license` v4, `github-open` v3, `google-flights` v4, `hn-comments` v3, `hn-top` v4, `hockey-bruins-1990` v4, `hover-profile` v4, `httpx-requires-python` v4, `internet-login` v4, `nested-frames` v4, `new-window` v4, `oscars-2012` v4, `pizza-order` v4, `practice-login` v4, `pypi-newer` v4, `pypi-open` v3, `pypi-structured` v4, `pypi-version` v4, `quotes-einstein-count` v4, `quotes-js-page2` v4, `quotes-search` v4, `ruff-release` v4, `saucedemo-cart` v4, `saucedemo-checkout` v4, `saucedemo-locked-out` v4, `saucedemo-pause` v3, `stretch-books-nonfiction-five-star` v6, `stretch-bstack-apple-google` v5, `stretch-bstack-apple-samsung` v5, `stretch-calendar-first-friday` v6, `stretch-date-range-monday` v5, `stretch-quotes-top-authors` v5, `stretch-wizard-correction` v5, `stretch-wizard-review` v4, `table-largest-due` v4, `wiki-godel` v4, `wiki-open` v3.
 <!-- /evals:versions -->
 
 Published results are rows, not tables typed by hand. A release's rows are committed to
@@ -259,45 +261,74 @@ one run count once in that summary. The local suite stores the counts without pr
 ### 0.5.6, 2026-09-25
 
 <!-- evals:results:0.5.6 -->
-| | passed | correct | median time | mean time | median cost | mean cost | suite total |
+`core` `9b765b1a`: fastbrowse against Browser Use agent, on the same 13 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 55/56 | 55/56 | 20.6s | 29.1s | $0.0034 | $0.0059 | $0.33 |
-| Browser Use agent | 37/42 | 42/42 | 35.8s | 59.7s | $0.4758 | $0.4899 | $20.58 |
-| jev-ultrafast | 11/15 | 11/15 | 13.0s | 31.2s | unknown | unknown | $0.01 (1 unpriced) |
+| fastbrowse (0.5.6) | 36/37 | 36/37 | 22.7s | 34.9s | $0.0041 | $0.0069 | $0.25 |
+| Browser Use agent | 33/37 | 37/37 | 40.7s | 64.5s | $0.4775 | $0.4973 | $18.40 |
 
-Suites: `core` `9b765b1a`. Runs: `993506e34fd9` at `cfefd89`.
-Excluded as provider outages: fastbrowse 7, jev-ultrafast 3.
+Each arm made 42 attempts. Provider outages ended 5 of fastbrowse's, so each arm is scored on the same 37: an attempt one arm lost is dropped for every arm at that task. `wiki-godel` is left out, with no fastbrowse attempt measured. Runs: `993506e34fd9` at `cfefd89`.
+Changed since these runs: `arxiv-title` v3 → v4, `expandtesting-login` v3 → v4, `github-license` v3 → v4, `google-flights` v3 → v4, `hn-top` v3 → v4, `internet-login` v3 → v4, `practice-login` v3 → v4, `pypi-newer` v3 → v4, `pypi-structured` v3 → v4, `pypi-version` v3 → v4, `saucedemo-cart` v3 → v4, `saucedemo-checkout` v3 → v4, `saucedemo-locked-out` v3 → v4, `wiki-godel` v3 → v4; compare them only against runs of the same version.
 
-| | passed | correct | median time | mean time | median cost | mean cost | suite total |
+`core` `9b765b1a`: fastbrowse against jev-ultrafast, on the same 5 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 21/21 | 21/21 | 18.2s | 17.7s | $0.0051 | $0.0068 | $0.14 |
-| Browser Use agent | 22/24 | 24/24 | 12.9s | 13.2s | $0.1353 | $0.1884 | $4.52 |
+| fastbrowse (0.5.6) | 13/13 | 13/13 | 32.7s | 40.9s | $0.0031 | $0.0043 | $0.06 |
+| jev-ultrafast | 9/13 | 9/13 | 13.2s | 34.7s | unknown | unknown | $0.00 (1 unpriced) |
 
-Suites: `dev` `d562020d`. Runs: `993506e34fd9` at `cfefd89`.
-Excluded as provider outages: fastbrowse 3.
+Each arm made 18 attempts. Provider outages ended 2 of fastbrowse's and 3 of jev-ultrafast's, so each arm is scored on the same 13: an attempt one arm lost is dropped for every arm at that task. `arxiv-open` is left out, with no jev-ultrafast attempt measured. Runs: `993506e34fd9` at `cfefd89`.
+Changed since these runs: `arxiv-open` v2 → v3, `flights-search` v2 → v3, `github-open` v2 → v3, `hn-comments` v2 → v3, `pypi-open` v2 → v3, `wiki-open` v2 → v3; compare them only against runs of the same version.
 
-| | passed | correct | median time | mean time | median cost | mean cost | suite total |
+`core` `9b765b1a`: fastbrowse alone, on the 1 task only it ran.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 25/25 | 25/25 | 19.3s | 27.8s | $0.0072 | $0.0174 | $0.43 |
-| Browser Use agent | 26/27 | 27/27 | 15.0s | 20.2s | $0.1970 | $0.2329 | $6.29 |
+| fastbrowse (0.5.6) | 3/3 | 3/3 | 38.8s | 45.2s | $0.0025 | $0.0062 | $0.02 |
 
-Suites: `heldout` `18b64a73`. Runs: `993506e34fd9` at `cfefd89`.
-Excluded as provider outages: fastbrowse 2.
+Each arm made 3 attempts. Runs: `993506e34fd9` at `cfefd89`.
+Changed since these runs: `saucedemo-pause` v2 → v3; compare them only against runs of the same version.
 
-| | passed | correct | median time | mean time | median cost | mean cost | suite total |
+`dev` `d562020d`: fastbrowse against Browser Use agent, on the same 7 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 12/15 | 12/15 | 44.9s | 57.6s | $0.0271 | $0.0366 | $0.55 |
+| fastbrowse (0.5.6) | 21/21 | 21/21 | 18.2s | 19.8s | $0.0051 | $0.0068 | $0.14 |
+| Browser Use agent | 19/21 | 21/21 | 12.8s | 12.5s | $0.1308 | $0.1440 | $3.02 |
+
+Each arm made 24 attempts. Provider outages ended 3 of fastbrowse's, so each arm is scored on the same 21: an attempt one arm lost is dropped for every arm at that task. `ruff-release` is left out, with no fastbrowse attempt measured. Runs: `993506e34fd9` at `cfefd89`.
+Changed since these runs: `books-travel-priciest` v3 → v4, `dynamic-loading` v3 → v4, `hockey-bruins-1990` v3 → v4, `hover-profile` v3 → v4, `nested-frames` v3 → v4, `oscars-2012` v3 → v4, `pizza-order` v3 → v4, `ruff-release` v3 → v4; compare them only against runs of the same version.
+
+`heldout` `18b64a73`: fastbrowse against Browser Use agent, on the same 9 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.6) | 25/25 | 25/25 | 19.5s | 29.8s | $0.0072 | $0.0174 | $0.43 |
+| Browser Use agent | 24/25 | 25/25 | 14.8s | 20.3s | $0.1962 | $0.2256 | $5.64 |
+
+Each arm made 27 attempts. Provider outages ended 2 of fastbrowse's, so each arm is scored on the same 25: an attempt one arm lost is dropped for every arm at that task. Runs: `993506e34fd9` at `cfefd89`.
+Changed since these runs: `books-mystery-cheapest` v3 → v4, `countries-mongolia` v3 → v4, `crates-serde` v3 → v4, `httpx-requires-python` v3 → v4, `new-window` v3 → v4, `quotes-einstein-count` v3 → v4, `quotes-js-page2` v3 → v4, `quotes-search` v3 → v4, `table-largest-due` v3 → v4; compare them only against runs of the same version.
+
+`stretch-dev` `69abd819`: fastbrowse against Browser Use agent, on the same 5 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.6) | 12/15 | 12/15 | 57.0s | 78.8s | $0.0271 | $0.0366 | $0.55 |
 | Browser Use agent | 15/15 | 15/15 | 59.9s | 79.2s | $0.3732 | $0.5790 | $8.69 |
 
-Suites: `stretch-dev` `69abd819`. Runs: `98ef8dc21156` at `2304b2c`.
+Each arm made 15 attempts. Runs: `98ef8dc21156` at `2304b2c`.
+Changed since these runs: `stretch-books-nonfiction-five-star` v5 → v6, `stretch-bstack-apple-google` v4 → v5, `stretch-date-range-monday` v4 → v5, `stretch-wizard-correction` v4 → v5, `stretch-wizard-review` v3 → v4; compare them only against runs of the same version.
 
-| | passed | correct | median time | mean time | median cost | mean cost | suite total |
+`stretch-heldout` `f3f5c3f7`: fastbrowse against Browser Use agent, on the same 3 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 6/8 | 6/8 | 70.6s | 76.7s | $0.0283 | $0.0990 | $0.79 |
-| Browser Use agent | 8/9 | 9/9 | 42.6s | 78.0s | $0.2579 | $0.4980 | $4.48 |
+| fastbrowse (0.5.6) | 6/8 | 6/8 | 101.5s | 94.3s | $0.0283 | $0.0990 | $0.79 |
+| Browser Use agent | 8/8 | 8/8 | 38.4s | 67.0s | $0.2395 | $0.4367 | $3.49 |
 
-Suites: `stretch-heldout` `f3f5c3f7`. Runs: `98ef8dc21156` at `2304b2c`.
-Excluded as provider outages: fastbrowse 1.
+Each arm made 9 attempts. Provider outages ended 1 of fastbrowse's, so each arm is scored on the same 8: an attempt one arm lost is dropped for every arm at that task. Runs: `98ef8dc21156` at `2304b2c`.
+Changed since these runs: `stretch-bstack-apple-samsung` v4 → v5, `stretch-calendar-first-friday` v5 → v6, `stretch-quotes-top-authors` v4 → v5; compare them only against runs of the same version.
 <!-- /evals:results:0.5.6 -->
 
 ### 0.5.2, 2026-09-22
@@ -340,19 +371,21 @@ file byte for byte with the generator. Historical aggregate tables cannot recons
 excluded from this feed.
 
 <!-- evals:feed-schema -->
-Schema version 1. Each releases entry represents one release, suite and suite version.
+Schema version 2. Each releases entry represents one comparison in one release, suite and suite version.
 
 | Object | Fields |
 |---|---|
 | `ResultsSummary` | `schema_version`, `releases` |
-| `ReleaseSummary` | `fastbrowse_version`, `date`, `suite`, `suite_version`, `arms`, `task_versions_changed` |
+| `ReleaseSummary` | `fastbrowse_version`, `date`, `suite`, `suite_version`, `compared`, `tasks`, `arms`, `task_versions_changed` |
 | `ArmSummary` | `passed`, `total`, `excluded`, `priced`, `seconds`, `dollars` |
 | `MetricSummary` | `median`, `mean` |
 | `TaskChange` | `task`, `previous`, `current` |
 
 `releases` is newest first, and within a release the suites run in their defined order, `core` first. `date` is the latest UTC run date in that group.
-`arms` maps registry names to statistics across every attempt, including failures, except those a provider outage ended: `excluded` counts those, and `total` leaves them out.
-`seconds` and `dollars` contain numeric median and mean values; dollars are USD. `seconds` excludes measured outage waits (`transient_seconds`).
+Each entry is one comparison: `compared` names the arms scored on its `tasks`, every arm on all of them, since a task runs only on the arms it grades on equal terms. A suite has one entry per comparison, those with most arms first; the first `core` entry is fastbrowse against Browser Use.
+Schema version 2 added `compared` and `tasks`; version 1 pooled a suite's comparisons into one entry.
+`arms` maps registry names to statistics across the scored attempts, failures included. `total` counts them; `excluded` counts attempts made but not scored, ended by an outage or matched to one.
+`seconds` and `dollars` contain numeric median and mean values; dollars are USD. Seconds are wall time.
 `priced` counts attempts with known cost. Both dollar statistics are null if any attempt is unpriced.
 `task_versions_changed` compares observed task versions with the previous published release:
 `task`, `previous` and `current` version lists. New tasks have an empty previous list;

@@ -58,14 +58,41 @@ def test_a_secret_is_caught_in_every_encoding_a_page_or_log_carries_it_in() -> N
 def test_a_secret_is_redacted_from_an_address_everywhere_but_the_host_it_was_typed_on(url: str, redacted: str) -> None:
     redactor = Redactor()
     redactor.register("username", "practice", "https://practice.expandtesting.com/login")
-    assert redactor.redact_url(url) == redacted
+    assert redactor.redact(url) == redacted
     assert redactor.redact("sign in as practice") == "sign in as [secret:username]"
+
+
+@pytest.mark.parametrize(
+    ("text", "masked"),
+    [
+        # The site's own host, wherever the address sits, keeps its letters; the rest of the address does not.
+        ("https://practice.expandtesting.com/secure", "https://practice.expandtesting.com/secure"),
+        ("see https://practice.expandtesting.com.", "see https://practice.expandtesting.com."),
+        ("https://practice.expandtesting.com/?u=practice", "https://practice.expandtesting.com/?u=••••••••"),
+        ("https://practice@practice.expandtesting.com/", "https://••••••••@practice.expandtesting.com/"),
+        # Anywhere else the value is blanked, the ordinary word and any host it was not typed on included.
+        ("practice makes perfect", "•••••••• makes perfect"),
+        ("https://practice.attacker.test/", "https://••••••••.attacker.test/"),
+        ("http://practice.expandtesting.com/", "http://••••••••.expandtesting.com/"),
+        # A password in the host of any other origin is blanked, a sibling host of the same site included.
+        ("https://hunter2.expandtesting.com/", "https://•••••••.expandtesting.com/"),
+        ("https://x.test/#hunter2 hunter2", "https://x.test/#••••••• •••••••"),
+        ("hunter2practice", "•••••••••••••••"),
+    ],
+)
+def test_masking_keeps_the_host_a_secret_was_typed_on_and_blanks_every_other_appearance(text: str, masked: str) -> None:
+    redactor = Redactor()
+    redactor.register("username", "practice", "https://practice.expandtesting.com/login")
+    redactor.register("password", "hunter2", "https://practice.expandtesting.com/login")
+    assert redactor.mask(text) == masked
+    assert len(redactor.mask(text)) == len(text)
+    assert redactor.reveals(text) is (masked != text)
 
 
 def test_a_secret_running_from_the_host_into_the_path_is_still_redacted() -> None:
     redactor = Redactor()
     redactor.register("token", "example.test/abc")
-    assert redactor.redact_url("https://example.test/abc") == "https://[secret:token]"
+    assert redactor.redact("https://example.test/abc") == "https://[secret:token]"
 
 
 @pytest.mark.parametrize(
