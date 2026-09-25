@@ -285,14 +285,15 @@ def _pairs(*pairs: tuple[str, str]) -> Check:
 
 
 def _says(outcome: Outcome, day: date, *, weekday: bool = False) -> str | None:
-    """The answer states this date with its year, day before or after the month, and its weekday if asked for."""
+    """The answer states this date with its year, day before or after the month or as ISO 2026-09-28, and its
+    weekday if asked for."""
     answer = _prose(outcome)
     month, number = _flat(f"{day:%B}"), rf"(?<!\d){day.day}(?:st|nd|rd|th)?(?!\d)"
-    stated = (
-        re.search(rf"{month}\W+{number}|{number}\W+(?:of\W+)?{month}", answer)
-        and re.search(rf"(?<!\d){day.year}(?!\d)", answer)
-        and (not weekday or _flat(f"{day:%A}") in answer)
+    spelled = re.search(rf"{month}\W+{number}|{number}\W+(?:of\W+)?{month}", answer) and re.search(
+        rf"(?<!\d){day.year}(?!\d)", answer
     )
+    iso = re.search(rf"(?<![\d-]){day.isoformat()}(?![\d-])", answer)
+    stated = (spelled or iso) and (not weekday or _flat(f"{day:%A}") in answer)
     return None if stated else f"answer does not state {day:%A %d %B %Y}: {outcome.answer!r}"
 
 
