@@ -284,7 +284,7 @@ def test_every_comparison_sets_arms_on_the_same_tasks() -> None:
     text = versions.headline("1.0.0", rows)
     assert "fastbrowse against Browser Use agent, on the same 1 task." in text
     assert "1 task graded on fastbrowse alone is in" in text
-    assert "fastbrowse alone, on the 1 task no other arm is graded on" in versions.results_table("1.0.0", rows)
+    assert "fastbrowse alone, on the 1 task only it ran" in versions.results_table("1.0.0", rows)
 
 
 def test_summary_does_not_mix_suite_versions_or_invent_legacy_rows() -> None:

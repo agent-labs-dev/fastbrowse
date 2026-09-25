@@ -281,7 +281,7 @@ Changed since these runs: `arxiv-title` v3 → v4, `expandtesting-login` v3 → 
 Each arm made 18 attempts. Provider outages ended 2 of fastbrowse's and 3 of jev-ultrafast's, so each arm is scored on the same 13: an attempt one arm lost is dropped for every arm at that task. `arxiv-open` is left out, with no jev-ultrafast attempt measured. Runs: `993506e34fd9` at `cfefd89`.
 Changed since these runs: `arxiv-open` v2 → v3, `flights-search` v2 → v3, `github-open` v2 → v3, `hn-comments` v2 → v3, `pypi-open` v2 → v3, `wiki-open` v2 → v3; compare them only against runs of the same version.
 
-`core` `9b765b1a`: fastbrowse alone, on the 1 task no other arm is graded on.
+`core` `9b765b1a`: fastbrowse alone, on the 1 task only it ran.
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
@@ -371,7 +371,7 @@ file byte for byte with the generator. Historical aggregate tables cannot recons
 excluded from this feed.
 
 <!-- evals:feed-schema -->
-Schema version 1. Each releases entry represents one release, suite and suite version.
+Schema version 2. Each releases entry represents one comparison in one release, suite and suite version.
 
 | Object | Fields |
 |---|---|

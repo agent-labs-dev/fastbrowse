@@ -371,7 +371,7 @@ class _Comparison:
         tasks = len({r["task"] for r in self.scored})
         noun = "task" if tasks == 1 else "tasks"
         if len(self.arms) == 1:
-            return f"{_label(self.arms[0])} alone, on the {tasks} {noun} no other arm is graded on"
+            return f"{_label(self.arms[0])} alone, on the {tasks} {noun} only it ran"
         return " against ".join(_label(a) for a in self.arms) + f", on the same {tasks} {noun}"
 
     @property
@@ -715,7 +715,8 @@ def protocol_docs() -> str:
 def feed_schema_docs() -> str:
     models = (ResultsSummary, ReleaseSummary, ArmSummary, MetricSummary, TaskChange)
     lines = [
-        "Schema version 1. Each releases entry represents one release, suite and suite version.",
+        f"Schema version {ResultsSummary.model_fields['schema_version'].default}. "
+        "Each releases entry represents one comparison in one release, suite and suite version.",
         "",
         "| Object | Fields |",
         "|---|---|",
