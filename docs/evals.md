@@ -48,10 +48,12 @@ Rows keep raw `status`, `task_successful` and `normalized_status`: `done`, `stop
 A pass requires a correct grade and `done`, or the exact expected fastbrowse stop.
 The hosted SDK maps to `done` only for a stopped session with `is_task_successful=true`.
 That verdict lands after the session stops; the harness waits up to 90 seconds for it. A verdict still missing then is the provider's silence, and the attempt counts as an outage.
+That verdict can be false on a correct answer whose session shows no sign of failing or giving up; the `correct` column counts those answers.
 An attempt that fails while the task's site answers its start URL with a 5xx, or not at all, is an outage too: a site serving errors fails every arm alike.
 An attempt an outage ended is waited out and run again, up to five times over about 25 minutes.
 A row still unavailable after that is recorded but scores nothing, and neither does one attempt of every other arm at that task: each comparison scores its arms on the same attempts at the same tasks.
 Time is wall time for every arm. fastbrowse records the outage waits inside a run (`transient_seconds`), but the other arms cannot, so no arm's are subtracted.
+The hosted arm's time runs until its API reports the session stopped, which can come well after its agent's last message.
 Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the row.
 Existing timing includes browser setup. These rows do not claim the planned handoff-only timing protocol.
 Jev is priced at list ($0.042 per million input tokens) whenever the gateway meters a request at $0, for fastbrowse and jev-ultrafast alike.
@@ -257,6 +259,72 @@ the README fallback; they cannot be compared against the current task versions.
 Both suites write per-run `would_fire` counts for shadow tripwires. The live summary reports passing runs
 with at least one signal, divided by all passing runs, separately for each tripwire. Repeated signals within
 one run count once in that summary. The local suite stores the counts without printing that rate.
+
+### 0.5.7, 2026-09-25
+
+<!-- evals:results:0.5.7 -->
+`core` `391f8d42`: fastbrowse against Browser Use agent, on the same 14 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.7) | 42/42 | 42/42 | 21.4s | 27.9s | $0.0085 | $0.0123 | $0.52 |
+| Browser Use agent | 37/42 | 39/42 | 21.4s | 52.8s | $0.3624 | $0.5198 | $21.83 |
+
+Each arm made 42 attempts. Runs: `9caefa930c72` at `e265dd1`.
+
+`core` `391f8d42`: fastbrowse against jev-ultrafast, on the same 6 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.7) | 18/18 | 18/18 | 10.6s | 21.2s | $0.0028 | $0.0046 | $0.08 |
+| jev-ultrafast | 12/18 | 12/18 | 11.8s | 30.3s | $0.0014 | $0.0077 | $0.14 |
+
+Each arm made 18 attempts. Runs: `9caefa930c72` at `e265dd1`.
+
+`core` `391f8d42`: fastbrowse alone, on the 1 task only it ran.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.7) | 3/3 | 3/3 | 34.5s | 35.0s | $0.0047 | $0.0048 | $0.01 |
+
+Each arm made 3 attempts. Runs: `9caefa930c72` at `e265dd1`.
+
+`dev` `fe57fc77`: fastbrowse against Browser Use agent, on the same 8 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.7) | 24/24 | 24/24 | 17.6s | 18.4s | $0.0058 | $0.0078 | $0.19 |
+| Browser Use agent | 23/24 | 24/24 | 8.9s | 12.3s | $0.1333 | $0.1879 | $4.51 |
+
+Each arm made 24 attempts. Runs: `9caefa930c72` at `e265dd1`.
+
+`heldout` `0e3d5bb8`: fastbrowse against Browser Use agent, on the same 9 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.7) | 27/27 | 27/27 | 16.4s | 26.5s | $0.0084 | $0.0185 | $0.50 |
+| Browser Use agent | 24/27 | 27/27 | 12.9s | 24.2s | $0.2023 | $0.2779 | $7.50 |
+
+Each arm made 27 attempts. Runs: `9caefa930c72` at `e265dd1`.
+
+`stretch-dev` `63ceceeb`: fastbrowse against Browser Use agent, on the same 5 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.7) | 12/15 | 12/15 | 46.2s | 61.6s | $0.0308 | $0.0478 | $0.72 |
+| Browser Use agent | 15/15 | 15/15 | 61.6s | 71.7s | $0.5711 | $0.5722 | $8.58 |
+
+Each arm made 15 attempts. Runs: `9caefa930c72` at `e265dd1`.
+
+`stretch-heldout` `456fd056`: fastbrowse against Browser Use agent, on the same 3 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.7) | 6/9 | 6/9 | 64.4s | 73.7s | $0.0487 | $0.0973 | $0.88 |
+| Browser Use agent | 9/9 | 9/9 | 29.7s | 50.7s | $0.2227 | $0.3111 | $2.80 |
+
+Each arm made 9 attempts. Runs: `9caefa930c72` at `e265dd1`.
+<!-- /evals:results:0.5.7 -->
 
 ### 0.5.6, 2026-09-25
 

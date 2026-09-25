@@ -33,61 +33,61 @@ something that was never on the page. Every claim in an answer cites a verbatim 
 ### Against Browser Use
 
 <!-- evals:headline -->
-Measured on 2026-09-25 with the build released as 0.5.6: 46 tasks, 273 attempts across all arms, on cloud browsers.
+Measured on 2026-09-25 with the build released as 0.5.7: 46 tasks, 273 attempts across all arms, on cloud browsers.
 
-Suite `core` `9b765b1a`: fastbrowse against Browser Use agent, on the same 13 tasks.
-
-| | passed | cost per task | median time |
-|:--|:--|:--|:--|
-| fastbrowse | 36/37 | $0.0041 (median), $0.0069 mean | 22.7s |
-| Browser Use agent | 33/37 | $0.4775 (median), $0.4973 mean | 40.7s |
-
-Each arm made 42 attempts. Provider outages ended 5 of fastbrowse's, so each arm is scored on the same 37: an attempt one arm lost is dropped for every arm at that task. `wiki-godel` is left out, with no fastbrowse attempt measured.
-
-Suite `core` `9b765b1a`: fastbrowse against jev-ultrafast, on the same 5 tasks.
+Suite `core` `391f8d42`: fastbrowse against Browser Use agent, on the same 14 tasks.
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 13/13 | $0.0031 (median), $0.0043 mean | 32.7s |
-| jev-ultrafast | 9/13 | unknown (median), unknown mean | 13.2s |
+| fastbrowse | 42/42 | $0.0085 (median), $0.0123 mean | 21.4s |
+| Browser Use agent | 37/42 | $0.3624 (median), $0.5198 mean | 21.4s |
 
-Each arm made 18 attempts. Provider outages ended 2 of fastbrowse's and 3 of jev-ultrafast's, so each arm is scored on the same 13: an attempt one arm lost is dropped for every arm at that task. `arxiv-open` is left out, with no jev-ultrafast attempt measured.
+Each arm made 42 attempts.
 
-Suite `dev` `d562020d`: fastbrowse against Browser Use agent, on the same 7 tasks.
-
-| | passed | cost per task | median time |
-|:--|:--|:--|:--|
-| fastbrowse | 21/21 | $0.0051 (median), $0.0068 mean | 18.2s |
-| Browser Use agent | 19/21 | $0.1308 (median), $0.1440 mean | 12.8s |
-
-Each arm made 24 attempts. Provider outages ended 3 of fastbrowse's, so each arm is scored on the same 21: an attempt one arm lost is dropped for every arm at that task. `ruff-release` is left out, with no fastbrowse attempt measured.
-
-Suite `heldout` `18b64a73`: fastbrowse against Browser Use agent, on the same 9 tasks.
+Suite `core` `391f8d42`: fastbrowse against jev-ultrafast, on the same 6 tasks.
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 25/25 | $0.0072 (median), $0.0174 mean | 19.5s |
-| Browser Use agent | 24/25 | $0.1962 (median), $0.2256 mean | 14.8s |
+| fastbrowse | 18/18 | $0.0028 (median), $0.0046 mean | 10.6s |
+| jev-ultrafast | 12/18 | $0.0014 (median), $0.0077 mean | 11.8s |
 
-Each arm made 27 attempts. Provider outages ended 2 of fastbrowse's, so each arm is scored on the same 25: an attempt one arm lost is dropped for every arm at that task.
+Each arm made 18 attempts.
 
-Suite `stretch-dev` `69abd819`: fastbrowse against Browser Use agent, on the same 5 tasks.
+Suite `dev` `fe57fc77`: fastbrowse against Browser Use agent, on the same 8 tasks.
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 12/15 | $0.0271 (median), $0.0366 mean | 57.0s |
-| Browser Use agent | 15/15 | $0.3732 (median), $0.5790 mean | 59.9s |
+| fastbrowse | 24/24 | $0.0058 (median), $0.0078 mean | 17.6s |
+| Browser Use agent | 23/24 | $0.1333 (median), $0.1879 mean | 8.9s |
+
+Each arm made 24 attempts.
+
+Suite `heldout` `0e3d5bb8`: fastbrowse against Browser Use agent, on the same 9 tasks.
+
+| | passed | cost per task | median time |
+|:--|:--|:--|:--|
+| fastbrowse | 27/27 | $0.0084 (median), $0.0185 mean | 16.4s |
+| Browser Use agent | 24/27 | $0.2023 (median), $0.2779 mean | 12.9s |
+
+Each arm made 27 attempts.
+
+Suite `stretch-dev` `63ceceeb`: fastbrowse against Browser Use agent, on the same 5 tasks.
+
+| | passed | cost per task | median time |
+|:--|:--|:--|:--|
+| fastbrowse | 12/15 | $0.0308 (median), $0.0478 mean | 46.2s |
+| Browser Use agent | 15/15 | $0.5711 (median), $0.5722 mean | 61.6s |
 
 Each arm made 15 attempts.
 
-Suite `stretch-heldout` `f3f5c3f7`: fastbrowse against Browser Use agent, on the same 3 tasks.
+Suite `stretch-heldout` `456fd056`: fastbrowse against Browser Use agent, on the same 3 tasks.
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 6/8 | $0.0283 (median), $0.0990 mean | 101.5s |
-| Browser Use agent | 8/8 | $0.2395 (median), $0.4367 mean | 38.4s |
+| fastbrowse | 6/9 | $0.0487 (median), $0.0973 mean | 64.4s |
+| Browser Use agent | 9/9 | $0.2227 (median), $0.3111 mean | 29.7s |
 
-Each arm made 9 attempts. Provider outages ended 1 of fastbrowse's, so each arm is scored on the same 8: an attempt one arm lost is dropped for every arm at that task.
+Each arm made 9 attempts.
 
 1 task graded on fastbrowse alone is in [docs/evals.md](docs/evals.md#results).
 <!-- /evals:headline -->

@@ -2,6 +2,706 @@
   "schema_version": 2,
   "releases": [
     {
+      "fastbrowse_version": "0.5.7",
+      "date": "2026-09-25",
+      "suite": "core",
+      "suite_version": "391f8d42",
+      "compared": [
+        "fastbrowse",
+        "browser-use"
+      ],
+      "tasks": 14,
+      "arms": {
+        "fastbrowse": {
+          "passed": 42,
+          "total": 42,
+          "excluded": 0,
+          "priced": 42,
+          "seconds": {
+            "median": 21.45,
+            "mean": 27.866666666666667
+          },
+          "dollars": {
+            "median": 0.00846,
+            "mean": 0.012287142857142858
+          }
+        },
+        "browser-use": {
+          "passed": 37,
+          "total": 42,
+          "excluded": 0,
+          "priced": 42,
+          "seconds": {
+            "median": 21.45,
+            "mean": 52.81190476190476
+          },
+          "dollars": {
+            "median": 0.36238,
+            "mean": 0.5198440476190476
+          }
+        }
+      },
+      "task_versions_changed": [
+        {
+          "task": "arxiv-title",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "expandtesting-login",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "github-license",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "google-flights",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "hn-top",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "internet-login",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "practice-login",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "pypi-newer",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "pypi-structured",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "pypi-version",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "saucedemo-cart",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "saucedemo-checkout",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "saucedemo-locked-out",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "wiki-godel",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "fastbrowse_version": "0.5.7",
+      "date": "2026-09-25",
+      "suite": "core",
+      "suite_version": "391f8d42",
+      "compared": [
+        "fastbrowse",
+        "jev-ultrafast"
+      ],
+      "tasks": 6,
+      "arms": {
+        "fastbrowse": {
+          "passed": 18,
+          "total": 18,
+          "excluded": 0,
+          "priced": 18,
+          "seconds": {
+            "median": 10.6,
+            "mean": 21.25
+          },
+          "dollars": {
+            "median": 0.00277,
+            "mean": 0.00455
+          }
+        },
+        "jev-ultrafast": {
+          "passed": 12,
+          "total": 18,
+          "excluded": 0,
+          "priced": 18,
+          "seconds": {
+            "median": 11.85,
+            "mean": 30.305555555555554
+          },
+          "dollars": {
+            "median": 0.00141,
+            "mean": 0.007655555555555555
+          }
+        }
+      },
+      "task_versions_changed": [
+        {
+          "task": "arxiv-open",
+          "previous": [
+            2
+          ],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "flights-search",
+          "previous": [
+            2
+          ],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "github-open",
+          "previous": [
+            2
+          ],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "hn-comments",
+          "previous": [
+            2
+          ],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "pypi-open",
+          "previous": [
+            2
+          ],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "wiki-open",
+          "previous": [
+            2
+          ],
+          "current": [
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "fastbrowse_version": "0.5.7",
+      "date": "2026-09-25",
+      "suite": "core",
+      "suite_version": "391f8d42",
+      "compared": [
+        "fastbrowse"
+      ],
+      "tasks": 1,
+      "arms": {
+        "fastbrowse": {
+          "passed": 3,
+          "total": 3,
+          "excluded": 0,
+          "priced": 3,
+          "seconds": {
+            "median": 34.5,
+            "mean": 35.03333333333333
+          },
+          "dollars": {
+            "median": 0.00474,
+            "mean": 0.004773333333333333
+          }
+        }
+      },
+      "task_versions_changed": [
+        {
+          "task": "saucedemo-pause",
+          "previous": [
+            2
+          ],
+          "current": [
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "fastbrowse_version": "0.5.7",
+      "date": "2026-09-25",
+      "suite": "dev",
+      "suite_version": "fe57fc77",
+      "compared": [
+        "fastbrowse",
+        "browser-use"
+      ],
+      "tasks": 8,
+      "arms": {
+        "fastbrowse": {
+          "passed": 24,
+          "total": 24,
+          "excluded": 0,
+          "priced": 24,
+          "seconds": {
+            "median": 17.65,
+            "mean": 18.45
+          },
+          "dollars": {
+            "median": 0.005835,
+            "mean": 0.007824583333333333
+          }
+        },
+        "browser-use": {
+          "passed": 23,
+          "total": 24,
+          "excluded": 0,
+          "priced": 24,
+          "seconds": {
+            "median": 8.95,
+            "mean": 12.304166666666667
+          },
+          "dollars": {
+            "median": 0.13332,
+            "mean": 0.18791416666666666
+          }
+        }
+      },
+      "task_versions_changed": [
+        {
+          "task": "books-travel-priciest",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "dynamic-loading",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "hockey-bruins-1990",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "hover-profile",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "nested-frames",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "oscars-2012",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "pizza-order",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "ruff-release",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "fastbrowse_version": "0.5.7",
+      "date": "2026-09-25",
+      "suite": "heldout",
+      "suite_version": "0e3d5bb8",
+      "compared": [
+        "fastbrowse",
+        "browser-use"
+      ],
+      "tasks": 9,
+      "arms": {
+        "fastbrowse": {
+          "passed": 27,
+          "total": 27,
+          "excluded": 0,
+          "priced": 27,
+          "seconds": {
+            "median": 16.4,
+            "mean": 26.537037037037038
+          },
+          "dollars": {
+            "median": 0.0084,
+            "mean": 0.01848296296296296
+          }
+        },
+        "browser-use": {
+          "passed": 24,
+          "total": 27,
+          "excluded": 0,
+          "priced": 27,
+          "seconds": {
+            "median": 12.9,
+            "mean": 24.24074074074074
+          },
+          "dollars": {
+            "median": 0.20228,
+            "mean": 0.2778703703703704
+          }
+        }
+      },
+      "task_versions_changed": [
+        {
+          "task": "books-mystery-cheapest",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "countries-mongolia",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "crates-serde",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "httpx-requires-python",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "new-window",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "quotes-einstein-count",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "quotes-js-page2",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "quotes-search",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "table-largest-due",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "fastbrowse_version": "0.5.7",
+      "date": "2026-09-25",
+      "suite": "stretch-dev",
+      "suite_version": "63ceceeb",
+      "compared": [
+        "fastbrowse",
+        "browser-use"
+      ],
+      "tasks": 5,
+      "arms": {
+        "fastbrowse": {
+          "passed": 12,
+          "total": 15,
+          "excluded": 0,
+          "priced": 15,
+          "seconds": {
+            "median": 46.2,
+            "mean": 61.593333333333334
+          },
+          "dollars": {
+            "median": 0.03084,
+            "mean": 0.047750666666666663
+          }
+        },
+        "browser-use": {
+          "passed": 15,
+          "total": 15,
+          "excluded": 0,
+          "priced": 15,
+          "seconds": {
+            "median": 61.6,
+            "mean": 71.70666666666666
+          },
+          "dollars": {
+            "median": 0.57112,
+            "mean": 0.5722106666666666
+          }
+        }
+      },
+      "task_versions_changed": [
+        {
+          "task": "stretch-books-nonfiction-five-star",
+          "previous": [
+            5
+          ],
+          "current": [
+            6
+          ]
+        },
+        {
+          "task": "stretch-bstack-apple-google",
+          "previous": [
+            4
+          ],
+          "current": [
+            5
+          ]
+        },
+        {
+          "task": "stretch-date-range-monday",
+          "previous": [
+            4
+          ],
+          "current": [
+            5
+          ]
+        },
+        {
+          "task": "stretch-wizard-correction",
+          "previous": [
+            4
+          ],
+          "current": [
+            5
+          ]
+        },
+        {
+          "task": "stretch-wizard-review",
+          "previous": [
+            3
+          ],
+          "current": [
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "fastbrowse_version": "0.5.7",
+      "date": "2026-09-25",
+      "suite": "stretch-heldout",
+      "suite_version": "456fd056",
+      "compared": [
+        "fastbrowse",
+        "browser-use"
+      ],
+      "tasks": 3,
+      "arms": {
+        "fastbrowse": {
+          "passed": 6,
+          "total": 9,
+          "excluded": 0,
+          "priced": 9,
+          "seconds": {
+            "median": 64.4,
+            "mean": 73.74444444444444
+          },
+          "dollars": {
+            "median": 0.04872,
+            "mean": 0.09730222222222222
+          }
+        },
+        "browser-use": {
+          "passed": 9,
+          "total": 9,
+          "excluded": 0,
+          "priced": 9,
+          "seconds": {
+            "median": 29.7,
+            "mean": 50.71111111111111
+          },
+          "dollars": {
+            "median": 0.22272,
+            "mean": 0.31107444444444443
+          }
+        }
+      },
+      "task_versions_changed": [
+        {
+          "task": "stretch-bstack-apple-samsung",
+          "previous": [
+            4
+          ],
+          "current": [
+            5
+          ]
+        },
+        {
+          "task": "stretch-calendar-first-friday",
+          "previous": [
+            5
+          ],
+          "current": [
+            6
+          ]
+        },
+        {
+          "task": "stretch-quotes-top-authors",
+          "previous": [
+            4
+          ],
+          "current": [
+            5
+          ]
+        }
+      ]
+    },
+    {
       "fastbrowse_version": "0.5.6",
       "date": "2026-09-25",
       "suite": "core",
