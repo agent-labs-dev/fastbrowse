@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-09-25
+
 - **A Jev outage costs a batch, not the run.** After two 5xx answers in a row, a batch of questions is asked one
   at a time within the retries it had left, and the answers that came back are kept.
   ([#131](https://github.com/agent-labs-dev/fastbrowse/issues/131))
@@ -494,7 +496,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.4...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.5...HEAD
+[0.5.5]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.5
 [0.5.4]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.4
 [0.5.3]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.3
 [0.5.2]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.2
