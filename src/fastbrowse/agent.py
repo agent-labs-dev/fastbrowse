@@ -244,6 +244,10 @@ class _RunState:
     reaching a new one restores the recovery budget or counts an action that changed the page as progress."""
     left: str | None = None
     """The state the last action that changed the page was taken from, until the next observation judges it."""
+    crossed: set[tuple[str, str, str]] = field(default_factory=set[tuple[str, str, str]])
+    """Each move the run has made: the state it left, the action, and the state it reached. A return to an earlier
+    state is a loop only when it retraces one of these; walking back through a wizard to correct a step is new
+    moves all the way."""
     acted_from: Observation | None = None
     """The page the last action was taken on, until the next observation says what it did."""
     pending_move: Move | None = None
@@ -876,9 +880,14 @@ class Agent:
         left, state.left = state.left, None
         if left is None:
             return None
+        move = (left, _described(state.history[-1]), key)
+        retraced = move in state.crossed
+        state.crossed.add(move)
         cycle = state.history[first:] if first is not None else []
-        # Going back to a list after reading one of its pages is how a comparison is done, not a wasted round.
-        if first is None or key == left or any(entry.operation is Operation.READ for entry in cycle):
+        # Going back to a list after reading one of its pages is how a comparison is done, not a wasted round. A
+        # first return by a new move is not a loop yet: Back from a wizard's review to correct a step reached
+        # each earlier step again, and the run was stopped as stuck for doing what the task asked.
+        if first is None or key == left or not retraced or any(entry.operation is Operation.READ for entry in cycle):
             if put_back:
                 # A setting put back to a state its page already held is not progress, however the results
                 # redraw beneath it. Without this a filter toggled on and off reached a page state never seen
@@ -895,8 +904,8 @@ class Agent:
         )
         last = state.history[-1]
         state.history[-1] = last.model_copy(update={"effect": f"{last.effect}; {note}" if last.effect else note})
-        # One return is already a loop: waiting for the stall count let Search and Done go round three times, with
-        # an unsure step's recovery in between sending the run off to re-fill the origin.
+        # The first retraced move is already a loop: waiting for the stall count let Search and Done go round three
+        # times, with an unsure step's recovery in between sending the run off to re-fill the origin.
         return note
 
     @staticmethod

@@ -621,6 +621,28 @@ async def test_an_anchor_with_no_destination_but_click_semantics_is_offered_as_a
     assert clicked == "1"
 
 
+async def test_what_a_form_holds_is_quotable_but_a_password_is_not(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/icons.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.body.innerHTML = '<h2>Booking</h2>"
+        '<label>Start Date<input type="date" value="2026-09-28"></label>'
+        '<p><label for="end">End Date</label><input id="end" type="date" value="2026-10-07"></p>'
+        '<select aria-label="Size"><option>Small</option><option selected>Large</option></select>'
+        '<label>Password<input type="password" value="hunter2"></label>'
+        '<input type="text" value="" placeholder="Empty">\'',
+    )
+    text = (await page.capture()).text
+    assert "Start Date: 2026-09-28" in text
+    assert "End Date: 2026-10-07" in text
+    assert "Size: Large" in text
+    assert "hunter2" not in text
+    assert "Empty" not in text
+
+
 async def test_a_uniquely_named_date_field_still_gets_its_section_heading(
     page: CdpPage, browser_session: BrowserSession, main_site: str
 ) -> None:
