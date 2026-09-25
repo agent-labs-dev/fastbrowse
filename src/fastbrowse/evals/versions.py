@@ -230,9 +230,9 @@ def all_tasks() -> tuple[dict[str, tuple[Any, ...]], tuple[Any, ...]]:
 
 _KEPT = ("arm", "task", "category", "suite", "suite_version", "task_version", "status",
          "normalized_status", "task_successful", "passed", "correct",
-         "seconds", "dollars", "retries", "failure")  # fmt: skip
+         "seconds", "dollars", "retries", "failure", "model", "text_model")  # fmt: skip
 _RUN_KEPT = ("run_id", "run_started", "fastbrowse_version", "git_sha", "git_dirty", "providers", "max_steps",
-             "concurrency", "jev_ultrafast", "arms")  # fmt: skip
+             "concurrency", "jev_ultrafast", "arms", "python", "argv")  # fmt: skip
 
 
 def slim(row: Mapping[str, Any]) -> dict[str, Any]:

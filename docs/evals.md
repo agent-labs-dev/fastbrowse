@@ -255,6 +255,46 @@ Both suites write per-run `would_fire` counts for shadow tripwires. The live sum
 with at least one signal, divided by all passing runs, separately for each tripwire. Repeated signals within
 one run count once in that summary. The local suite stores the counts without printing that rate.
 
+### 0.5.6, 2026-09-25
+
+<!-- evals:results:0.5.6 -->
+| | passed | correct | median time | mean time | median cost | mean cost | suite total |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.6) | 55/63 | 57/63 | 28.6s | 38.7s | $0.0032 | $0.0055 | $0.35 |
+| Browser Use agent | 37/42 | 42/42 | 35.8s | 59.7s | $0.4758 | $0.4899 | $20.58 |
+| jev-ultrafast | 11/18 | 11/18 | 13.5s | 28.6s | unknown | unknown | $0.01 (1 unpriced) |
+
+Suites: `core` `9b765b1a`. Runs: `993506e34fd9` at `cfefd89`.
+
+| | passed | correct | median time | mean time | median cost | mean cost | suite total |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.6) | 21/24 | 21/24 | 19.6s | 31.3s | $0.0052 | $0.0082 | $0.20 |
+| Browser Use agent | 22/24 | 24/24 | 12.9s | 13.2s | $0.1353 | $0.1884 | $4.52 |
+
+Suites: `dev` `d562020d`. Runs: `993506e34fd9` at `cfefd89`.
+
+| | passed | correct | median time | mean time | median cost | mean cost | suite total |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.6) | 25/27 | 25/27 | 20.8s | 30.0s | $0.0065 | $0.0161 | $0.44 |
+| Browser Use agent | 26/27 | 27/27 | 15.0s | 20.2s | $0.1970 | $0.2329 | $6.29 |
+
+Suites: `heldout` `18b64a73`. Runs: `993506e34fd9` at `cfefd89`.
+
+| | passed | correct | median time | mean time | median cost | mean cost | suite total |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.6) | 12/15 | 12/15 | 57.0s | 78.8s | $0.0271 | $0.0366 | $0.55 |
+| Browser Use agent | 15/15 | 15/15 | 59.9s | 79.2s | $0.3732 | $0.5790 | $8.69 |
+
+Suites: `stretch-dev` `69abd819`. Runs: `98ef8dc21156` at `2304b2c`.
+
+| | passed | correct | median time | mean time | median cost | mean cost | suite total |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.6) | 6/9 | 6/9 | 81.0s | 88.2s | $0.0276 | $0.0881 | $0.79 |
+| Browser Use agent | 8/9 | 9/9 | 42.6s | 78.0s | $0.2579 | $0.4980 | $4.48 |
+
+Suites: `stretch-heldout` `f3f5c3f7`. Runs: `98ef8dc21156` at `2304b2c`.
+<!-- /evals:results:0.5.6 -->
+
 ### 0.5.2, 2026-09-22
 
 <!-- evals:legacy -->
@@ -313,7 +353,6 @@ Schema version 1. Each releases entry represents one release, suite and suite ve
 `task`, `previous` and `current` version lists. New tasks have an empty previous list;
 tasks absent from the current group are not reported as removed. The first release has no changes.
 Separate suite versions never share an aggregate. No wall-clock generation timestamp is emitted.
-There are no published JSONL rows yet; the generated releases array is empty.
 <!-- /evals:feed-schema -->
 
 ## External benchmarks

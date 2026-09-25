@@ -33,14 +33,43 @@ something that was never on the page. Every claim in an answer cites a verbatim 
 ### Against Browser Use
 
 <!-- evals:headline -->
-Measured on 2026-09-22 with the build released as 0.5.2: 14 answer tasks, 3 attempts each on cloud browsers.
+Measured on 2026-09-25 with the build released as 0.5.6: 46 tasks, 273 attempts across all arms, on cloud browsers.
+
+Suite `core`, version `9b765b1a`.
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 41/42 | $0.0041 (median), $0.0086 mean | 20.6s |
-| Browser Use agent | 39/42 | $0.3668 (median), $0.6193 mean | 21.6s |
+| fastbrowse | 55/63 | $0.0032 (median), $0.0055 mean | 28.6s |
+| Browser Use agent | 37/42 | $0.4758 (median), $0.4899 mean | 35.8s |
+| jev-ultrafast | 11/18 | unknown (median), unknown mean | 13.5s |
 
-These are historical aggregates, predating versioned rows and the current stricter graders.
+Suite `dev`, version `d562020d`.
+
+| | passed | cost per task | median time |
+|:--|:--|:--|:--|
+| fastbrowse | 21/24 | $0.0052 (median), $0.0082 mean | 19.6s |
+| Browser Use agent | 22/24 | $0.1353 (median), $0.1884 mean | 12.9s |
+
+Suite `heldout`, version `18b64a73`.
+
+| | passed | cost per task | median time |
+|:--|:--|:--|:--|
+| fastbrowse | 25/27 | $0.0065 (median), $0.0161 mean | 20.8s |
+| Browser Use agent | 26/27 | $0.1970 (median), $0.2329 mean | 15.0s |
+
+Suite `stretch-dev`, version `69abd819`.
+
+| | passed | cost per task | median time |
+|:--|:--|:--|:--|
+| fastbrowse | 12/15 | $0.0271 (median), $0.0366 mean | 57.0s |
+| Browser Use agent | 15/15 | $0.3732 (median), $0.5790 mean | 59.9s |
+
+Suite `stretch-heldout`, version `f3f5c3f7`.
+
+| | passed | cost per task | median time |
+|:--|:--|:--|:--|
+| fastbrowse | 6/9 | $0.0276 (median), $0.0881 mean | 81.0s |
+| Browser Use agent | 8/9 | $0.2579 (median), $0.4980 mean | 42.6s |
 <!-- /evals:headline -->
 
 Compare rows only at matching task versions. See [eval results and workflow](docs/evals.md).

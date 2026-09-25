@@ -92,6 +92,7 @@ def _row(task: str, *, arm: str = "fastbrowse", passed: bool = True, **run: Any)
         "dollars": 0.01,
         "retries": 0,
         "failure": None if passed else "answer lacks x",
+        "model": "hosted-model-7",
         "trace": ["dropped from the published row"],
         "run": {
             "run_id": "r1",
@@ -99,6 +100,7 @@ def _row(task: str, *, arm: str = "fastbrowse", passed: bool = True, **run: Any)
             "fastbrowse_version": "9.9.9",
             "git_sha": "0123456789",
             "git_dirty": False,
+            "argv": ["--suite", "core"],
         }
         | run,
     }
@@ -136,6 +138,9 @@ def test_publishing_refuses_rows_that_cannot_be_traced_or_compared(results: Path
 def test_published_rows_are_slim_immutable_and_generate_the_tables(results: Path) -> None:
     published = _publish(results, [_row("pypi-version"), _row("hn-top", passed=False)])
     assert "trace" not in published.read_text(encoding="utf-8")
+    # The model and invocation are provenance: a hosted arm's score means nothing without the model behind it.
+    kept = json.loads(published.read_text(encoding="utf-8").splitlines()[0])
+    assert kept["model"] == "hosted-model-7" and kept["run"]["argv"] == ["--suite", "core"]
     with pytest.raises(ValueError, match="never rewritten"):
         _publish(results, [_row("pypi-version")])
     table = versions.docs_blocks()["results:9.9.9"]
