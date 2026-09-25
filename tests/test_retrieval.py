@@ -22,7 +22,7 @@ from fastbrowse.jev import (
     Question,
 )
 from fastbrowse.llm import DEFAULT_MAX_OUTPUT_TOKENS, Generation, Message
-from fastbrowse.memory import Fact, Notes, evidence_id, fact_id
+from fastbrowse.memory import Fact, Notes, Tally, evidence_id, fact_id
 from fastbrowse.models import CostBasis, CostComponent, CostLine, Evidence, FactReader, Frozen, Limits, LLMPurpose
 from fastbrowse.page import Block, BlockKind, Capture, Observation
 from fastbrowse.planner import Plan, Requirement, RequirementKind
@@ -1871,3 +1871,375 @@ async def test_short_read_leaves_room_for_both_non_candidate_choices(count: int)
     else:
         # Only the focus pass runs; an overflowing page never gets a truncated choice.
         assert _only_focus(jev.requests) and len(llm.calls) == 1
+
+
+async def test_tally_read_counts_unique_records_across_pages_and_closes_only_at_the_end() -> None:
+    notes = Notes()
+    first = capture((BlockKind.PARAGRAPH, "Quote one by Ada"), (BlockKind.PARAGRAPH, "Quote two by Ben"))
+    last = capture((BlockKind.PARAGRAPH, "Quote one by Ada"), (BlockKind.PARAGRAPH, "Quote three by Ben"))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [],
+                "answered": False,
+                "continues": [
+                    {
+                        "requirement_id": "r",
+                        "records": [],
+                        "tallies": [
+                            {"key": "Ada", "records": [{"first": "s0", "last": "s0"}]},
+                            {"key": "Ben", "records": [{"first": "s1", "last": "s1"}]},
+                        ],
+                    }
+                ],
+            },
+            {
+                "claims": [],
+                "answered": True,
+                "tallies": [
+                    {
+                        "requirement_id": "r",
+                        "groups": [
+                            {"key": "Ada", "records": [{"first": "s0", "last": "s0"}]},
+                            {"key": "Ben", "records": [{"first": "s1", "last": "s1"}]},
+                        ],
+                        "complete": True,
+                    }
+                ],
+            },
+        ]
+    )
+    result = await read(llm, first, "Rank authors by count", ["r"], notes)
+    assert result.continues == ("r",)
+    assert not notes.evidenced("r")
+    await read(llm, last, "Rank authors by count", ["r"], notes, continuing={"r"})
+    assert [(t.key, t.count) for t in notes.tallies] == [("Ben", 2), ("Ada", 1)]
+    assert notes.evidenced("r")
+    assert "Quote one by Ada" not in llm.calls[1][1][-1].content.split("# Capture")[0]
+    plan = Plan(
+        requirements=(Requirement(id="r", text="Rank authors", kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    draft = draft_answer(plan, notes)
+    assert draft is not None and len(draft.citations) == 3
+    assert draft.answer.index("Ben: 2") < draft.answer.index("Ada: 1")
+
+
+@pytest.fixture
+def author_tallies() -> Notes:
+    notes = Notes()
+    authors = [author for author, count in enumerate((10, 9, 8, *([2] * 26), *([1] * 21))) for _ in range(count)]
+    records = []
+    for page_number in range(10):
+        page = capture(
+            *(
+                (
+                    BlockKind.RECORD,
+                    f"Quote {number:03}: Reading gives us somewhere to go when we stay where we are; "
+                    f"each page holds another life. By Author {authors[number]:02}.",
+                )
+                for number in range(page_number * 10, (page_number + 1) * 10)
+            ),
+            (BlockKind.PARAGRAPH, f"Page {page_number + 1} of 10. Quotes from all authors, without a tag filter."),
+        ).model_copy(update={"url": f"https://quotes.toscrape.com/page/{page_number + 1}/"})
+        for row in range(10):
+            item = block_evidence(page, f"s{row}")
+            fact = Fact(text=item.quote, evidence=item, reader=FactReader.LLM)
+            notes.add(fact)
+            records.append(fact_id(fact))
+            notes.add_tally(
+                Tally(
+                    requirement_id="counts",
+                    key=f"Author {authors[page_number * 10 + row]:02}",
+                    records=(fact_id(fact),),
+                )
+            )
+        context = block_evidence(page, "s10")
+        notes.add(Fact(text=context.quote, evidence=context, reader=FactReader.LLM))
+    notes.complete_tallies("counts")
+    # A separate ranking requirement can refer to the records already counted under another requirement.
+    notes.add(
+        Fact(
+            requirement_id="ranking",
+            text="Author 00, Author 01 and Author 02 have the most quotes, with 10, 9 and 8 respectively.",
+            evidence=None,
+            basis=tuple(records),
+            reader=FactReader.LLM,
+        )
+    )
+    return notes
+
+
+@pytest.mark.parametrize("json_encoded", [False, True])
+def test_tallied_quotes_fit_protected_notes_budget(author_tallies: Notes, json_encoded: bool) -> None:
+    notes = author_tallies
+    rendered = notes.render_with_ids(15706, preserve_requirements=True, json_encoded=json_encoded)
+    size = len(json.dumps(rendered.text)) - 2 if json_encoded else len(rendered.text)
+    assert size <= 15706
+    assert len(notes.tallies) == 50 and sum(tally.count for tally in notes.tallies) == 100
+    assert "100 distinct records" in rendered.text
+    assert "Author 00: 10" in rendered.text and "Author 01: 9" in rendered.text and "Author 02: 8" in rendered.text
+    assert "Reading gives us" not in rendered.text
+    assert "without a tag filter" in rendered.text
+    assert notes.evidenced("counts") and notes.evidenced("ranking")
+    assert {record for tally in notes.tallies for record in tally.records} <= set(
+        notes.expand_evidence_ids(rendered.evidence_ids)
+    )
+
+
+def test_tally_claim_checks_judge_counted_records_by_their_tally(author_tallies: Notes) -> None:
+    notes = author_tallies
+    groups = notes.supporting("counts")[:3]
+    answer = assemble_answer([Claim(text=fact.text, evidence_ids=(key,)) for key, fact in groups], notes, ())
+    assert len(answer.citations) == 27
+    questions = claim_check_questions(answer, notes)
+    for index, (_, fact) in enumerate(groups):
+        for issue in ("unsupported", "contradicted"):
+            instructions = questions[f"{issue}_{index}"].instructions
+            assert f"TALLY: {json.dumps(fact.text)}" in instructions
+            assert not any(item.model_dump_json() in instructions for item in notes.evidence.values())
+    assert {citation.quote for citation in answer.citations} == {
+        item.quote
+        for key, _ in groups
+        for record in notes.expand_evidence_ids((key,))
+        if (item := notes.evidence.get(record)) is not None
+    }
+
+
+def test_a_ranking_over_every_counted_record_leaves_the_omission_check_its_notes(author_tallies: Notes) -> None:
+    notes = author_tallies
+    plan = tuple(Requirement(id=key, text=key, kind=RequirementKind.INFORMATION) for key in ("counts", "ranking"))
+    claims = [Claim(text=fact.text, evidence_ids=(key,)) for key, fact in notes.supporting("counts")[:3]]
+    # The live answer ranked each leading author in its own claim, each citing every record.
+    claims += [Claim(text=fact.text, evidence_ids=(key,)) for key, fact in notes.supporting("ranking")] * 3
+    questions = claim_check_questions(assemble_answer(claims, notes, plan), notes)
+    omitted = questions["requirement_omitted"].instructions.split("# Notes\n", 1)[1]
+    assert "Author 00: 10" in omitted and "without a tag filter" in omitted
+
+
+@pytest.mark.parametrize("caller", ["read", "compose", "fields", "done", "verify", "claims"])
+async def test_tallied_quotes_fit_agent_render_paths(
+    author_tallies: Notes, monkeypatch: pytest.MonkeyPatch, caller: str
+) -> None:
+    from fastbrowse.verification import llm_verify
+
+    monkeypatch.setattr(TokenBudget, "remaining_chars", lambda *_: 15706)
+    notes = author_tallies
+    plan = Plan(
+        requirements=tuple(
+            Requirement(id=key, text=text, kind=RequirementKind.INFORMATION)
+            for key, text in (("counts", "Count each author's quotes"), ("ranking", "Name the three leading authors"))
+        ),
+        answer_expected=True,
+    )
+    task = "Across every page, which three authors have the most quotes, and how many does each have?"
+    page = capture((BlockKind.PARAGRAPH, "Page 10 of 10"))
+    observation = Observation(
+        url=page.url,
+        title=page.title,
+        page_key="last",
+        captured_at=page.captured_at,
+        controls=(),
+        omitted_controls=0,
+        viewport_text=page.text,
+        tabs=(),
+    )
+    draft = assemble_answer(
+        [Claim(text=fact.text, evidence_ids=(key,)) for key, fact in notes.supporting("counts")[:3]],
+        notes,
+        plan.requirements,
+    )
+    match caller:
+        case "done":
+            jev = _ReadJev({"complete": NoulAnswer(probability=0.95)})
+            await check_done(jev, task, plan, observation, notes, Thresholds(), draft)
+            state = jev.requests[0][0]
+            assert isinstance(state, dict) and isinstance(state["notes"], str)
+            rendered = state["notes"]
+        case "claims":
+            questions = claim_check_questions(draft, notes)
+            rendered = questions["requirement_omitted"].instructions.split("# Notes\n", 1)[1]
+        case _:
+            response: JsonValue
+            match caller:
+                case "read":
+                    response = {"claims": [], "answered": False}
+                case "compose":
+                    response = {"claims": [claim.model_dump(mode="json") for claim in draft.claims]}
+                case "fields":
+                    response = {"fields": []}
+                case _:
+                    response = {"missing": [], "ungrounded": [], "complete": True}
+            llm = ScriptedLLM([response])
+            match caller:
+                case "read":
+                    await read(llm, page, task, ["counts", "ranking"], notes)
+                case "compose":
+                    answer = (await compose(llm, task, plan, notes)).data
+                    assert len(answer.citations) == 27 and answer.dropped_claims == 0
+                case "fields":
+                    await propose_text_fields_from_notes(llm, task, notes, {"author": Field(description="Top author")})
+                case _:
+                    await llm_verify(llm, task, plan, observation, (), notes, ())
+            rendered = llm.calls[0][1][-1].content
+    assert "Author 00: 10" in rendered and "100 distinct records" in rendered
+    assert "Reading gives us" not in rendered
+
+
+@pytest.mark.parametrize("requirement_id", ["r", "other"])
+async def test_completed_tally_leaves_earlier_continuation_records_open(requirement_id: str) -> None:
+    notes = Notes()
+    first = capture((BlockKind.RECORD, "Quote one by Ada"), (BlockKind.RECORD, "Quote two by Ada"))
+    last = capture((BlockKind.RECORD, "Quote three by Ada"))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [],
+                "answered": False,
+                "continues": [
+                    {
+                        "requirement_id": requirement_id,
+                        "records": [{"first": "s0", "last": "s0"}, {"first": "s1", "last": "s1"}],
+                    }
+                ],
+            },
+            {
+                "claims": [],
+                "answered": True,
+                "tallies": [
+                    {
+                        "requirement_id": "r",
+                        "groups": [{"key": "Ada", "records": [{"first": "s0", "last": "s0"}]}],
+                        "complete": True,
+                    }
+                ],
+            },
+        ]
+    )
+    await read(llm, first, "Count Ada's quotes", [requirement_id], notes)
+    result = await read(llm, last, "Count Ada's quotes", ["r"], notes, continuing={"r"})
+    assert len(notes.evidence) == 3
+    assert notes.evidenced("r") is (requirement_id != "r")
+    assert result.incomplete == (("r",) if requirement_id == "r" else ())
+
+
+@pytest.mark.parametrize("missing", [True, False])
+async def test_partial_tallies_never_close_a_requirement_from_a_generated_total(missing: bool) -> None:
+    notes = Notes()
+    page = capture((BlockKind.PARAGRAPH, "A quote by Ada"))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {"cite": {"first": "s0", "last": "s0"}, "text": "Ada has 999 quotes", "requirement_id": "r"}
+                ],
+                "answered": True,
+                "tallies": [
+                    {
+                        "requirement_id": "r",
+                        "complete": missing,
+                        "groups": [
+                            {"key": "Ada", "records": [{"first": "missing" if missing else "s0", "last": "s0"}]},
+                        ],
+                    }
+                ],
+            }
+        ]
+    )
+    await read(llm, page, "Count quotes", ["r"], notes)
+    assert not notes.evidenced("r")
+
+
+async def test_tally_chunks_count_overlap_once_and_keep_completion_open_until_last_chunk() -> None:
+    notes = Notes()
+    page = capture(*((BlockKind.PARAGRAPH, f"Quote {number} by Ada") for number in range(4)))
+    parts = chunk(page, 35)
+    assert len(parts) > 1
+    responses: list[JsonValue] = [
+        {
+            "claims": [],
+            "answered": True,
+            "tallies": [
+                {
+                    "requirement_id": "r",
+                    "complete": True,
+                    "groups": [
+                        {"key": "Ada", "records": [{"first": key, "last": key} for key in part.block_ids]},
+                    ],
+                }
+            ],
+        }
+        for part in parts
+    ]
+    llm = ScriptedLLM(responses)
+    result = await read(llm, page, "Count Ada's quotes", ["r"], notes, max_chars=35)
+    assert len(result.coverage) == len(parts)
+    assert notes.tallies[0].count == 4
+    assert notes.evidenced("r")
+
+
+async def test_a_failed_tally_read_reopens_previous_coverage() -> None:
+    notes = Notes()
+    page = capture((BlockKind.RECORD, "Quote one by Ada"))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [],
+                "answered": True,
+                "tallies": [
+                    {
+                        "requirement_id": "r",
+                        "complete": True,
+                        "groups": [
+                            {"key": "Ada", "records": [{"first": "s0", "last": "s0"}]},
+                        ],
+                    }
+                ],
+            },
+            {
+                "claims": [],
+                "answered": True,
+                "tallies": [
+                    {
+                        "requirement_id": "r",
+                        "complete": True,
+                        "groups": [
+                            {"key": "Ada", "records": [{"first": "absent", "last": "absent"}]},
+                        ],
+                    }
+                ],
+            },
+        ]
+    )
+    await read(llm, page, "Count quotes", ["r"], notes)
+    assert notes.evidenced("r")
+    result = await read(llm, page, "Count quotes", ["r"], notes)
+    assert result.incomplete == ("r",)
+    assert not notes.evidenced("r")
+
+
+async def test_a_record_split_across_chunks_counts_once() -> None:
+    notes = Notes()
+    page = capture((BlockKind.RECORD, "By Ada: first line\nBy Ada: second line\nBy Ada: third line"))
+    parts = chunk(page, 20)
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [],
+                "answered": True,
+                "tallies": [
+                    {
+                        "requirement_id": "r",
+                        "complete": True,
+                        "groups": [
+                            {"key": "Ada", "records": [{"first": "s0", "last": "s0"}]},
+                        ],
+                    }
+                ],
+            }
+            for _ in parts
+        ]
+    )
+    await read(llm, page, "Count quotes", ["r"], notes, max_chars=20)
+    assert notes.evidenced("r")
+    assert notes.tallies[0].count == 1
+    assert next(iter(notes.evidence.values())).quote == page.text

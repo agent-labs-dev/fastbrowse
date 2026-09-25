@@ -93,7 +93,8 @@ def strict_schema(schema: JsonValue) -> JsonValue:
     """The schema with every property required and no defaults, as strict structured output demands.
 
     A field with a default is optional to pydantic, which strict mode rejects; the model instead writes the
-    empty value, and validation accepts it as it would the default.
+    empty value, and validation accepts it as it would the default. An array's `maxItems` is left to validation
+    too: a provider behind OpenRouter answered HTTP 400 to every read whose claims list carried `maxItems: 60`.
     """
     if isinstance(schema, list):
         return [strict_schema(item) for item in schema]
@@ -101,7 +102,7 @@ def strict_schema(schema: JsonValue) -> JsonValue:
         return schema
     result: dict[str, JsonValue] = {}
     for key, value in schema.items():
-        if key == "default":
+        if key in ("default", "maxItems"):
             continue
         # These map names to schemas, so a property called "default" is a name, not a keyword.
         if key in ("properties", "$defs") and isinstance(value, dict):
@@ -113,14 +114,14 @@ def strict_schema(schema: JsonValue) -> JsonValue:
     return result
 
 
-def _grow_cap(body: dict[str, JsonValue], attempt: int, cap: int) -> None:
+def _grow_cap(body: dict[str, JsonValue], attempt: int, cap: int, purpose: LLMPurpose) -> None:
     """Make room for a response that ran into the output cap, or report it as truncated when it did so again.
 
     Repairing the JSON would send the same prompt under the same cap and be cut off again, so the one retry is
     spent on more room instead, and a second truncation is reported as what it is.
     """
     if attempt == 1:
-        raise LLMError(f"LLM response truncated at the {body['max_tokens']} token output cap")
+        raise LLMError(f"LLM response truncated at the {body['max_tokens']} token output cap ({purpose.value})")
     body["max_tokens"] = cap * _TRUNCATION_RETRY_FACTOR
 
 
@@ -266,7 +267,7 @@ class OpenAICompatibleLLM:
                 # made every run with one slow call stop at its dollar cap.
                 costs.append(with_discarded(_cost(payload, purpose), usage))
                 if _truncated(payload):
-                    _grow_cap(body, attempt, max_output_tokens)
+                    _grow_cap(body, attempt, max_output_tokens, purpose)
                     continue
                 try:
                     content = _content(payload)
@@ -283,7 +284,7 @@ class OpenAICompatibleLLM:
                     detail = self._scrubbed(error_detail(error))
                     if _ends_mid_json(error):
                         if (written := _short_of_cap(payload, body["max_tokens"])) is None:
-                            _grow_cap(body, attempt, max_output_tokens)
+                            _grow_cap(body, attempt, max_output_tokens, purpose)
                         elif short_retried:
                             raise LLMRetriesExhausted(
                                 f"LLM response ended mid-JSON at {written} of {body['max_tokens']} output tokens twice"

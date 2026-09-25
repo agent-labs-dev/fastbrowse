@@ -32,7 +32,7 @@ from fastbrowse.jev import (
     NoulQuestion,
 )
 from fastbrowse.llm import Generation, LLMClient, Message
-from fastbrowse.memory import Fact, Notes, evidence_id, fact_id
+from fastbrowse.memory import Fact, Notes, Tally, evidence_id, fact_id
 from fastbrowse.models import UNTRUSTED, Citation, CostComponent, CostLine, Evidence, FactReader, Frozen, LLMPurpose
 from fastbrowse.page import Block, BlockKind, Capture
 from fastbrowse.planner import Plan, Requirement, RequirementKind
@@ -345,7 +345,22 @@ def _remember(
 _MAX_CONTINUING_RECORDS = 60
 
 
+class _TallyGroup(Frozen):
+    key: str | None = Field(
+        description="The label stated in each record, such as its author; null for an ungrouped count."
+    )
+    records: tuple[_Cite, ...]
+
+
+class _TallyRead(Frozen):
+    requirement_id: str
+    groups: tuple[_TallyGroup, ...]
+    complete: bool = False
+    """True only when earlier evidence and this capture cover the entire requested list."""
+
+
 class _Continuation(Frozen):
+    tallies: tuple[_TallyGroup, ...] = ()
     requirement_id: str = Field(
         description=(
             "A requirement whose answer ranges over a list this capture shows only part of, because it continues "
@@ -371,6 +386,7 @@ class _Continuation(Frozen):
 
 
 class _ReadResponse(Frozen):
+    tallies: tuple[_TallyRead, ...] = ()
     claims: tuple[_ReadClaim, ...]
     answered: bool
     continues: tuple[_Continuation, ...] = ()
@@ -460,6 +476,7 @@ async def read(
     uncovered = 0
     ordered: set[str] = set()
     expands: str | None = None
+    tally_complete: set[str] = set()
     wanted = [
         r
         for r in requirements
@@ -509,6 +526,13 @@ async def read(
                     "constraints; otherwise null. Set answered only when the collected evidence and this capture "
                     "fully answer the question.\n"
                     "- Values typed into fields, suggestions and previews are inputs, not results.\n\n"
+                    "# Tallies\nFor a count of records or a ranking by record count, return tally groups: "
+                    "each key is the label stated in its records, and each record cites its own source blocks. "
+                    "Use continues.tallies while more pages remain and tallies with complete=true only on the "
+                    "last requested page. List only records from this chunk; never repeat earlier records, quote "
+                    "their text, calculate totals or write claims for counted records. Code deduplicates, counts "
+                    "and ranks them, preserving their quotes behind the tally references. Reuse a tally reference "
+                    "as a basis instead of listing every earlier record. Keep other claims concise, at most 60.\n\n"
                     "# Lists over several pages\nA count, total or superlative over a list needs the whole "
                     "list. Earlier pages are in the collected evidence under their own URLs. When the list goes "
                     "on past this capture and the collected evidence does not cover the rest, add an entry to "
@@ -549,6 +573,45 @@ async def read(
         continues = dict.fromkeys(c.requirement_id for c in carried)
         expands = next((c.expands for c in carried if c.expands), None)
         references = {key: key for key in offered.evidence_ids}
+        tally_reads = [t for t in result.data.tallies if t.requirement_id in requirement_ids]
+        tally_reads.extend(_TallyRead(requirement_id=c.requirement_id, groups=c.tallies) for c in carried if c.tallies)
+        for tally_read in tally_reads:
+            notes.unevidence((tally_read.requirement_id,))
+            so_far.unevidence((tally_read.requirement_id,))
+            if tally_read.complete and result.data.answered and part.index == part.total - 1:
+                tally_complete.add(tally_read.requirement_id)
+            for group in tally_read.groups:
+                records = []
+                missing = max(0, len(group.records) - _MAX_CONTINUING_RECORDS)
+                for cite in group.records[:_MAX_CONTINUING_RECORDS]:
+                    evidence = _cited(capture, part, cite)
+                    if evidence is None or (
+                        group.key is not None
+                        and (not group.key.strip() or not _loose(group.key).search(evidence.quote))
+                    ):
+                        missing += 1
+                        continue
+                    if cite.first == cite.last:
+                        block = next(b for b in capture.blocks if b.source_id == cite.first)
+                        if block.kind is BlockKind.RECORD:
+                            # Chunking a long record must not count its quoted pieces as separate records.
+                            evidence = _evidence(capture, block, block.start, block.end)
+                    record = _quoted(evidence)
+                    so_far.add(record)
+                    notes.add(record)
+                    records.append(fact_id(record))
+                    facts[(fact_id(record), None)] = record
+                if records:
+                    tally = Tally(
+                        requirement_id=tally_read.requirement_id, key=group.key or "records", records=tuple(records)
+                    )
+                    so_far.add_tally(tally)
+                    fact = notes.add_tally(tally)
+                    facts[(fact_id(fact), None)] = fact
+                    accepted += 1
+                uncovered += missing
+                if missing:
+                    lost[tally_read.requirement_id] = None
         for index, claim in enumerate(result.data.claims):
             # Carried to the next chunk without its requirement id, which only the whole page can settle.
             fact = _remember(capture, part, claim.model_copy(update={"requirement_id": None}), so_far, references)
@@ -557,6 +620,9 @@ async def read(
                 continue
             references[f"claim:{index}"] = fact_id(fact)
             requirement_id = claim.requirement_id if claim.requirement_id in requirement_ids else None
+            if requirement_id in {t.requirement_id for t in notes.tallies}:
+                # Only the counted records and explicit coverage close a tally, never a generated total.
+                requirement_id = None
             # A site that sorts or filters its own list by the quantity compared settles the superlative on its
             # leading record: the rest of the list cannot beat it. The page has to say so, in its own text, and
             # that statement is kept as a fact so the claim rests on it and the claim check can judge it. Only a
@@ -594,6 +660,7 @@ async def read(
                     continue
                 record = _quoted(evidence)
                 so_far.add(record)
+                notes.add_continuation(continuation.requirement_id, fact_id(record))
                 found.append(record)
             uncovered += missing
             if missing:
@@ -603,7 +670,14 @@ async def read(
         # read of a page whose list goes on, whether this chunk said so or the caller's notice did: the rest of
         # this page is part of the set being counted or compared, and a pager sits at the foot of a listing,
         # in the last chunk, after the chunk that believes it has the answer.
-        if result.data.answered and accepted and not rejected_here and not continues and not notice:
+        if (
+            result.data.answered
+            and accepted
+            and not rejected_here
+            and not continues
+            and not notice
+            and (not tally_reads or part.index == part.total - 1)
+        ):
             break
     # Which requirements a claim may close is settled once every chunk has been read, because the pager that says
     # the list goes on sits at its foot, in the last one. A winner or total from part of a list is not the answer:
@@ -613,6 +687,10 @@ async def read(
     # A lost record leaves later comparisons incomplete too; the page's own stated order can still settle a winner.
     for key in ordered:
         continues.pop(key, None)
+    for requirement_id in tally_complete:
+        # Earlier continuation quotes have no tally key, so counting only later pages would omit them.
+        if notes.has_untallied_records(requirement_id):
+            lost[requirement_id] = None
     blocked = (set(incomplete) | lost.keys()) - ordered
     for fact in found:
         if fact.requirement_id in continues or fact.requirement_id in blocked:
@@ -620,6 +698,8 @@ async def read(
         # Its quote was verified against this capture when the chunk was read.
         notes.add(fact)
         facts[(fact_id(fact), fact.requirement_id)] = fact
+    for requirement_id in tally_complete - continues.keys() - blocked:
+        notes.complete_tallies(requirement_id)
     return ReadOutcome(
         facts=tuple(facts.values()),
         coverage=tuple(coverage),
@@ -1211,7 +1291,7 @@ def _without_citation_markup(text: str) -> str:
     # The composer can echo bracketed references in prose; only its checked evidence_ids create links.
     def replace(match: re.Match[str]) -> str:
         label = match[1]
-        if label.isdecimal() or re.fullmatch(r"[\w-]+:\d+:\d+|derived:[0-9a-f]+", label):
+        if label.isdecimal() or re.fullmatch(r"[\w-]+:\d+:\d+|(?:derived|tally):[0-9a-f]+", label):
             logger.warning("compose dropped inline citation reference %r", label)
             return ""
         return label if match[2] else match[0]
@@ -1242,11 +1322,14 @@ async def compose(
             content=(
                 "# Composer\nWrite the answer as self-contained plain-text claims in reading order, each citing the "
                 "evidence_ids of the notes it rests on. Answer the requested outputs; do not claim a requirement "
-                "the notes do not evidence.\n\n"
+                "the notes do not evidence. Write every value the task asks for, such as each item's price, in the "
+                "claim text itself: a reader sees the text, not the notes behind its citations.\n\n"
                 "# One claim, one fact\nA claim is supported in full by the notes it cites. Split a statement that "
                 "combines separately evidenced facts into one claim each. A claim that compares, counts, totals or "
                 "picks a superlative cites every note it is drawn from. A list of records cites each record it "
-                "names, and a long list is written as several claims of a handful of records each.\n\n"
+                "names, and a long list is written as several claims of a handful of records each. "
+                "Cite tally ids directly; their counts and descending order are computed in code, and code "
+                "expands their record citations. Never re-list the basis ids inside a tally.\n\n"
                 f"# Trust\n{UNTRUSTED}"
             ),
         ),
@@ -1283,6 +1366,32 @@ async def compose(
             dropped_claims=len(result.data.claims) - len(claims),
         ),
         cost=result.cost,
+    )
+
+
+def partial_answer(notes: Notes, max_chars: int) -> ComposedAnswer:
+    notice = (
+        "Partial evidence only. Remaining coverage and any facts that do not fit are omitted; totals may be incomplete."
+    )
+    claims: list[Claim] = []
+    counted: set[str] = set()
+    candidates = [fact for fact in notes.facts if fact.tally is not None]
+    candidates.extend(fact for fact in notes.facts if fact.evidence is not None)
+    for fact in candidates:
+        if fact_id(fact) in counted:
+            continue
+        text = fact.text if fact.tally is not None else fact.evidence.quote if fact.evidence else ""
+        claim = Claim(text=text, evidence_ids=(fact_id(fact),))
+        composed = assemble_answer([*claims, claim], notes, ())
+        if len(composed.linked_answer) + len(notice) + 2 <= max_chars:
+            claims.append(claim)
+            counted.update(notes.expand_evidence_ids(claim.evidence_ids))
+    result = assemble_answer(claims, notes, ())
+    return result.model_copy(
+        update={
+            "answer": f"{notice}\n\n{result.answer}".strip(),
+            "linked_answer": f"{notice}\n\n{result.linked_answer}".strip(),
+        }
     )
 
 
@@ -1352,12 +1461,21 @@ def claim_check_questions(
 ) -> Mapping[str, NoulQuestion]:
     questions: dict[str, NoulQuestion] = {}
     known = notes.evidence
+    # A counted record is shown as its tally's line: code checked each quote against the group when it was read and
+    # counted them, and a ranking citing every record put a hundred quotes into each of its questions.
+    counted = {record: fact.text for fact in notes.facts if fact.tally is not None for record in fact.basis}
     for index, claim in enumerate(composed.claims):
         # A derived fact is judged from the records it expands to, never from the reader's own conclusion.
+        keys = [key for key in notes.expand_evidence_ids(claim.evidence_ids) if not notes.derived(key)]
         evidence = "\n".join(
-            known[key].model_dump_json() if key in known else f"MISSING: {key}"
-            for key in notes.expand_evidence_ids(claim.evidence_ids)
-            if not notes.derived(key)
+            dict.fromkeys(
+                f"TALLY: {json.dumps(counted[key], ensure_ascii=False)}"
+                if key in counted
+                else known[key].model_dump_json()
+                if key in known
+                else f"MISSING: {key}"
+                for key in keys
+            )
         )
         for issue in ("unsupported", "contradicted"):
             questions[f"{issue}_{index}"] = NoulQuestion(

@@ -51,6 +51,7 @@ from fastbrowse.clients.environment import load_settings
 from fastbrowse.clients.validation import RETRYABLE_STATUS, TRANSIENT_TRANSPORT
 from fastbrowse.evals.live_tasks import TASKS, Category, LiveTask, Outcome
 from fastbrowse.evals.more_tasks import DEV, HELDOUT, STRETCH_DEV, STRETCH_HELDOUT
+from fastbrowse.evals.versions import load_lock, provenance, suite_version, task_version
 from fastbrowse.models import Authorization, BrowserEvent, Limits, RunResult, Status, StepEvent, Unavailable
 from fastbrowse.page import Observation
 from fastbrowse.run import run_task
@@ -226,6 +227,12 @@ class EvalRow(ArmReport):
     data: object = None
     final_url: str | None = None
     video: str | None = None
+    suite: str | None = None
+    suite_version: str | None = None
+    task_version: int | None = None
+    """Rows compare only at equal task versions; see fastbrowse.evals.versions."""
+    run: dict[str, JsonValue] = {}
+    """The invocation's provenance, the same on every row it wrote: build, commit, providers, run id."""
 
 
 class _UltrafastReport(BaseModel):
@@ -632,8 +639,10 @@ def _cause(row: EvalRow) -> str:
 
 async def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--only", nargs="*", default=[])
-    parser.add_argument("--suite", nargs="*", default=["core"], choices=list(SUITES), help="task sets to run")
+    parser.add_argument("--only", nargs="*", default=[], help="task ids to run; an id the selection lacks is an error")
+    parser.add_argument(
+        "--suite", nargs="*", choices=list(SUITES), help="task sets to run (default core, or every suite with --only)"
+    )
     parser.add_argument("--category", nargs="*", default=[], choices=[c.value for c in Category])
     parser.add_argument("--bitwarden", action="store_true", help="login credentials from the vault items")
     parser.add_argument("--arms", nargs="*", default=list(ARMS), choices=ARMS)
@@ -650,18 +659,34 @@ async def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     tasks = [
         t
-        for suite in args.suite
+        for suite in args.suite or (list(SUITES) if args.only else ["core"])
         for t in SUITES[suite]
         if (not args.only or t.id in args.only) and (not args.category or t.category.value in args.category)
     ]
+    # A rerun meant to confirm one row must not "pass" by quietly running none of it.
+    if missing := sorted(set(args.only) - {t.id for t in tasks}):
+        parser.error(f"--only names tasks outside the selected suites and categories: {', '.join(missing)}")
+    lock = load_lock()
+    suite_of = {t.id: name for name, suite_tasks in SUITES.items() for t in suite_tasks}
+    suite_versions = {name: suite_version((t.id for t in suite_tasks), lock) for name, suite_tasks in SUITES.items()}
     handler = logging.StreamHandler(sys.stdout)
     handler.addFilter(_NameRun())
     # Traces are collected per run at DEBUG and propagate here; only warnings belong on the console.
     handler.setLevel(logging.WARNING)
     handler.setFormatter(logging.Formatter("%(levelname)-7s %(run)s %(name)s: %(message)s"))
     logging.basicConfig(level=logging.WARNING, handlers=[handler])
-    if "fastbrowse" in args.arms:
-        print(f"PROVIDERS {load_settings().providers()}", flush=True)
+    providers = load_settings().providers() if "fastbrowse" in args.arms else None
+    if providers is not None:
+        print(f"PROVIDERS {providers}", flush=True)
+    run = provenance(
+        providers=providers,
+        jev_ultrafast=ULTRAFAST if "jev-ultrafast" in args.arms else None,
+        argv=list(argv),
+        concurrency=args.concurrency,
+        max_steps=MAX_STEPS,
+    )
+    dirty = " (uncommitted changes)" if run["git_dirty"] else ""
+    print(f"RUN {run['run_id']} fastbrowse {run['fastbrowse_version']} at {run['git_sha']}{dirty}", flush=True)
     if "jev-ultrafast" in args.arms:
         await prepare_ultrafast()
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -704,7 +729,16 @@ async def main(argv: list[str]) -> int:
                     wait = min(30 * (retries + 1), 300)
                     print(f"RETRY {arm:13} {task.id:20} in {wait}s: {_cause(row)}", flush=True)
                     await asyncio.sleep(wait)
-                row = row.model_copy(update={"concurrency": args.concurrency, "retries": retries})
+                row = row.model_copy(
+                    update={
+                        "concurrency": args.concurrency,
+                        "retries": retries,
+                        "suite": suite_of[task.id],
+                        "suite_version": suite_versions[suite_of[task.id]],
+                        "task_version": task_version(task.id, lock),
+                        "run": run,
+                    }
+                )
                 # Trace records hold whatever a component logged, so anything JSON cannot hold is written as text.
                 out.write(row.model_dump_json(fallback=str) + "\n")
                 out.flush()

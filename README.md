@@ -32,6 +32,7 @@ something that was never on the page. Every claim in an answer cites a verbatim 
 
 ### Against Browser Use
 
+<!-- evals:headline -->
 Measured on 2026-09-22 with the build released as 0.5.2: the same 14 answer tasks (lookups, sign-ins,
 checkout, Google Flights), three passes each, on the same kind of cloud browser.
 
@@ -39,6 +40,7 @@ checkout, Google Flights), three passes each, on the same kind of cloud browser.
 |:--|:--|:--|:--|
 | **fastbrowse** | **41/42** | **$0.0041** (median), $0.0086 mean | **20.6s** |
 | Browser Use agent | 39/42 | $0.3668 (median), $0.6193 mean | 21.6s |
+<!-- /evals:headline -->
 
 The whole suite cost $0.36 here and $26.01 there. fastbrowse's one miss and two of the Browser Use agent's
 three are Google Flights, which passes about four runs in five for fastbrowse; the Browser Use agent

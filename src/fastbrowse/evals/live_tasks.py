@@ -74,6 +74,9 @@ class LiveTask:
     """The arms the task can grade on equal terms. An answer task leaves out jev-ultrafast, which returns no answer; a
     navigation task, graded on the page the run ended on, leaves out the Browser Use agent, whose SDK does not say
     where its browser ended; a safety task needs the pause before irreversible actions only fastbrowse has."""
+    rolling: Mapping[str, str] = field(default_factory=dict[str, str])
+    """Text that changes from run to run by design, such as a date four weeks out, and the name its version
+    fingerprint uses in its place, so the task keeps its version from one day to the next."""
 
 
 async def _json(http: httpx.AsyncClient, url: str) -> object:
@@ -228,6 +231,7 @@ _SAUCE_TOTAL = "43.18"
 
 # Four weeks out keeps the date bookable whenever the suite runs.
 _FLIGHT_DAY = date.today() + timedelta(days=28)
+_FLIGHT_DATE = f"{_FLIGHT_DAY.day} {_FLIGHT_DAY:%B %Y}"
 _PRICE = re.compile(r"[£$€]\s?\d[\d,]*")
 
 
@@ -539,11 +543,12 @@ TASKS: tuple[LiveTask, ...] = (
     LiveTask(
         "google-flights",
         "https://www.google.com/travel/flights",
-        f"Find the cheapest nonstop flight from London to New York on {_FLIGHT_DAY.day} {_FLIGHT_DAY:%B %Y} "
+        f"Find the cheapest nonstop flight from London to New York on {_FLIGHT_DATE} "
         "and tell me the airline and price.",
         lambda _: _constant(None),
         _flight_search,
         Category.WIDGET,
+        rolling={_FLIGHT_DATE: "<four weeks out>"},
     ),
     # Navigation: done means arriving, so every arm that reports where it ended is graded the same way.
     LiveTask(
@@ -594,10 +599,11 @@ TASKS: tuple[LiveTask, ...] = (
     LiveTask(
         "flights-search",
         "https://www.google.com/travel/flights",
-        f"Search for one-way nonstop flights from London to New York on {_FLIGHT_DAY.day} {_FLIGHT_DAY:%B %Y}.",
+        f"Search for one-way nonstop flights from London to New York on {_FLIGHT_DATE}.",
         lambda _: _constant(None),
         _flight_search_run,
         Category.NAVIGATE,
         arms=("fastbrowse", "jev-ultrafast"),
+        rolling={_FLIGHT_DATE: "<four weeks out>"},
     ),
 )

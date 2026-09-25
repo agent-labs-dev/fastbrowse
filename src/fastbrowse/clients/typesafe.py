@@ -9,6 +9,7 @@ from pydantic import JsonValue
 from fastbrowse.clients.validation import (
     RequestUsage,
     asking_open,
+    asking_split,
     error_detail,
     estimated_cost,
     json_object,
@@ -40,9 +41,15 @@ class TypeSafeJevClient:
         self._model = model
 
     async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
-        return await asking_open(questions, lambda asked: self._ask(state, asked), self._model)
+        return await asking_open(
+            questions,
+            lambda asked: asking_split(asked, lambda batch, attempt, split: self._ask(state, batch, attempt, split)),
+            self._model,
+        )
 
-    async def _ask(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+    async def _ask(
+        self, state: JsonValue, questions: Mapping[str, Question], start_attempt: int, split_batch: bool
+    ) -> Evaluation:
         started = monotonic()
         sent = RequestUsage()
         response = await post(
@@ -51,6 +58,8 @@ class TypeSafeJevClient:
             self._api_key,
             {"model": self._model, "state": state, "questions": wire_questions(questions)},
             usage=sent,
+            start_attempt=start_attempt,
+            split_batch=split_batch,
         )
         try:
             payload = json_object(response)
@@ -60,6 +69,7 @@ class TypeSafeJevClient:
             if not isinstance(model, str):
                 raise ValueError("invalid model name")
             return Evaluation(
+                requests=sent.requests,
                 model=model,
                 answers=parse_answers(payload.get("answers"), questions),
                 input_tokens=tokens,

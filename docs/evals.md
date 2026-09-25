@@ -102,11 +102,39 @@ server-rendered forms. Each pair across the split exercises the same skill, so t
 uv run --extra browser-use python -m fastbrowse.evals.live --arms fastbrowse --suite heldout --repeat 3
 ```
 
-`--only` selects within the chosen suites, so a held-out task needs its suite as well as its id:
+`--only` without `--suite` looks for its ids in every suite. With `--suite` or `--category`, it selects within
+them. Either way, an id the selection does not hold stops the run before it starts, naming the id:
 
 ```sh
-uv run --extra browser-use python -m fastbrowse.evals.live --arms fastbrowse --suite heldout     --only books-mystery-cheapest quotes-einstein-count --repeat 3
+uv run --extra browser-use python -m fastbrowse.evals.live --arms fastbrowse --only books-mystery-cheapest quotes-einstein-count --repeat 3
 ```
+
+<!-- evals:tasks:dev -->
+| Task | Category | Version | Asks |
+|---|---|---|---|
+| `books-travel-priciest` | lookup | 1 | Which is the most expensive book in the Travel category, and what does it cost? |
+| `hockey-bruins-1990` | lookup | 1 | How many games did the Boston Bruins win in the 1990 season? |
+| `oscars-2012` | lookup | 1 | Of the 2012 films listed here, which one won Best Picture? |
+| `dynamic-loading` | widget | 1 | Start the example and tell me the text that appears when loading finishes. |
+| `nested-frames` | widget | 1 | What text does the frame in the middle of the top row show? |
+| `hover-profile` | widget | 1 | Which user name is revealed when you hover over the second profile picture? |
+| `ruff-release` | lookup | 1 | What is the latest release of ruff on GitHub? |
+| `pizza-order` | checkout | 1 | Order a large pizza with mushroom for Ada Lovelace, telephone 020 7946 0000, email ada@example.com, and submit it. Tell me which size the server received. |
+<!-- /evals:tasks:dev -->
+
+<!-- evals:tasks:heldout -->
+| Task | Category | Version | Asks |
+|---|---|---|---|
+| `books-mystery-cheapest` | lookup | 1 | Which is the cheapest book in the Mystery category, and what does it cost? |
+| `quotes-einstein-count` | lookup | 1 | How many quotes by Albert Einstein are there across the whole site? |
+| `countries-mongolia` | lookup | 1 | What population does this page list for Mongolia? |
+| `quotes-js-page2` | lookup | 1 | Who wrote the first quote on the second page? |
+| `crates-serde` | lookup | 1 | What is the latest stable version of the serde crate? |
+| `new-window` | widget | 1 | Follow the link that opens a new window and tell me that window's heading. |
+| `table-largest-due` | widget | 1 | In the first table, whose amount due is the largest? |
+| `httpx-requires-python` | lookup | 1 | What is the oldest Python version the latest httpx release supports? |
+| `quotes-search` | lookup | 1 | Use the search form to find Albert Einstein's quote tagged success, and tell me what it says. |
+<!-- /evals:tasks:heldout -->
 
 The rule that makes the split worth having: **agent changes are iterated against `dev` only.** `heldout` is run
 before and after a round of changes and never debugged, so its score says whether a round improved the agent or
@@ -129,6 +157,76 @@ uv run --extra browser-use python -m fastbrowse.evals.live --arms fastbrowse --s
 Each task was kept only if the agent at the time failed it at least once in three runs, for a reason other than
 the site or the network; a candidate that passed every run was dropped. Date truth is computed when the attempt
 runs, and form and date tasks are graded on the controls of the page the run ended on.
+
+<!-- evals:tasks:stretch-dev -->
+| Task | Category | Version | Asks |
+|---|---|---|---|
+| `stretch-wizard-review` | checkout | 1 | In the Automation Practice Lab section, fill out the Multi-Step Wizard: Full Name 'Ada Lovelace', Email 'ada.lovelace@example.com', City 'London', ZIP Code 'SW1A 1AA'. Review your details, submit, and tell me what the page says. |
+| `stretch-date-range-monday` | widget | 1 | Find Date Picker 3, the date range picker. Book a stay starting the next Monday that is strictly after today, for nine nights, then submit. Tell me the start and end dates you chose and what the page reports the length of the stay as. |
+| `stretch-books-nonfiction-five-star` | lookup | 3 | Across every page of the Nonfiction category, which three five-star-rated books are the cheapest, and what does each cost? |
+| `stretch-bstack-apple-google` | widget | 2 | Filter the product list to Apple and Google together. Then remove the Apple filter, so only Google remains. Sort by price lowest to highest, and tell me the two cheapest Google phones and their prices. |
+<!-- /evals:tasks:stretch-dev -->
+
+<!-- evals:tasks:stretch-heldout -->
+| Task | Category | Version | Asks |
+|---|---|---|---|
+| `stretch-wizard-correction` | checkout | 1 | In the Live Interactive Form widget, fill First Name 'Priya Sharma', Email 'priya.sharma@example.com', Address '221B Baker Street', City 'Manchester', Language 'Turkish', and check the QA newsletter box. Reach the Review step, then go back and correct the first name to 'Priya Sharman' before continuing through Submit. Tell me what the confirmation says. |
+| `stretch-calendar-first-friday` | widget | 2 | Using the jQuery UI Datepicker (the calendar popup, not the native date input), navigate to next month and select its first Friday. Tell me the date, day, and month it shows. |
+| `stretch-quotes-top-authors` | lookup | 2 | Across every page of this site, which three authors have the most quotes attributed to them, and how many quotes does each have? |
+| `stretch-bstack-apple-samsung` | widget | 2 | Filter the product list to Apple and Samsung together, then remove the Apple filter so only Samsung remains. Sort by price highest to lowest, and tell me the three most expensive phones and their prices. |
+<!-- /evals:tasks:stretch-heldout -->
+
+## Versions
+
+A score means something only next to the build and tasks that produced it, so every result row records both:
+
+- `run`: the provenance of the invocation, shared by every row it wrote. It holds a `run_id`, the
+  `fastbrowse_version`, the `git_sha` and whether tracked files had uncommitted changes (`git_dirty`), the Python
+  version, the Jev route and LLM models (`providers`), the jev-ultrafast pin when that arm ran, and the command line.
+- `task_version`, `suite` and `suite_version`: the version of the task as graded, and of the suite it belongs to.
+
+A task's version goes up whenever what it asks, where it starts or how it is graded changes. Two rows compare only
+at equal task versions, and two suite scores only at equal suite versions. `src/fastbrowse/evals/versions.json`
+records each task's version with a fingerprint of its definition: its fields, and the tokens of its grader and
+answer key followed into every eval helper, class and constant they reach. Comments and layout are not part of it,
+nor is text a task declares `rolling`, such as the flight date four weeks out, which is fingerprinted under a
+stable name; anything else is, so a task cannot change and keep its version. A test fails until the version is bumped:
+
+```sh
+uv run python -m fastbrowse.evals.versions --bump TASK_ID --docs
+```
+
+A suite's version is a hash of its tasks' ids and versions, so adding, dropping or bumping a task changes it. The
+task tables for the split suites above and this table are generated from the task definitions, and a test fails
+when they differ:
+
+<!-- evals:versions -->
+| Suite | Tasks | Version |
+|---|---|---|
+| `core` | 21 | `e34936a8` |
+| `dev` | 8 | `8ecc7f62` |
+| `heldout` | 9 | `d2c12361` |
+| `stretch-dev` | 4 | `ee445f17` |
+| `stretch-heldout` | 4 | `40f781d7` |
+| local fixtures | 6 | `dda8ba89` |
+
+Tasks past version 1: `stretch-books-nonfiction-five-star` v3, `stretch-bstack-apple-google` v2, `stretch-bstack-apple-samsung` v2, `stretch-calendar-first-friday` v2, `stretch-quotes-top-authors` v2.
+<!-- /evals:versions -->
+
+Published results are rows, not tables typed by hand. A release's rows are committed to
+`docs/results/<release>.jsonl`, keeping each row's grade and provenance without its traces, and the release's table
+below and the README headline are generated from them:
+
+```sh
+uv run python -m fastbrowse.evals.versions --publish 0.5.5 artifacts/evals/live.jsonl
+```
+
+Publishing refuses rows from a dirty or uncommitted tree, from another fastbrowse version, or from a task version that
+is no longer current, and never rewrites a release already published. It adds the release's own section under
+Results, newest first. Each generated table names the suite versions
+and runs behind it and lists any task changed since, so an old score cannot pass for the tasks as they stand. The
+0.5.2 results below predate versioned rows: they ran the tasks as they stood at that release, and the test checks
+the README against them instead.
 
 ## Results
 

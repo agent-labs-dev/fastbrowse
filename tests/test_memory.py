@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from fastbrowse.memory import Fact, Notes, NotesTooLarge, fact_id
+from fastbrowse.memory import Fact, Notes, NotesTooLarge, Tally, fact_id
 from fastbrowse.models import Evidence, FactReader
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 
@@ -112,3 +112,126 @@ def test_budget_keeps_transitive_basis_with_the_requirement_or_fails(json_encode
         notes.render_with_ids(budget - 1, preserve_requirements=True, json_encoded=json_encoded)
     shortened = notes.render_with_ids(budget - 1, json_encoded=json_encoded)
     assert fact_id(total) not in shortened.evidence_ids
+
+
+def test_tallies_deduplicate_records_and_render_without_losing_basis() -> None:
+    notes = Notes()
+    ids = []
+    for page in range(10):
+        for number in range(10):
+            quote = f"Record {page * 10 + number} by Ada: " + "A long quotation. " * 30
+            item = evidence(sha=f"page-{page}", start=number * 1000, end=number * 1000 + len(quote)).model_copy(
+                update={"quote": quote, "url": f"https://example.test/page/{page}"}
+            )
+            fact = Fact(text=quote, evidence=item, reader=FactReader.LLM)
+            notes.add(fact)
+            ids.append(fact_id(fact))
+            notes.add_tally(Tally(requirement_id="r", key="Ada", records=(fact_id(fact),)))
+    original = notes.facts[0].evidence
+    assert original is not None
+    duplicate = notes.facts[0].model_copy(update={"evidence": original.model_copy(update={"capture_sha256": "reread"})})
+    notes.add(duplicate)
+    notes.add_tally(Tally(requirement_id="r", key="Ada", records=(fact_id(duplicate),)))
+    assert notes.tallies[0].count == 100
+    assert not notes.evidenced("r")
+    notes.complete_tallies("r")
+    rendered = notes.render_with_ids(3000, preserve_requirements=True)
+    assert "Ada: 100" in rendered.text
+    assert "100 distinct records" in rendered.text
+    assert "A long quotation" not in rendered.text
+    assert set(ids) <= set(notes.expand_evidence_ids(rendered.evidence_ids))
+    assert len(notes.evidence) >= 100
+    assert notes.evidenced("r")
+
+
+def test_tallies_keep_identical_rows_in_one_capture_and_deduplicate_recaptures() -> None:
+    notes = Notes()
+    originals: list[str] = []
+    for sha, starts in (("first", (0, 30)), ("reread", (10, 40)), ("overlap", (20,)), ("first", (0, 30))):
+        records = []
+        for start in starts:
+            quote = "Ada: approved" if sha == "first" else "Ada:  approved"
+            item = evidence(sha=sha, start=start, end=start + len(quote)).model_copy(update={"quote": quote})
+            fact = Fact(text=quote, evidence=item, reader=FactReader.LLM)
+            notes.add(fact)
+            records.append(fact_id(fact))
+        notes.add_tally(Tally(requirement_id="r", key="Ada", records=tuple(records)))
+        if not originals:
+            originals = records
+        assert notes.tallies[0].count == 2
+        assert notes.tallies[0].records == tuple(originals)
+
+
+@pytest.mark.parametrize(
+    ("second_url", "count"),
+    [
+        ("https://example.test/rows?page=2", 2),
+        ("https://example.test/other?page=1", 2),
+        ("http://example.test/rows?page=1", 2),
+        ("https://example.test/rows?page=1#row", 1),
+    ],
+)
+def test_tally_row_identity_is_scoped_to_the_address(second_url: str, count: int) -> None:
+    notes = Notes()
+    records: list[str] = []
+    quote = "Ada | Widget | $10"
+    for index, url in enumerate(("https://example.test/rows?page=1", second_url, second_url)):
+        item = evidence(sha=f"capture-{index}", end=len(quote)).model_copy(update={"url": url, "quote": quote})
+        fact = Fact(text=quote, evidence=item, reader=FactReader.LLM)
+        notes.add(fact)
+        records.append(fact_id(fact))
+        notes.add_tally(Tally(requirement_id="r", key="Ada", records=(fact_id(fact),)))
+    assert notes.tallies[0].count == count
+    assert notes.tallies[0].records == tuple(records[:count])
+    assert not notes.evidenced("r")
+    notes.complete_tallies("r")
+    assert notes.evidenced("r")
+    assert len(notes.supporting_evidence("r")) == count
+
+
+def test_tally_record_identity_survives_returning_to_an_earlier_capture() -> None:
+    notes = Notes()
+    for sha, start in (("first", 0), ("second", 10), ("second", 40), ("first", 30)):
+        item = evidence(sha=sha, start=start, end=start + 13).model_copy(update={"quote": "Ada: approved"})
+        fact = Fact(text=item.quote, evidence=item, reader=FactReader.LLM)
+        notes.add(fact)
+        notes.add_tally(Tally(requirement_id="r", key="Ada", records=(fact_id(fact),)))
+    assert notes.tallies[0].count == 2
+
+
+@pytest.mark.parametrize("json_encoded", [False, True])
+def test_compact_tallies_do_not_hide_an_unrelated_required_basis(json_encoded: bool) -> None:
+    record = Fact(text="Ada", evidence=evidence(sha="ada"), reader=FactReader.LLM)
+    basis = Fact(text="Required context " * 100, evidence=evidence(sha="context"), reader=FactReader.LLM)
+    conclusion = Fact(
+        text="A conclusion", evidence=None, basis=(fact_id(basis),), requirement_id="r2", reader=FactReader.LLM
+    )
+    notes = Notes((record, basis, conclusion))
+    notes.add_tally(Tally(requirement_id="r1", key="Ada", records=(fact_id(record),)))
+    notes.complete_tallies("r1")
+    with pytest.raises(NotesTooLarge):
+        notes.render_with_ids(800, preserve_requirements=True, json_encoded=json_encoded)
+    rendered = notes.render_with_ids(800, json_encoded=json_encoded)
+    assert fact_id(conclusion) not in rendered.evidence_ids
+
+
+def test_tally_aliases_keep_other_basis_quotes_and_citation_ids() -> None:
+    record = Fact(text="Ada", evidence=evidence(sha="ada"), reader=FactReader.LLM)
+    context = Fact(text="All authors", evidence=evidence(sha="context"), reader=FactReader.LLM)
+    notes = Notes((record, context))
+    tally = notes.add_tally(Tally(requirement_id="r1", key="Ada", records=(fact_id(record),)))
+    notes.complete_tallies("r1")
+    conclusion = Fact(
+        text="Ada leads",
+        evidence=None,
+        basis=(fact_id(record), fact_id(context)),
+        requirement_id="r2",
+        reader=FactReader.LLM,
+    )
+    notes.add(conclusion)
+    rendered = notes.render_with_ids(1000, preserve_requirements=True)
+    assert f'basis=records(1) + ["{fact_id(context)}"]' in rendered.text
+    assert f'[{fact_id(context)}] "All authors"' in rendered.text and 'quote="fact"' in rendered.text
+    assert f"[{fact_id(record)}]" not in rendered.text
+    assert set(rendered.evidence_ids) == {fact_id(fact) for fact in (record, context, tally, conclusion)}
+    assert notes.expand_evidence_ids((fact_id(conclusion),)) == (fact_id(record), fact_id(context), fact_id(conclusion))

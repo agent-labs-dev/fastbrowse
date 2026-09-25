@@ -144,15 +144,23 @@
 
   const ARIA_ROLES = ['button', 'link', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'menuitemradio',
     'option', 'gridcell', 'combobox', 'textbox', 'searchbox', 'spinbutton'];
-  const SELECTOR = 'a[href],button,input,textarea,select,summary,label,[contenteditable="true"],' +
+  // jQuery UI's datepicker prev/next are anchors with no href, appended to <body> once the field is focused:
+  // they carry no destination, only a click handler, so they need naming here to be walked at all.
+  const SELECTOR = 'a[href],a[data-handler][data-event="click"],a[onclick],a[role="button"],' +
+    'button,input,textarea,select,summary,label,[contenteditable="true"],' +
     ARIA_ROLES.map(role => `[role="${role}"]`).join(',');
+  // Types whose value is a calendar date, not free text: the field writer must produce the type's ISO shape
+  // and the native value setter, not typed keystrokes, is what a picker widget actually commits.
+  const DATE_TYPES = ['date', 'datetime-local', 'month', 'week', 'time'];
 
   const roleOf = e => {
     if (sourceOf(e) !== e) return sourceOf(e).type;
     const explicit = e.getAttribute('role');
     if (ARIA_ROLES.includes(explicit)) return explicit;
     if (e.tagName === 'BUTTON' || e.tagName === 'SUMMARY') return 'button';
-    if (e.tagName === 'A') return 'link';
+    // An anchor with nowhere to go acts through its click handler alone, like the jQuery UI datepicker's
+    // Next/Prev: a destination is what makes it a link, so without one it is offered as a button instead.
+    if (e.tagName === 'A') return e.hasAttribute('href') ? 'link' : 'button';
     if (e.tagName === 'SELECT') return 'combobox';
     if (e.tagName === 'TEXTAREA' || e.isContentEditable) return 'textbox';
     if (e.tagName === 'INPUT') {
@@ -161,7 +169,7 @@
       if (['button', 'submit', 'reset', 'image'].includes(e.type)) return 'button';
       if (e.type === 'search') return 'searchbox';
       if (e.type === 'number') return 'spinbutton';
-      if (['text', 'email', 'url', 'tel', 'password'].includes(e.type)) return 'textbox';
+      if (['text', 'email', 'url', 'tel', 'password', ...DATE_TYPES].includes(e.type)) return 'textbox';
     }
     return null;
   };
@@ -401,6 +409,28 @@
       for (const c of group) {
         c.context = `${twins.indexOf(registry.nodes.get(c.id)) + 1} of ${twins.length}`;
       }
+    }
+  }
+
+  // A date field's own label ("Start Date") rarely says which picker it belongs to when a page offers several
+  // ("Date Picker 3"): unlike a colliding label, a uniquely named one never reaches the loop above, so the
+  // nearest ancestor that names a section is attached here on its own, without the twin-avoidance `contextOf`
+  // needs to keep a card from naming its neighbour.
+  const nearestHeading = (element, label) => {
+    for (let e = element.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
+      const aria = (e.getAttribute('aria-label') || '').trim();
+      if (aria && aria !== label) return excerpt(aria, CONTROL_CONTEXT_CHARS);
+      for (const heading of e.querySelectorAll(HEADINGS)) {
+        const text = firstLine(heading.innerText);
+        if (text && text !== label) return excerpt(text, CONTROL_CONTEXT_CHARS);
+      }
+    }
+    return '';
+  };
+  for (const c of controls) {
+    if (!c.context && DATE_TYPES.includes(c.input_type)) {
+      const context = nearestHeading(registry.nodes.get(c.id), c.label);
+      if (context) c.context = context;
     }
   }
 

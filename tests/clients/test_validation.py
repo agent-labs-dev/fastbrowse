@@ -1,11 +1,14 @@
 import asyncio
+import json
 import time
 
 import httpx
 import pytest
 
-from fastbrowse.clients.validation import RequestUsage, post, post_with_retry, with_discarded
-from fastbrowse.jev import JevError, JevRetriesExhausted
+from fastbrowse.clients.typesafe import TypeSafeJevClient
+from fastbrowse.clients.validation import RETRY_DELAYS_SECONDS, RequestUsage, post, post_with_retry, with_discarded
+from fastbrowse.clients.vercel import VercelGatewayJevClient
+from fastbrowse.jev import JevError, JevRetriesExhausted, NoulQuestion
 from fastbrowse.models import CostBasis, CostComponent, CostLine, Unavailable
 from fastbrowse.telemetry import traced
 
@@ -66,6 +69,39 @@ async def test_a_fast_request_is_not_hedged() -> None:
         )
     assert response is not None and len(calls) == 1
     assert usage.unaccounted_requests == 0
+
+
+@pytest.mark.parametrize("client_type", [TypeSafeJevClient, VercelGatewayJevClient])
+@pytest.mark.parametrize("earlier_failures", [0, 2, 4])
+async def test_batch_hedges_consume_the_split_retry_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    client_type: type[TypeSafeJevClient] | type[VercelGatewayJevClient],
+    earlier_failures: int,
+) -> None:
+    monkeypatch.setattr("fastbrowse.clients.validation.JEV_HEDGE_SECONDS", 0.001)
+    paired = asyncio.Event()
+    sent: list[tuple[str, ...]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        keys = tuple(json.loads(request.content)["questions"])
+        sent.append(keys)
+        if len(sent) <= earlier_failures:
+            return httpx.Response(429)
+        if len(keys) > 1:
+            if len(sent) == earlier_failures + 2:
+                paired.set()
+            await paired.wait()
+        return httpx.Response(503)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(JevRetriesExhausted) as caught:
+            await client_type("key", http=http).evaluate(
+                "page", {key: NoulQuestion(instructions="Is it?") for key in ("a", "b")}
+            )
+    batch_requests = earlier_failures + 2
+    assert sent[:batch_requests] == [("a", "b")] * batch_requests
+    assert sent[batch_requests:] == [("a",)] * (len(RETRY_DELAYS_SECONDS) + 1 - batch_requests)
+    assert caught.value.requests == len(sent) == len(RETRY_DELAYS_SECONDS) + 1
 
 
 async def test_retry_waits_for_the_servers_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:

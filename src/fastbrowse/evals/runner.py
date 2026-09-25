@@ -24,6 +24,7 @@ from fastbrowse.clients.environment import Settings, load_settings
 from fastbrowse.config import Config
 from fastbrowse.evals.local import Recorder, fixture_server
 from fastbrowse.evals.tasks import TASKS, LocalTask
+from fastbrowse.evals.versions import load_lock, provenance, suite_version, task_version
 from fastbrowse.models import BrowserConnection, Limits
 from fastbrowse.telemetry import traced, transient_seconds
 
@@ -82,7 +83,15 @@ async def main(argv: list[str]) -> int:
     parser.add_argument("--out", type=Path, default=Path("artifacts/evals/local.jsonl"))
     args = parser.parse_args(argv)
     tasks = [t for t in TASKS if not args.only or t.id in args.only]
+    if missing := sorted(set(args.only) - {t.id for t in tasks}):
+        parser.error(f"--only names no local task: {', '.join(missing)}")
     settings = load_settings()
+    lock = load_lock()
+    stamp = {
+        "suite": "local",
+        "suite_version": suite_version((t.id for t in TASKS), lock),
+        "run": provenance(providers=settings.providers(), argv=list(argv)),
+    }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, object]] = []
     with (
@@ -97,6 +106,7 @@ async def main(argv: list[str]) -> int:
                     row = await run_task(
                         task, base_url, recorder, connection, http, DirectorySink(Path(downloads)), settings
                     )
+                    row |= stamp | {"task_version": task_version(task.id, lock)}
                     rows.append(row)
                     out.write(json.dumps(row) + "\n")
                     mark = "PASS" if row["passed"] else "FAIL"

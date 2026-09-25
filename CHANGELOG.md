@@ -11,6 +11,25 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A Jev outage costs a batch, not the run.** After two 5xx answers in a row, a batch of questions is asked one
+  at a time within the retries it had left, and the answers that came back are kept.
+  ([#131](https://github.com/agent-labs-dev/fastbrowse/issues/131))
+- **Back stays on the task's site.** Back is offered only when the page before is on the same site, so a wizard
+  that shares one address no longer steps back to a blank page. ([#132](https://github.com/agent-labs-dev/fastbrowse/issues/132))
+- **Counts over long lists fit in the run's notes.** Records are tallied compactly with their citations, code
+  computes the totals and rankings, and a run that still fills its notes ends `observation_limit` with what it
+  had grounded rather than an error. ([#133](https://github.com/agent-labs-dev/fastbrowse/issues/133))
+- **Star ratings drawn as icons are read.** A rating shown only as a class such as `star-rating Three`, or an
+  accessible label, now appears in the page text. ([#134](https://github.com/agent-labs-dev/fastbrowse/issues/134))
+- **Date pickers and date fields can be used.** Links that act as buttons, such as a calendar's days, are
+  offered as controls, and native date, time, month and week fields are filled in ISO form and read back.
+  ([#135](https://github.com/agent-labs-dev/fastbrowse/issues/135), [#136](https://github.com/agent-labs-dev/fastbrowse/issues/136))
+- **A browser that never loads the first page reports `unavailable`.** Such a timeout is retried once; a
+  timeout on the agent's own later navigation remains an `error`. ([#137](https://github.com/agent-labs-dev/fastbrowse/issues/137))
+- **Evals record what they measured.** Every task has a version that a test forces up when its grader changes,
+  every result row records the build and task version it ran, published results are committed rows that are
+  never rewritten, and the tables in the docs are generated from them. `--only` searches every suite and rejects
+  a task it cannot find. ([#139](https://github.com/agent-labs-dev/fastbrowse/issues/139))
 - **A comparison missing one of its records no longer names a winner.** When a page of a list named a record the
   reader could not tie to the page's text, or more records than one page holds, the record was dropped and a later
   page could still settle "the cheapest" without it. That requirement now stays open for the rest of the run, so

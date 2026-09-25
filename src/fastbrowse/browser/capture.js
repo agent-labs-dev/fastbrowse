@@ -52,7 +52,39 @@
     }
     return '';
   };
-  const cellText = c => textOf(c) || drawn(c);
+  // A rating widget states its value only in markup a reader cannot see: a `star-rating` class carrying a
+  // One..Five word token, or an accessible label the icons alone do not carry. Counting icons never works,
+  // since a site colours a fixed row of them by class instead of drawing one per star (books.toscrape.com:
+  // `<p class="star-rating Five">`, five identical `<i class="icon-star">` children whatever the rating).
+  // Only these two explicit sources are trusted; a class that merely mentions "star" or an icon glyph is not
+  // read as a rating, and a hidden widget states nothing a reader could see either.
+  const RATING_WORD = { one: 'One', two: 'Two', three: 'Three', four: 'Four', five: 'Five' };
+  const RATING_LABEL = /\b[1-5]\s*(?:\/|out of)\s*5\b|\b[1-5]\s*stars?\b/i;
+  const ratingOf = e => {
+    if (hidden(e) || getComputedStyle(e).visibility === 'hidden') return '';
+    const classes = [...e.classList].map(c => c.toLowerCase());
+    if (classes.includes('star-rating')) {
+      for (const token of classes) if (RATING_WORD[token]) return `${RATING_WORD[token]} stars`;
+    }
+    const label = e.getAttribute('aria-label') || e.getAttribute('title');
+    return label && RATING_LABEL.test(label) ? clean(label) : '';
+  };
+  // Checked on the element itself, then any descendant a class or role names as the widget, since a
+  // role="img" label commonly sits one level below the card holding the title and price. A widget hidden
+  // by an ancestor (rather than itself) states nothing a reader could see either, so ratingOf's own
+  // `hidden` check is not enough: walk up to the search root and reject any candidate under a hidden one.
+  const ratingIn = c => ratingOf(c) || [...c.querySelectorAll('[class*="star" i], [class*="rating" i], [role="img"]')]
+    .filter(e => {
+      for (let a = e.parentElement; a && a !== c; a = a.parentElement) if (hidden(a)) return false;
+      return true;
+    })
+    .map(ratingOf).find(Boolean) || '';
+  const withRating = (text, c) => {
+    const rating = ratingIn(c);
+    if (!rating || text.includes(rating)) return text;
+    return text ? `${text} (${rating})` : rating;
+  };
+  const cellText = c => withRating(textOf(c) || drawn(c), c);
 
   const renderTable = table => {
     // A table filter hides what it excludes with `hidden`, display or visibility (`collapse` is the one CSS made
@@ -77,9 +109,10 @@
   function flush(run) {
     if (!run.length) return;
     const elements = run.filter(n => n.nodeType === 1);
-    const text = clean(run.map(n => (n.nodeType === 3 ? n.textContent : n.innerText ?? '')).join(''));
+    let text = clean(run.map(n => (n.nodeType === 3 ? n.textContent : n.innerText ?? '')).join(''));
     const onlyLink = elements.length === 1 && elements[0].tagName === 'A' && elements[0].href
       && clean(elements[0].innerText ?? '') === text;
+    for (const e of elements) text = withRating(text, e);
     if (onlyLink) push('link', text, { href: hrefOf(elements[0]) });
     else push('paragraph', text);
     run.length = 0;
@@ -105,7 +138,7 @@
     const descendants = [...el.querySelectorAll('*')];
     if (descendants.some(c => c.shadowRoot) || descendants.filter(c => HEADINGS[c.tagName]).length > 1) return null;
     if (!descendants.some(c => !SKIP.has(c.tagName) && !hidden(c) && isBlock(c))) return null;
-    const text = textOf(el);
+    const text = withRating(textOf(el), el);
     if (!text || text.length > 1500) return null;
     // A repeated wrapper around another list is a group, so keep the inner records separately citable.
     if (descendants.some(c => (c.tagName === 'LI' && leaf(c)) || recordText(c) !== null)) return null;
@@ -150,7 +183,7 @@
     const record = recordText(el);
     if ((el.tagName === 'LI' && leaf(el)) || record !== null) {
       const links = el.querySelectorAll('a[href]');
-      return push(el.tagName === 'LI' ? 'list_item' : 'record', record ?? textOf(el),
+      return push(el.tagName === 'LI' ? 'list_item' : 'record', record ?? withRating(textOf(el), el),
         links.length === 1 ? { href: hrefOf(links[0]) } : {});
     }
     walk(el);

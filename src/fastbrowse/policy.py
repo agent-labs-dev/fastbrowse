@@ -50,7 +50,10 @@ A matching result alone does not prove a filter was set.
 Do not toggle a checkbox, switch or radio already in the requested state.
 Elements marked offscreen can be targeted directly; do not scroll just to reach them.
 A link's href shows where it leads; use it to tell site navigation from content links.
-A matching link is not an opened result."""
+A matching link is not an opened result.
+A wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before
+this one: when the page itself offers a Back or Previous control, prefer it over the back operation to move
+within the form."""
 
 TARGET = f"""{UNTRUSTED}
 Choose the best observed target if the next operation is the one this question names.
@@ -352,7 +355,7 @@ def _offered_operations(
                 if len(observation.tabs) > 1:
                     available.append(operation)
             case Operation.BACK:
-                if context.history:
+                if observation.can_go_back:
                     available.append(operation)
             case Operation.ESCAPE | Operation.SCROLL | Operation.READ | Operation.DONE | Operation.ESCALATE:
                 available.append(operation)

@@ -1,6 +1,6 @@
 """Contract for Jev (TypeSafe System One): typed questions in, calibrated answers out."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Literal, Protocol
 
 from pydantic import Field, JsonValue
@@ -64,6 +64,8 @@ class Evaluation(Frozen):
     answers: Mapping[str, Answer]
     input_tokens: int = Field(ge=0)
     cost: CostLine
+    requests: int = Field(default=1, ge=0)
+    """HTTP requests, including retries and hedges, made to obtain these answers."""
 
 
 class JevError(RuntimeError):
@@ -81,10 +83,21 @@ class JevTransportFailed(JevError, Unavailable):
 class JevRetriesExhausted(JevError, Unavailable):
     """A retryable HTTP status outlasted the provider's retry budget."""
 
-    def __init__(self, message: str, *, seconds: float, unaccounted_requests: int) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        seconds: float,
+        unaccounted_requests: int,
+        requests: int = 0,
+        answered: Sequence[Evaluation] = (),
+    ) -> None:
         super().__init__(message)
         self.seconds = seconds
         self.unaccounted_requests = unaccounted_requests
+        self.requests = requests
+        self.answered = tuple(answered)
+        """Singles answered before a split batch ran out of retries; paid for, and kept by a failover."""
 
 
 class JevClient(Protocol):

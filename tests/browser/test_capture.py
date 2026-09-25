@@ -202,6 +202,122 @@ async def test_non_records_fall_back_to_the_walk(
     assert all(block.kind is not BlockKind.RECORD for block in capture.blocks)
 
 
+def _rated_card(rating: str, price: str) -> str:
+    # books.toscrape.com: every rating draws the same five icons, whatever the class says; only the class or an
+    # accessible label ever states which one it is.
+    stars = "".join('<i class="icon-star"></i>' for _ in range(5))
+    return f'<article class="card"><h3>Book</h3><p class="star-rating {rating}">{stars}</p><p>{price}</p></article>'
+
+
+async def test_a_class_only_star_rating_reaches_the_record(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/icons.html")
+    markup = _rated_card("Five", "£12.51") + _rated_card("Three", "£9.99") + _rated_card("Five", "£4.00")
+    await eval_value(
+        browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
+    )
+    capture = await page.capture()
+    records = [block for block in capture.blocks if block.kind is BlockKind.RECORD]
+    assert len(records) == 3
+    texts = [capture.text[block.start : block.end] for block in records]
+    assert "Five stars" in texts[0] and "£12.51" in texts[0]
+    assert "Three stars" in texts[1] and "£9.99" in texts[1]
+    assert "Five stars" in texts[2]
+
+
+async def test_an_accessible_rating_label_reaches_the_text(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/icons.html")
+    markup = '<p>Great product <span role="img" aria-label="4 out of 5 stars"></span></p>'
+    await eval_value(
+        browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
+    )
+    capture = await page.capture()
+    assert any("4 out of 5 stars" in capture.text[block.start : block.end] for block in capture.blocks)
+
+
+async def test_a_hidden_rating_widget_adds_nothing(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/icons.html")
+    markup = '<p>Item</p><p class="star-rating Five" hidden></p>'
+    await eval_value(
+        browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
+    )
+    capture = await page.capture()
+    assert not any("stars" in capture.text[block.start : block.end] for block in capture.blocks)
+
+
+def _card_with_hidden_wrapper() -> str:
+    # A hidden wrapper (e.g. a template div a site keeps offscreen) holds a five-star widget; a visible
+    # one-star widget follows. The hidden widget's own `hidden` check on itself passes (it isn't hidden),
+    # so only checking ancestors up to the record root stops it from winning the descendant search.
+    return (
+        '<article class="card"><h3>Book</h3>'
+        '<div hidden><p class="star-rating Five"></p></div>'
+        '<p class="star-rating One"></p></article>'
+    )
+
+
+async def test_a_rating_hidden_by_an_ancestor_is_ignored(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/icons.html")
+    markup = _card_with_hidden_wrapper() + _rated_card("Two", "£1.00") + _rated_card("Three", "£2.00")
+    await eval_value(
+        browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
+    )
+    capture = await page.capture()
+    records = [block for block in capture.blocks if block.kind is BlockKind.RECORD]
+    assert len(records) == 3
+    first = capture.text[records[0].start : records[0].end]
+    assert "Five stars" not in first
+    assert "One stars" in first
+
+
+def _card_with_invisible_wrapper() -> str:
+    # A wrapper hidden via CSS `visibility:hidden` (inherited by its children, unlike `display:none`) holds
+    # a five-star widget; a visible one-star widget follows. ratingOf's own `hidden()` check only looks at
+    # `hidden`/`display`, so the invisible five-star widget must be rejected by its own computed visibility.
+    return (
+        '<article class="card"><h3>Book</h3>'
+        '<div style="visibility:hidden"><p class="star-rating Five"></p></div>'
+        '<p class="star-rating One"></p></article>'
+    )
+
+
+async def test_a_rating_hidden_by_ancestor_visibility_is_ignored(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/icons.html")
+    markup = _card_with_invisible_wrapper() + _rated_card("Two", "£1.00") + _rated_card("Three", "£2.00")
+    await eval_value(
+        browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
+    )
+    capture = await page.capture()
+    records = [block for block in capture.blocks if block.kind is BlockKind.RECORD]
+    assert len(records) == 3
+    first = capture.text[records[0].start : records[0].end]
+    assert "Five stars" not in first
+    assert "One stars" in first
+
+
+async def test_an_arbitrary_class_naming_a_number_is_not_read_as_a_rating(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    # Only the literal `star-rating` class is trusted; a differently named class that happens to carry a rating
+    # word, or a plain icon count, must never be inferred as one.
+    await page.navigate(f"{main_site}/icons.html")
+    markup = '<p class="badge Five">Featured</p>'
+    await eval_value(
+        browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
+    )
+    capture = await page.capture()
+    assert not any("stars" in capture.text[block.start : block.end] for block in capture.blocks)
+
+
 async def test_nested_record_lists_keep_the_inner_records(page: CdpPage, browser_session: BrowserSession) -> None:
     await page.navigate("about:blank")
     cards = "<article><p>Quotation</p><p>by Author</p></article>" * 3

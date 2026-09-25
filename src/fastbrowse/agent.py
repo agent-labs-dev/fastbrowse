@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, JsonValue
 
 from fastbrowse.batches import evaluate_batches
 from fastbrowse.citations import ANSWER_LINK, text_fragment
+from fastbrowse.clients.validation import jev_spend
 from fastbrowse.config import Config, ObservationLimits
 from fastbrowse.effects import (
     SETTING_ROLES,
@@ -63,6 +64,7 @@ from fastbrowse.page import (
     Capture,
     Control,
     Dialog,
+    NavigationTimeout,
     Observation,
     Page,
     pager_link,
@@ -77,7 +79,7 @@ from fastbrowse.policy import (
     StepContext,
     decide,
 )
-from fastbrowse.retrieval import ComposedAnswer, compose, draft_answer, read
+from fastbrowse.retrieval import ComposedAnswer, compose, draft_answer, partial_answer, read
 from fastbrowse.safety import (
     Redactor,
     irreversible_question,
@@ -149,7 +151,8 @@ class _FieldText(Frozen):
 _FIELD_WRITER = (
     "# Field writer\nWrite only the text for one form field. "
     "Infer its meaning from the task, current value, page context and recent actions. "
-    "Use the field's displayed format for dates. "
+    "Use the field's displayed format for dates, except in a field whose input_type is date, datetime-local, month, "
+    "week or time, which takes ISO 8601 (2026-09-25, 2026-09-25T14:30, 2026-09, 2026-W39, 14:30). "
     "A fact the task states in another shape is given, not missing: take the part of a "
     "stated name, address or date this field asks for and write it in the field's shape.\n\n"
     f"# Trust\n{UNTRUSTED}"
@@ -346,46 +349,62 @@ class Agent:
         # The ledger checks `max_seconds` between operations; only a deadline around the awaits bounds a
         # browser or provider call that never returns.
         deadline = asyncio.timeout(ledger.limits.max_seconds)
-        try:
-            async with deadline:
-                # The plan is needed to read, to judge DONE and to answer, and the start page, the first fills
-                # and clicks all come before those, so it is written from the task while they run.
-                planning = asyncio.create_task(make_plan(self._llm, task, start=start, ledger=ledger))
-                # `start=None` leaves the browser where it is, which is what a caller stepping a run on
-                # from a page it opened itself wants. `choose_start` is the other case: a caller with a goal
-                # and no page at all, who wants the first address worked out from the task.
-                opening = start if start is not None or not choose_start else await self._first_page(task, ledger)
-                history, invented = ([], set[str]()) if opening is None else await self._open(task, opening, ledger)
-                if start is None and opening is not None:
-                    # The caller gave a goal and no page, so this address was worked out from the task too.
-                    invented.add(opening)
-                    await self._front_page_if_blank(opening)
-                state = _RunState(
-                    task, inputs or {}, tuple(attachments), authorization or Authorization(), ledger, planning
+        with jev_spend(ledger.lines, ledger=ledger):
+            try:
+                async with deadline:
+                    # The plan is needed to read, to judge DONE and to answer, and the start page, the first fills
+                    # and clicks all come before those, so it is written from the task while they run.
+                    planning = asyncio.create_task(make_plan(self._llm, task, start=start, ledger=ledger))
+                    # `start=None` leaves the browser where it is, which is what a caller stepping a run on
+                    # from a page it opened itself wants. `choose_start` is the other case: a caller with a goal
+                    # and no page at all, who wants the first address worked out from the task.
+                    opening = start if start is not None or not choose_start else await self._first_page(task, ledger)
+                    history, invented = ([], set[str]()) if opening is None else await self._open(task, opening, ledger)
+                    if start is None and opening is not None:
+                        # The caller gave a goal and no page, so this address was worked out from the task too.
+                        invented.add(opening)
+                        await self._front_page_if_blank(opening)
+                    state = _RunState(
+                        task, inputs or {}, tuple(attachments), authorization or Authorization(), ledger, planning
+                    )
+                    state.history.extend(history)
+                    state.invented = invented
+                    return await self._loop(state, output_schema, until)
+            except _Stop as stop:
+                return self._result(state, ledger, stop.status, error=stop.error)
+            except TimeoutError:
+                if not deadline.expired():
+                    raise
+                limit = f"time limit {ledger.limits.max_seconds}s reached"
+                return self._result(state, ledger, Status.BUDGET_EXCEEDED, error=limit)
+            except BudgetExceeded as error:
+                return self._result(state, ledger, Status.BUDGET_EXCEEDED, error=str(error))
+            except NotesTooLarge as error:
+                notes = state.notes if state else Notes()
+                partial = partial_answer(notes, self._config.observation.working_notes_chars)
+                cited = notes.expand_evidence_ids(key for claim in partial.claims for key in claim.evidence_ids)
+                answer, citations = self._public_answer(partial)
+                return self._result(
+                    state,
+                    ledger,
+                    Status.OBSERVATION_LIMIT,
+                    answer=answer,
+                    citations=citations,
+                    evidence=tuple(item for key, item in notes.evidence.items() if key in cited),
+                    error=self._redactor.redact(str(error)),
                 )
-                state.history.extend(history)
-                state.invented = invented
-                return await self._loop(state, output_schema, until)
-        except _Stop as stop:
-            return self._result(state, ledger, stop.status, error=stop.error)
-        except TimeoutError:
-            if not deadline.expired():
-                raise
-            limit = f"time limit {ledger.limits.max_seconds}s reached"
-            return self._result(state, ledger, Status.BUDGET_EXCEEDED, error=limit)
-        except BudgetExceeded as error:
-            return self._result(state, ledger, Status.BUDGET_EXCEEDED, error=str(error))
-        except (ObservationTooLarge, NotesTooLarge) as error:
-            return self._result(state, ledger, Status.OBSERVATION_LIMIT, error=str(error))
-        except (JevError, LLMError, BrowserError) as error:
-            message = self._redactor.redact(str(error))[:500]
-            trace("run_error", kind=type(error).__name__, step=len(state.steps) if state else 0, error=message)
-            status = Status.UNAVAILABLE if isinstance(error, Unavailable) else Status.ERROR
-            return self._result(state, ledger, status, error=message)
-        finally:
-            # A run can end before it ever needed the plan, and a plan still being written would bill it.
-            if planning is not None:
-                await _discard(planning)
+            except ObservationTooLarge as error:
+                return self._result(state, ledger, Status.OBSERVATION_LIMIT, error=str(error))
+            except (JevError, LLMError, BrowserError) as error:
+                message = self._redactor.redact(str(error))[:500]
+                trace("run_error", kind=type(error).__name__, step=len(state.steps) if state else 0, error=message)
+                unavailable = isinstance(error, Unavailable) or (state is None and isinstance(error, NavigationTimeout))
+                status = Status.UNAVAILABLE if unavailable else Status.ERROR
+                return self._result(state, ledger, status, error=message)
+            finally:
+                # A run can end before it ever needed the plan, and a plan still being written would bill it.
+                if planning is not None:
+                    await _discard(planning)
 
     async def _loop(
         self, state: _RunState, output_schema: type[BaseModel] | None, until: UntilCheck | None
@@ -1757,7 +1776,7 @@ class Agent:
                 # it sent the run to finish again from the same notes until the recoveries ran out.
                 unmet += [
                     f"{key}: {requirements[key]} (read off "
-                    + ", ".join(dict.fromkeys(f.evidence.url for _, f in state.notes.supporting(key) if f.evidence))
+                    + ", ".join(dict.fromkeys(item.url for item in state.notes.supporting_evidence(key)))
                     + ", an address built from the task, not the page it describes)"
                     for key in sorted(misread)
                 ]
@@ -2096,9 +2115,7 @@ def _guessed(plan: Plan, notes: Notes, invented: Set[str]) -> set[str]:
     """The requirements with a fact read on an address the run built from the task rather than clicked to."""
     places = {_place(url) for url in invented}
     return {
-        r.id
-        for r in plan.requirements
-        if any(f.evidence is not None and _place(f.evidence.url) in places for _, f in notes.supporting(r.id))
+        r.id for r in plan.requirements if any(_place(item.url) in places for item in notes.supporting_evidence(r.id))
     }
 
 

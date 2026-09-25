@@ -249,7 +249,7 @@ def _grounding(notes: Notes, plan: Plan, invented: Sequence[str]) -> str:
     """
     lines = []
     for requirement in plan.requirements:
-        urls = sorted({fact.evidence.url for _, fact in notes.supporting(requirement.id) if fact.evidence})
+        urls = sorted({item.url for item in notes.supporting_evidence(requirement.id)})
         if urls:
             lines.append(f"- {requirement.id}: {', '.join(urls)}")
     parts = []

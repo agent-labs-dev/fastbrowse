@@ -27,8 +27,17 @@ from fastbrowse.agent import Agent
 from fastbrowse.browser import BrowserSession, CdpPage
 from fastbrowse.browser import session as browser_session
 from fastbrowse.config import Config
-from fastbrowse.models import BrowserConnection, CostBreakdown, CostLine, LocalChrome, RunResult, Status, Unavailable
-from fastbrowse.page import BrowserError
+from fastbrowse.models import (
+    BrowserConnection,
+    CostBreakdown,
+    CostLine,
+    LocalChrome,
+    RunResult,
+    Status,
+    StepOutcome,
+    Unavailable,
+)
+from fastbrowse.page import BrowserError, NavigationTimeout
 from fastbrowse.run import _browser, run_task
 from tests.browser.conftest import RecordingArtifactSink
 from tests.test_policy import ScriptedJev
@@ -165,8 +174,11 @@ async def test_a_failed_navigation_is_tried_again_once(
         if raised is None:
             await navigating
         else:
-            with pytest.raises(BrowserError, match=re.escape(raised)):
+            # A real navigation error (a net:: failure, or one the page reports with no error text at all) is
+            # never mistaken for a timeout: only the readiness wait exhausting its budget classifies as one.
+            with pytest.raises(BrowserError, match=re.escape(raised)) as caught:
                 await navigating
+            assert not isinstance(caught.value, NavigationTimeout)
     assert transport.calls.count("Page.navigate") == min(len(errors) + 1, 2)
 
 
@@ -174,11 +186,73 @@ async def test_a_page_that_never_loads_is_tried_again_once(monkeypatch: pytest.M
     transport = CdpTransport(monkeypatch)
     monkeypatch.setattr(page_module, "_NAVIGATE_RETRY_SECONDS", 0)
     async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
-        with pytest.raises(BrowserError, match=re.escape("Page.navigate failed (TimeoutError)")):
+        with pytest.raises(NavigationTimeout, match=re.escape("Page.navigate failed (TimeoutError)")):
             await CdpPage(session, Config()).navigate("https://example.test", load_timeout_seconds=0.1)
         transport.results["Runtime.evaluate"] = [LOADED, SETTLED]
         await CdpPage(session, Config()).navigate("https://example.test", load_timeout_seconds=0.1)
     assert transport.calls.count("Page.navigate") == 3
+
+
+def _history(entries: list[str], current: int) -> dict[str, Any]:
+    return {"currentIndex": current, "entries": [{"id": i, "url": url} for i, url in enumerate(entries)]}
+
+
+@pytest.mark.parametrize(
+    ("entries", "current"),
+    [
+        (["about:blank", "https://example.test/wizard"], 1),
+        (["https://other.test/", "https://example.test/"], 1),
+        (["https://example.test/"], 0),
+    ],
+    ids=["blank predecessor", "cross-origin predecessor", "empty history"],
+)
+async def test_can_go_back_is_false_without_a_same_origin_predecessor(
+    monkeypatch: pytest.MonkeyPatch, entries: list[str], current: int
+) -> None:
+    transport = CdpTransport(monkeypatch)
+    transport.results["Page.getNavigationHistory"] = [_history(entries, current)]
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+        assert await CdpPage(session, Config())._can_go_back() is False
+
+
+async def test_can_go_back_is_true_with_a_same_origin_predecessor(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = CdpTransport(monkeypatch)
+    transport.results["Page.getNavigationHistory"] = [
+        _history(["https://example.test/start", "https://example.test/next"], 1)
+    ]
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+        assert await CdpPage(session, Config())._can_go_back() is True
+
+
+async def test_back_refuses_to_navigate_when_the_predecessor_is_no_longer_same_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # History can change between the observation that offered BACK and this dispatch, so `_back` re-checks the
+    # live history rather than trusting a guard the caller computed from a stale observation.
+    transport = CdpTransport(monkeypatch)
+    transport.results["Page.getNavigationHistory"] = [_history(["about:blank", "https://example.test/"], 1)]
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+        outcome, detail = await CdpPage(session, Config())._back()
+    assert outcome is StepOutcome.FAILED
+    assert detail == "no same-origin earlier history entry"
+    assert "Page.navigateToHistoryEntry" not in transport.calls
+
+
+async def test_back_navigates_to_a_same_origin_predecessor_and_can_be_taken_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CdpTransport(monkeypatch)
+    transport.results["Page.getNavigationHistory"] = [
+        _history(["https://example.test/a", "https://example.test/b", "https://example.test/c"], 2),
+        _history(["https://example.test/a", "https://example.test/b", "https://example.test/c"], 1),
+    ]
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+        page = CdpPage(session, Config())
+        first = await page._back()
+        second = await page._back()
+    assert first == (StepOutcome.EXECUTED, None)
+    assert second == (StepOutcome.EXECUTED, None)
+    assert transport.calls.count("Page.navigateToHistoryEntry") == 2
 
 
 async def test_background_finalizers_finish_before_socket_stops(monkeypatch: pytest.MonkeyPatch) -> None:

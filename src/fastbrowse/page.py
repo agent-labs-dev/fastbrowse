@@ -147,6 +147,9 @@ class Observation(Frozen):
     dialog: Dialog | None = None
     inaccessible_frames: int = Field(default=0, ge=0)
     """Frames whose content could not be read; reported so answers never claim full coverage."""
+    can_go_back: bool = False
+    """A same-origin http(s) entry sits immediately before the current one in browser history: BACK would leave
+    the task's own site otherwise, as a wizard sharing one URL with no earlier entry but `about:blank` does."""
 
 
 class BlockKind(StrEnum):
@@ -197,6 +200,13 @@ class Action(Frozen):
 
 class BrowserError(RuntimeError):
     """A browser failure a `Page` raises, with a message safe to put in a run result: never page text."""
+
+
+class NavigationTimeout(BrowserError):
+    """`Page.navigate` gave up waiting for a document: the CDP command timed out, or the page never became ready.
+
+    Before a run's first step no agent code has acted, so the run ends `unavailable`; after it, the agent's own
+    navigation timed out and the run ends `error` as any other browser failure does."""
 
 
 class ActResult(Frozen):
