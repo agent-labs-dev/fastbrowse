@@ -210,8 +210,10 @@ async def test_gateway_remaps_wire_types_confidence_and_cost(cost: JsonValue) ->
     assert selected.confidence == 1
     assert result.input_tokens == 389
     assert result.cost.output_tokens == 61
-    assert result.cost.basis is (CostBasis.ESTIMATED if cost is None else CostBasis.METERED)
-    expected = 389 * 0.042 / 1_000_000 if cost is None else float(str(cost))
+    # The gateway metering $0 while 389 tokens flowed is not a free request: it is priced at list, as unmetered.
+    listed = cost is None or not float(str(cost))
+    assert result.cost.basis is (CostBasis.ESTIMATED if listed else CostBasis.METERED)
+    expected = 389 * 0.042 / 1_000_000 if listed else float(str(cost))
     assert result.cost.dollars is not None and math.isclose(result.cost.dollars, expected)
 
 

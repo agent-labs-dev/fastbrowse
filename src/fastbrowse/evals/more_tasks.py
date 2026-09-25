@@ -215,7 +215,7 @@ HELDOUT: tuple[LiveTask, ...] = (
         "https://the-internet.herokuapp.com/windows",
         "Follow the link that opens a new window and tell me that window's heading.",
         _fixed(None),
-        _has("New Window"),
+        _exactly("New Window"),
         Category.WIDGET,
     ),
     LiveTask(

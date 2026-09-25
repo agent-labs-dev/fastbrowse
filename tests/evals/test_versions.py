@@ -136,7 +136,8 @@ def test_publishing_refuses_rows_that_cannot_be_traced_or_compared(results: Path
 
 
 def test_published_rows_are_slim_immutable_and_generate_the_tables(results: Path) -> None:
-    published = _publish(results, [_row("pypi-version"), _row("hn-top", passed=False)])
+    rival = [_row("pypi-version", arm="browser-use"), _row("hn-top", arm="browser-use")]
+    published = _publish(results, [_row("pypi-version"), _row("hn-top", passed=False), *rival])
     assert "trace" not in published.read_text(encoding="utf-8")
     # The model and invocation are provenance: a hosted arm's score means nothing without the model behind it.
     kept = json.loads(published.read_text(encoding="utf-8").splitlines()[0])
@@ -221,7 +222,7 @@ def test_summary_groups_suites_and_preserves_unknown_costs() -> None:
     second = later | {"seconds": 30.0, "dollars": None, "passed": False}
     other = later | {"suite": "dev", "suite_version": "dev-version", "arm": "browser-use"}
     feed = versions.summary([("1.0.1", [later, second, other]), ("1.0.0", [first])])
-    assert feed.schema_version == 1 and len(feed.releases) == 3
+    assert feed.schema_version == 2 and len(feed.releases) == 3
     core = next(r for r in feed.releases if r.fastbrowse_version == "1.0.1" and r.suite == "core")
     arm = core.arms["fastbrowse"]
     assert (arm.passed, arm.total, arm.priced) == (1, 2, 1)
@@ -247,22 +248,47 @@ def test_the_feed_leads_each_release_with_the_core_suite() -> None:
     ]
 
 
-def test_provider_outages_count_in_no_figure() -> None:
-    """An outage says nothing about the agent: 0.5.6 read 55/63 at 28.6s on core, 55/56 at 20.6s without them."""
-    waited = _row("pypi-version") | {"seconds": 40.0, "transient_seconds": 30.0}
+def test_an_outage_scores_no_arm_and_takes_a_matching_attempt_from_each() -> None:
+    """0.5.6 dropped fastbrowse's outages alone, leaving it on 13 core tasks beside Browser Use on 14. Time is wall
+    time: only fastbrowse measures its outage waits, so subtracting them would favour it."""
+    waited = _row("pypi-version") | {"seconds": 40.0, "transient_seconds": 30.0, "at": 1.0}
     outage = _row("pypi-version") | {"normalized_status": "unavailable", "passed": False, "seconds": 300.0}
-    feed = versions.summary([("1.0.0", [waited, outage])])
-    arm = feed.releases[0].arms["fastbrowse"]
-    assert (arm.passed, arm.total, arm.excluded) == (1, 1, 1)
-    assert arm.seconds.median == 10.0 and arm.dollars.mean == 0.01
-    rows = [waited, outage]
-    assert "Excluded as provider outages: fastbrowse 1." in versions.headline("1.0.0", rows)
-    only = versions.summary([("1.0.0", [outage])]).releases[0].arms["fastbrowse"]
-    assert (only.total, only.excluded, only.seconds.median) == (0, 1, None)
+    first = _row("pypi-version", arm="browser-use") | {"at": 1.0}
+    later = _row("pypi-version", arm="browser-use", passed=False) | {"at": 2.0}
+    lost = [_row("hn-top") | {"normalized_status": "unavailable"}, _row("hn-top", arm="browser-use")]
+    rows = [waited, outage, first, later, *lost]
+    arms = versions.summary([("1.0.0", rows)]).releases[0]
+    assert arms.tasks == 1
+    assert [(a.passed, a.total, a.excluded) for a in arms.arms.values()] == [(1, 1, 2), (1, 1, 2)]
+    assert arms.arms["fastbrowse"].seconds.median == 40.0
+    note = versions.headline("1.0.0", rows)
+    assert "so each arm is scored on the same 1: an attempt one arm lost is dropped for every arm" in note
+    assert "`hn-top` is left out, with no fastbrowse attempt measured." in note
+
+
+def test_every_comparison_sets_arms_on_the_same_tasks() -> None:
+    """Pooled, core set fastbrowse on 21 tasks beside Browser Use on 14 and jev-ultrafast on 6."""
+    rows = [
+        _row("pypi-version"),
+        _row("pypi-version", arm="browser-use"),
+        _row("hn-top"),
+        _row("hn-top", arm="jev-ultrafast"),
+        _row("wiki-open", passed=False),
+    ]
+    feed = versions.summary([("1.0.0", rows)])
+    assert [(r.compared, r.tasks, r.arms["fastbrowse"].total) for r in feed.releases] == [
+        (["fastbrowse", "browser-use"], 1, 1),
+        (["fastbrowse", "jev-ultrafast"], 1, 1),
+        (["fastbrowse"], 1, 1),
+    ]
+    text = versions.headline("1.0.0", rows)
+    assert "fastbrowse against Browser Use agent, on the same 1 task." in text
+    assert "1 task graded on fastbrowse alone is in" in text
+    assert "fastbrowse alone, on the 1 task only it ran" in versions.results_table("1.0.0", rows)
 
 
 def test_summary_does_not_mix_suite_versions_or_invent_legacy_rows() -> None:
-    assert versions.summary([]).model_dump() == {"schema_version": 1, "releases": []}
+    assert versions.summary([]).model_dump() == {"schema_version": 2, "releases": []}
     row = _row("pypi-version")
     feed = versions.summary([("9.9.9", [row, row | {"suite_version": "other", "seconds": 20}])])
     assert len(feed.releases) == 2
@@ -271,7 +297,13 @@ def test_summary_does_not_mix_suite_versions_or_invent_legacy_rows() -> None:
 
 def test_markdown_keeps_suite_versions_separate_and_unpriced_cost_unknown() -> None:
     row = _row("pypi-version")
-    rows = [row, row | {"suite_version": "other", "seconds": 20, "dollars": None}]
+    rival = _row("pypi-version", arm="browser-use") | {"seconds": 99.0}
+    rows = [
+        row,
+        rival,
+        row | {"suite_version": "other", "seconds": 20, "dollars": None},
+        rival | {"suite_version": "other"},
+    ]
     for text in (versions.results_table("9.9.9", rows), versions.headline("9.9.9", rows)):
         assert "abcd1234" in text and "other" in text
         assert "10.0s" in text and "20.0s" in text and "15.0s" not in text
