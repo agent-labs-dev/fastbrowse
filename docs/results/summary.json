@@ -1,4 +1,193 @@
 {
   "schema_version": 1,
-  "releases": []
+  "releases": [
+    {
+      "fastbrowse_version": "0.5.6",
+      "date": "2026-09-25",
+      "suite": "stretch-heldout",
+      "suite_version": "f3f5c3f7",
+      "arms": {
+        "fastbrowse": {
+          "passed": 6,
+          "total": 9,
+          "priced": 9,
+          "seconds": {
+            "median": 81.0,
+            "mean": 88.21111111111111
+          },
+          "dollars": {
+            "median": 0.02757,
+            "mean": 0.0881311111111111
+          }
+        },
+        "browser-use": {
+          "passed": 8,
+          "total": 9,
+          "priced": 9,
+          "seconds": {
+            "median": 42.6,
+            "mean": 77.9888888888889
+          },
+          "dollars": {
+            "median": 0.25788,
+            "mean": 0.49801
+          }
+        }
+      },
+      "task_versions_changed": []
+    },
+    {
+      "fastbrowse_version": "0.5.6",
+      "date": "2026-09-25",
+      "suite": "stretch-dev",
+      "suite_version": "69abd819",
+      "arms": {
+        "fastbrowse": {
+          "passed": 12,
+          "total": 15,
+          "priced": 15,
+          "seconds": {
+            "median": 57.0,
+            "mean": 78.79333333333334
+          },
+          "dollars": {
+            "median": 0.02709,
+            "mean": 0.036614
+          }
+        },
+        "browser-use": {
+          "passed": 15,
+          "total": 15,
+          "priced": 15,
+          "seconds": {
+            "median": 59.9,
+            "mean": 79.19333333333333
+          },
+          "dollars": {
+            "median": 0.37323,
+            "mean": 0.579008
+          }
+        }
+      },
+      "task_versions_changed": []
+    },
+    {
+      "fastbrowse_version": "0.5.6",
+      "date": "2026-09-25",
+      "suite": "heldout",
+      "suite_version": "18b64a73",
+      "arms": {
+        "fastbrowse": {
+          "passed": 25,
+          "total": 27,
+          "priced": 27,
+          "seconds": {
+            "median": 20.8,
+            "mean": 30.022222222222222
+          },
+          "dollars": {
+            "median": 0.00653,
+            "mean": 0.016134444444444444
+          }
+        },
+        "browser-use": {
+          "passed": 26,
+          "total": 27,
+          "priced": 27,
+          "seconds": {
+            "median": 15.0,
+            "mean": 20.22222222222222
+          },
+          "dollars": {
+            "median": 0.19698,
+            "mean": 0.2329451851851852
+          }
+        }
+      },
+      "task_versions_changed": []
+    },
+    {
+      "fastbrowse_version": "0.5.6",
+      "date": "2026-09-25",
+      "suite": "dev",
+      "suite_version": "d562020d",
+      "arms": {
+        "fastbrowse": {
+          "passed": 21,
+          "total": 24,
+          "priced": 24,
+          "seconds": {
+            "median": 19.65,
+            "mean": 31.3375
+          },
+          "dollars": {
+            "median": 0.00516,
+            "mean": 0.00823
+          }
+        },
+        "browser-use": {
+          "passed": 22,
+          "total": 24,
+          "priced": 24,
+          "seconds": {
+            "median": 12.850000000000001,
+            "mean": 13.204166666666667
+          },
+          "dollars": {
+            "median": 0.1353,
+            "mean": 0.18835083333333333
+          }
+        }
+      },
+      "task_versions_changed": []
+    },
+    {
+      "fastbrowse_version": "0.5.6",
+      "date": "2026-09-25",
+      "suite": "core",
+      "suite_version": "9b765b1a",
+      "arms": {
+        "fastbrowse": {
+          "passed": 55,
+          "total": 63,
+          "priced": 63,
+          "seconds": {
+            "median": 28.6,
+            "mean": 38.680952380952384
+          },
+          "dollars": {
+            "median": 0.00321,
+            "mean": 0.005488095238095238
+          }
+        },
+        "browser-use": {
+          "passed": 37,
+          "total": 42,
+          "priced": 42,
+          "seconds": {
+            "median": 35.75,
+            "mean": 59.66904761904762
+          },
+          "dollars": {
+            "median": 0.475835,
+            "mean": 0.48991428571428575
+          }
+        },
+        "jev-ultrafast": {
+          "passed": 11,
+          "total": 18,
+          "priced": 17,
+          "seconds": {
+            "median": 13.5,
+            "mean": 28.566666666666666
+          },
+          "dollars": {
+            "median": null,
+            "mean": null
+          }
+        }
+      },
+      "task_versions_changed": []
+    }
+  ]
 }
