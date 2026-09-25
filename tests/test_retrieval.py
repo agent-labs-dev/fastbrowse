@@ -1,4 +1,6 @@
+import asyncio
 import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -25,8 +27,11 @@ from fastbrowse.models import CostBasis, CostComponent, CostLine, Evidence, Fact
 from fastbrowse.page import Block, BlockKind, Capture, Observation
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 from fastbrowse.retrieval import (
+    TRANSACTION_CONTRADICTED,
+    Claim,
     UnsupportedField,
     _read_message,
+    assemble_answer,
     chunk,
     claim_check_questions,
     compose,
@@ -38,6 +43,7 @@ from fastbrowse.retrieval import (
     propose_text_fields_from_notes,
     read,
     read_candidates,
+    transaction_check_question,
 )
 from fastbrowse.telemetry import BudgetExceeded, Ledger
 from fastbrowse.verification import check_done
@@ -619,6 +625,105 @@ async def test_compose_cannot_return_uncited_free_text_without_claims() -> None:
     assert result.data.answer == "" and result.data.claims == ()
 
 
+async def test_committed_action_evidence_is_named_to_the_composer_and_contradiction_check() -> None:
+    listing = capture((BlockKind.PARAGRAPH, "Black pen £7"))
+    checkout = capture((BlockKind.PARAGRAPH, "Red pen £11.55"))
+    notes = Notes(
+        Fact(reader=FactReader.LLM, text=page.text, evidence=block_evidence(page, "s0")) for page in (listing, checkout)
+    )
+    listed, committed = tuple(notes.evidence)
+    answer = assemble_answer((Claim(text="Bought a black pen for £7", evidence_ids=(listed,)),), notes, ())
+    ordinary = claim_check_questions(answer, notes)
+    checked = transaction_check_question(answer, notes, (committed,))
+
+    assert checked is not None
+    assert checkout.text in checked.instructions
+    assert listing.text not in checked.instructions
+    assert TRANSACTION_CONTRADICTED not in ordinary
+    llm = ScriptedLLM([{"claims": []}])
+    await compose(
+        llm,
+        "Buy a pen",
+        Plan(requirements=(), answer_expected=True),
+        notes,
+        transaction_evidence_ids=(committed,),
+    )
+    prompt = "\n".join(message.content for message in llm.calls[0][1])
+    transaction = prompt.split("# Transaction evidence\n", 1)[1].split("# Notes", 1)[0]
+    assert committed in transaction and listed not in transaction
+    assert "cites" in transaction and "committed" in transaction
+
+
+def test_transaction_evidence_keeps_the_latest_pages_within_its_own_budget() -> None:
+    page = capture(
+        (BlockKind.PARAGRAPH, "Black pen £7"),
+        (BlockKind.PARAGRAPH, "Basket\n" * 1000),
+        (BlockKind.PARAGRAPH, "Order placed: red pen £11.55"),
+    )
+    notes = Notes(
+        Fact(reader=FactReader.LLM, text=block.source_id, evidence=block_evidence(page, block.source_id))
+        for block in page.blocks
+    )
+    listed, basket, placed = tuple(notes.evidence)
+    answer = assemble_answer((Claim(text="Bought a black pen for £7", evidence_ids=(listed,)),), notes, ())
+    question = transaction_check_question(
+        answer, notes, (basket, placed), tokens=TokenBudget(state_plus_largest_question=3000)
+    )
+    assert question is not None
+    instructions = question.instructions
+    assert "Order placed" in instructions and "Basket" not in instructions
+    assert (
+        transaction_check_question(answer, notes, (placed,), tokens=TokenBudget(state_plus_largest_question=1)) is None
+    )
+    assert transaction_check_question(answer, notes, ()) is None
+
+
+def test_a_receipt_larger_than_the_budget_is_cut_to_fit_not_dropped() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Black pen £7"), (BlockKind.PARAGRAPH, "Order placed: red pen " + "x" * 20000))
+    notes = Notes(
+        Fact(reader=FactReader.LLM, text=block.source_id, evidence=block_evidence(page, block.source_id))
+        for block in page.blocks
+    )
+    listed, placed = tuple(notes.evidence)
+    answer = assemble_answer((Claim(text="Bought a black pen for £7", evidence_ids=(listed,)),), notes, ())
+    tokens = TokenBudget(state_plus_largest_question=3000)
+    question = transaction_check_question(answer, notes, (placed,), tokens=tokens)
+    assert question is not None
+    assert "Order placed: red pen" in question.instructions
+    assert tokens.remaining_chars(json.dumps({"answer": answer.answer}), [question.model_dump_json()]) >= 0
+
+
+async def test_transaction_evidence_does_not_spend_the_omission_notes_budget() -> None:
+    from fastbrowse.verification import check_claims
+    from tests.test_policy import ScriptedJev
+
+    page = capture(*((BlockKind.PARAGRAPH, f"Item {index}: " + "x" * 510) for index in range(40)))
+    notes = Notes(
+        Fact(
+            reader=FactReader.LLM,
+            requirement_id="r1",
+            text=page.text[block.start : block.end],
+            evidence=block_evidence(page, block.source_id),
+        )
+        for block in page.blocks
+    )
+    ids = tuple(notes.evidence)
+    requirement = Requirement(id="r1", text="What was bought?", kind=RequirementKind.INFORMATION)
+    answer = assemble_answer((Claim(text="Bought the items", evidence_ids=(ids[0],)),), notes, (requirement,))
+    ordinary = claim_check_questions(answer, notes)
+    jev = ScriptedJev({}, noul=0.0)
+    ledger = Ledger(Limits())
+
+    assert await check_claims(jev, answer, notes, Thresholds(), ledger=ledger, transaction_evidence_ids=ids) == answer
+
+    assert len(jev.requests) == ledger.jev_calls == len(ledger.lines) == 2
+    claims = next(q for q in jev.requests if "requirement_omitted" in q)
+    assert claims == ordinary
+    omission = claims["requirement_omitted"].instructions
+    assert all(fact.text in omission for fact in notes.facts)
+    assert any(set(q) == {TRANSACTION_CONTRADICTED} for q in jev.requests)
+
+
 def test_currency_sentence_punctuation_and_candidate_context() -> None:
     page = capture((BlockKind.PARAGRAPH, "Revenue: $1,234.50. Costs: $200.00."))
     field = Fields.model_fields["amount"]
@@ -944,6 +1049,60 @@ async def test_a_doubted_claim_is_dropped_only_if_the_rest_still_answers(omitted
         assert held.citations == composed.citations[:1]
 
 
+@pytest.mark.parametrize("contradicted", [0.1, 0.9])
+async def test_an_answer_the_committed_pages_contradict_is_rejected(contradicted: float) -> None:
+    from fastbrowse.jev import Evaluation, NoulAnswer
+    from fastbrowse.models import CostBasis, CostComponent, CostLine
+    from fastbrowse.verification import check_claims
+
+    class Jev:
+        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
+            scores = {TRANSACTION_CONTRADICTED: contradicted}
+            answers = {key: NoulAnswer(probability=scores.get(key, 0.05)) for key in questions}
+            free = CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0)
+            return Evaluation(model="test", answers=answers, input_tokens=1, cost=free)
+
+    page = capture((BlockKind.PARAGRAPH, "Black pen £7"), (BlockKind.PARAGRAPH, "Order placed: red pen £11.55"))
+    notes = Notes(
+        Fact(reader=FactReader.LLM, text=block.source_id, evidence=block_evidence(page, block.source_id))
+        for block in page.blocks
+    )
+    listed, placed = tuple(notes.evidence)
+    composed = assemble_answer((Claim(text="Bought a black pen for £7", evidence_ids=(listed,)),), notes, ())
+    held = await check_claims(Jev(), composed, notes, Thresholds(), transaction_evidence_ids=(placed,))
+    assert (held is None) is (contradicted > 0.5)
+
+
+async def test_a_failed_claim_ask_waits_for_the_transaction_ask_before_raising() -> None:
+    from fastbrowse.jev import Evaluation, NoulAnswer
+    from fastbrowse.verification import check_claims
+
+    finished: list[str] = []
+
+    class Jev:
+        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
+            if TRANSACTION_CONTRADICTED not in questions:
+                raise JevError("claims failed")
+            await asyncio.sleep(0.01)
+            finished.append(TRANSACTION_CONTRADICTED)
+            free = CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0)
+            answers = {key: NoulAnswer(probability=0.05) for key in questions}
+            return Evaluation(model="test", answers=answers, input_tokens=1, cost=free)
+
+    page = capture((BlockKind.PARAGRAPH, "Black pen £7"), (BlockKind.PARAGRAPH, "Order placed: black pen £7"))
+    notes = Notes(
+        Fact(reader=FactReader.LLM, text=block.source_id, evidence=block_evidence(page, block.source_id))
+        for block in page.blocks
+    )
+    listed, placed = tuple(notes.evidence)
+    composed = assemble_answer((Claim(text="Bought a black pen for £7", evidence_ids=(listed,)),), notes, ())
+    ledger = Ledger(Limits())
+    with pytest.raises(JevError):
+        await check_claims(Jev(), composed, notes, Thresholds(), ledger=ledger, transaction_evidence_ids=(placed,))
+    assert finished == [TRANSACTION_CONTRADICTED]
+    assert ledger.lines, "the finished ask was billed before check_claims returned"
+
+
 async def test_pruning_the_only_claim_for_a_requirement_is_an_omission() -> None:
     from fastbrowse.jev import Evaluation, NoulAnswer
     from fastbrowse.models import CostBasis, CostComponent, CostLine, Evidence
@@ -1074,6 +1233,128 @@ async def test_a_record_naming_blocks_the_page_did_not_offer_is_counted_not_cred
     )
     assert outcome.uncovered == 1
     assert [fact.evidence.quote for fact in notes.facts if fact.evidence is not None] == ["Sharp Objects 47.82"]
+
+
+@pytest.mark.parametrize("loss", ["outside_chunk", "overflow"])
+async def test_a_lost_continuation_record_blocks_a_later_pages_winner(loss: str) -> None:
+    first = capture((BlockKind.PARAGRAPH, "Book A 12.00"), (BlockKind.PARAGRAPH, "Book B 15.00"))
+    records: list[JsonValue] = (
+        [{"first": "s0", "last": "s0"}, {"first": "s1", "last": "s1"}]
+        if loss == "outside_chunk"
+        else [{"first": "s0", "last": "s0"}] * 60 + [{"first": "s1", "last": "s1"}]
+    )
+    llm = ScriptedLLM(
+        [
+            {"claims": [], "answered": False, "continues": [{"requirement_id": "r1", "records": records}]},
+            {"claims": [], "answered": False, "continues": [{"requirement_id": "r1", "records": []}]},
+            {
+                "claims": [
+                    {"text": "Book C is cheapest", "cite": {"first": "s0", "last": "s0"}, "requirement_id": "r1"},
+                    {"text": "Delivery is free", "cite": {"first": "s1", "last": "s1"}, "requirement_id": "r2"},
+                ],
+                "answered": True,
+            },
+        ]
+    )
+    notes = Notes()
+    outcome = await read(llm, first, "Cheapest?", ["r1", "r2"], notes, max_chars=15)
+    last = capture((BlockKind.PARAGRAPH, "Book C 10.00"), (BlockKind.PARAGRAPH, "Delivery is free"))
+    await read(llm, last, "Cheapest and delivery?", ["r1", "r2"], notes, incomplete=outcome.incomplete)
+
+    assert not notes.evidenced("r1")
+    assert notes.evidenced("r2")
+    assert any(f.text == "Book C is cheapest" and f.requirement_id is None for f in notes.facts)
+    assert outcome.uncovered == 1 and outcome.incomplete == ("r1",)
+
+
+async def test_overflow_records_a_claim_already_holds_are_not_lost() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Book A 12.00"), (BlockKind.PARAGRAPH, "Book B 15.00"))
+    records: list[JsonValue] = [{"first": "s0", "last": "s0"}] * 60 + [{"first": "s1", "last": "s1"}]
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [{"text": "Book B costs 15.00", "cite": {"first": "s1", "last": "s1"}}],
+                "answered": False,
+                "continues": [{"requirement_id": "r1", "records": records}],
+            }
+        ]
+    )
+    outcome = await read(llm, page, "Cheapest?", ["r1"], Notes())
+    assert outcome.uncovered == 0 and outcome.incomplete == ()
+
+
+async def test_a_lost_continuation_record_blocks_the_last_chunks_winner() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Book A 12.00"), (BlockKind.PARAGRAPH, "Book B 10.00"))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [],
+                "answered": False,
+                "continues": [{"requirement_id": "r1", "records": [{"first": "s1", "last": "s1"}]}],
+            },
+            {
+                "claims": [
+                    {"text": "Book B is cheapest", "cite": {"first": "s1", "last": "s1"}, "requirement_id": "r1"}
+                ],
+                "answered": True,
+            },
+        ]
+    )
+    notes = Notes()
+    outcome = await read(llm, page, "Cheapest?", ["r1"], notes, max_chars=15)
+
+    assert not notes.evidenced("r1")
+    assert outcome.continues == () and outcome.incomplete == ("r1",)
+    assert notes.facts[0].text == "Book B is cheapest" and notes.facts[0].requirement_id is None
+
+
+async def test_an_incomplete_comparison_skips_scalar_choice_but_still_reaches_the_reader() -> None:
+    from tests.test_policy import ScriptedJev
+
+    page = capture((BlockKind.PARAGRAPH, "Book A 12.00"))
+    jev = ScriptedJev({})
+    requirement = Requirement(id="r1", text="The cheapest book", kind=RequirementKind.INFORMATION)
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [{"text": "Book A", "cite": {"first": "s0", "last": "s0"}, "requirement_id": "r1"}],
+                "answered": True,
+            }
+        ]
+    )
+    notes = Notes()
+    await read(llm, page, "Cheapest?", ["r1"], notes, jev=jev, requirements=[requirement], incomplete={"r1"})
+
+    assert jev.requests == []
+    assert "# Requirement ids\nr1" in llm.calls[0][1][-1].content
+    assert notes.facts and not notes.evidenced("r1")
+
+
+@pytest.mark.parametrize("earlier_page", [False, True])
+async def test_a_stated_order_settles_a_winner_despite_a_lost_continuation_record(earlier_page: bool) -> None:
+    page = capture((BlockKind.PARAGRAPH, "Sorted by price, lowest first"), (BlockKind.PARAGRAPH, "Book A 12.00"))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "text": "Book A is cheapest",
+                        "cite": {"first": "s1", "last": "s1"},
+                        "orders_list": {"first": "s0", "last": "s0"},
+                        "requirement_id": "r1",
+                    }
+                ],
+                "answered": True,
+                "continues": [{"requirement_id": "r1", "records": [{"first": "s9", "last": "s9"}]}],
+            }
+        ]
+    )
+    notes = Notes()
+    outcome = await read(llm, page, "Cheapest?", ["r1"], notes, incomplete={"r1"} if earlier_page else ())
+
+    assert notes.evidenced("r1")
+    assert outcome.incomplete == ("r1",) and outcome.continues == ()
+    assert any(f.evidence is not None and f.evidence.quote == "Sorted by price, lowest first" for f in notes.facts)
 
 
 @pytest.mark.parametrize(("records", "uncovered"), [(65, 5), (0, 0)])
@@ -1336,7 +1617,7 @@ async def test_a_list_that_runs_on_into_the_next_chunk_is_settled_by_the_last_on
             {
                 "claims": [],
                 "answered": False,
-                "continues": [{"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}]}],
+                "continues": [{"requirement_id": "r1", "records": []}],
             },
             {
                 "claims": [

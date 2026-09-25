@@ -4,8 +4,9 @@ Jev checks completion, individual action requirements and draft quality. An LLM 
 when those answers leave completion uncertain.
 """
 
+import asyncio
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from enum import StrEnum
 from typing import assert_never
 
@@ -19,6 +20,7 @@ from fastbrowse.models import UNTRUSTED, CostComponent, CostLine, Evidence, Froz
 from fastbrowse.page import Capture, Control, Observation, cut_text
 from fastbrowse.planner import Plan, RequirementKind
 from fastbrowse.retrieval import (
+    TRANSACTION_CONTRADICTED,
     ComposedAnswer,
     UnsupportedField,
     assemble_answer,
@@ -28,6 +30,7 @@ from fastbrowse.retrieval import (
     field_question,
     propose_text_fields,
     propose_text_fields_from_notes,
+    transaction_check_question,
 )
 from fastbrowse.telemetry import Ledger, trace
 
@@ -351,8 +354,10 @@ async def check_claims(
     *,
     tokens: TokenBudget = _DEFAULT_CONFIG.tokens,
     ledger: Ledger | None = None,
+    transaction_evidence_ids: Collection[str] = (),
 ) -> ComposedAnswer | None:
-    """The answer without any claim a check doubts, or None when a requirement is omitted from what is left.
+    """The answer without any claim a check doubts, or None when a requirement is omitted from what is left or the
+    pages where the run committed an action contradict it.
 
     The composer adds claims its quotes do not cover (a login page's nav links, a Log out button), and one of
     those failed three runs in four of a correct sign-in answer. Removing a doubted claim asserts nothing new,
@@ -363,7 +368,22 @@ async def check_claims(
     # and Jev rejects an empty question batch; dropped or uncited answer text still cannot pass.
     if not questions:
         return composed if not composed.answer and composed.dropped_claims == 0 else None
-    answers = await _ask(jev, composed, questions, ledger)
+    transaction = transaction_check_question(composed, notes, transaction_evidence_ids, tokens=tokens)
+    if transaction is None:
+        answers = await _ask(jev, composed, questions, ledger)
+    else:
+        # Asked apart so the committed pages cannot take the omission check's notes budget.
+        checked = {TRANSACTION_CONTRADICTED: transaction}
+        # Both asks finish before either failure propagates, so neither is billed after the check has returned.
+        claimed, committed = await asyncio.gather(
+            _ask(jev, composed, questions, ledger), _ask(jev, composed, checked, ledger), return_exceptions=True
+        )
+        if isinstance(claimed, BaseException):
+            raise claimed
+        if isinstance(committed, BaseException):
+            raise committed
+        answers = {**claimed, **committed}
+        questions = {**questions, **checked}
     limit = thresholds.claim_problem_above
     trace(
         "claims",
@@ -372,7 +392,10 @@ async def check_claims(
         cited=[list(claim.evidence_ids) for claim in composed.claims],
         dropped=composed.dropped_claims,
     )
-    if composed.dropped_claims or _probability(answers, _OMITTED) > limit:
+    if (
+        composed.dropped_claims
+        or max(_probability(answers, _OMITTED), _probability(answers, TRANSACTION_CONTRADICTED)) > limit
+    ):
         return None
     kept = tuple(
         claim
