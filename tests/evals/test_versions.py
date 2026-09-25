@@ -146,6 +146,15 @@ def test_a_first_publication_writes_its_own_section_or_nothing(results: Path, mo
     assert versions.render_docs(docs) == docs
 
 
+def test_release_sections_stay_newest_first_however_they_are_added(results: Path) -> None:
+    for release in ("9.10.0", "9.9.9"):
+        source = results / f"{release}.rows"
+        source.write_text(json.dumps(_row("pypi-version", fastbrowse_version=release)) + "\n", encoding="utf-8")
+        versions.publish(release, source)
+    docs = versions.render_docs(DOCS)
+    assert docs.index("### 9.10.0,") < docs.index("### 9.9.9,") < docs.index("### 0.5.2,")
+
+
 def test_a_published_table_names_tasks_changed_since(results: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _publish(results, [_row("pypi-version")])
     lock = versions.load_lock()

@@ -61,7 +61,7 @@
   const RATING_WORD = { one: 'One', two: 'Two', three: 'Three', four: 'Four', five: 'Five' };
   const RATING_LABEL = /\b[1-5]\s*(?:\/|out of)\s*5\b|\b[1-5]\s*stars?\b/i;
   const ratingOf = e => {
-    if (hidden(e)) return '';
+    if (hidden(e) || getComputedStyle(e).visibility === 'hidden') return '';
     const classes = [...e.classList].map(c => c.toLowerCase());
     if (classes.includes('star-rating')) {
       for (const token of classes) if (RATING_WORD[token]) return `${RATING_WORD[token]} stars`;

@@ -231,15 +231,24 @@ class Notes:
 
         aliases = {key: index for index, key in enumerate(self._facts, 1)}
         evidence = self.evidence
+        counted = {key for fact in self._facts.values() if fact.tally is not None for key in fact.basis}
+
+        def basis_text(fact: Fact) -> str:
+            # A ranking can cite every counted record again; full span ids undo the tally's compact rendering.
+            records = ",".join(str(aliases[key]) for key in fact.basis if key in counted)
+            other = [key for key in fact.basis if key not in counted]
+            parts = [f"records({records})"] if records else []
+            if other:
+                parts.append(json.dumps(other))
+            return " basis=" + " + ".join(parts) if parts else ""
 
         def line(key: str, fact: Fact) -> str:
             if fact.tally is not None:
-                basis = ",".join(str(aliases[record]) for record in fact.basis)
                 urls = tuple(dict.fromkeys(evidence[record].url for record in fact.basis))
                 return (
                     f"[{key}] {json.dumps(fact.text, ensure_ascii=False)} "
                     f"requirements={','.join(sorted(self._requirements[key])) or '-'} "
-                    f"tally_for={fact.tally.requirement_id} basis=records({basis}) urls={json.dumps(urls)}"
+                    f"tally_for={fact.tally.requirement_id}{basis_text(fact)} urls={json.dumps(urls)}"
                 )
             source = (
                 "derived"
@@ -249,8 +258,7 @@ class Notes:
             )
             return (
                 f"[{key}] {json.dumps(fact.text, ensure_ascii=False)} "
-                f"requirements={','.join(sorted(self._requirements[key])) or '-'} {source}"
-                + (f" basis={json.dumps(fact.basis)}" if fact.basis else "")
+                f"requirements={','.join(sorted(self._requirements[key])) or '-'} {source}" + basis_text(fact)
             )
 
         def size(text: str) -> int:

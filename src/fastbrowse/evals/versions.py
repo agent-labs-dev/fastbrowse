@@ -261,13 +261,13 @@ def publish(release: str, source: Path) -> Path:
     return target
 
 
-def _release_key(path: Path) -> tuple[int, ...]:
-    return tuple(int(part) for part in re.findall(r"\d+", path.stem))
+def _release_key(release: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", release))
 
 
 def published() -> list[tuple[str, list[dict[str, Any]]]]:
     """Every published release with its rows, newest first."""
-    files = sorted(RESULTS.glob("*.jsonl"), key=_release_key, reverse=True) if RESULTS.exists() else []
+    files = sorted(RESULTS.glob("*.jsonl"), key=lambda f: _release_key(f.stem), reverse=True)
     return [(f.stem, [json.loads(line) for line in f.read_text(encoding="utf-8").splitlines() if line]) for f in files]
 
 
@@ -343,7 +343,7 @@ def _cell(text: str) -> str:
     return " ".join(text.split()).replace("|", "\\|")
 
 
-def docs_blocks() -> dict[str, str]:
+def docs_blocks(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) -> dict[str, str]:
     """The generated parts of docs/evals.md, by marker name: a task table per split suite, the versions, and a
     table per published release."""
     suites, local = all_tasks()
@@ -361,7 +361,7 @@ def docs_blocks() -> dict[str, str]:
     if changed:
         table += "\n\nTasks past version 1: " + ", ".join(f"`{task_id}` v{v}" for task_id, v in changed) + "."
     blocks["versions"] = table
-    for release, rows in published():
+    for release, rows in published() if releases is None else releases:
         blocks[f"results:{release}"] = results_table(release, rows)
     return blocks
 
@@ -381,15 +381,22 @@ _RESULTS_HEADING = "\n## Results\n"
 
 def render_docs(text: str) -> str:
     """docs/evals.md with its generated blocks; a newly published release gets its own section, newest first."""
-    blocks = docs_blocks()
-    for name in blocks:
-        if name.startswith("results:") and f"<!-- evals:{name} -->" not in text:
-            release = name.removeprefix("results:")
-            day = dict(published())[release][0]["run"]["run_started"][:10]
-            first = text.index("\n### ", text.index(_RESULTS_HEADING))
-            section = f"\n### {release}, {day}\n\n<!-- evals:{name} -->\n<!-- /evals:{name} -->\n"
-            text = text[:first] + section + text[first:]
-    return _render(text, blocks, "docs/evals.md")
+    releases = published()
+    for release, rows in releases:
+        name = f"results:{release}"
+        if f"<!-- evals:{name} -->" in text:
+            continue
+        start = text.index(_RESULTS_HEADING) + len(_RESULTS_HEADING)
+        end = next((m.start() for m in re.finditer(r"\n## ", text) if m.start() >= start), len(text))
+        older = (
+            m.start()
+            for m in re.finditer(r"\n### (\S+), \d{4}-\d{2}-\d{2}\n", text)
+            if start <= m.start() < end and _release_key(m[1]) < _release_key(release)
+        )
+        at = next(older, end)
+        day = rows[0]["run"]["run_started"][:10]
+        text = f"{text[:at]}\n### {release}, {day}\n\n<!-- evals:{name} -->\n<!-- /evals:{name} -->\n{text[at:]}"
+    return _render(text, docs_blocks(releases), "docs/evals.md")
 
 
 def render_readme(text: str) -> str:

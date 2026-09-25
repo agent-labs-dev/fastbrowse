@@ -186,3 +186,25 @@ def test_compact_tallies_do_not_hide_an_unrelated_required_basis(json_encoded: b
         notes.render_with_ids(800, preserve_requirements=True, json_encoded=json_encoded)
     rendered = notes.render_with_ids(800, json_encoded=json_encoded)
     assert fact_id(conclusion) not in rendered.evidence_ids
+
+
+def test_tally_aliases_keep_other_basis_quotes_and_citation_ids() -> None:
+    record = Fact(text="Ada", evidence=evidence(sha="ada"), reader=FactReader.LLM)
+    context = Fact(text="All authors", evidence=evidence(sha="context"), reader=FactReader.LLM)
+    notes = Notes((record, context))
+    tally = notes.add_tally(Tally(requirement_id="r1", key="Ada", records=(fact_id(record),)))
+    notes.complete_tallies("r1")
+    conclusion = Fact(
+        text="Ada leads",
+        evidence=None,
+        basis=(fact_id(record), fact_id(context)),
+        requirement_id="r2",
+        reader=FactReader.LLM,
+    )
+    notes.add(conclusion)
+    rendered = notes.render_with_ids(1000, preserve_requirements=True)
+    assert f'basis=records(1) + ["{fact_id(context)}"]' in rendered.text
+    assert f'[{fact_id(context)}] "All authors"' in rendered.text and 'quote="fact"' in rendered.text
+    assert f"[{fact_id(record)}]" not in rendered.text
+    assert set(rendered.evidence_ids) == {fact_id(fact) for fact in (record, context, tally, conclusion)}
+    assert notes.expand_evidence_ids((fact_id(conclusion),)) == (fact_id(record), fact_id(context), fact_id(conclusion))
