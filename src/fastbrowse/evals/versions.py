@@ -230,7 +230,7 @@ def all_tasks() -> tuple[dict[str, tuple[Any, ...]], tuple[Any, ...]]:
 
 _KEPT = ("arm", "task", "category", "suite", "suite_version", "task_version", "status",
          "normalized_status", "task_successful", "passed", "correct",
-         "seconds", "dollars", "retries", "failure", "model", "text_model")  # fmt: skip
+         "seconds", "dollars", "retries", "failure", "model", "text_model", "transient_seconds")  # fmt: skip
 _RUN_KEPT = ("run_id", "run_started", "fastbrowse_version", "git_sha", "git_dirty", "providers", "max_steps",
              "concurrency", "jev_ultrafast", "arms", "python", "argv")  # fmt: skip
 
@@ -314,8 +314,32 @@ def published() -> list[tuple[str, list[dict[str, Any]]]]:
     return [(f.stem, [json.loads(line) for line in f.read_text(encoding="utf-8").splitlines() if line]) for f in files]
 
 
+def _measured(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """The attempts that measured the arm. One that ended `unavailable` was stopped by a provider outage outlasting
+    every retry, so it says nothing about the arm and counts in no pass rate, time or cost."""
+    return [r for r in rows if r.get("normalized_status") != "unavailable"]
+
+
+def _agent_seconds(row: Mapping[str, Any]) -> float:
+    """The run's time without the outage waits it measured (`transient_seconds`): failed requests and the backoff
+    between them are the provider's time, not the arm's."""
+    return max(row["seconds"] - (row.get("transient_seconds") or 0.0), 0.0)
+
+
+def _excluded(rows: Sequence[Mapping[str, Any]]) -> str:
+    """The note under a table naming the attempts each arm lost to outages, or nothing when none were."""
+    lost = {arm: len(arm_rows) - len(_measured(arm_rows)) for arm, arm_rows in _by_arm(rows).items()}
+    named = ", ".join(f"{ARM_LABELS.get(arm, arm)} {n}" for arm, n in lost.items() if n)
+    return f"Excluded as provider outages: {named}." if named else ""
+
+
 def _arm_stats(rows: Sequence[Mapping[str, Any]]) -> dict[str, str]:
-    seconds = [r["seconds"] for r in rows]
+    rows = _measured(rows)
+    if not rows:
+        return dict.fromkeys(
+            ("passed", "correct", "median time", "mean time", "median cost", "mean cost", "suite total"), "-"
+        )
+    seconds = [_agent_seconds(r) for r in rows]
     dollars = [r["dollars"] for r in rows if r["dollars"] is not None]
     unpriced = f" ({len(rows) - len(dollars)} unpriced)" if len(dollars) < len(rows) else ""
     return {
@@ -360,6 +384,8 @@ def _results_table(release: str, rows: Sequence[Mapping[str, Any]]) -> str:
     suites = sorted({(r["suite"], r["suite_version"]) for r in rows})
     lines += ["", "Suites: " + ", ".join(f"`{s}` `{v}`" for s, v in suites) + ". Runs: "
               + ", ".join(f"`{run}` at `{sha}`" for run, sha in runs) + "."]  # fmt: skip
+    if excluded := _excluded(rows):
+        lines.append(excluded)
     lock = load_lock()
     changed = sorted(
         {(r["task"], r["task_version"], task_version(r["task"], lock)) for r in rows}
@@ -380,7 +406,7 @@ def headline(release: str, rows: Sequence[Mapping[str, Any]]) -> str:
     tasks = {r["task"] for r in rows}
     lines = [
         f"Measured on {days[-1]} with the build released as {release}: {len(tasks)} tasks, "
-        f"{len(rows)} attempts across all arms, on cloud browsers.",
+        f"{len(_measured(rows))} attempts across all arms, on cloud browsers.",
         "",
     ]
     for (suite, revision), group in _by_suite(rows).items():
@@ -390,6 +416,8 @@ def headline(release: str, rows: Sequence[Mapping[str, Any]]) -> str:
             s = _arm_stats(arm_rows)
             cost = f"{s['median cost']} (median), {s['mean cost']} mean"
             lines.append(f"| {ARM_LABELS.get(arm, arm)} | {s['passed']} | {cost} | {s['median time']} |")
+        if excluded := _excluded(group):
+            lines += ["", excluded]
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -459,6 +487,8 @@ class MetricSummary(BaseModel):
 class ArmSummary(BaseModel):
     passed: int
     total: int
+    excluded: int = 0
+    """Attempts left out of every figure here because a provider outage outlasted their retries."""
     priced: int
     seconds: MetricSummary
     dollars: MetricSummary
@@ -505,13 +535,15 @@ def summary(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) 
             groups.setdefault((row["suite"], row["suite_version"]), []).append(row)
         for (suite, revision), group in sorted(groups.items()):
             arms = {}
-            for arm, arm_rows in _by_arm(group).items():
+            for arm, attempts in _by_arm(group).items():
+                arm_rows = _measured(attempts)
                 prices = [r["dollars"] for r in arm_rows if r["dollars"] is not None]
                 arms[arm] = ArmSummary(
                     passed=sum(bool(r["passed"]) for r in arm_rows),
                     total=len(arm_rows),
+                    excluded=len(attempts) - len(arm_rows),
                     priced=len(prices),
-                    seconds=_metrics([r["seconds"] for r in arm_rows]),
+                    seconds=_metrics([_agent_seconds(r) for r in arm_rows]),
                     dollars=_metrics(prices if len(prices) == len(arm_rows) else []),
                 )
             changes = [
@@ -574,8 +606,9 @@ def protocol_docs() -> str:
         "A pass requires a correct grade and `done`, or the exact expected fastbrowse stop.",
         "The hosted SDK maps to `done` only for a stopped session with `is_task_successful=true`.",
         "That verdict lands after the session stops; the harness waits up to 90 seconds for it.",
-        "Provider-unavailable attempts are retried at most twice; the final failed row and retry count remain.",
-        "`seconds` includes retries within the reported attempt; fastbrowse records `transient_seconds` separately.",
+        "An attempt a provider outage ended is waited out and run again, up to five times over about 25 minutes.",
+        "A row still unavailable after that is recorded but left out of every pass rate, time and cost.",
+        "Median time excludes the outage waits fastbrowse measured within a run (`transient_seconds`).",
         "Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the row.",
         "Existing timing includes browser setup. These rows do not claim the planned handoff-only timing protocol.",
     ]
@@ -596,8 +629,10 @@ def feed_schema_docs() -> str:
         "",
         "`releases` is newest first, and within a release the suites run in their defined order, `core` first. "
         "`date` is the latest UTC run date in that group.",
-        "`arms` maps registry names to statistics across every attempt, including failures.",
-        "`seconds` and `dollars` contain numeric median and mean values; dollars are USD.",
+        "`arms` maps registry names to statistics across every attempt, including failures, except those a provider "
+        "outage ended: `excluded` counts those, and `total` leaves them out.",
+        "`seconds` and `dollars` contain numeric median and mean values; dollars are USD. "
+        "`seconds` excludes measured outage waits (`transient_seconds`).",
         "`priced` counts attempts with known cost. Both dollar statistics are null if any attempt is unpriced.",
         "`task_versions_changed` compares observed task versions with the previous published release:",
         "`task`, `previous` and `current` version lists. New tasks have an empty previous list;",

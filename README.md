@@ -33,43 +33,51 @@ something that was never on the page. Every claim in an answer cites a verbatim 
 ### Against Browser Use
 
 <!-- evals:headline -->
-Measured on 2026-09-25 with the build released as 0.5.6: 46 tasks, 273 attempts across all arms, on cloud browsers.
+Measured on 2026-09-25 with the build released as 0.5.6: 46 tasks, 257 attempts across all arms, on cloud browsers.
 
 Suite `core`, version `9b765b1a`.
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 55/63 | $0.0032 (median), $0.0055 mean | 28.6s |
+| fastbrowse | 55/56 | $0.0034 (median), $0.0059 mean | 20.6s |
 | Browser Use agent | 37/42 | $0.4758 (median), $0.4899 mean | 35.8s |
-| jev-ultrafast | 11/18 | unknown (median), unknown mean | 13.5s |
+| jev-ultrafast | 11/15 | unknown (median), unknown mean | 13.0s |
+
+Excluded as provider outages: fastbrowse 7, jev-ultrafast 3.
 
 Suite `dev`, version `d562020d`.
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 21/24 | $0.0052 (median), $0.0082 mean | 19.6s |
+| fastbrowse | 21/21 | $0.0051 (median), $0.0068 mean | 18.2s |
 | Browser Use agent | 22/24 | $0.1353 (median), $0.1884 mean | 12.9s |
+
+Excluded as provider outages: fastbrowse 3.
 
 Suite `heldout`, version `18b64a73`.
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 25/27 | $0.0065 (median), $0.0161 mean | 20.8s |
+| fastbrowse | 25/25 | $0.0072 (median), $0.0174 mean | 19.3s |
 | Browser Use agent | 26/27 | $0.1970 (median), $0.2329 mean | 15.0s |
+
+Excluded as provider outages: fastbrowse 2.
 
 Suite `stretch-dev`, version `69abd819`.
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 12/15 | $0.0271 (median), $0.0366 mean | 57.0s |
+| fastbrowse | 12/15 | $0.0271 (median), $0.0366 mean | 44.9s |
 | Browser Use agent | 15/15 | $0.3732 (median), $0.5790 mean | 59.9s |
 
 Suite `stretch-heldout`, version `f3f5c3f7`.
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 6/9 | $0.0276 (median), $0.0881 mean | 81.0s |
+| fastbrowse | 6/8 | $0.0283 (median), $0.0990 mean | 70.6s |
 | Browser Use agent | 8/9 | $0.2579 (median), $0.4980 mean | 42.6s |
+
+Excluded as provider outages: fastbrowse 1.
 <!-- /evals:headline -->
 
 Compare rows only at matching task versions. See [eval results and workflow](docs/evals.md).

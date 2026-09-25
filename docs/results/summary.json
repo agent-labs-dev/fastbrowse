@@ -9,20 +9,22 @@
       "arms": {
         "fastbrowse": {
           "passed": 55,
-          "total": 63,
-          "priced": 63,
+          "total": 56,
+          "excluded": 7,
+          "priced": 56,
           "seconds": {
-            "median": 28.6,
-            "mean": 38.680952380952384
+            "median": 20.6,
+            "mean": 29.06982142857143
           },
           "dollars": {
-            "median": 0.00321,
-            "mean": 0.005488095238095238
+            "median": 0.00344,
+            "mean": 0.005903214285714286
           }
         },
         "browser-use": {
           "passed": 37,
           "total": 42,
+          "excluded": 0,
           "priced": 42,
           "seconds": {
             "median": 35.75,
@@ -35,11 +37,12 @@
         },
         "jev-ultrafast": {
           "passed": 11,
-          "total": 18,
-          "priced": 17,
+          "total": 15,
+          "excluded": 3,
+          "priced": 14,
           "seconds": {
-            "median": 13.5,
-            "mean": 28.566666666666666
+            "median": 13.0,
+            "mean": 31.24
           },
           "dollars": {
             "median": null,
@@ -57,20 +60,22 @@
       "arms": {
         "fastbrowse": {
           "passed": 21,
-          "total": 24,
-          "priced": 24,
+          "total": 21,
+          "excluded": 3,
+          "priced": 21,
           "seconds": {
-            "median": 19.65,
-            "mean": 31.3375
+            "median": 18.2,
+            "mean": 17.70904761904762
           },
           "dollars": {
-            "median": 0.00516,
-            "mean": 0.00823
+            "median": 0.00513,
+            "mean": 0.006815714285714286
           }
         },
         "browser-use": {
           "passed": 22,
           "total": 24,
+          "excluded": 0,
           "priced": 24,
           "seconds": {
             "median": 12.850000000000001,
@@ -92,20 +97,22 @@
       "arms": {
         "fastbrowse": {
           "passed": 25,
-          "total": 27,
-          "priced": 27,
+          "total": 25,
+          "excluded": 2,
+          "priced": 25,
           "seconds": {
-            "median": 20.8,
-            "mean": 30.022222222222222
+            "median": 19.3,
+            "mean": 27.8436
           },
           "dollars": {
-            "median": 0.00653,
-            "mean": 0.016134444444444444
+            "median": 0.00716,
+            "mean": 0.0173596
           }
         },
         "browser-use": {
           "passed": 26,
           "total": 27,
+          "excluded": 0,
           "priced": 27,
           "seconds": {
             "median": 15.0,
@@ -128,10 +135,11 @@
         "fastbrowse": {
           "passed": 12,
           "total": 15,
+          "excluded": 0,
           "priced": 15,
           "seconds": {
-            "median": 57.0,
-            "mean": 78.79333333333334
+            "median": 44.9,
+            "mean": 57.57333333333333
           },
           "dollars": {
             "median": 0.02709,
@@ -141,6 +149,7 @@
         "browser-use": {
           "passed": 15,
           "total": 15,
+          "excluded": 0,
           "priced": 15,
           "seconds": {
             "median": 59.9,
@@ -162,20 +171,22 @@
       "arms": {
         "fastbrowse": {
           "passed": 6,
-          "total": 9,
-          "priced": 9,
+          "total": 8,
+          "excluded": 1,
+          "priced": 8,
           "seconds": {
-            "median": 81.0,
-            "mean": 88.21111111111111
+            "median": 70.585,
+            "mean": 76.70375
           },
           "dollars": {
-            "median": 0.02757,
-            "mean": 0.0881311111111111
+            "median": 0.028325000000000003,
+            "mean": 0.0990375
           }
         },
         "browser-use": {
           "passed": 8,
           "total": 9,
+          "excluded": 0,
           "priced": 9,
           "seconds": {
             "median": 42.6,
