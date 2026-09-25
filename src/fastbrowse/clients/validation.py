@@ -259,8 +259,12 @@ async def post_with_retry(
         if request_limit is not None and usage.requests >= request_limit:
             break
         if split_batch and usage.consecutive_5xx >= 2 and delay is not None:
+            # Batch hedges consume requests too, so a split inherits only the requests still available.
+            next_attempt = start_attempt + usage.requests
+            if next_attempt > len(RETRY_DELAYS_SECONDS):
+                break
             _transient(call, began, time.monotonic())
-            raise _SplitBatch(attempt + 1, usage)
+            raise _SplitBatch(next_attempt, usage)
         if delay is not None:
             wait = _backoff(response, delay)
             reason = usage.failures[-1] if usage.failures else "no usable response"

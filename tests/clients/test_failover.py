@@ -20,12 +20,15 @@ def source(request: httpx.Request) -> JevSource:
 
 def answer(provider: JevSource) -> httpx.Response:
     if provider is JevSource.TYPESAFE:
-        return httpx.Response(200, json={"answers": {"q": {"type": "noul", "noul": 1}}, "usage": {"input_tokens": 100}})
+        return httpx.Response(
+            200,
+            json={"answers": {"q": {"type": "noul", "noul": 1}}, "usage": {"input_tokens": 100, "output_tokens": 7}},
+        )
     return httpx.Response(
         200,
         json={
             "answers": {"q": {"type": "boolean", "probability": 1}},
-            "usage": {"inputTokens": 100},
+            "usage": {"inputTokens": 100, "outputTokens": 7},
             "providerMetadata": {"gateway": {"cost": "0.001"}},
         },
     )
@@ -232,6 +235,7 @@ async def test_failover_accounts_for_each_providers_unanswered_requests(
     assert first.input_tokens == 100
     assert first.cost.input_tokens == 300
     assert second.cost.input_tokens == 100
+    assert first.cost.output_tokens == second.cost.output_tokens == 7
     assert first.cost.seconds == ATTEMPTS + 2
     assert second.cost.seconds == 1
     assert second.cost.dollars is not None

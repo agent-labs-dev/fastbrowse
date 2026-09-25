@@ -5,6 +5,7 @@ import json
 from collections.abc import Mapping
 from unittest.mock import AsyncMock, Mock
 
+import httpx
 import pytest
 from pydantic import JsonValue
 
@@ -23,7 +24,9 @@ from fastbrowse.agent import (
     _Unsure,
     _verified,
 )
+from fastbrowse.batches import evaluate_batches
 from fastbrowse.citations import text_fragment
+from fastbrowse.clients.typesafe import TypeSafeJevClient
 from fastbrowse.config import Config, ObservationLimits, StallRules, Thresholds
 from fastbrowse.effects import state_key
 from fastbrowse.jev import Answer, Evaluation, JevError, JevRetriesExhausted, NoulAnswer, NoulQuestion, Question
@@ -33,6 +36,7 @@ from fastbrowse.models import (
     Authorization,
     BrowserEvent,
     Citation,
+    CostComponent,
     Decider,
     FactReader,
     Limits,
@@ -2392,6 +2396,60 @@ async def test_a_provider_outage_ends_the_run_apart_from_a_failure(failure: JevE
     result = await agent.run("Buy it", limits=Limits(max_steps=2))
 
     assert result.status == status
+
+
+@pytest.mark.parametrize("batched", [False, True])
+@pytest.mark.parametrize("max_dollars", [0.00006, 0.0005])
+async def test_run_checks_split_spend_without_double_counting(
+    monkeypatch: pytest.MonkeyPatch, batched: bool, max_dollars: float
+) -> None:
+    sent: list[tuple[str, ...]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        keys = tuple(json.loads(request.content)["questions"])
+        sent.append(keys)
+        if len(keys) > 1:
+            return httpx.Response(503)
+        return httpx.Response(
+            200,
+            json={"answers": {keys[0]: {"type": "noul", "noul": 1}}, "usage": {"input_tokens": 1000}},
+        )
+
+    real_sleep = asyncio.sleep
+
+    async def immediate(_: float) -> None:
+        await real_sleep(0)
+
+    monkeypatch.setattr("fastbrowse.clients.validation.asyncio.sleep", immediate)
+    planned = Generation(data=Plan(requirements=(), answer_expected=False), cost=FREE)
+    monkeypatch.setattr(agent_module, "make_plan", AsyncMock(return_value=planned))
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    questions = {f"q{i}": NoulQuestion(instructions="Is it?") for i in range(10)}
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        jev = TypeSafeJevClient("key", http=http)
+        agent = Agent(page, jev, ScriptedLLM([]))
+
+        async def loop(state: _RunState, output_schema: object, until: object) -> RunResult:
+            if batched:
+                await evaluate_batches(jev, "page", questions, tokens=Config().tokens, ledger=state.ledger)
+            else:
+                state.ledger.reserve(CostComponent.JEV)
+                result = await jev.evaluate("page", questions)
+                state.ledger.record(result.cost)
+            state.ledger.reserve(CostComponent.JEV)
+            result = await jev.evaluate("page", {"next": NoulQuestion(instructions="Is it?")})
+            state.ledger.record(result.cost)
+            return agent._result(state, state.ledger, Status.COMPLETE)
+
+        monkeypatch.setattr(agent, "_loop", loop)
+        result = await agent.run("Read the page", limits=Limits(max_dollars=max_dollars))
+
+    answered = 2 if max_dollars == 0.00006 else 11
+    assert result.status is (Status.BUDGET_EXCEEDED if answered == 2 else Status.COMPLETE)
+    assert len([keys for keys in sent if len(keys) == 1]) == answered
+    assert result.cost.known_dollars == pytest.approx(answered * 0.000042)
+    assert sum(line.input_tokens for line in result.cost.lines) == answered * 1000
 
 
 async def test_a_page_nobody_read_is_read_before_it_is_scrolled() -> None:

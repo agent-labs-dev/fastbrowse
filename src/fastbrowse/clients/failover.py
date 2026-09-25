@@ -12,7 +12,7 @@ from fastbrowse.clients.validation import (
     record_jev_spend,
 )
 from fastbrowse.jev import Evaluation, JevClient, JevRetriesExhausted, Question
-from fastbrowse.models import CostBasis, CostLine
+from fastbrowse.models import CostLine
 from fastbrowse.telemetry import trace
 
 logger = logging.getLogger(__name__)
@@ -65,13 +65,7 @@ class FailoverJevClient:
             if error.unaccounted_requests:
                 # Only unanswered requests may be billed. Estimate their inputs without multiplying backup hedges.
                 discarded = estimated_cost(result.input_tokens * error.unaccounted_requests)
-                cost = cost.model_copy(
-                    update={
-                        "basis": CostBasis.UNKNOWN if cost.dollars is None else CostBasis.ESTIMATED,
-                        "dollars": None if cost.dollars is None else cost.dollars + (discarded.dollars or 0),
-                        "input_tokens": cost.input_tokens + discarded.input_tokens,
-                    }
-                )
+                cost = merged_cost([cost, discarded]).model_copy(update={"seconds": cost.seconds})
             return Evaluation(
                 model=result.model,
                 answers={**held, **result.answers},

@@ -162,6 +162,33 @@ def test_tallies_keep_identical_rows_in_one_capture_and_deduplicate_recaptures()
         assert notes.tallies[0].records == tuple(originals)
 
 
+@pytest.mark.parametrize(
+    ("second_url", "count"),
+    [
+        ("https://example.test/rows?page=2", 2),
+        ("https://example.test/other?page=1", 2),
+        ("http://example.test/rows?page=1", 2),
+        ("https://example.test/rows?page=1#row", 1),
+    ],
+)
+def test_tally_row_identity_is_scoped_to_the_address(second_url: str, count: int) -> None:
+    notes = Notes()
+    records: list[str] = []
+    quote = "Ada | Widget | $10"
+    for index, url in enumerate(("https://example.test/rows?page=1", second_url, second_url)):
+        item = evidence(sha=f"capture-{index}", end=len(quote)).model_copy(update={"url": url, "quote": quote})
+        fact = Fact(text=quote, evidence=item, reader=FactReader.LLM)
+        notes.add(fact)
+        records.append(fact_id(fact))
+        notes.add_tally(Tally(requirement_id="r", key="Ada", records=(fact_id(fact),)))
+    assert notes.tallies[0].count == count
+    assert notes.tallies[0].records == tuple(records[:count])
+    assert not notes.evidenced("r")
+    notes.complete_tallies("r")
+    assert notes.evidenced("r")
+    assert len(notes.supporting_evidence("r")) == count
+
+
 def test_tally_record_identity_survives_returning_to_an_earlier_capture() -> None:
     notes = Notes()
     for sha, start in (("first", 0), ("second", 10), ("second", 40), ("first", 30)):

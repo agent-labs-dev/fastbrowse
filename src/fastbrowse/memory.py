@@ -102,8 +102,9 @@ class Notes:
             if fact.evidence is None:
                 raise ValueError("a tally record must cite a captured span")
             evidence = fact.evidence
-            # Equal quotes can be separate rows in one capture, but repeat on overlapping pages.
-            identity = (tally.requirement_id, urlsplit(evidence.url).netloc, " ".join(evidence.quote.split()))
+            # Equal quotes on different addresses can be distinct rows; only recaptures share an identity.
+            address = urlsplit(evidence.url)._replace(fragment="").geturl()
+            identity = (tally.requirement_id, address, " ".join(evidence.quote.split()))
             occurrences = self._record_ids.setdefault(identity, [])
             sha = evidence.capture_sha256
             occurrence = next((item for item in occurrences if item.get(sha) == key), None)

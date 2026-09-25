@@ -349,7 +349,7 @@ class Agent:
         # The ledger checks `max_seconds` between operations; only a deadline around the awaits bounds a
         # browser or provider call that never returns.
         deadline = asyncio.timeout(ledger.limits.max_seconds)
-        with jev_spend(ledger.lines):
+        with jev_spend(ledger.lines, ledger=ledger):
             try:
                 async with deadline:
                     # The plan is needed to read, to judge DONE and to answer, and the start page, the first fills
