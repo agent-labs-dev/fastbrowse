@@ -2139,6 +2139,29 @@ async def test_transaction_verdicts_are_cached_across_answer_attempts(
     assert state.ledger.lines.count(FREE) == len(jev.requests)
 
 
+async def test_an_unclassified_candidate_still_supplies_transaction_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    state, agent, jev, composing = await _transaction_run(monkeypatch)
+    failing = AsyncMock(side_effect=JevError("service unavailable"))
+    original = jev.evaluate
+
+    async def evaluate(state_: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        if isinstance(state_, dict) and "pages" in state_:
+            return await failing(state_, questions)
+        return await original(state_, questions)
+
+    monkeypatch.setattr(jev, "evaluate", evaluate)
+    await _click(agent, state, _at("https://shop.test/checkout", _button("Buy")), "Buy")
+    agent._note_effect(state, _at("https://shop.test/receipt"))
+
+    await agent._answer(state, None)
+    await agent._answer(state, None)
+
+    assert failing.await_count > 1, "a failed classification is not cached"
+    ids = tuple(state.notes.evidence)[1:]
+    assert [call.kwargs["transaction_evidence_ids"] for call in composing.await_args_list] == [ids, ids]
+    assert any(TRANSACTION_CONTRADICTED in questions for questions in jev.requests)
+
+
 async def test_a_page_that_rewrites_its_own_text_is_read_only_while_it_pays_out() -> None:
     """The exact-content key never matches on a ticker, so without a budget the run reads it for ever."""
     state = await _reading_state()

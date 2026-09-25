@@ -1851,10 +1851,11 @@ class Agent:
                     verdict = answered.answers.get(key)
                     if isinstance(verdict, NoulAnswer):
                         candidate.committing = verdict.probability > self._config.thresholds.irreversible_above
+        # A candidate Jev could not classify counts as committing: a failed call must not drop the receipt check.
         committed = {
             url
             for candidate in state.transaction_candidates
-            if candidate.committing
+            if candidate.committing is not False
             for url in (candidate.from_url, candidate.landed_url)
             if url is not None
         }

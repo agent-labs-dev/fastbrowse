@@ -1,4 +1,6 @@
+import asyncio
 import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -676,6 +678,21 @@ def test_transaction_evidence_keeps_the_latest_pages_within_its_own_budget() -> 
     assert transaction_check_question(answer, notes, ()) is None
 
 
+def test_a_receipt_larger_than_the_budget_is_cut_to_fit_not_dropped() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Black pen £7"), (BlockKind.PARAGRAPH, "Order placed: red pen " + "x" * 20000))
+    notes = Notes(
+        Fact(reader=FactReader.LLM, text=block.source_id, evidence=block_evidence(page, block.source_id))
+        for block in page.blocks
+    )
+    listed, placed = tuple(notes.evidence)
+    answer = assemble_answer((Claim(text="Bought a black pen for £7", evidence_ids=(listed,)),), notes, ())
+    tokens = TokenBudget(state_plus_largest_question=3000)
+    question = transaction_check_question(answer, notes, (placed,), tokens=tokens)
+    assert question is not None
+    assert "Order placed: red pen" in question.instructions
+    assert tokens.remaining_chars(json.dumps({"answer": answer.answer}), [question.model_dump_json()]) >= 0
+
+
 async def test_transaction_evidence_does_not_spend_the_omission_notes_budget() -> None:
     from fastbrowse.verification import check_claims
     from tests.test_policy import ScriptedJev
@@ -1056,6 +1073,36 @@ async def test_an_answer_the_committed_pages_contradict_is_rejected(contradicted
     assert (held is None) is (contradicted > 0.5)
 
 
+async def test_a_failed_claim_ask_waits_for_the_transaction_ask_before_raising() -> None:
+    from fastbrowse.jev import Evaluation, NoulAnswer
+    from fastbrowse.verification import check_claims
+
+    finished: list[str] = []
+
+    class Jev:
+        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
+            if TRANSACTION_CONTRADICTED not in questions:
+                raise JevError("claims failed")
+            await asyncio.sleep(0.01)
+            finished.append(TRANSACTION_CONTRADICTED)
+            free = CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0)
+            answers = {key: NoulAnswer(probability=0.05) for key in questions}
+            return Evaluation(model="test", answers=answers, input_tokens=1, cost=free)
+
+    page = capture((BlockKind.PARAGRAPH, "Black pen £7"), (BlockKind.PARAGRAPH, "Order placed: black pen £7"))
+    notes = Notes(
+        Fact(reader=FactReader.LLM, text=block.source_id, evidence=block_evidence(page, block.source_id))
+        for block in page.blocks
+    )
+    listed, placed = tuple(notes.evidence)
+    composed = assemble_answer((Claim(text="Bought a black pen for £7", evidence_ids=(listed,)),), notes, ())
+    ledger = Ledger(Limits())
+    with pytest.raises(JevError):
+        await check_claims(Jev(), composed, notes, Thresholds(), ledger=ledger, transaction_evidence_ids=(placed,))
+    assert finished == [TRANSACTION_CONTRADICTED]
+    assert ledger.lines, "the finished ask was billed before check_claims returned"
+
+
 async def test_pruning_the_only_claim_for_a_requirement_is_an_omission() -> None:
     from fastbrowse.jev import Evaluation, NoulAnswer
     from fastbrowse.models import CostBasis, CostComponent, CostLine, Evidence
@@ -1218,6 +1265,22 @@ async def test_a_lost_continuation_record_blocks_a_later_pages_winner(loss: str)
     assert notes.evidenced("r2")
     assert any(f.text == "Book C is cheapest" and f.requirement_id is None for f in notes.facts)
     assert outcome.uncovered == 1 and outcome.incomplete == ("r1",)
+
+
+async def test_overflow_records_a_claim_already_holds_are_not_lost() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Book A 12.00"), (BlockKind.PARAGRAPH, "Book B 15.00"))
+    records: list[JsonValue] = [{"first": "s0", "last": "s0"}] * 60 + [{"first": "s1", "last": "s1"}]
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [{"text": "Book B costs 15.00", "cite": {"first": "s1", "last": "s1"}}],
+                "answered": False,
+                "continues": [{"requirement_id": "r1", "records": records}],
+            }
+        ]
+    )
+    outcome = await read(llm, page, "Cheapest?", ["r1"], Notes())
+    assert outcome.uncovered == 0 and outcome.incomplete == ()
 
 
 async def test_a_lost_continuation_record_blocks_the_last_chunks_winner() -> None:

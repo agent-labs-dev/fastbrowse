@@ -32,7 +32,7 @@ from fastbrowse.jev import (
     NoulQuestion,
 )
 from fastbrowse.llm import Generation, LLMClient, Message
-from fastbrowse.memory import Fact, Notes, fact_id
+from fastbrowse.memory import Fact, Notes, evidence_id, fact_id
 from fastbrowse.models import UNTRUSTED, Citation, CostComponent, CostLine, Evidence, FactReader, Frozen, LLMPurpose
 from fastbrowse.page import Block, BlockKind, Capture
 from fastbrowse.planner import Plan, Requirement, RequirementKind
@@ -580,7 +580,13 @@ async def read(
         # Code copies each quote from the blocks named, exactly as it does for a claim, so a record is the
         # page's own text and never the reader's retyping of it.
         for continuation in carried:
-            missing = max(0, len(continuation.records) - _MAX_CONTINUING_RECORDS)
+            # Records past the cap are not kept, but one an accepted claim already holds is not lost.
+            held = {fact_id(fact) for fact in found} | so_far.evidence.keys()
+            missing = 0
+            for cite in continuation.records[_MAX_CONTINUING_RECORDS:]:
+                evidence = _cited(capture, part, cite)
+                if evidence is None or evidence_id(evidence) not in held:
+                    missing += 1
             for cite in continuation.records[:_MAX_CONTINUING_RECORDS]:
                 evidence = _cited(capture, part, cite)
                 if evidence is None:
@@ -1329,6 +1335,12 @@ def transaction_check_question(
         if len(json.dumps("\n".join([line, *kept]))) - len('""') > room:
             break
         kept.insert(0, line)
+    if not kept:
+        # A receipt larger than the budget is cut to fit rather than dropped: without it nothing checks the answer.
+        cut = committed[-1][: max(room, 0)]
+        while cut and len(json.dumps(cut)) - len('""') > room:
+            cut = cut[: len(cut) * 9 // 10]
+        kept = [cut] if cut else []
     return transaction.model_copy(update={"instructions": context + "\n".join(kept) + question}) if kept else None
 
 

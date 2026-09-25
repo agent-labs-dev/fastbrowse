@@ -374,9 +374,14 @@ async def check_claims(
     else:
         # Asked apart so the committed pages cannot take the omission check's notes budget.
         checked = {TRANSACTION_CONTRADICTED: transaction}
+        # Both asks finish before either failure propagates, so neither is billed after the check has returned.
         claimed, committed = await asyncio.gather(
-            _ask(jev, composed, questions, ledger), _ask(jev, composed, checked, ledger)
+            _ask(jev, composed, questions, ledger), _ask(jev, composed, checked, ledger), return_exceptions=True
         )
+        if isinstance(claimed, BaseException):
+            raise claimed
+        if isinstance(committed, BaseException):
+            raise committed
         answers = {**claimed, **committed}
         questions = {**questions, **checked}
     limit = thresholds.claim_problem_above
