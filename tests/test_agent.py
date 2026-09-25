@@ -18,6 +18,7 @@ from fastbrowse.agent import (
     _follow_recovery,
     _guessed,
     _history,
+    _record,
     _RunState,
     _Stop,
     _try_unsure,
@@ -97,6 +98,13 @@ async def test_field_writer_receives_popup_context_and_other_field_values() -> N
     other = field("Destination").model_copy(update={"id": "destination", "value": "York"})
     obs = observation((target, other)).model_copy(update={"viewport_text": "Choose a station"})
     state = await run_state()
+    steps = ("Set the origin to Bath and search.", "Go back and change the origin to Bristol.")
+    state.ready_plan = Plan(
+        requirements=tuple(
+            Requirement(id=f"r{i}", text=text, kind=RequirementKind.ACTION) for i, text in enumerate(steps)
+        ),
+        answer_expected=False,
+    )
     state.hint = "Replace the origin"
     state.history.append(
         HistoryEntry(operation=Operation.CLICK, target="Origin", outcome=StepOutcome.EXECUTED, page_changed=True)
@@ -113,6 +121,40 @@ async def test_field_writer_receives_popup_context_and_other_field_values() -> N
     assert prompt["recent_actions"][0]["target"] == "Origin"
     assert prompt["subgoal"] == "Replace the origin"
     assert prompt["page"]["text"] == "Choose a station"
+    # In order: told only the task, the writer typed a later correction on the first pass.
+    assert prompt["requirements"] == list(steps)
+
+
+def test_a_value_typed_before_the_recent_window_stays_in_the_record() -> None:
+    """A long wizard pushed its first fill out of the recent actions, and the correction then showed no order."""
+    first = HistoryEntry(
+        operation=Operation.FILL, target="Name", outcome=StepOutcome.EXECUTED, page_changed=False, text="Ada"
+    )
+    click = HistoryEntry(operation=Operation.CLICK, target="Next", outcome=StepOutcome.EXECUTED, page_changed=True)
+    limits = ObservationLimits(history_entries=2, earlier_history_entries=1)
+    record = _record([first, *[click] * 5], limits)
+    assert record[0].text == "Ada"
+    assert len(record) == 4
+
+
+async def test_a_step_abandoned_while_waiting_for_the_plan_leaves_the_plan_to_the_rest_of_the_run() -> None:
+    """A fill waits for the plan, and a redraw cancels the fill: the plan every later step needs survives."""
+    plan = Plan(requirements=(), answer_expected=False)
+    release = asyncio.Event()
+
+    async def planned() -> Generation[Plan]:
+        await release.wait()
+        return Generation(data=plan, cost=FREE)
+
+    state = await run_state()
+    state.ready_plan, state.planning = None, asyncio.create_task(planned())
+    waiting = asyncio.create_task(state.await_plan())
+    await asyncio.sleep(0)
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    release.set()
+    assert await state.await_plan() is plan
 
 
 async def test_missing_personal_information_stops_once_recovery_returns_to_it() -> None:

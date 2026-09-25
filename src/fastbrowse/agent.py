@@ -154,7 +154,10 @@ _FIELD_WRITER = (
     "Use the field's displayed format for dates, except in a field whose input_type is date, datetime-local, month, "
     "week or time, which takes ISO 8601 (2026-09-25, 2026-09-25T14:30, 2026-09, 2026-W39, 14:30). "
     "A fact the task states in another shape is given, not missing: take the part of a "
-    "stated name, address or date this field asks for and write it in the field's shape.\n\n"
+    "stated name, address or date this field asks for and write it in the field's shape. "
+    "The requirements are the task's steps in the order it wants them done. When more than one gives this field "
+    "a value (enter one, later change it), write the value of the earliest such requirement that no recent "
+    "action has already typed into this field; a later value is written only after the earlier one was.\n\n"
     f"# Trust\n{UNTRUSTED}"
 )
 
@@ -305,7 +308,9 @@ class _RunState:
 
     async def await_plan(self) -> Plan:
         if self.ready_plan is None:
-            planned = await self.planning
+            # Shielded: a caller cancelled mid-wait (a fill a redraw abandoned) must not cancel the one plan every
+            # later step needs. Teardown still cancels the task itself.
+            planned = await asyncio.shield(self.planning)
             self.ledger.record(planned.cost)
             self.ready_plan = planned.data
         return self.ready_plan
@@ -1275,6 +1280,9 @@ class Agent:
         # can have a generic label; the opening action and surrounding values explain its purpose.
         context = {
             "task": state.task,
+            # Given only the task, the writer typed "enter X, later correct it to Y" as Y on the first pass every
+            # time, and no Back could then show a correction; in order, it typed X first and Y after going back.
+            "requirements": [r.text for r in (await state.await_plan()).requirements],
             "subgoal": state.hint,
             "field": target.model_dump(mode="json", exclude_none=True),
             "other_fields": [
@@ -1292,7 +1300,7 @@ class Agent:
             },
             "recent_actions": [
                 entry.model_dump(mode="json", exclude_none=True)
-                for entry in _history(state.history, self._config.observation)
+                for entry in _record(state.history, self._config.observation)
             ],
             "notes": state.notes.render(self._config.observation.working_notes_chars),
         }
@@ -1702,6 +1710,7 @@ class Agent:
             self._config.thresholds,
             draft,
             tokens=self._config.tokens,
+            history=_record(state.history, self._config.observation),
         )
         trace(
             "done_check",
@@ -1746,7 +1755,7 @@ class Agent:
                     fresh,
                     await self._screenshots(),
                     state.notes,
-                    state.steps,
+                    _record(state.history, self._config.observation),
                     doubted=check.doubted,
                     invented=sorted(state.invented),
                     config=self._config,
@@ -2162,6 +2171,14 @@ def _history(history: Sequence[HistoryEntry], limits: ObservationLimits) -> tupl
     split = len(history) - limits.history_entries
     earlier = history[max(0, split - limits.earlier_history_entries) : max(0, split)]
     return (*(entry.model_copy(update={"effect": None}) for entry in earlier), *history[max(0, split) :])
+
+
+def _record(history: Sequence[HistoryEntry], limits: ObservationLimits) -> tuple[HistoryEntry, ...]:
+    """The recent actions, after every value typed before them: a correction is judged against the first value,
+    which a long wizard can push out of the recent window."""
+    recent = _history(history, limits)
+    typed = (e.model_copy(update={"effect": None}) for e in history[: len(history) - len(recent)] if e.text is not None)
+    return (*typed, *recent)
 
 
 def _recovery_text(text: str) -> str:

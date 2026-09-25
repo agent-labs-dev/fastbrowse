@@ -11,6 +11,7 @@ exercises the same skill.
 Each stretch task failed at least once in three runs of the unmodified agent, for a reason other than
 infrastructure, when it was chosen; a candidate that passed every run was dropped. They cover a multi-step form
 with a correction, a date relative to today, a list aggregated across pages, and a filter changed and then undone.
+The form-with-a-correction task moved to the dev set once a fix was debugged against it.
 
 Truth is fixed by a practice site, fetched from a live API at run time as in `live_tasks`, or computed from the
 date an attempt runs on.
@@ -389,21 +390,23 @@ STRETCH_DEV: tuple[LiveTask, ...] = (
         _pairs(("Pixel 2", "399"), ("Pixel 3", "599")),
         Category.WIDGET,
     ),
-)
-
-STRETCH_HELDOUT: tuple[LiveTask, ...] = (
+    # Held out until #143 was debugged against it; a task a fix was made for measures the fix, not the agent.
     LiveTask(
         "stretch-wizard-correction",
         "https://lab.hakdogan.com/practice/form-multi-step/",
         "In the Live Interactive Form widget, fill First Name 'Priya Sharma', Email "
         "'priya.sharma@example.com', Address '221B Baker Street', City 'Manchester', Language 'Turkish', and "
         "check the QA newsletter box. Reach the Review step, then go back and correct the first name to "
-        "'Priya Sharman' before continuing through Submit. Tell me what the confirmation says.",
+        "'Priya Sharman' before continuing through Submit. Tell me the first name the Review step showed last "
+        "and what the confirmation says.",
         _fixed(None),
         _has("Priya Sharman", "submitted successfully"),
         Category.CHECKOUT,
         authorize=True,
     ),
+)
+
+STRETCH_HELDOUT: tuple[LiveTask, ...] = (
     LiveTask(
         "stretch-calendar-first-friday",
         "https://practice.softwaretestingmentor.com/calendar/",

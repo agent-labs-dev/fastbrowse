@@ -662,6 +662,53 @@ async def test_a_uniquely_named_date_field_still_gets_its_section_heading(
     assert start.context == "Date Picker 3"
 
 
+async def test_a_control_is_named_by_the_title_nearest_before_it_not_the_posts_first_heading(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    """A post's heading ("Data Entry Form") named a date picker's Submit, and the verifier read the wrong form."""
+    await page.navigate(f"{main_site}/icons.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.body.innerHTML = '<article><h3>Data Entry Form</h3><p>Pick dates below.</p>"
+        '<label>Date Picker 3</label><div><label>Start Date<input type="date"></label>'
+        "<button>Submit</button></div></article>"
+        '<form><h3>Contact</h3><label for="n">Name</label><input id="n"><button>Submit</button></form>\'',
+    )
+    obs = await observe_until(page, "Start Date")
+    assert find(obs, "Start Date").context == "Date Picker 3"
+    submits = [c for c in obs.controls if c.label == "Submit"]
+    assert sorted(c.context or "" for c in submits) == ["Contact", "Date Picker 3"]
+
+
+async def test_twins_keep_their_card_names_past_shared_hidden_and_control_labels(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    """A shared "Options" heading, a hidden label and a label holding an output are not what names a card."""
+    card = (
+        "<div><h2>{name}</h2><label hidden>Unavailable</label><label>Total <output>12</output></label>"
+        "<h3>Options</h3><label>Quantity<input></label><button>Add to cart</button></div>"
+    )
+    await page.navigate(f"{main_site}/icons.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        f"document.body.innerHTML = '{card.format(name='Brass Kettle')}{card.format(name='Copper Pan')}'",
+    )
+    obs = await observe_until(page, "Add to cart")
+    for label in ("Add to cart", "Quantity"):
+        assert [c.context for c in obs.controls if c.label == label] == ["Brass Kettle", "Copper Pan"]
+    # One card's transparent label is not shared, so the shared-title fallback cannot be what skips it.
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        'document.body.innerHTML = \'<div><h2>Brass Kettle</h2><label style="opacity:0">Sold out</label>'
+        "<button>Add to cart</button></div><div><h2>Copper Pan</h2><button>Add to cart</button></div>'",
+    )
+    obs = await observe_until(page, "Add to cart")
+    assert [c.context for c in obs.controls if c.label == "Add to cart"] == ["Brass Kettle", "Copper Pan"]
+
+
 async def test_a_browser_handed_over_by_cdp_url_drives_and_survives_the_run(
     chrome_connection: BrowserConnection, artifact_sink: RecordingArtifactSink, main_site: str
 ) -> None:

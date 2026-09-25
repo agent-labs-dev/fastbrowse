@@ -174,7 +174,8 @@ Their tasks are not scored by the home-suite graders.
 
 `stretch-dev` and `stretch-heldout` are a harder split, paired by skill in the same way: a multi-step form with a
 correction, a date relative to today, a list that has to be aggregated across pages, and a filter that is
-applied and then partly undone.
+applied and then partly undone. `stretch-wizard-correction` moved to `stretch-dev` once #143 was debugged
+against it, so the held-out form-correction skill has no pair until a fresh task replaces it.
 
 Use `stretch-dev` or `stretch-heldout` as the live-suite recipe's suite argument.
 
@@ -187,12 +188,12 @@ Date truth is computed when the attempt runs, and form and date tasks are graded
 | `stretch-date-range-monday` | widget | 2 | Find Date Picker 3, the date range picker. Book a stay starting the next Monday that is strictly after today, for nine nights, then submit. Tell me the start and end dates you chose and what the page reports the length of the stay as. |
 | `stretch-books-nonfiction-five-star` | lookup | 4 | Across every page of the Nonfiction category, which three five-star-rated books are the cheapest, and what does each cost? |
 | `stretch-bstack-apple-google` | widget | 3 | Filter the product list to Apple and Google together. Then remove the Apple filter, so only Google remains. Sort by price lowest to highest, and tell me the two cheapest Google phones and their prices. |
+| `stretch-wizard-correction` | checkout | 3 | In the Live Interactive Form widget, fill First Name 'Priya Sharma', Email 'priya.sharma@example.com', Address '221B Baker Street', City 'Manchester', Language 'Turkish', and check the QA newsletter box. Reach the Review step, then go back and correct the first name to 'Priya Sharman' before continuing through Submit. Tell me the first name the Review step showed last and what the confirmation says. |
 <!-- /evals:tasks:stretch-dev -->
 
 <!-- evals:tasks:stretch-heldout -->
 | Task | Category | Version | Asks |
 |---|---|---|---|
-| `stretch-wizard-correction` | checkout | 2 | In the Live Interactive Form widget, fill First Name 'Priya Sharma', Email 'priya.sharma@example.com', Address '221B Baker Street', City 'Manchester', Language 'Turkish', and check the QA newsletter box. Reach the Review step, then go back and correct the first name to 'Priya Sharman' before continuing through Submit. Tell me what the confirmation says. |
 | `stretch-calendar-first-friday` | widget | 3 | Using the jQuery UI Datepicker (the calendar popup, not the native date input), navigate to next month and select its first Friday. Tell me the date, day, and month it shows. |
 | `stretch-quotes-top-authors` | lookup | 3 | Across every page of this site, which three authors have the most quotes attributed to them, and how many quotes does each have? |
 | `stretch-bstack-apple-samsung` | widget | 3 | Filter the product list to Apple and Samsung together, then remove the Apple filter so only Samsung remains. Sort by price highest to lowest, and tell me the three most expensive phones and their prices. |
@@ -226,11 +227,11 @@ when they differ:
 | `core` | 21 | `6e85816d` |
 | `dev` | 8 | `c07d79d0` |
 | `heldout` | 9 | `45bdce8f` |
-| `stretch-dev` | 4 | `cfbbe3a1` |
-| `stretch-heldout` | 4 | `5e3bc643` |
+| `stretch-dev` | 5 | `f08d4b25` |
+| `stretch-heldout` | 3 | `232fc3bf` |
 | local fixtures | 6 | `dda8ba89` |
 
-Tasks past version 1: `arxiv-open` v2, `arxiv-title` v2, `books-mystery-cheapest` v2, `books-travel-priciest` v2, `countries-mongolia` v2, `crates-serde` v2, `dynamic-loading` v2, `expandtesting-login` v2, `flights-search` v2, `github-license` v2, `github-open` v2, `google-flights` v2, `hn-comments` v2, `hn-top` v2, `hockey-bruins-1990` v2, `hover-profile` v2, `httpx-requires-python` v2, `internet-login` v2, `nested-frames` v2, `new-window` v2, `oscars-2012` v2, `pizza-order` v2, `practice-login` v2, `pypi-newer` v2, `pypi-open` v2, `pypi-structured` v2, `pypi-version` v2, `quotes-einstein-count` v2, `quotes-js-page2` v2, `quotes-search` v2, `ruff-release` v2, `saucedemo-cart` v2, `saucedemo-checkout` v2, `saucedemo-locked-out` v2, `saucedemo-pause` v2, `stretch-books-nonfiction-five-star` v4, `stretch-bstack-apple-google` v3, `stretch-bstack-apple-samsung` v3, `stretch-calendar-first-friday` v3, `stretch-date-range-monday` v2, `stretch-quotes-top-authors` v3, `stretch-wizard-correction` v2, `stretch-wizard-review` v2, `table-largest-due` v2, `wiki-godel` v2, `wiki-open` v2.
+Tasks past version 1: `arxiv-open` v2, `arxiv-title` v2, `books-mystery-cheapest` v2, `books-travel-priciest` v2, `countries-mongolia` v2, `crates-serde` v2, `dynamic-loading` v2, `expandtesting-login` v2, `flights-search` v2, `github-license` v2, `github-open` v2, `google-flights` v2, `hn-comments` v2, `hn-top` v2, `hockey-bruins-1990` v2, `hover-profile` v2, `httpx-requires-python` v2, `internet-login` v2, `nested-frames` v2, `new-window` v2, `oscars-2012` v2, `pizza-order` v2, `practice-login` v2, `pypi-newer` v2, `pypi-open` v2, `pypi-structured` v2, `pypi-version` v2, `quotes-einstein-count` v2, `quotes-js-page2` v2, `quotes-search` v2, `ruff-release` v2, `saucedemo-cart` v2, `saucedemo-checkout` v2, `saucedemo-locked-out` v2, `saucedemo-pause` v2, `stretch-books-nonfiction-five-star` v4, `stretch-bstack-apple-google` v3, `stretch-bstack-apple-samsung` v3, `stretch-calendar-first-friday` v3, `stretch-date-range-monday` v2, `stretch-quotes-top-authors` v3, `stretch-wizard-correction` v3, `stretch-wizard-review` v2, `table-largest-due` v2, `wiki-godel` v2, `wiki-open` v2.
 <!-- /evals:versions -->
 
 Published results are rows, not tables typed by hand. A release's rows are committed to
