@@ -13,6 +13,7 @@ from fastbrowse.clients.typesafe import TypeSafeJevClient
 from fastbrowse.clients.validation import RETRY_DELAYS_SECONDS, jev_spend
 from fastbrowse.clients.vercel import VercelGatewayJevClient
 from fastbrowse.jev import (
+    JEV_DOLLARS_PER_INPUT_TOKEN,
     ChoiceAnswer,
     ChoiceQuestion,
     JevError,
@@ -24,7 +25,8 @@ from fastbrowse.jev import (
     ScoreAnswer,
     ScoreQuestion,
 )
-from fastbrowse.models import CostBasis, CostLine
+from fastbrowse.models import CostBasis, CostLine, Limits
+from fastbrowse.telemetry import BudgetExceeded, Ledger
 
 
 def choice() -> ChoiceQuestion:
@@ -485,6 +487,30 @@ async def test_batch_split_does_not_change_other_failure_contracts(
                 "page", {key: NoulQuestion(instructions=key) for key in ("a", "b")}
             )
     assert calls == (len(RETRY_DELAYS_SECONDS) + 1 if status == 429 else 1)
+
+
+async def test_a_split_single_that_would_cross_the_dollar_cap_is_not_sent() -> None:
+    cap = 0.001
+    sent: list[tuple[str, ...]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        keys = tuple(json.loads(request.content)["questions"])
+        sent.append(keys)
+        if len(keys) > 1:
+            return httpx.Response(503)
+        # The first single's bill leaves less room under the cap than the next single's own input.
+        billed = int(cap / JEV_DOLLARS_PER_INPUT_TOKEN) - 100
+        return httpx.Response(
+            200, json={"answers": {keys[0]: {"type": "noul", "noul": 1}}, "usage": {"input_tokens": billed}}
+        )
+
+    ledger = Ledger(Limits(max_dollars=cap))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with jev_spend(ledger.lines, ledger=ledger), pytest.raises(BudgetExceeded):
+            await TypeSafeJevClient("key", http=http).evaluate(
+                "page", {key: NoulQuestion(instructions=key * 3000) for key in ("a", "b")}
+            )
+    assert sent == [("a", "b"), ("a", "b"), ("a",)]
 
 
 @pytest.mark.parametrize("cancel", [True, False])

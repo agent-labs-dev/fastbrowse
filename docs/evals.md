@@ -188,8 +188,9 @@ A score means something only next to the build and tasks that produced it, so ev
 A task's version goes up whenever what it asks, where it starts or how it is graded changes. Two rows compare only
 at equal task versions, and two suite scores only at equal suite versions. `src/fastbrowse/evals/versions.json`
 records each task's version with a fingerprint of its definition: its fields, and the tokens of its grader and
-answer key followed into every eval helper, class and constant they reach. Comments and layout are not part of it;
-anything else is, so a task cannot change and keep its version. A test fails until the version is bumped:
+answer key followed into every eval helper, class and constant they reach. Comments and layout are not part of it,
+nor is text a task declares `rolling`, such as the flight date four weeks out, which is fingerprinted under a
+stable name; anything else is, so a task cannot change and keep its version. A test fails until the version is bumped:
 
 ```sh
 uv run python -m fastbrowse.evals.versions --bump TASK_ID --docs

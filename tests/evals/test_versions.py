@@ -28,6 +28,18 @@ def test_a_changed_grader_changes_the_fingerprint() -> None:
     assert versions.fingerprint(dataclasses.replace(task)) == versions.fingerprint(task)
 
 
+@pytest.mark.parametrize("task_id", ["google-flights", "flights-search"])
+def test_a_rolling_date_keeps_the_version_from_one_day_to_the_next(task_id: str) -> None:
+    task = next(t for suite in live.SUITES.values() for t in suite if t.id == task_id)
+    [(today, name)] = task.rolling.items()
+    assert today in task.task
+    tomorrow = dataclasses.replace(
+        task, task=task.task.replace(today, "1 January 2099"), rolling={"1 January 2099": name}
+    )
+    assert versions.fingerprint(tomorrow) == versions.fingerprint(task)
+    assert versions.fingerprint(dataclasses.replace(tomorrow, task="Search for flights.")) != versions.fingerprint(task)
+
+
 def test_closures_over_different_values_fingerprint_apart() -> None:
     def expecting(needle: str) -> LiveTask:
         return dataclasses.replace(live.SUITES["core"][0], check=lambda _outcome, _truth: needle)
@@ -110,6 +122,8 @@ def test_publishing_refuses_rows_that_cannot_be_traced_or_compared(results: Path
         _row("pypi-version", git_sha=None),
         _row("pypi-version", fastbrowse_version="9.9.8"),
         _row("pypi-version") | {"task_version": 0},
+        # A task missing from the lock has no version to compare, so its null version must not match.
+        _row("no-such-task"),
     ):
         with pytest.raises(ValueError):
             _publish(results, [bad])

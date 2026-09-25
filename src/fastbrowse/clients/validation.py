@@ -1,6 +1,8 @@
 """Shared wire encoding and strict validation for both Jev transports."""
 
 import asyncio
+import functools
+import json
 import logging
 import math
 import time
@@ -14,6 +16,7 @@ from typing import assert_never
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
+from fastbrowse.config import TokenBudget
 from fastbrowse.jev import (
     JEV_DOLLARS_PER_INPUT_TOKEN,
     Answer,
@@ -383,7 +386,9 @@ async def post(
     start_attempt: int = 0,
     split_batch: bool = False,
 ) -> httpx.Response:
-    check_jev_spend()
+    # Priced before sending, so a split single or a retry cannot carry the run past its dollar cap.
+    check = functools.partial(check_jev_spend, _body_dollars(body))
+    check()
     started = monotonic()
     usage = usage if usage is not None else RequestUsage()
     auth = {"Authorization": f"Bearer {api_key}", **(headers or {})}
@@ -396,7 +401,7 @@ async def post(
             call="jev",
             attempt_seconds=JEV_ATTEMPT_SECONDS,
             hedge_seconds=JEV_HEDGE_SECONDS,
-            before_retry=check_jev_spend,
+            before_retry=check,
             usage=usage,
             start_attempt=start_attempt,
             split_batch=split_batch,
@@ -522,12 +527,16 @@ def record_jev_spend(costs: Sequence[CostLine]) -> None:
         spend.lines.extend(costs)
 
 
-def check_jev_spend() -> None:
+def _body_dollars(body: dict[str, JsonValue]) -> float:
+    return len(json.dumps(body)) / TokenBudget().chars_per_token * JEV_DOLLARS_PER_INPUT_TOKEN
+
+
+def check_jev_spend(estimate_dollars: float = 0.0) -> None:
     if (spend := _partial_spend.get()) is not None and spend.ledger is not None:
         ledger = spend.ledger
         # Nested splits and failover hold paid answers until their result can include them once.
         lines = [*ledger.lines, *(cost for paid in spend.pending.values() if paid is not ledger.lines for cost in paid)]
-        replace(ledger, lines=lines).reserve(CostComponent.JEV, calls=0)
+        replace(ledger, lines=lines).reserve(CostComponent.JEV, estimate_dollars, calls=0)
 
 
 def merged_cost(lines: Sequence[CostLine]) -> CostLine:

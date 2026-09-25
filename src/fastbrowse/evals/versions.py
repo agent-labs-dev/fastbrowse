@@ -137,7 +137,12 @@ def _stable(value: object, seen: set[str]) -> object:
 def fingerprint(task: object) -> str:
     """What the task asks and how it is graded, hashed: equal fingerprints grade the same run the same way."""
     assert dataclasses.is_dataclass(task) and not isinstance(task, type)
-    body = json.dumps(_stable(task, set()), sort_keys=True, default=str)
+    seen: set[str] = set()
+    # `rolling` says how to fingerprint the task, not what it asks: its text is hashed under its stable name.
+    fields = {f.name: _stable(getattr(task, f.name), seen) for f in dataclasses.fields(task) if f.name != "rolling"}
+    body = json.dumps(fields, sort_keys=True, default=str)
+    for text, name in getattr(task, "rolling", {}).items():
+        body = body.replace(text, name)
     return hashlib.sha256(body.encode()).hexdigest()[:16]
 
 
@@ -246,7 +251,10 @@ def publish(release: str, source: Path) -> Path:
             problems.append(f"{where}: not from a clean, committed tree")
         elif run.get("fastbrowse_version") != release:
             problems.append(f"{where}: ran fastbrowse {run.get('fastbrowse_version')}, not {release}")
-        if row.get("task_version") != task_version(str(row.get("task")), lock):
+        current = task_version(str(row.get("task")), lock)
+        if current is None:
+            problems.append(f"{where}: no task by that id is in versions.json")
+        elif row.get("task_version") != current:
             problems.append(f"{where}: task version {row.get('task_version')} is not the current one")
     if not rows or problems:
         raise ValueError("\n".join(problems) or f"{source} has no rows")
