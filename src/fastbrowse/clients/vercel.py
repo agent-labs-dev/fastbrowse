@@ -21,6 +21,7 @@ from pydantic import JsonValue
 
 from fastbrowse.clients.validation import (
     RequestUsage,
+    asking_open,
     dollars,
     error_detail,
     estimated_cost,
@@ -46,6 +47,9 @@ class VercelGatewayJevClient:
         self._base_url = base_url.rstrip("/")
 
     async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        return await asking_open(questions, lambda asked: self._ask(state, asked), "typesafe-ai/jev")
+
+    async def _ask(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
         started = monotonic()
         sent = RequestUsage()
         response = await post(

@@ -432,6 +432,14 @@ def _video(record: Path | None) -> str | None:
     return str(record) if record is not None and record.exists() and record.stat().st_size else None
 
 
+async def _github_token(request: httpx.Request) -> None:
+    # An answer key is fetched again on every retry, and a Jev outage retries rows for hours, so the anonymous
+    # 60 an hour ran out and failed github-license on a 403. A token raises that to 5000.
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token and request.url.host == "api.github.com":
+        request.headers["Authorization"] = f"Bearer {token}"
+
+
 async def _truth(task: LiveTask, http: httpx.AsyncClient) -> object:
     # Answer keys come from public APIs that rate-limit, so a transient failure is waited out, never a crashed eval.
     for retries in itertools.count():
@@ -444,6 +452,24 @@ async def _truth(task: LiveTask, http: httpx.AsyncClient) -> object:
             wait = min(30 * (retries + 1), 300)
             print(f"RETRY truth         {task.id:20} in {wait}s: {type(exc).__name__} {status or ''}", flush=True)
             await asyncio.sleep(wait)
+
+
+def _crashed(
+    arm: str, task: LiveTask, failure: str, *, at: float, seconds: float, status: str | None, record: Path | None
+) -> EvalRow:
+    return EvalRow(
+        arm=arm,
+        task=task.id,
+        category=task.category.value,
+        at=at,
+        status=status,
+        correct=False,
+        passed=False,
+        failure=failure,
+        seconds=round(seconds, 1),
+        dollars=None,
+        video=_video(record),
+    )
 
 
 async def run_arm(
@@ -470,20 +496,21 @@ async def run_arm(
             outcome, report = await hosted_arm(task, http, record=record)
     except Exception as exc:  # a crashed arm is a failed task, recorded rather than aborting the comparison
         unavailable = isinstance(exc, (Unavailable, *TRANSIENT_TRANSPORT))
-        return EvalRow(
-            arm=arm,
-            task=task.id,
-            category=task.category.value,
+        return _crashed(
+            arm,
+            task,
+            f"{type(exc).__name__}: {exc}",
             at=at,
+            seconds=time.monotonic() - started,
             status=Status.UNAVAILABLE.value if unavailable else None,
-            correct=False,
-            passed=False,
-            failure=f"{type(exc).__name__}: {exc}",
-            seconds=round(time.monotonic() - started, 1),
-            dollars=None,
-            video=_video(record),
+            record=record,
         )
-    failure = task.check(outcome, truth)
+    try:
+        failure = task.check(outcome, truth)
+    except Exception as exc:
+        # One task's grader must not discard every other run in the suite: gather propagates, and a 114-run
+        # pass is an hour and real money. A grader that raises is that row's failure and nobody else's.
+        failure = f"check raised {type(exc).__name__}: {exc}"
     # Right and proven are graded apart: a correct answer the agent could not back with quotes is a
     # different defect from a wrong one, and one pass/fail column hid which the suite was showing.
     correct = failure is None
@@ -654,13 +681,20 @@ async def main(argv: list[str]) -> int:
         tempfile.TemporaryDirectory() as downloads,
         args.out.open("a", encoding="utf-8") as out,
     ):
-        async with httpx.AsyncClient(timeout=60) as http:
+        async with httpx.AsyncClient(timeout=60, event_hooks={"request": [_github_token]}) as http:
 
             async def one(arm: str, task: LiveTask, record: Path | None) -> EvalRow:
                 # A provider outage says nothing about the agent, so a run it ended is run again until one ends
                 # on its own, however long that takes; the slot is released while waiting, and for the answer key.
                 for retries in itertools.count():
-                    truth = await _truth(task, http)
+                    try:
+                        truth = await _truth(task, http)
+                    except Exception as exc:
+                        # An answer key that will not come back (a 403 from a rate-limited API, a body missing
+                        # the field it is read from) fails this task alone: gather would discard every run.
+                        failure = f"truth raised {type(exc).__name__}: {exc}"
+                        row = _crashed(arm, task, failure, at=time.time(), seconds=0.0, status=None, record=None)
+                        break
                     async with gate:
                         row = await run_arm(
                             arm, task, truth, http, Path(downloads), bitwarden=args.bitwarden, record=record

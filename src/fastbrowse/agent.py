@@ -18,7 +18,16 @@ from pydantic import BaseModel, Field, JsonValue
 
 from fastbrowse.citations import ANSWER_LINK, text_fragment
 from fastbrowse.config import Config, ObservationLimits
-from fastbrowse.effects import SETTING_ROLES, ControlKey, ControlValue, Move, effect, move, reversal, state_key
+from fastbrowse.effects import (
+    SETTING_ROLES,
+    ControlKey,
+    ControlValue,
+    Move,
+    effect,
+    move,
+    reversal,
+    state_key,
+)
 from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, JevClient, JevError, NoulAnswer, NoulQuestion
 from fastbrowse.llm import Generation, LLMClient, LLMError, Message
 from fastbrowse.memory import Fact, Notes, NotesTooLarge
@@ -231,12 +240,23 @@ class _RunState:
     )
     """Each document's committed control values seen so far, which a setting put back to cannot renew recovery."""
     ready_plan: Plan | None = None
+    invented: set[str] = field(default_factory=set[str])
+    """Addresses this run built from the task rather than reached by clicking: an accepted shortcut, or a start
+    page worked out from the task. These are the ones that can land on a page of the right shape and the wrong
+    search, so the verifier is told which they were."""
+    owes_read: bool = False
+    """An interaction changed the page after the notes last read it. A run clicked a filter and declared itself
+    done, and the check judged notes read off the list before the filter applied, so an answer is not finished
+    until a read of what the interaction produced has run."""
     read_here: bool = False
     """This page has been read since it last changed."""
     tried_unsure: set[str] = field(default_factory=set[str])
     """Page states where an unsure pick has been acted on instead of recovering; the next one there recovers."""
     reads: set[ReadKey] = field(default_factory=set)
     """Attempted reads by document, exact content and outstanding requirements, independent of URL edits."""
+    barren: dict[ReadKey, int] = field(default_factory=dict[ReadKey, int])
+    """Reads by document, page state and outstanding requirements that added no fact. Keyed by what can be done
+    on the page rather than by its exact text, so a page rewriting itself cannot mint a fresh key for ever."""
     next_page: bool = False
     """Open this page's next page, set when the reader says a list the run needs goes on past the page it read."""
     paged_from: str | None = None
@@ -320,13 +340,16 @@ class Agent:
                 # from a page it opened itself wants. `choose_start` is the other case: a caller with a goal
                 # and no page at all, who wants the first address worked out from the task.
                 opening = start if start is not None or not choose_start else await self._first_page(task, ledger)
-                history = [] if opening is None else await self._open(task, opening, ledger)
+                history, invented = ([], set[str]()) if opening is None else await self._open(task, opening, ledger)
                 if start is None and opening is not None:
+                    # The caller gave a goal and no page, so this address was worked out from the task too.
+                    invented.add(opening)
                     await self._front_page_if_blank(opening)
                 state = _RunState(
                     task, inputs or {}, tuple(attachments), authorization or Authorization(), ledger, planning
                 )
                 state.history.extend(history)
+                state.invented = invented
                 return await self._loop(state, output_schema, until)
         except _Stop as stop:
             return self._result(state, ledger, stop.status, error=stop.error)
@@ -357,8 +380,8 @@ class Agent:
             observation = await self._observe()
             state.first_url = state.first_url or observation.url
             self._note_effect(state, observation)
-            undone, renews = self._reversal(state)
-            stalled = self._settle(state, observation, renews=renews)
+            undone, renews, put_back = self._reversal(state)
+            stalled = self._settle(state, observation, renews=renews, put_back=put_back)
             if (stalled := undone or stalled) is not None:
                 await self._recover(state, observation, stalled)
                 continue
@@ -441,20 +464,33 @@ class Agent:
                 await state.await_plan()
                 continue
             if decision.operation in _NOT_ACTING:
-                if _unread(await state.await_plan(), state.notes):
+                plan = await state.await_plan()
+                # Notes that evidence every requirement can still describe the page before the last interaction
+                # redrew it, so an answer owed after one is read off what it drew. A plan that only acts has
+                # nothing to read, and finishes without waiting.
+                if _unread(plan, state.notes) or (state.owes_read and plan.answer_expected):
                     reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
+                    # A read that ran spends the direction it was sent on, but may leave one of its own: the control
+                    # the reader named to show more was cleared right after the read that named it, and Flights
+                    # runs went to recovery without clicking View more flights. A skipped read spends nothing.
+                    held, state.directed = state.directed, None
                     if not await self._step(state, observation, reading, decided_by):
-                        state.directed = None
                         continue
-                    directed = (
-                        decision
-                        if decision.directed
-                        else _follow_recovery(state, observation, decision, uncertain=True)
-                    )
-                    if directed is None:
-                        await self._recover(state, observation, _read_exhausted(state))
-                        continue
-                    decision, uncertain, decided_by = directed, False, Decider.LLM
+                    state.directed = held
+                    if not _unread(plan, state.notes):
+                        # Only an owed read gets here: a scroll changes the page but not its text, so the read
+                        # found content already read, and the notes already describe what the interaction drew.
+                        decision = decision.model_copy(update={"operation": Operation.DONE, "target": None})
+                    else:
+                        directed = (
+                            decision
+                            if decision.directed
+                            else _follow_recovery(state, observation, decision, uncertain=True)
+                        )
+                        if directed is None:
+                            await self._recover(state, observation, _read_exhausted(state))
+                            continue
+                        decision, uncertain, decided_by = directed, False, Decider.LLM
                 else:
                     state.directed = None
                     decision = decision.model_copy(update={"operation": Operation.DONE, "target": None})
@@ -511,7 +547,7 @@ class Agent:
         try:
             await asyncio.wait({working, watching}, return_when=asyncio.FIRST_COMPLETED)
             if not working.done() and watching.result():
-                trace("redecide", url=self._redactor.redact(observation.url))
+                trace("redecide", url=self._redactor.redact_url(observation.url))
                 state.redecided = True
                 return None
             return await working
@@ -559,7 +595,7 @@ class Agent:
         trace("start_page_blank", proposed=opened, front=front)
         await self._page.navigate(front)
 
-    async def _open(self, task: str, start: str, ledger: Ledger) -> list[HistoryEntry]:
+    async def _open(self, task: str, start: str, ledger: Ledger) -> tuple[list[HistoryEntry], set[str]]:
         """Open `start`, or a direct address for the task on its site when one is proposed in time.
 
         The proposal is written while the start page loads, so it costs no wall time unless it outlasts the load,
@@ -570,31 +606,33 @@ class Agent:
             await self._page.navigate(start)
             proposal = await asyncio.wait_for(asyncio.shield(proposing), _SHORTCUT_GRACE_SECONDS)
         except (TimeoutError, LLMError):
-            return []
+            return [], set()
         finally:
             await _discard(proposing)
         shortcut = accept(proposal.url, start)
         if shortcut is None:
-            return []
+            return [], set()
         try:
             await self._page.navigate(shortcut)
             # `accept` saw only the proposed address; a redirect can still land on another site.
-            landed = origin_of(await self._page.origin())
+            landed = await self._page.address()
             status = await self._page.response_status()
         except BrowserError:
             landed, status = None, None
-        if landed != origin_of(start):
+        if landed is None or origin_of(landed) != origin_of(start):
             logger.warning("shortcut %s did not stay on %s; returning to the start page", shortcut, start)
             await self._page.navigate(start)
-            return []
+            return [], set()
         if status is not None and status >= 400:
             # A proposed address is a guess, and a guess can name a path the site does not serve: books-mystery
             # opened `mysteryfile_3/`, read a 404 and spent a BACK leaving it, every run. The start page is known good.
             logger.info("shortcut %s answered HTTP %s; staying on the start page", shortcut, status)
             await self._page.navigate(start)
-            return []
+            return [], set()
         note = f"opened {shortcut} directly instead of clicking there; the start page {start} is one BACK away"
-        return [HistoryEntry(operation=None, target=None, outcome=StepOutcome.EXECUTED, page_changed=True, note=note)]
+        opened = HistoryEntry(operation=None, target=None, outcome=StepOutcome.EXECUTED, page_changed=True, note=note)
+        # The facts cite where the page landed, so a redirect's address is the one they can be matched against.
+        return [opened], {shortcut, landed}
 
     async def _propose(self, task: str, start: str, ledger: Ledger) -> Shortcut:
         # Recorded here, not by the caller: a proposal that finished is billed even when the run ends first.
@@ -654,6 +692,7 @@ class Agent:
             if act.outcome is StepOutcome.EXECUTED and action.text is not None:
                 typed = "<secret>" if action.secret else self._redactor.mask(action.text)
             changed = act.page_changed
+            state.owes_read = state.owes_read or (act.outcome is StepOutcome.EXECUTED and changed)
             # A value edit answers "was this progress" itself, and its answer beats `changed`: the popup a fill
             # draws IS a page change, so `changed` alone kept crediting the identical re-fill even once the
             # written-value check had stopped doing so. `changed` decides every other operation.
@@ -772,7 +811,9 @@ class Agent:
             action.model_copy(update={"target_id": twins[0].id}), self._raw_observation or fresh
         )
 
-    def _settle(self, state: _RunState, observation: Observation, *, renews: bool = True) -> str | None:
+    def _settle(
+        self, state: _RunState, observation: Observation, *, renews: bool = True, put_back: bool = False
+    ) -> str | None:
         """Judge the last page-changing action by the state it led to; the reason to recover, if the run is stuck.
 
         Recoveries are spent on being stuck, not on the whole run, so a page state never seen before restores the
@@ -794,6 +835,12 @@ class Agent:
         cycle = state.history[first:] if first is not None else []
         # Going back to a list after reading one of its pages is how a comparison is done, not a wasted round.
         if first is None or key == left or any(entry.operation is Operation.READ for entry in cycle):
+            if put_back:
+                # A setting put back to a state its page already held is not progress, however the results
+                # redraw beneath it. Without this a filter toggled on and off reached a page state never seen
+                # on every click, so nothing counted it and the run toggled until the step limit.
+                state.unchanged += 1
+                return None
             state.unchanged = 0
             state.hint = None
             return None
@@ -809,7 +856,7 @@ class Agent:
         return note
 
     @staticmethod
-    def _reversal(state: _RunState) -> tuple[str | None, bool]:
+    def _reversal(state: _RunState) -> tuple[str | None, bool, bool]:
         """The reason to recover when a setting went back to an earlier value, and whether the state reached may
         renew the recovery budget. Settings put back to values their page already held are not progress, however
         the results redraw: a filter toggled on and off reached a state never seen on every click."""
@@ -823,9 +870,11 @@ class Agent:
             # Scrolling shows and hides controls without changing a setting.
             or state.history[-1].operation in _PAGE_OPERATIONS
         ):
-            return None, True
+            return None, True, False
         held = made.document, frozenset(made.values_after.items())
         renews = held not in state.settings_held
+        # Nothing committed means nothing was put anywhere, so there is no earlier state to have returned to.
+        put_back = bool(made.values_after) and not renews
         state.settings_held.update((held, (made.document, frozenset(made.values_before.items()))))
         note = None
         for index, earlier in reversed(state.moves):
@@ -837,7 +886,7 @@ class Agent:
                 note = f"{returned}; intervening actions: {actions}"
                 break
         state.moves.append((at, made))
-        return note, renews
+        return note, renews, put_back
 
     @staticmethod
     def _note_effect(state: _RunState, observation: Observation) -> None:
@@ -1169,7 +1218,7 @@ class Agent:
         value = await resolve_secret(self._secrets, name, origin) if self._secrets else None
         if value is None:
             raise _Stop(Status.NEEDS_INPUT, f"secret {name} is not available for {origin}")
-        self._redactor.register(name, value)
+        self._redactor.register(name, value, origin)
         return value
 
     async def _generate_text(self, state: _RunState, observation: Observation, target: Control) -> str:
@@ -1334,12 +1383,43 @@ class Agent:
         capture = capture or await self._capture()
         plan = await state.await_plan()
         wanted = [r for r in state.notes.unresolved(plan) if r.kind is RequirementKind.INFORMATION]
+        owed = not wanted and state.owes_read and plan.answer_expected
+        if owed:
+            # Every requirement was evidenced off the page before the last interaction redrew it, so they are
+            # asked again of what it drew: a reader asked nothing would leave the pre-filter fare answering.
+            wanted = [r for r in plan.requirements if r.kind is RequirementKind.INFORMATION]
+        budget: ReadKey | None = None
         if observation is not None:
-            key = observation.document_key, capture.sha256, tuple(r.id for r in wanted)
+            wanted_ids = tuple(r.id for r in wanted)
+            # Keyed by address too: a list paged in place keeps its document and its Previous and Next, and only
+            # its URL says the third page is not the two barren ones before it.
+            budget = observation.document_key, state_key(observation), wanted_ids
+            # An owed read is exempt: a filter that keeps its address and controls shares the budget of the page
+            # before it, and a skip there either finished on the pre-filter fare or turned every later DONE into
+            # a skipped read and recovery. It is owed at most once per interaction, so it cannot read for ever.
+            if not owed and state.barren.get(budget, 0) >= self._config.stall.barren_reads:
+                # The page keeps rewriting its own text, so the exact-content key below never matches and the
+                # run could read it until the step budget ran out. What it can do here has paid out nothing.
+                trace("read_skipped", reason="no_new_facts_from_this_page_state")
+                return False, True
+            # Past the barren budget this exact content is either read now or was read before, so the notes hold
+            # what the last interaction drew. A barren skip read nothing, and leaves the read owed.
+            state.owes_read = False
+            key = observation.document_key, capture.sha256, wanted_ids
             if key in state.reads:
                 trace("read_skipped", reason="unchanged_content_and_requirements")
                 return False, True
             state.reads.add(key)
+
+        def spent(progressed: bool) -> None:
+            """A read that paid out clears the budget, so a page that starts answering again is readable."""
+            if budget is None:
+                return
+            if progressed:
+                state.barren.pop(budget, None)
+            else:
+                state.barren[budget] = state.barren.get(budget, 0) + 1
+
         if not capture.text.strip():
             # An empty page may still be rendering; only new content warrants another read.
             if observation is not None and await self._outwait(observation):
@@ -1347,13 +1427,18 @@ class Agent:
                 if drawn.text.strip():
                     return await self._read(state, drawn, observation)
             # Nothing on the page can evidence anything, so the reader is not asked.
-            trace("read", url=self._redactor.redact(capture.url), chars=0, wanted=[r.id for r in wanted])
+            trace("read", url=self._redactor.redact_url(capture.url), chars=0, wanted=[r.id for r in wanted])
+            spent(False)
             return False, False
         following = next_page_control(observation) if observation is not None else None
         began = state.first_url if following is not None or state.pages else None
-        question = read_question(state.task, wanted, began_at=None if began is None else self._redactor.redact(began))
+        question = read_question(
+            state.task, wanted, began_at=None if began is None else self._redactor.redact_url(began)
+        )
         notice = next_page_notice(following)
         before = len(state.notes.facts)
+        known = {fact.text for fact in state.notes.facts}
+        evidenced = {r.id for r in wanted if state.notes.evidenced(r.id)}
         outcome = await read(
             self._llm,
             capture,
@@ -1367,24 +1452,40 @@ class Agent:
             notice=notice,
             continuing=state.continuing,
         )
-        progressed = len(state.notes.facts) > before or any(state.notes.evidenced(r.id) for r in wanted)
+        # Payout is what the notes did not already say. A fact is keyed by the capture it was read from, so a
+        # page that rewrites a line re-mints the same records as new facts, and counting them read it for ever.
+        progressed = any(fact.text not in known for fact in state.notes.facts) or any(
+            state.notes.evidenced(r.id) for r in wanted if r.id not in evidenced
+        )
         continues = [key for key in outcome.continues if not state.notes.evidenced(key)]
         trace(
             "read",
-            url=self._redactor.redact(capture.url),
+            url=self._redactor.redact_url(capture.url),
             chars=len(capture.text),
             wanted=[r.id for r in wanted],
             facts_added=len(state.notes.facts) - before,
             rejected_claims=outcome.rejected_claims,
             evidenced=[r.id for r in wanted if state.notes.evidenced(r.id)],
             continues=continues,
+            # Records the reader said this page compared that no run of blocks resolved. A comparison carried
+            # forward with these missing is incomplete in the notes, which the trace should say out loud.
+            uncovered=outcome.uncovered,
         )
+        spent(progressed)
         if observation is not None:
-            self._follow_pages(state, continues, following)
+            self._follow_pages(state, continues, following, observation, outcome.expands)
         return progressed, False
 
-    def _follow_pages(self, state: _RunState, continues: Sequence[str], following: Control | None) -> None:
-        """Arrange for the rest of a list the reader says it needs: the next page by code, or a word to Jev."""
+    def _follow_pages(
+        self,
+        state: _RunState,
+        continues: Sequence[str],
+        following: Control | None,
+        observation: Observation,
+        expands: str | None,
+    ) -> None:
+        """Arrange for the rest of a list the reader says it needs: the next page by code, the control the
+        reader named, or a word to Jev."""
         state.continuing = set(continues)
         if not continues:
             return
@@ -1394,10 +1495,19 @@ class Agent:
             return
         # "Otherwise finish" was a dead end: the reader withholds a list it has not seen the end of, so the done check
         # refused every such finish, and Flights runs spent their recoveries finding "View more flights" instead.
+        show = "open the control that loads or pages through more of the list"
+        # The reader saw which control shows the rest. Matched against the page's own labels rather than
+        # trusted, so a label the reader invented directs nothing. The hint names it too, so Jev is still told
+        # where the rest is when a confident decision elsewhere drops the direction.
+        if expands is not None:
+            named = [c for c in observation.controls if c.label == expands and Operation.CLICK in c.operations]
+            if len(named) == 1:
+                state.directed = (Operation.CLICK, named[0].id)
+                show = f'open "{expands}"'
         state.hint = (
             "The reader saw the list this task needs go on past what the page shows, so what was read cannot settle "
-            "it. Show the rest and READ it: open the control that loads or pages through more of the list, or narrow "
-            "the list with the page's own filter or sort so the answer is in view."
+            f"it. Show the rest and READ it: {show}, or narrow the list with the page's own filter or sort so the "
+            "answer is in view."
         )
 
     async def _recover(
@@ -1549,7 +1659,12 @@ class Agent:
             requirements={r.id: r.text for r in state.plan.requirements},
         )
         state.ledger.record(check.cost)
+        if check.verdict is DoneVerdict.ACCEPT and _guessed(state.plan, state.notes, state.invented):
+            # Jev judges the notes, not where they were read, so only the verifier is shown the guessed addresses.
+            check = check.model_copy(update={"verdict": DoneVerdict.VERIFY})
         accepted = check.verdict is DoneVerdict.ACCEPT
+        missing: tuple[str, ...] = ()
+        misread: set[str] = set()
         drafting: asyncio.Task[Generation[ComposedAnswer]] | None = None
         # Whoever still holds the draft when this returns is responsible for it. `finally` covers the
         # paths that are not a decision at all: the verifier raising, `until` raising, the caller
@@ -1580,19 +1695,49 @@ class Agent:
                     state.notes,
                     state.steps,
                     doubted=check.doubted,
+                    invented=sorted(state.invented),
                     config=self._config,
                     ledger=state.ledger,
                 )
                 state.ledger.record(verdict.cost)
-                accepted = _verified(verdict.data, state.plan, state.notes)
-                trace("verify", complete=verdict.data.complete, missing=list(verdict.data.missing))
+                accepted = _verified(verdict.data, state.plan, state.notes, state.invented)
+                # Asked to open httpx's project page, a run picked DONE on pypi.org before acting, Jev held the one
+                # requirement unmet, and flash-lite called it complete. Only an action can do what Jev says is
+                # undone, so a run that has taken none cannot be talked past it. The history, not the steps, since
+                # an opened shortcut acts too: counting only steps held a run already on /project/httpx idle, and
+                # its recovery clicked through to GitHub.
+                idle = not any(
+                    h.outcome is StepOutcome.EXECUTED and h.operation not in {*_NOT_ACTING, Operation.ESCALATE}
+                    for h in state.history
+                )
+                undone = {r.id for r in state.plan.requirements if r.kind is RequirementKind.ACTION} & set(check.unmet)
+                accepted = accepted and not (idle and undone)
+                missing, misread = verdict.data.missing, _misread(verdict.data, state.plan, state.notes, state.invented)
+                trace(
+                    "verify",
+                    complete=verdict.data.complete,
+                    missing=list(verdict.data.missing),
+                    ungrounded=list(verdict.data.ungrounded),
+                )
             if accepted and until is not None:
                 accepted = await until((self._raw_observation or fresh).url)
             if not accepted:
                 requirements = {r.id: r.text for r in state.plan.requirements}
-                unmet = "; ".join(f"{key}: {requirements.get(key, key)}" for key in check.unmet)
-                reason = f"DONE rejected: {unmet or 'completion not confirmed'}"
-                reason = self._redactor.redact(reason)
+                unmet = [
+                    f"{key}: {requirements.get(key, key)}"
+                    for key in dict.fromkeys((*check.unmet, *missing))
+                    if key not in misread
+                ]
+                # Naming the page is what gives recovery something to do: told only "completion not confirmed",
+                # it sent the run to finish again from the same notes until the recoveries ran out.
+                unmet += [
+                    f"{key}: {requirements[key]} (read off "
+                    + ", ".join(dict.fromkeys(f.evidence.url for _, f in state.notes.supporting(key) if f.evidence))
+                    + ", an address built from the task, not the page it describes)"
+                    for key in sorted(misread)
+                ]
+                state.notes.unevidence(misread)
+                reason = self._redactor.redact(f"DONE rejected: {'; '.join(unmet) or 'completion not confirmed'}")
                 state.history.append(
                     HistoryEntry(
                         operation=Operation.DONE,
@@ -1717,7 +1862,7 @@ class Agent:
         requirement_id = redact(fact.requirement_id) if fact.requirement_id is not None else None
         if fact.evidence is None:
             return StepFact(text=text, requirement_id=requirement_id, reader=fact.reader)
-        url, quote = redact(fact.evidence.url), redact(fact.evidence.quote)
+        url, quote = self._redactor.redact_url(fact.evidence.url), redact(fact.evidence.quote)
         return StepFact(
             text=text,
             requirement_id=requirement_id,
@@ -1731,13 +1876,14 @@ class Agent:
         """The answer and its citations with secrets redacted, links included.
 
         A link percent-encodes its quote, where redacting the text cannot see a secret, so each link is rebuilt
-        from the redacted quote and swapped into the answer before the answer itself is redacted.
+        from the redacted address and quote, and only the prose between links is redacted as text: redacting a
+        rebuilt link again would rewrite a secret the site published in its own hostname.
         """
         redact = self._redactor.redact
         citations = []
         links: dict[str, str] = {}
         for citation in composed.citations:
-            url, quote = redact(citation.url), redact(citation.quote)
+            url, quote = self._redactor.redact_url(citation.url), redact(citation.quote)
             public = citation.model_copy(
                 update={
                     "text": redact(citation.text),
@@ -1749,9 +1895,11 @@ class Agent:
             links[citation.deep_link] = public.deep_link
             citations.append(public)
         # Every link destination in one pass. Replacing one link at a time rewrote the start of any longer link
-        # sharing its prefix, which then no longer matched and kept its percent-encoded secret.
-        answer = ANSWER_LINK.sub(lambda link: f"](<{links[link.group(1)]}>)", composed.linked_answer)
-        return redact(answer), tuple(citations)
+        # sharing its prefix, which then no longer matched and kept its percent-encoded secret. Split keeps each
+        # destination at an odd index, between the prose around it.
+        pieces = ANSWER_LINK.split(composed.linked_answer)
+        answer = "".join(f"](<{links[piece]}>)" if n % 2 else redact(piece) for n, piece in enumerate(pieces))
+        return answer, tuple(citations)
 
     def _plan_mark(self, state: _RunState) -> str:
         """What the plan still wants. Requirement ids, not model prose: this asks whether the run resolved
@@ -1819,7 +1967,7 @@ class Agent:
             steps=tuple(state.steps) if state else (),
             cost=ledger.breakdown(),
             artifacts=self._page.artifacts[self._artifact_start :],
-            final_url=self._redactor.redact(state.last_page[0]) if state and state.last_page else None,
+            final_url=self._redactor.redact_url(state.last_page[0]) if state and state.last_page else None,
             error=error,
             would_fire=tuple(state.would_fire) if state else (),
         )
@@ -1863,16 +2011,44 @@ def _describe(control: Control) -> str:
     return f"{control.label} ({control.context})" if control.context else control.label
 
 
-def _verified(verdict: LLMVerdict, plan: Plan, notes: Notes) -> bool:
+def _place(url: str) -> tuple[str, str]:
+    """An address as origin and path: the query and fragment a site writes back do not make it another page."""
+    return origin_of(url), urlsplit(url).path or "/"
+
+
+def _guessed(plan: Plan, notes: Notes, invented: Set[str]) -> set[str]:
+    """The requirements with a fact read on an address the run built from the task rather than clicked to."""
+    places = {_place(url) for url in invented}
+    return {
+        r.id
+        for r in plan.requirements
+        if any(f.evidence is not None and _place(f.evidence.url) in places for _, f in notes.supporting(r.id))
+    }
+
+
+def _misread(verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str]) -> set[str]:
+    """The requirements the verifier says were read off the wrong page, where that page was a guessed address.
+
+    A guessed address is the one that can land on a page of the right shape and the wrong search: a proposed
+    address opened a flights summary, the reader quoted a price from it, and the requirement counted as cited.
+    A page reached by clicking was chosen off the site itself, so there the verifier's doubt is only doubt.
+    """
+    return set(verdict.ungrounded) & _guessed(plan, notes, invented)
+
+
+def _verified(verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str]) -> bool:
     """Whether the verifier's doubts leave the run finished.
 
     An information requirement the notes cite facts for is not left open by the verifier: the answer's claims are
     checked against those quotes before it is given. On flash-lite the verifier named "compare the two release
-    dates" missing with both dates in the notes, one run in three, until the run stopped stuck.
+    dates" missing with both dates in the notes, one run in three, until the run stopped stuck. Only evidence read
+    on a guessed address is not excused, since that is the wrong page the citing check cannot see.
     """
     cited = {r.id for r in plan.requirements if r.kind is RequirementKind.INFORMATION and notes.evidenced(r.id)}
-    doubted = set(verdict.missing) - cited
-    return not doubted and (verdict.complete or bool(verdict.missing))
+    misread = _misread(verdict, plan, notes, invented)
+    named = set(verdict.missing) | (set(verdict.ungrounded) & {r.id for r in plan.requirements})
+    doubted = named - (cited - misread)
+    return not doubted and (verdict.complete or bool(named))
 
 
 def _described(entry: HistoryEntry) -> str:

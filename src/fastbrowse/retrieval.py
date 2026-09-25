@@ -203,6 +203,51 @@ def _evidence(capture: Capture, block: Block, start: int, end: int) -> Evidence:
     )
 
 
+# A model asked to quote a page rewrites its punctuation: a curly apostrophe becomes a straight one, an en dash
+# a hyphen, an ellipsis three dots. The words are still the page's own, so a byte-exact test drops a correct
+# value, the fact never lands, and the requirement it would have evidenced stays open until the run stalls.
+# Built from code points because scripts/no_slop.py fails the build on a line holding one of these characters.
+_PUNCTUATION_FAMILIES: tuple[str, ...] = (
+    "'" + chr(0x2018) + chr(0x2019) + chr(0x02BC) + chr(0x00B4) + "`",
+    '"' + chr(0x201C) + chr(0x201D) + chr(0x201E) + chr(0x201F) + chr(0x00AB) + chr(0x00BB),
+    "-" + chr(0x2010) + chr(0x2011) + chr(0x2012) + chr(0x2013) + chr(0x2014) + chr(0x2015) + chr(0x2212),
+)
+_ELLIPSIS = chr(0x2026)
+
+
+def _family(character: str) -> str:
+    """A character class holding every shape of `character` a model might write, or the character alone."""
+    for members in _PUNCTUATION_FAMILIES:
+        if character in members:
+            return "[" + "".join(re.escape(member) for member in members) + "]"
+    return re.escape(character)
+
+
+def _loose(value: str) -> re.Pattern[str]:
+    """`value` as a pattern tolerating the punctuation shape a model rewrites, and the backslash a capture puts
+    before a table cell's own pipe when it renders the row as markdown. It widens nothing but punctuation
+    shape: the words, their order and their spacing all still have to be there, and the caller still decides
+    which block the match has to lie inside."""
+    parts: list[str] = []
+    for token in re.findall(r"\s+|\.\.\.|.", value, flags=re.DOTALL):
+        if token.isspace():
+            parts.append(r"\s+")
+        elif token == "..." or token == _ELLIPSIS:
+            parts.append("(?:" + re.escape("...") + "|" + re.escape(_ELLIPSIS) + ")")
+        elif token.isalnum():
+            parts.append(re.escape(token))
+        else:
+            parts.append(r"(?:\\)?" + _family(token))
+    return re.compile("".join(parts))
+
+
+def _found(text: str, value: str) -> str | None:
+    """How `text` itself writes `value`, allowing for the punctuation shape and the markdown escaping. The match is
+    what gets kept, so a field carries the page's own punctuation and never the model's retyping of it."""
+    match = _loose(value).search(" ".join(text.split()))
+    return None if match is None else match.group(0).replace("\\|", "|")
+
+
 class _Cite(Frozen):
     first: str
     """The first source block the claim reads, by label without brackets (main/:12 for a line shown as
@@ -222,6 +267,16 @@ class _ReadClaim(Frozen):
         description=(
             "Every record counted or compared: evidence ids from collected notes (without brackets), or "
             "claim:N for an earlier claim in this response's claims array, indexed from zero."
+        ),
+    )
+    orders_list: _Cite | None = Field(
+        default=None,
+        description=(
+            "For a superlative the page itself settles: the source blocks where the page states how the list is "
+            "ordered or filtered, by the very quantity being compared (a sort control reading 'price, low to "
+            "high', a heading naming the filter in force). Only when the page says it; never inferred from the "
+            "order the records happen to appear in. With this, the leading record answers even though the list "
+            "goes on, so it settles only a claim that cites that record and draws on nothing."
         ),
     )
     text: str
@@ -284,16 +339,46 @@ def _remember(
     return fact
 
 
+# A page of a list costs two short block labels a record. The cap is what one capture can plausibly show, and
+# bounds what one page adds to the notes. It is applied in code, not the schema: a reply over it, or a pager-only
+# chunk with no records, would otherwise fail validation and end the run over a page that read fine.
+_MAX_CONTINUING_RECORDS = 60
+
+
+class _Continuation(Frozen):
+    requirement_id: str = Field(
+        description=(
+            "A requirement whose answer ranges over a list this capture shows only part of, because it continues "
+            "on further pages or behind a load-more control, and the collected evidence does not cover the rest."
+        )
+    )
+    expands: str | None = Field(
+        default=None,
+        description=(
+            "The exact label of the control on this page that shows the rest of the list, when one is offered. "
+            "Null when nothing on the page expands it."
+        ),
+    )
+    records: tuple[_Cite, ...] = Field(
+        default=(),
+        description=(
+            "Every record this capture adds to that comparison, each as the run of source blocks holding it and "
+            "the value being compared. A later page cannot show what its winner beat unless this page names the "
+            "records it was compared against, so list every one this capture shows; a capture holding only the "
+            "pager lists none."
+        ),
+    )
+
+
 class _ReadResponse(Frozen):
     claims: tuple[_ReadClaim, ...]
     answered: bool
-    continues: tuple[str, ...] = Field(
-        default=(),
-        description=(
-            "Requirement ids whose answer ranges over a list this capture shows only part of, because it continues "
-            "on further pages or behind a load-more control, and the collected evidence does not cover the rest."
-        ),
-    )
+    continues: tuple[_Continuation, ...] = ()
+
+
+def _quoted(evidence: Evidence) -> Fact:
+    """A fact that is only the page's own text, kept as context a claim can rest on."""
+    return Fact(text=evidence.quote, evidence=evidence, reader=FactReader.LLM)
 
 
 class ReadOutcome(Frozen):
@@ -303,6 +388,12 @@ class ReadOutcome(Frozen):
     cost_lines: tuple[CostLine, ...]
     continues: tuple[str, ...] = ()
     """Requirements whose list goes on past this capture, so no claim from it closes them."""
+    uncovered: int = 0
+    """Records a continuation named that no run of offered blocks resolved, or that fell past the cap, so this
+    page's comparison is incomplete in the notes even though the reader believed it had listed them."""
+    expands: str | None = None
+    """The label the reader gave for the control that shows the rest of the list, so the run can open it
+    instead of being told only that the list goes on."""
 
 
 def _notes_room(tokens: TokenBudget, messages: Sequence[Message], response: type[Frozen]) -> int:
@@ -361,6 +452,9 @@ async def read(
     continues: dict[str, None] = {}
     found: list[Fact] = []
     rejected = 0
+    uncovered = 0
+    ordered: set[str] = set()
+    expands: str | None = None
     wanted = [
         r
         for r in requirements
@@ -409,9 +503,14 @@ async def read(
                     "- Values typed into fields, suggestions and previews are inputs, not results.\n\n"
                     "# Lists over several pages\nA count, total or superlative over a list needs the whole "
                     "list. Earlier pages are in the collected evidence under their own URLs. When the list goes "
-                    "on past this capture and the collected evidence does not cover the rest, list the "
-                    "requirement in continues and still cite every record this capture adds, with a null "
-                    "requirement id. Once the collected evidence and this capture cover every page, the "
+                    "on past this capture and the collected evidence does not cover the rest, add an entry to "
+                    "continues naming the requirement, and give in its records every record this capture adds "
+                    "to that comparison, each as the blocks holding it and the value compared. "
+                    "Name in expands the control on this page that shows the rest, when one is offered. "
+                    "If instead the page states that the list is ordered or filtered by the very quantity "
+                    "being compared, the leading record answers: give the claim citing it its requirement id and cite "
+                    "that statement in orders_list rather than listing the requirement in continues. "
+                    "Once the collected evidence and this capture cover every page, the "
                     "conclusion takes the requirement id and draws on each record once. A task that bounds the "
                     "pages it covers ends at the last page it names.\n\n"
                     f"# Trust\n{UNTRUSTED} Never infer facts the capture and evidence do not show."
@@ -438,7 +537,9 @@ async def read(
         # The latest chunk decides: it holds the page's foot, where a pager sits, reads every earlier chunk's
         # records in its collected evidence, and is given the caller's next-page notice. An earlier chunk's
         # "continues" meant the list went on into this chunk; a union let it block the last chunk's conclusion.
-        continues = dict.fromkeys(key for key in result.data.continues if key in requirement_ids)
+        carried = [c for c in result.data.continues if c.requirement_id in requirement_ids]
+        continues = dict.fromkeys(c.requirement_id for c in carried)
+        expands = next((c.expands for c in carried if c.expands), None)
         references = {key: key for key in offered.evidence_ids}
         for index, claim in enumerate(result.data.claims):
             # Carried to the next chunk without its requirement id, which only the whole page can settle.
@@ -448,8 +549,38 @@ async def read(
                 continue
             references[f"claim:{index}"] = fact_id(fact)
             requirement_id = claim.requirement_id if claim.requirement_id in requirement_ids else None
+            # A site that sorts or filters its own list by the quantity compared settles the superlative on its
+            # leading record: the rest of the list cannot beat it. The page has to say so, in its own text, and
+            # that statement is kept as a fact so the claim rests on it and the claim check can judge it. Only a
+            # claim resting on that one record qualifies: a count or total draws on every record it counts, and
+            # the part of a list one page shows does not settle it however the site sorts it.
+            if requirement_id is not None and claim.orders_list is not None and not claim.draws_on:
+                ordering = _cited(capture, part, claim.orders_list)
+                if ordering is None:
+                    # The reader cites the order instead of saying the list goes on, so an order that resolves to
+                    # no block leaves the leading row settling "cheapest" on nothing the page said.
+                    requirement_id = None
+                else:
+                    stated = _quoted(ordering)
+                    so_far.add(stated)
+                    found.append(stated)
+                    fact = fact.model_copy(update={"basis": (*fact.basis, fact_id(stated))})
+                    ordered.add(requirement_id)
             found.append(fact.model_copy(update={"requirement_id": requirement_id}))
             accepted += 1
+        # The records a continuing page compared, kept as facts so a later page's winner can show what it beat.
+        # Code copies each quote from the blocks named, exactly as it does for a claim, so a record is the
+        # page's own text and never the reader's retyping of it.
+        for continuation in carried:
+            uncovered += max(0, len(continuation.records) - _MAX_CONTINUING_RECORDS)
+            for cite in continuation.records[:_MAX_CONTINUING_RECORDS]:
+                evidence = _cited(capture, part, cite)
+                if evidence is None:
+                    uncovered += 1
+                    continue
+                record = _quoted(evidence)
+                so_far.add(record)
+                found.append(record)
         rejected += rejected_here
         # An unsupported assertion of completion cannot suppress reading the remaining chunks. Nor can it end a
         # read of a page whose list goes on, whether this chunk said so or the caller's notice did: the rest of
@@ -462,6 +593,9 @@ async def read(
     # cheapest on page one of two is only the cheapest so far. The fact is kept for the comparison; the
     # requirement stays open. The notes take the claims here rather than per chunk, which is also why the
     # collected evidence above stays separate from this read's final requirement assignments.
+    # A requirement the page settled by stating its own order is not reopened by the list going on.
+    for key in ordered:
+        continues.pop(key, None)
     for fact in found:
         if fact.requirement_id in continues:
             fact = fact.model_copy(update={"requirement_id": None})
@@ -474,6 +608,8 @@ async def read(
         rejected_claims=rejected,
         cost_lines=tuple(costs),
         continues=tuple(continues),
+        uncovered=uncovered,
+        expands=expands if continues else None,
     )
 
 
@@ -637,8 +773,9 @@ async def propose_text_fields(
     ledger: Ledger | None = None,
 ) -> tuple[dict[str, tuple[str, Evidence]], tuple[CostLine, ...]]:
     """The LLM names each text value and the block it is in; code keeps it only if that block, offered in this
-    chunk, contains the value verbatim. A text value is often part of a block ("httpx 0.28.1"), which a copy of
-    whole blocks cannot express, so the block is its evidence.
+    chunk, contains the value up to its punctuation's shape, and keeps the block's own spelling. A text value is
+    often part of a block ("httpx 0.28.1"), which a copy of whole blocks cannot express, so the block is its
+    evidence.
     """
     wanted = "\n".join(f"- {name}: {field.description or field.title or name}" for name, field in fields.items())
     found: dict[str, tuple[str, Evidence]] = {}
@@ -673,8 +810,8 @@ async def propose_text_fields(
             if proposal.field not in missing or not value:
                 continue
             evidence = _cited(capture, part, _Cite(first=proposal.source_id, last=proposal.source_id))
-            if evidence is not None and value in " ".join(evidence.quote.split()):
-                found[proposal.field] = (value, evidence)
+            if evidence is not None and (written := _found(evidence.quote, value)):
+                found[proposal.field] = (written, evidence)
     return found, tuple(costs)
 
 
@@ -691,10 +828,10 @@ async def propose_text_fields_from_notes(
 
     A comparison ends on one of the pages it compared: pypi-newer answered "requests" correctly three runs in
     three and returned no data, because it ended on httpx's results, and taken from that page the field came
-    back "httpx". A value is kept only when the note it cites quotes it verbatim, or when it is a name the task
-    itself gives: a choice between the task's own entities ("httpx or requests"), made on a cited note whose
-    quote is a date, invents nothing. Cited on the derived comparison itself, which quotes nothing, such a name is
-    evidenced by the record the comparison read for it.
+    back "httpx". A value is kept only when the note it cites quotes it, up to its punctuation's shape, or when
+    it is a name the task itself gives: a choice between the task's own entities ("httpx or requests"), made on a
+    cited note whose quote is a date, invents nothing. Cited on the derived comparison itself, which quotes
+    nothing, such a name is evidenced by the record the comparison read for it.
     """
     if not notes.facts:
         return {}
@@ -733,14 +870,10 @@ async def propose_text_fields_from_notes(
         evidence = cited.get(proposal.source_id)
         if evidence is None and notes.derived(proposal.source_id) and _names(task, value):
             evidence = _compared(notes, proposal.source_id, value)
-        if (
-            proposal.field in fields
-            and proposal.field not in found
-            and value
-            and evidence is not None
-            and (value in " ".join(evidence.quote.split()) or _names(task, value))
-        ):
-            found[proposal.field] = (value, evidence)
+        if proposal.field not in fields or proposal.field in found or not value or evidence is None:
+            continue
+        if written := _found(evidence.quote, value) or _names(task, value):
+            found[proposal.field] = (written, evidence)
     return found
 
 
@@ -752,9 +885,10 @@ def _compared(notes: Notes, key: str, name: str) -> Evidence | None:
     return next((fact.evidence for fact in records if fact.evidence is not None and _names(fact.text, name)), None)
 
 
-def _names(task: str, value: str) -> bool:
-    """Whether the task gives `value` as a whole word or phrase, not just as part of a longer word."""
-    return re.search(rf"(?<!\w){re.escape(value)}(?!\w)", " ".join(task.split())) is not None
+def _names(task: str, value: str) -> str | None:
+    """How the task writes `value` when it gives it as a whole word or phrase, not just as part of a longer word."""
+    match = re.search(rf"(?<!\w){_loose(value).pattern}(?!\w)", " ".join(task.split()))
+    return None if match is None else match.group(0)
 
 
 def copy_field(answer: ChoiceAnswer, candidates: Sequence[Candidate]) -> tuple[ScalarValue, Evidence] | None:

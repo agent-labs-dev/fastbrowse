@@ -337,3 +337,39 @@ async def test_an_echoed_key_never_reaches_the_error(
         with pytest.raises(JevError) as error:
             await client(key, http=http).evaluate("state", {"q": choice()})
     assert "a1b2c3d4a1b2" not in str(error.value)
+
+
+@pytest.mark.parametrize("gateway", [False, True])
+async def test_a_choice_of_one_option_is_answered_without_asking(gateway: bool) -> None:
+    """Jev refuses a choice of one option, and wiki-godel retried that refusal as an outage for hours."""
+    only = ChoiceQuestion(instructions="Which field?", criteria={"e7": "Search"})
+    sent: list[set[str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = TypeAdapter(dict[str, JsonValue]).validate_json(request.content)
+        questions = payload["questions"]
+        assert isinstance(questions, dict)
+        sent.append(set(questions))
+        return httpx.Response(
+            200,
+            json={
+                "answers": {"col": choice_answer()},
+                "usage": {"input_tokens": 9, "inputTokens": 9},
+                "providerMetadata": {"typesafe": {"confidence": {"col": 0.8}}},
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = (
+            VercelGatewayJevClient("key", http=http, base_url="https://gateway.test")
+            if gateway
+            else TypeSafeJevClient("key", http=http, base_url="https://direct.test")
+        )
+        mixed = await client.evaluate({}, {"col": choice(), "fill_target": only})
+        alone = await client.evaluate({}, {"fill_target": only})
+
+    assert sent == [{"col"}]
+    for result in (mixed, alone):
+        assert result.answers["fill_target"] == ChoiceAnswer(choice="e7", probabilities={"e7": 1.0}, confidence=1.0)
+    assert set(mixed.answers) == {"col", "fill_target"}
+    assert alone.input_tokens == 0

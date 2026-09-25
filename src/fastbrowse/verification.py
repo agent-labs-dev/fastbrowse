@@ -55,6 +55,15 @@ class DoneCheck(Frozen):
 
 class LLMVerdict(Frozen):
     missing: tuple[str, ...] = Field(description="Requirement ids the page or notes do not show as satisfied.")
+    ungrounded: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Requirement ids whose facts were read from a page that is not the one the task described: a "
+            "summary, preview or default listing reached by a guessed address, or a page that does not show "
+            "the task's own query, filters, dates, sort or category in force. Name one here even when it has "
+            "evidence, because the evidence is from the wrong page."
+        ),
+    )
     complete: bool = Field(description="Whether the evidence shows that every task requirement is satisfied.")
 
 
@@ -228,6 +237,26 @@ async def check_done(
     )
 
 
+def _grounding(notes: Notes, plan: Plan, invented: Sequence[str]) -> str:
+    """Where each requirement's facts were read, and which addresses the run guessed rather than clicked to.
+
+    A requirement can be evidenced from a page that is not the search the task asked for: a proposed address
+    opened a flights summary, the reader quoted a price from it, and every check passed on evidence the run
+    should never have had. The verifier cannot see that without being told which page each fact came from.
+    """
+    lines = []
+    for requirement in plan.requirements:
+        urls = sorted({fact.evidence.url for _, fact in notes.supporting(requirement.id) if fact.evidence})
+        if urls:
+            lines.append(f"- {requirement.id}: {', '.join(urls)}")
+    parts = []
+    if lines:
+        parts.append("## Where each requirement's facts were read\n" + "\n".join(lines))
+    if invented:
+        parts.append("## Addresses this run built from the task\n" + "\n".join(f"- {u}" for u in invented))
+    return ("\n\n".join(parts) + "\n\n") if parts else ""
+
+
 async def llm_verify(
     llm: LLMClient,
     task: str,
@@ -238,10 +267,14 @@ async def llm_verify(
     steps: Sequence[StepResult],
     *,
     doubted: Sequence[str] = (),
+    invented: Sequence[str] = (),
     config: Config = _DEFAULT_CONFIG,
     ledger: Ledger | None = None,
 ) -> Generation[LLMVerdict]:
-    """`doubted` names the requirements the done check doubted, which the verifier must see shown, not assume."""
+    """`doubted` names the requirements the done check doubted, which the verifier must see shown, not assume.
+
+    `invented` names addresses this run built from the task rather than reached by clicking, which are the ones
+    that can land on a page that looks like the answer without being the search the task asked for."""
     # A flights search passed here with Jev doubting its one requirement at 0.14: the rows matched, and nothing
     # asked whether the nonstop filter the task named had ever been applied.
     requirements = "\n".join(
@@ -267,7 +300,13 @@ async def llm_verify(
         "compare, count or conclude from facts is satisfied when the notes hold those facts: the answer "
         "draws the conclusion, and no page shows it. A requirement to narrow a search or listing (a filter, "
         "option or sort) is satisfied when the page shows it applied, in a set control, the address or the "
-        "page's own filter text, not when the rows in view happen to match it."
+        "page's own filter text, not when the rows in view happen to match it.\n\n"
+        "Then judge where the facts came from. A page holding values of the right kind is not the page the "
+        "task described unless it shows that task's own query, filters, dates, sort or category in force. A "
+        "summary, preview, default or related listing can show prices or rows that are not the ones asked "
+        "for. Name in ungrounded every requirement whose facts were read from such a page, even when it has "
+        "evidence. Addresses this run built from the task rather than reached by clicking are the ones to "
+        "weigh hardest, since a guessed address can land on a page of the right shape and the wrong search."
     )
     messages = [
         Message(
@@ -278,7 +317,8 @@ async def llm_verify(
             role="user",
             content=(
                 f"## Task\n{task}\n\n## Requirements\n{requirements}\n\n## Steps taken\n{history}\n\n"
-                f"## Set controls\n{json.dumps(_controls(stateful))}\n\n## Page\n{observation.url}\n"
+                f"## Set controls\n{json.dumps(_controls(stateful))}\n\n{_grounding(notes, plan, invented)}"
+                f"## Page\n{observation.url}\n"
             ),
             images=screenshots,
         ),

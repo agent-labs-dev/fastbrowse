@@ -24,6 +24,7 @@ from fastbrowse.agent import (
 )
 from fastbrowse.citations import text_fragment
 from fastbrowse.config import Config, ObservationLimits, StallRules, Thresholds
+from fastbrowse.effects import state_key
 from fastbrowse.jev import Answer, Evaluation, JevError, JevRetriesExhausted, NoulAnswer, NoulQuestion, Question
 from fastbrowse.llm import Generation
 from fastbrowse.memory import Fact, Notes, evidence_id
@@ -40,7 +41,7 @@ from fastbrowse.models import (
     StepEvent,
     StepOutcome,
 )
-from fastbrowse.page import Action, ActResult, BlockKind, Control, Observation, Page
+from fastbrowse.page import Action, ActResult, BlockKind, Capture, Control, Observation, Page
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 from fastbrowse.policy import Decision, HistoryEntry, ReadAssessment, build_request, decide
 from fastbrowse.retrieval import ComposedAnswer
@@ -837,6 +838,165 @@ async def test_a_filter_that_keeps_redrawing_the_results_cannot_renew_the_recove
     assert len(llm.calls) == 1
 
 
+def _filtered(checked: bool, nth: int) -> Observation:
+    """A results page whose rows redraw on every toggle, so each page state is one never seen before."""
+    box = _button("Direct only").model_copy(update={"role": "checkbox", "checked": checked})
+    return observation((box, _button(f"{nth} results"))).model_copy(update={"document_key": "results"})
+
+
+async def _toggle(agent: Agent, page: Mock, state: _RunState, here: Observation, there: Observation) -> None:
+    """One click on the setting, settled the way the loop settles it."""
+    page.observe = AsyncMock(return_value=there)
+    await agent._step(state, here, _code_decision(Operation.CLICK, here.controls[0]))
+    agent._note_effect(state, there)
+    _, renews, put_back = agent._reversal(state)
+    agent._settle(state, there, renews=renews, put_back=put_back)
+
+
+async def test_a_filter_put_back_to_a_state_its_page_already_held_is_not_progress() -> None:
+    """A read between the clicks disarms both loop detectors, which is what the toggling runs actually did."""
+    page = Mock(spec=Page)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
+    page.screenshot = AsyncMock(return_value=b"")
+    page.artifacts = ()
+    llm = ScriptedLLM([{"diagnosis": "The filter is cycling", "next_subgoal": "Read results", "give_up": False}] * 8)
+    agent = Agent(page, ScriptedJev({}), llm)
+    state = await run_state()
+    state.authorization = Authorization(irreversible_actions=True)
+    here = _filtered(False, 0)
+    agent._settle(state, here)
+    for nth in range(1, 6):
+        there = _filtered(nth % 2 == 1, nth)
+        await _toggle(agent, page, state, here, there)
+        # A read between the toggles is what made every earlier check treat the return as a comparison.
+        state.history.append(
+            HistoryEntry(operation=Operation.READ, target=None, outcome=StepOutcome.EXECUTED, page_changed=False)
+        )
+        here = there
+    # The filter only ever holds two states, so every click from the second one puts it back to one seen
+    # before. Three of those reach the no-progress tripwire, and the run recovers instead of toggling on to
+    # its step limit. Before this, each redrawn results page was a state never seen and nothing counted.
+    assert any(purpose is LLMPurpose.RECOVER for purpose, _ in llm.calls)
+
+
+async def test_a_setting_given_a_value_its_page_has_not_held_is_still_progress() -> None:
+    page = Mock(spec=Page)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
+    page.screenshot = AsyncMock(return_value=b"")
+    page.artifacts = ()
+    llm = ScriptedLLM([{"diagnosis": "d", "next_subgoal": "n", "give_up": False}] * 8)
+    agent = Agent(page, ScriptedJev({}), llm)
+    state = await run_state()
+    state.authorization = Authorization(irreversible_actions=True)
+    sort = _button("Sort").model_copy(update={"role": "option", "value": "relevance"})
+    here = observation((sort,)).model_copy(update={"document_key": "results"})
+    agent._settle(state, here)
+    for value in ("price", "rating", "distance"):
+        there = observation((sort.model_copy(update={"value": value}),)).model_copy(update={"document_key": "results"})
+        await _toggle(agent, page, state, here, there)
+        state.history.append(
+            HistoryEntry(operation=Operation.READ, target=None, outcome=StepOutcome.EXECUTED, page_changed=False)
+        )
+        here = there
+    # Each value is one the page has not held, so none of them is a put-back and the run is left alone.
+    assert state.unchanged == 0
+    assert not any(purpose is LLMPurpose.RECOVER for purpose, _ in llm.calls)
+
+
+async def _filtered_fares(*, answer_expected: bool) -> tuple[Agent, Mock, _RunState, ScriptedLLM]:
+    """A fare list read unfiltered, then a click on Nonstop only that redraws it, with Jev picking DONE."""
+    nonstop = _button("Nonstop only")
+    here = observation((nonstop,)).model_copy(update={"document_key": "results"})
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=here)
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "$320 1 stop")))
+    page.screenshot = AsyncMock(return_value=b"")
+    page.artifacts = ()
+
+    async def settled(*args: object, **kwargs: object) -> bool:
+        await asyncio.sleep(5)  # a real watch on a settled page polls until its deadline
+        return False
+
+    page.redrawn = AsyncMock(side_effect=settled)
+
+    async def filtered(*args: object) -> ActResult:
+        page.capture.return_value = capture((BlockKind.PARAGRAPH, "$410 nonstop"))
+        return ActResult(outcome=StepOutcome.EXECUTED, page_changed=True)
+
+    page.act = AsyncMock(side_effect=filtered)
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [{"text": fare, "cite": {"first": "s0", "last": "s0"}, "requirement_id": "r1"}],
+                "answered": True,
+            }
+            for fare in ("$320 1 stop", "$410 nonstop")
+        ]
+    )
+    agent = Agent(page, ScriptedJev({"operation": "done", "r1": "synthesis"}, noul=0.0), llm)
+    state = await run_state()
+    state.authorization = Authorization(irreversible_actions=True)
+    requirements = (Requirement(id="r1", text="Find the cheapest nonstop fare", kind=RequirementKind.INFORMATION),)
+    state.ready_plan = Plan(requirements=requirements if answer_expected else (), answer_expected=answer_expected)
+    if answer_expected:
+        await agent._read(state, await page.capture(), here)
+    await agent._step(state, here, _code_decision(Operation.CLICK, nonstop))
+    return agent, page, state, llm
+
+
+async def _finished(agent: Agent, state: _RunState) -> list[str]:
+    """Run the loop to its first finish, returning the quotes the done check would have judged."""
+    judged: list[str] = []
+
+    async def finish(*args: object) -> agent_module.RunResult:
+        judged.extend(e.quote for e in state.notes.evidence.values())
+        return agent._result(state, state.ledger, Status.COMPLETE)
+
+    agent._finish = AsyncMock(side_effect=finish)
+    await asyncio.wait_for(agent._loop(state, None, None), timeout=1)
+    return judged
+
+
+async def test_an_owed_read_of_unchanged_text_finishes_rather_than_recovering() -> None:
+    """A scroll changes the page but not its text, so the owed read repeats one already made."""
+    agent, page, state, llm = await _filtered_fares(answer_expected=True)
+    page.capture.return_value = capture((BlockKind.PARAGRAPH, "$320 1 stop"))
+    await agent._read(state, await page.capture(), await page.observe())
+    state.owes_read = True
+    assert "$320 1 stop" in await _finished(agent, state)
+    assert [purpose for purpose, _ in llm.calls] == [LLMPurpose.READ]
+
+
+async def test_a_finish_after_an_interaction_reads_what_it_drew() -> None:
+    """A run clicked a filter and called itself done on notes read off the list before the filter applied."""
+    agent, _, state, llm = await _filtered_fares(answer_expected=True)
+    judged = await _finished(agent, state)
+    assert [purpose for purpose, _ in llm.calls] == [LLMPurpose.READ, LLMPurpose.READ]
+    assert "$410 nonstop" in judged
+
+
+async def test_a_finish_that_owes_no_answer_neither_reads_nor_waits() -> None:
+    """A submit then DONE finishes at once: the redraw watch on a settled page runs to its deadline, and waiting
+    on it held every such run for two seconds."""
+    agent, page, state, llm = await _filtered_fares(answer_expected=False)
+    finish = agent._finish
+    await _finished(agent, state)
+    llm.responses = [{"missing": [], "complete": True}]
+    result = await asyncio.wait_for(finish(state, await page.observe(), None, None), timeout=1)
+    assert result is not None and result.status is Status.COMPLETE
+    assert LLMPurpose.READ not in [purpose for purpose, _ in llm.calls]
+
+
+async def test_an_owed_read_is_not_skipped_by_a_budget_the_page_spent_before_the_interaction() -> None:
+    """A filter that keeps its address and controls shares the barren budget of the page before it."""
+    agent, page, state, llm = await _filtered_fares(answer_expected=True)
+    here = await page.observe()
+    state.barren[here.document_key, state_key(here), ("r1",)] = agent._config.stall.barren_reads
+    assert "$410 nonstop" in await _finished(agent, state)
+    assert len(llm.calls) == 2
+    assert not state.owes_read
+
+
 async def test_scrolling_controls_in_and_out_of_view_is_not_a_reversal() -> None:
     top = observation((_button("1"), _button("Search"))).model_copy(update={"document_key": "doc"})
     below = observation((_button("Search"),)).model_copy(update={"document_key": "doc"})
@@ -849,7 +1009,7 @@ async def test_scrolling_controls_in_and_out_of_view_is_not_a_reversal() -> None
         await agent._step(state, before, _code_decision(Operation.SCROLL, None))
         agent._note_effect(state, after)
         agent._settle(state, after)
-        assert agent._reversal(state) == (None, True)
+        assert agent._reversal(state) == (None, True, False)
 
 
 @pytest.mark.parametrize("recoveries", [2, 6])
@@ -912,7 +1072,160 @@ def test_the_verifier_cannot_hold_open_a_requirement_the_notes_cite(
         Fact(reader=FactReader.LLM, requirement_id=r, text=r, evidence=evidence(start=i))
         for i, r in enumerate(("httpx", "compare"))
     )
-    assert _verified(LLMVerdict(complete=complete, missing=missing), plan, notes) is accepted
+    assert _verified(LLMVerdict(complete=complete, missing=missing), plan, notes, set()) is accepted
+
+
+@pytest.mark.parametrize(
+    ("ungrounded", "invented", "accepted", "complete"),
+    [
+        ((), {"https://example.test/"}, True, True),
+        # The citing excusal cannot see this: the requirement has evidence, read on an address the run guessed.
+        (("httpx",), {"https://example.test/?q=httpx"}, False, True),
+        # Read on the page the caller named or one the run clicked to, the doubt is the verifier's alone. The
+        # synthesis requirement is satisfied from notes, and no page ever shows a comparison.
+        (("httpx",), set(), True, True),
+        (("compare",), set(), True, True),
+        # A verifier that calls the run incomplete only for the excused doubt is excused with it, as for missing.
+        (("httpx",), set(), True, False),
+        # A verdict naming something the plan never asked for says nothing about this run.
+        (("invented-id",), {"https://example.test/"}, True, True),
+    ],
+)
+def test_evidence_does_not_excuse_a_requirement_read_off_a_guessed_address(
+    ungrounded: tuple[str, ...], invented: set[str], accepted: bool, complete: bool
+) -> None:
+    """A proposed address opened a flights summary, the reader quoted a price from it, and the requirement
+    counted as cited, so the verifier could not hold it open however plainly it was the wrong search."""
+    info = RequirementKind.INFORMATION
+    plan = Plan(
+        requirements=(
+            Requirement(id="httpx", text="Find httpx's latest release date", kind=info),
+            Requirement(id="compare", text="Compare the two dates", kind=info),
+        ),
+        answer_expected=True,
+    )
+    notes = Notes(
+        Fact(reader=FactReader.LLM, requirement_id=r, text=r, evidence=evidence(start=i))
+        for i, r in enumerate(("httpx", "compare"))
+    )
+    verdict = LLMVerdict(complete=complete, missing=(), ungrounded=ungrounded)
+    assert _verified(verdict, plan, notes, invented) is accepted
+
+
+async def _finishing(state: _RunState, llm: ScriptedLLM, *, noul: float) -> tuple[Agent, Observation]:
+    on = _at("https://example.test/flights/results")
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=on)
+    page.screenshot = AsyncMock(return_value=b"")
+    page.artifacts = ()
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="The cheapest nonstop fare", kind=RequirementKind.INFORMATION),),
+        answer_expected=False,
+    )
+
+    async def planned() -> Generation[Plan]:
+        return Generation(data=plan, cost=FREE)
+
+    state.planning = asyncio.create_task(planned())
+    await state.planning
+    state.ready_plan = plan
+    return Agent(page, ScriptedJev({}, noul=noul), llm), on
+
+
+def _fare(url: str, sha: str) -> Fact:
+    read = evidence(sha=sha).model_copy(update={"url": url})
+    return Fact(reader=FactReader.LLM, requirement_id="r1", text="$320", evidence=read)
+
+
+async def test_a_requirement_read_off_a_guessed_address_reopens_until_the_right_page_is_read() -> None:
+    """Refused as read off the wrong page with the fare left as the answer, every click after became DONE and
+    every DONE the same refusal, told only "completion not confirmed", until the run stopped stuck."""
+    summary = "https://example.test/flights/summary"
+    state = await run_state()
+    state.invented = {summary}
+    state.notes.add(_fare(f"{summary}?from=BRS", "summary"))
+    recovery: JsonValue = {
+        "diagnosis": "the fare came from a summary",
+        "next_subgoal": "Run the real search",
+        "give_up": False,
+    }
+    llm = ScriptedLLM(
+        [{"missing": [], "ungrounded": ["r1"], "complete": True}, recovery, {"missing": [], "complete": True}]
+    )
+    agent, on = await _finishing(state, llm, noul=0.5)
+
+    assert await agent._finish(state, on, None, None) is None
+    assert state.notes.unresolved(state.plan) == state.plan.requirements
+    assert f"r1: The cheapest nonstop fare (read off {summary}?from=BRS" in (state.history[-1].effect or "")
+
+    state.notes.add(_fare("https://example.test/flights/results?from=BRS", "results"))
+    result = await agent._finish(state, on, None, None)
+    assert result is not None and result.status is Status.COMPLETE
+
+
+_SHORTCUT = HistoryEntry(operation=None, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
+
+
+@pytest.mark.parametrize(
+    ("history", "complete"),
+    [
+        # A run chose DONE on the start page, Jev held the requirement unmet and the verifier called it complete,
+        # so it reported complete on the wrong page.
+        pytest.param((), False, id="nothing-acted"),
+        # A shortcut had already opened the project page; held idle, the run clicked on through to GitHub.
+        pytest.param((_SHORTCUT,), True, id="shortcut-opened"),
+    ],
+)
+async def test_only_a_run_that_has_not_acted_is_held_to_an_action_jev_holds_undone(
+    history: tuple[HistoryEntry, ...], complete: bool
+) -> None:
+    state = await run_state()
+    state.history.extend(history)
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Open httpx's project page", kind=RequirementKind.ACTION),),
+        answer_expected=False,
+    )
+    state.ready_plan = plan
+    on = _at("https://pypi.org/")
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=on)
+    page.screenshot = AsyncMock(return_value=b"")
+    page.artifacts = ()
+    llm = ScriptedLLM([{"missing": [], "complete": True}, {"diagnosis": "", "next_subgoal": "", "give_up": False}])
+    agent = Agent(page, ScriptedJev({}, noul=0.99), llm)
+
+    result = await agent._finish(state, on, None, None)
+
+    assert (result is not None and result.status is Status.COMPLETE) is complete
+    assert llm.calls[0][0] is LLMPurpose.VERIFY
+
+
+class _ConfirmingJev(ScriptedJev):
+    """Confirms every requirement and the task as complete, so the done check accepts outright."""
+
+    async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        return Evaluation(
+            model="test",
+            answers={key: NoulAnswer(probability=0.0 if key.startswith("unmet_") else 0.99) for key in questions},
+            input_tokens=10,
+            cost=FREE,
+        )
+
+
+@pytest.mark.parametrize("guessed", [True, False])
+async def test_a_confident_finish_resting_on_a_guessed_address_is_still_verified(guessed: bool) -> None:
+    summary = "https://example.test/flights/summary"
+    state = await run_state()
+    state.invented = {summary} if guessed else set()
+    state.notes.add(_fare(summary, "summary"))
+    llm = ScriptedLLM([{"missing": [], "complete": True}])
+    agent, on = await _finishing(state, llm, noul=0.99)
+    agent._jev = _ConfirmingJev({})
+
+    result = await agent._finish(state, on, None, None)
+
+    assert result is not None and result.status is Status.COMPLETE
+    assert [purpose for purpose, _ in llm.calls] == ([LLMPurpose.VERIFY] if guessed else [])
 
 
 @pytest.mark.parametrize("draws", [True, False])
@@ -1051,7 +1364,7 @@ async def test_a_list_the_reader_needs_whole_is_read_page_by_page_without_decidi
                 }
             ],
             "answered": True,
-            "continues": ["r1"],
+            "continues": [{"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}]}],
         },
         {
             "claims": [
@@ -1098,10 +1411,101 @@ async def test_a_list_goes_on_to_jev_with_a_hint_when_code_finds_no_next_page() 
         answer_expected=True,
     )
     here = _at("https://example.test/quotes/", _button("Load more"))
-    reads: list[JsonValue] = [{"claims": [], "answered": False, "continues": ["r1"]}]
+    reads: list[JsonValue] = [
+        {
+            "claims": [],
+            "answered": False,
+            "continues": [{"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}]}],
+        }
+    ]
     agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "none"}), ScriptedLLM(reads))
     await agent._read(state, capture((BlockKind.PARAGRAPH, "Einstein quote")), here)
     assert not state.next_page
+    assert state.hint is not None
+
+
+async def test_the_control_the_reader_names_opens_the_rest_of_the_list() -> None:
+    """A reader that can name the control showing the rest gives the run a way forward, where a hint alone
+    sent Flights runs round their recovery budget looking for View more flights."""
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r1", text="The cheapest fare", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    here = _at("https://example.test/flights/", _button("View more flights"))
+    reads: list[JsonValue] = [
+        {
+            "claims": [],
+            "answered": False,
+            "continues": [
+                {
+                    "requirement_id": "r1",
+                    "records": [{"first": "s0", "last": "s0"}],
+                    "expands": "View more flights",
+                }
+            ],
+        }
+    ]
+    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "none"}), ScriptedLLM(reads))
+    await agent._read(state, capture((BlockKind.PARAGRAPH, "From 1061 US dollars")), here)
+    assert state.directed == (Operation.CLICK, here.controls[0].id)
+    assert not state.next_page
+
+
+async def test_a_read_jev_chose_opens_the_control_its_reader_named() -> None:
+    """The direction a read leaves outlives the read: cleared straight after it, Flights runs went to recovery
+    and never clicked the View more flights the reader had named."""
+    more = _button("View more flights")
+    here = _at("https://example.test/flights/", more)
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r1", text="The cheapest fare", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=here)
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "From 1061 US dollars")))
+    page.screenshot = AsyncMock(return_value=b"")
+    page.artifacts = ()
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
+    jev = ScriptedJev({"operation": "read", "read_assessment": "evidence", "r1": "none"}, noul=0.0)
+    reads: list[JsonValue] = [
+        {
+            "claims": [],
+            "answered": False,
+            "continues": [{"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}], "expands": more.label}],
+        }
+    ]
+    agent = Agent(page, jev, ScriptedLLM(reads))
+    agent._recover = AsyncMock(side_effect=_Stop(Status.STUCK, "recovering"))
+    state.ledger.limits = Limits(max_steps=3)
+    from fastbrowse.telemetry import BudgetExceeded
+
+    with pytest.raises((_Stop, BudgetExceeded)):
+        await agent._loop(state, None, None)
+    page.act.assert_awaited_once()
+    assert [step.target for step in state.steps if step.operation is Operation.CLICK] == [more.label]
+
+
+async def test_a_control_the_reader_invents_directs_nothing() -> None:
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r1", text="The cheapest fare", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    here = _at("https://example.test/flights/", _button("Filters"))
+    reads: list[JsonValue] = [
+        {
+            "claims": [],
+            "answered": False,
+            "continues": [
+                {"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}], "expands": "Show all 240"}
+            ],
+        }
+    ]
+    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "none"}), ScriptedLLM(reads))
+    await agent._read(state, capture((BlockKind.PARAGRAPH, "From 1061 US dollars")), here)
+    assert state.directed is None
     assert state.hint is not None
 
 
@@ -1114,7 +1518,13 @@ async def test_the_pages_code_opens_are_capped() -> None:
     )
     state.pages = Config().max_pages
     here = _at("https://example.test/list/", _link("next", "next", "/list/2"))
-    reads: list[JsonValue] = [{"claims": [], "answered": False, "continues": ["r1"]}]
+    reads: list[JsonValue] = [
+        {
+            "claims": [],
+            "answered": False,
+            "continues": [{"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}]}],
+        }
+    ]
     agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "none"}), ScriptedLLM(reads))
     await agent._read(state, capture((BlockKind.PARAGRAPH, "a book")), here)
     assert not state.next_page
@@ -1332,14 +1742,18 @@ async def test_a_shortcut_the_site_does_not_serve_returns_to_the_start_page(stat
     start, guessed = "https://books.test/", "https://books.test/catalogue/mysteryfile_3/index.html"
     page = Mock(spec=Page)
     page.navigate = AsyncMock()
-    page.origin = AsyncMock(return_value="https://books.test")
+    # The site redirects the guess, and the facts will cite where it landed.
+    landed = "https://books.test/catalogue/category/books/mystery_3/index.html"
+    page.address = AsyncMock(return_value=landed)
     page.response_status = AsyncMock(return_value=status)
     agent = Agent(page, ScriptedJev({}), ScriptedLLM([{"url": guessed}]))
 
-    history = await agent._open("Which is the cheapest mystery book?", start, Ledger(Limits()))
+    history, invented = await agent._open("Which is the cheapest mystery book?", start, Ledger(Limits()))
 
     assert bool(history) is stays
     assert page.navigate.await_args_list[-1].args == ((guessed,) if stays else (start,))
+    # Only an address the run actually stayed on is one the verifier has to weigh.
+    assert invented == ({guessed, landed} if stays else set())
 
 
 @pytest.mark.parametrize(
@@ -1464,6 +1878,121 @@ def test_an_upload_is_judged_by_the_page_not_by_a_value() -> None:
     assert Agent._edit_progress(*edit("a.pdf", holds=None, operation=Operation.UPLOAD), set()) is None
 
 
+def _ticker(nth: int) -> Capture:
+    """One observation of a page that rewrites its own text every time it is looked at."""
+    return capture((BlockKind.PARAGRAPH, f"Live results, updated {nth} seconds ago"))
+
+
+async def _reading_state() -> _RunState:
+    state = await run_state()
+    requirement = Requirement(id="r1", text="Find the total", kind=RequirementKind.INFORMATION)
+    state.ready_plan = Plan(requirements=(requirement,), answer_expected=True)
+    return state
+
+
+async def test_a_page_that_rewrites_its_own_text_is_read_only_while_it_pays_out() -> None:
+    """The exact-content key never matches on a ticker, so without a budget the run reads it for ever."""
+    state = await _reading_state()
+    here = _at("https://example.test/live/", _button("Refresh"))
+    llm = ScriptedLLM([{"claims": [], "answered": False}] * 6)
+    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
+    skipped = []
+    for nth in range(5):
+        _, was_skipped = await agent._read(state, _ticker(nth), here)
+        skipped.append(was_skipped)
+    assert len(llm.calls) == Config().stall.barren_reads
+    assert skipped == [False, False, True, True, True]
+
+
+async def test_a_read_that_pays_out_restores_the_budget_of_the_page_state_it_read() -> None:
+    state = await _reading_state()
+    here = _at("https://example.test/live/", _button("Refresh"))
+    paid: JsonValue = {"claims": [{"text": "Total: 12", "cite": {"first": "s0", "last": "s0"}}], "answered": False}
+    barren: JsonValue = {"claims": [], "answered": False}
+    llm = ScriptedLLM([barren, paid, barren, barren])
+    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
+    for nth in range(3):
+        await agent._read(state, _ticker(nth), here)
+    assert state.notes.facts, "the second read added a fact"
+    # Without the payout clearing the first barren read, the third would have spent the budget.
+    _, was_skipped = await agent._read(state, _ticker(3), here)
+    assert not was_skipped
+    assert len(llm.calls) == 4
+
+
+async def test_a_spent_read_budget_belongs_to_one_page_state_not_to_the_run() -> None:
+    state = await _reading_state()
+    llm = ScriptedLLM([{"claims": [], "answered": False}] * 4)
+    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
+    here = _at("https://example.test/live/", _button("Refresh"))
+    for nth in range(3):
+        await agent._read(state, _ticker(nth), here)
+    assert len(llm.calls) == Config().stall.barren_reads
+    # A control the earlier state did not offer is a page state of its own, with a budget of its own.
+    changed = _at("https://example.test/live/", _button("Refresh"), _button("Show all"))
+    _, was_skipped = await agent._read(state, _ticker(3), changed)
+    assert not was_skipped
+    assert len(llm.calls) == Config().stall.barren_reads + 1
+
+
+async def test_a_list_paged_in_place_gives_each_page_its_own_read_budget() -> None:
+    """A client-side pager keeps its document and its buttons, so only the address tells the pages apart."""
+    state = await _reading_state()
+    llm = ScriptedLLM([{"claims": [], "answered": False}] * 3)
+    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
+    skipped = []
+    for nth in (1, 2, 3):
+        here = _at(f"https://example.test/orders?page={nth}", _button("Previous"), _button("Next"))
+        _, was_skipped = await agent._read(state, capture((BlockKind.PARAGRAPH, f"Order {nth}00")), here)
+        skipped.append(was_skipped)
+    assert skipped == [False, False, False]
+    assert len(llm.calls) == 3
+
+
+async def test_rereading_the_same_records_off_a_ticking_page_is_not_payout() -> None:
+    """Each capture of a ticking page mints the records it quotes afresh, though the notes already hold them."""
+    state = await _reading_state()
+    here = _at("https://example.test/flights/", _button("Refresh"))
+    carried: JsonValue = {
+        "claims": [],
+        "answered": False,
+        "continues": [{"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}]}],
+    }
+    llm = ScriptedLLM([carried] * 6)
+    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
+    for nth in range(6):
+        flights = capture(
+            (BlockKind.PARAGRAPH, "AB12 London to Paris $410"),
+            (BlockKind.PARAGRAPH, f"Prices updated {nth} seconds ago"),
+        )
+        await agent._read(state, flights, here)
+    # The first read's records are new to the notes and pay out; the same records again do not.
+    assert len(llm.calls) == Config().stall.barren_reads + 1
+
+
+async def test_a_starved_read_lets_the_interaction_jev_chose_proceed() -> None:
+    """The point of the budget: the run stops reading the ticker and does the thing the task needs."""
+    state = await _reading_state()
+    refresh = _button("Refresh")
+    here = _at("https://example.test/live/", refresh)
+    jev = ScriptedJev(
+        {"operation": "click", "click_target": refresh.id, "read_assessment": "evidence", "r1": "synthesis"}
+    )
+    llm = ScriptedLLM([{"claims": [], "answered": False}] * 6)
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=here)
+    page.capture = AsyncMock(return_value=_ticker(99))
+    page.screenshot = AsyncMock(return_value=b"")
+    page.artifacts = ()
+    agent = Agent(page, jev, llm)
+    for nth in range(Config().stall.barren_reads):
+        await agent._read(state, _ticker(nth), here)
+    clicking = await decide(jev, here, context(), Config())
+    assert clicking.read_assessment is ReadAssessment.EVIDENCE
+    # A forced read here would be the third barren one on this page state, so the click goes ahead instead.
+    assert await agent._read_before_interaction(state, here, clicking) is False
+
+
 async def test_same_text_can_be_read_for_a_new_document_or_new_requirement() -> None:
     state = await run_state()
     requirement = Requirement(id="r1", text="Find the total", kind=RequirementKind.INFORMATION)
@@ -1550,6 +2079,20 @@ async def test_a_link_sharing_another_links_start_is_still_redacted() -> None:
     answer, public = agent._public_answer(ComposedAnswer(answer="", linked_answer=body, claims=(), citations=cited))
     assert "alpha" not in answer
     assert all(p.deep_link in answer for p in public)
+
+
+async def test_a_secret_the_site_uses_as_its_hostname_leaves_the_cited_address_readable() -> None:
+    # The username `practice` is also the site's subdomain; redacting it there left links no browser opens.
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    agent._redactor.register("username", "practice", "https://practice.example.test")
+    url, quote = "https://practice.example.test/secure?user=practice", "Welcome, practice"
+    cited = Citation(id=1, text=quote, url=url, quote=quote, deep_link=text_fragment(url, quote))
+    linked = f"Signed in as practice [1](<{cited.deep_link}>)"
+    answer, (public,) = agent._public_answer(
+        ComposedAnswer(answer="", linked_answer=linked, claims=(), citations=(cited,))
+    )
+    assert public.url == "https://practice.example.test/secure?user=[secret:username]"
+    assert answer == f"Signed in as [secret:username] [1](<{public.deep_link}>)"
 
 
 @pytest.mark.parametrize(

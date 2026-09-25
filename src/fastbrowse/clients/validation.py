@@ -4,7 +4,7 @@ import asyncio
 import logging
 import math
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from time import monotonic
 from typing import assert_never
@@ -17,6 +17,7 @@ from fastbrowse.jev import (
     Answer,
     ChoiceAnswer,
     ChoiceQuestion,
+    Evaluation,
     JevError,
     JevInputTooLarge,
     JevRetriesExhausted,
@@ -150,7 +151,11 @@ RETRY_DELAYS_SECONDS = (0.5, 1.5, 4.0, 8.0, 8.0)
 """About 22s in all. With 6s, a Jev 503 ended 5 of 311 eval runs, and each time the next run, started 0 to 15s
 later, got through: the outages are brief, and a run lost to one costs far more than the wait. Only a longer
 outage moves the run to the backup provider (`clients/failover.py`)."""
-RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 529})
+RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529})
+"""Statuses that say nothing about the request, so a repeat can clear them. 520 to 524 are Cloudflare's edge failing
+to reach the provider behind it: a 520 arrived seconds after a retried 503 from the same outage and, unlisted, failed
+its eval row for good. A status still listed once the retries run out ends the run unavailable, not in error, so
+the eval harness retries the row too."""
 TRANSIENT_TRANSPORT = (
     httpx.TimeoutException,
     httpx.NetworkError,
@@ -448,6 +453,30 @@ def parse_answers(
             case _:
                 assert_never(question)
     return answers
+
+
+async def asking_open(
+    questions: Mapping[str, Question], ask: Callable[[Mapping[str, Question]], Awaitable[Evaluation]], model: str
+) -> Evaluation:
+    """Answer each choice of one option here and send `ask` only the rest.
+
+    Jev began refusing a choice with a single option ("choice requires at least 2 options"), which the
+    typesafe-ai route reported as a 503: wiki-godel's shortcut opened the article with one field to fill, and the
+    run retried that refusal as an outage for hours. Such a choice was never in doubt, so it is not asked.
+    """
+    forced = {
+        key: ChoiceAnswer(choice=only, probabilities={only: 1.0}, confidence=1.0)
+        for key, question in questions.items()
+        if isinstance(question, ChoiceQuestion) and len(question.criteria) == 1
+        for only in question.criteria
+    }
+    if not forced:
+        return await ask(questions)
+    rest = {key: question for key, question in questions.items() if key not in forced}
+    if not rest:
+        return Evaluation(model=model, answers=forced, input_tokens=0, cost=estimated_cost(0))
+    evaluation = await ask(rest)
+    return evaluation.model_copy(update={"answers": {**evaluation.answers, **forced}})
 
 
 def estimated_cost(input_tokens: int, output_tokens: int = 0) -> CostLine:

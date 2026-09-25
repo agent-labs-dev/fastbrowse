@@ -86,14 +86,16 @@ async def test_retry_waits_for_the_servers_retry_after(monkeypatch: pytest.Monke
     assert usage.unaccounted_requests == 0
 
 
-async def test_a_brief_outage_is_outlasted(monkeypatch: pytest.MonkeyPatch) -> None:
+# A Cloudflare edge error in front of the provider (520 to 524) is as transient as its 503: issue #125.
+@pytest.mark.parametrize("status", [503, 520])
+async def test_a_brief_outage_is_outlasted(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
     waits: list[float] = []
 
     async def record(delay: float) -> None:
         waits.append(delay)
 
     monkeypatch.setattr("fastbrowse.clients.validation.asyncio.sleep", record)
-    responses = iter([*(httpx.Response(503) for _ in range(4)), httpx.Response(200)])
+    responses = iter([*(httpx.Response(status) for _ in range(4)), httpx.Response(200)])
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: next(responses))) as http:
         response = await post_with_retry(
             http, "https://jev.test/v1", {}, {}, call="jev", attempt_seconds=30.0, hedge_seconds=5.0

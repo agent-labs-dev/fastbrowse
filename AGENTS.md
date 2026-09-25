@@ -78,7 +78,8 @@ The run loop is `src/fastbrowse/agent.py`, and everything else is a seam it call
 - **`retrieval.py`** routes short facts through Jev and other reads through the LLM. A read claim cites source
   blocks and code copies its quote from them; a count the page does not state rests on its basis facts; `memory.py` holds notes with citation ids, and `citations.py` builds deep links.
 - **`verification.py`** decides whether a run may finish: Jev's done check against the plan's requirements,
-  then the LLM verifier only for what Jev doubted, then the answer's claims checked against the quotes.
+  then the LLM verifier for what Jev doubted and for any requirement evidenced on an address the run guessed
+  from the task, then the answer's claims checked against the quotes.
 - **`safety.py`** owns secrets and irreversible actions. **`effects.py`** says what an action actually did,
   which is how a no-op is told from progress. **`telemetry.py`** is the ledger: steps, calls, dollars.
 - **`cli.py`**, **`mcp_server.py`** and **`run_task`** are the three entry points; `options.py` holds the rules
@@ -99,8 +100,9 @@ These are the things a change must not quietly break.
   and page state rather than the model's say-so.
 - **A model never sees a secret value.** Secrets reach a page by name, resolved at the moment of typing and
   only for their declared origin (which may be `https://*.site.com`, covering that site's hosts and nothing
-  that merely ends with the same letters), and are redacted from the run's text results. No model screenshot or
-  PNG step frame is taken while a resolved secret is showing as page text. The step-frame check is made
+  that merely ends with the same letters), and are redacted from the run's text results. A reported address on
+  an origin the secret was typed on keeps its host and port, since a value there is one that site published;
+  the rest of it, and any other host, is redacted. No model screenshot or PNG step frame is taken while a resolved secret is showing as page text. The step-frame check is made
   against the page as it is when the image is taken, never against an earlier reading of it - the action being
   recorded may be the one that put the secret there. Live JPEG frames and recordings show the rendered page
   without this check.

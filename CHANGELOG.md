@@ -11,6 +11,90 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A cheapest or highest from part of a list needs the page to state its order.** A reader that cited the
+  page's sort order to settle a superlative on the leading row still settled it when that citation named no block
+  on the page; the row alone no longer answers it.
+- **A step with one possible target no longer fails.** Jev now refuses a choice of only one option, and the
+  typesafe-ai route reports that refusal as a 503, so a page with one field to fill ended the run, or in the evals
+  retried it for hours as an outage: `wiki-godel` never finished. A choice of one option is answered without
+  asking, and a request left with no open question is not sent.
+- **A run that has not acted cannot be talked past an action Jev holds undone.** Asked to open a project page,
+  a run chose DONE on the start page, Jev's done check held the requirement unmet, and the verifier called it
+  complete, so the run reported `complete` on the wrong page. With no action taken, an action requirement Jev
+  holds unmet now keeps the run going. Opening a shortcut address counts as acting, so a run the shortcut
+  already took to the page is not held back.
+- **The live evals send `GITHUB_TOKEN` to the GitHub API when it is set.** A row's answer key is fetched again
+  on every retry, so a long provider outage spent the anonymous 60 requests an hour and failed `github-license`
+  on a 403 that said nothing about the agent.
+
+- **A secret that is also part of a site's hostname no longer breaks the reported address.** A username of
+  `practice` signed in at `https://practice.expandtesting.com/secure`, and redaction rewrote the host as well,
+  so the run reported `https://[secret:username].expandtesting.com/secure`, which is not an address. Final
+  addresses, trace addresses, fact and citation links now keep their host and port on an origin the secret was
+  typed on, since a value there was published by that site; on any other host, and in the path, query, fragment
+  or sign-in part of an address, it is still redacted, as is every other appearance of it in the run's text.
+
+- **Evidence from the wrong page no longer counts as an answer.** A proposed address opened a flights summary
+  rather than the search the task described, the reader quoted a price from it, and the requirement counted as
+  evidenced, so the verifier could not hold it open however plainly it was the wrong page. The verifier is now
+  told where each requirement's facts were read and which addresses the run built from the task rather than
+  reached by clicking, and it can name a requirement whose evidence came from the wrong page. A requirement
+  evidenced on such an address goes to the verifier even when Jev's own check accepts. When that evidence was read on a guessed address, the requirement is not excused by
+  having it: the requirement reopens, and the refusal names the page it was read off, so the run goes to find
+  the right one rather than finishing again from the same notes.
+
+- **A reader can settle a superlative the site has already ordered, or name the control that shows the rest.**
+  Three reads of a filtered results page returned nothing while the cheapest row was on screen: the reader saw
+  the list go on and never assigned the requirement, so the done check refused and the run stuck. A page that
+  states it is ordered or filtered by the quantity being compared now settles the superlative on its leading
+  record, citing that statement so the claim rests on it. A count or total over a list that goes on is not
+  settled this way. Where the list really does go on, the reader names
+  the control that shows the rest, and the run opens it when the page offers that label.
+
+- **A page that cannot settle a list now has to say what it compared.** The reader's prompt asked a continuing
+  page to quote every record it compared, and about half the time it quoted only the leading one, so the
+  winner on a later page could not show the values it beat and the claim check scored it unsupported. The
+  records are now a required part of the reader's answer rather than a request in prose, and code copies each
+  quote from the blocks named, so a record is the page's own text. A read that settles its list pays nothing
+  for this.
+
+- **A run reads what its last interaction changed before it calls itself finished.** A run clicked a filter
+  and declared itself done against the results as they were before the filter applied, so the check read a
+  list the run never saw. A run that owes an answer now reads the page its last interaction drew before the
+  done check judges it, asking the reader again for what it had already found. A run that only acts
+  finishes without reading or waiting.
+
+- **A filter put back to a state its page already held is not progress.** On a results page, turning a filter
+  on and off redraws the rows underneath it, so every click reached a page state the run had never seen and
+  nothing counted it: runs toggled one control until the step limit. A setting returned to committed values
+  its document has already held no longer counts as progress, however the results redraw, so three of them
+  reach the no-progress check and the run recovers. A setting given a value its page has not held is
+  untouched.
+
+- **A live eval survives a grader that raises.** The agent chooses where a run ends, so a grader is handed any
+  address a page can navigate to, and one that could not be parsed took down the whole suite: 59 of 63 runs
+  were discarded after four had finished. A grader that raises now fails that row and nobody else's, and so
+  does an answer key that cannot be fetched for a reason a retry would not cure.
+
+- **A page that rewrites its own text cannot be read for ever.** Reads were remembered by the page's exact
+  content, so a ticker, a rotating advert or a live counter minted a key the run had never seen on every
+  observation, and the agent could read one page until its step budget ran out instead of acting. Reads are
+  now also budgeted by the page's address and what it lets you do rather than by its text, and two reads of
+  one page state that add nothing the notes did not already hold make the run act instead. A read that adds a
+  new fact restores the budget. Each page of a list paged in place keeps a budget of its own, and the same
+  records read again off a ticking page are not new facts.
+
+- **A Cloudflare edge error is retried like a 503.** A provider behind Cloudflare answered a 503, which was
+  retried, and then a 520 seconds later in the same outage, which ended the run in error and failed its eval
+  row for good, although a re-run of the task passed. Statuses 520 to 524 are now retried with backoff, and
+  once the retries run out the run ends `unavailable`, so the live eval retries the row rather than scoring it.
+
+- **A value is still the page's when the model retypes its punctuation.** A field the page writes with a curly
+  apostrophe, an en dash or an ellipsis was dropped when the model quoted it with a straight apostrophe, a
+  hyphen or three dots, so the fact never landed, the requirement stayed open, and the run read the same page
+  until it stalled. A value now matches across a punctuation family, and across the backslash a capture puts
+  before a table cell's own pipe. The value returned and the quote kept as evidence are both the page's own
+  text, not the model's retyping, and the words, their order and their spacing all still have to be there.
 - **A table filtered on the page is read as filtered.** Rows a filter hid, with `hidden`, `display:none` or
   `visibility`, and rows in a hidden header, body or footer still entered the capture, so a reader could answer
   from a row the page no longer showed. They are left out now, and so are cells a column toggle hid.
