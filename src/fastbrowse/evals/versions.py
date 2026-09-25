@@ -38,15 +38,16 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from types import CodeType
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, ValidationError
 
 LOCK = Path(__file__).with_name("versions.json")
 ROOT = Path(__file__).parents[3]
 DOCS = ROOT / "docs" / "evals.md"
 README = ROOT / "README.md"
 RESULTS = ROOT / "docs" / "results"
+LEGACY = RESULTS / "legacy.json"
 _ADDRESS = re.compile(r" at 0x[0-9a-f]+")
 _OWN = "fastbrowse.evals"
 _CONSTANT = (str, bytes, int, float, bool, tuple, frozenset, dict, re.Pattern, enum.Enum)
@@ -140,6 +141,12 @@ def fingerprint(task: object) -> str:
     seen: set[str] = set()
     # `rolling` says how to fingerprint the task, not what it asks: its text is hashed under its stable name.
     fields = {f.name: _stable(getattr(task, f.name), seen) for f in dataclasses.fields(task) if f.name != "rolling"}
+    if hasattr(task, "expect"):
+        from fastbrowse.evals.live_tasks import prompt
+        from fastbrowse.evals.status import status_matches
+
+        fields["status_rule"] = _stable(status_matches, seen)
+        fields["prompt"] = _stable(prompt, seen)
     body = json.dumps(fields, sort_keys=True, default=str)
     for text, name in getattr(task, "rolling", {}).items():
         body = body.replace(text, name)
@@ -221,10 +228,11 @@ def all_tasks() -> tuple[dict[str, tuple[Any, ...]], tuple[Any, ...]]:
 
 # Published results.
 
-_KEPT = ("arm", "task", "category", "suite", "suite_version", "task_version", "status", "passed", "correct",
+_KEPT = ("arm", "task", "category", "suite", "suite_version", "task_version", "status",
+         "normalized_status", "task_successful", "passed", "correct",
          "seconds", "dollars", "retries", "failure")  # fmt: skip
 _RUN_KEPT = ("run_id", "run_started", "fastbrowse_version", "git_sha", "git_dirty", "providers", "max_steps",
-             "concurrency", "jev_ultrafast")  # fmt: skip
+             "concurrency", "jev_ultrafast", "arms")  # fmt: skip
 
 
 def slim(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -236,8 +244,26 @@ def slim(row: Mapping[str, Any]) -> dict[str, Any]:
     return kept
 
 
+class _StatisticsRow(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    arm: str = Field(min_length=1)
+    passed: bool
+    correct: bool
+    seconds: FiniteFloat = Field(ge=0)
+    dollars: FiniteFloat | None = Field(ge=0)
+
+
 def publish(release: str, source: Path) -> Path:
     """Commit `source`'s rows as `release`'s published results; refuse rows that cannot be traced or compared."""
+    if release == "auto":
+        rows = [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines() if line.strip()]
+        releases = {(row.get("run") or {}).get("fastbrowse_version") for row in rows}
+        if len(releases) != 1 or None in releases:
+            raise ValueError("rows must identify one fastbrowse release")
+        release = str(releases.pop())
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", release):
+        raise ValueError("release must be a numeric x.y.z version")
     target = RESULTS / f"{release}.jsonl"
     if target.exists():
         raise ValueError(f"{target} exists: published results are never rewritten; publish under a new release")
@@ -247,10 +273,19 @@ def publish(release: str, source: Path) -> Path:
     for row in rows:
         run = row.get("run") or {}
         where = f"{row.get('arm')} {row.get('task')}"
+        try:
+            _StatisticsRow.model_validate(row)
+        except ValidationError as exc:
+            problems.append(f"{where}: {exc.error_count()} invalid fields ({exc.errors()[0]['loc']})")
+            continue
         if not run.get("git_sha") or run.get("git_dirty") is not False:
             problems.append(f"{where}: not from a clean, committed tree")
         elif run.get("fastbrowse_version") != release:
             problems.append(f"{where}: ran fastbrowse {run.get('fastbrowse_version')}, not {release}")
+        if not run.get("run_started") or not run.get("run_id"):
+            problems.append(f"{where}: missing run date or id")
+        if not row.get("suite") or not row.get("suite_version"):
+            problems.append(f"{where}: missing suite or suite version")
         current = task_version(str(row.get("task")), lock)
         if current is None:
             problems.append(f"{where}: no task by that id is in versions.json")
@@ -288,8 +323,8 @@ def _arm_stats(rows: Sequence[Mapping[str, Any]]) -> dict[str, str]:
         "correct": f"{sum(r['correct'] for r in rows)}/{len(rows)}",
         "median time": f"{statistics.median(seconds):.1f}s",
         "mean time": f"{statistics.mean(seconds):.1f}s",
-        "median cost": f"${statistics.median(dollars):.4f}" if dollars else "unknown",
-        "mean cost": f"${statistics.mean(dollars):.4f}" if dollars else "unknown",
+        "median cost": f"${statistics.median(dollars):.4f}" if not unpriced else "unknown",
+        "mean cost": f"${statistics.mean(dollars):.4f}" if not unpriced else "unknown",
         "suite total": f"${sum(dollars):.2f}{unpriced}",
     }
 
@@ -302,6 +337,17 @@ def _by_arm(rows: Sequence[Mapping[str, Any]]) -> dict[str, list[Mapping[str, An
 
 
 def results_table(release: str, rows: Sequence[Mapping[str, Any]]) -> str:
+    return "\n\n".join(_results_table(release, group) for group in _by_suite(rows).values())
+
+
+def _by_suite(rows: Sequence[Mapping[str, Any]]) -> dict[tuple[str, str], list[Mapping[str, Any]]]:
+    groups: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    for row in rows:
+        groups.setdefault((row["suite"], row["suite_version"]), []).append(row)
+    return dict(sorted(groups.items()))
+
+
+def _results_table(release: str, rows: Sequence[Mapping[str, Any]]) -> str:
     """`release`'s published rows as the results table, with the suite versions they ran and any task changed
     since, so an old score cannot pass for one of the tasks as they stand."""
     columns = ["passed", "correct", "median time", "mean time", "median cost", "mean cost", "suite total"]
@@ -332,23 +378,226 @@ def headline(release: str, rows: Sequence[Mapping[str, Any]]) -> str:
     """The README's comparison table, from the newest published results."""
     days = sorted(r["run"]["run_started"][:10] for r in rows if r["run"]["run_started"])
     tasks = {r["task"] for r in rows}
-    passes = max(sum(1 for r in rows if r["task"] == t and r["arm"] == rows[0]["arm"]) for t in tasks)
     lines = [
-        f"Measured on {days[-1]} with the build released as {release}: {len(tasks)} tasks, {passes} passes each, "
-        "on the same kind of cloud browser.",
+        f"Measured on {days[-1]} with the build released as {release}: {len(tasks)} tasks, "
+        f"{len(rows)} attempts across all arms, on cloud browsers.",
         "",
-        "| | passed | cost per task | median time |",
-        "|:--|:--|:--|:--|",
     ]
-    for arm, arm_rows in _by_arm(rows).items():
-        s = _arm_stats(arm_rows)
-        cost = f"{s['median cost']} (median), {s['mean cost']} mean"
-        lines.append(f"| {ARM_LABELS.get(arm, arm)} | {s['passed']} | {cost} | {s['median time']} |")
+    for (suite, revision), group in _by_suite(rows).items():
+        lines += [f"Suite `{suite}`, version `{revision}`.", "", "| | passed | cost per task | median time |",
+                  "|:--|:--|:--|:--|"]  # fmt: skip
+        for arm, arm_rows in _by_arm(group).items():
+            s = _arm_stats(arm_rows)
+            cost = f"{s['median cost']} (median), {s['mean cost']} mean"
+            lines.append(f"| {ARM_LABELS.get(arm, arm)} | {s['passed']} | {cost} | {s['median time']} |")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+class _LegacyArm(BaseModel):
+    passed: int
+    total: int
+    correct: int
+    median_seconds: float
+    mean_seconds: float
+    median_dollars: float
+    mean_dollars: float
+    total_dollars: float
+
+
+class _LegacyResults(BaseModel):
+    release: str
+    date: str
+    tasks: int
+    repeats: int
+    concurrency: int
+    max_steps: int
+    source: str
+    arms: dict[str, _LegacyArm]
+
+
+def legacy_docs(*, headline_only: bool = False) -> str:
+    old = _LegacyResults.model_validate_json(LEGACY.read_text(encoding="utf-8"))
+    lines = [
+        f"Measured on {old.date} with the build released as {old.release}: {old.tasks} answer tasks, "
+        f"{old.repeats} attempts each on cloud browsers.",
+        "",
+        "| | passed | cost per task | median time |"
+        if headline_only
+        else "| | passed | correct answer | median time | mean time | median cost | mean cost | suite total |",
+        "|:--|:--|:--|:--|" if headline_only else "|:--|:--|:--|:--|:--|:--|:--|:--|",
+    ]
+    for arm, stats in old.arms.items():
+        label = ARM_LABELS[arm]
+        if headline_only:
+            lines.append(
+                f"| {label} | {stats.passed}/{stats.total} | ${stats.median_dollars:.4f} (median), "
+                f"${stats.mean_dollars:.4f} mean | {stats.median_seconds:.1f}s |"
+            )
+        else:
+            lines.append(
+                f"| {label} | {stats.passed}/{stats.total} | {stats.correct}/{stats.total} | "
+                f"{stats.median_seconds:.1f}s | {stats.mean_seconds:.1f}s | ${stats.median_dollars:.4f} | "
+                f"${stats.mean_dollars:.4f} | ${stats.total_dollars:.2f} |"
+            )
+    lines += ["", "These are historical aggregates, predating versioned rows and the current stricter graders."]
+    if not headline_only:
+        lines += [
+            f"That release used {old.concurrency} concurrent runs and a {old.max_steps}-step limit for "
+            "fastbrowse and jev-ultrafast. The current limit is generated above.",
+            f"The [archived report]({old.source}) preserves task, navigation and split-suite detail.",
+            "`docs/results/legacy.json` records these aggregates; it is excluded from the site feed.",
+        ]
     return "\n".join(lines)
+
+
+class MetricSummary(BaseModel):
+    median: float | None
+    mean: float | None
+
+
+class ArmSummary(BaseModel):
+    passed: int
+    total: int
+    priced: int
+    seconds: MetricSummary
+    dollars: MetricSummary
+
+
+class TaskChange(BaseModel):
+    task: str
+    previous: list[int]
+    current: list[int]
+
+
+class ReleaseSummary(BaseModel):
+    fastbrowse_version: str
+    date: str
+    suite: str
+    suite_version: str
+    arms: dict[str, ArmSummary]
+    task_versions_changed: list[TaskChange]
+
+
+class ResultsSummary(BaseModel):
+    schema_version: Literal[1] = 1
+    releases: list[ReleaseSummary]
+
+
+def _metrics(values: list[float]) -> MetricSummary:
+    return MetricSummary(
+        median=statistics.median(values) if values else None, mean=statistics.mean(values) if values else None
+    )
+
+
+def summary(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) -> ResultsSummary:
+    """Release/suite pairs, newest first, without mixing task versions or inventing unpriced costs."""
+    releases = published() if releases is None else releases
+    previous: dict[str, list[int]] = {}
+    result: list[ReleaseSummary] = []
+    for release, rows in sorted(releases, key=lambda item: _release_key(item[0])):
+        versions = {
+            task: sorted({r["task_version"] for r in rows if r["task"] == task})
+            for task in sorted({r["task"] for r in rows})
+        }
+        groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for row in rows:
+            groups.setdefault((row["suite"], row["suite_version"]), []).append(row)
+        for (suite, revision), group in sorted(groups.items()):
+            arms = {}
+            for arm, arm_rows in _by_arm(group).items():
+                prices = [r["dollars"] for r in arm_rows if r["dollars"] is not None]
+                arms[arm] = ArmSummary(
+                    passed=sum(bool(r["passed"]) for r in arm_rows),
+                    total=len(arm_rows),
+                    priced=len(prices),
+                    seconds=_metrics([r["seconds"] for r in arm_rows]),
+                    dollars=_metrics(prices if len(prices) == len(arm_rows) else []),
+                )
+            changes = [
+                TaskChange(task=task, previous=previous.get(task, []), current=current)
+                for task in sorted({r["task"] for r in group})
+                if previous
+                and previous.get(task) != (current := sorted({r["task_version"] for r in group if r["task"] == task}))
+            ]
+            result.append(
+                ReleaseSummary(
+                    fastbrowse_version=release,
+                    date=max(r["run"]["run_started"][:10] for r in group),
+                    suite=suite,
+                    suite_version=revision,
+                    arms=arms,
+                    task_versions_changed=changes,
+                )
+            )
+        previous = versions
+    result.sort(key=lambda r: (_release_key(r.fastbrowse_version), r.suite, r.suite_version), reverse=True)
+    return ResultsSummary(releases=result)
+
+
+def render_summary() -> str:
+    return summary().model_dump_json(indent=2) + "\n"
 
 
 def _cell(text: str) -> str:
     return " ".join(text.split()).replace("|", "\\|")
+
+
+def protocol_docs() -> str:
+    from fastbrowse.evals.live import ARMS, MAX_STEPS
+
+    lines = [
+        "Every arm receives `Start at {start}. {task}`. CDP runners also receive the declared start URL.",
+        f"fastbrowse, jev-ultrafast and browser-use OSS use a {MAX_STEPS}-step limit. "
+        "The hosted API exposes no step limit.",
+        "The existing harness has no common dollar or wall-time cap; "
+        "cloud browsers expire after their configured lifetime.",
+        "Default arms: " + ", ".join(f"`{name}`" for name, arm in ARMS.items() if arm.default) + ".",
+        "",
+        "| Arm | Pin | Tier |",
+        "|---|---|---|",
+    ]
+    lines.extend(f"| `{name}` | {arm.pin} | {arm.tier} |" for name, arm in ARMS.items())
+    lines += [
+        "",
+        "`browser-use-oss` is opt-in and installed in an isolated uv environment only when selected.",
+        "Its Pydantic pin conflicts with the hosted SDK, so it is not a project extra.",
+        "Rows keep raw `status`, `task_successful` and `normalized_status`: "
+        "`done`, `stopped`, `budget`, `timeout`, `error`, `blocked` or `unavailable`.",
+        "A pass requires a correct grade and `done`, or the exact expected fastbrowse stop.",
+        "The hosted SDK maps to `done` only for a stopped session with `is_task_successful=true`.",
+        "Provider-unavailable attempts are retried at most twice; the final failed row and retry count remain.",
+        "`seconds` includes retries within the reported attempt; fastbrowse records `transient_seconds` separately.",
+        "Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the row.",
+        "Existing timing includes browser setup. These rows do not claim the planned handoff-only timing protocol.",
+    ]
+    return "\n\n".join(lines[:4]) + "\n" + "\n".join(lines[4:])
+
+
+def feed_schema_docs() -> str:
+    models = (ResultsSummary, ReleaseSummary, ArmSummary, MetricSummary, TaskChange)
+    lines = [
+        "Schema version 1. Each releases entry represents one release, suite and suite version.",
+        "",
+        "| Object | Fields |",
+        "|---|---|",
+    ]
+    for model in models:
+        lines.append(f"| `{model.__name__}` | " + ", ".join(f"`{name}`" for name in model.model_fields) + " |")
+    lines += [
+        "",
+        "`releases` is newest first. `date` is the latest UTC run date in that group.",
+        "`arms` maps registry names to statistics across every attempt, including failures.",
+        "`seconds` and `dollars` contain numeric median and mean values; dollars are USD.",
+        "`priced` counts attempts with known cost. Both dollar statistics are null if any attempt is unpriced.",
+        "`task_versions_changed` compares observed task versions with the previous published release:",
+        "`task`, `previous` and `current` version lists. New tasks have an empty previous list;",
+        "tasks absent from the current group are not reported as removed. The first release has no changes.",
+        "Separate suite versions never share an aggregate. No wall-clock generation timestamp is emitted.",
+    ]
+    if not published():
+        lines += ["There are no published JSONL rows yet; the generated releases array is empty."]
+    return "\n".join(lines)
 
 
 def docs_blocks(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) -> dict[str, str]:
@@ -356,7 +605,7 @@ def docs_blocks(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = No
     table per published release."""
     suites, local = all_tasks()
     lock = load_lock()
-    blocks = {}
+    blocks = {"protocol": protocol_docs(), "feed-schema": feed_schema_docs(), "legacy": legacy_docs()}
     for name, tasks in suites.items():
         if name == "core":
             continue  # the core suite's table says how each task is graded, which is prose; a test checks its ids
@@ -408,16 +657,18 @@ def render_docs(text: str) -> str:
 
 
 def render_readme(text: str) -> str:
-    """The README with its headline generated from the newest published release; unchanged before the first."""
+    """The README headline from published rows, falling back to the recorded historical aggregates."""
     newest = published()[:1]
-    return _render(text, {"headline": headline(*newest[0])} if newest else {}, "README.md")
+    return _render(text, {"headline": headline(*newest[0]) if newest else legacy_docs(headline_only=True)}, "README.md")
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="check or update the eval versions and published results")
     parser.add_argument("--bump", nargs="*", default=[], metavar="TASK_ID")
     parser.add_argument("--publish", nargs=2, metavar=("RELEASE", "ROWS"), help="commit a results file as RELEASE")
-    parser.add_argument("--docs", action="store_true", help="regenerate docs/evals.md and the README headline")
+    parser.add_argument(
+        "--docs", action="store_true", help="regenerate eval docs, README headline and docs/results/summary.json"
+    )
     args = parser.parse_args(argv)
     suites, local = all_tasks()
     tasks = {t.id: t for t in (*(t for s in suites.values() for t in s), *local)}
@@ -436,6 +687,8 @@ def main(argv: list[str]) -> int:
     if args.docs or args.publish:
         DOCS.write_text(render_docs(DOCS.read_text(encoding="utf-8")), encoding="utf-8")
         README.write_text(render_readme(README.read_text(encoding="utf-8")), encoding="utf-8")
+        RESULTS.mkdir(parents=True, exist_ok=True)
+        (RESULTS / "summary.json").write_text(render_summary(), encoding="utf-8")
     problems = mismatches(list(tasks.values()))
     print("\n".join(problems) or f"{len(tasks)} tasks match versions.json")
     return 1 if problems else 0

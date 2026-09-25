@@ -11,6 +11,14 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Live evals require the evidence they grade.** A missing final page fails any arm whose page the harness can
+  observe (the hosted agent, which cannot report one, is graded on its answer), unfinished hosted sessions no
+  longer pass, subprocess arms get only allowed environment values, and all arms share one prompt. An opt-in
+  browser-use OSS adapter and pinned external task loaders support preparing independent comparisons.
+- **Eval results have a site feed.** Regenerating docs also writes `docs/results/summary.json` from published
+  rows, with release and suite versions, per-arm time and cost, and changed task versions. Just recipes run,
+  publish and regenerate without editing totals.
+
 ## [0.5.5] - 2026-09-25
 
 - **A Jev outage costs a batch, not the run.** After two 5xx answers in a row, a batch of questions is asked one

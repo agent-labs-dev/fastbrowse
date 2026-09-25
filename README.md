@@ -33,47 +33,24 @@ something that was never on the page. Every claim in an answer cites a verbatim 
 ### Against Browser Use
 
 <!-- evals:headline -->
-Measured on 2026-09-22 with the build released as 0.5.2: the same 14 answer tasks (lookups, sign-ins,
-checkout, Google Flights), three passes each, on the same kind of cloud browser.
+Measured on 2026-09-22 with the build released as 0.5.2: 14 answer tasks, 3 attempts each on cloud browsers.
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| **fastbrowse** | **41/42** | **$0.0041** (median), $0.0086 mean | **20.6s** |
+| fastbrowse | 41/42 | $0.0041 (median), $0.0086 mean | 20.6s |
 | Browser Use agent | 39/42 | $0.3668 (median), $0.6193 mean | 21.6s |
+
+These are historical aggregates, predating versioned rows and the current stricter graders.
 <!-- /evals:headline -->
 
-The whole suite cost $0.36 here and $26.01 there. fastbrowse's one miss and two of the Browser Use agent's
-three are Google Flights, which passes about four runs in five for fastbrowse; the Browser Use agent
-answered those two from the landing page with no price.
-
-Median cost ratios by category: 65x for lookups, 173x for sign-ins and 195x for checkout.
-Jev selects actions through classification; planning, field text and reading can still require LLM generation.
-
-Task medians show where time went:
-
-| task | fastbrowse | Browser Use agent |
-|:--|:--|:--|
-| `saucedemo-checkout` two items, a shipping form and Finish | **38.1s** | 113.3s |
-| `saucedemo-cart` sign in, find a product, add it | **20.2s** | 86.1s |
-| `saucedemo-locked-out` report the site's error rather than claim success | **20.2s** | 93.8s |
-| `expandtesting-login` sign in and confirm the signed-in page | **20.5s** | 102.8s |
-| `practice-login` the same on another practice site | **22.0s** | 102.7s |
-
-Lookup medians included `arxiv-title` at 11.1s, `pypi-version` at 12.5s and `github-license` at 16.6s;
-the Browser Use agent is faster on four of the seven lookups.
-
-[Every run, what it cost, and how a failure is counted](docs/evals.md#052-2026-09-22).
+Compare rows only at matching task versions. See [eval results and workflow](docs/evals.md).
 
 ### Why fastbrowse, against each kind of agent
 
 - **LLM agents that generate actions** (Browser Use and similar): Jev picks each action from the controls
-  that are on the page, so there is no invented selector to retry. A task costs a fraction as much (a lookup,
-  $0.0051 against $0.3281 median across the lookup category), and every claim in the answer links to the
-  page text it came from.
+  that are on the page, so there is no invented selector to retry. Every claim in the answer links to the page text it came from.
 - **Choice-model navigators** ([jev-ultrafast](https://github.com/browser-use/jev-ultrafast)): the same
-  core technique, with page reading, cited answers, scoped secrets and an authorization gate. On the six
-  navigation tasks both can run, fastbrowse passed 18/18 against 12/18, and jev-ultrafast is cheaper on
-  every task both finish.
+  core technique, with page reading, cited answers, scoped secrets and an authorization gate. Navigation tasks compare the page each run ended on.
 - **Scripts:** there are no selectors to maintain. The same agent handles a date picker, a checkout and
   a search box it has never seen.
 
@@ -341,21 +318,12 @@ seconds to minutes, so raise the client's tool timeout if it has one (`MCP_TOOL_
 
 ## Evals and development
 
-```sh
-uv sync --all-extras                                         # the Browser Use SDK too, which ty checks
-uv run pre-commit install                                    # ruff and ty before each commit
-uv run python -m fastbrowse.evals.runner                     # local fixtures, about $0.005 a task
-uv run --extra browser-use python -m fastbrowse.evals.live                     # live head-to-head, 8 at a time
-uv run --extra browser-use python -m fastbrowse.evals.live --arms fastbrowse        # ours alone
-uv run --extra browser-use python -m fastbrowse.evals.live --suite heldout   # the held-out split
-uv run ruff format . && uv run ruff check . && uv run ty check && uv run pytest
-uv run python scripts/no_slop.py && uv run vale sync && uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs src scripts tests
-```
+The [eval workflow](docs/evals.md#workflow) has the run, publish and regeneration commands. Final page checks
+require evidence read by the harness, and a pass also requires the task's expected ending. Published rows carry
+build and task versions; the [site feed](docs/results/summary.json) is generated from them.
 
-Grades use recorded requests, API truth, final page state or captured quotes where the arm exposes them.
-The Browser Use agent exposes answer text only, which is checked against task truth. See [docs/evals.md](docs/evals.md),
-[docs/design.md](docs/design.md), and [docs/jev.md](docs/jev.md) for every Jev assumption checked against
-Typesafe's documentation.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and checks, [docs/design.md](docs/design.md) for the browser
+layer, and [docs/jev.md](docs/jev.md) for the Jev assumptions checked against Typesafe's documentation.
 
 ## Changelog
 

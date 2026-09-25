@@ -122,6 +122,9 @@ def test_publishing_refuses_rows_that_cannot_be_traced_or_compared(results: Path
         _row("pypi-version", git_sha=None),
         _row("pypi-version", fastbrowse_version="9.9.8"),
         _row("pypi-version") | {"task_version": 0},
+        _row("pypi-version") | {"seconds": float("nan")},
+        _row("pypi-version") | {"dollars": -1},
+        _row("pypi-version") | {"passed": "false"},
         # A task missing from the lock has no version to compare, so its null version must not match.
         _row("no-such-task"),
     ):
@@ -172,8 +175,11 @@ def test_release_sections_stay_newest_first_however_they_are_added(results: Path
 def test_a_published_table_names_tasks_changed_since(results: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _publish(results, [_row("pypi-version")])
     lock = versions.load_lock()
-    monkeypatch.setattr(versions, "load_lock", lambda: lock | {"pypi-version": {"version": 2, "fingerprint": ""}})
-    assert "`pypi-version` v1 → v2" in versions.docs_blocks()["results:9.9.9"]
+    previous = lock["pypi-version"]["version"]
+    monkeypatch.setattr(
+        versions, "load_lock", lambda: lock | {"pypi-version": {"version": previous + 1, "fingerprint": ""}}
+    )
+    assert f"`pypi-version` v{previous} → v{previous + 1}" in versions.docs_blocks()["results:9.9.9"]
 
 
 def test_generated_docs_are_current() -> None:
@@ -204,22 +210,68 @@ def test_the_documented_core_and_local_tasks_are_the_defined_ones() -> None:
     assert {i for row in _rows(_section(DOCS, "## Local fixtures")) for i in _ids(row[0])} == {t.id for t in LOCAL}
 
 
-def test_the_readme_headline_is_the_latest_published_result() -> None:
-    # Before the first committed release the headline is prose; afterwards test_generated_docs_are_current owns it.
-    if versions.published():
-        return
-    heading = re.search(r"^### (\S+), (\d{4}-\d{2}-\d{2})$", DOCS, re.M)
-    assert heading is not None
-    release, day = heading.groups()
-    assert f"Measured on {day} with the build released as {release}" in README
-    rows = {}
-    for cells in _rows(DOCS[heading.end() :]):
-        if len(cells) == 8:
-            rows.setdefault(re.sub(r" \(.*\)$", "", cells[0]), cells)
-    for arm, headline in (("fastbrowse", "**fastbrowse**"), ("Browser Use agent", "Browser Use agent")):
-        _, passed, _, median_time, _, median_cost, mean_cost, _ = rows[arm]
-        line = next(line for line in README.splitlines() if line.startswith(f"| {headline} |"))
-        plain = line.replace("**", "")
-        assert f"| {passed} |" in plain
-        assert f"{median_cost} (median), {mean_cost} mean" in plain
-        assert f"| {median_time} |" in plain
+def test_summary_groups_suites_and_preserves_unknown_costs() -> None:
+    first = _row("pypi-version", fastbrowse_version="1.0.0") | {"task_version": 1}
+    later = _row("pypi-version", fastbrowse_version="1.0.1") | {"task_version": 2, "suite_version": "changed"}
+    second = later | {"seconds": 30.0, "dollars": None, "passed": False}
+    other = later | {"suite": "dev", "suite_version": "dev-version", "arm": "browser-use"}
+    feed = versions.summary([("1.0.1", [later, second, other]), ("1.0.0", [first])])
+    assert feed.schema_version == 1 and len(feed.releases) == 3
+    core = next(r for r in feed.releases if r.fastbrowse_version == "1.0.1" and r.suite == "core")
+    arm = core.arms["fastbrowse"]
+    assert (arm.passed, arm.total, arm.priced) == (1, 2, 1)
+    assert arm.seconds.mean == arm.seconds.median == 20.0
+    assert arm.dollars.mean is arm.dollars.median is None
+    assert core.task_versions_changed == [versions.TaskChange(task="pypi-version", previous=[1], current=[2])]
+    old = next(r for r in feed.releases if r.fastbrowse_version == "1.0.0")
+    assert not old.task_versions_changed
+    assert old.arms["fastbrowse"].dollars.mean == 0.01
+
+
+def test_summary_does_not_mix_suite_versions_or_invent_legacy_rows() -> None:
+    assert versions.summary([]).model_dump() == {"schema_version": 1, "releases": []}
+    row = _row("pypi-version")
+    feed = versions.summary([("9.9.9", [row, row | {"suite_version": "other", "seconds": 20}])])
+    assert len(feed.releases) == 2
+    assert {r.arms["fastbrowse"].seconds.mean for r in feed.releases} == {10, 20}
+
+
+def test_markdown_keeps_suite_versions_separate_and_unpriced_cost_unknown() -> None:
+    row = _row("pypi-version")
+    rows = [row, row | {"suite_version": "other", "seconds": 20, "dollars": None}]
+    for text in (versions.results_table("9.9.9", rows), versions.headline("9.9.9", rows)):
+        assert "abcd1234" in text and "other" in text
+        assert "10.0s" in text and "20.0s" in text and "15.0s" not in text
+        assert "unknown" in text
+    mixed = versions._arm_stats([row, row | {"dollars": None}])
+    assert mixed["median cost"] == mixed["mean cost"] == "unknown"
+
+
+def test_legacy_aggregates_generate_both_docs_without_inventing_rows() -> None:
+    old = json.loads(versions.LEGACY.read_text())
+    assert sum(a["total"] for a in old["arms"].values()) == old["tasks"] * old["repeats"] * len(old["arms"])
+    for arm in old["arms"].values():
+        for text in (versions.legacy_docs(), versions.legacy_docs(headline_only=True)):
+            assert f"{arm['passed']}/{arm['total']}" in text
+            assert f"${arm['median_dollars']:.4f}" in text
+    assert "30-step" in versions.legacy_docs() and "historical" in versions.legacy_docs()
+
+
+def test_committed_summary_is_generated_from_published_rows() -> None:
+    assert (versions.RESULTS / "summary.json").read_text() == versions.render_summary()
+
+
+def test_publish_auto_uses_recorded_release(results: Path) -> None:
+    source = results / "rows.jsonl"
+    source.write_text(json.dumps(_row("pypi-version")) + "\n")
+    assert versions.publish("auto", source).name == "9.9.9.jsonl"
+    with pytest.raises(ValueError, match="numeric"):
+        versions.publish("../escape", source)
+
+
+def test_status_rule_is_versioned(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastbrowse.evals import status
+
+    before = versions.fingerprint(live.SUITES["core"][0])
+    monkeypatch.setattr(status, "status_matches", lambda *_: True)
+    assert versions.fingerprint(live.SUITES["core"][0]) != before

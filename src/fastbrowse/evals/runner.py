@@ -23,6 +23,7 @@ from fastbrowse.browser import BrowserSession, CdpPage
 from fastbrowse.clients.environment import Settings, load_settings
 from fastbrowse.config import Config
 from fastbrowse.evals.local import Recorder, fixture_server
+from fastbrowse.evals.status import normalize
 from fastbrowse.evals.tasks import TASKS, LocalTask
 from fastbrowse.evals.versions import load_lock, provenance, suite_version, task_version
 from fastbrowse.models import BrowserConnection, Limits
@@ -57,15 +58,18 @@ async def run_task(
     lost = transient_seconds(events, started, ended)
     failure = task.check(result, recorder.snapshot())
     return {
+        "arm": "fastbrowse",
+        "category": "fixture",
+        "correct": failure is None,
+        "normalized_status": normalize(result.status),
         "task": task.id,
         "passed": failure is None,
         "would_fire": dict(Counter(tripwire.value for tripwire in result.would_fire)),
         "failure": failure,
         "status": result.status.value,
-        # A provider's retried 503s say nothing about the agent, so they are left out of its time.
-        "seconds": round(ended - started - lost, 1),
+        "seconds": round(ended - started, 1),
         "transient_seconds": round(lost, 2),
-        "dollars": round(result.cost.known_dollars, 5),
+        "dollars": None if result.cost.has_unknown else round(result.cost.known_dollars, 5),
         "unknown_cost": result.cost.has_unknown,
         "seconds_by_call": result.cost.seconds_by_call(),
         "steps": len(result.steps),

@@ -32,37 +32,36 @@ import sys
 import tempfile
 import time
 from collections import Counter
+from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from unittest import mock
 
 import httpx
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 import fastbrowse.run
 from fastbrowse.adapters.bitwarden import bitwarden_login
 from fastbrowse.adapters.browser_use_cloud import BrowserUseCloudBrowser
 from fastbrowse.agent import Agent
-from fastbrowse.browser import CdpPage
-from fastbrowse.browser.recording import Recording
 from fastbrowse.clients.environment import load_settings
 from fastbrowse.clients.validation import RETRYABLE_STATUS, TRANSIENT_TRANSPORT
-from fastbrowse.evals.live_tasks import TASKS, Category, LiveTask, Outcome
+from fastbrowse.evals.live_tasks import TASKS, Category, LiveTask, Outcome, prompt
 from fastbrowse.evals.more_tasks import DEV, HELDOUT, STRETCH_DEV, STRETCH_HELDOUT
+from fastbrowse.evals.observe import GradedPage as _GradedPage
+from fastbrowse.evals.observe import observe_browser
+from fastbrowse.evals.status import Ending, normalize, status_matches
 from fastbrowse.evals.versions import load_lock, provenance, suite_version, task_version
 from fastbrowse.models import Authorization, BrowserEvent, Limits, RunResult, Status, StepEvent, Unavailable
-from fastbrowse.page import Observation
 from fastbrowse.run import run_task
 from fastbrowse.safety import ScopedSecrets, origin_of
 from fastbrowse.telemetry import traced, transient_seconds
 
-ARMS = ("fastbrowse", "jev-ultrafast", "browser-use")
 MAX_STEPS = 50
 LIMITS = Limits(max_steps=MAX_STEPS)
-"""No arm has a dollar or time cap: a cap one arm reaches measures the budget, not the arm, so every run ends
-when its agent does. fastbrowse and jev-ultrafast share a step limit; the Browser Use agent has none to set."""
+"""The existing harness has a step cap only; the benchmark time and dollar caps need separate metering work."""
 
 ULTRAFAST = "jev-ultrafast @ git+https://github.com/browser-use/jev-ultrafast@1231850a0bf1a0c0341fe408ef1668dbbfdfac46"
 ULTRAFAST_RUNNER = Path(__file__).resolve().parents[3] / "scripts" / "ultrafast_arm.py"
@@ -107,6 +106,7 @@ class _Observed:
     kept on the classes let a run starting reset the page another had just observed, which then graded as
     "no final page to grade"."""
 
+    final_url: str | None = None
     controls: tuple[tuple[str, str | None], ...] | None = None
     observe_error: str | None = None
     """Why the page could not be observed after the run; a grader then reports it had no page."""
@@ -117,53 +117,22 @@ class _Observed:
 _observed: ContextVar[_Observed] = ContextVar("live_observed")
 
 
-class _TimedRecording(Recording):
-    async def show_result(self, task: str, result: RunResult) -> None:
-        _observed.get().ended = time.monotonic()
-        await super().show_result(task, result)
-
-
-# A popup left open marks the rest of the page aria-hidden, which the agent rightly ignores and a grader
-# reading the form must not; so the grader's look lifts the marks, observes as the agent would, and restores them.
-_UNHIDE = """(() => {
-  const marked = [...document.querySelectorAll('[aria-hidden="true"],[inert]')];
-  window.__fastbrowseHidden = marked.map(e => [e, e.getAttribute('aria-hidden'), e.hasAttribute('inert')]);
-  marked.forEach(e => { e.removeAttribute('aria-hidden'); e.removeAttribute('inert'); });
-})()"""
-_RESTORE = """(() => {
-  for (const [e, hidden, inert] of window.__fastbrowseHidden || []) {
-    if (hidden !== null) e.setAttribute('aria-hidden', hidden);
-    if (inert) e.setAttribute('inert', '');
-  }
-  delete window.__fastbrowseHidden;
-})()"""
-
-
-class _GradedPage(CdpPage):
-    async def observe_all(self) -> Observation:
-        """Every control on the page, including those a popup has hidden from the agent."""
-        session_id = self._session.active_session_id
-        await self._evaluate(session_id, _UNHIDE)
-        try:
-            return await self.observe()
-        finally:
-            await self._evaluate(session_id, _RESTORE)
-
-
 class _ObservedAgent(Agent):
     """fastbrowse's agent, with the page it ended on observed once more after the run, for graders that read the
     page itself (what a form ended up holding) rather than anything the agent reported."""
 
     async def run(self, *args: Any, **kwargs: Any) -> RunResult:
         result = await super().run(*args, **kwargs)
+        _observed.get().ended = time.monotonic()
         try:
-            observation = await self._page.observe()
-            hidden = await self._page.observe_all() if isinstance(self._page, _GradedPage) else None
+            observation = (
+                await self._page.observe_all() if isinstance(self._page, _GradedPage) else await self._page.observe()
+            )
         except Exception as exc:  # a page that cannot be observed leaves nothing to grade, which the grader reports
             _observed.get().observe_error = f"{type(exc).__name__}: {exc}"
             return result
-        controls = (*observation.controls, *(hidden.controls if hidden is not None else ()))
-        _observed.get().controls = tuple((c.label, c.value) for c in controls)
+        _observed.get().final_url = observation.url
+        _observed.get().controls = tuple((c.label, c.value) for c in observation.controls)
         return result
 
 
@@ -181,11 +150,11 @@ class ArmReport(BaseModel):
     """What an arm says about one run beyond its outcome; a field belongs to the arms named beside it."""
 
     status: str
+    task_successful: bool | None = None
     seconds: float
-    """Wall time, less `transient_seconds` for the arms that can measure it."""
+    """Wall time, including retries; browser setup is included for existing arms."""
     transient_seconds: float = 0.0
-    """Time lost to a provider's transient failures, retried 503s and their backoff: it says nothing about the agent,
-    so it is left out of `seconds`. Measured for fastbrowse only; the other arms retry out of our sight."""
+    """Retry time measured by fastbrowse, retained as a diagnostic without subtracting it from wall time."""
     dollars: float | None
     """None when some of the run's spend could not be priced: a known total would then be only a floor."""
     error: str | None = None
@@ -220,6 +189,7 @@ class EvalRow(ArmReport):
     status: str | None = None  # a crashed arm reports nothing, unless a provider was unavailable
     retries: int = 0
     """Runs discarded before this one because a provider stayed unavailable: they say nothing about the agent."""
+    normalized_status: Ending = Ending.ERROR
     correct: bool
     passed: bool
     failure: str | None
@@ -241,8 +211,6 @@ class _UltrafastReport(BaseModel):
     status: str
     error: str | None
     seconds: float
-    final_url: str | None
-    controls: list[tuple[str, str | None]] | None
     steps: int
     actions: int
     trace: list[str]
@@ -264,7 +232,7 @@ async def fast_arm(
     token = _observed.set(seen)
     try:
         result = await run_task(
-            task.task,
+            prompt(task),
             start=task.start,
             browser_api_key=load_settings().browser_key(),
             output_schema=task.output_schema,
@@ -279,7 +247,7 @@ async def fast_arm(
     finally:
         _observed.reset(token)
     quotes = tuple((e.url, e.quote) for e in result.evidence)
-    outcome = Outcome(result.answer, result.data, result.final_url or task.start, quotes, seen.controls)
+    outcome = Outcome(result.answer, result.data, seen.final_url, quotes, seen.controls)
     return outcome, result, seen
 
 
@@ -290,14 +258,17 @@ async def _on_fast_event(task: LiveTask, event: StepEvent | BrowserEvent) -> Non
 
 async def prepare_ultrafast() -> None:
     """Install jev-ultrafast's environment once, so no run is timed installing it."""
-    process = await asyncio.create_subprocess_exec(*ULTRAFAST_COMMAND, "-c", "import jev_ultrafast")
-    if await process.wait() != 0:
-        raise RuntimeError(f"could not install {ULTRAFAST}")
+    with tempfile.TemporaryDirectory(prefix="ultra-prepare-") as runtime:
+        process = await asyncio.create_subprocess_exec(
+            *ULTRAFAST_COMMAND, "-c", "import jev_ultrafast", env=arm_environment("jev-ultrafast", runtime), cwd=runtime
+        )
+        if await process.wait() != 0:
+            raise RuntimeError(f"could not install {ULTRAFAST}")
 
 
 def _ultrafast_env(cdp_ws: str, runtime: str) -> dict[str, str]:
     settings = load_settings()
-    env = dict(os.environ)
+    env = arm_environment("jev-ultrafast", runtime)
     # Its text helper is an OpenRouter model; Jev comes from TypeSafe directly or through the gateway.
     env |= {
         "TEXT_MODEL_API_KEY": settings.openrouter_key(),
@@ -328,25 +299,22 @@ async def ultrafast_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path
         _watch("jev-ultrafast", task, cloud.connection.live_url)
         request = {
             "start": task.start,
-            "goal": task.task,
+            "goal": prompt(task),
             "cdp_ws": cloud.connection.cdp_url,
             "max_steps": MAX_STEPS,
             "record": None if record is None else str(record),
         }
         with tempfile.TemporaryDirectory(prefix="bh-") as runtime:
-            process = await asyncio.create_subprocess_exec(
-                *ULTRAFAST_COMMAND,
-                str(ULTRAFAST_RUNNER),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                env=_ultrafast_env(cloud.connection.cdp_url, runtime),
-                cwd=runtime,
+            ran = _UltrafastReport.model_validate_json(
+                await _invoke(
+                    ULTRAFAST_COMMAND,
+                    ULTRAFAST_RUNNER,
+                    request,
+                    _ultrafast_env(cloud.connection.cdp_url, runtime),
+                    runtime,
+                )
             )
-            stdout, _ = await process.communicate(json.dumps(request).encode())
-        lines = stdout.decode().strip().splitlines()
-        if process.returncode != 0 or not lines:
-            raise RuntimeError(f"the jev-ultrafast runner exited {process.returncode} without a result")
-        ran = _UltrafastReport.model_validate_json(lines[-1])
+        final = await observe_browser(cloud.connection.cdp_url)
     browser = sum(line.dollars or 0 for line in cloud.cost)
     dollars = ran.jev_dollars + ran.text_dollars + browser
     report = ArmReport(
@@ -360,9 +328,9 @@ async def ultrafast_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path
         actions=ran.actions,
         unmetered_requests=ran.unmetered_requests,
         text_model=ran.text_model,
+        observe_error=final.error,
     )
-    observed = None if ran.controls is None else tuple(ran.controls)
-    return Outcome(None, None, ran.final_url, controls=observed), report
+    return Outcome(None, None, final.url, controls=final.controls), report
 
 
 async def hosted_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | None) -> tuple[Outcome, ArmReport]:
@@ -384,7 +352,7 @@ async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
 
     client = AsyncBrowserUse(api_key=load_settings().browser_key())
     run = client.run(
-        f"Start at {task.start}. {task.task}",
+        prompt(task),
         output_schema=task.output_schema,
         proxy_country_code="us",
         sensitive_data=dict(task.secrets) or None,
@@ -411,14 +379,15 @@ async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
     else:
         raise error
     if isinstance(output, BaseModel):
-        outcome = Outcome(output.model_dump_json(), output.model_dump(), None)
+        outcome = Outcome(output.model_dump_json(), output.model_dump(), None, unobservable=True)
     elif isinstance(output, dict):
-        outcome = Outcome(json.dumps(output), output, None)
+        outcome = Outcome(json.dumps(output), output, None, unobservable=True)
     else:
-        outcome = Outcome(str(output) if output else None, None, None)
+        outcome = Outcome(str(output) if output else None, None, None, unobservable=True)
     cost = session.total_cost_usd
     report = ArmReport(
         status=session.status.value,
+        task_successful=getattr(session, "is_task_successful", None),
         seconds=round(seconds, 2),
         dollars=None if cost is None else float(cost),
         model=str(session.model.value if hasattr(session.model, "value") else session.model),
@@ -470,6 +439,7 @@ def _crashed(
         category=task.category.value,
         at=at,
         status=status,
+        normalized_status=normalize(status),
         correct=False,
         passed=False,
         failure=failure,
@@ -493,14 +463,9 @@ async def run_arm(
     started = time.monotonic()
     at = time.time()
     try:
-        if arm == "fastbrowse":
-            outcome, report = await _fast_report(
-                task, http, downloads, bitwarden=bitwarden, record=record, started=started
-            )
-        elif arm == "jev-ultrafast":
-            outcome, report = await ultrafast_arm(task, http, record=record)
-        else:
-            outcome, report = await hosted_arm(task, http, record=record)
+        outcome, report = await ARMS[arm].runner(
+            task, http, downloads, bitwarden=bitwarden, record=record, started=started
+        )
     except Exception as exc:  # a crashed arm is a failed task, recorded rather than aborting the comparison
         unavailable = isinstance(exc, (Unavailable, *TRANSIENT_TRANSPORT))
         return _crashed(
@@ -521,13 +486,15 @@ async def run_arm(
     # Right and proven are graded apart: a correct answer the agent could not back with quotes is a
     # different defect from a wrong one, and one pass/fail column hid which the suite was showing.
     correct = failure is None
-    expected = {"fastbrowse": task.expect.value, "jev-ultrafast": "done"}.get(arm)
-    if expected is not None and failure is None and report.status != expected:
-        failure = f"status {report.status}, expected {expected}"
+    if failure is None and not status_matches(arm, report.status, task.expect, report.task_successful):
+        failure = f"status {report.status}, expected {task.expect.value}"
     return EvalRow.model_validate(
         report.model_dump()
         | {
             "arm": arm,
+            "normalized_status": normalize(
+                report.status, hosted=arm == "browser-use", hosted_success=report.task_successful
+            ),
             "task": task.id,
             "category": task.category.value,
             "at": at,
@@ -555,7 +522,7 @@ async def _fast_report(
     lost = transient_seconds(events, started, ended)
     return outcome, ArmReport(
         status=result.status.value,
-        seconds=ended - started - lost,
+        seconds=ended - started,
         transient_seconds=round(lost, 2),
         # An unknown line makes the known total a floor, not a cost.
         dollars=None if cost.has_unknown else cost.known_dollars,
@@ -580,6 +547,156 @@ async def _fast_report(
             for c in {line.component.value for line in cost.lines}
         },
     )
+
+
+class ArmSpec(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+
+    runner: Callable[..., Awaitable[tuple[Outcome, ArmReport]]]
+    pin: str
+    env_allowlist: tuple[str, ...]
+    tier: Literal["A", "hosted"]
+    default: bool = True
+    prepare: Callable[[], Awaitable[None]] | None = None
+
+
+_RUNTIME_ENV = ("PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR")
+OSS_PIN = "browser-use==0.13.10"
+OSS_COMMAND = ("uv", "run", "--no-project", "--quiet", "--with", OSS_PIN, "python")
+OSS_RUNNER = ULTRAFAST_RUNNER.with_name("browser_use_oss_arm.py")
+OSS_MODEL = "google/gemini-3.8-flash"
+
+
+def arm_environment(name: str, runtime: str, source: Mapping[str, str] | None = None) -> dict[str, str]:
+    source = os.environ if source is None else source
+    # HOME is a fresh directory, so uv's cache and managed Pythons are pointed at where they really are: without
+    # them each run would resolve cold and download its interpreter again.
+    cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    data = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return {key: source[key] for key in ARMS[name].env_allowlist if key in source} | {
+        "HOME": runtime,
+        "UV_CACHE_DIR": str(Path(os.environ.get("UV_CACHE_DIR", cache / "uv")).resolve()),
+        "UV_PYTHON_INSTALL_DIR": str(Path(os.environ.get("UV_PYTHON_INSTALL_DIR", data / "uv" / "python")).resolve()),
+        "ANONYMIZED_TELEMETRY": "false",
+    }
+
+
+async def _invoke(
+    command: tuple[str, ...], script: Path, request: Mapping[str, object], env: dict[str, str], cwd: str
+) -> bytes:
+    process = await asyncio.create_subprocess_exec(
+        *command, str(script), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, env=env, cwd=cwd
+    )
+    try:
+        stdout, _ = await process.communicate(json.dumps(request).encode())
+    except BaseException:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+        raise
+    lines = stdout.splitlines()
+    if process.returncode != 0 or not lines:
+        raise RuntimeError(f"{script.name} exited {process.returncode} without a result")
+    return lines[-1]
+
+
+class _OssReport(BaseModel):
+    status: str
+    answer: str | None = None
+    data: JsonValue = None
+    steps: int
+    seconds: float
+    dollars: float | None = None
+    error: str | None = None
+
+
+async def oss_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | None) -> tuple[Outcome, ArmReport]:
+    if record is not None:
+        raise ValueError("browser-use-oss recording is not supported by this adapter")
+    started = time.monotonic()
+    cloud = BrowserUseCloudBrowser(load_settings().browser_key(), http=http)
+    async with cloud:
+        booted = time.monotonic() - started
+        _watch("browser-use-oss", task, cloud.connection.live_url)
+        request: dict[str, object] = {
+            "start": task.start,
+            "goal": prompt(task),
+            "cdp_ws": cloud.connection.cdp_url,
+            "max_steps": MAX_STEPS,
+            "record": None,
+            "model": OSS_MODEL,
+            "secrets": dict(task.secrets),
+            "output_schema": task.output_schema.model_json_schema() if task.output_schema else None,
+        }
+        with tempfile.TemporaryDirectory(prefix="bu-oss-") as runtime:
+            env = arm_environment("browser-use-oss", runtime)
+            env["OPENROUTER_API_KEY"] = load_settings().openrouter_key()
+            ran = _OssReport.model_validate_json(await _invoke(OSS_COMMAND, OSS_RUNNER, request, env, runtime))
+        final = await observe_browser(cloud.connection.cdp_url)
+    browser = sum(line.dollars or 0 for line in cloud.cost)
+    return Outcome(ran.answer, ran.data, final.url, controls=final.controls), ArmReport(
+        status=ran.status,
+        # Timed inside the runner as jev-ultrafast is, so neither arm is charged for resolving and importing itself.
+        seconds=round(booted + ran.seconds, 2),
+        dollars=None if ran.dollars is None else ran.dollars + browser,
+        steps=ran.steps,
+        error=ran.error,
+        model=OSS_MODEL,
+        observe_error=final.error,
+        cost_by_component={"browser": browser} | ({} if ran.dollars is None else {"llm": ran.dollars}),
+    )
+
+
+async def prepare_oss() -> None:
+    with tempfile.TemporaryDirectory(prefix="bu-prepare-") as runtime:
+        process = await asyncio.create_subprocess_exec(
+            *OSS_COMMAND, "-c", "import browser_use", env=arm_environment("browser-use-oss", runtime), cwd=runtime
+        )
+        if await process.wait() != 0:
+            raise RuntimeError(f"could not install {OSS_PIN}")
+
+
+async def _run_fast(
+    task: LiveTask, http: httpx.AsyncClient, downloads: Path, **kwargs: Any
+) -> tuple[Outcome, ArmReport]:
+    return await _fast_report(task, http, downloads, **kwargs)
+
+
+async def _run_ultra(task: LiveTask, http: httpx.AsyncClient, _: Path, **kwargs: Any) -> tuple[Outcome, ArmReport]:
+    return await ultrafast_arm(task, http, record=kwargs["record"])
+
+
+async def _run_hosted(task: LiveTask, http: httpx.AsyncClient, _: Path, **kwargs: Any) -> tuple[Outcome, ArmReport]:
+    return await hosted_arm(task, http, record=kwargs["record"])
+
+
+async def _run_oss(task: LiveTask, http: httpx.AsyncClient, _: Path, **kwargs: Any) -> tuple[Outcome, ArmReport]:
+    return await oss_arm(task, http, record=kwargs["record"])
+
+
+async def _prepare_ultra() -> None:
+    await prepare_ultrafast()
+
+
+ARMS: dict[str, ArmSpec] = {
+    "fastbrowse": ArmSpec(runner=_run_fast, pin="run.fastbrowse_version + run.git_sha", env_allowlist=(), tier="A"),
+    "jev-ultrafast": ArmSpec(
+        runner=_run_ultra, pin=ULTRAFAST, env_allowlist=_RUNTIME_ENV, tier="A", prepare=_prepare_ultra
+    ),
+    "browser-use": ArmSpec(
+        runner=_run_hosted,
+        pin="browser-use-sdk==3.11.3; hosted model reported per row",
+        env_allowlist=(),
+        tier="hosted",
+    ),
+    "browser-use-oss": ArmSpec(
+        runner=_run_oss, pin=OSS_PIN, env_allowlist=_RUNTIME_ENV, tier="A", default=False, prepare=prepare_oss
+    ),
+}
+
+
+def eligible(arm: str, task: LiveTask) -> bool:
+    return arm in task.arms or (arm == "browser-use-oss" and task.expect == Status.COMPLETE)
 
 
 SUITES: dict[str, tuple[LiveTask, ...]] = {
@@ -607,7 +724,7 @@ def summarize(rows: list[EvalRow], arms: list[str]) -> None:
             f"${sum(priced):.4f}" + (f" ({unknown} runs of unknown cost)" if unknown else "")
         )
         if lost := sum(r.transient_seconds for r in arm_rows):
-            print(f"  {'transient':18} {lost / len(arm_rows):5.1f}s a task, left out of the median")
+            print(f"  {'transient':18} {lost / len(arm_rows):5.1f}s a task, included in the median")
         calls: dict[str, float] = {}
         for r in arm_rows:
             for label, spent in r.seconds_by_call.items():
@@ -645,7 +762,9 @@ async def main(argv: list[str]) -> int:
     )
     parser.add_argument("--category", nargs="*", default=[], choices=[c.value for c in Category])
     parser.add_argument("--bitwarden", action="store_true", help="login credentials from the vault items")
-    parser.add_argument("--arms", nargs="*", default=list(ARMS), choices=ARMS)
+    parser.add_argument(
+        "--arms", nargs="*", default=[name for name, spec in ARMS.items() if spec.default], choices=list(ARMS)
+    )
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--record", type=Path, metavar="DIR", help="save each run as DIR/<arm>/<task>-<n>.mp4")
     parser.add_argument("--out", type=Path, default=Path("artifacts/evals/live.jsonl"))
@@ -657,6 +776,8 @@ async def main(argv: list[str]) -> int:
         "time timed the same as one at a time; compare arms only under the same setting.",
     )
     args = parser.parse_args(argv)
+    if args.record is not None and "browser-use-oss" in args.arms:
+        parser.error("browser-use-oss does not support --record")
     tasks = [
         t
         for suite in args.suite or (list(SUITES) if args.only else ["core"])
@@ -681,20 +802,21 @@ async def main(argv: list[str]) -> int:
     run = provenance(
         providers=providers,
         jev_ultrafast=ULTRAFAST if "jev-ultrafast" in args.arms else None,
+        arms={name: {"pin": ARMS[name].pin, "tier": ARMS[name].tier} for name in args.arms},
         argv=list(argv),
         concurrency=args.concurrency,
         max_steps=MAX_STEPS,
     )
     dirty = " (uncommitted changes)" if run["git_dirty"] else ""
     print(f"RUN {run['run_id']} fastbrowse {run['fastbrowse_version']} at {run['git_sha']}{dirty}", flush=True)
-    if "jev-ultrafast" in args.arms:
-        await prepare_ultrafast()
+    for name in args.arms:
+        if prepare := ARMS[name].prepare:
+            await prepare()
     args.out.parent.mkdir(parents=True, exist_ok=True)
     rows: list[EvalRow] = []
     # Patched once for the whole run: overlapping runs each patching and restoring would interleave, and a run ending
     # would restore the originals under a run still going.
     patches = (
-        mock.patch.object(fastbrowse.run, "Recording", _TimedRecording),
         mock.patch.object(fastbrowse.run, "Agent", _ObservedAgent),
         mock.patch.object(fastbrowse.run, "CdpPage", _GradedPage),
     )
@@ -702,15 +824,13 @@ async def main(argv: list[str]) -> int:
     with (
         patches[0],
         patches[1],
-        patches[2],
         tempfile.TemporaryDirectory() as downloads,
         args.out.open("a", encoding="utf-8") as out,
     ):
         async with httpx.AsyncClient(timeout=60, event_hooks={"request": [_github_token]}) as http:
 
             async def one(arm: str, task: LiveTask, record: Path | None) -> EvalRow:
-                # A provider outage says nothing about the agent, so a run it ended is run again until one ends
-                # on its own, however long that takes; the slot is released while waiting, and for the answer key.
+                # Bound outage retries so a provider failure cannot keep a benchmark running indefinitely.
                 for retries in itertools.count():
                     try:
                         truth = await _truth(task, http)
@@ -724,7 +844,7 @@ async def main(argv: list[str]) -> int:
                         row = await run_arm(
                             arm, task, truth, http, Path(downloads), bitwarden=args.bitwarden, record=record
                         )
-                    if row.status != Status.UNAVAILABLE:
+                    if row.normalized_status != Ending.UNAVAILABLE or retries >= 2:
                         break
                     wait = min(30 * (retries + 1), 300)
                     print(f"RETRY {arm:13} {task.id:20} in {wait}s: {_cause(row)}", flush=True)
@@ -755,7 +875,7 @@ async def main(argv: list[str]) -> int:
                 for _ in range(args.repeat)
                 for task in tasks
                 for arm in args.arms
-                if arm in task.arms
+                if eligible(arm, task)
             ]
             rows = list(await asyncio.gather(*(one(arm, task, record) for arm, task, record in planned)))
     summarize(rows, args.arms)

@@ -22,7 +22,7 @@ from urllib.parse import unquote, urlparse
 
 import httpx
 
-from fastbrowse.evals.live_tasks import Category, Check, LiveTask, Outcome, Truth
+from fastbrowse.evals.live_tasks import Category, Check, LiveTask, Outcome, Truth, _no_page
 
 
 async def _json(http: httpx.AsyncClient, url: str) -> object:
@@ -92,7 +92,9 @@ def _exactly(needle: str) -> Check:
 
 
 def _submitted(outcome: Outcome, truth: object) -> str | None:
-    if outcome.final_url is not None and unquote(urlparse(outcome.final_url).path).rstrip("/") != "/post":
+    if not outcome.final_url:
+        return _no_page(outcome) or _has("large")(outcome, truth)
+    if unquote(urlparse(outcome.final_url).path).rstrip("/") != "/post":
         return f"ended on {outcome.final_url}, not on the page the form posts to"
     return _has("large")(outcome, truth)
 

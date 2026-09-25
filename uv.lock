@@ -251,6 +251,9 @@ dependencies = [
 browser-use = [
     { name = "browser-use-sdk" },
 ]
+eval-data = [
+    { name = "pyyaml" },
+]
 mcp = [
     { name = "mcp" },
 ]
@@ -268,15 +271,16 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "browser-use-sdk", marker = "extra == 'browser-use'", specifier = ">=3.11.3,<3.12" },
+    { name = "browser-use-sdk", marker = "extra == 'browser-use'", specifier = "==3.11.3" },
     { name = "cdp-use", specifier = "==1.4.5" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.28,<1" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.20,<2" },
     { name = "pydantic", specifier = ">=2.11,<3" },
     { name = "pydantic-settings", specifier = ">=2.10,<3" },
+    { name = "pyyaml", marker = "extra == 'eval-data'", specifier = ">=6,<7" },
     { name = "websockets", specifier = ">=14,<18" },
 ]
-provides-extras = ["browser-use", "mcp"]
+provides-extras = ["browser-use", "eval-data", "mcp"]
 
 [package.metadata.requires-dev]
 dev = [
