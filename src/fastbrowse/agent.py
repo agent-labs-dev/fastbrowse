@@ -10,7 +10,7 @@ import json
 import logging
 import time
 from collections import deque
-from collections.abc import Coroutine, Mapping, Sequence, Set
+from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence, Set
 from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit
 
@@ -284,6 +284,9 @@ class _RunState:
     pages: int = 0
     """Next pages opened by code this run."""
     first_url: str | None = None
+    visited: dict[str, None] = field(default_factory=dict[str, None])
+    """Every address the run has been on, in order, first the one it began on. The action record starts after that
+    first page, so without this a task's "start at" address was one the checks could not see the run had reached."""
     """The first page the run looked at, which is what a task's "this page" means once the run has moved on."""
     redecided: bool = False
     """A decision was dropped because the page redrew under it, so nothing is watched until an action is taken."""
@@ -378,6 +381,9 @@ class Agent:
                     )
                     state.history.extend(history)
                     state.invented = invented
+                    if opening is not None:
+                        # A shortcut leaves the start page before the loop observes anything.
+                        state.visited[opening] = None
                     return await self._loop(state, output_schema, until)
             except _Stop as stop:
                 return self._result(state, ledger, stop.status, error=stop.error)
@@ -422,6 +428,7 @@ class Agent:
             state.ledger.check()
             observation = await self._observe()
             state.first_url = state.first_url or observation.url
+            state.visited[(self._raw_observation or observation).url] = None
             self._note_effect(state, observation)
             undone, renews, put_back = self._reversal(state)
             stalled = self._settle(state, observation, renews=renews, put_back=put_back)
@@ -1709,6 +1716,7 @@ class Agent:
             draft,
             tokens=self._config.tokens,
             history=_record(state.history, self._config.observation),
+            visited=_visited(state.visited, self._config.observation, self._redactor.redact),
         )
         trace(
             "done_check",
@@ -1756,6 +1764,7 @@ class Agent:
                     _record(state.history, self._config.observation),
                     doubted=check.doubted,
                     invented=sorted(state.invented),
+                    visited=_visited(state.visited, self._config.observation, self._redactor.redact),
                     config=self._config,
                     ledger=state.ledger,
                 )
@@ -2176,6 +2185,16 @@ def _record(history: Sequence[HistoryEntry], limits: ObservationLimits) -> tuple
     recent = _history(history, limits)
     typed = (e.model_copy(update={"effect": None}) for e in history[: len(history) - len(recent)] if e.text is not None)
     return (*typed, *recent)
+
+
+def _visited(visited: Iterable[str], limits: ObservationLimits, redact: Callable[[str], str]) -> tuple[str, ...]:
+    """Where the run began, then the addresses it has been on since, as many as the actions shown with them.
+
+    Redacted as they are shown, not as they were stored: a value in an early address can become a secret only
+    when a later page asks for it."""
+    urls = tuple(dict.fromkeys(map(redact, visited)))
+    shown = limits.history_entries + limits.earlier_history_entries
+    return urls[:1] + urls[max(1, len(urls) - shown) :]
 
 
 def _recovery_text(text: str) -> str:

@@ -17,6 +17,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   Masking and redaction now share one rule: a value that sits wholly inside the host of an address on an origin
   it was typed on is left, wherever the address appears, and every other appearance of it, a password's
   included, is still blanked or redacted.
+- **An answer states the value, not the requirement ahead of it.** A value read straight off the page was answered
+  as the requirement it met followed by the value ("Find the latest released version of httpx." then
+  "httpx 0.28.1"); the answer is now the value alone.
+- **The page a run began on counts as visited.** A task saying "Start at" an address could be planned as a
+  requirement to go there, and a run that opened a deeper page from it was sent back because nothing it was checked
+  against showed it had been there. The done check and verifier now see every address the run has been on, first
+  the one it began on, and the planner no longer makes a start address a requirement of its own.
 
 ## [0.5.6] - 2026-09-25
 

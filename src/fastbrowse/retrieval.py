@@ -1214,10 +1214,12 @@ async def _read_choices(
         value, evidence = copied
         logger.debug("read reader=jev_choice requirement=%s reason=scalar_candidate", requirement.id)
         # The candidate's evidence was cut from this capture by code, so it is kept as selected, not re-found.
+        # The text is the value alone: the draft answer states a fact's text, and prefixed with the requirement it
+        # answered "Find the latest released version of httpx. httpx 0.28.1". The notes name the requirement.
         facts.append(
             Fact(
                 requirement_id=requirement.id,
-                text=f"{requirement.text}\n{value}",
+                text=str(value),
                 evidence=evidence,
                 reader=FactReader.JEV_CHOICE,
             )

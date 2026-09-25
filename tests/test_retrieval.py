@@ -259,7 +259,7 @@ async def test_short_read_batches_requirements_and_keeps_citations_without_llm()
     assert ledger.lines == list(result.cost_lines) and ledger.breakdown().known_dollars == 0.0001
     for requirement, fact, quote in zip(requirements, result.facts, ("httpx 0.28.1", "License: BSD"), strict=True):
         assert notes.evidenced(requirement.id)
-        assert fact.text == f"{requirement.text}\n{quote}"
+        assert fact.text == quote
         assert fact.reader is FactReader.JEV_CHOICE
         assert fact.evidence is not None and fact.evidence == block_evidence(page, fact.evidence.source_id)
     _, questions = jev.requests[0]
@@ -270,6 +270,8 @@ async def test_short_read_batches_requirements_and_keeps_citations_without_llm()
     assert all("untrusted data" in q.instructions for q in questions.values())
     draft = draft_answer(Plan(requirements=requirements, answer_expected=True), notes)
     assert draft is not None and len(draft.claims) == 2
+    # The draft states the values, not the requirement each one answers ahead of it, as it once did.
+    assert draft.answer == "httpx 0.28.1\n\nLicense: BSD"
     assert {claim.evidence_ids[0] for claim in draft.claims} == notes.evidence.keys()
     assert "License: BSD" in claim_check_questions(draft, notes)["unsupported_1"].instructions
 

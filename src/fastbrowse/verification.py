@@ -36,6 +36,13 @@ from fastbrowse.retrieval import (
 from fastbrowse.telemetry import Ledger, trace
 
 _DEFAULT_CONFIG = Config()
+# "Start at https://github.com/astral-sh/ruff." became a requirement to navigate there, and a run whose shortcut
+# opened the release page straight from it was sent back to the repository root it had begun on: the action record
+# starts after the first page, so nothing the checks saw said the run had been there.
+_REACHED = (
+    "A requirement only to reach, open or start at an address is satisfied once the visited addresses include it, "
+    "the first of which is where the run began."
+)
 
 
 class DoneVerdict(StrEnum):
@@ -139,11 +146,13 @@ async def check_done(
     *,
     tokens: TokenBudget = _DEFAULT_CONFIG.tokens,
     history: Sequence[HistoryEntry] = (),
+    visited: Sequence[str] = (),
 ) -> DoneCheck:
     """Judge completion, and whether `draft` answers the task as written, in the one Jev call.
 
     `history` is the run's action record. A page shows only where a process ended, so an accepted check that never
-    saw the record would pass "enter one name, go back and correct it" on a run that typed the correction first."""
+    saw the record would pass "enter one name, go back and correct it" on a run that typed the correction first.
+    `visited` is every address the run has been on, first the one it began on, which no action records."""
     questions: dict[str, Question] = {
         "complete": NoulQuestion(
             instructions=(
@@ -166,8 +175,8 @@ async def check_done(
                 questions[f"unmet_{requirement.id}"] = NoulQuestion(
                     instructions=(
                         f"{UNTRUSTED}\nIs this requirement not visibly satisfied? The actions in state are the run's "
-                        "own record; a requirement that orders actions is satisfied only when they show that order."
-                        f"\n\n{requirement.text}"
+                        "own record; a requirement that orders actions is satisfied only when they show that order. "
+                        f"{_REACHED}\n\n{requirement.text}"
                     ),
                     true="It is not satisfied, or there is no visible confirmation.",
                     false="The page visibly confirms it is satisfied.",
@@ -196,7 +205,8 @@ async def check_done(
             instructions=(
                 f"{UNTRUSTED}\nDoes the draft in state need rewriting before it answers the task? It does if it "
                 "misses part of what was asked, repeats or contradicts itself, includes facts the task did not ask "
-                "for, or leaves a comparison, count or calculation undone."
+                "for, leaves a comparison, count or calculation undone, or gives a value without saying which part "
+                "of the task it answers when that is not plain."
             ),
             true="Yes, it needs rewriting before it answers the task.",
             false="No, it answers the task as written.",
@@ -205,6 +215,8 @@ async def check_done(
     context: dict[str, JsonValue] = {"task": task, "date": observation.captured_at.date().isoformat()}
     if history:
         context["actions"] = "\n".join(map(_step, history))
+    if visited:
+        context["visited"] = list(visited)
     if draft is not None:
         context["draft"] = draft.answer
     evaluation = await jev.evaluate(
@@ -272,6 +284,10 @@ def _grounding(notes: Notes, plan: Plan, invented: Sequence[str]) -> str:
     return ("\n\n".join(parts) + "\n\n") if parts else ""
 
 
+def _visited(visited: Sequence[str]) -> str:
+    return "## Visited addresses\n" + "".join(f"- {url}\n" for url in visited) + "\n" if visited else ""
+
+
 def _step(entry: HistoryEntry) -> str:
     """One action as the run recorded it: the value typed and what it visibly did, both already redacted."""
     action = f"{entry.operation.value if entry.operation else 'open'} {entry.target or ''}".strip()
@@ -291,13 +307,15 @@ async def llm_verify(
     *,
     doubted: Sequence[str] = (),
     invented: Sequence[str] = (),
+    visited: Sequence[str] = (),
     config: Config = _DEFAULT_CONFIG,
     ledger: Ledger | None = None,
 ) -> Generation[LLMVerdict]:
     """`doubted` names the requirements the done check doubted, which the verifier must see shown, not assume.
 
     `invented` names addresses this run built from the task rather than reached by clicking, which are the ones
-    that can land on a page that looks like the answer without being the search the task asked for."""
+    that can land on a page that looks like the answer without being the search the task asked for. `visited` is
+    every address the run has been on, first the one it began on."""
     # A flights search passed here with Jev doubting its one requirement at 0.14: the rows matched, and nothing
     # asked whether the nonstop filter the task named had ever been applied.
     requirements = "\n".join(
@@ -320,7 +338,7 @@ async def llm_verify(
         "The steps are the run's own record, and a click that navigated is not visible on the page it left. Be "
         "strict about whether the action happened, not about the task's wording of the label. A requirement that "
         "orders actions (enter one value, then go back and change it) is satisfied only when the steps show that "
-        "order. A date relative to today is judged against the current date. A requirement to "
+        f"order. {_REACHED} A date relative to today is judged against the current date. A requirement to "
         "compare, count or conclude from facts is satisfied when the notes hold those facts: the answer "
         "draws the conclusion, and no page shows it. A requirement to narrow a search or listing (a filter, "
         "option or sort) is satisfied when the page shows it applied, in a set control, the address or the "
@@ -343,7 +361,7 @@ async def llm_verify(
                 f"## Task\n{task}\n\n## Current date\n{observation.captured_at.date().isoformat()}\n\n"
                 f"## Requirements\n{requirements}\n\n## Steps taken\n{steps}\n\n"
                 f"## Set controls\n{json.dumps(_controls(stateful))}\n\n{_grounding(notes, plan, invented)}"
-                f"## Page\n{observation.url}\n"
+                f"{_visited(visited)}## Page\n{observation.url}\n"
             ),
             images=screenshots,
         ),
