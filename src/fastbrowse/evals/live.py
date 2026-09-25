@@ -68,6 +68,9 @@ ULTRAFAST_RUNNER = Path(__file__).resolve().parents[3] / "scripts" / "ultrafast_
 ULTRAFAST_COMMAND = ("uv", "run", "--no-project", "--quiet", "--python", "3.14", "--with", ULTRAFAST, "python")
 ULTRAFAST_TEXT_MODEL = "inception/mercury-2.5"
 """jev-ultrafast's own configuration (.env.example): its text helper on OpenRouter, reasoning off."""
+OUTAGE_RETRIES = 5
+"""Runs of a row a provider outage ended, after the first, waiting 1, 2, 4, 8 then 10 minutes: about 25 minutes, past
+the 503 spells seen so far. A row still unavailable then is recorded, and left out of every published figure."""
 VERDICT_WAIT = 90.0
 """Seconds to wait for Browser Use to judge a stopped session; a verdict still missing then grades as a failure."""
 
@@ -724,20 +727,26 @@ SUITES: dict[str, tuple[LiveTask, ...]] = {
 
 def summarize(rows: list[EvalRow], arms: list[str]) -> None:
     for arm in arms:
-        arm_rows = [r for r in rows if r.arm == arm]
+        ran = [r for r in rows if r.arm == arm]
+        # Outage rows say nothing about the agent: left out here as in every published figure.
+        arm_rows = [r for r in ran if r.normalized_status != Ending.UNAVAILABLE]
         if not arm_rows:
+            if ran:
+                print(f"{arm}: all {len(ran)} runs ended by a provider outage")
             continue
         passed = sum(r.passed for r in arm_rows)
         correct = sum(r.correct for r in arm_rows)
         priced = [r.dollars for r in arm_rows if r.dollars is not None]
-        seconds = [r.seconds for r in arm_rows]
+        seconds = [max(r.seconds - r.transient_seconds, 0.0) for r in arm_rows]
         unknown = len(arm_rows) - len(priced)
         print(
             f"{arm}: {passed}/{len(arm_rows)} passed, {correct} correct, median {statistics.median(seconds):.1f}s, "
             f"${sum(priced):.4f}" + (f" ({unknown} runs of unknown cost)" if unknown else "")
         )
+        if excluded := len(ran) - len(arm_rows):
+            print(f"  {excluded} runs ended by a provider outage, excluded")
         if lost := sum(r.transient_seconds for r in arm_rows):
-            print(f"  {'transient':18} {lost / len(arm_rows):5.1f}s a task, included in the median")
+            print(f"  {'transient':18} {lost / len(arm_rows):5.1f}s a task, excluded from the median")
         calls: dict[str, float] = {}
         for r in arm_rows:
             for label, spent in r.seconds_by_call.items():
@@ -843,7 +852,7 @@ async def main(argv: list[str]) -> int:
         async with httpx.AsyncClient(timeout=60, event_hooks={"request": [_github_token]}) as http:
 
             async def one(arm: str, task: LiveTask, record: Path | None) -> EvalRow:
-                # Bound outage retries so a provider failure cannot keep a benchmark running indefinitely.
+                # An outage is waited out and the row run again; bounded, so a dead provider cannot hold a run forever.
                 for retries in itertools.count():
                     try:
                         truth = await _truth(task, http)
@@ -857,9 +866,9 @@ async def main(argv: list[str]) -> int:
                         row = await run_arm(
                             arm, task, truth, http, Path(downloads), bitwarden=args.bitwarden, record=record
                         )
-                    if row.normalized_status != Ending.UNAVAILABLE or retries >= 2:
+                    if row.normalized_status != Ending.UNAVAILABLE or retries >= OUTAGE_RETRIES:
                         break
-                    wait = min(30 * (retries + 1), 300)
+                    wait = min(60 * 2**retries, 600)
                     print(f"RETRY {arm:13} {task.id:20} in {wait}s: {_cause(row)}", flush=True)
                     await asyncio.sleep(wait)
                 row = row.model_copy(

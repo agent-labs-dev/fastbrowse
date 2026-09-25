@@ -334,11 +334,14 @@ async def test_unavailable_retries_are_bounded_and_recorded(monkeypatch: pytest.
             return_value=(Outcome(None, None, None), live.ArmReport(status="unavailable", seconds=1, dollars=None))
         ),
     )
-    monkeypatch.setattr(live.asyncio, "sleep", AsyncMock())
+    sleep = AsyncMock()
+    monkeypatch.setattr(live.asyncio, "sleep", sleep)
     target = tmp_path / "rows.jsonl"
     await live.main(["--arms", "browser-use", "--only", "pypi-version", "--out", str(target)])
     row = live.EvalRow.model_validate_json(target.read_text())
-    assert row.retries == 2 and row.normalized_status == Ending.UNAVAILABLE and not row.passed
+    assert row.retries == live.OUTAGE_RETRIES and row.normalized_status == Ending.UNAVAILABLE and not row.passed
+    outage_waits = [c.args[0] for c in sleep.await_args_list if c.args and c.args[0] >= 60]
+    assert outage_waits == [60, 120, 240, 480, 600]
 
 
 async def test_local_rows_keep_unknown_cost_and_raw_time(monkeypatch: pytest.MonkeyPatch) -> None:
