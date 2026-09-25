@@ -144,6 +144,34 @@ def test_tallies_deduplicate_records_and_render_without_losing_basis() -> None:
     assert notes.evidenced("r")
 
 
+def test_tallies_keep_identical_rows_in_one_capture_and_deduplicate_recaptures() -> None:
+    notes = Notes()
+    originals: list[str] = []
+    for sha, starts in (("first", (0, 30)), ("reread", (10, 40)), ("overlap", (20,)), ("first", (0, 30))):
+        records = []
+        for start in starts:
+            quote = "Ada: approved" if sha == "first" else "Ada:  approved"
+            item = evidence(sha=sha, start=start, end=start + len(quote)).model_copy(update={"quote": quote})
+            fact = Fact(text=quote, evidence=item, reader=FactReader.LLM)
+            notes.add(fact)
+            records.append(fact_id(fact))
+        notes.add_tally(Tally(requirement_id="r", key="Ada", records=tuple(records)))
+        if not originals:
+            originals = records
+        assert notes.tallies[0].count == 2
+        assert notes.tallies[0].records == tuple(originals)
+
+
+def test_tally_record_identity_survives_returning_to_an_earlier_capture() -> None:
+    notes = Notes()
+    for sha, start in (("first", 0), ("second", 10), ("second", 40), ("first", 30)):
+        item = evidence(sha=sha, start=start, end=start + 13).model_copy(update={"quote": "Ada: approved"})
+        fact = Fact(text=item.quote, evidence=item, reader=FactReader.LLM)
+        notes.add(fact)
+        notes.add_tally(Tally(requirement_id="r", key="Ada", records=(fact_id(fact),)))
+    assert notes.tallies[0].count == 2
+
+
 @pytest.mark.parametrize("json_encoded", [False, True])
 def test_compact_tallies_do_not_hide_an_unrelated_required_basis(json_encoded: bool) -> None:
     record = Fact(text="Ada", evidence=evidence(sha="ada"), reader=FactReader.LLM)

@@ -250,6 +250,11 @@ def publish(release: str, source: Path) -> Path:
             problems.append(f"{where}: task version {row.get('task_version')} is not the current one")
     if not rows or problems:
         raise ValueError("\n".join(problems) or f"{source} has no rows")
+    # The results file is never rewritten, so every page it regenerates must be checked before it exists.
+    if "<!-- evals:headline -->" not in README.read_text(encoding="utf-8"):
+        raise ValueError("README.md has no <!-- evals:headline --> block")
+    if _RESULTS_HEADING not in DOCS.read_text(encoding="utf-8"):
+        raise ValueError("docs/evals.md has no Results section")
     RESULTS.mkdir(parents=True, exist_ok=True)
     ordered = sorted((slim(r) for r in rows), key=lambda r: (r["arm"], r["task"], r["run"]["run_started"] or ""))
     target.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in ordered), encoding="utf-8")
@@ -371,8 +376,20 @@ def _render(text: str, blocks: Mapping[str, str], where: str) -> str:
     return text
 
 
+_RESULTS_HEADING = "\n## Results\n"
+
+
 def render_docs(text: str) -> str:
-    return _render(text, docs_blocks(), "docs/evals.md")
+    """docs/evals.md with its generated blocks; a newly published release gets its own section, newest first."""
+    blocks = docs_blocks()
+    for name in blocks:
+        if name.startswith("results:") and f"<!-- evals:{name} -->" not in text:
+            release = name.removeprefix("results:")
+            day = dict(published())[release][0]["run"]["run_started"][:10]
+            first = text.index("\n### ", text.index(_RESULTS_HEADING))
+            section = f"\n### {release}, {day}\n\n<!-- evals:{name} -->\n<!-- /evals:{name} -->\n"
+            text = text[:first] + section + text[first:]
+    return _render(text, blocks, "docs/evals.md")
 
 
 def render_readme(text: str) -> str:

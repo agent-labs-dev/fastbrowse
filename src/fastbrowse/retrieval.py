@@ -660,6 +660,7 @@ async def read(
                     continue
                 record = _quoted(evidence)
                 so_far.add(record)
+                notes.add_continuation(continuation.requirement_id, fact_id(record))
                 found.append(record)
             uncovered += missing
             if missing:
@@ -686,6 +687,10 @@ async def read(
     # A lost record leaves later comparisons incomplete too; the page's own stated order can still settle a winner.
     for key in ordered:
         continues.pop(key, None)
+    for requirement_id in tally_complete:
+        # Earlier continuation quotes have no tally key, so counting only later pages would omit them.
+        if notes.has_untallied_records(requirement_id):
+            lost[requirement_id] = None
     blocked = (set(incomplete) | lost.keys()) - ordered
     for fact in found:
         if fact.requirement_id in continues or fact.requirement_id in blocked:
@@ -1317,7 +1322,8 @@ async def compose(
             content=(
                 "# Composer\nWrite the answer as self-contained plain-text claims in reading order, each citing the "
                 "evidence_ids of the notes it rests on. Answer the requested outputs; do not claim a requirement "
-                "the notes do not evidence.\n\n"
+                "the notes do not evidence. Write every value the task asks for, such as each item's price, in the "
+                "claim text itself: a reader sees the text, not the notes behind its citations.\n\n"
                 "# One claim, one fact\nA claim is supported in full by the notes it cites. Split a statement that "
                 "combines separately evidenced facts into one claim each. A claim that compares, counts, totals or "
                 "picks a superlative cites every note it is drawn from. A list of records cites each record it "

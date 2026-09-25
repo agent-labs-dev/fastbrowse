@@ -70,7 +70,8 @@ class Notes:
         self._facts: dict[str, Fact] = {}
         self._requirements: dict[str, set[str]] = {}
         self._tally_records: set[str] = set()
-        self._record_ids: dict[tuple[str, str, str], str] = {}
+        self._record_ids: dict[tuple[str, str, str], list[dict[str, str]]] = {}
+        self._continuation_records: dict[str, set[str]] = {}
         for fact in facts:
             self.add(fact)
 
@@ -101,9 +102,18 @@ class Notes:
             if fact.evidence is None:
                 raise ValueError("a tally record must cite a captured span")
             evidence = fact.evidence
-            # A new capture changes span ids, while an overlapping page may repeat the same record.
+            # Equal quotes can be separate rows in one capture, but repeat on overlapping pages.
             identity = (tally.requirement_id, urlsplit(evidence.url).netloc, " ".join(evidence.quote.split()))
-            canonical = self._record_ids.setdefault(identity, key)
+            occurrences = self._record_ids.setdefault(identity, [])
+            sha = evidence.capture_sha256
+            occurrence = next((item for item in occurrences if item.get(sha) == key), None)
+            if occurrence is None:
+                occurrence = next((item for item in occurrences if sha not in item), None)
+            if occurrence is None:
+                occurrence = {}
+                occurrences.append(occurrence)
+            occurrence[sha] = key
+            canonical = next(iter(occurrence.values()))
             records.append(canonical)
             self._tally_records.add(key)
         fact = Fact(text="", evidence=None, basis=tuple(records), tally=tally, reader=FactReader.LLM)
@@ -116,6 +126,19 @@ class Notes:
         self._facts[key] = fact
         self._requirements.setdefault(key, set())
         return fact
+
+    def add_continuation(self, requirement_id: str, record_id: str) -> None:
+        self._continuation_records.setdefault(requirement_id, set()).add(record_id)
+
+    def has_untallied_records(self, requirement_id: str) -> bool:
+        tallied = {
+            key
+            for identity, occurrences in self._record_ids.items()
+            if identity[0] == requirement_id
+            for occurrence in occurrences
+            for key in occurrence.values()
+        }
+        return bool(self._continuation_records.get(requirement_id, set()) - tallied)
 
     def complete_tallies(self, requirement_id: str) -> None:
         for key, fact in self._facts.items():

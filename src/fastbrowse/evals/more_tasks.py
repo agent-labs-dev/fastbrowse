@@ -330,7 +330,12 @@ def _first_friday_check(outcome: Outcome, truth: object) -> str | None:
     picked = _controls(outcome).get("Click to pick a date:")
     if picked is not None and picked != truth["mdy"]:
         return f"date input = {picked!r}, expected {truth['mdy']!r}"
-    return _says(outcome, date.fromisoformat(truth["date"]), weekday=True)
+    friday, answer = date.fromisoformat(truth["date"]), _prose(outcome)
+    # The page shows "Date: 10/02/2026 Day: Friday Month: October"; its own date string, with the day and month
+    # it names, is as much an answer as the date spelled out.
+    if truth["mdy"] in answer and _flat(f"{friday:%A}") in answer and _flat(f"{friday:%B}") in answer:
+        return None
+    return _says(outcome, friday, weekday=True)
 
 
 STRETCH_DEV: tuple[LiveTask, ...] = (
@@ -363,7 +368,8 @@ STRETCH_DEV: tuple[LiveTask, ...] = (
         _fixed(None),
         _pairs(
             ("Agnostic: A Spirited Manifesto", "12.51"),
-            ("Disrupted: My Misadventure in the Start-Up Bubble", "15.28"),
+            # The category listing cuts this title short; an answer read from it names what the page shows.
+            ("Disrupted: My Misadventure in", "15.28"),
             ("Mother, Can You Not?", "16.89"),
         ),
         Category.LOOKUP,

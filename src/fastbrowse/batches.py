@@ -65,8 +65,7 @@ async def evaluate_batches(
 
     async def evaluate(questions: Mapping[str, Question]) -> Mapping[str, Answer] | None:
         try:
-            with jev_spend(paid):
-                evaluation = await jev.evaluate(state, questions)
+            evaluation = await jev.evaluate(state, questions)
         except JevError:
             return None
         paid.append(evaluation.cost)
@@ -78,7 +77,16 @@ async def evaluate_batches(
     input_tokens = 0
     requests = 0
     try:
-        results = await asyncio.gather(*(evaluate(batch) for batch in batches))
+        with jev_spend(paid, ledger=ledger):
+            tasks = [asyncio.create_task(evaluate(batch)) for batch in batches]
+            try:
+                results = await asyncio.gather(*tasks)
+            except BaseException:
+                # A budget stop in one batch must cancel its peers before their paid singles are collected.
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
     finally:
         if ledger is not None:
             # A deadline can cancel the pass after some batches were billed. Their cost is kept without the limit

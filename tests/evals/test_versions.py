@@ -130,6 +130,22 @@ def test_published_rows_are_slim_immutable_and_generate_the_tables(results: Path
         versions.render_readme("no markers")
 
 
+def test_a_first_publication_writes_its_own_section_or_nothing(results: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bare = results / "README.md"
+    bare.write_text("no markers\n", encoding="utf-8")
+    monkeypatch.setattr(versions, "README", bare)
+    with pytest.raises(ValueError, match="evals:headline"):
+        _publish(results, [_row("pypi-version")])
+    assert not (results / "results").exists()
+    monkeypatch.undo()
+    monkeypatch.setattr(versions, "RESULTS", results / "results")
+    _publish(results, [_row("pypi-version")])
+    docs = versions.render_docs(DOCS)
+    assert docs.index("### 9.9.9, 2026-09-25") < docs.index("### 0.5.2")
+    assert "| fastbrowse (9.9.9) | 1/1 |" in docs
+    assert versions.render_docs(docs) == docs
+
+
 def test_a_published_table_names_tasks_changed_since(results: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _publish(results, [_row("pypi-version")])
     lock = versions.load_lock()

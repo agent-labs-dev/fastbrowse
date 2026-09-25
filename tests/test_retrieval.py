@@ -1924,6 +1924,43 @@ async def test_tally_read_counts_unique_records_across_pages_and_closes_only_at_
     assert draft.answer.index("Ben: 2") < draft.answer.index("Ada: 1")
 
 
+@pytest.mark.parametrize("requirement_id", ["r", "other"])
+async def test_completed_tally_leaves_earlier_continuation_records_open(requirement_id: str) -> None:
+    notes = Notes()
+    first = capture((BlockKind.RECORD, "Quote one by Ada"), (BlockKind.RECORD, "Quote two by Ada"))
+    last = capture((BlockKind.RECORD, "Quote three by Ada"))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [],
+                "answered": False,
+                "continues": [
+                    {
+                        "requirement_id": requirement_id,
+                        "records": [{"first": "s0", "last": "s0"}, {"first": "s1", "last": "s1"}],
+                    }
+                ],
+            },
+            {
+                "claims": [],
+                "answered": True,
+                "tallies": [
+                    {
+                        "requirement_id": "r",
+                        "groups": [{"key": "Ada", "records": [{"first": "s0", "last": "s0"}]}],
+                        "complete": True,
+                    }
+                ],
+            },
+        ]
+    )
+    await read(llm, first, "Count Ada's quotes", [requirement_id], notes)
+    result = await read(llm, last, "Count Ada's quotes", ["r"], notes, continuing={"r"})
+    assert len(notes.evidence) == 3
+    assert notes.evidenced("r") is (requirement_id != "r")
+    assert result.incomplete == (("r",) if requirement_id == "r" else ())
+
+
 @pytest.mark.parametrize("missing", [True, False])
 async def test_partial_tallies_never_close_a_requirement_from_a_generated_total(missing: bool) -> None:
     notes = Notes()

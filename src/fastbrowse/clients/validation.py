@@ -7,7 +7,7 @@ import time
 from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from time import monotonic
 from typing import assert_never
 
@@ -31,7 +31,7 @@ from fastbrowse.jev import (
     ScoreQuestion,
 )
 from fastbrowse.models import CostBasis, CostComponent, CostLine
-from fastbrowse.telemetry import trace
+from fastbrowse.telemetry import Ledger, trace
 
 logger = logging.getLogger(__name__)
 
@@ -379,6 +379,7 @@ async def post(
     start_attempt: int = 0,
     split_batch: bool = False,
 ) -> httpx.Response:
+    check_jev_spend()
     started = monotonic()
     usage = usage if usage is not None else RequestUsage()
     auth = {"Authorization": f"Bearer {api_key}", **(headers or {})}
@@ -391,6 +392,7 @@ async def post(
             call="jev",
             attempt_seconds=JEV_ATTEMPT_SECONDS,
             hedge_seconds=JEV_HEDGE_SECONDS,
+            before_retry=check_jev_spend,
             usage=usage,
             start_attempt=start_attempt,
             split_batch=split_batch,
@@ -483,22 +485,45 @@ class _SplitBatch(Exception):
         self.usage = usage
 
 
-_partial_spend: ContextVar[list[CostLine] | None] = ContextVar("jev_partial_spend", default=None)
+@dataclass(slots=True)
+class _JevSpend:
+    lines: list[CostLine]
+    ledger: Ledger | None
+    pending: dict[int, list[CostLine]]
+
+
+_partial_spend: ContextVar[_JevSpend | None] = ContextVar("jev_partial_spend", default=None)
 
 
 @contextmanager
-def jev_spend(lines: list[CostLine]) -> Generator[None]:
+def jev_spend(lines: list[CostLine], *, ledger: Ledger | None = None) -> Generator[None]:
     """Keep answered singles billable when another single fails or the caller cancels the batch."""
-    token = _partial_spend.set(lines)
+    parent = _partial_spend.get()
+    if ledger is None and parent is not None:
+        ledger = parent.ledger
+    pending = parent.pending if parent is not None and parent.ledger is ledger else {}
+    owned = id(lines) not in pending
+    pending[id(lines)] = lines
+    token = _partial_spend.set(_JevSpend(lines, ledger, pending))
     try:
         yield
     finally:
         _partial_spend.reset(token)
+        if owned:
+            del pending[id(lines)]
 
 
 def record_jev_spend(costs: Sequence[CostLine]) -> None:
-    if (lines := _partial_spend.get()) is not None:
-        lines.extend(costs)
+    if (spend := _partial_spend.get()) is not None:
+        spend.lines.extend(costs)
+
+
+def check_jev_spend() -> None:
+    if (spend := _partial_spend.get()) is not None and spend.ledger is not None:
+        ledger = spend.ledger
+        # Nested splits and failover hold paid answers until their result can include them once.
+        lines = [*ledger.lines, *(cost for paid in spend.pending.values() if paid is not ledger.lines for cost in paid)]
+        replace(ledger, lines=lines).reserve(CostComponent.JEV, calls=0)
 
 
 def merged_cost(lines: Sequence[CostLine]) -> CostLine:
@@ -529,11 +554,17 @@ async def asking_split(
     except _SplitBatch as split:
         start_attempt, usage = split.start_attempt, split.usage
     answered: list[Evaluation] = []
+    paid: list[CostLine] = []
     try:
-        for key, question in questions.items():
-            answered.append(await ask({key: question}, start_attempt, False))
+        with jev_spend(paid):
+            for key, question in questions.items():
+                result = await ask({key: question}, start_attempt, False)
+                answered.append(result)
+                record_jev_spend((result.cost,))
+                # A hedge consumes a retry too; later questions retain only their first attempt for free.
+                start_attempt = min(len(RETRY_DELAYS_SECONDS), start_attempt + result.requests - 1)
     except BaseException as error:
-        record_jev_spend([result.cost for result in answered])
+        record_jev_spend(paid)
         if isinstance(error, JevRetriesExhausted):
             raise JevRetriesExhausted(
                 str(error),

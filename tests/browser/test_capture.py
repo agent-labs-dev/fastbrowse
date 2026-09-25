@@ -250,6 +250,33 @@ async def test_a_hidden_rating_widget_adds_nothing(
     assert not any("stars" in capture.text[block.start : block.end] for block in capture.blocks)
 
 
+def _card_with_hidden_wrapper() -> str:
+    # A hidden wrapper (e.g. a template div a site keeps offscreen) holds a five-star widget; a visible
+    # one-star widget follows. The hidden widget's own `hidden` check on itself passes (it isn't hidden),
+    # so only checking ancestors up to the record root stops it from winning the descendant search.
+    return (
+        '<article class="card"><h3>Book</h3>'
+        '<div hidden><p class="star-rating Five"></p></div>'
+        '<p class="star-rating One"></p></article>'
+    )
+
+
+async def test_a_rating_hidden_by_an_ancestor_is_ignored(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/icons.html")
+    markup = _card_with_hidden_wrapper() + _rated_card("Two", "£1.00") + _rated_card("Three", "£2.00")
+    await eval_value(
+        browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
+    )
+    capture = await page.capture()
+    records = [block for block in capture.blocks if block.kind is BlockKind.RECORD]
+    assert len(records) == 3
+    first = capture.text[records[0].start : records[0].end]
+    assert "Five stars" not in first
+    assert "One stars" in first
+
+
 async def test_an_arbitrary_class_naming_a_number_is_not_read_as_a_rating(
     page: CdpPage, browser_session: BrowserSession, main_site: str
 ) -> None:

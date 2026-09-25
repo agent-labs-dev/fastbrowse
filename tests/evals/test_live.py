@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from fastbrowse.evals import live, live_tasks
+from fastbrowse.evals import live, live_tasks, more_tasks
 from fastbrowse.evals.live_tasks import TASKS, LiveTask, Outcome
 from fastbrowse.models import Unavailable
 from fastbrowse.telemetry import TRACE, trace, traced
@@ -446,3 +446,12 @@ async def test_the_github_token_goes_only_to_the_github_api(
     await live._github_token(request)
 
     assert request.headers.get("Authorization") == sent
+
+
+def test_the_first_friday_grader_takes_the_date_as_the_page_shows_it() -> None:
+    truth = {"date": "2026-10-02", "mdy": "10/02/2026"}
+    shown = "The date shown is 10/02/2026. The day shown is Friday. The month shown is October."
+    assert more_tasks._first_friday_check(Outcome(shown, None, None), truth) is None
+    assert more_tasks._first_friday_check(Outcome("Friday 2 October 2026", None, None), truth) is None
+    assert more_tasks._first_friday_check(Outcome("It shows 10/09/2026, Friday, October.", None, None), truth)
+    assert more_tasks._first_friday_check(Outcome("It shows 10/02/2026.", None, None), truth)

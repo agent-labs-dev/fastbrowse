@@ -70,8 +70,14 @@
     return label && RATING_LABEL.test(label) ? clean(label) : '';
   };
   // Checked on the element itself, then any descendant a class or role names as the widget, since a
-  // role="img" label commonly sits one level below the card holding the title and price.
+  // role="img" label commonly sits one level below the card holding the title and price. A widget hidden
+  // by an ancestor (rather than itself) states nothing a reader could see either, so ratingOf's own
+  // `hidden` check is not enough: walk up to the search root and reject any candidate under a hidden one.
   const ratingIn = c => ratingOf(c) || [...c.querySelectorAll('[class*="star" i], [class*="rating" i], [role="img"]')]
+    .filter(e => {
+      for (let a = e.parentElement; a && a !== c; a = a.parentElement) if (hidden(a)) return false;
+      return true;
+    })
     .map(ratingOf).find(Boolean) || '';
   const withRating = (text, c) => {
     const rating = ratingIn(c);

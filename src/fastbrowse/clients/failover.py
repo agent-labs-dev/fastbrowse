@@ -57,6 +57,8 @@ class FailoverJevClient:
                     str(backup_error),
                     seconds=error.seconds + backup_error.seconds,
                     unaccounted_requests=error.unaccounted_requests + backup_error.unaccounted_requests,
+                    requests=error.requests + backup_error.requests,
+                    answered=(*error.answered, *backup_error.answered),
                 ) from backup_error
 
             cost = result.cost

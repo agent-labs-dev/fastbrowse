@@ -383,17 +383,31 @@ async def test_a_choice_of_one_option_is_answered_without_asking(gateway: bool) 
 
 @pytest.mark.parametrize("client_type", [TypeSafeJevClient, VercelGatewayJevClient])
 @pytest.mark.parametrize("exhaust", [False, True])
+@pytest.mark.parametrize("hedged", [False, True])
+@pytest.mark.parametrize("retried_questions", [0, 3, 10])
 async def test_failed_batch_splits_with_only_remaining_attempts(
-    client_type: type[TypeSafeJevClient] | type[VercelGatewayJevClient], exhaust: bool
+    monkeypatch: pytest.MonkeyPatch,
+    client_type: type[TypeSafeJevClient] | type[VercelGatewayJevClient],
+    exhaust: bool,
+    hedged: bool,
+    retried_questions: int,
 ) -> None:
+    monkeypatch.setattr("fastbrowse.clients.validation.JEV_HEDGE_SECONDS", 0.001 if hedged else 1.5)
     seen: Counter[tuple[str, ...]] = Counter()
     gateway = client_type is VercelGatewayJevClient
     attempts = len(RETRY_DELAYS_SECONDS) + 1
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    async def handler(request: httpx.Request) -> httpx.Response:
         keys = tuple(json.loads(request.content)["questions"])
         seen[keys] += 1
-        if len(keys) > 1 or (keys == ("b",) and (exhaust or seen[keys] < attempts - 2)):
+        if len(keys) > 1:
+            return httpx.Response(503)
+        first = seen[keys] == 1 and int(keys[0][1:]) < retried_questions
+        if first and hedged:
+            released = asyncio.Event()
+            asyncio.get_running_loop().call_later(0.01, released.set)
+            await released.wait()
+        if first or (exhaust and keys == ("q9",)):
             return httpx.Response(503)
         return httpx.Response(
             200,
@@ -408,20 +422,48 @@ async def test_failed_batch_splits_with_only_remaining_attempts(
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = client_type("key", http=http)
-        questions = {key: NoulQuestion(instructions=key) for key in ("a", "b")}
-        if exhaust:
-            with pytest.raises(JevRetriesExhausted):
-                await client.evaluate("page", questions)
-        else:
+        questions = {f"q{i}": NoulQuestion(instructions="x") for i in range(10)}
+        try:
             result = await client.evaluate("page", questions)
+        except JevRetriesExhausted as error:
+            assert exhaust or retried_questions > attempts - 3
+            assert error.requests == seen.total()
+        else:
+            assert not exhaust
             assert result.answers == {key: NoulAnswer(probability=1) for key in questions}
-            assert result.input_tokens == result.cost.input_tokens == 200
+            assert result.input_tokens == 100 * len(questions)
+            assert result.cost.input_tokens == 100 * (len(questions) + (retried_questions if hedged else 0))
             assert result.requests == seen.total()
-            assert result.cost.dollars == pytest.approx(200 * 0.042 / 1_000_000)
-    assert seen[("a", "b")] == 2
-    assert seen[("a",)] == 1
-    assert seen[("b",)] == attempts - 2
-    assert seen.total() <= attempts + (attempts - 2) * len(questions)
+            assert result.cost.dollars == pytest.approx(result.cost.input_tokens * 0.042 / 1_000_000)
+    assert seen[tuple(questions)] == 2
+    assert seen.total() - 2 <= attempts - 2 + len(questions)
+
+
+async def test_failover_exhaustion_preserves_answered_singles_and_request_counts() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        keys = tuple(json.loads(request.content)["questions"])
+        answered = "a" if request.url.host == "primary.test" else "b"
+        if keys != (answered,):
+            return httpx.Response(503)
+        return httpx.Response(
+            200, json={"answers": {answered: {"type": "noul", "noul": 1}}, "usage": {"input_tokens": 100}}
+        )
+
+    paid: list[CostLine] = []
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = FailoverJevClient(
+            TypeSafeJevClient("key", http=http, base_url="https://primary.test"),
+            TypeSafeJevClient("key", http=http, base_url="https://backup.test"),
+        )
+        with jev_spend(paid), pytest.raises(JevRetriesExhausted) as caught:
+            await client.evaluate("page", {key: NoulQuestion(instructions=key) for key in ("a", "b", "c")})
+    assert caught.value.requests == calls
+    assert [key for result in caught.value.answered for key in result.answers] == ["a", "b"]
+    assert sum(line.input_tokens for line in paid) == 200
 
 
 @pytest.mark.parametrize("client_type", [TypeSafeJevClient, VercelGatewayJevClient])

@@ -163,7 +163,7 @@ runs, and form and date tasks are graded on the controls of the page the run end
 |---|---|---|---|
 | `stretch-wizard-review` | checkout | 1 | In the Automation Practice Lab section, fill out the Multi-Step Wizard: Full Name 'Ada Lovelace', Email 'ada.lovelace@example.com', City 'London', ZIP Code 'SW1A 1AA'. Review your details, submit, and tell me what the page says. |
 | `stretch-date-range-monday` | widget | 1 | Find Date Picker 3, the date range picker. Book a stay starting the next Monday that is strictly after today, for nine nights, then submit. Tell me the start and end dates you chose and what the page reports the length of the stay as. |
-| `stretch-books-nonfiction-five-star` | lookup | 1 | Across every page of the Nonfiction category, which three five-star-rated books are the cheapest, and what does each cost? |
+| `stretch-books-nonfiction-five-star` | lookup | 2 | Across every page of the Nonfiction category, which three five-star-rated books are the cheapest, and what does each cost? |
 | `stretch-bstack-apple-google` | widget | 1 | Filter the product list to Apple and Google together. Then remove the Apple filter, so only Google remains. Sort by price lowest to highest, and tell me the two cheapest Google phones and their prices. |
 <!-- /evals:tasks:stretch-dev -->
 
@@ -171,7 +171,7 @@ runs, and form and date tasks are graded on the controls of the page the run end
 | Task | Category | Version | Asks |
 |---|---|---|---|
 | `stretch-wizard-correction` | checkout | 1 | In the Live Interactive Form widget, fill First Name 'Priya Sharma', Email 'priya.sharma@example.com', Address '221B Baker Street', City 'Manchester', Language 'Turkish', and check the QA newsletter box. Reach the Review step, then go back and correct the first name to 'Priya Sharman' before continuing through Submit. Tell me what the confirmation says. |
-| `stretch-calendar-first-friday` | widget | 1 | Using the jQuery UI Datepicker (the calendar popup, not the native date input), navigate to next month and select its first Friday. Tell me the date, day, and month it shows. |
+| `stretch-calendar-first-friday` | widget | 2 | Using the jQuery UI Datepicker (the calendar popup, not the native date input), navigate to next month and select its first Friday. Tell me the date, day, and month it shows. |
 | `stretch-quotes-top-authors` | lookup | 1 | Across every page of this site, which three authors have the most quotes attributed to them, and how many quotes does each have? |
 | `stretch-bstack-apple-samsung` | widget | 1 | Filter the product list to Apple and Samsung together, then remove the Apple filter so only Samsung remains. Sort by price highest to lowest, and tell me the three most expensive phones and their prices. |
 <!-- /evals:tasks:stretch-heldout -->
@@ -205,9 +205,11 @@ when they differ:
 | `core` | 21 | `e34936a8` |
 | `dev` | 8 | `8ecc7f62` |
 | `heldout` | 9 | `d2c12361` |
-| `stretch-dev` | 4 | `4441eaa1` |
-| `stretch-heldout` | 4 | `849c9516` |
+| `stretch-dev` | 4 | `f2e42148` |
+| `stretch-heldout` | 4 | `32c54b03` |
 | local fixtures | 6 | `dda8ba89` |
+
+Tasks past version 1: `stretch-books-nonfiction-five-star` v2, `stretch-calendar-first-friday` v2.
 <!-- /evals:versions -->
 
 Published results are rows, not tables typed by hand. A release's rows are committed to
@@ -219,7 +221,8 @@ uv run python -m fastbrowse.evals.versions --publish 0.5.5 artifacts/evals/live.
 ```
 
 Publishing refuses rows from a dirty or uncommitted tree, from another fastbrowse version, or from a task version that
-is no longer current, and never rewrites a release already published. Each generated table names the suite versions
+is no longer current, and never rewrites a release already published. It adds the release's own section under
+Results, newest first. Each generated table names the suite versions
 and runs behind it and lists any task changed since, so an old score cannot pass for the tasks as they stand. The
 0.5.2 results below predate versioned rows: they ran the tasks as they stood at that release, and the test checks
 the README against them instead.
