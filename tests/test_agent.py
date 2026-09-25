@@ -25,6 +25,7 @@ from fastbrowse.agent import (
     _unread,
     _Unsure,
     _verified,
+    _visited,
 )
 from fastbrowse.batches import evaluate_batches
 from fastbrowse.citations import text_fragment
@@ -54,7 +55,7 @@ from fastbrowse.page import Action, ActResult, BlockKind, Capture, Control, Dial
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 from fastbrowse.policy import Decision, HistoryEntry, ReadAssessment, build_request, decide
 from fastbrowse.retrieval import TRANSACTION_CONTRADICTED, ComposedAnswer
-from fastbrowse.safety import ScopedSecrets
+from fastbrowse.safety import Redactor, ScopedSecrets
 from fastbrowse.shortcut import Shortcut
 from fastbrowse.telemetry import Ledger
 from fastbrowse.tripwires import Tripwire
@@ -1318,6 +1319,15 @@ async def test_the_page_a_run_began_on_is_shown_to_the_checks_after_a_shortcut_l
     purpose, messages = llm.calls[0][:2]
     assert purpose is LLMPurpose.VERIFY
     assert f"## Visited addresses\n- {start}\n" in messages[-1].content
+
+
+def test_visited_addresses_are_redacted_when_shown_and_keep_where_the_run_began() -> None:
+    """A value in an early address can become a secret only when a later page asks for it."""
+    redactor = Redactor()
+    visited = dict.fromkeys(["https://a.test/?user=ada", *(f"https://a.test/{i}" for i in range(5))])
+    redactor.register("username", "ada")
+    shown = _visited(visited, ObservationLimits(history_entries=1, earlier_history_entries=1), redactor.redact_url)
+    assert shown == ("https://a.test/?user=[secret:username]", "https://a.test/3", "https://a.test/4")
 
 
 class _ConfirmingJev(ScriptedJev):

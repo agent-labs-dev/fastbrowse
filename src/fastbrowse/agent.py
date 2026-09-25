@@ -10,7 +10,7 @@ import json
 import logging
 import time
 from collections import deque
-from collections.abc import Coroutine, Iterable, Mapping, Sequence, Set
+from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence, Set
 from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit
 
@@ -383,7 +383,7 @@ class Agent:
                     state.invented = invented
                     if opening is not None:
                         # A shortcut leaves the start page before the loop observes anything.
-                        state.visited[self._redactor.redact(opening)] = None
+                        state.visited[opening] = None
                     return await self._loop(state, output_schema, until)
             except _Stop as stop:
                 return self._result(state, ledger, stop.status, error=stop.error)
@@ -428,7 +428,7 @@ class Agent:
             state.ledger.check()
             observation = await self._observe()
             state.first_url = state.first_url or observation.url
-            state.visited[observation.url] = None
+            state.visited[(self._raw_observation or observation).url] = None
             self._note_effect(state, observation)
             undone, renews, put_back = self._reversal(state)
             stalled = self._settle(state, observation, renews=renews, put_back=put_back)
@@ -1718,7 +1718,7 @@ class Agent:
             draft,
             tokens=self._config.tokens,
             history=_record(state.history, self._config.observation),
-            visited=_visited(state.visited, self._config.observation),
+            visited=_visited(state.visited, self._config.observation, self._redactor.redact_url),
         )
         trace(
             "done_check",
@@ -1766,7 +1766,7 @@ class Agent:
                     _record(state.history, self._config.observation),
                     doubted=check.doubted,
                     invented=sorted(state.invented),
-                    visited=_visited(state.visited, self._config.observation),
+                    visited=_visited(state.visited, self._config.observation, self._redactor.redact_url),
                     config=self._config,
                     ledger=state.ledger,
                 )
@@ -2190,9 +2190,12 @@ def _record(history: Sequence[HistoryEntry], limits: ObservationLimits) -> tuple
     return (*typed, *recent)
 
 
-def _visited(visited: Iterable[str], limits: ObservationLimits) -> tuple[str, ...]:
-    """Where the run began, then the addresses it has been on since, as many as the actions shown with them."""
-    urls = tuple(visited)
+def _visited(visited: Iterable[str], limits: ObservationLimits, redact: Callable[[str], str]) -> tuple[str, ...]:
+    """Where the run began, then the addresses it has been on since, as many as the actions shown with them.
+
+    Redacted as they are shown, not as they were stored: a value in an early address can become a secret only
+    when a later page asks for it."""
+    urls = tuple(dict.fromkeys(map(redact, visited)))
     shown = limits.history_entries + limits.earlier_history_entries
     return urls[:1] + urls[max(1, len(urls) - shown) :]
 
