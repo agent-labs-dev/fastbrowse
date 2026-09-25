@@ -40,22 +40,9 @@ jobs:
           path: dist/
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
 
-  # The site's changelog page reads CHANGELOG.md from `main` at build time and deploys as a static export, so
-  # a release is invisible there until the site builds again. This asks it to, once the version is on PyPI and
-  # the page's "runs exactly the release below it" is true. `SITE_DEPLOY_HOOK` is a Vercel deploy hook for
-  # agent-labs-dev/fastbrowse-site; with no secret set the release still succeeds and the site catches up on
-  # its own next push.
+  # The site shows this release only once it builds again after the version is on PyPI, when its
+  # "runs exactly the release below it" is true; site.yml asks it to.
   site:
     needs: pypi
-    runs-on: ubuntu-latest
-    steps:
-      - name: Rebuild the site so its changelog shows this release
-        env:
-          HOOK: ${{ secrets.SITE_DEPLOY_HOOK }}
-        run: |
-          if [ -z "$HOOK" ]; then
-            echo "SITE_DEPLOY_HOOK is not set: the site will show this release after its next deploy."
-            exit 0
-          fi
-          curl -fsS --retry 3 -X POST "$HOOK" > /dev/null
-          echo "asked fastbrowse-site to rebuild"
+    uses: ./.github/workflows/site.yml
+    secrets: inherit

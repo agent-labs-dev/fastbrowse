@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import Mapping
+from itertools import pairwise
 from unittest.mock import AsyncMock, Mock
 
 import httpx
@@ -733,12 +734,35 @@ async def test_a_change_that_leads_back_to_an_earlier_state_is_not_progress() ->
     assert agent._settle(state, reopened) is None
     assert state.unchanged == 0
     await _click(agent, state, reopened, "Done")
+    # Back on the form by a move not made before; Search from it again is the round the run already went.
+    assert agent._settle(state, form) is None
+    await _click(agent, state, form, "Search")
     note = (
         "back to a page state first reached 2 actions ago; "
-        "the actions since (click Search, click Done) undid each other"
+        "the actions since (click Done, click Search) undid each other"
     )
-    assert agent._settle(state, form) == note
+    assert agent._settle(state, reopened) == note
     assert state.history[-1].effect == note
+
+
+async def test_walking_back_through_a_wizard_to_correct_a_step_is_not_a_loop() -> None:
+    steps = [observation((_button("Back"), _button("Next"), _button(f"Step {n}"))) for n in range(1, 5)]
+    page = Mock(spec=Page)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
+    state = await run_state()
+    state.authorization = Authorization(irreversible_actions=True)
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    assert agent._settle(state, steps[0]) is None
+    for here, there in pairwise(steps):
+        await _click(agent, state, here, "Next")
+        assert agent._settle(state, there) is None
+    # Review reached; back to the first step, each step once more.
+    for here, there in pairwise(reversed(steps)):
+        await _click(agent, state, here, "Back")
+        assert agent._settle(state, there) is None
+    # Going round Next and Back again retraces moves already made.
+    await _click(agent, state, steps[0], "Next")
+    assert agent._settle(state, steps[1]) is not None
 
 
 async def test_a_change_to_text_alone_still_counts_as_progress() -> None:

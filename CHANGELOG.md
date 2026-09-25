@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Correcting a wizard step is not a loop.** Going Back through a multi-step form to fix an earlier step reached
+  pages the run had seen before, and it was stopped as stuck. A return now counts as a loop only when it repeats a
+  move the run already made. ([#132](https://github.com/agent-labs-dev/fastbrowse/issues/132))
+- **What a form holds can be quoted.** A filled field, date or select now reads as `Label: value` in the page text,
+  so an answer about the dates or options chosen can cite them. Password and secret values are never read.
+  ([#136](https://github.com/agent-labs-dev/fastbrowse/issues/136))
 - **Live evals require the evidence they grade.** A missing final page fails any arm whose page the harness can
   observe (the hosted agent, which cannot report one, is graded on its answer), unfinished hosted sessions no
   longer pass, subprocess arms get only allowed environment values, and all arms share one prompt. An opt-in

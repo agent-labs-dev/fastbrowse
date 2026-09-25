@@ -1,0 +1,29 @@
+name: Site
+# fastbrowse.ai is a static export that reads CHANGELOG.md and the published eval results from `main` when it
+# builds, so a change to them is invisible there until the site builds again. This asks it to, whenever they
+# change on `main` and after each release reaches PyPI. `SITE_DEPLOY_HOOK` is a Vercel deploy hook for
+# agent-labs-dev/fastbrowse-site; with no secret set this says so and succeeds, and the site catches up on its
+# own next push.
+on:
+  push:
+    branches: [main]
+    paths: [CHANGELOG.md, README.md, docs/**]
+  workflow_call:
+    secrets:
+      SITE_DEPLOY_HOOK:
+        required: false
+  workflow_dispatch:
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rebuild fastbrowse.ai from main
+        env:
+          HOOK: ${{ secrets.SITE_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::warning title=Site not rebuilt::SITE_DEPLOY_HOOK is not set, so fastbrowse.ai shows this change only after its next deploy."
+            exit 0
+          fi
+          curl -fsS --retry 3 -X POST "$HOOK" > /dev/null
+          echo "asked fastbrowse-site to rebuild"
