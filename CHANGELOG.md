@@ -16,8 +16,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   did; an address that does not resolve still ends `error`.
 - **A value the task changes later is typed in order.** Asked to enter one value and later correct it, the
   field writer typed the correction on the first pass, so no step could show the change. It now lists the
-  values a field holds in turn, and the run types the first one not yet typed there. A box ticked or option
+  values a field holds in turn, and the run types the next one in that order, so a field set back to an earlier
+  value is not skipped past it. A box ticked or option
   chosen early in a long form stays in the record the completion checks read, as typed values already did.
+- **An answer read on a page the run guessed the address of is always checked when doubted.** A doubted answer
+  read on a built address, such as `github.com/owner/repo`, goes to the verifier, and the verifier finding it
+  read off the wrong page sends the run back to work. Only answers read on pages the run clicked to skip it.
 - **Paginated lists are read while the next page loads.** After the reader identifies a list needed in full,
   intermediate pages collect records concurrently. Their quotes merge in page order before the final page
   answers the comparison, within the run's page, step, call and time limits.

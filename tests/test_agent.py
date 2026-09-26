@@ -20,6 +20,7 @@ from fastbrowse.agent import (
     _follow_recovery,
     _guessed,
     _history,
+    _next_value,
     _plan_ids,
     _record,
     _RunState,
@@ -2921,18 +2922,22 @@ def test_a_verifier_naming_a_requirement_by_another_spelling_names_that_requirem
     assert _plan_ids(["req_1", "2", "REQ-2", "req-9", "summary"], plan) == {"req-1", "req-2"}
 
 
-async def test_a_doubted_lookup_with_every_requirement_cited_finishes_without_the_verifier() -> None:
-    """The verifier excuses a cited requirement, so on a lookup it could only refuse naming nothing, which it never
-    did in 76 0.5.7 verifications; each cost a screenshot and a vision call. The claims are still checked."""
+@pytest.mark.parametrize("guessed", [False, True])
+async def test_a_doubted_lookup_with_every_requirement_cited_finishes_without_the_verifier(guessed: bool) -> None:
+    """The verifier excuses a cited requirement, so on a lookup it could only refuse naming nothing; each check cost
+    a screenshot and a vision call. The claims are still checked. A page the run guessed can be a real page about
+    the wrong thing, so a doubted answer read there is still verified."""
     state = await run_state()
-    state.notes.add(_fare("https://example.test/flights/results", "results"))
-    llm = ScriptedLLM([])
+    url = "https://example.test/flights/results"
+    state.invented = {url} if guessed else set()
+    state.notes.add(_fare(url, "results"))
+    llm = ScriptedLLM([{"missing": [], "complete": True}] if guessed else [])
     agent, on = await _finishing(state, llm, noul=0.5)
 
     result = await agent._finish(state, on, None, None)
 
     assert result is not None and result.status is Status.COMPLETE
-    assert LLMPurpose.VERIFY not in [purpose for purpose, _ in llm.calls]
+    assert (LLMPurpose.VERIFY in [purpose for purpose, _ in llm.calls]) is guessed
 
 
 def _continued(*, through_end: bool = True) -> dict[str, Any]:
@@ -3225,3 +3230,18 @@ async def test_result_reports_latest_observed_url_with_result_redaction() -> Non
     result = agent._result(state, state.ledger, Status.BUDGET_EXCEEDED)
     assert result.final_url == agent._redactor.redact(url)
     assert result.final_url != agent._redactor.mask(url)
+
+
+@pytest.mark.parametrize(
+    ("typed", "expected"),
+    [((), "A"), (("A",), "B"), (("A", "B"), "A"), (("A", "B", "A"), "C"), (("A", "B", "A", "C"), "C")],
+)
+def test_a_field_set_back_to_an_earlier_value_is_typed_in_the_order_the_task_gives(
+    typed: tuple[str, ...], expected: str
+) -> None:
+    """Kept as a set of values typed, A then B then A then C skipped the second A and typed C."""
+    history = [
+        HistoryEntry(operation=Operation.FILL, target="Name", outcome=StepOutcome.EXECUTED, page_changed=False, text=t)
+        for t in typed
+    ]
+    assert _next_value(["A", "B", "A", "C"], history, "Name") == expected

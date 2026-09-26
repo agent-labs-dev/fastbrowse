@@ -2046,7 +2046,7 @@ class Agent:
         )
         state.ledger.record(check.cost)
         guessed = _guessed(state.plan, state.notes, state.invented)
-        if check.verdict is DoneVerdict.ACCEPT and guessed:
+        if check.verdict is DoneVerdict.ACCEPT and _guessed(state.plan, state.notes, state.invented, searches=True):
             # Jev judges the notes, not where they were read, so only the verifier is shown the guessed searches.
             check = check.model_copy(update={"verdict": DoneVerdict.VERIFY})
         elif check.verdict is DoneVerdict.VERIFY and not guessed and _lookup(state.plan):
@@ -2467,19 +2467,19 @@ def _place(url: str) -> tuple[str, str]:
     return origin_of(url), urlsplit(url).path or "/"
 
 
-def _guessed(plan: Plan, notes: Notes, invented: Set[str]) -> set[str]:
-    """The requirements with a fact read on a search the run built from the task rather than clicked to.
+def _guessed(plan: Plan, notes: Notes, invented: Set[str], *, searches: bool = False) -> set[str]:
+    """The requirements with a fact read on an address the run built from the task rather than clicked to.
 
-    A search is where a page of the right shape can show the wrong results, as a proposed Google Flights address
-    did, and its state is in the address: the one built, or the one the site wrote back. A plain page the run built
-    (`github.com/encode/httpx`) is that page or fails to load, and counting it as guessed sent 23 of 138 0.5.7 runs
-    to the verifier, which found nothing wrong on any of them."""
+    A guessed address can load a real page about the wrong thing, so a doubted answer read on one is always shown
+    to the verifier. `searches` narrows it to built searches, whose state is in the address (the one built, or the
+    one the site wrote back): a page of the right shape with the wrong results, as a proposed Google Flights address
+    was, is sent to the verifier even when Jev does not doubt it."""
     places = {_place(url): _searched(url) for url in invented}
     return {
         r.id
         for r in plan.requirements
         if any(
-            _place(item.url) in places and (places[_place(item.url)] or _searched(item.url))
+            _place(item.url) in places and (not searches or places[_place(item.url)] or _searched(item.url))
             for item in notes.supporting_evidence(r.id)
         )
     }
@@ -2543,16 +2543,16 @@ def _history(history: Sequence[HistoryEntry], limits: ObservationLimits) -> tupl
 
 
 def _next_value(values: Sequence[str], history: Sequence[HistoryEntry], label: str | None) -> str:
-    """The first of a field's values in turn that no fill has typed into it yet, else the last.
+    """The next of a field's values in turn after those its fills have typed so far, in order, else the last.
 
     Told the order in its prompt, the writer still typed "enter X, later correct it to Y" as Y on the first pass
-    in every wizard run, so no Back could show a correction; it lists the values, and code keeps the order."""
-    typed = {
-        e.text
-        for e in history
-        if e.operation is Operation.FILL and e.outcome is StepOutcome.EXECUTED and e.target == label
-    }
-    return next((value for value in values if value not in typed), values[-1])
+    in every wizard run, so no Back could show a correction; it lists the values, and code keeps the order. The
+    order is walked, not a set of what was typed: a field set back to an earlier value would otherwise skip it."""
+    done = 0
+    for e in history:
+        if e.operation is Operation.FILL and e.outcome is StepOutcome.EXECUTED and e.target == label:
+            done += done < len(values) and e.text == values[done]
+    return values[min(done, len(values) - 1)]
 
 
 def _only_typed_since_read(history: Sequence[HistoryEntry]) -> bool:
