@@ -18,8 +18,8 @@
           "excluded": 0,
           "priced": 42,
           "seconds": {
-            "median": 21.45,
-            "mean": 27.866666666666667
+            "median": 19.6,
+            "mean": 25.275
           },
           "dollars": {
             "median": 0.00846,
@@ -187,8 +187,8 @@
           "excluded": 0,
           "priced": 18,
           "seconds": {
-            "median": 10.6,
-            "mean": 21.25
+            "median": 10.015,
+            "mean": 18.105
           },
           "dollars": {
             "median": 0.00277,
@@ -283,8 +283,8 @@
           "excluded": 0,
           "priced": 3,
           "seconds": {
-            "median": 34.5,
-            "mean": 35.03333333333333
+            "median": 34.33,
+            "mean": 34.376666666666665
           },
           "dollars": {
             "median": 0.00474,
@@ -321,8 +321,8 @@
           "excluded": 0,
           "priced": 24,
           "seconds": {
-            "median": 17.65,
-            "mean": 18.45
+            "median": 16.68,
+            "mean": 17.926666666666666
           },
           "dollars": {
             "median": 0.005835,
@@ -436,8 +436,8 @@
           "excluded": 0,
           "priced": 27,
           "seconds": {
-            "median": 16.4,
-            "mean": 26.537037037037038
+            "median": 15.6,
+            "mean": 26.04148148148148
           },
           "dollars": {
             "median": 0.0084,
@@ -560,8 +560,8 @@
           "excluded": 0,
           "priced": 15,
           "seconds": {
-            "median": 46.2,
-            "mean": 61.593333333333334
+            "median": 40.830000000000005,
+            "mean": 58.89866666666667
           },
           "dollars": {
             "median": 0.03084,
@@ -648,8 +648,8 @@
           "excluded": 0,
           "priced": 9,
           "seconds": {
-            "median": 64.4,
-            "mean": 73.74444444444444
+            "median": 53.160000000000004,
+            "mean": 71.10555555555555
           },
           "dollars": {
             "median": 0.04872,
@@ -718,8 +718,8 @@
           "excluded": 5,
           "priced": 37,
           "seconds": {
-            "median": 22.7,
-            "mean": 34.921621621621625
+            "median": 20.7,
+            "mean": 28.37027027027027
           },
           "dollars": {
             "median": 0.00407,
@@ -760,8 +760,8 @@
           "excluded": 5,
           "priced": 13,
           "seconds": {
-            "median": 32.7,
-            "mean": 40.91538461538462
+            "median": 19.560000000000002,
+            "mean": 32.56769230769231
           },
           "dollars": {
             "median": 0.00307,
@@ -801,8 +801,8 @@
           "excluded": 0,
           "priced": 3,
           "seconds": {
-            "median": 38.8,
-            "mean": 45.233333333333334
+            "median": 37.769999999999996,
+            "mean": 43.89666666666666
           },
           "dollars": {
             "median": 0.0025,
@@ -830,7 +830,7 @@
           "priced": 21,
           "seconds": {
             "median": 18.2,
-            "mean": 19.79047619047619
+            "mean": 17.70904761904762
           },
           "dollars": {
             "median": 0.00513,
@@ -871,8 +871,8 @@
           "excluded": 2,
           "priced": 25,
           "seconds": {
-            "median": 19.5,
-            "mean": 29.844
+            "median": 19.3,
+            "mean": 27.8436
           },
           "dollars": {
             "median": 0.00716,
@@ -913,8 +913,8 @@
           "excluded": 0,
           "priced": 15,
           "seconds": {
-            "median": 57.0,
-            "mean": 78.79333333333334
+            "median": 44.9,
+            "mean": 57.57333333333333
           },
           "dollars": {
             "median": 0.02709,
@@ -955,8 +955,8 @@
           "excluded": 1,
           "priced": 8,
           "seconds": {
-            "median": 101.55,
-            "mean": 94.3125
+            "median": 70.585,
+            "mean": 76.70375
           },
           "dollars": {
             "median": 0.028325000000000003,

@@ -52,9 +52,9 @@ def test_the_hosted_agent_is_graded_on_its_answer_where_it_cannot_show_a_page(
     assert task.check(dataclasses.replace(hosted, unobservable=False), truth) is not None
 
 
-def test_an_idle_hosted_session_that_succeeded_is_done() -> None:
-    assert normalize("idle", hosted=True, hosted_success=True) == Ending.DONE
-    assert normalize("idle", hosted=True, hosted_success=False) != Ending.DONE
+def test_an_idle_hosted_session_that_answered_is_done() -> None:
+    assert normalize("idle", hosted=True, answered=True) == Ending.DONE
+    assert normalize("idle", hosted=True, answered=False) != Ending.DONE
 
 
 def test_cart_requires_product_in_the_answer_and_on_the_final_cart() -> None:
@@ -94,12 +94,11 @@ def test_status_normalization_fails_closed(raw: str | None, expected: Ending) ->
 
 
 @pytest.mark.parametrize(
-    ("raw", "success", "passed"),
+    ("raw", "answered", "passed"),
     [
         ("stopped", True, True),
         ("stopped", False, False),
-        ("stopped", None, False),
-        ("done", None, False),
+        ("done", False, False),
         ("complete", True, False),
         ("running", True, False),
         ("timed_out", True, False),
@@ -107,12 +106,12 @@ def test_status_normalization_fails_closed(raw: str | None, expected: Ending) ->
     ],
 )
 async def test_hosted_correct_answer_requires_successful_terminal_status(
-    raw: str, success: bool | None, passed: bool, monkeypatch: pytest.MonkeyPatch
+    raw: str, answered: bool, passed: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hosted = AsyncMock(
         return_value=(
             Outcome("v1", None, None),
-            live.ArmReport(status=raw, task_successful=success, seconds=1, dollars=0.1),
+            live.ArmReport(status=raw, task_successful=False, answered=answered, seconds=1, dollars=0.1),
         )
     )
     monkeypatch.setattr(live, "hosted_arm", hosted)
@@ -380,11 +379,11 @@ async def test_local_rows_keep_unknown_cost_and_raw_time(monkeypatch: pytest.Mon
     assert row["seconds"] == 5 and row["transient_seconds"] == 2 and row["dollars"] is None
 
 
-def test_a_hosted_run_never_judged_is_an_outage_not_a_failure() -> None:
-    """A dynamic-loading answer was correct, but Browser Use gave no verdict within the wait and it graded failed."""
-    assert normalize("stopped", hosted=True, hosted_success=None) == Ending.UNAVAILABLE
-    assert normalize("idle", hosted=True, hosted_success=None) == Ending.UNAVAILABLE
-    assert normalize("stopped", hosted=True, hosted_success=False) == Ending.STOPPED
+def test_a_hosted_run_is_done_on_its_own_answer_not_browser_uses_later_verdict() -> None:
+    """0.5.7: `is_task_successful` failed six correct answers whose sessions showed no sign of failing; fastbrowse
+    is held only to its own completion, so the hosted agent is held to its own `done`."""
+    assert normalize("stopped", hosted=True, answered=True) == Ending.DONE
+    assert normalize("stopped", hosted=True, answered=False) == Ending.STOPPED
 
 
 async def test_a_run_failed_on_a_site_serving_errors_is_an_outage() -> None:
