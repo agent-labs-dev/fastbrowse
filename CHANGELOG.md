@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Repeated lists need fewer model reads to count.** The reader can identify a field shared by every record,
+  and code groups and counts the original captured blocks. For an unfiltered count across all pages, later
+  pages reuse that field only while their title, section and record structure match; a change goes back to the
+  reader. The final page confirms the list ended, and merged tallies keep every record's quote and page address.
 - **Paginated comparisons spend less time reading and navigating.** Pager links open their observed
   same-origin address directly, with each followed page still recorded. Readers keep matching records from
   the first page, use a smaller response for intermediate pages, and cite earlier evidence with short

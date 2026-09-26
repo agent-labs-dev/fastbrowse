@@ -314,6 +314,22 @@ def _cited(capture: Capture, part: Chunk, cite: _Cite) -> Evidence | None:
     return _evidence(capture, run[0], max(run[0].start, part.start), min(run[-1].end, part.end))
 
 
+def _record_cites(capture: Capture, part: Chunk, cites: Sequence[_Cite]) -> tuple[_Cite, ...]:
+    result: list[_Cite] = []
+    for cite in cites:
+        evidence = _cited(capture, part, cite)
+        blocks = (
+            []
+            if evidence is None
+            else [b for b in _offered(capture, part) if b.start < evidence.end and b.end > evidence.start]
+        )
+        if blocks and all(b.kind is BlockKind.RECORD and b.start >= part.start and b.end <= part.end for b in blocks):
+            result.extend(_Cite(first=b.source_id, last=b.source_id) for b in blocks)
+        else:
+            result.append(cite)
+    return tuple(result)
+
+
 def _remember(
     capture: Capture,
     part: Chunk,
@@ -350,11 +366,46 @@ def _remember(
 _MAX_CONTINUING_RECORDS = 60
 
 
+class _TallyField(Frozen):
+    span: _Cite
+    prefix: str
+    suffix: str
+
+
 class _TallyGroup(Frozen):
     key: str | None = Field(
         description="The label stated in each record, such as its author; null for an ungrouped count."
     )
-    records: tuple[_Cite, ...]
+    records: tuple[_Cite, ...] = ()
+    field: _TallyField | None = Field(
+        default=None,
+        description="Instead of enumerating records: a range containing only complete record blocks, each "
+        "counted once, grouped by the text between the exact prefix and suffix in each record. Use only when "
+        "every record in the range matches the task. Set key=null and records=[] when using field.",
+    )
+
+
+def _field_groups(capture: Capture, part: Chunk, field: _TallyField) -> tuple[_TallyGroup, ...] | None:
+    evidence = _cited(capture, part, field.span)
+    if evidence is None or not field.prefix or not field.suffix:
+        return None
+    blocks = [b for b in _offered(capture, part) if b.start < evidence.end and b.end > evidence.start]
+    if not blocks or len(blocks) > _MAX_CONTINUING_RECORDS:
+        return None
+    groups: dict[str, list[_Cite]] = {}
+    for block in blocks:
+        # A paragraph may hold several records, and a split record may hide a second matching field.
+        if block.kind is not BlockKind.RECORD or block.start < part.start or block.end > part.end:
+            return None
+        text = capture.text[block.start : block.end]
+        matches = list(re.finditer(re.escape(field.prefix) + r"([^\n]*?)" + re.escape(field.suffix), text))
+        if len(matches) != 1:
+            return None
+        key = matches[0][1].strip()
+        if not key or len(key) > 200 or field.prefix in key:
+            return None
+        groups.setdefault(key, []).append(_Cite(first=block.source_id, last=block.source_id))
+    return tuple(_TallyGroup(key=key, records=tuple(records)) for key, records in groups.items())
 
 
 class _TallyRead(Frozen):
@@ -366,6 +417,12 @@ class _TallyRead(Frozen):
 
 class _Continuation(Frozen):
     tallies: tuple[_TallyGroup, ...] = ()
+    reuse_field: bool = Field(
+        default=False,
+        description="True only for an unfiltered count of EVERY record in this entire paginated list, grouped "
+        "by the same field. Never for a count conditioned on any record attribute. Code may reuse the field "
+        "on later pages only while every record has the same structure.",
+    )
     through_end: bool = Field(
         default=False,
         description="True only when the task needs every remaining page of this list. False when the task "
@@ -411,6 +468,20 @@ class _RecordSet(Frozen):
 class _RecordsResponse(Frozen):
     continues: tuple[_RecordSet, ...]
     context: tuple[_Cite, ...] = ()
+    ended: tuple[str, ...] = Field(
+        default=(),
+        description="Requirement ids whose requested list this capture shows reaching its end. Empty for a "
+        "partial list, a loading page, an unrelated page, or a list continuing behind any control.",
+    )
+
+
+class TallyReader(Frozen):
+    requirement_id: str
+    title: str
+    heading_path: tuple[str, ...]
+    frame_id: str | None
+    prefix: str
+    suffix: str
 
 
 def _quoted(evidence: Evidence) -> Fact:
@@ -435,6 +506,8 @@ class ReadOutcome(Frozen):
     instead of being told only that the list goes on."""
     through_end: tuple[str, ...] = ()
     continuation_records: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    ended: tuple[str, ...] = ()
+    tally_readers: tuple[TallyReader, ...] = ()
 
     def merge_records(self, notes: Notes) -> None:
         """Merge an isolated records read in page order, using the same span and tally deduplication."""
@@ -447,6 +520,45 @@ class ReadOutcome(Frozen):
         for requirement_id, records in self.continuation_records.items():
             for record in records:
                 notes.add_continuation(requirement_id, record)
+
+
+def read_tallies(
+    capture: Capture, readers: Sequence[TallyReader], requirement_ids: Sequence[str]
+) -> ReadOutcome | None:
+    if capture.inaccessible_frames or len(capture.text) > _READ_CHUNK_CHARS:
+        return None
+    records = [b for b in capture.blocks if b.kind is BlockKind.RECORD]
+    if not records or {r.requirement_id for r in readers} != set(requirement_ids):
+        return None
+    parts = chunk(capture, _READ_CHUNK_CHARS)
+    if len(parts) != 1:
+        return None
+    notes = Notes()
+    for reader in readers:
+        if capture.title != reader.title or any(
+            (b.heading_path, b.frame_id) != (reader.heading_path, reader.frame_id) for b in records
+        ):
+            return None
+        field = _TallyField(
+            span=_Cite(first=records[0].source_id, last=records[-1].source_id),
+            prefix=reader.prefix,
+            suffix=reader.suffix,
+        )
+        groups = _field_groups(capture, parts[0], field)
+        if groups is None:
+            return None
+        for group in groups:
+            keys: list[str] = []
+            for cite in group.records:
+                evidence = _cited(capture, parts[0], cite)
+                assert evidence is not None
+                fact = _quoted(evidence)
+                notes.add(fact)
+                keys.append(fact_id(fact))
+            notes.add_tally(
+                Tally(requirement_id=reader.requirement_id, key=group.key or "records", records=tuple(keys))
+            )
+    return ReadOutcome(facts=notes.facts, coverage=(0,), rejected_claims=0, cost_lines=())
 
 
 def _notes_room(tokens: TokenBudget, messages: Sequence[Message], response: type[Frozen]) -> int:
@@ -466,7 +578,7 @@ def _read_message(
     offered = _offered(capture, part)
     # A table cut mid-rows is shown under its header, which lies before the chunk, so its columns keep their names.
     sources = "\n".join(
-        f"[{block.source_id}] "
+        f"[{block.source_id}] ({block.kind.value}) "
         + (f"{part.header}\n" if part.header and block.start < part.start else "")
         + capture.text[max(block.start, part.start) : min(block.end, part.end)]
         for block in offered
@@ -516,6 +628,8 @@ async def read(
     tally_complete: set[str] = set()
     through_end: tuple[str, ...] = ()
     continuation_records: dict[str, list[str]] = {}
+    ended: tuple[str, ...] = ()
+    tally_readers: list[TallyReader] = []
     wanted = [
         r
         for r in requirements
@@ -589,6 +703,16 @@ async def read(
                     "their text, calculate totals or write claims for counted records. Code deduplicates, counts "
                     "and ranks them, preserving their quotes behind the tally references. Reuse a tally reference "
                     "as a basis instead of listing every earlier record. Keep other claims concise, at most 60.\n\n"
+                    "For repeated record blocks with the grouping label between the same literal delimiters, "
+                    "prefer one tally group with key=null, records=[] and field: span covers the records, "
+                    "prefix and suffix are the exact text surrounding the label, each occurring once per record "
+                    "(include a newline in the prefix when it starts a line). Code extracts each record's "
+                    "label and counts it. Every block in the range must be a complete record matching the task; "
+                    "do not include headings, navigation or records excluded by a filter. When using tallies, "
+                    "leave the continuation's records empty.\n\n"
+                    "Set reuse_field=true for an unfiltered count of every record across this whole list, "
+                    "when all record blocks use this same grouping field. Code can then read later pages "
+                    "with the same structure. Any condition selecting records forbids reuse_field.\n\n"
                     "# Lists over several pages\nA count, total or superlative over a list needs the whole "
                     "list. Earlier pages are in the collected evidence under their own URLs. When the list goes "
                     "on past this capture and the collected evidence does not cover the rest, add an entry to "
@@ -618,6 +742,11 @@ async def read(
                     "record in its records as source block ranges, including the compared value and the "
                     "attributes that show it matches. For counts or rankings by count use continues.tallies "
                     "instead, grouped by the label stated in each record. Omit records excluded by the task's "
+                    "filters. Prefer a tally field range for complete record blocks with the grouping label "
+                    "between the same exact prefix and suffix: key=null, records=[], field={span, prefix, suffix}. "
+                    "Delimiters must occur once per record; include the newline for a field starting a line. "
+                    "Every block in that range must be a matching record. When using tallies, leave the "
+                    "continuation's records empty. Omit records excluded by the task's "
                     "filters, but never select only the page's winners. Earlier pages are being read separately. "
                     "Use context for source block ranges needed to interpret these records, such as filters "
                     f"or table headers. Do not conclude comparisons.\n\n# Trust\n{UNTRUSTED}"
@@ -637,6 +766,7 @@ async def read(
                 max_output_tokens=tokens.read_output_tokens,
                 ledger=ledger,
             )
+            ended = tuple(key for key in collected.data.ended if key in requirement_ids)
             context: list[_ReadClaim] = []
             for cite in collected.data.context:
                 evidence = _cited(capture, part, cite)
@@ -675,10 +805,38 @@ async def read(
         # The latest chunk decides: it holds the page's foot, where a pager sits, reads every earlier chunk's
         # records in its collected evidence, and is given the caller's next-page notice. An earlier chunk's
         # "continues" meant the list went on into this chunk; a union let it block the last chunk's conclusion.
-        carried = [c for c in result.data.continues if c.requirement_id in requirement_ids]
+        carried = [
+            c.model_copy(update={"records": _record_cites(capture, part, c.records)})
+            for c in result.data.continues
+            if c.requirement_id in requirement_ids
+        ]
         continues = dict.fromkeys(c.requirement_id for c in carried)
         through_end = tuple(c.requirement_id for c in carried if c.through_end)
         expands = next((c.expands for c in carried if c.expands), None)
+        for continuation in carried:
+            if not continuation.reuse_field or not continuation.through_end or len(continuation.tallies) != 1:
+                continue
+            group = continuation.tallies[0]
+            field = group.field
+            records = [b for b in capture.blocks if b.kind is BlockKind.RECORD]
+            if (
+                field is not None
+                and group.key is None
+                and not group.records
+                and part.total == 1
+                and records
+                and field.span == _Cite(first=records[0].source_id, last=records[-1].source_id)
+            ):
+                reader = TallyReader(
+                    requirement_id=continuation.requirement_id,
+                    title=capture.title,
+                    heading_path=records[0].heading_path,
+                    frame_id=records[0].frame_id,
+                    prefix=field.prefix,
+                    suffix=field.suffix,
+                )
+                if read_tallies(capture, [reader], [reader.requirement_id]) is not None:
+                    tally_readers.append(reader)
         references = {labels[key]: key for key in offered.evidence_ids}
         references.update((key, key) for key in offered.evidence_ids)
         tally_reads = [t for t in result.data.tallies if t.requirement_id in requirement_ids]
@@ -688,7 +846,18 @@ async def read(
             so_far.unevidence((tally_read.requirement_id,))
             if tally_read.complete and result.data.answered and part.index == part.total - 1:
                 tally_complete.add(tally_read.requirement_id)
+            groups: list[_TallyGroup] = []
             for group in tally_read.groups:
+                if group.field is None:
+                    groups.append(group)
+                elif (
+                    group.key is None and not group.records and (expanded := _field_groups(capture, part, group.field))
+                ):
+                    groups.extend(expanded)
+                else:
+                    lost[tally_read.requirement_id] = None
+                    uncovered += 1
+            for group in groups:
                 records = []
                 missing = max(0, len(group.records) - _MAX_CONTINUING_RECORDS)
                 for cite in group.records[:_MAX_CONTINUING_RECORDS]:
@@ -854,6 +1023,8 @@ async def read(
         expands=expands if continues else None,
         through_end=tuple(key for key in through_end if key in continues),
         continuation_records={key: tuple(dict.fromkeys(records)) for key, records in continuation_records.items()},
+        ended=tuple(key for key in ended if key not in lost),
+        tally_readers=tuple(reader for reader in tally_readers if reader.requirement_id not in lost),
     )
 
 

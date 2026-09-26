@@ -3410,3 +3410,100 @@ async def test_direct_pager_navigation_refuses_a_changed_document() -> None:
     result = await agent._follow_pager(Action(operation=Operation.CLICK, target_id="next"), observations[0])
     assert result.outcome is StepOutcome.STALE
     page.navigate.assert_not_called()
+
+
+async def _tally_pipeline_fixture() -> tuple[Agent, _RunState, Mock, list[Observation], list[Capture], ScriptedLLM]:
+    agent, state, page, observations, _, _ = await _pipeline_fixture()
+    captures = [
+        capture((BlockKind.RECORD, f"Record {i}\nOwner: {owner}\nState: open")).model_copy(update={"url": obs.url})
+        for i, (obs, owner) in enumerate(zip(observations, ["Ada", "Ben", "Ada", "Ben"], strict=True))
+    ]
+    group: JsonValue = {
+        "key": None,
+        "field": {"span": {"first": "s0", "last": "s0"}, "prefix": "\nOwner: ", "suffix": "\nState:"},
+    }
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [],
+                "answered": False,
+                "continues": [{"requirement_id": "r1", "through_end": True, "reuse_field": True, "tallies": [group]}],
+            },
+            {"continues": [{"requirement_id": "r1", "tallies": [group]}], "ended": ["r1"]},
+        ]
+    )
+    agent._llm = llm
+    state.notes = Notes()
+    state.task = "Count every record by owner across the whole list"
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r1", text=state.task, kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    page.capture.side_effect = captures[1:]
+    await agent._read(state, captures[0], observations[0])
+    return agent, state, page, observations, captures, llm
+
+
+async def test_tally_pipeline_reuses_only_intermediate_reads_and_cites_every_capture() -> None:
+    agent, state, _, observations, captures, llm = await _tally_pipeline_fixture()
+    await agent._pipeline_pages(state, observations[0])
+    assert len(llm.calls) == 2
+    assert state.notes.evidenced("r1") and not state.owes_read
+    assert [(t.key, t.count) for t in state.notes.tallies] == [("Ada", 2), ("Ben", 2)]
+    evidence = state.notes.supporting_evidence("r1")
+    assert [e.url for e in evidence] == [c.url for c in captures]
+    assert all(
+        e.quote == c.text[e.start : e.end] and e.capture_sha256 == c.sha256
+        for e, c in zip(evidence, captures, strict=True)
+    )
+    assert state.evidenced_at[state_key(observations[-1])]["r1"] == captures[-1].sha256
+    assert [step.url for step in state.steps if step.operation is Operation.READ] == [c.url for c in captures]
+
+
+@pytest.mark.parametrize("failure", ["incomplete", "untallied", "no_end", "limit"])
+async def test_tally_pipeline_cannot_close_without_complete_records_and_the_end(failure: str) -> None:
+    agent, state, _, observations, _, llm = await _tally_pipeline_fixture()
+    if failure == "incomplete":
+        state.incomplete.add("r1")
+    elif failure == "untallied":
+        fact = _fare(observations[0].url, "extra").model_copy(update={"requirement_id": None})
+        state.notes.add(fact)
+        state.notes.add_continuation("r1", fact_id(fact))
+    elif failure == "no_end":
+        assert isinstance(llm.responses[0], dict)
+        llm.responses[0]["ended"] = []
+    else:
+        agent._config = Config(max_pages=2)
+
+    # A failed completion goes back to the ordinary reader; it must not acquire evidence before that read.
+    async def fallback(*args: Any, **kwargs: Any) -> bool:
+        assert not state.notes.evidenced("r1")
+        return False
+
+    original = agent._step
+
+    async def step(*args: Any, **kwargs: Any) -> bool:
+        if args[2].operation is Operation.READ:
+            return await fallback(*args, **kwargs)
+        return await original(*args, **kwargs)
+
+    agent._step = AsyncMock(side_effect=step)
+    await agent._pipeline_pages(state, observations[0])
+    assert not state.notes.evidenced("r1")
+
+
+async def test_changed_tally_structure_uses_the_llm_for_that_capture() -> None:
+    agent, state, _, _, captures, llm = await _tally_pipeline_fixture()
+    changed = capture((BlockKind.RECORD, "Different structure: Ben owns this record")).model_copy(
+        update={"url": captures[1].url}
+    )
+    llm.responses = [
+        {
+            "continues": [
+                {"requirement_id": "r1", "tallies": [{"key": "Ben", "records": [{"first": "s0", "last": "s0"}]}]}
+            ]
+        }
+    ]
+    result = await agent._page_records(state, changed, state.plan.requirements)
+    assert len(llm.calls) == 2
+    assert changed.text in llm.calls[-1][1][-1].content
+    assert result.facts[0].evidence is not None and result.facts[0].evidence.url == changed.url

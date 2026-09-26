@@ -43,6 +43,7 @@ from fastbrowse.retrieval import (
     propose_text_fields_from_notes,
     read,
     read_candidates,
+    read_tallies,
     transaction_check_question,
 )
 from fastbrowse.telemetry import BudgetExceeded, Ledger
@@ -2030,6 +2031,126 @@ async def test_tally_read_counts_unique_records_across_pages_and_closes_only_at_
     draft = draft_answer(plan, notes)
     assert draft is not None and len(draft.citations) == 3
     assert draft.answer.index("Ben: 2") < draft.answer.index("Ada: 1")
+
+
+def _field_tally(last: str = "s2") -> dict[str, JsonValue]:
+    return {
+        "key": None,
+        "field": {"span": {"first": "s0", "last": last}, "prefix": "\nOwner: ", "suffix": "\nState:"},
+    }
+
+
+async def test_tally_field_copies_distinct_records_and_merges_captures_without_recounting() -> None:
+    page = capture(
+        *(
+            (BlockKind.RECORD, f"Record {i}\nOwner: {owner}\nState: open")
+            for i, owner in enumerate(["Ada", "Ben", "Ada"])
+        )
+    )
+    notes = Notes()
+    response: JsonValue = {"continues": [{"requirement_id": "r", "tallies": [_field_tally()]}]}
+    second = capture(
+        *(
+            (BlockKind.RECORD, f"Another {i}\nOwner: {owner}\nState: open")
+            for i, owner in enumerate(["Ada", "Ben", "Ada"])
+        )
+    ).model_copy(update={"url": page.url + "/2"})
+    for current in [page, page, second]:
+        isolated = Notes()
+        result = await read(
+            ScriptedLLM([response]),
+            current,
+            "Count by owner",
+            ["r"],
+            isolated,
+            records_only=True,
+        )
+        assert not result.incomplete and not isolated.evidenced("r")
+        for fact in isolated.facts:
+            if fact.evidence is not None:
+                e = fact.evidence
+                assert e.quote == current.text[e.start : e.end] and e.url == current.url
+        result.merge_records(notes)
+    assert [(t.key, t.count) for t in notes.tallies] == [("Ada", 4), ("Ben", 2)]
+
+
+@pytest.mark.parametrize("fault", ["paragraph", "missing", "ambiguous", "empty", "frame", "reversed", "cap"])
+async def test_invalid_tally_field_cannot_close_or_partially_count_a_list(fault: str) -> None:
+    parts = [(BlockKind.RECORD, f"Record {i}\nOwner: Ada\nState: open") for i in range(61 if fault == "cap" else 3)]
+    if fault == "paragraph":
+        parts[1] = (BlockKind.PARAGRAPH, parts[1][1])
+    elif fault == "missing":
+        parts[1] = (BlockKind.RECORD, "Record without an owner")
+    elif fault == "ambiguous":
+        parts[1] = (BlockKind.RECORD, parts[1][1] + "\nOwner: Ben\nState: open")
+    elif fault == "empty":
+        parts[1] = (BlockKind.RECORD, "Record\nOwner: \nState: open")
+    page = capture(*parts)
+    if fault == "frame":
+        page = page.model_copy(
+            update={
+                "blocks": (page.blocks[0], page.blocks[1].model_copy(update={"frame_id": "other"}), *page.blocks[2:])
+            }
+        )
+    field = _field_tally(f"s{len(parts) - 1}")
+    if fault == "reversed":
+        field["field"] = {"span": {"first": "s2", "last": "s0"}, "prefix": "\nOwner: ", "suffix": "\nState:"}
+    response: JsonValue = {
+        "claims": [],
+        "answered": True,
+        "tallies": [{"requirement_id": "r", "complete": True, "groups": [field]}],
+    }
+    notes = Notes()
+    result = await read(ScriptedLLM([response]), page, "Count by owner", ["r"], notes)
+    assert result.incomplete == ("r",) and result.uncovered == 1
+    assert not notes.evidenced("r") and not notes.tallies
+
+
+@pytest.mark.parametrize("reuse", [False, True])
+async def test_tally_reader_requires_explicit_unfiltered_scope_and_revalidates_every_record(reuse: bool) -> None:
+    page = capture(*((BlockKind.RECORD, f"Record {i}\nOwner: Ada\nState: open") for i in range(3)))
+    response: JsonValue = {
+        "claims": [],
+        "answered": False,
+        "continues": [{"requirement_id": "r", "reuse_field": reuse, "through_end": True, "tallies": [_field_tally()]}],
+    }
+    result = await read(ScriptedLLM([response]), page, "Count all records by owner", ["r"], Notes())
+    assert bool(result.tally_readers) is reuse
+    if not reuse:
+        return
+    counted = read_tallies(page, result.tally_readers, ["r"])
+    assert counted is not None and not counted.cost_lines
+    assert [f.tally.count for f in counted.facts if f.tally] == [3]
+    assert not counted.ended
+    for changed in [
+        page.model_copy(update={"title": "Another list"}),
+        page.model_copy(update={"inaccessible_frames": 1}),
+        capture((BlockKind.RECORD, "A record without the field")),
+        capture(
+            (BlockKind.RECORD, "Record\nOwner: Ada\nState: open"),
+            (BlockKind.PARAGRAPH, "Interrupted list"),
+            (BlockKind.RECORD, "Record\nOwner: Ben\nState: open"),
+        ),
+        capture((BlockKind.RECORD, "Record\nOwner: Ada\nState: open"), (BlockKind.RECORD, "Unrelated record")),
+        page.model_copy(
+            update={"blocks": tuple(b.model_copy(update={"heading_path": ("Other",)}) for b in page.blocks)}
+        ),
+        page.model_copy(update={"text": page.text + "x" * 12000}),
+    ]:
+        assert read_tallies(changed, result.tally_readers, ["r"]) is None
+    assert read_tallies(page, result.tally_readers, ["r", "other"]) is None
+
+
+async def test_tally_field_and_a_range_of_the_same_records_leave_no_untallied_basis() -> None:
+    page = capture(*((BlockKind.RECORD, f"Record {i}\nOwner: Ada\nState: open") for i in range(3)))
+    notes = Notes()
+    response: JsonValue = {
+        "continues": [{"requirement_id": "r", "tallies": [_field_tally()], "records": [{"first": "s0", "last": "s2"}]}]
+    }
+    result = await read(ScriptedLLM([response]), page, "Count by owner", ["r"], Notes(), records_only=True)
+    result.merge_records(notes)
+    assert len(notes.comparison_records("r")) == 3
+    assert not notes.has_untallied_records("r")
 
 
 @pytest.fixture
