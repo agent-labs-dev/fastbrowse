@@ -49,6 +49,8 @@ class Control(Frozen):
     """Kept across observations for as long as the same DOM node survives."""
     frame_id: str | None
     frame_origin: str | None = None
+    form_id: str | None = None
+    """Owner form or local field group, scoped to the frame and document that observed it."""
     retarget_key: str | None = Field(default=None, exclude=True)
     """Browser guard without node ids, tying a replacement to the same semantics and receiving document."""
     role: str
@@ -196,6 +198,8 @@ class Action(Frozen):
     """Origin authorized by the resolver; the receiving document must still match at insertion."""
     files: tuple[Attachment, ...] = ()
     accept_dialog: bool | None = None
+    form_fill: bool = False
+    """Check whether this ordinary fill leaves the observed form safe to continue without another observation."""
 
 
 class BrowserError(RuntimeError):
@@ -220,6 +224,7 @@ class ActResult(Frozen):
     outcome: StepOutcome
     page_changed: bool
     detail: str | None = None
+    form_unchanged: bool = False
 
 
 class Page(Protocol):

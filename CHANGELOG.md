@@ -11,6 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Forms can fill several empty fields from one model call.** After a confident field choice, the writer
+  supplies values for the same form and each fill checks that the page and other fields stayed unchanged.
+  A new field, changed value, dialog or navigation returns to the usual decision loop. Secrets, populated
+  fields and submission keep their existing checks, and corrections still follow the task's value order.
+  Fills also avoid activating an already focused tab and let the page's input events drive settling.
 - **Repeated lists need fewer model reads to count.** The reader can identify a field shared by every record,
   and code groups and counts the original captured blocks. For an unfiltered count across all pages, later
   pages reuse that field only while their title, section and record structure match; a change goes back to the

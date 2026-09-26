@@ -239,6 +239,18 @@
   };
 
   const controls = [];
+  const fieldScope = e => {
+    if (!e.matches('input,textarea,select')) return null;
+    const form = e.form || e.closest('form,fieldset,[role="form"]');
+    if (form) return String(identity(form));
+    // Script-built forms can use a local group of labelled fields without an HTML form owner.
+    // Stop at document sections so a sidebar search never joins the content's fields.
+    for (let p = e.parentElement; p && !p.matches('body,main,article,section,aside,nav,header,footer');
+      p = p.parentElement) {
+      if (p.querySelectorAll('input:not([type=hidden]),textarea,select').length > 1) return String(identity(p));
+    }
+    return null;
+  };
   for (const e of walk(document)) {
     if (!safe(e) || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]')) continue;
     const source = sourceOf(e);
@@ -254,6 +266,7 @@
       distance: (y < 0 || y >= innerHeight) ? 1 + Math.abs(y - innerHeight / 2) : 0,
       sensitive: secret(source), input_type: source.type || null,
       frame_origin: e.ownerDocument.location.origin, frame_path: framePath(e.ownerDocument),
+      form_id: fieldScope(source),
       submit_semantics: submitSemantics(e),
     };
     if (rname === 'link' && e.href) {
@@ -506,6 +519,26 @@
 
   const guards = {};
   for (const c of controls) guards[c.id] = registry.guard(registry.nodes.get(c.id));
+  // A dependent field can appear without changing page text. Compare all controls,
+  // excusing only the value and required marker of the field just filled.
+  const formState = controls.map(({ distance, offscreen, ...c }) => {
+    const form = registry.nodes.get(c.id)?.form;
+    return {...c, form: form ? [form.action, form.method, form.target] : null};
+  });
+  const formPage = JSON.stringify([location.href, performance.timeOrigin, document.title, viewport_text]);
+  if (typeof mode === 'object') {
+    const previous = registry.formObserved;
+    if (!previous || previous.page !== formPage) return false;
+    const expected = previous.controls.map(c => {
+      if (c.id !== mode.id) return c;
+      const {blocking, ...filled} = c;
+      return mode.text ? {...filled, value: mode.text} : c;
+    });
+    const same = JSON.stringify(expected) === JSON.stringify(formState);
+    if (same) registry.formObserved = {page: formPage, controls: formState};
+    return same;
+  }
+  registry.formObserved = {page: formPage, controls: formState};
   // Kept so a later check can ask whether any of these controls changed without sending the guards back.
   registry.observed = new Map(controls.map(c => [c.id, JSON.stringify(guards[c.id])]));
   const field_state = [...document.querySelectorAll('input,textarea,select')].filter(safe)

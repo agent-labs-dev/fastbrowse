@@ -168,8 +168,17 @@ class _FieldText(Frozen):
     )
 
 
-_FIELD_WRITER = (
-    "# Field writer\nWrite only the text for one form field. "
+class _FormField(_FieldText):
+    id: str
+
+
+class _FormText(Frozen):
+    fields: tuple[_FormField, ...] = Field(
+        description="Fields safe to fill now, in order, starting with the chosen field. Omit any uncertain field."
+    )
+
+
+_FIELD_RULES = (
     "Infer its meaning from the task, current value, page context and recent actions. "
     "Use the field's displayed format for dates, except in a field whose input_type is date, datetime-local, month, "
     "week or time, which takes ISO 8601 (2026-09-25, 2026-09-25T14:30, 2026-09, 2026-W39, 14:30). "
@@ -180,6 +189,18 @@ _FIELD_WRITER = (
     "earliest one no recent action has already typed into this field.\n\n"
     f"# Trust\n{UNTRUSTED}"
 )
+
+_FIELD_WRITER = "# Field writer\nWrite only the text for one form field. " + _FIELD_RULES
+
+_FORM_WRITER = (
+    "# Form writer\nWrite text for ALL the listed empty fields whose values the task or notes supply. "
+    "These fields belong to one form. Filling several contact or address fields together is one task step: "
+    "include every known value, starting with chosen_field. Each value will be typed separately. "
+    "Omit fields that need a result from an intervening task step, or that would require inventing a value. "
+    "Omit optional fields the task does not supply. If only the chosen field can be filled yet, return it alone. "
+    "Copy each field's id exactly. For a value to correct later, still list all values in task order; "
+    "only the first pending value will be typed now. "
+) + _FIELD_RULES
 
 
 class _Recovery(Frozen):
@@ -343,6 +364,9 @@ class _RunState:
     record that was lost."""
     transaction_candidates: list[_TransactionCandidate] = field(default_factory=list[_TransactionCandidate])
     """Authorized clicks can just navigate, so only candidates with notes are classified when answering."""
+    form_continues: bool = False
+    form_rejected: set[tuple[str, str | None, str]] = field(default_factory=set)
+    form_values: dict[tuple[str, str], tuple[Control, _FieldText]] = field(default_factory=dict)
 
     @property
     def plan(self) -> Plan:
@@ -693,6 +717,8 @@ class Agent:
                 await self._recover(state, observation, reason)
                 continue
             try:
+                if not uncertain and not decision.directed and await self._fill_form(state, observation, decision):
+                    continue
                 if await self._step(state, observation, decision, decided_by):
                     await self._recover(state, observation, _read_exhausted(state))
             except _Unsure as unsure:
@@ -831,9 +857,13 @@ class Agent:
         gate: bool = True,
         require_all_evidence: bool = False,
         follow_pager: bool = False,
+        prepared_action: Action | None = None,
     ) -> bool:
         """Return whether a duplicate read was skipped, so callers can recover or continue the interaction."""
         started = time.monotonic()
+        state.form_continues = False
+        if decision.operation not in {Operation.FILL, Operation.SCROLL}:
+            state.form_values.clear()
         facts_before = len(state.notes.facts)
         reason = state.hint if decision.directed else None
         label = _describe(decision.target) if decision.target else decision.tab_id
@@ -854,7 +884,7 @@ class Agent:
                 effect_now += f" {_read_exhausted(state)}"
             act = ActResult(outcome=StepOutcome.EXECUTED, page_changed=False, detail=effect_now)
         else:
-            action = await self._unless_redrawn(
+            action = prepared_action or await self._unless_redrawn(
                 state, self._action(state, observation, decision, gate=gate), observation, decision.target
             )
             if action is None:
@@ -869,7 +899,10 @@ class Agent:
                 self._page.withhold_frames(True)
             raw = self._raw_observation or observation
             act = await self._follow_pager(action, raw) if follow_pager else await self._page.act(action, raw)
-            if act.outcome is StepOutcome.STALE and decision.target is not None:
+            state.form_continues = (
+                action.form_fill and act.form_unchanged and not act.page_changed and act.outcome is StepOutcome.EXECUTED
+            )
+            if act.outcome is StepOutcome.STALE and decision.target is not None and not action.form_fill:
                 act = await self._act_on_twin(action, observation, decision.target) or act
             if act.outcome is StepOutcome.EXECUTED and state.authorization.irreversible_actions:
                 question = None
@@ -972,6 +1005,7 @@ class Agent:
         for tripped in self._tripwires(state):
             if tripped.tripwire is Tripwire.NO_PROGRESS or self._config.stall.tripwires is TripwireMode.ARMED:
                 await self._recover(state, observation, str(tripped))
+                state.form_continues = False
                 return False
             state.would_fire.append(tripped.tripwire)
             logger.info(
@@ -1446,9 +1480,41 @@ class Agent:
         return value
 
     async def _generate_text(self, state: _RunState, observation: Observation, target: Control) -> str:
+        known = state.form_values.pop((observation.document_key, target.id), None)
+        if known is not None and known[0].model_copy(update={"offscreen": target.offscreen}) == target:
+            value = known[1]
+            return _next_value(value.values, state.history, target.label) if len(value.values) > 1 else value.text
+        context = await self._field_context(state, observation, target)
+        messages = [
+            Message(role="system", content=_FIELD_WRITER),
+            Message(role="user", content=json.dumps(context)),
+        ]
+        written = await self._write_field(state, messages, target)
+        if written is not None:
+            return written
+        # A surname can be present inside a full name. Confirm absence before ending the run on one writer's doubt.
+        if await self._value_absent(state, observation, target):
+            raise self._missing(state, target)
+        insisted = [
+            *messages,
+            Message(
+                role="user",
+                content=(
+                    "You reported this value as missing, but the task or notes appear to state it, or to state "
+                    "something it is part of. Look again and write it. Report it missing only if it truly is "
+                    "not there: never invent one."
+                ),
+            ),
+        ]
+        written = await self._write_field(state, insisted, target)
+        if written is None:
+            raise self._missing(state, target)
+        return written
+
+    async def _field_context(self, state: _RunState, observation: Observation, target: Control) -> dict[str, JsonValue]:
         # Adapted from browser-use/jev-ultrafast (MIT), model.py:field_context. A popup's field
         # can have a generic label; the opening action and surrounding values explain its purpose.
-        context = {
+        return {
             "task": state.task,
             # Given only the task, the writer typed "enter X, later correct it to Y" as Y on the first pass every
             # time, and no Back could then show a correction; in order, it typed X first and Y after going back.
@@ -1474,34 +1540,88 @@ class Agent:
             ],
             "notes": state.notes.render(self._config.observation.working_notes_chars),
         }
-        messages = [
-            Message(role="system", content=_FIELD_WRITER),
-            Message(role="user", content=json.dumps(context)),
-        ]
-        written = await self._write_field(state, messages, target)
-        if written is not None:
-            return written
-        # Ending a run on "you never told me" is right, and one low-effort call is a thin thing to end it on:
-        # the writer called a surname the task had given it missing in a third of checkout runs. Jev reads the
-        # same task and notes, so it is asked whether the value really is absent before the run stops, and the
-        # writer gets one more attempt with the disagreement put to it.
-        if await self._value_absent(state, observation, target):
-            raise self._missing(state, target)
-        insisted = [
-            *messages,
-            Message(
-                role="user",
-                content=(
-                    "You reported this value as missing, but the task or notes appear to state it, or to state "
-                    "something it is part of. Look again and write it. Report it missing only if it truly is "
-                    "not there: never invent one."
-                ),
-            ),
-        ]
-        written = await self._write_field(state, insisted, target)
+
+    async def _fill_form(self, state: _RunState, observation: Observation, decision: Decision) -> bool:
+        target = decision.target
+        if decision.operation is not Operation.FILL or target is None or state.inputs or observation.dialog:
+            return False
+        if target.form_id is None or observation.omitted_controls or observation.inaccessible_frames:
+            return False
+        form_key = (observation.document_key, target.frame_id, target.form_id)
+        if form_key in state.form_rejected:
+            return False
+        same_form = [c for c in observation.controls if (c.frame_id, c.form_id) == (target.frame_id, target.form_id)]
+        if any(c.sensitive for c in same_form):
+            return False
+        fields = {c.id: c for c in same_form if Operation.FILL in c.operations and not c.value and c.role == "textbox"}
+        if target.id not in fields or len(fields) < 2:
+            return False
+        # A form that cannot be batched gets the ordinary field path on its next decision.
+        state.form_rejected.add(form_key)
+
+        async def write() -> _FormText:
+            context = await self._field_context(state, observation, target)
+            context["chosen_field"] = context.pop("field")
+            context["fields"] = [c.model_dump(mode="json", exclude_none=True) for c in fields.values()]
+            generation = await self._llm.generate(
+                LLMPurpose.FIELD_TEXT,
+                [Message(role="system", content=_FORM_WRITER), Message(role="user", content=json.dumps(context))],
+                _FormText,
+                ledger=state.ledger,
+            )
+            state.ledger.record(generation.cost)
+            return generation.data
+
+        try:
+            written = await self._unless_redrawn(state, write(), observation, target)
+        except LLMError:
+            return False
         if written is None:
-            raise self._missing(state, target)
-        return written
+            return True
+        ids = [f.id for f in written.fields]
+        trace("form_values", chosen=target.id, fields=ids)
+        if not ids or ids[0] != target.id or len(set(ids)) != len(ids) or any(id not in fields for id in ids):
+            return False
+        trace("form_batch", fields=ids)
+        # Scrolling to the first field ends a batch too. A later Jev choice can reuse its value only while
+        # the field's identity, meaning and empty value survive the fresh observation.
+        for value in written.fields:
+            if not value.missing and value.text and not self._redactor.reveals(value.model_dump_json()):
+                state.form_values[(observation.document_key, value.id)] = (fields[value.id], value)
+        for index, value in enumerate(written.fields):
+            control = fields[value.id]
+            text = _next_value(value.values, state.history, control.label) if len(value.values) > 1 else value.text
+            if value.missing or not text or self._redactor.reveals(text):
+                return index > 0
+            state.ledger.check()
+            state.form_values.pop((observation.document_key, control.id), None)
+            action = Action(operation=Operation.FILL, target_id=control.id, text=text, form_fill=True)
+            await self._step(
+                state,
+                observation,
+                decision if index == 0 else _code_decision(Operation.FILL, control),
+                Decider.JEV if index == 0 else Decider.LLM,
+                prepared_action=action,
+            )
+            if not state.form_continues:
+                break
+            observation = observation.model_copy(
+                update={
+                    "controls": tuple(
+                        c.model_copy(update={"value": text, "blocking": None}) if c.id == control.id else c
+                        for c in observation.controls
+                    )
+                }
+            )
+            self._note_effect(state, observation)
+            undone, renews, put_back = self._reversal(state)
+            stalled = self._settle(state, observation, renews=renews, put_back=put_back)
+            if undone or stalled:
+                await self._recover(state, observation, undone or stalled or "form changed")
+                break
+        else:
+            state.form_rejected.discard(form_key)
+        return True
 
     @staticmethod
     def _missing(state: _RunState, target: Control) -> Exception:
@@ -2048,6 +2168,7 @@ class Agent:
     async def _recover(
         self, state: _RunState, observation: Observation, reason: str, *, gives_up_as: Status = Status.STUCK
     ) -> None:
+        state.form_values.clear()
         reason = self._redactor.redact(reason)
         state.recoveries += 1
         # Recovery spends every tripwire's evidence so the same threshold crossing cannot trigger it again.

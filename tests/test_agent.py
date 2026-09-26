@@ -3522,3 +3522,140 @@ async def test_changed_tally_structure_uses_the_llm_for_that_capture() -> None:
     assert len(llm.calls) == 2
     assert changed.text in llm.calls[-1][1][-1].content
     assert result.facts[0].evidence is not None and result.facts[0].evidence.url == changed.url
+
+
+def form_fields() -> tuple[Control, Control]:
+    name, email = (
+        field(label).model_copy(update={"id": label, "role": "textbox", "value": "", "form_id": "form"})
+        for label in ("Name", "Email")
+    )
+    return name, email
+
+
+@pytest.mark.parametrize("continues", [True, False])
+async def test_form_batch_writes_once_and_stops_when_browser_cannot_confirm(continues: bool) -> None:
+    name, email = form_fields()
+    page = Mock(spec=Page)
+    page.redrawn = AsyncMock(return_value=False)
+    page.act = AsyncMock(
+        return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=False, form_unchanged=continues)
+    )
+    llm = ScriptedLLM(
+        [
+            {
+                "fields": [
+                    {"id": "Name", "missing": False, "text": "Later", "values": ["Initial", "Later"]},
+                    {"id": "Email", "missing": False, "text": "ada@example.com"},
+                ]
+            }
+        ]
+    )
+    agent = Agent(page, ScriptedJev({}), llm)
+    state = await run_state()
+    assert await agent._fill_form(state, observation((name, email)), _code_decision(Operation.FILL, name))
+    assert len(llm.calls) == 1
+    actions = [call.args[0] for call in page.act.call_args_list]
+    assert [a.text for a in actions] == (["Initial", "ada@example.com"] if continues else ["Initial"])
+    assert state.ledger.steps == len(actions)
+    assert len(state.history) == len(actions)
+    assert all(a.form_fill and not a.secret for a in actions)
+    page.observe.assert_not_called()
+
+
+@pytest.mark.parametrize("bad", ["unknown", "duplicate", "missing", "blank", "wrong_first"])
+async def test_uncertain_form_batch_falls_back_without_typing(bad: str) -> None:
+    name, email = form_fields()
+    fields: list[JsonValue] = [
+        {"id": "Name", "missing": bad == "missing", "text": "" if bad == "blank" else "Ada"},
+        {
+            "id": "unknown" if bad == "unknown" else "Name" if bad == "duplicate" else "Email",
+            "missing": False,
+            "text": "ada@example.com",
+        },
+    ]
+    if bad == "wrong_first":
+        fields.reverse()
+    page = Mock(spec=Page)
+    page.redrawn = AsyncMock(return_value=False)
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([{"fields": fields}]))
+    assert not await agent._fill_form(
+        await run_state(), observation((name, email)), _code_decision(Operation.FILL, name)
+    )
+    page.act.assert_not_called()
+
+
+@pytest.mark.parametrize("excluded", ["secret", "populated", "different_form", "inputs", "popup"])
+async def test_form_batch_leaves_sensitive_or_dependent_fields_on_existing_path(excluded: str) -> None:
+    name, email = form_fields()
+    email = email.model_copy(
+        update={
+            "sensitive": excluded == "secret",
+            "value": "old@example.com" if excluded == "populated" else "",
+            "form_id": "another" if excluded == "different_form" else "form",
+            "role": "combobox" if excluded == "popup" else "textbox",
+        }
+    )
+    page = Mock(spec=Page)
+    llm = ScriptedLLM([])
+    state = await run_state()
+    if excluded == "inputs":
+        state.inputs = {"name": "Ada"}
+    assert not await Agent(page, ScriptedJev({}), llm)._fill_form(
+        state, observation((name, email)), _code_decision(Operation.FILL, name)
+    )
+    assert not llm.calls
+    page.act.assert_not_called()
+
+
+async def test_form_batch_checks_step_budget_between_fields() -> None:
+    name, email = form_fields()
+    page = Mock(spec=Page)
+    page.redrawn = AsyncMock(return_value=False)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=False, form_unchanged=True))
+    llm = ScriptedLLM(
+        [
+            {
+                "fields": [
+                    {"id": "Name", "missing": False, "text": "Ada"},
+                    {"id": "Email", "missing": False, "text": "ada@example.com"},
+                ]
+            }
+        ]
+    )
+    state = await run_state()
+    state.ledger = Ledger(Limits(max_steps=1))
+    with pytest.raises(BudgetExceeded):
+        await Agent(page, ScriptedJev({}), llm)._fill_form(
+            state, observation((name, email)), _code_decision(Operation.FILL, name)
+        )
+    assert page.act.call_count == 1
+
+
+@pytest.mark.parametrize("changed", [False, True])
+async def test_batch_values_survive_scrolling_but_not_changed_fields(changed: bool) -> None:
+    name, email = form_fields()
+    email = email.model_copy(update={"offscreen": True})
+    before = observation((name, email))
+    page = Mock(spec=Page)
+    page.redrawn = AsyncMock(return_value=False)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
+    llm = ScriptedLLM(
+        [
+            {
+                "fields": [
+                    {"id": "Name", "missing": False, "text": "Ada"},
+                    {"id": "Email", "missing": False, "text": "ada@example.com"},
+                ]
+            },
+            {"missing": False, "text": "new@example.com"},
+        ]
+    )
+    agent = Agent(page, ScriptedJev({}), llm)
+    state = await run_state()
+    assert await agent._fill_form(state, before, _code_decision(Operation.FILL, name))
+    assert page.act.call_count == 1
+    email = email.model_copy(update={"offscreen": False, "label": "Different email" if changed else email.label})
+    text = await agent._generate_text(state, observation((email,)), email)
+    assert text == ("new@example.com" if changed else "ada@example.com")
+    assert len(llm.calls) == (2 if changed else 1)
+    assert not await agent._fill_form(state, before, _code_decision(Operation.FILL, name))

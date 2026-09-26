@@ -162,6 +162,7 @@ class _SnapshotControl(Frozen):
     id: int
     frame_path: str | None = None
     frame_origin: str | None = None
+    form_id: str | None = None
     role: str
     label: str
     context: str | None = None
@@ -517,6 +518,10 @@ class CdpPage(Page):
             target = self._last.controls.get(action.target_id)
             if target is None:
                 return ActResult(outcome=StepOutcome.STALE, page_changed=False, detail="unknown control id")
+        if action.form_fill and target is not None:
+            current = next(c.value or "" for c in observation.controls if c.id == action.target_id)
+            if not await self._form_unchanged(target, current):
+                return ActResult(outcome=StepOutcome.STALE, page_changed=False, detail="form changed before fill")
         # A pending dialog already blocks the renderer's main thread; evaluating now would hang.
         before_fingerprint = ""
         point: _Point = None
@@ -530,11 +535,35 @@ class CdpPage(Page):
                     outcome=StepOutcome.STALE, page_changed=False, detail="control changed since observation"
                 )
 
-        outcome, detail = await self._dispatch(action, target, point)
+        try:
+            outcome, detail = await self._dispatch(action, target, point)
+        except BrowserError:
+            if not action.form_fill:
+                raise
+            # An input handler can navigate before retention is checked. Its next field needs a fresh decision.
+            return ActResult(outcome=StepOutcome.FAILED, page_changed=True, detail="form changed during fill")
         if outcome != StepOutcome.EXECUTED:
-            return ActResult(outcome=outcome, page_changed=False, detail=detail)
-        changed = await self._changed_since(before_fingerprint)
-        return ActResult(outcome=StepOutcome.EXECUTED, page_changed=changed, detail=detail)
+            return ActResult(outcome=outcome, page_changed=self._session.pending_dialog() is not None, detail=detail)
+        changed = await self._changed_since(before_fingerprint, filled=action.operation is Operation.FILL)
+        unchanged = False
+        if action.form_fill and not changed and target is not None and not action.secret:
+            unchanged = await self._form_unchanged(target, action.text or "")
+        return ActResult(outcome=StepOutcome.EXECUTED, page_changed=changed, detail=detail, form_unchanged=unchanged)
+
+    async def _form_unchanged(self, target: tuple[str, str, int, list[object] | None], text: str) -> bool:
+        if self._session.pending_dialog() is not None or target[0] != self._session.active_session_id:
+            return False
+        # Other frame sessions can change independently of this renderer's guard.
+        if self._session.frame_sessions():
+            return False
+        with suppress(BrowserError):
+            return (
+                await self._until_dialog(
+                    self._evaluate(target[0], f"({_PAGE_JS})({json.dumps({'id': target[2], 'text': text})})")
+                )
+                is True
+            )
+        return False
 
     async def _dispatch(
         self, action: Action, target: tuple[str, str, int, list[object] | None] | None, point: _Point
@@ -545,9 +574,12 @@ class CdpPage(Page):
             case Operation.HOVER:
                 return await self._hover(target, point)
             case Operation.FILL:
-                return await self._fill(
-                    target, action.text or "", point, secret=action.secret, secret_origin=action.secret_origin
+                filled = await self._until_dialog(
+                    self._fill(
+                        target, action.text or "", point, secret=action.secret, secret_origin=action.secret_origin
+                    )
                 )
+                return filled or (StepOutcome.FAILED, "dialog interrupted fill before its value was verified")
             case Operation.SELECT:
                 return await self._select(target, action.text or "", point)
             case Operation.ENTER:
@@ -575,6 +607,20 @@ class CdpPage(Page):
                 raise ValueError(f"{action.operation} does not dispatch through the browser layer")
             case _:
                 assert_never(action.operation)
+
+    async def _until_dialog[T](self, work: Coroutine[None, None, T]) -> T | None:
+        # Input and focus handlers can open a dialog before CDP answers, blocking every following renderer check.
+        task = asyncio.create_task(work)
+        dialog = asyncio.create_task(self._session.wait_for_dialog())
+        try:
+            await asyncio.wait({task, dialog}, return_when=asyncio.FIRST_COMPLETED)
+            if self._session.pending_dialog() is not None:
+                return None
+            return task.result()
+        finally:
+            task.cancel()
+            dialog.cancel()
+            await asyncio.gather(task, dialog, return_exceptions=True)
 
     async def _click(
         self, target: tuple[str, str, int, list[object] | None] | None, point: _Point
@@ -1103,8 +1149,6 @@ class CdpPage(Page):
     # -- shared helpers -------------------------------------------------------------------------------
 
     async def _focus(self, session_id: str, local_id: int, *, prepare_fill: bool = False, secret: bool = False) -> bool:
-        # Background local tabs can report activeElement while routing keyboard input elsewhere.
-        await self._session.client.send.Target.activateTarget(params={"targetId": self._session.active_target_id})
         mask = (
             "e.dataset.fastbrowseSecret = '1'; e.style.setProperty('-webkit-text-security', 'disc', 'important'); "
             if secret
@@ -1119,29 +1163,33 @@ class CdpPage(Page):
             if prepare_fill
             else ""
         )
-        return bool(
-            await self._evaluate(
-                session_id,
-                "(id => { const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return false; "
-                + mask
-                + "e.ownerDocument.defaultView.focus(); e.focus({preventScroll: true}); "
-                "if (!e.isConnected || e.getRootNode().activeElement !== e) return false; "
-                # activeElement is set by focus() before it returns, but hasFocus() is answered by the
-                # browser's focus controller, which does not run inside the task that called focus().
-                # For a field inside an iframe it therefore reads false for a tick or two, so judging it
-                # here in the same task rejects a field that is in fact focused. Poll instead of guessing.
-                "return new Promise(resolve => { "
-                f"const deadline = Date.now() + {_FOCUS_SETTLE_SECONDS * 1000}; "
-                # Every condition is rechecked on the tick that succeeds. Waiting for the focus signal
-                # means focus can move while we wait, and reporting success on a stale activeElement
-                # would authorize the caller to send keystrokes to whatever holds focus now.
-                "const check = () => { if (!e.isConnected || e.getRootNode().activeElement !== e) "
-                "{ resolve(false); return; } "
-                "if (e.ownerDocument.hasFocus()) { " + prepare + "resolve(true); return; } "
-                "if (Date.now() > deadline) { resolve(false); return; } "
-                f"setTimeout(check, 10); }}; check(); }}); }})({local_id})",
-            )
+        script = (
+            "((id, activated) => { const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return false; "
+            "if (!activated && !e.ownerDocument.hasFocus()) return null; "
+            + mask
+            + "e.ownerDocument.defaultView.focus(); e.focus({preventScroll: true}); "
+            "if (!e.isConnected || e.getRootNode().activeElement !== e) return false; "
+            # activeElement is set by focus() before it returns, but hasFocus() is answered by the
+            # browser's focus controller, which does not run inside the task that called focus().
+            # For a field inside an iframe it therefore reads false for a tick or two, so judging it
+            # here in the same task rejects a field that is in fact focused. Poll instead of guessing.
+            "return new Promise(resolve => { "
+            f"const deadline = Date.now() + {_FOCUS_SETTLE_SECONDS * 1000}; "
+            # Every condition is rechecked on the tick that succeeds. Waiting for the focus signal
+            # means focus can move while we wait, and reporting success on a stale activeElement
+            # would authorize the caller to send keystrokes to whatever holds focus now.
+            "const check = () => { if (!e.isConnected || e.getRootNode().activeElement !== e) "
+            "{ resolve(false); return; } "
+            "if (e.ownerDocument.hasFocus()) { " + prepare + "resolve(true); return; } "
+            "if (Date.now() > deadline) { resolve(false); return; } "
+            "setTimeout(check, 10); }; check(); }); })"
         )
+        # A pointer click normally focused the document already; background tabs still need activation.
+        result = await self._evaluate(session_id, f"{script}({local_id}, false)")
+        if result is None:
+            await self._session.client.send.Target.activateTarget(params={"targetId": self._session.active_target_id})
+            result = await self._evaluate(session_id, f"{script}({local_id}, true)")
+        return bool(result)
 
     async def _fingerprint(self) -> str:
         result = await self._evaluate(self._session.active_session_id, _FINGERPRINT_JS)
@@ -1200,7 +1248,7 @@ class CdpPage(Page):
             target_task.cancel()
             await asyncio.gather(fingerprint_task, target_task, return_exceptions=True)
 
-    async def _changed_since(self, before: str) -> bool:
+    async def _changed_since(self, before: str, *, filled: bool = False) -> bool:
         """Wait for the page to settle after an action, then report whether it changed.
 
         A click that navigates returns before the navigation starts, so an immediate fingerprint would describe
@@ -1210,7 +1258,9 @@ class CdpPage(Page):
         deadline = time.monotonic() + _SETTLE_SECONDS
         dialog = asyncio.create_task(self._session.wait_for_dialog())
         try:
-            await asyncio.sleep(_SETTLE_QUIET_SECONDS)
+            # Input events already start the renderer's quiet clock; sleeping here pays its full delay again.
+            if not filled:
+                await asyncio.sleep(_SETTLE_QUIET_SECONDS)
             while (remaining := deadline - time.monotonic()) > 0:
                 if self._session.pending_dialog() is not None:
                     return True
@@ -1289,6 +1339,7 @@ def _control_from_raw(
         id=control_id,
         frame_id=frame_id,
         frame_origin=c.frame_origin,
+        form_id=c.form_id,
         # A redraw changes the node ids at either end of the guard. Everything between them, including
         # the receiving document's timeOrigin and form semantics, must survive before an action can follow it.
         retarget_key=hashlib.sha256(json.dumps(guard[1:-1]).encode()).hexdigest() if guard else None,
