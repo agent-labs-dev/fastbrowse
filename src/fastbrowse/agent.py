@@ -131,9 +131,6 @@ alone, which leaves the DOM as it was, so it is not judged by the DOM."""
 
 logger = logging.getLogger(__name__)
 
-type _Prepared = ComposedAnswer | asyncio.Task[Generation[ComposedAnswer]] | None
-"""An answer ready before conclusion: the reader's facts Jev accepted as written, or a composer in flight."""
-
 type ReadKey = tuple[str, str, tuple[str, ...]]
 type Signature = tuple[Operation, str | None, str]
 """One action on one target, from one page state: the key both the cycle count and the no-op memory are kept by."""
@@ -1705,71 +1702,76 @@ class Agent:
         until: UntilCheck | None,
     ) -> RunResult | None:
         """Return the final result when DONE holds up; None sends the loop back to work."""
-        fresh = await self._observe()
         state.ledger.reserve(CostComponent.JEV)
         await state.await_plan()
-        draft = draft_answer(state.plan, state.notes) if state.plan.answer_expected else None
-        check = await check_done(
-            self._jev,
-            state.task,
-            state.plan,
-            fresh,
-            state.notes,
-            self._config.thresholds,
-            draft,
-            tokens=self._config.tokens,
-            history=_record(state.history, self._config.observation),
-            visited=_visited(state.visited, self._config.observation, self._redactor.redact),
-        )
-        trace(
-            "done_check",
-            verdict=check.verdict.value,
-            complete=round(check.complete, 3),
-            unmet=list(check.unmet),
-            requirements={r.id: r.text for r in state.plan.requirements},
-        )
-        state.ledger.record(check.cost)
-        guessed = _guessed(state.plan, state.notes, state.invented)
-        if check.verdict is DoneVerdict.ACCEPT and guessed:
-            # Jev judges the notes, not where they were read, so only the verifier is shown the guessed searches.
-            check = check.model_copy(update={"verdict": DoneVerdict.VERIFY})
-        elif check.verdict is DoneVerdict.VERIFY and not guessed and _lookup(state.plan):
-            # A doubted lookup reaches here with every requirement cited, and the verifier excuses a cited
-            # requirement (`_verified`), so all it could still do was refuse naming nothing, which it never did in
-            # 76 0.5.7 verifications. It cost a screenshot and a vision call, 3 to 8s, on half of all runs. Every
-            # claim of the answer is still checked against its quotes.
-            check = check.model_copy(update={"verdict": DoneVerdict.ACCEPT})
-        accepted = check.verdict is DoneVerdict.ACCEPT
-        missing: tuple[str, ...] = ()
-        misread: set[str] = set()
-        drafting: asyncio.Task[Generation[ComposedAnswer]] | None = None
-        # Whoever still holds the draft when this returns is responsible for it. `finally` covers the
-        # paths that are not a decision at all: the verifier raising, `until` raising, the caller
-        # cancelling the run. An orphaned compose would otherwise keep calling a model and billing a
-        # ledger for a run that has already produced its result.
+        answering: asyncio.Task[tuple[ComposedAnswer, bool]] | None = None
+        checking: asyncio.Task[ComposedAnswer | None] | None = None
+        shooting: asyncio.Task[tuple[bytes, ...]] | None = None
+        # Whoever still holds a task when this returns is responsible for it. `finally` covers the paths that are
+        # not a decision at all: the verifier raising, `until` raising, the caller cancelling the run. An orphaned
+        # compose would otherwise keep calling a model and billing a ledger for a run that has already produced
+        # its result.
         try:
+            ids = await self._transaction_evidence_ids(state) if state.plan.answer_expected else ()
+            draft = draft_answer(state.plan, state.notes) if state.plan.answer_expected else None
+            if draft is not None:
+                # The draft's claim check reads only the notes, so it runs beside the observation and the done
+                # check rather than after them: Jev accepted the draft on most lookups, and each then waited 0.3 to
+                # 0.7s more for this check to start. A draft the done check sends for rewriting keeps it as the
+                # fallback should the composer's answer fail its own check.
+                checking = asyncio.create_task(self._holds(state, draft, ids))
+            fresh = await self._observe()
+            guessed = _guessed(state.plan, state.notes, state.invented)
+            if guessed or not _lookup(state.plan):
+                # Only these can still reach the verifier, whose screenshot took 0.5s after the done check; taken
+                # beside it, the vision call starts as soon as the check doubts.
+                shooting = asyncio.create_task(self._screenshots())
+            check = await check_done(
+                self._jev,
+                state.task,
+                state.plan,
+                fresh,
+                state.notes,
+                self._config.thresholds,
+                draft,
+                tokens=self._config.tokens,
+                history=_record(state.history, self._config.observation),
+                visited=_visited(state.visited, self._config.observation, self._redactor.redact),
+            )
+            trace(
+                "done_check",
+                verdict=check.verdict.value,
+                complete=round(check.complete, 3),
+                unmet=list(check.unmet),
+                requirements={r.id: r.text for r in state.plan.requirements},
+            )
+            state.ledger.record(check.cost)
+            if check.verdict is DoneVerdict.ACCEPT and guessed:
+                # Jev judges the notes, not where they were read, so only the verifier is shown the guessed searches.
+                check = check.model_copy(update={"verdict": DoneVerdict.VERIFY})
+            elif check.verdict is DoneVerdict.VERIFY and not guessed and _lookup(state.plan):
+                # A doubted lookup reaches here with every requirement cited, and the verifier excuses a cited
+                # requirement (`_verified`), so all it could still do was refuse naming nothing, which it never did
+                # in 76 0.5.7 verifications. It cost a screenshot and a vision call, 3 to 8s, on half of all runs.
+                # Every claim of the answer is still checked against its quotes.
+                check = check.model_copy(update={"verdict": DoneVerdict.ACCEPT})
+            accepted = check.verdict is DoneVerdict.ACCEPT
+            missing: tuple[str, ...] = ()
+            misread: set[str] = set()
             if check.verdict is DoneVerdict.VERIFY:
-                # Write the answer while the verifier is still deciding. Both read the same finished
-                # notes, and every accepted run wants an answer, so the whole cost of guessing wrong is
-                # one discarded call on the branch that was going back to work anyway.
-                if state.plan.answer_expected and check.answer is None:
-                    drafting = asyncio.create_task(
-                        compose(
-                            self._llm,
-                            state.task,
-                            state.plan,
-                            state.notes,
-                            tokens=self._config.tokens,
-                            ledger=state.ledger,
-                            transaction_evidence_ids=await self._transaction_evidence_ids(state),
-                        )
-                    )
+                assert shooting is not None
+                screenshots = await shooting
+                if state.plan.answer_expected:
+                    # Answer while the verifier is still deciding. Both read the same finished notes, and every
+                    # accepted run wants an answer, so the whole cost of guessing wrong is one discarded call on the
+                    # branch that was going back to work anyway.
+                    answering = asyncio.create_task(self._answer(state, ids, draft, checking, ready=bool(check.answer)))
                 verdict = await llm_verify(
                     self._llm,
                     state.task,
                     state.plan,
                     fresh,
-                    await self._screenshots(),
+                    screenshots,
                     state.notes,
                     _record(state.history, self._config.observation),
                     doubted=check.doubted,
@@ -1831,49 +1833,56 @@ class Agent:
                 await self._record_failure(state, observation, Operation.DONE, reason, decided_by=judge)
                 await self._recover(state, observation, reason)
                 return None
-            handed, drafting = drafting, None
-            return await self._conclude(state, output_schema, check.answer or handed)
+            if answering is None and state.plan.answer_expected:
+                answering = asyncio.create_task(self._answer(state, ids, draft, checking, ready=bool(check.answer)))
+            return await self._conclude(state, output_schema, answering)
         finally:
-            if drafting is not None:
-                await _discard(drafting)
+            for task in (answering, checking, shooting):
+                if task is not None:
+                    await _discard(task)
 
-    async def _answer(self, state: _RunState, prepared: _Prepared) -> tuple[ComposedAnswer, bool]:
-        """The answer and whether its claims held, composing only when nothing prepared survives the check."""
-        if isinstance(prepared, ComposedAnswer):
-            if (held := await self._holds(state, prepared)) is not None:
-                return held, True
-            # Jev took the reader's facts as the answer and then doubted a claim in them, which is what
-            # the composer exists for.
-            prepared = None
-        facts = draft_answer(state.plan, state.notes)
+    async def _answer(
+        self,
+        state: _RunState,
+        ids: tuple[str, ...],
+        draft: ComposedAnswer | None = None,
+        checking: asyncio.Task[ComposedAnswer | None] | None = None,
+        *,
+        ready: bool = False,
+    ) -> tuple[ComposedAnswer, bool]:
+        """The answer and whether its claims held, composing only when the reader's draft is not the answer.
+
+        `checking` is the draft's claim check, already running, and `ready` says Jev took the draft as written. The
+        check is read at most once however many paths want it: before, a doubted draft was checked again after the
+        composer's answer failed."""
+        # Jev took the reader's facts as the answer; one it then doubts a claim in is what the composer exists for.
+        if ready and checking is not None and (held := await checking) is not None:
+            return held, True
         try:
             composed = (
-                await (
-                    prepared
-                    if prepared is not None
-                    else compose(
-                        self._llm,
-                        state.task,
-                        state.plan,
-                        state.notes,
-                        tokens=self._config.tokens,
-                        ledger=state.ledger,
-                        transaction_evidence_ids=await self._transaction_evidence_ids(state),
-                    )
+                await compose(
+                    self._llm,
+                    state.task,
+                    state.plan,
+                    state.notes,
+                    tokens=self._config.tokens,
+                    ledger=state.ledger,
+                    transaction_evidence_ids=ids,
                 )
             ).data
         except LLMError:
             # A composer that fails (one looped to its output cap) leaves the reader's facts, each with its quote,
             # which is an answer the claim check can still pass; failing the run over it threw away read evidence.
-            if facts is None:
+            if draft is None or checking is None:
                 raise
             logger.warning("The composer failed; offering the reader's facts to the claim check", exc_info=True)
-            composed, facts = facts, None
-        held = await self._holds(state, composed)
-        if held is None and facts is not None:
+            held = await checking
+            return held or draft, held is not None
+        held = await self._holds(state, composed, ids)
+        if held is None and checking is not None:
             # A list of forty records came back as one claim citing one quote, which no claim check should pass. The
             # reader's own facts each carry the quote that shows them, so they are offered to the same check.
-            held = await self._holds(state, facts)
+            held = await checking
         return held or composed, held is not None
 
     async def _transaction_evidence_ids(self, state: _RunState) -> tuple[str, ...]:
@@ -1915,7 +1924,7 @@ class Agent:
         }
         return tuple(key for key, item in evidence.items() if item.url in committed)
 
-    async def _holds(self, state: _RunState, answer: ComposedAnswer) -> ComposedAnswer | None:
+    async def _holds(self, state: _RunState, answer: ComposedAnswer, ids: tuple[str, ...]) -> ComposedAnswer | None:
         return await check_claims(
             self._jev,
             answer,
@@ -1923,7 +1932,7 @@ class Agent:
             self._config.thresholds,
             tokens=self._config.tokens,
             ledger=state.ledger,
-            transaction_evidence_ids=await self._transaction_evidence_ids(state),
+            transaction_evidence_ids=ids,
         )
 
     async def _extraction(self, state: _RunState, output_schema: type[BaseModel]) -> Extraction:
@@ -1943,7 +1952,7 @@ class Agent:
         self,
         state: _RunState,
         output_schema: type[BaseModel] | None,
-        prepared: _Prepared = None,
+        answering: asyncio.Task[tuple[ComposedAnswer, bool]] | None = None,
     ) -> RunResult:
         answer: str | None = None
         composed: ComposedAnswer | None = None
@@ -1953,16 +1962,15 @@ class Agent:
         verified = True
         # Writing the answer and filling the caller's schema read the same finished notes and neither
         # needs the other's output, so a task that wants both pays for the slower one rather than both.
-        answering = self._answer(state, prepared) if state.plan.answer_expected else None
         extracting = self._extraction(state, output_schema) if output_schema is not None else None
         if answering is not None and extracting is not None:
-            first, second = asyncio.create_task(answering), asyncio.create_task(extracting)
+            extraction_task = asyncio.create_task(extracting)
             try:
-                (composed, verified), extraction = await asyncio.gather(first, second)
+                (composed, verified), extraction = await asyncio.gather(answering, extraction_task)
             finally:
                 # gather reports the first failure and leaves its sibling running, which would go on
                 # calling a model after the run had already failed or hit its budget.
-                for task in (first, second):
+                for task in (answering, extraction_task):
                     if not task.done():
                         await _discard(task)
         elif answering is not None:

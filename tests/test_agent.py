@@ -55,7 +55,7 @@ from fastbrowse.models import (
 from fastbrowse.page import Action, ActResult, BlockKind, Capture, Control, Dialog, NavigationTimeout, Observation, Page
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 from fastbrowse.policy import Decision, HistoryEntry, ReadAssessment, build_request, decide
-from fastbrowse.retrieval import TRANSACTION_CONTRADICTED, ComposedAnswer
+from fastbrowse.retrieval import TRANSACTION_CONTRADICTED, ComposedAnswer, draft_answer
 from fastbrowse.safety import Redactor, ScopedSecrets
 from fastbrowse.shortcut import Shortcut
 from fastbrowse.telemetry import Ledger
@@ -1188,15 +1188,25 @@ def test_evidence_does_not_excuse_a_requirement_read_off_a_guessed_address(
     assert _verified(verdict, plan, notes, invented) is accepted
 
 
-async def _finishing(state: _RunState, llm: ScriptedLLM, *, noul: float) -> tuple[Agent, Observation]:
+async def _finishing(
+    state: _RunState,
+    llm: ScriptedLLM,
+    *,
+    noul: float,
+    answer_expected: bool = False,
+    extra: tuple[Requirement, ...] = (),
+) -> tuple[Agent, Observation]:
     on = _at("https://example.test/flights/results")
     page = Mock(spec=Page)
     page.observe = AsyncMock(return_value=on)
     page.screenshot = AsyncMock(return_value=b"")
     page.artifacts = ()
     plan = Plan(
-        requirements=(Requirement(id="r1", text="The cheapest nonstop fare", kind=RequirementKind.INFORMATION),),
-        answer_expected=False,
+        requirements=(
+            Requirement(id="r1", text="The cheapest nonstop fare", kind=RequirementKind.INFORMATION),
+            *extra,
+        ),
+        answer_expected=answer_expected,
     )
 
     async def planned() -> Generation[Plan]:
@@ -1797,7 +1807,10 @@ async def test_a_composed_answer_that_fails_its_check_falls_back_to_the_readers_
     whole: JsonValue = {"claims": [{"text": "WHOLE LIST: Book A and Book B", "evidence_ids": [evidence_id(first)]}]}
     agent = Agent(Mock(spec=Page), DoubtingJev({}), ScriptedLLM([whole]))
 
-    composed, verified = await agent._answer(state, None)
+    draft = draft_answer(state.plan, state.notes)
+    assert draft is not None
+    checking = asyncio.create_task(agent._holds(state, draft, ()))
+    composed, verified = await agent._answer(state, (), draft, checking)
     answer = composed.answer
 
     assert verified
@@ -2134,7 +2147,7 @@ async def test_only_executed_committing_actions_supply_transaction_evidence_to_t
     await agent._step(state, checkout, decision)
     agent._note_effect(state, receipt)
     agent._note_effect(state, _at("https://shop.test/help"))
-    _, held = await agent._answer(state, None)
+    _, held = await _answer(agent, state)
 
     committing = operation in {Operation.CLICK, Operation.ENTER} and outcome is StepOutcome.EXECUTED
     assert len(state.transaction_candidates) == len(jev.classifications) == int(committing)
@@ -2145,6 +2158,11 @@ async def test_only_executed_committing_actions_supply_transaction_evidence_to_t
     if committing:
         assert "Red pen £11.55" in questions[TRANSACTION_CONTRADICTED].instructions
         assert "Paid £11.55" in questions[TRANSACTION_CONTRADICTED].instructions
+
+
+async def _answer(agent: Agent, state: _RunState) -> tuple[ComposedAnswer, bool]:
+    """The composing path `_finish` takes once Jev doubts the reader's draft, without the draft to fall back on."""
+    return await agent._answer(state, await agent._transaction_evidence_ids(state))
 
 
 class TransactionJev(ScriptedJev):
@@ -2198,7 +2216,7 @@ async def test_reversible_navigation_contributes_no_transaction_evidence(monkeyp
     await _click(agent, state, _at("https://shop.test/search", _button("Details")), "Details")
     agent._note_effect(state, _at("https://shop.test/checkout"))
 
-    _, held = await agent._answer(state, None)
+    _, held = await _answer(agent, state)
 
     assert held and composing.await_args is not None
     assert composing.await_args.kwargs["transaction_evidence_ids"] == ()
@@ -2211,7 +2229,7 @@ async def test_unauthorized_navigation_records_no_candidates_or_extra_calls(monk
     await _click(agent, state, _at("https://shop.test/search", _button("Details")), "Details")
     agent._note_effect(state, _at("https://shop.test/checkout"))
 
-    _, held = await agent._answer(state, None)
+    _, held = await _answer(agent, state)
 
     assert held and composing.await_args is not None
     assert composing.await_args.kwargs["transaction_evidence_ids"] == ()
@@ -2234,7 +2252,7 @@ async def test_committing_click_and_dialog_include_checkout_and_receipt(
     agent._note_effect(state, _at("https://shop.test/receipt"))
     agent._note_effect(state, _at("https://shop.test/help"))
 
-    _, held = await agent._answer(state, None)
+    _, held = await _answer(agent, state)
 
     assert held and composing.await_args is not None
     assert composing.await_args.kwargs["transaction_evidence_ids"] == tuple(state.notes.evidence)[1:]
@@ -2251,14 +2269,14 @@ async def test_candidates_without_evidence_are_classified_only_when_read(monkeyp
     state, agent, jev, composing = await _transaction_run(monkeypatch)
     await _click(agent, state, _at("https://shop.test/unread", _button("Buy")), "Buy")
     agent._note_effect(state, _at("https://shop.test/unread-receipt"))
-    await agent._answer(state, None)
+    await _answer(agent, state)
     assert not jev.classifications
     assert composing.await_args is not None
     assert composing.await_args.kwargs["transaction_evidence_ids"] == ()
 
     receipt = evidence(sha="later").model_copy(update={"url": "https://shop.test/unread-receipt", "quote": "Paid £7"})
     state.notes.add(Fact(reader=FactReader.LLM, text=receipt.quote, evidence=receipt))
-    await agent._answer(state, None)
+    await _answer(agent, state)
 
     assert len(jev.classifications) == 1
     assert composing.await_args.kwargs["transaction_evidence_ids"] == (evidence_id(receipt),)
@@ -2272,8 +2290,8 @@ async def test_transaction_verdicts_are_cached_across_answer_attempts(
     await _click(agent, state, _at("https://shop.test/checkout", _button("Buy")), "Buy")
     agent._note_effect(state, _at("https://shop.test/receipt"))
 
-    await agent._answer(state, None)
-    await agent._answer(state, None)
+    await _answer(agent, state)
+    await _answer(agent, state)
 
     assert len(jev.classifications) == 1
     ids = tuple(state.notes.evidence)[1:] if probability > Config().thresholds.irreversible_above else ()
@@ -2296,8 +2314,8 @@ async def test_an_unclassified_candidate_still_supplies_transaction_evidence(mon
     await _click(agent, state, _at("https://shop.test/checkout", _button("Buy")), "Buy")
     agent._note_effect(state, _at("https://shop.test/receipt"))
 
-    await agent._answer(state, None)
-    await agent._answer(state, None)
+    await _answer(agent, state)
+    await _answer(agent, state)
 
     assert failing.await_count > 1, "a failed classification is not cached"
     ids = tuple(state.notes.evidence)[1:]
@@ -2736,3 +2754,84 @@ async def test_a_doubted_lookup_with_every_requirement_cited_finishes_without_th
 
     assert result is not None and result.status is Status.COMPLETE
     assert LLMPurpose.VERIFY not in [purpose for purpose, _ in llm.calls]
+
+
+class HeldDoneCheckJev(ScriptedJev):
+    """Answers the done check only once `released` is set, so work that waits for the check never sets it."""
+
+    def __init__(self, noul: float) -> None:
+        super().__init__({}, noul=noul)
+        self.released = asyncio.Event()
+
+    async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        if "complete" in questions:
+            await asyncio.wait_for(self.released.wait(), timeout=1)
+        elif "unsupported_0" in questions:
+            self.released.set()
+        return await super().evaluate(state, questions)
+
+
+async def test_the_drafts_claim_check_runs_beside_the_done_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Jev took the reader's facts as the answer on most lookups, and each then waited for a claim check it could
+    have asked while the done check was out. The verifier cannot run on a cited lookup, so no screenshot is taken."""
+    state = await run_state()
+    state.notes.add(_fare("https://example.test/flights/results", "results"))
+    llm = ScriptedLLM([])
+    agent, on = await _finishing(state, llm, noul=0.05, answer_expected=True)
+    agent._jev = jev = HeldDoneCheckJev(0.05)
+    shot = AsyncMock(return_value=b"")
+    monkeypatch.setattr(agent._page, "screenshot", shot)
+
+    result = await agent._finish(state, on, None, None)
+
+    assert result is not None and result.status is Status.COMPLETE and result.answer is not None
+    assert "$320" in result.answer
+    assert not llm.calls
+    assert sum("unsupported_0" in questions for questions in jev.requests) == 1
+    shot.assert_not_awaited()
+
+
+async def test_the_verifiers_screenshot_is_taken_beside_the_done_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = await run_state()
+    state.notes.add(_fare("https://example.test/flights/results", "results"))
+    click = Requirement(id="r2", text="Select the fare", kind=RequirementKind.ACTION)
+    llm = ScriptedLLM([{"missing": [], "complete": True}])
+    agent, on = await _finishing(state, llm, noul=0.5, extra=(click,))
+    agent._jev = jev = HeldDoneCheckJev(0.5)
+    monkeypatch.setattr(agent._page, "screenshot", AsyncMock(side_effect=lambda: jev.released.set() or b"png"))
+
+    result = await agent._finish(state, on, None, None)
+
+    assert result is not None and result.status is Status.COMPLETE
+    ((purpose, messages, *_),) = llm.calls
+    assert purpose is LLMPurpose.VERIFY and messages[-1].images == (b"png",)
+
+
+class ClaimDoubtingJev(ScriptedJev):
+    """Accepts completion and the draft as written, and doubts every claim."""
+
+    async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        self.requests.append(questions)
+        answers: dict[str, Answer] = {
+            key: NoulAnswer(probability=0.9 if key.startswith(("unsupported_", "contradicted_")) else 0.05)
+            for key in questions
+        }
+        return Evaluation(model="test", answers=answers, input_tokens=10, cost=FREE)
+
+
+async def test_a_doubted_draft_is_checked_once_when_the_composers_answer_fails_too() -> None:
+    """The draft Jev took as written failed its check, and so did the composer's answer; the draft was then
+    offered to the same check again, which could only doubt it the same way."""
+    state = await run_state()
+    state.notes.add(_fare("https://example.test/flights/results", "results"))
+    composed: JsonValue = {"claims": [{"text": "The fare is $320", "evidence_ids": list(state.notes.evidence)}]}
+    llm = ScriptedLLM([composed])
+    agent, on = await _finishing(state, llm, noul=0.05, answer_expected=True)
+    agent._jev = jev = ClaimDoubtingJev({})
+
+    result = await agent._finish(state, on, None, None)
+
+    assert result is not None and result.status is Status.UNVERIFIED
+    assert [purpose for purpose, *_ in llm.calls] == [LLMPurpose.COMPOSE]
+    drafts = [q for q in jev.requests if "# Claim\n$320\n" in getattr(q.get("unsupported_0"), "instructions", "")]
+    assert len(drafts) == 1

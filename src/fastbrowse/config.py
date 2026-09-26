@@ -29,6 +29,10 @@ class Thresholds(Frozen):
     """Jev's agreement that the task or notes hold a field's value, under which a NEEDS_INPUT stop stands."""
     rewrite_from: float = 0.30
     """Jev's doubt that the read facts already answer the task, from which the LLM composer writes it instead."""
+    rewrite_one_claim_from: float = 0.60
+    """The same doubt for a draft of one fact, which cannot repeat itself or leave a comparison between its facts
+    undone. Jev doubted one-fact drafts 0.15 to 0.51 and every draft of more 0.69 to 0.91; the composer only
+    reworded the one-fact ones (Argo, "Hello World!"), at 2 to 5s each."""
 
 
 class ObservationLimits(Frozen):

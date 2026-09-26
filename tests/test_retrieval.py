@@ -969,13 +969,20 @@ class _DraftJev:
         return Evaluation(model="test", answers=answers, input_tokens=1, cost=cost)
 
 
-@pytest.mark.parametrize(("doubt", "skips_composer"), [(0.1, True), (0.6, False), (None, False)])
+# Two facts want a surer no than one: only a draft of several can repeat itself or leave their comparison undone.
+@pytest.mark.parametrize(
+    ("doubt", "facts", "skips_composer"),
+    [(0.1, 1, True), (0.45, 1, True), (0.65, 1, False), (None, 1, False), (0.1, 2, True), (0.45, 2, False)],
+)
 async def test_only_a_confident_jev_no_lets_the_read_facts_stand_as_the_answer(
-    doubt: float | None, skips_composer: bool
+    doubt: float | None, facts: int, skips_composer: bool
 ) -> None:
-    page = capture((BlockKind.PARAGRAPH, "Price is $12"))
+    page = capture((BlockKind.PARAGRAPH, "Price is $12"), (BlockKind.PARAGRAPH, "Postage is $3"))
     evidence = block_evidence(page, "s0")
     notes = Notes((Fact(reader=FactReader.LLM, requirement_id="r1", text="The price is $12.", evidence=evidence),))
+    if facts == 2:
+        postage = block_evidence(page, "s1")
+        notes.add(Fact(reader=FactReader.LLM, requirement_id="r1", text="Postage is $3.", evidence=postage))
     plan = Plan(
         requirements=(Requirement(id="r1", text="Find price", kind=RequirementKind.INFORMATION),),
         answer_expected=True,

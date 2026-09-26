@@ -253,7 +253,16 @@ async def check_done(
         verdict = DoneVerdict.VERIFY
     # An answer Jev did not give is not a yes: only a present, confident "no rewrite needed" skips the composer.
     doubt = evaluation.answers.get("draft_needs_writing")
-    ready = isinstance(doubt, NoulAnswer) and doubt.probability < thresholds.rewrite_from
+    # A draft missing a requirement still fails the claim check's omission question, and the composer writes it.
+    limit = (
+        thresholds.rewrite_one_claim_from if draft is not None and len(draft.claims) == 1 else thresholds.rewrite_from
+    )
+    ready = isinstance(doubt, NoulAnswer) and doubt.probability < limit
+    if draft is not None:
+        # Whether the composer runs, 2 to 5s, turns on this one answer, which no other record kept.
+        trace(
+            "draft", claims=len(draft.claims), doubt=round(_probability(evaluation.answers, "draft_needs_writing"), 3)
+        )
     return DoneCheck(
         verdict=verdict,
         complete=complete,
