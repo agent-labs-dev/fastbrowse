@@ -516,6 +516,16 @@ class Agent:
             # The confidence gates judge Jev's uncertainty, and there is none to judge here.
             if state.next_page and state.through_end and not state.paging_failed:
                 await self._pipeline_pages(state, observation)
+                if (
+                    not state.paging_failed
+                    and not state.owes_read
+                    and _lookup(state.plan)
+                    and _answered(state.plan, state.notes)
+                    and self._observed is not None
+                ):
+                    result = await self._finish(state, self._observed, output_schema, until)
+                    if result is not None:
+                        return result
                 continue
             if (paging := _paging(state, observation)) is not None:
                 if await self._step(state, observation, paging, Decider.LLM, gate=False):
@@ -794,6 +804,7 @@ class Agent:
         capture: Capture | None = None,
         gate: bool = True,
         require_all_evidence: bool = False,
+        follow_pager: bool = False,
     ) -> bool:
         """Return whether a duplicate read was skipped, so callers can recover or continue the interaction."""
         started = time.monotonic()
@@ -825,7 +836,8 @@ class Agent:
             if action.secret:
                 # Held from the keystrokes on: a page may mirror the value, and only the next reading shows it.
                 self._page.withhold_frames(True)
-            act = await self._page.act(action, self._raw_observation or observation)
+            raw = self._raw_observation or observation
+            act = await self._follow_pager(action, raw) if follow_pager else await self._page.act(action, raw)
             if act.outcome is StepOutcome.STALE and decision.target is not None:
                 act = await self._act_on_twin(action, observation, decision.target) or act
             if act.outcome is StepOutcome.EXECUTED and state.authorization.irreversible_actions:
@@ -931,6 +943,23 @@ class Agent:
                 extra={"tripwire": tripped.tripwire.value},
             )
         return False
+
+    async def _follow_pager(self, action: Action, observation: Observation) -> ActResult:
+        target = next_page_control(observation)
+        if (
+            action.operation is not Operation.CLICK
+            or target is None
+            or target.id != action.target_id
+            or await self._page.address() != observation.url
+        ):
+            return ActResult(outcome=StepOutcome.STALE, page_changed=False)
+        # A known pager address needs no pointer events, whose guards and settling cost a cloud round trip each.
+        await self._page.navigate(urljoin(observation.url, target.href))
+        return ActResult(
+            outcome=StepOutcome.EXECUTED,
+            page_changed=await self._page.address() != observation.url,
+            detail="Followed next-page link by URL.",
+        )
 
     async def _act_on_twin(self, action: Action, observation: Observation, target: Control) -> ActResult | None:
         """Act on the one control now standing where `target` stood, if the page redrew it since it was observed.
@@ -1757,7 +1786,12 @@ class Agent:
                     state.paged_from = state_key(observation)
                     before_click = len(state.steps)
                     await self._step(
-                        state, observation, _code_decision(Operation.CLICK, target), Decider.LLM, gate=False
+                        state,
+                        observation,
+                        _code_decision(Operation.CLICK, target),
+                        Decider.LLM,
+                        gate=False,
+                        follow_pager=True,
                     )
                     if (
                         len(state.steps) == before_click

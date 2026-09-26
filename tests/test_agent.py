@@ -2969,12 +2969,20 @@ async def _pipeline_fixture(
     page.artifacts = ()
     page.observe = AsyncMock(side_effect=observations[1:])
     page.capture = AsyncMock(side_effect=captures[1:])
+    current_url = observations[0].url
+
+    async def navigate(url: str) -> None:
+        nonlocal current_url
+        current_url = url
+
+    page.navigate = AsyncMock(side_effect=navigate)
+    page.address = AsyncMock(side_effect=lambda: current_url)
     page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
     llm = ScriptedLLM(
         [
             _continued(through_end=through_end),
-            _continued(),
-            _continued(),
+            {"continues": [{"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}]}]},
+            {"continues": [{"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}]}]},
             {
                 "answered": True,
                 "claims": [
@@ -3024,7 +3032,7 @@ async def test_pager_reads_overlap_and_final_read_sees_records_in_page_order() -
     assert [step.url for step in state.steps if step.operation is Operation.READ] == [c.url for c in captures]
     assert [step.index for step in state.steps] == list(range(7))
     assert len(state.history) == len(state.steps) == state.ledger.steps == 7
-    assert page.act.await_count == 3
+    assert page.navigate.await_count == 3
     assert agent._result(state, state.ledger, Status.COMPLETE).final_url == observations[-1].url
 
 
@@ -3039,9 +3047,10 @@ async def test_pager_reads_overlap_and_final_read_sees_records_in_page_order() -
 async def test_pipeline_reserves_read_steps_and_respects_page_and_call_caps(
     limits: Limits, config: Config, pages: int
 ) -> None:
-    agent, state, page, observations, _, _ = await _pipeline_fixture(config=config, limits=limits)
+    agent, state, page, observations, _, llm = await _pipeline_fixture(config=config, limits=limits)
+    llm.responses[pages - 1] = _continued()
     await agent._pipeline_pages(state, observations[0])
-    assert page.act.await_count == state.pages == pages
+    assert page.navigate.await_count == state.pages == pages
     assert state.ledger.steps == 1 + 2 * pages <= limits.max_steps
     assert state.ledger.llm_calls == pages + 1 <= limits.max_llm_calls
     assert not state.notes.evidenced("r1")
@@ -3055,7 +3064,7 @@ async def test_bounded_page_requirement_keeps_serial_paging() -> None:
 
 
 async def test_pipeline_read_failure_retries_saved_capture_and_returns_to_serial_loop() -> None:
-    agent, state, page, observations, captures, _ = await _pipeline_fixture()
+    agent, state, page, observations, captures, llm = await _pipeline_fixture()
     original = agent._page_records
     calls = 0
 
@@ -3069,24 +3078,29 @@ async def test_pipeline_read_failure_retries_saved_capture_and_returns_to_serial
     agent._page_records = AsyncMock(side_effect=fail_once)
     await agent._pipeline_pages(state, observations[0])
     assert calls == 2 and state.paging_failed
-    assert page.act.await_count == 1
+    assert page.navigate.await_count == 1
     assert any(e.url == captures[1].url for e in state.notes.evidence.values())
     assert not state.incomplete
     assert not state.notes.evidenced("r1")
     # A records read does not spend the serial read of this page.
+    llm.responses.insert(0, _continued())
     assert not await agent._step(state, observations[1], _code_decision(Operation.READ, None), capture=captures[1])
     assert state.next_page
 
 
 async def test_pipeline_load_failure_keeps_captured_records_and_stops_navigating() -> None:
     agent, state, page, observations, captures, _ = await _pipeline_fixture()
-    page.act.side_effect = [
-        ActResult(outcome=StepOutcome.EXECUTED, page_changed=True),
-        NavigationTimeout("load failed"),
-    ]
+    navigate = page.navigate.side_effect
+
+    async def fail_second(url: str) -> None:
+        if page.navigate.await_count == 2:
+            raise NavigationTimeout("load failed")
+        await navigate(url)
+
+    page.navigate.side_effect = fail_second
     await agent._pipeline_pages(state, observations[0])
     assert state.paging_failed and not state.next_page
-    assert page.act.await_count == 2
+    assert page.navigate.await_count == 2
     assert [e.url for e in state.notes.evidence.values()] == [c.url for c in captures[:2]]
     assert not state.notes.evidenced("r1")
 
@@ -3109,7 +3123,7 @@ async def test_pipeline_cancellation_joins_background_readers() -> None:
     with pytest.raises(asyncio.CancelledError):
         await running
     assert cancelled.is_set()
-    assert page.act.await_count < 3
+    assert page.navigate.await_count < 3
 
 
 @pytest.mark.parametrize("href", ["https://other.test/list/2", "//other.test/list/2", "other.test/list/2", "#next"])
@@ -3137,6 +3151,7 @@ async def test_pipeline_final_read_error_leaves_current_capture_readable() -> No
     llm.generate = AsyncMock(side_effect=fail_once)
     await agent._pipeline_pages(state, observations[0])
     assert state.paging_failed and state.steps[-1].outcome is StepOutcome.FAILED
+    llm.responses.insert(0, _continued())
     assert not await agent._step(state, observations[1], _code_decision(Operation.READ, None), capture=captures[1])
     assert calls == 2
 
@@ -3170,7 +3185,7 @@ async def test_pipeline_time_limit_cancels_and_joins_readers() -> None:
     assert cancelled.is_set()
 
 
-async def test_loop_enters_pipeline_without_jev_between_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_loop_finishes_pipeline_without_another_decision(monkeypatch: pytest.MonkeyPatch) -> None:
     agent, state, page, observations, _, _ = await _pipeline_fixture()
     page.observe.side_effect = [*observations, observations[-1]]
     decisions = 0
@@ -3185,17 +3200,18 @@ async def test_loop_enters_pipeline_without_jev_between_pages(monkeypatch: pytes
     monkeypatch.setattr(agent_module, "decide", done)
     agent._finish = AsyncMock(side_effect=lambda *args: agent._result(state, state.ledger, Status.COMPLETE))
     result = await agent._loop(state, None, None)
-    assert result.status is Status.COMPLETE and decisions == 1
-    assert page.act.await_count == 3
+    assert result.status is Status.COMPLETE and decisions == 0
+    assert page.navigate.await_count == 3
 
 
 @pytest.mark.parametrize("outcome", [StepOutcome.EXECUTED, StepOutcome.STALE, StepOutcome.COVERED])
 async def test_pipeline_stops_after_a_pager_click_that_does_not_load_a_page(outcome: StepOutcome) -> None:
     agent, state, page, observations, _, _ = await _pipeline_fixture()
-    page.act.return_value = ActResult(outcome=outcome, page_changed=False)
+    agent._follow_pager = AsyncMock(return_value=ActResult(outcome=outcome, page_changed=False))
     agent._act_on_twin = AsyncMock(return_value=None)
     await agent._pipeline_pages(state, observations[0])
-    assert page.act.await_count == 1
+    assert agent._follow_pager.await_count == 1
+    page.navigate.assert_not_called()
     page.capture.assert_not_called()
     assert not state.next_page and not state.notes.evidenced("r1")
 
@@ -3245,3 +3261,43 @@ def test_a_field_set_back_to_an_earlier_value_is_typed_in_the_order_the_task_giv
         for t in typed
     ]
     assert _next_value(["A", "B", "A", "C"], history, "Name") == expected
+
+
+@pytest.mark.parametrize("redirect", [False, True])
+async def test_pager_navigation_records_the_followed_link_and_rejects_same_page_or_external_redirect(
+    redirect: bool,
+) -> None:
+    agent, state, page, observations, _, _ = await _pipeline_fixture()
+    if redirect:
+        page.observe.side_effect = [_at("https://other.test/login")]
+    else:
+        page.navigate.side_effect = None
+    await agent._pipeline_pages(state, observations[0])
+    page.navigate.assert_awaited_once_with("https://example.test/list/2")
+    page.act.assert_not_called()
+    page.capture.assert_not_called()
+    followed = state.steps[-1]
+    assert followed.url == observations[0].url and followed.target == "Next"
+    assert followed.note == "Followed next-page link by URL."
+    assert not state.notes.evidenced("r1")
+
+
+@pytest.mark.parametrize("href", ["https://other.test/2", "//other.test/2", "#next", "/list/1"])
+async def test_direct_pager_navigation_refuses_untrusted_destinations(href: str) -> None:
+    page = Mock(spec=Page)
+    page.address = AsyncMock(return_value="https://example.test/list/1")
+    page.navigate = AsyncMock()
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    observed = _at("https://example.test/list/1", _link("next", "Next", href))
+    result = await agent._follow_pager(Action(operation=Operation.CLICK, target_id="next"), observed)
+    assert result.outcome is StepOutcome.STALE
+    page.navigate.assert_not_called()
+
+
+async def test_direct_pager_navigation_refuses_a_changed_document() -> None:
+    agent, _, page, observations, _, _ = await _pipeline_fixture()
+    page.address.side_effect = None
+    page.address.return_value = "https://example.test/other"
+    result = await agent._follow_pager(Action(operation=Operation.CLICK, target_id="next"), observations[0])
+    assert result.outcome is StepOutcome.STALE
+    page.navigate.assert_not_called()

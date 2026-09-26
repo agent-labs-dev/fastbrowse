@@ -1703,7 +1703,7 @@ async def test_derived_answer_cites_and_checks_every_record_across_pages(compose
                     "requirement_id": "r",
                     "text": answer,
                     "cite": {"first": "s0", "last": "s0"},
-                    "draws_on": ["claim:1", earlier[2], "claim:0", earlier[0]],
+                    "draws_on": ["claim:1", "e2", "claim:0", "e0"],
                 },
             ],
             "answered": True,
@@ -1711,7 +1711,9 @@ async def test_derived_answer_cites_and_checks_every_record_across_pages(compose
     )
     outcome = await read(llm, last, answer, ["r"], notes, continuing=("r",))
     keys = tuple(notes.evidence)
-    assert all(f"[{key}]" in llm.calls[-1][1][-1].content for key in earlier)
+    prompt = llm.calls[-1][1][-1].content
+    assert all(f"[e{i}]" in prompt and key not in prompt for i, key in enumerate(earlier))
+    assert 'basis=["e1", "e0"]' in prompt
     assert outcome.facts[-1].basis == (keys[4], keys[2], keys[3], keys[0])
     assert notes.supporting("r")[0][1].text == answer
     plan = Plan(
@@ -2359,8 +2361,6 @@ async def test_isolated_records_merge_tallies_without_closing_or_double_counting
     ]
     responses: list[JsonValue] = [
         {
-            "answered": True,
-            "claims": [],
             "continues": [
                 {
                     "requirement_id": "r",
@@ -2373,13 +2373,10 @@ async def test_isolated_records_merge_tallies_without_closing_or_double_counting
         },
     ] * 2 + [
         {
-            "answered": True,
-            "claims": [],
-            "tallies": [
+            "continues": [
                 {
                     "requirement_id": "r",
-                    "complete": True,
-                    "groups": [
+                    "tallies": [
                         {"key": "Ada", "records": [{"first": "s0", "last": "s0"}]},
                     ],
                 }
@@ -2406,8 +2403,6 @@ async def test_isolated_continuation_metadata_and_lost_records_survive_merge() -
         ScriptedLLM(
             [
                 {
-                    "answered": False,
-                    "claims": [],
                     "continues": [
                         {
                             "requirement_id": "r",
@@ -2473,3 +2468,84 @@ async def test_final_page_refuses_to_drop_earlier_records_to_fit_prompt() -> Non
             require_all_evidence=True,
         )
     assert not llm.calls
+
+
+@pytest.mark.parametrize("missing", ["requirement", "context", "none"])
+async def test_record_read_keeps_empty_sets_apart_from_missing_evidence(missing: str) -> None:
+    page = capture((BlockKind.HEADING, "Active items"), (BlockKind.RECORD, "Ada: $3"))
+    response: JsonValue = {
+        "continues": [] if missing == "requirement" else [{"requirement_id": "r", "records": []}],
+        "context": [{"first": "missing" if missing == "context" else "s0", "last": "s0"}],
+    }
+    notes = Notes()
+    result = await read(ScriptedLLM([response]), page, "Find matches", ["r"], notes, records_only=True)
+    result.merge_records(notes)
+    assert not notes.evidenced("r")
+    assert result.incomplete == (() if missing == "none" else ("r",))
+    if missing != "context":
+        quote = notes.facts[0].evidence
+        assert quote is not None and quote.quote == page.text[quote.start : quote.end]
+        assert quote.url == page.url and quote.capture_sha256 == page.sha256
+
+
+async def test_final_comparison_cannot_drop_earlier_records_from_its_basis() -> None:
+    earlier = capture((BlockKind.RECORD, "Oak $19"), (BlockKind.RECORD, "Pine $7"))
+    notes = Notes()
+    for block in earlier.blocks:
+        evidence = block_evidence(earlier, block.source_id)
+        fact = Fact(text=evidence.quote, evidence=evidence, reader=FactReader.LLM)
+        notes.add(fact)
+        notes.add_continuation("r", fact_id(fact))
+    last = capture((BlockKind.RECORD, "Elm $15")).model_copy(update={"url": "https://example.test/last"})
+    await read(
+        ScriptedLLM(
+            [
+                {
+                    "answered": True,
+                    "claims": [
+                        {
+                            "requirement_id": "r",
+                            "text": "Pine is cheapest at $7",
+                            "cite": None,
+                            "draws_on": [],
+                            "records": [{"first": "s0", "last": "s0"}],
+                        }
+                    ],
+                }
+            ]
+        ),
+        last,
+        "Find the cheapest item",
+        ["r"],
+        notes,
+        require_all_evidence=True,
+    )
+    assert [e.quote for e in notes.supporting_evidence("r")] == ["Oak $19", "Pine $7", "Elm $15"]
+    assert [e.url for e in notes.supporting_evidence("r")] == [earlier.url, earlier.url, last.url]
+
+
+async def test_final_comparison_keeps_records_from_earlier_chunks_too() -> None:
+    page = capture((BlockKind.RECORD, "Oak $19"), (BlockKind.RECORD, "Pine $7"))
+    notes = Notes()
+    llm = ScriptedLLM(
+        [
+            {
+                "answered": False,
+                "claims": [],
+                "continues": [{"requirement_id": "r", "records": [{"first": "s0", "last": "s0"}]}],
+            },
+            {
+                "answered": True,
+                "claims": [
+                    {
+                        "requirement_id": "r",
+                        "text": "Pine is cheapest at $7",
+                        "cite": None,
+                        "records": [{"first": "s1", "last": "s1"}],
+                    }
+                ],
+            },
+        ]
+    )
+    await read(llm, page, "Find the cheapest item", ["r"], notes, max_chars=8, require_all_evidence=True)
+    assert [e.quote for e in notes.supporting_evidence("r")] == ["Oak $19", "Pine $7"]

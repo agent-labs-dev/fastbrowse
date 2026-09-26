@@ -402,6 +402,17 @@ class _ReadResponse(Frozen):
     continues: tuple[_Continuation, ...] = ()
 
 
+class _RecordSet(Frozen):
+    requirement_id: str
+    records: tuple[_Cite, ...] = ()
+    tallies: tuple[_TallyGroup, ...] = ()
+
+
+class _RecordsResponse(Frozen):
+    continues: tuple[_RecordSet, ...]
+    context: tuple[_Cite, ...] = ()
+
+
 def _quoted(evidence: Evidence) -> Fact:
     """A fact that is only the page's own text, kept as context a claim can rest on."""
     return Fact(text=evidence.quote, evidence=evidence, reader=FactReader.LLM)
@@ -532,6 +543,12 @@ async def read(
         )
     if notice:
         question += f"\n\n{notice}"
+    if require_all_evidence:
+        question += (
+            "\n\nCode attaches every earlier comparison record to each requirement's conclusion. You need not "
+            "repeat those references in draws_on; use it for any extra context the claim needs. Still include "
+            "every compared record from this capture in records, and state the requested values in the answer."
+        )
     if records_only:
         question += (
             "\n\nThis page is being read while earlier pages are still being read. Collect this page's records "
@@ -576,7 +593,9 @@ async def read(
                     "list. Earlier pages are in the collected evidence under their own URLs. When the list goes "
                     "on past this capture and the collected evidence does not cover the rest, add an entry to "
                     "continues naming the requirement, and give in its records every record this capture adds "
-                    "to that comparison, each as the blocks holding it and the value compared. "
+                    "to that comparison, each as the blocks holding it and the value compared. Apply the "
+                    "requirement's filters on every page: include every matching record with its compared "
+                    "value and the attributes that show it matches; omit records those filters exclude. "
                     "Name in expands the control on this page that shows the rest, when one is offered. "
                     "If instead the page states that the list is ordered or filtered by the very quantity "
                     "being compared, the leading record answers: give the claim citing it its requirement id and cite "
@@ -590,18 +609,63 @@ async def read(
             ),
             _read_message(capture, part, question, requirement_ids),
         ]
-        room = _notes_room(tokens, messages, _ReadResponse)
-        offered = so_far.render_with_ids(room, preserve_requirements=True)
+        if records_only:
+            messages[0] = Message(
+                role="system",
+                content=(
+                    "# Page records\nCollect the records on this page for the requested requirements. "
+                    "Return each requirement in continues even when no records match. Put every matching "
+                    "record in its records as source block ranges, including the compared value and the "
+                    "attributes that show it matches. For counts or rankings by count use continues.tallies "
+                    "instead, grouped by the label stated in each record. Omit records excluded by the task's "
+                    "filters, but never select only the page's winners. Earlier pages are being read separately. "
+                    "Use context for source block ranges needed to interpret these records, such as filters "
+                    f"or table headers. Do not conclude comparisons.\n\n# Trust\n{UNTRUSTED}"
+                ),
+            )
+        room = _notes_room(tokens, messages, _RecordsResponse if records_only else _ReadResponse)
+        labels = {fact_id(fact): f"e{i}" for i, fact in enumerate(so_far.facts)}
+        offered = so_far.render_with_ids(room, preserve_requirements=True, labels=labels)
         if require_all_evidence and {fact_id(fact) for fact in so_far.facts} - set(offered.evidence_ids):
             raise NotesTooLarge("The final page cannot fit every earlier record in its collected evidence")
         messages[-1] = _read_message(capture, part, question, requirement_ids, offered.text)
-        result = await llm.generate(
-            LLMPurpose.READ,
-            messages,
-            _ReadResponse,
-            max_output_tokens=tokens.read_output_tokens,
-            ledger=ledger,
-        )
+        if records_only:
+            collected = await llm.generate(
+                LLMPurpose.READ,
+                messages,
+                _RecordsResponse,
+                max_output_tokens=tokens.read_output_tokens,
+                ledger=ledger,
+            )
+            context: list[_ReadClaim] = []
+            for cite in collected.data.context:
+                evidence = _cited(capture, part, cite)
+                if evidence is None:
+                    lost.update(dict.fromkeys(requirement_ids))
+                    uncovered += 1
+                else:
+                    context.append(_ReadClaim(cite=cite, text=evidence.quote))
+            # An omitted requirement could have lost a whole page. An explicit empty record set means none matched.
+            lost.update(dict.fromkeys(set(requirement_ids) - {c.requirement_id for c in collected.data.continues}))
+            result = Generation(
+                data=_ReadResponse(
+                    claims=tuple(context),
+                    answered=False,
+                    continues=tuple(
+                        _Continuation(requirement_id=c.requirement_id, records=c.records, tallies=c.tallies)
+                        for c in collected.data.continues
+                    ),
+                ),
+                cost=collected.cost,
+            )
+        else:
+            result = await llm.generate(
+                LLMPurpose.READ,
+                messages,
+                _ReadResponse,
+                max_output_tokens=tokens.read_output_tokens,
+                ledger=ledger,
+            )
         if ledger is not None:
             ledger.record(result.cost)
         costs.append(result.cost)
@@ -615,7 +679,8 @@ async def read(
         continues = dict.fromkeys(c.requirement_id for c in carried)
         through_end = tuple(c.requirement_id for c in carried if c.through_end)
         expands = next((c.expands for c in carried if c.expands), None)
-        references = {key: key for key in offered.evidence_ids}
+        references = {labels[key]: key for key in offered.evidence_ids}
+        references.update((key, key) for key in offered.evidence_ids)
         tally_reads = [t for t in result.data.tallies if t.requirement_id in requirement_ids]
         tally_reads.extend(_TallyRead(requirement_id=c.requirement_id, groups=c.tallies) for c in carried if c.tallies)
         for tally_read in tally_reads:
@@ -656,6 +721,11 @@ async def read(
                 if missing:
                     lost[tally_read.requirement_id] = None
         for index, claim in enumerate(result.data.claims):
+            if require_all_evidence and claim.requirement_id is not None and claim.requirement_id in requirement_ids:
+                # A winner must retain the records it beat even when the reader cites only its chosen rows.
+                claim = claim.model_copy(
+                    update={"draws_on": (*claim.draws_on, *so_far.comparison_records(claim.requirement_id))}
+                )
             records: dict[str, Fact] = {}
             missing = max(0, len(claim.records) - _MAX_CONTINUING_RECORDS)
             for cite in claim.records[:_MAX_CONTINUING_RECORDS]:
@@ -728,6 +798,7 @@ async def read(
                     continue
                 record = _quoted(evidence)
                 so_far.add(record)
+                so_far.add_continuation(continuation.requirement_id, fact_id(record))
                 notes.add_continuation(continuation.requirement_id, fact_id(record))
                 continuation_records.setdefault(continuation.requirement_id, []).append(fact_id(record))
                 found.append(record)

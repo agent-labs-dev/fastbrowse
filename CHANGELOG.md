@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Paginated comparisons spend less time reading and navigating.** Pager links open their observed
+  same-origin address directly, with each followed page still recorded. Readers keep matching records from
+  the first page, use a smaller response for intermediate pages, and cite earlier evidence with short
+  references that resolve to the original capture spans. Answered comparisons go straight to the final checks.
 - **A site that drops the first page load ends the run `unavailable`, not `error`.** Chrome's empty,
   reset, refused or proxy-failed connection before the first step says the site was down, as a timeout already
   did; an address that does not resolve still ends `error`.
