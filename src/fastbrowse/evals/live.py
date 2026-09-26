@@ -32,7 +32,7 @@ import sys
 import tempfile
 import time
 from collections import Counter
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -82,6 +82,11 @@ HOSTED_OUTAGE = "Task ended unexpectedly."
 """The output Browser Use gives a session its own infrastructure ended."""
 NAVIGATION_FAILED = "Page.navigate failed"
 """How fastbrowse reports a first page that never loaded."""
+SITE_PROBE_SECONDS = 15
+"""How often the harness fetches each task site's start page while a run goes on."""
+SITE_STALL_SECONDS = 10
+"""A start page fetch slower than this is the site stalling: every site in the suites answers in under two seconds
+between stalls."""
 
 
 def _watch(arm: str, task: LiveTask, live_url: str | None) -> None:
@@ -378,6 +383,46 @@ async def _down(task: LiveTask, http: httpx.AsyncClient) -> str | None:
     if response.status_code >= 500:
         return f"site unavailable: {task.start} answered HTTP {response.status_code}"
     return None
+
+
+class SiteWatch:
+    """Each task site's start page fetched every `SITE_PROBE_SECONDS` through a run, by the harness itself.
+
+    One day's the-internet.herokuapp.com held requests for 30 seconds at a time, a plain fetch included: attempts
+    it held took 36s where the same task took 7s between stalls, for whichever arm drew them. An attempt that a
+    fetch saw its site stall during is an outage for every arm alike, as a site serving errors already was."""
+
+    def __init__(self, http: httpx.AsyncClient, tasks: Sequence[LiveTask]) -> None:
+        self._http = http
+        self._starts = {origin_of(t.start): t.start for t in reversed(tasks)}
+        self._stalls: dict[str, list[tuple[float, float, str]]] = {origin: [] for origin in self._starts}
+
+    async def run(self) -> None:
+        await asyncio.gather(*(self._probe(origin, url) for origin, url in self._starts.items()))
+
+    async def _probe(self, origin: str, url: str) -> None:
+        while True:
+            began = time.time()
+            why = None
+            try:
+                response = await self._http.get(url, follow_redirects=True, timeout=SITE_STALL_SECONDS * 3)
+                if response.status_code >= 500:
+                    why = f"answered HTTP {response.status_code}"
+            except httpx.TransportError as error:
+                why = f"unreachable ({type(error).__name__})"
+            ended = time.time()
+            if why is None and ended - began > SITE_STALL_SECONDS:
+                why = f"took {ended - began:.0f}s to answer"
+            if why is not None:
+                self._stalls[origin].append((began, ended, why))
+            await asyncio.sleep(max(0.0, SITE_PROBE_SECONDS - (ended - began)))
+
+    def stalled(self, task: LiveTask, start: float, end: float) -> str | None:
+        """Why the task's site stalled between `start` and `end`, or None if every fetch then was answered."""
+        for began, ended, why in self._stalls.get(origin_of(task.start), ()):
+            if began < end and ended > start:
+                return f"site stalled: {task.start} {why}"
+        return None
 
 
 async def hosted_answer(client: Any, session_id: str, output: object) -> datetime | None:
@@ -938,6 +983,8 @@ async def main(argv: list[str]) -> int:
         args.out.open("a", encoding="utf-8") as out,
     ):
         async with httpx.AsyncClient(timeout=60, event_hooks={"request": [_github_token]}) as http:
+            watch = SiteWatch(http, tasks)
+            watching = asyncio.create_task(watch.run())
 
             async def one(arm: str, task: LiveTask, record: Path | None, repeat: int) -> EvalRow:
                 # An outage is waited out and the row run again; bounded, so a dead provider cannot hold a run forever.
@@ -957,6 +1004,10 @@ async def main(argv: list[str]) -> int:
                             arm, task, truth, http, Path(downloads), bitwarden=args.bitwarden, record=record
                         )
                     row = await _site_checked(row, task, http)
+                    if row.normalized_status != Ending.UNAVAILABLE and (
+                        stalled := watch.stalled(task, row.at, time.time())
+                    ):
+                        row = row.model_copy(update={"normalized_status": Ending.UNAVAILABLE, "failure": stalled})
                     if row.normalized_status != Ending.UNAVAILABLE or retries >= OUTAGE_RETRIES:
                         break
                     wait = min(60 * 2**retries, 600)
@@ -991,7 +1042,10 @@ async def main(argv: list[str]) -> int:
                 for arm in args.arms
                 if eligible(arm, task)
             ]
-            rows = list(await asyncio.gather(*(one(*plan) for plan in planned)))
+            try:
+                rows = list(await asyncio.gather(*(one(*plan) for plan in planned)))
+            finally:
+                watching.cancel()
     summarize(rows, args.arms)
     return 0
 

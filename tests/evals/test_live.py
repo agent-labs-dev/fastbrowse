@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import runpy
+import time
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -666,3 +667,19 @@ def test_an_error_sent_with_http_200_is_not_an_answer() -> None:
         model = SimpleNamespace(CLIENT=SimpleNamespace(post=lambda *_, response=response, **__: response))
         with pytest.raises(raised, match=f"error {code} in HTTP 200"):
             RUNNER["_post"](model, "https://openrouter.ai/api/v1/chat/completions", {}, {})
+
+
+async def test_an_attempt_its_site_stalled_during_is_an_outage_for_any_arm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One day's the-internet.herokuapp.com held requests 30s at a time: nested-frames took 36s, and 7s between."""
+    served = iter([httpx.Response(200), httpx.Response(503)])
+    http = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: next(served, httpx.Response(200))))
+    monkeypatch.setattr(live, "SITE_PROBE_SECONDS", 0.01)
+    frames = task("internet-login")
+    watch = live.SiteWatch(http, [frames])
+    start = time.time()
+    watching = asyncio.create_task(watch.run())
+    await asyncio.sleep(0.1)
+    watching.cancel()
+    assert watch.stalled(frames, start, time.time()) == f"site stalled: {frames.start} answered HTTP 503"
+    assert watch.stalled(frames, start - 10, start - 5) is None
+    assert watch.stalled(task("pypi-newer"), start, time.time()) is None

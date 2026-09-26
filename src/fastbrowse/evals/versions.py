@@ -721,6 +721,10 @@ def protocol_docs() -> str:
         "An attempt that fails while the task's site answers its start URL with a 5xx, or not at all, is an outage "
         "too: a site serving errors fails every arm alike. fastbrowse's first page never loading is an outage only "
         "when that same check finds the site down; otherwise it is fastbrowse's failure.",
+        "Through a run the harness also fetches each task site's start page every 15 seconds. An attempt of any "
+        "arm during which one of those fetches took over 10 seconds, failed, or got a 5xx is an outage, passed or "
+        "not: one day's the-internet.herokuapp.com held requests 30 seconds at a time, and an attempt it held took "
+        "five times as long as the same task between stalls.",
         'A hosted session Browser Use itself ends with "Task ended unexpectedly." is a Browser Use outage: its agent '
         "neither answered nor gave up. A session ending in `error` with any other output is scored as its failure.",
         "An attempt of any arm still running after 15 minutes is stopped as an outage: the slowest finished attempts "
