@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A site that drops the first page load ends the run `unavailable`, not `error`.** Chrome's empty,
+  reset, refused or proxy-failed connection before the first step says the site was down, as a timeout already
+  did; an address that does not resolve still ends `error`.
 - **A value the task changes later is typed in order.** Asked to enter one value and later correct it, the
   field writer typed the correction on the first pass, so no step could show the change. It now lists the
   values a field holds in turn, and the run types the first one not yet typed there. A box ticked or option

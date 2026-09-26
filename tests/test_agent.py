@@ -54,7 +54,19 @@ from fastbrowse.models import (
     StepOutcome,
     StepResult,
 )
-from fastbrowse.page import Action, ActResult, BlockKind, Capture, Control, Dialog, NavigationTimeout, Observation, Page
+from fastbrowse.page import (
+    Action,
+    ActResult,
+    BlockKind,
+    BrowserError,
+    Capture,
+    Control,
+    Dialog,
+    NavigationTimeout,
+    Observation,
+    Page,
+    SiteUnreachable,
+)
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 from fastbrowse.policy import Decision, HistoryEntry, ReadAssessment, build_request, decide
 from fastbrowse.retrieval import TRANSACTION_CONTRADICTED, ComposedAnswer
@@ -2777,13 +2789,14 @@ async def test_a_page_nobody_read_is_read_before_it_is_scrolled() -> None:
     assert not await agent._read_before_interaction(state, obs, decision)
 
 
+@pytest.mark.parametrize("failed", [NavigationTimeout, SiteUnreachable])
 @pytest.mark.parametrize("opening", [True, False])
 async def test_navigation_timeout_is_unavailable_only_while_opening(
-    monkeypatch: pytest.MonkeyPatch, opening: bool
+    monkeypatch: pytest.MonkeyPatch, opening: bool, failed: type[BrowserError]
 ) -> None:
     page = Mock(spec=Page)
     page.artifacts = ()
-    page.navigate = AsyncMock(side_effect=NavigationTimeout("navigation timed out"))
+    page.navigate = AsyncMock(side_effect=failed("navigation timed out"))
     # No shortcut is proposed, whichever of the plan and the proposal asks first, so the start page is opened.
     llm = ScriptedLLM([{"url": None}, {"url": None}])
     agent = Agent(page, ScriptedJev({}), llm)

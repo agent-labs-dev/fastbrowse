@@ -70,6 +70,7 @@ from fastbrowse.page import (
     NavigationTimeout,
     Observation,
     Page,
+    SiteUnreachable,
     pager_link,
 )
 from fastbrowse.planner import Plan, Requirement, RequirementKind, make_plan
@@ -485,7 +486,9 @@ class Agent:
             except (JevError, LLMError, BrowserError) as error:
                 message = self._redactor.redact(str(error))[:500]
                 trace("run_error", kind=type(error).__name__, step=len(state.steps) if state else 0, error=message)
-                unavailable = isinstance(error, Unavailable) or (state is None and isinstance(error, NavigationTimeout))
+                unavailable = isinstance(error, Unavailable) or (
+                    state is None and isinstance(error, NavigationTimeout | SiteUnreachable)
+                )
                 status = Status.UNAVAILABLE if unavailable else Status.ERROR
                 return self._result(state, ledger, status, error=message)
             finally:

@@ -37,7 +37,7 @@ from fastbrowse.models import (
     StepOutcome,
     Unavailable,
 )
-from fastbrowse.page import BrowserError, NavigationTimeout
+from fastbrowse.page import BrowserError, NavigationTimeout, SiteUnreachable
 from fastbrowse.run import _browser, run_task
 from tests.browser.conftest import RecordingArtifactSink
 from tests.test_policy import ScriptedJev
@@ -171,6 +171,7 @@ SETTLED = {"result": {"value": [True, "fingerprint"]}}
         (["net::ERR_TUNNEL_CONNECTION_FAILED"], None),
         (["net::ERR_TUNNEL_CONNECTION_FAILED"] * 2, "Page.navigate failed (net::ERR_TUNNEL_CONNECTION_FAILED)"),
         (["secret https://example.test/secret"] * 2, "Page.navigate failed (NavigationError)"),
+        (["net::ERR_NAME_NOT_RESOLVED"] * 2, "Page.navigate failed (net::ERR_NAME_NOT_RESOLVED)"),
     ],
 )
 async def test_a_failed_navigation_is_tried_again_once(
@@ -190,6 +191,8 @@ async def test_a_failed_navigation_is_tried_again_once(
             with pytest.raises(BrowserError, match=re.escape(raised)) as caught:
                 await navigating
             assert not isinstance(caught.value, NavigationTimeout)
+            # The site or connection dropping it is an outage; a name that never resolved can be a typo.
+            assert isinstance(caught.value, SiteUnreachable) is ("TUNNEL" in raised)
     assert transport.calls.count("Page.navigate") == min(len(errors) + 1, 2)
 
 

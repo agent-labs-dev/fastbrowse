@@ -39,6 +39,7 @@ from fastbrowse.page import (
     NavigationTimeout,
     Observation,
     Page,
+    SiteUnreachable,
     cut_marker,
     loads_more,
     pager_link,
@@ -225,6 +226,22 @@ _SCREENSHOT_WAIT_SECONDS = 1.0
 _NAVIGATE_ATTEMPTS = 2
 _NAVIGATE_RETRY_SECONDS = 1.0
 _NET_ERROR = re.compile(r"net::ERR_[A-Z_]+")
+# The site or the connection to it gave nothing: the-internet.herokuapp.com answered ERR_EMPTY_RESPONSE for
+# a quarter hour of one eval. Not ERR_NAME_NOT_RESOLVED, which a mistyped address also gives.
+_UNREACHABLE = frozenset(
+    f"net::ERR_{name}"
+    for name in (
+        "EMPTY_RESPONSE",
+        "CONNECTION_RESET",
+        "CONNECTION_CLOSED",
+        "CONNECTION_REFUSED",
+        "CONNECTION_TIMED_OUT",
+        "TIMED_OUT",
+        "TUNNEL_CONNECTION_FAILED",
+        "PROXY_CONNECTION_FAILED",
+        "NETWORK_CHANGED",
+    )
+)
 # A deadline, not a wait: focus normally lands in one or two ticks. A loaded CI runner took over 0.3s.
 _FOCUS_SETTLE_SECONDS = 1.0
 # Long enough for a suggestion request to come back over a slow connection, and paid only by a field
@@ -1071,6 +1088,8 @@ class CdpPage(Page):
         # distinct type, not this message, to tell a slow site or session from its own broken navigation.
         if timed_out:
             raise NavigationTimeout(f"Page.navigate failed ({failure})")
+        if failure in _UNREACHABLE:
+            raise SiteUnreachable(f"Page.navigate failed ({failure})")
         raise BrowserError(f"Page.navigate failed ({failure})")
 
     async def _ready(self, session_id: str, timeout_seconds: float) -> bool:

@@ -209,6 +209,13 @@ class NavigationTimeout(BrowserError):
     navigation timed out and the run ends `error` as any other browser failure does."""
 
 
+class SiteUnreachable(BrowserError):
+    """`Page.navigate` got nothing from the site: Chrome named a dropped, refused or empty connection.
+
+    Treated as `NavigationTimeout` is: before the first step the site was down, not the agent wrong. A name that
+    does not resolve is not one of these; that can be a mistyped address."""
+
+
 class ActResult(Frozen):
     outcome: StepOutcome
     page_changed: bool
