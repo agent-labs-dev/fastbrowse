@@ -230,7 +230,8 @@ def all_tasks() -> tuple[dict[str, tuple[Any, ...]], tuple[Any, ...]]:
 
 _KEPT = ("arm", "task", "category", "suite", "suite_version", "task_version", "status",
          "normalized_status", "task_successful", "passed", "correct",
-         "seconds", "dollars", "retries", "failure", "model", "text_model", "transient_seconds", "at")  # fmt: skip
+         "seconds", "dollars", "retries", "failure", "model", "text_model", "transient_seconds", "at",
+         "answered", "session_seconds")  # fmt: skip
 _RUN_KEPT = ("run_id", "run_started", "fastbrowse_version", "git_sha", "git_dirty", "providers", "max_steps",
              "concurrency", "jev_ultrafast", "arms", "python", "argv")  # fmt: skip
 
@@ -320,12 +321,18 @@ def _measured(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     return [r for r in rows if r.get("normalized_status") != "unavailable"]
 
 
+def _active(row: Mapping[str, Any]) -> float:
+    """A row's time without the provider outage waits measured inside it: a 503 and its backoff say nothing about
+    the agent, so no published time includes them."""
+    return max(0.0, row["seconds"] - (row.get("transient_seconds") or 0.0))
+
+
 def _arm_stats(rows: Sequence[Mapping[str, Any]]) -> dict[str, str]:
     if not rows:
         return dict.fromkeys(
             ("passed", "correct", "median time", "mean time", "median cost", "mean cost", "total cost"), "-"
         )
-    seconds = [r["seconds"] for r in rows]
+    seconds = [_active(r) for r in rows]
     dollars = [r["dollars"] for r in rows if r["dollars"] is not None]
     unpriced = f" ({len(rows) - len(dollars)} unpriced)" if len(dollars) < len(rows) else ""
     return {
@@ -631,7 +638,7 @@ def summary(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) 
                     total=len(arm_rows),
                     excluded=len(attempts) - len(arm_rows),
                     priced=len(prices),
-                    seconds=_metrics([r["seconds"] for r in arm_rows]),
+                    seconds=_metrics([_active(r) for r in arm_rows]),
                     dollars=_metrics(prices if len(prices) == len(arm_rows) else []),
                 )
             changes = [
@@ -694,20 +701,23 @@ def protocol_docs() -> str:
         "Rows keep raw `status`, `task_successful` and `normalized_status`: "
         "`done`, `stopped`, `budget`, `timeout`, `error`, `blocked` or `unavailable`.",
         "A pass requires a correct grade and `done`, or the exact expected fastbrowse stop.",
-        "The hosted SDK maps to `done` only for a stopped session with `is_task_successful=true`.",
-        "That verdict lands after the session stops; the harness waits up to 90 seconds for it. A verdict still "
-        "missing then is the provider's silence, and the attempt counts as an outage.",
-        "That verdict can be false on a correct answer whose session shows no sign of failing or giving up; the "
-        "`correct` column counts those answers.",
+        "The hosted arm is `done` when its agent answered: it called `done` with a result that was not an error, "
+        "or, never calling `done`, replied with the answer the session kept as its output. That is its own "
+        "completion, as fastbrowse is held to its own. Browser Use's `is_task_successful` is kept in the row "
+        "(`task_successful`) but decides nothing: it is Browser Use's later judgement of the session, and it failed "
+        "correct answers whose sessions showed no sign of failing or giving up.",
         "An attempt that fails while the task's site answers its start URL with a 5xx, or not at all, is an outage "
         "too: a site serving errors fails every arm alike.",
+        "A fastbrowse attempt in which any Jev call took over 2 seconds, retries included, is a Jev outage: healthy "
+        "calls take about half a second at any page size, and no worse than 0.93 seconds in 45 measured.",
         "An attempt an outage ended is waited out and run again, up to five times over about 25 minutes.",
         "A row still unavailable after that is recorded but scores nothing, and neither does one attempt of every "
         "other arm at that task: each comparison scores its arms on the same attempts at the same tasks.",
-        "Time is wall time for every arm. fastbrowse records the outage waits inside a run (`transient_seconds`), "
-        "but the other arms cannot, so no arm's are subtracted.",
-        "The hosted arm's time runs until its API reports the session stopped, which can come well after its "
-        "agent's last message.",
+        "Time runs from the start of an attempt to the agent's answer. Provider outage waits measured inside an "
+        "attempt (`transient_seconds`: failed requests and the backoff between them) are left out of every time "
+        "published; only fastbrowse's client can see its own, so the other arms' are 0.",
+        "The hosted arm's time ends at its agent's answer, by Browser Use's own clock from the session's creation. "
+        "Its API reports the session stopped as much as two minutes later (`session_seconds`), which is not counted.",
         "Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the row.",
         "Existing timing includes browser setup. These rows do not claim the planned handoff-only timing protocol.",
         "Jev is priced at list ($0.042 per million input tokens) whenever the gateway meters a request at $0, for "
@@ -737,7 +747,8 @@ def feed_schema_docs() -> str:
         "Schema version 2 added `compared` and `tasks`; version 1 pooled a suite's comparisons into one entry.",
         "`arms` maps registry names to statistics across the scored attempts, failures included. `total` counts "
         "them; `excluded` counts attempts made but not scored, ended by an outage or matched to one.",
-        "`seconds` and `dollars` contain numeric median and mean values; dollars are USD. Seconds are wall time.",
+        "`seconds` and `dollars` contain numeric median and mean values; dollars are USD. "
+        "Seconds leave out measured outage waits.",
         "`priced` counts attempts with known cost. Both dollar statistics are null if any attempt is unpriced.",
         "`task_versions_changed` compares observed task versions with the previous published release:",
         "`task`, `previous` and `current` version lists. New tasks have an empty previous list;",

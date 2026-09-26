@@ -35,6 +35,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 from unittest import mock
@@ -72,8 +73,6 @@ ULTRAFAST_TEXT_MODEL = "inception/mercury-2.5"
 OUTAGE_RETRIES = 5
 """Runs of a row a provider outage ended, after the first, waiting 1, 2, 4, 8 then 10 minutes: about 25 minutes, past
 the 503 spells seen so far. A row still unavailable then is recorded, and left out of every published figure."""
-VERDICT_WAIT = 90.0
-"""Seconds to wait for Browser Use to judge a stopped session; a verdict still missing then counts as an outage."""
 
 
 def _watch(arm: str, task: LiveTask, live_url: str | None) -> None:
@@ -158,9 +157,9 @@ class ArmReport(BaseModel):
     status: str
     task_successful: bool | None = None
     seconds: float
-    """Wall time, including retries; browser setup is included for existing arms."""
+    """Time to the answer, including browser setup; the hosted arm ends at its agent's `done` (`session_seconds`)."""
     transient_seconds: float = 0.0
-    """Retry time measured by fastbrowse, retained as a diagnostic without subtracting it from wall time."""
+    """Provider outage waits fastbrowse measured inside the run; every published time leaves them out."""
     dollars: float | None
     """None when some of the run's spend could not be priced: a known total would then be only a floor."""
     error: str | None = None
@@ -182,6 +181,10 @@ class ArmReport(BaseModel):
     # the Browser Use agent
     model: str | None = None
     session_id: str | None = None
+    answered: bool | None = None
+    """Its agent called `done` with a result that was not an error: its own completion, as fastbrowse's is."""
+    session_seconds: float | None = None
+    """Until the API reported the session stopped, which can be well after the answer; `seconds` ends at the answer."""
 
 
 class EvalRow(ArmReport):
@@ -366,14 +369,35 @@ async def _down(task: LiveTask, http: httpx.AsyncClient) -> str | None:
     return None
 
 
-async def _judged(client: Any, session: Any) -> Any:
-    """The session once Browser Use has judged it. The verdict lands after the session stops, so a session read
-    as soon as the run returns is ungraded, and the grader would read that as a failure."""
-    deadline = time.monotonic() + VERDICT_WAIT
-    while getattr(session, "is_task_successful", None) is None and time.monotonic() < deadline:
-        await asyncio.sleep(2)
-        session = await client.sessions.get(session.id)
-    return session
+async def hosted_answer(client: Any, session_id: str, output: object) -> datetime | None:
+    """When the hosted agent answered, or None if it never did: its last `done` result that was not an error. An
+    agent that answers without calling `done` (0.5.7's github-license, among others) replies in a message, which
+    the session keeps as its output; that last reply is its answer."""
+    done: datetime | None = None
+    reply: datetime | None = None
+    called_done, after = False, None
+    for _ in range(100):
+        page = await client.sessions.messages(session_id, limit=100, **({"after": after} if after else {}))
+        for message in page.messages:
+            if message.type == "completion_result":
+                called_done = True
+                if not json.loads(message.data or "{}").get("is_error"):
+                    done = max(done or message.created_at, message.created_at)
+            elif message.type == "assistant_message":
+                reply = max(reply or message.created_at, message.created_at)
+        if not page.messages or not getattr(page, "has_more", False):
+            break
+        after = str(page.messages[-1].id)
+    return done if called_done else reply if output else None
+
+
+def answer_seconds(created_after: float, session: Any, answered: datetime | None, wall: float) -> float:
+    """Time to the hosted agent's answer: the client's wait for the session to exist, then the server's own clock
+    from its creation to the answer. The session reports stopped as much as two minutes after that, on Browser Use's
+    side, while fastbrowse's clock stops when its run returns its answer."""
+    if answered is None:
+        return wall
+    return min(wall, created_after + max(0.0, (answered - session.created_at).total_seconds()))
 
 
 async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path | None) -> tuple[Outcome, ArmReport]:
@@ -392,6 +416,7 @@ async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
     # The session id appears once the SDK has created the session, which is when its live URL exists.
     while run.session_id is None and not finishing.done():
         await asyncio.wait({finishing}, timeout=0.2)
+    created_after = time.monotonic() - started
     if run.session_id is not None:
         _watch("browser-use", task, (await client.sessions.get(run.session_id)).live_url)
     # gather, not await: the SDK raises on output that fails the task's schema, before the session's cost is read.
@@ -407,7 +432,7 @@ async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
         output = session.output
     else:
         raise error
-    session = await _judged(client, session)
+    answered = await hosted_answer(client, str(session.id), output)
     if isinstance(output, BaseModel):
         outcome = Outcome(output.model_dump_json(), output.model_dump(), None, unobservable=True)
     elif isinstance(output, dict):
@@ -418,7 +443,9 @@ async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
     report = ArmReport(
         status=session.status.value,
         task_successful=getattr(session, "is_task_successful", None),
-        seconds=round(seconds, 2),
+        answered=answered is not None,
+        seconds=round(answer_seconds(created_after, session, answered, seconds), 2),
+        session_seconds=round(seconds, 2),
         dollars=None if cost is None else float(cost),
         model=str(session.model.value if hasattr(session.model, "value") else session.model),
         steps=session.step_count,
@@ -479,6 +506,13 @@ def _crashed(
     )
 
 
+def _slow_jev(events: list[object]) -> float:
+    """The slowest Jev call past `JEV_SLOW_SECONDS` in a run's trace, or 0."""
+    return max(
+        (float(e["seconds"]) for e in events if isinstance(e, dict) and e.get("event") == "request_slow"), default=0.0
+    )
+
+
 async def run_arm(
     arm: str,
     task: LiveTask,
@@ -516,15 +550,17 @@ async def run_arm(
     # Right and proven are graded apart: a correct answer the agent could not back with quotes is a
     # different defect from a wrong one, and one pass/fail column hid which the suite was showing.
     correct = failure is None
-    if failure is None and not status_matches(arm, report.status, task.expect, report.task_successful):
+    if failure is None and not status_matches(arm, report.status, task.expect, bool(report.answered)):
         failure = f"status {report.status}, expected {task.expect.value}"
+    ending = normalize(report.status, hosted=arm == "browser-use", answered=bool(report.answered))
+    if slow := _slow_jev(report.events):
+        # Jev answers in under a second; a slower call is its outage, and the attempt is run again, never scored.
+        ending, failure = Ending.UNAVAILABLE, f"Jev unavailable: a call took {slow:.1f}s"
     return EvalRow.model_validate(
         report.model_dump()
         | {
             "arm": arm,
-            "normalized_status": normalize(
-                report.status, hosted=arm == "browser-use", hosted_success=report.task_successful
-            ),
+            "normalized_status": ending,
             "task": task.id,
             "category": task.category.value,
             "at": at,
@@ -751,7 +787,7 @@ def summarize(rows: list[EvalRow], arms: list[str]) -> None:
         passed = sum(r.passed for r in arm_rows)
         correct = sum(r.correct for r in arm_rows)
         priced = [r.dollars for r in arm_rows if r.dollars is not None]
-        seconds = [r.seconds for r in arm_rows]
+        seconds = [max(0.0, r.seconds - r.transient_seconds) for r in arm_rows]
         unknown = len(arm_rows) - len(priced)
         print(
             f"{arm}: {passed}/{len(arm_rows)} passed, {correct} correct, median {statistics.median(seconds):.1f}s, "
@@ -760,7 +796,7 @@ def summarize(rows: list[EvalRow], arms: list[str]) -> None:
         if excluded := len(ran) - len(arm_rows):
             print(f"  {excluded} runs ended by a provider outage, excluded")
         if lost := sum(r.transient_seconds for r in arm_rows):
-            print(f"  {'transient':18} {lost / len(arm_rows):5.1f}s a task, included in the median")
+            print(f"  {'transient':18} {lost / len(arm_rows):5.1f}s a task, left out of the median")
         calls: dict[str, float] = {}
         for r in arm_rows:
             for label, spent in r.seconds_by_call.items():
