@@ -729,8 +729,39 @@ async def test_calendar_twins_are_named_by_the_month_they_show(
         "for (const a of document.querySelectorAll('a')) a.href = '#';",
     )
     obs = await observe_until(page, "Next")
-    for label in ("Prev", "Next", "2"):
+    for label in ("Prev", "Next"):
         assert [c.context for c in obs.controls if c.label == label] == ["September 2026", "October 2026"]
+    assert [c.context for c in obs.controls if c.label == "2"] == [
+        "September 2026; column: Mo",
+        "October 2026; column: Mo",
+    ]
+
+
+async def test_table_controls_keep_columns_across_empty_cells_and_spans(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/icons.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        """document.body.innerHTML = `
+        <table><thead><tr><th rowspan="2">Week</th><th colspan="2">October 2026</th></tr>
+        <tr><th><span title="Thursday">Th</span></th><th><abbr title="Friday">Fr</abbr></th></tr></thead>
+        <tbody><tr><th scope="row" rowspan="2">A</th><td></td><td><button>2</button></td></tr>
+        <tr><td><button>8</button></td><td><button>9</button></td></tr></tbody></table>
+        <table><tr><th id="other">Price</th><th>Quantity</th></tr>
+        <tr><td><button>Buy</button></td><td headers="other"><button>Quote</button></td></tr></table>
+        <table><thead><tr><th>Product</th><th>Price</th></tr></thead>
+        <tbody><tr><th scope="row" rowspan="0">A</th><td>10</td></tr></tbody>
+        <tbody><tr><td>B</td><td><button>Offer</button></td></tr></tbody></table>`""",
+    )
+    obs = await observe_until(page, "Quote")
+    assert find(obs, "2").context == "column: October 2026 / Friday"
+    assert find(obs, "8").context == "column: October 2026 / Thursday"
+    assert find(obs, "9").context == "column: October 2026 / Friday"
+    assert find(obs, "Buy").context == "column: Price"
+    assert find(obs, "Quote").context == "column: Price"
+    assert find(obs, "Offer").context == "column: Price"
 
 
 async def test_a_browser_handed_over_by_cdp_url_drives_and_survives_the_run(

@@ -486,6 +486,49 @@
     }
   }
 
+  // Flattened text loses empty cells: a calendar day then has no weekday, and the chooser picked a Tuesday
+  // for the first Friday. Keep the table's column names beside its controls, including uniquely named ones.
+  const columns = new Map();
+  for (const c of controls) {
+    const cell = registry.nodes.get(c.id).closest('td,th');
+    const table = cell?.closest('table');
+    if (!table) continue;
+    if (!columns.has(table)) {
+      const positions = new Map(), headers = [], occupied = [];
+      const rows = [...table.rows];
+      rows.forEach((row, r) => {
+        let col = 0;
+        for (const cell of row.cells) {
+          while (occupied[col] > r) col++;
+          const end = col + cell.colSpan;
+          positions.set(cell, [col, end, r]);
+          const remaining = row.parentElement.rows.length - row.sectionRowIndex;
+          for (let i = col; i < end; i++)
+            occupied[i] = r + Math.min(cell.rowSpan || remaining, remaining);
+          if (cell.tagName === 'TH' && !['row', 'rowgroup'].includes(cell.scope) &&
+            (cell.scope || row.parentElement.tagName === 'THEAD' ||
+              (r === 0 && [...row.cells].every(c => c.tagName === 'TH')))) headers.push(cell);
+          col = end;
+        }
+      });
+      const names = new Map();
+      for (const [cell, [start, end, row]] of positions) {
+        const associated = cell.headers ? cell.headers.split(/\s+/).map(id => cell.ownerDocument.getElementById(id)) :
+          headers.filter(header => {
+            const [left, right, above] = positions.get(header);
+            return above < row && left < end && right > start;
+          });
+        const labels = associated.filter(header => header && visible(header)).map(header =>
+          header.getAttribute('abbr') || header.getAttribute('title') ||
+          header.querySelector('[title]')?.getAttribute('title') || labelOf(header));
+        names.set(cell, [...new Set(labels.filter(Boolean))].join(' / '));
+      }
+      columns.set(table, names);
+    }
+    const column = columns.get(table).get(cell);
+    if (column) c.context = [c.context, `column: ${excerpt(column, CONTROL_CONTEXT_CHARS)}`].filter(Boolean).join('; ');
+  }
+
   // Python applies the configured caps after merging frames; keep the nearest controls first.
   controls.sort((a, b) => a.distance - b.distance);
 

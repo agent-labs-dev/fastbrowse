@@ -57,7 +57,8 @@ class Control(Frozen):
     label: str
     context: str | None = None
     """What tells this control apart from others reading exactly the same: the heading or first line of the
-    nearest card, row or section holding it and none of its twins. Set only where labels collide."""
+    nearest card, row or section holding it and none of its twins. Table column headers and date field sections
+    also name controls whose labels do not collide."""
     operations: frozenset[Operation]
     value: str | None = None
     """Current value; masked for sensitive fields."""

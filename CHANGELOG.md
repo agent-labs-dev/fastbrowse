@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Calendar days keep their weekday column.** Controls inside tables now carry their header names,
+  preserving empty cells and row and column spans, and expanding abbreviations from the page's titles.
+  A request for the first Friday can choose the day in that column instead of reconstructing the calendar
+  from flattened text, which picked a Tuesday and spent extra steps correcting it.
 - **Filtered counts across pages use recorded tallies.** The plan identifies requests for one count,
   and code counts their matching records even when a reader returns plain continuation records or varies
   the group's label between pages. Overlapping record ranges count each record once, and reaching the
