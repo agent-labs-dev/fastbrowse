@@ -3659,3 +3659,134 @@ async def test_batch_values_survive_scrolling_but_not_changed_fields(changed: bo
     assert text == ("new@example.com" if changed else "ada@example.com")
     assert len(llm.calls) == (2 if changed else 1)
     assert not await agent._fill_form(state, before, _code_decision(Operation.FILL, name))
+
+
+@pytest.mark.parametrize("order,expected", [("lowest", "Item 4: $1"), ("highest", "Item 1: $4")])
+@pytest.mark.parametrize("with_count", [False, True])
+async def test_numeric_pipeline_reads_last_page_concurrently_and_keeps_all_citations(
+    order: str, expected: str, with_count: bool
+) -> None:
+    from fastbrowse.comparison import NumericComparison
+    from fastbrowse.retrieval import claim_check_questions, draft_answer
+
+    agent, state, page, observations, captures, llm = await _pipeline_fixture()
+    state.comparisons = {
+        "r1": NumericComparison.model_validate(
+            {
+                "order": order,
+                "limit": 1,
+                "label": {"prefix": "", "suffix": ": "},
+                "value": {"prefix": ": ", "suffix": ""},
+            }
+        )
+    }
+    llm.responses[-1] = {
+        "continues": [{"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}]}],
+        "ended": ["r1"],
+    }
+    if with_count:
+        state.ready_plan = state.plan.model_copy(
+            update={
+                "requirements": (
+                    *state.plan.requirements,
+                    Requirement(
+                        id="count", text="Count matching items", kind=RequirementKind.INFORMATION, count_records=True
+                    ),
+                )
+            }
+        )
+        state.notes.add_tally(
+            Tally(requirement_id="count", key="Count matching items", records=state.notes.comparison_records("r1"))
+        )
+        for response in llm.responses:
+            assert isinstance(response, dict) and isinstance(response["continues"], list)
+            response["continues"].append({"requirement_id": "count", "records": [{"first": "s0", "last": "s0"}]})
+        llm.responses[-1]["ended"] = ["r1", "count"]
+    last_started = asyncio.Event()
+    original = agent._page_records
+
+    async def overlapping(state: _RunState, captured: Capture, wanted: Any, *, reuse: bool = True) -> Any:
+        result = await original(state, captured, wanted, reuse=reuse)
+        if captured.url == captures[-1].url:
+            last_started.set()
+        else:
+            await last_started.wait()
+        return result
+
+    agent._page_records = AsyncMock(side_effect=overlapping)
+    async with asyncio.timeout(2):
+        await agent._pipeline_pages(state, observations[0])
+    assert last_started.is_set()
+    assert state.notes.evidenced("r1") and not state.owes_read
+    assert state.notes.supporting("r1")[0][1].text == f"{order.capitalize()} 1:\n{expected}"
+    assert [e.url for e in state.notes.supporting_evidence("r1")] == [c.url for c in captures]
+    assert [step.url for step in state.steps if step.operation is Operation.READ] == [c.url for c in captures]
+    assert len(llm.calls) == 4
+    assert page.navigate.await_count == 3
+    if with_count:
+        assert state.notes.evidenced("count") and state.notes.tallies[0].count == 4
+    draft = draft_answer(state.plan, state.notes)
+    assert draft is not None
+    assert expected in draft.answer
+    assert {c.quote for c in draft.citations} == {c.text for c in captures}
+    checked = claim_check_questions(draft, state.notes)["unsupported_0"].instructions
+    assert all(c.text in checked for c in captures)
+
+
+@pytest.mark.parametrize("failure", ["incomplete", "no_end", "invalid_field"])
+async def test_numeric_pipeline_falls_back_without_certifying_partial_records(failure: str) -> None:
+    from fastbrowse.comparison import NumericComparison
+
+    agent, state, _, observations, captures, llm = await _pipeline_fixture()
+    state.comparisons = {
+        "r1": NumericComparison.model_validate(
+            {
+                "order": "lowest",
+                "limit": 1,
+                "label": {"prefix": "", "suffix": ": "},
+                "value": {"prefix": "absent" if failure == "invalid_field" else ": ", "suffix": ""},
+            }
+        )
+    }
+    if failure == "incomplete":
+        state.incomplete.add("r1")
+    llm.responses[-1] = {
+        "continues": [{"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}]}],
+        "ended": [] if failure == "no_end" else ["r1"],
+    }
+    original = agent._step
+    fallback = []
+
+    async def step(*args: Any, **kwargs: Any) -> bool:
+        if args[2].operation is Operation.READ:
+            assert not state.notes.evidenced("r1")
+            fallback.append(kwargs["capture"])
+            return False
+        return await original(*args, **kwargs)
+
+    agent._step = AsyncMock(side_effect=step)
+    await agent._pipeline_pages(state, observations[0])
+    assert fallback == [captures[-1]]
+    assert not state.notes.evidenced("r1")
+
+
+@pytest.mark.parametrize("limits", [Limits(max_steps=7), Limits(max_llm_calls=4)])
+async def test_numeric_pipeline_leaves_room_for_fallback_before_trying_records_only(limits: Limits) -> None:
+    from fastbrowse.comparison import NumericComparison
+
+    agent, state, _, observations, _, llm = await _pipeline_fixture(limits=limits)
+    state.comparisons = {
+        "r1": NumericComparison.model_validate(
+            {
+                "order": "lowest",
+                "limit": 1,
+                "label": {"prefix": "", "suffix": ": "},
+                "value": {"prefix": ": ", "suffix": ""},
+            }
+        )
+    }
+    await agent._pipeline_pages(state, observations[0])
+    assert state.notes.evidenced("r1")
+    assert len(llm.calls) == 4
+    assert "every earlier comparison record" in llm.calls[-1][1][-1].content
+    assert state.ledger.steps == 7

@@ -131,8 +131,12 @@ class Notes:
     def add_continuation(self, requirement_id: str, record_id: str) -> None:
         self._continuation_records.setdefault(requirement_id, set()).add(record_id)
 
-    def comparison_records(self, requirement_id: str) -> tuple[str, ...]:
-        records = self._continuation_records.get(requirement_id, set())
+    def comparison_records(self, requirement_id: str | None = None) -> tuple[str, ...]:
+        records = (
+            set().union(*self._continuation_records.values())
+            if requirement_id is None
+            else self._continuation_records.get(requirement_id, set())
+        )
         return tuple(key for key in self._facts if key in records)
 
     def has_untallied_records(self, requirement_id: str) -> bool:
@@ -243,6 +247,8 @@ class Notes:
         shown_ids = labels or {}
         evidence = self.evidence
         counted = {key for fact in self._facts.values() if fact.tally is not None for key in fact.basis}
+        # A record can be counted and compared by price; its tally alone cannot evidence the price comparison.
+        summarized = self._tally_records - set(self.comparison_records())
 
         def basis_text(fact: Fact) -> str:
             # A ranking can cite every counted record again; full span ids undo the tally's compact rendering.
@@ -276,9 +282,7 @@ class Notes:
             # A JSON state escapes quotes and newlines; its notes budget must count those extra characters.
             return len(json.dumps(text)) - len('""') if json_encoded else len(text)
 
-        visible = {
-            key: fact for key, fact in self._facts.items() if key not in self._tally_records or self._requirements[key]
-        }
+        visible = {key: fact for key, fact in self._facts.items() if key not in summarized or self._requirements[key]}
         # Counts are ranked in code; the reader need only select the output the task asked for.
         ranked = sorted(
             visible.items(),
@@ -303,10 +307,10 @@ class Notes:
         ordered = sorted(ranked, key=lambda item: item[0] not in required)
         keys = tuple(key for key, _ in ordered)
         for count in range(len(ordered) - 1, -1, -1):
-            kept = set(keys[:count]) | (set(self.expand_evidence_ids(keys[:count])) & self._tally_records)
+            kept = set(keys[:count]) | (set(self.expand_evidence_ids(keys[:count])) & summarized)
             if preserve_requirements and required - kept:
                 raise NotesTooLarge(f"Requirement evidence exceeds the {max_chars} character notes budget")
-            if any(set(fact.basis) - kept - self._tally_records for _, fact in ordered[:count]):
+            if any(set(fact.basis) - kept - summarized for _, fact in ordered[:count]):
                 continue
             result = "\n".join(filter(None, [render(ordered[:count]), f"[{len(ordered) - count} facts omitted]"]))
             if size(result) <= max_chars:

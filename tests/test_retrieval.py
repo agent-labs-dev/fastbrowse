@@ -2837,3 +2837,163 @@ async def test_final_comparison_keeps_records_from_earlier_chunks_too() -> None:
     )
     await read(llm, page, "Find the cheapest item", ["r"], notes, max_chars=8, require_all_evidence=True)
     assert [e.quote for e in notes.supporting_evidence("r")] == ["Oak $19", "Pine $7"]
+
+
+@pytest.mark.parametrize("order,expected", [("lowest", "Beta: $2.00"), ("highest", "Alpha: $10.00")])
+def test_numeric_comparison_uses_decimal_values_and_preserves_every_source(order: str, expected: str) -> None:
+    from fastbrowse.comparison import NumericComparison, complete_comparison
+
+    notes = Notes()
+    pages = [capture((BlockKind.RECORD, text)) for text in ("Alpha: $10.00", "Beta: $2.00")]
+    for index, page in enumerate(pages):
+        page = page.model_copy(update={"url": f"https://example.test/{index}"})
+        fact = Fact(text=page.text, evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+        notes.add(fact)
+        notes.add_continuation("r", fact_id(fact))
+    spec = NumericComparison.model_validate(
+        {"order": order, "limit": 1, "label": {"prefix": "", "suffix": ": "}, "value": {"prefix": ": ", "suffix": ""}}
+    )
+    assert complete_comparison(notes, "r", spec)
+    assert notes.supporting("r")[0][1].text.endswith(expected)
+    evidence = notes.supporting_evidence("r")
+    assert [e.url for e in evidence] == ["https://example.test/0", "https://example.test/1"]
+    assert [e.quote for e in evidence] == [p.text for p in pages]
+
+
+@pytest.mark.parametrize(
+    "records",
+    [
+        [],
+        ["A: $2", "B: $2"],
+        ["A: $2", "A: $3"],
+        ["A: $2", "B: 3"],
+        ["A: $2", "B: $1,000"],
+        ["A: $2", "B: $NaN"],
+        ["A: $2", "B: $1 to $3"],
+        ["A: $2", "B: $3\nOther: $1"],
+    ],
+)
+def test_numeric_comparison_falls_back_for_missing_ambiguous_or_tied_values(records: list[str]) -> None:
+    from fastbrowse.comparison import NumericComparison, complete_comparison
+
+    notes = Notes()
+    for text in records:
+        page = capture((BlockKind.RECORD, text))
+        fact = Fact(text=text, evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+        notes.add(fact)
+        notes.add_continuation("r", fact_id(fact))
+    spec = NumericComparison.model_validate(
+        {
+            "order": "lowest",
+            "limit": 1,
+            "label": {"prefix": "", "suffix": ": "},
+            "value": {"prefix": ": ", "suffix": ""},
+        }
+    )
+    assert not complete_comparison(notes, "r", spec)
+    assert not notes.evidenced("r")
+
+
+@pytest.mark.parametrize("count_records", [False, True])
+@pytest.mark.parametrize("lost_record", [False, True])
+async def test_numeric_comparison_requires_explicit_full_list_scope(count_records: bool, lost_record: bool) -> None:
+    page = capture((BlockKind.RECORD, "A: $2"))
+    comparison: JsonValue = {
+        "order": "lowest",
+        "limit": 1,
+        "label": {"prefix": "", "suffix": ": "},
+        "value": {"prefix": ": ", "suffix": ""},
+    }
+    for through_end in (False, True):
+        response: JsonValue = {
+            "claims": [],
+            "answered": False,
+            "continues": [
+                {
+                    "requirement_id": "r",
+                    "through_end": through_end,
+                    "comparison": comparison,
+                    "records": [{"first": "absent" if lost_record else "s0", "last": "s0"}],
+                }
+            ],
+        }
+        result = await read(
+            ScriptedLLM([response]),
+            page,
+            "Find the cheapest",
+            ["r"],
+            Notes(),
+            requirements=[
+                Requirement(
+                    id="r", text="Find the cheapest", kind=RequirementKind.INFORMATION, count_records=count_records
+                )
+            ],
+        )
+        assert bool(result.comparisons) is (through_end and not lost_record and not count_records)
+
+
+@pytest.mark.parametrize(
+    "prefix,suffix,quote,expected",
+    [
+        ("", "", "Alpha", "Alpha"),
+        ("Name: ", "\n", "Name: Alpha\nPrice: $3", "Alpha"),
+        ("[", "]", "[Alpha] [Beta]", None),
+        ("[", "]", "[Alpha [Beta]", None),
+        ("|", "|", "|Alpha|Beta|", None),
+        ("[", "]", "[Alpha\nBeta]", None),
+        ("[", "]", "[]", None),
+        ("[", "]", "Alpha", None),
+    ],
+)
+def test_comparison_fields_refuse_ambiguous_delimiters(
+    prefix: str, suffix: str, quote: str, expected: str | None
+) -> None:
+    from fastbrowse.comparison import QuotedField
+
+    assert QuotedField(prefix=prefix, suffix=suffix).extract(quote) == expected
+
+
+@pytest.mark.parametrize("limit,expected", [(1, None), (2, "Highest 2:\nAlpha: $10\nBeta: $10"), (4, None)])
+def test_numeric_top_n_requires_enough_records_and_an_unambiguous_cutoff(limit: int, expected: str | None) -> None:
+    from fastbrowse.comparison import NumericComparison, QuotedField, complete_comparison
+
+    page = capture(*((BlockKind.RECORD, text) for text in ("Alpha: $10", "Beta: $10", "Gamma: $2")))
+    notes = Notes()
+    for block in page.blocks:
+        evidence = block_evidence(page, block.source_id)
+        fact = Fact(text=evidence.quote, evidence=evidence, reader=FactReader.LLM)
+        notes.add(fact)
+        notes.add_continuation("r", fact_id(fact))
+    spec = NumericComparison(
+        order="highest",
+        limit=limit,
+        label=QuotedField(prefix="", suffix=": "),
+        value=QuotedField(prefix=": ", suffix=""),
+    )
+    assert complete_comparison(notes, "r", spec) is (expected is not None)
+    assert notes.evidenced("r") is (expected is not None)
+    if expected is not None:
+        assert notes.supporting("r")[0][1].text == expected
+
+
+def test_counted_comparison_quotes_remain_in_notes_and_cannot_be_dropped_to_fit() -> None:
+    from fastbrowse.comparison import NumericComparison, QuotedField, complete_comparison
+    from fastbrowse.memory import NotesTooLarge
+
+    page = capture((BlockKind.RECORD, "Alpha: $10"), (BlockKind.RECORD, "Beta: $2"))
+    notes = Notes()
+    for block in page.blocks:
+        evidence = block_evidence(page, block.source_id)
+        fact = Fact(text=evidence.quote, evidence=evidence, reader=FactReader.LLM)
+        notes.add(fact)
+        notes.add_continuation("rank", fact_id(fact))
+        notes.add_tally(Tally(requirement_id="count", key="Matching records", records=(fact_id(fact),)))
+    spec = NumericComparison(
+        order="highest", limit=1, label=QuotedField(prefix="", suffix=": "), value=QuotedField(prefix=": ", suffix="")
+    )
+    assert complete_comparison(notes, "rank", spec)
+    notes.complete_tallies("count")
+    rendered = notes.render(10_000, preserve_requirements=True)
+    assert "Alpha: $10" in rendered and "Beta: $2" in rendered
+    with pytest.raises(NotesTooLarge):
+        notes.render(len(rendered) - 1, preserve_requirements=True)

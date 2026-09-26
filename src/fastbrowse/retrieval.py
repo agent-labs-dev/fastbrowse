@@ -21,6 +21,7 @@ from pydantic.fields import FieldInfo
 
 from fastbrowse.batches import evaluate_batches
 from fastbrowse.citations import text_fragment
+from fastbrowse.comparison import NumericComparison
 from fastbrowse.config import TokenBudget
 from fastbrowse.jev import (
     MAX_CHOICE_OPTIONS,
@@ -425,6 +426,16 @@ class _TallyRead(Frozen):
 
 
 class _Continuation(Frozen):
+    comparison: NumericComparison | None = Field(
+        default=None,
+        description="For a lowest/highest/top-N ranking by one numeric field whose requested output is only "
+        "record labels and values: the order, number of results, and literal delimiters around each record's "
+        "label and displayed value (including its currency). Empty delimiter means the quote boundary. "
+        "Use only when these fields occur exactly once in every matching record, and all remaining pages "
+        "are needed. Apply the task's filters in records as usual. Null for counts, calculations, extra "
+        "output fields, tie rules or values requiring unit conversion. Related requirements asking for "
+        "the same winners' labels or values use the same comparison and records.",
+    )
     tallies: tuple[_TallyGroup, ...] = Field(
         default=(),
         description="For every count of matching records, including filtered counts, or ranking by count. "
@@ -533,6 +544,7 @@ class ReadOutcome(Frozen):
     continuation_records: dict[str, tuple[str, ...]] = Field(default_factory=dict)
     ended: tuple[str, ...] = ()
     tally_readers: tuple[TallyReader, ...] = ()
+    comparisons: dict[str, NumericComparison] = Field(default_factory=dict)
 
     def merge_records(self, notes: Notes) -> None:
         """Merge an isolated records read in page order, using the same span and tally deduplication."""
@@ -672,6 +684,7 @@ async def read(
     continuation_records: dict[str, list[str]] = {}
     ended: tuple[str, ...] = ()
     tally_readers: list[TallyReader] = []
+    comparisons: dict[str, NumericComparison] = {}
     counting = {r.id: r.text for r in requirements if r.kind is RequirementKind.INFORMATION and r.count_records}
     wanted = [
         r
@@ -760,6 +773,15 @@ async def read(
                     "Set reuse_field=true for an unfiltered count of every record across this whole list, "
                     "when all record blocks use this same grouping field. Code can then read later pages "
                     "with the same structure. Any condition selecting records forbids reuse_field.\n\n"
+                    "# Numeric rankings\nFor a minimum, maximum or top-N by one numeric field, set "
+                    "continues.comparison when all requested outputs are the winners' labels and values. "
+                    "Give order=lowest/highest, limit=N, and exact prefix/suffix delimiters for label and value "
+                    "inside each matching record's quote. The value includes its currency symbol. An empty "
+                    "prefix or suffix means the beginning or end of the quote. Each field must match once per "
+                    "record. Code will extract, sort and draft the answer once every page is read. Still list "
+                    "every matching record, applying the task's filters; never select only page winners. "
+                    "Related requirements for the same winners use the same comparison and records. "
+                    "Leave comparison null for counts, calculations, extra output fields or ambiguous formats.\n\n"
                     "# Lists over several pages\nA count, total or superlative over a list needs the whole "
                     "list. Earlier pages are in the collected evidence under their own URLs. When the list goes "
                     "on past this capture and the collected evidence does not cover the rest, add an entry to "
@@ -870,6 +892,11 @@ async def read(
         ]
         continues = dict.fromkeys(c.requirement_id for c in carried)
         through_end = tuple(c.requirement_id for c in carried if c.through_end)
+        comparisons = {
+            c.requirement_id: c.comparison
+            for c in carried
+            if c.through_end and c.comparison is not None and c.requirement_id not in counting
+        }
         expands = next((c.expands for c in carried if c.expands), None)
         for continuation in carried:
             if not continuation.reuse_field or not continuation.through_end or len(continuation.tallies) != 1:
@@ -1090,6 +1117,7 @@ async def read(
         continuation_records={key: tuple(dict.fromkeys(records)) for key, records in continuation_records.items()},
         ended=tuple(key for key in ended if key not in lost),
         tally_readers=tuple(reader for reader in tally_readers if reader.requirement_id not in lost),
+        comparisons={key: value for key, value in comparisons.items() if key not in lost},
     )
 
 
@@ -1847,7 +1875,14 @@ def claim_check_questions(
     known = notes.evidence
     # A counted record is shown as its tally's line: code checked each quote against the group when it was read and
     # counted them, and a ranking citing every record put a hundred quotes into each of its questions.
-    counted = {record: fact.text for fact in notes.facts if fact.tally is not None for record in fact.basis}
+    compared = set(notes.comparison_records())
+    counted = {
+        record: fact.text
+        for fact in notes.facts
+        if fact.tally is not None
+        for record in fact.basis
+        if record not in compared
+    }
     for index, claim in enumerate(composed.claims):
         # A derived fact is judged from the records it expands to, never from the reader's own conclusion.
         keys = [key for key in notes.expand_evidence_ids(claim.evidence_ids) if not notes.derived(key)]

@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, JsonValue
 from fastbrowse.batches import evaluate_batches
 from fastbrowse.citations import ANSWER_LINK, text_fragment
 from fastbrowse.clients.validation import jev_spend
+from fastbrowse.comparison import NumericComparison, complete_comparison
 from fastbrowse.config import Config, ObservationLimits
 from fastbrowse.effects import (
     SETTING_ROLES,
@@ -345,6 +346,7 @@ class _RunState:
     through_end: bool = False
     """Every unresolved requirement needs the entire list, so intermediate pages can be read concurrently."""
     tally_readers: tuple[TallyReader, ...] = ()
+    comparisons: dict[str, NumericComparison] = field(default_factory=dict)
     paging_failed: bool = False
     first_url: str | None = None
     visited: dict[str, None] = field(default_factory=dict[str, None])
@@ -1862,6 +1864,7 @@ class Agent:
         )
         state.incomplete.update(outcome.incomplete)
         state.tally_readers = outcome.tally_readers
+        state.comparisons = outcome.comparisons
         # Payout is what the notes did not already say. A fact is keyed by the capture it was read from, so a
         # page that rewrites a line re-mints the same records as new facts, and counting them read it for ever.
         progressed = any(fact.text not in known for fact in state.notes.facts) or any(
@@ -1982,7 +1985,7 @@ class Agent:
     async def _pipeline_pages(self, state: _RunState, observation: Observation) -> None:
         wanted = [r for r in state.notes.unresolved(state.plan) if r.kind is RequirementKind.INFORMATION]
         pending: list[_PageRead] = []
-        last_tally: _PageRead | None = None
+        last_records: _PageRead | None = None
         ended: tuple[str, ...] = ()
         capture: Capture | None = None
         origin = origin_of(observation.url)
@@ -2032,17 +2035,22 @@ class Agent:
                         state.paging_failed = True
                         break
                     following = next_page_control(observation)
-                    if following is None and {r.id for r in wanted} <= {t.requirement_id for t in state.notes.tallies}:
-                        # Counts merge in code, so the last page need not wait for earlier readers to finish.
+                    computable = {t.requirement_id for t in state.notes.tallies} | state.comparisons.keys()
+                    fallback_room = not state.comparisons or (
+                        state.ledger.steps + len(pending) + 2 <= state.ledger.limits.max_steps
+                        and state.ledger.llm_calls + 2 <= state.ledger.limits.max_llm_calls
+                    )
+                    if following is None and {r.id for r in wanted} <= computable and fallback_room:
+                        # Rankings and counts merge in code, so the last read need not wait for earlier pages.
                         frame = await self._frame() if self._on_event and self._config.step_frames else None
-                        last_tally = _PageRead(
+                        last_records = _PageRead(
                             capture,
                             observation,
                             asyncio.create_task(self._page_records(state, capture, wanted, reuse=False)),
                             time.monotonic(),
                             frame,
                         )
-                        pending.append(last_tally)
+                        pending.append(last_records)
                         capture = None
                         break
                     if (
@@ -2087,14 +2095,16 @@ class Agent:
                     )
             for page in pending:
                 outcome = await self._join_page(state, page, wanted)
-                if page is last_tally and outcome is not None:
+                if page is last_records and outcome is not None:
                     ended = outcome.ended
         finally:
             for page in pending:
                 page.task.cancel()
             await asyncio.gather(*(page.task for page in pending), return_exceptions=True)
-        if last_tally is not None and not state.paging_failed:
+        if last_records is not None and not state.paging_failed:
             for requirement_id in ended:
+                if requirement_id not in state.incomplete and requirement_id in state.comparisons:
+                    complete_comparison(state.notes, requirement_id, state.comparisons[requirement_id])
                 if requirement_id not in state.incomplete and not state.notes.has_untallied_records(requirement_id):
                     state.notes.complete_tallies(requirement_id)
             if all(state.notes.evidenced(r.id) for r in wanted):
@@ -2104,10 +2114,10 @@ class Agent:
                 state.read_here = True
                 state.typed_on_passed = False
                 state.evidenced_at.setdefault(state_key(observation), {}).update(
-                    {r.id: last_tally.capture.sha256 for r in wanted}
+                    {r.id: last_records.capture.sha256 for r in wanted}
                 )
             else:
-                capture = last_tally.capture
+                capture = last_records.capture
         # No intermediate read can close the comparison. Only this read sees every earlier page's records.
         if capture is not None and not state.paging_failed:
             state.ledger.check()

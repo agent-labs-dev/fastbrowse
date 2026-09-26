@@ -11,6 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Numeric rankings compare records from every page in code.** The reader identifies matching records
+  and the fields holding their labels and values; code ranks the collected values when the list ends. A
+  winner from an earlier page keeps its quote and page address in the answer's citations. Missing records,
+  ambiguous fields, mixed currencies and ties at the cutoff leave the comparison to the reader.
+  Records used for both counts and value comparisons keep their quoted values visible to the answer checks.
 - **Calendar days keep their weekday column.** Controls inside tables now carry their header names,
   preserving empty cells and row and column spans, and expanding abbreviations from the page's titles.
   A request for the first Friday can choose the day in that column instead of reconstructing the calendar
