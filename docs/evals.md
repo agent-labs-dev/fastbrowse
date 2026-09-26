@@ -213,6 +213,7 @@ Date truth is computed when the attempt runs, and form and date tasks are graded
 | `stretch-wizard-correction` | checkout | 6 | In the Live Interactive Form widget, fill First Name 'Priya Sharma', Email 'priya.sharma@example.com', Address '221B Baker Street', City 'Manchester', Language 'Turkish', and check the QA newsletter box. Reach the Review step, then go back and correct the first name to 'Priya Sharman' before continuing through Submit. Tell me the first name the Review step showed last and what the confirmation says. |
 | `stretch-calendar-first-friday` | widget | 7 | Using the jQuery UI Datepicker (the calendar popup, not the native date input), navigate to next month and select its first Friday. Tell me the date, day, and month it shows. |
 | `stretch-quotes-top-authors` | lookup | 6 | Across every page of this site, which three authors have the most quotes attributed to them, and how many quotes does each have? |
+| `stretch-books-young-adult-one-star` | lookup | 1 | Across every page of the Young Adult category, how many books are rated one star, and which of them is the most expensive, at what price? |
 <!-- /evals:tasks:stretch-dev -->
 
 <!-- evals:tasks:stretch-heldout -->
@@ -251,7 +252,7 @@ when they differ:
 | `core` | 20 | `bd7a00ba` |
 | `dev` | 13 | `6b9d5227` |
 | `heldout` | 9 | `86a31db4` |
-| `stretch-dev` | 7 | `7f6979c7` |
+| `stretch-dev` | 8 | `2ffd83ee` |
 | `stretch-heldout` | 3 | `0ab6d8fe` |
 | local fixtures | 6 | `dda8ba89` |
 

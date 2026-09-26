@@ -314,7 +314,12 @@ def _cited(capture: Capture, part: Chunk, cite: _Cite) -> Evidence | None:
     return _evidence(capture, run[0], max(run[0].start, part.start), min(run[-1].end, part.end))
 
 
-def _record_cites(capture: Capture, part: Chunk, cites: Sequence[_Cite]) -> tuple[_Cite, ...]:
+_COUNTED_KINDS = frozenset({BlockKind.RECORD, BlockKind.LIST_ITEM})
+
+
+def _record_cites(
+    capture: Capture, part: Chunk, cites: Sequence[_Cite], kinds: frozenset[BlockKind] = frozenset({BlockKind.RECORD})
+) -> tuple[_Cite, ...]:
     result: list[_Cite] = []
     for cite in cites:
         evidence = _cited(capture, part, cite)
@@ -323,7 +328,7 @@ def _record_cites(capture: Capture, part: Chunk, cites: Sequence[_Cite]) -> tupl
             if evidence is None
             else [b for b in _offered(capture, part) if b.start < evidence.end and b.end > evidence.start]
         )
-        if blocks and all(b.kind is BlockKind.RECORD and b.start >= part.start and b.end <= part.end for b in blocks):
+        if blocks and all(b.kind in kinds and b.start >= part.start and b.end <= part.end for b in blocks):
             result.extend(_Cite(first=b.source_id, last=b.source_id) for b in blocks)
         else:
             result.append(cite)
@@ -913,7 +918,9 @@ async def read(
                     uncovered += 1
             for group in groups:
                 records = []
-                cites = _record_cites(capture, part, group.records)
+                # Capture makes each leaf list item one unit, so a counted range of them is that many records;
+                # a compared record may still span several items, so only counting splits them.
+                cites = _record_cites(capture, part, group.records, _COUNTED_KINDS)
                 missing = max(0, len(cites) - _MAX_CONTINUING_RECORDS)
                 for cite in cites[:_MAX_CONTINUING_RECORDS]:
                     evidence = _cited(capture, part, cite)

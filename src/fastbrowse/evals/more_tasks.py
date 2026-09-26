@@ -511,6 +511,17 @@ STRETCH_DEV: tuple[LiveTask, ...] = (
         _pairs(("Albert Einstein", "10"), ("J.K. Rowling", "9"), ("Marilyn Monroe", "7")),
         Category.LOOKUP,
     ),
+    # The dev pair of stretch-books-sequential-art-one-star: a rating filter, its count and its dearest record
+    # across a paginated category.
+    LiveTask(
+        "stretch-books-young-adult-one-star",
+        "https://books.toscrape.com/catalogue/category/books/young-adult_21/index.html",
+        "Across every page of the Young Adult category, how many books are rated one star, and which of them "
+        "is the most expensive, at what price?",
+        _fixed(None),
+        _all(_whole("11"), _has("Caught", "55.35")),
+        Category.LOOKUP,
+    ),
 )
 
 STRETCH_HELDOUT: tuple[LiveTask, ...] = (

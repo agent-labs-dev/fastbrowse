@@ -2054,8 +2054,9 @@ async def test_tally_read_counts_unique_records_across_pages_and_closes_only_at_
 @pytest.mark.parametrize("records_only", [False, True])
 @pytest.mark.parametrize("last_matches", [False, True])
 @pytest.mark.parametrize("plain_records", [False, True])
+@pytest.mark.parametrize("kind", [BlockKind.RECORD, BlockKind.LIST_ITEM])
 async def test_filtered_tally_counts_record_ranges_through_empty_pages_and_recaptures(
-    records_only: bool, last_matches: bool, plain_records: bool
+    records_only: bool, last_matches: bool, plain_records: bool, kind: BlockKind
 ) -> None:
     question = "How many open records belong to Ada across the whole list?"
     plan = Plan(
@@ -2063,11 +2064,11 @@ async def test_filtered_tally_counts_record_ranges_through_empty_pages_and_recap
         answer_expected=True,
     )
     first = capture(
-        (BlockKind.RECORD, "One - Ada - open"),
-        (BlockKind.RECORD, "Two - Ada - open"),
-        (BlockKind.RECORD, "Three - Ben - open"),
-        (BlockKind.RECORD, "Four - Ada - open"),
-        (BlockKind.RECORD, "Five - Ada - closed"),
+        (kind, "One - Ada - open"),
+        (kind, "Two - Ada - open"),
+        (kind, "Three - Ben - open"),
+        (kind, "Four - Ada - open"),
+        (kind, "Five - Ada - closed"),
     )
     group: dict[str, JsonValue] = {
         "key": "Ada",
