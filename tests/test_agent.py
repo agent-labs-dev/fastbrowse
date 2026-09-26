@@ -750,10 +750,10 @@ async def test_directed_done_still_requires_verification_after_an_exhausted_read
     page.act.assert_not_called()
 
 
-@pytest.mark.parametrize("lookup", [True, False])
-async def test_a_read_that_answers_a_lookup_finishes_on_the_page_it_read(lookup: bool) -> None:
+@pytest.mark.parametrize(("lookup", "recovered"), [(True, False), (False, False), (True, True)])
+async def test_a_read_that_answers_a_lookup_finishes_on_the_page_it_read(lookup: bool, recovered: bool) -> None:
     """A read does not change the page, so observing it again and deciding only arrived at DONE. A plan with
-    something left to do on the site is decided again."""
+    something left to do on the site, or a read whose tripwire sent the run to recovery, is decided again."""
     kinds = (RequirementKind.INFORMATION,) if lookup else (RequirementKind.INFORMATION, RequirementKind.ACTION)
     state = await run_state()
     state.ready_plan = Plan(
@@ -770,9 +770,18 @@ async def test_a_read_that_answers_a_lookup_finishes_on_the_page_it_read(lookup:
         page, ScriptedJev({"operation": "read"}, noul=0.0), ScriptedLLM([{"claims": [claim], "answered": True}])
     )
     agent._finish = AsyncMock(return_value=agent._result(state, state.ledger, Status.COMPLETE))
+    if recovered:
+        step = agent._step
+
+        async def tripped(*args: object, **kwargs: object) -> bool:
+            skipped = await step(*args, **kwargs)
+            state.recoveries += 1
+            return skipped
+
+        agent._step = tripped
     # One step: a lookup reaches its finish on it, and anything else is stopped deciding its second.
     state.ledger.limits = Limits(max_steps=1)
-    if lookup:
+    if lookup and not recovered:
         await asyncio.wait_for(agent._loop(state, None, None), timeout=1)
         page.observe.assert_awaited_once()
         assert agent._finish.await_args is not None and agent._finish.await_args.args[1] is agent._observed
