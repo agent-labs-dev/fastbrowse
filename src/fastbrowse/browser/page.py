@@ -153,6 +153,7 @@ _TARGET_STATE = TypeAdapter(tuple[str, list[object] | None, _Point])
 """[fingerprint, live guard, hit-test point] from the pre-action check."""
 _SETTLED = TypeAdapter(tuple[bool, str | None])
 _NODE_ID = TypeAdapter(int | None)
+_LANDED = TypeAdapter(tuple[bool, bool])
 _FILL_TARGET = TypeAdapter(tuple[int | None, bool])
 
 
@@ -755,21 +756,18 @@ class CdpPage(Page):
                     return StepOutcome.FAILED, "secret origin or focus changed before insertion"
             else:
                 await self._session.client.send.Input.insertText(params={"text": text}, session_id=session_id)
-            landed = await self._evaluate(
-                session_id,
-                # The text can land in another field than ours: a framework may swap ours for a hydrated copy while
-                # the text is inserted, or focusing ours opens an editor over it that takes focus, a moment too
-                # late for the hand-off above to see. That field is accepted only when it is focused in the same
-                # document and covers the point ours occupied: a field elsewhere holding the same text is not
-                # evidence that ours took it.
-                f"((e, text) => {{ const holds = n => !!n && (n.value ?? n.innerText) === text; "
-                "if (e?.isConnected && holds(e)) return true; "
-                "const was = window.__fastbrowse?.filled; if (!was) return false; "
-                "const now = was.doc.activeElement; if (!now || now === e) return false; "
-                "const r = now.getBoundingClientRect(); "
-                "const inPlace = was.x >= r.left && was.x <= r.right && was.y >= r.top && was.y <= r.bottom; "
-                "return inPlace && holds(now); })"
-                f"(window.__fastbrowse?.nodes.get({local_id}), {json.dumps(text)})",
+            landed, suggests = _LANDED.validate_python(
+                await self._evaluate(
+                    session_id,
+                    # Whether the field asks for suggestions comes back with the check, so an ordinary field's
+                    # fill does not pay a round trip to learn it has none to wait for.
+                    "((ok, e) => [!!ok, !!ok && !!e && (e.getAttribute('role') === 'combobox' || "
+                    "e.type === 'search' || !!e.getAttribute('aria-autocomplete') || "
+                    "!!((id => id && e.ownerDocument.getElementById(id))("
+                    "e.getAttribute('aria-controls') || e.getAttribute('aria-owns'))))])("
+                    + self._landed_js(local_id, text)
+                    + f", window.__fastbrowse?.nodes.get({local_id}))",
+                )
             )
             if landed:
                 break
@@ -785,8 +783,26 @@ class CdpPage(Page):
             if attempt or handed is None or handed == local_id:
                 return StepOutcome.FAILED, "field did not retain the supplied text"
             local_id = handed
-        await self._await_suggestions(session_id, local_id)
+        if suggests:
+            await self._await_suggestions(session_id, local_id)
         return StepOutcome.EXECUTED, None
+
+    @staticmethod
+    def _landed_js(local_id: int, text: str) -> str:
+        # The text can land in another field than ours: a framework may swap ours for a hydrated copy while the
+        # text is inserted, or focusing ours opens an editor over it that takes focus, a moment too late for the
+        # hand-off to see. That field is accepted only when it is focused in the same document and covers the
+        # point ours occupied: a field elsewhere holding the same text is not evidence that ours took it.
+        return (
+            "((e, text) => { const holds = n => !!n && (n.value ?? n.innerText) === text; "
+            "if (e?.isConnected && holds(e)) return true; "
+            "const was = window.__fastbrowse?.filled; if (!was) return false; "
+            "const now = was.doc.activeElement; if (!now || now === e) return false; "
+            "const r = now.getBoundingClientRect(); "
+            "const inPlace = was.x >= r.left && was.x <= r.right && was.y >= r.top && was.y <= r.bottom; "
+            "return inPlace && holds(now); })"
+            f"(window.__fastbrowse?.nodes.get({local_id}), {json.dumps(text)})"
+        )
 
     async def _fill_native_date(self, session_id: str, local_id: int, value: str) -> tuple[StepOutcome, str | None]:
         """Commit an ISO value to a native date/time input the way its own picker would.
