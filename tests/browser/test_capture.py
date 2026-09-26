@@ -1,6 +1,7 @@
 """Capture blocks preserve the records a reader needs to cite together."""
 
 import json
+import time
 
 import pytest
 
@@ -384,3 +385,12 @@ async def test_a_capture_waits_for_a_loading_indicator_an_action_gave_up_on(page
     capture = await page.capture()
     assert "Hello World!" in capture.text
     assert "Loading..." not in capture.text
+
+
+async def test_a_capture_does_not_wait_on_an_indicator_off_screen(page: CdpPage, main_site: str) -> None:
+    """GitHub's empty progress bar and lazy skeletons below the fold cost every GitHub read the full wait."""
+    await page.navigate(f"{main_site}/offscreen-loading.html")
+    started = time.monotonic()
+    capture = await page.capture()
+    assert "BSD-3-Clause" in capture.text
+    assert time.monotonic() - started < 1.0

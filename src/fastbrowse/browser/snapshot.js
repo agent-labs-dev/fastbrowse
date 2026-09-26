@@ -38,6 +38,15 @@
   const LOADING = '[aria-busy="true"],[role="progressbar"],progress:not([value]),' +
     ['spinner', 'loading', 'loader', 'skeleton', 'shimmer']
       .flatMap(name => [`[class*="${name}" i]`, `[id*="${name}" i]`]).join(',');
+  // Only an indicator on screen is waited on. GitHub keeps an empty fixed progress bar and lazy skeletons below
+  // the fold, which load only once scrolled to: waiting on them spent the full wait on every GitHub page.
+  const showing = e => {
+    if (!e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+    const r = e.getBoundingClientRect();
+    const view = e.ownerDocument.defaultView || window;
+    return r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < view.innerHeight &&
+      r.left < view.innerWidth;
+  };
   if (!registry.track) {
     const roots = new WeakSet();
     const changed = () => { registry.lastMutation = performance.now(); };
@@ -60,8 +69,7 @@
     };
     const include = root => {
       registry.track(root);
-      loading ||= [...root.querySelectorAll(LOADING)].some(e => e.checkVisibility({ checkOpacity: true,
-        checkVisibilityCSS: true }));
+      loading ||= [...root.querySelectorAll(LOADING)].some(showing);
       const text = root.body?.innerText ?? root.textContent ?? '';
       hashText(text);
       // innerText omits shadow trees and child documents even when their content is visible.
