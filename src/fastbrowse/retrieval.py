@@ -32,7 +32,7 @@ from fastbrowse.jev import (
     NoulQuestion,
 )
 from fastbrowse.llm import Generation, LLMClient, Message
-from fastbrowse.memory import Fact, Notes, Tally, evidence_id, fact_id
+from fastbrowse.memory import Fact, Notes, NotesTooLarge, Tally, evidence_id, fact_id
 from fastbrowse.models import UNTRUSTED, Citation, CostComponent, CostLine, Evidence, FactReader, Frozen, LLMPurpose
 from fastbrowse.page import Block, BlockKind, Capture
 from fastbrowse.planner import Plan, Requirement, RequirementKind
@@ -366,6 +366,11 @@ class _TallyRead(Frozen):
 
 class _Continuation(Frozen):
     tallies: tuple[_TallyGroup, ...] = ()
+    through_end: bool = Field(
+        default=False,
+        description="True only when the task needs every remaining page of this list. False when the task "
+        "bounds the pages (such as this page and the next), or the rest is behind an expander rather than a pager.",
+    )
     requirement_id: str = Field(
         description=(
             "A requirement whose answer ranges over a list this capture shows only part of, because it continues "
@@ -417,6 +422,20 @@ class ReadOutcome(Frozen):
     expands: str | None = None
     """The label the reader gave for the control that shows the rest of the list, so the run can open it
     instead of being told only that the list goes on."""
+    through_end: tuple[str, ...] = ()
+    continuation_records: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+
+    def merge_records(self, notes: Notes) -> None:
+        """Merge an isolated records read in page order, using the same span and tally deduplication."""
+        for fact in self.facts:
+            if fact.tally is None:
+                notes.add(fact.model_copy(update={"requirement_id": None}))
+        for fact in self.facts:
+            if fact.tally is not None:
+                notes.add_tally(fact.tally)
+        for requirement_id, records in self.continuation_records.items():
+            for record in records:
+                notes.add_continuation(requirement_id, record)
 
 
 def _notes_room(tokens: TokenBudget, messages: Sequence[Message], response: type[Frozen]) -> int:
@@ -466,6 +485,8 @@ async def read(
     notice: str = "",
     continuing: Collection[str] = (),
     incomplete: Collection[str] = (),
+    records_only: bool = False,
+    require_all_evidence: bool = False,
 ) -> ReadOutcome:
     """`notice` is what the caller knows about the page that its text does not say, such as its next-page control;
     it goes with every question the reader is asked, however the question is narrowed. `continuing` names the
@@ -482,6 +503,8 @@ async def read(
     ordered: set[str] = set()
     expands: str | None = None
     tally_complete: set[str] = set()
+    through_end: tuple[str, ...] = ()
+    continuation_records: dict[str, list[str]] = {}
     wanted = [
         r
         for r in requirements
@@ -491,7 +514,7 @@ async def read(
         and r.id not in incomplete
     ]
     # A pager notice is a caveat on what this page can answer, and the choice model picks quotes without weighing one.
-    if jev is not None and wanted and not notice:
+    if jev is not None and wanted and not notice and not records_only:
         chosen = await _read_choices(jev, capture, wanted, tokens=tokens, ledger=ledger)
         costs.extend(chosen.cost_lines)
         for fact in chosen.facts:
@@ -509,6 +532,15 @@ async def read(
         )
     if notice:
         question += f"\n\n{notice}"
+    if records_only:
+        question += (
+            "\n\nThis page is being read while earlier pages are still being read. Collect this page's records "
+            "for each requirement in continues.records or continues.tallies, with any quoted context needed "
+            "to interpret them. Apply the requirement's filters: include every matching record with its "
+            "compared value and the attributes that show it matches; omit records those filters exclude. "
+            "Do not select only this page's winners. Do not conclude a comparison or mark a tally complete. "
+            "A later read will receive all pages' records and answer the question."
+        )
     # LLM claims reach the run's notes only once the whole page is read. Carry earlier chunks and Jev's facts
     # into each chunk so a count or comparison is not asked in ignorance of what was already collected.
     so_far = deepcopy(notes)
@@ -560,6 +592,8 @@ async def read(
         ]
         room = _notes_room(tokens, messages, _ReadResponse)
         offered = so_far.render_with_ids(room, preserve_requirements=True)
+        if require_all_evidence and {fact_id(fact) for fact in so_far.facts} - set(offered.evidence_ids):
+            raise NotesTooLarge("The final page cannot fit every earlier record in its collected evidence")
         messages[-1] = _read_message(capture, part, question, requirement_ids, offered.text)
         result = await llm.generate(
             LLMPurpose.READ,
@@ -579,6 +613,7 @@ async def read(
         # "continues" meant the list went on into this chunk; a union let it block the last chunk's conclusion.
         carried = [c for c in result.data.continues if c.requirement_id in requirement_ids]
         continues = dict.fromkeys(c.requirement_id for c in carried)
+        through_end = tuple(c.requirement_id for c in carried if c.through_end)
         expands = next((c.expands for c in carried if c.expands), None)
         references = {key: key for key in offered.evidence_ids}
         tally_reads = [t for t in result.data.tallies if t.requirement_id in requirement_ids]
@@ -694,6 +729,7 @@ async def read(
                 record = _quoted(evidence)
                 so_far.add(record)
                 notes.add_continuation(continuation.requirement_id, fact_id(record))
+                continuation_records.setdefault(continuation.requirement_id, []).append(fact_id(record))
                 found.append(record)
             uncovered += missing
             if missing:
@@ -709,6 +745,7 @@ async def read(
             and not rejected_here
             and not continues
             and not notice
+            and not records_only
             and (not tally_reads or part.index == part.total - 1)
         ):
             break
@@ -725,6 +762,8 @@ async def read(
         if notes.has_untallied_records(requirement_id):
             lost[requirement_id] = None
     blocked = (set(incomplete) | lost.keys()) - ordered
+    if records_only:
+        blocked.update(requirement_ids)
     for fact in found:
         if fact.requirement_id in continues or fact.requirement_id in blocked:
             fact = fact.model_copy(update={"requirement_id": None})
@@ -742,6 +781,8 @@ async def read(
         incomplete=tuple(lost),
         uncovered=uncovered,
         expands=expands if continues else None,
+        through_end=tuple(key for key in through_end if key in continues),
+        continuation_records={key: tuple(dict.fromkeys(records)) for key, records in continuation_records.items()},
     )
 
 

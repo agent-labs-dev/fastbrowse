@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Paginated lists are read while the next page loads.** After the reader identifies a list needed in full,
+  intermediate pages collect records concurrently. Their quotes merge in page order before the final page
+  answers the comparison, within the run's page, step, call and time limits.
 - **Cloud clicks, fills and observations use fewer round trips.** The pre-press frame wait shares its
   page evaluation with the target guard and hit test, field hand-off also reads the input type, and page
   snapshots run beside the history read. Pointer, focus and secret checks still gate input.

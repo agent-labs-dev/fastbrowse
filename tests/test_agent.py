@@ -2849,3 +2849,295 @@ async def test_a_doubted_lookup_with_every_requirement_cited_finishes_without_th
 
     assert result is not None and result.status is Status.COMPLETE
     assert LLMPurpose.VERIFY not in [purpose for purpose, _ in llm.calls]
+
+
+def _continued(*, through_end: bool = True) -> dict[str, Any]:
+    return {
+        "claims": [],
+        "answered": False,
+        "continues": [{"requirement_id": "r1", "through_end": through_end, "records": [{"first": "s0", "last": "s0"}]}],
+    }
+
+
+async def _pipeline_fixture(
+    *, config: Config | None = None, limits: Limits | None = None, through_end: bool = True
+) -> tuple[Agent, _RunState, Mock, list[Observation], list[Capture], ScriptedLLM]:
+    state = await run_state()
+    state.task = "Find the cheapest item across the entire list"
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r1", text=state.task, kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    state.ledger.limits = limits or Limits()
+    observations = [
+        _at(f"https://example.test/list/{i}", *([_link("next", "Next", f"/list/{i + 1}")] if i < 4 else []))
+        for i in range(1, 5)
+    ]
+    captures = [
+        capture((BlockKind.RECORD, f"Item {i}: ${5 - i}")).model_copy(update={"url": obs.url})
+        for i, obs in enumerate(observations, 1)
+    ]
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    page.observe = AsyncMock(side_effect=observations[1:])
+    page.capture = AsyncMock(side_effect=captures[1:])
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
+    llm = ScriptedLLM(
+        [
+            _continued(through_end=through_end),
+            _continued(),
+            _continued(),
+            {
+                "answered": True,
+                "claims": [
+                    {
+                        "requirement_id": "r1",
+                        "text": "Item 4 is cheapest at $1",
+                        "cite": {"first": "s0", "last": "s0"},
+                        "draws_on": [f"{c.sha256}:0:{len(c.text)}" for c in captures[:3]],
+                    }
+                ],
+            },
+        ]
+    )
+    agent = Agent(page, ScriptedJev({}), llm, config=config)
+    state.first_url = observations[0].url
+    await agent._step(state, observations[0], _code_decision(Operation.READ, None), capture=captures[0])
+    return agent, state, page, observations, captures, llm
+
+
+async def test_pager_reads_overlap_and_final_read_sees_records_in_page_order() -> None:
+    agent, state, page, observations, captures, llm = await _pipeline_fixture()
+    original = agent._page_records
+    second_started, third_done = asyncio.Event(), asyncio.Event()
+
+    async def overlapping(state: _RunState, captured: Capture, wanted: Any) -> Any:
+        if captured.url == captures[1].url:
+            second_started.set()
+            result = await original(state, captured, wanted)
+            await third_done.wait()
+            return result
+        assert second_started.is_set()
+        result = await original(state, captured, wanted)
+        third_done.set()
+        return result
+
+    agent._page_records = AsyncMock(side_effect=overlapping)
+    async with asyncio.timeout(2):
+        await agent._pipeline_pages(state, observations[0])
+    assert third_done.is_set()
+    assert state.notes.evidenced("r1")
+    assert list(state.notes.evidence) == [f"{c.sha256}:0:{len(c.text)}" for c in captures]
+    final_prompt = llm.calls[-1][1][-1].content
+    collected = final_prompt.split("# Capture")[0]
+    for captured in captures[:3]:
+        assert captured.text in collected and captured.url in collected
+    assert [e.url for e in state.notes.supporting_evidence("r1")] == [c.url for c in captures]
+    assert [step.url for step in state.steps if step.operation is Operation.READ] == [c.url for c in captures]
+    assert [step.index for step in state.steps] == list(range(7))
+    assert len(state.history) == len(state.steps) == state.ledger.steps == 7
+    assert page.act.await_count == 3
+    assert agent._result(state, state.ledger, Status.COMPLETE).final_url == observations[-1].url
+
+
+@pytest.mark.parametrize(
+    "limits,config,pages",
+    [
+        (Limits(), Config(max_pages=1), 1),
+        (Limits(max_steps=5), Config(), 2),
+        (Limits(max_llm_calls=2), Config(), 1),
+    ],
+)
+async def test_pipeline_reserves_read_steps_and_respects_page_and_call_caps(
+    limits: Limits, config: Config, pages: int
+) -> None:
+    agent, state, page, observations, _, _ = await _pipeline_fixture(config=config, limits=limits)
+    await agent._pipeline_pages(state, observations[0])
+    assert page.act.await_count == state.pages == pages
+    assert state.ledger.steps == 1 + 2 * pages <= limits.max_steps
+    assert state.ledger.llm_calls == pages + 1 <= limits.max_llm_calls
+    assert not state.notes.evidenced("r1")
+
+
+async def test_bounded_page_requirement_keeps_serial_paging() -> None:
+    _, state, _, observations, _, _ = await _pipeline_fixture(through_end=False)
+    assert state.next_page and not state.through_end
+    decision = agent_module._paging(state, observations[0])
+    assert decision is not None and decision.operation is Operation.CLICK
+
+
+async def test_pipeline_read_failure_retries_saved_capture_and_returns_to_serial_loop() -> None:
+    agent, state, page, observations, captures, _ = await _pipeline_fixture()
+    original = agent._page_records
+    calls = 0
+
+    async def fail_once(state: _RunState, captured: Capture, wanted: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise agent_module.LLMError("reader unavailable")
+        return await original(state, captured, wanted)
+
+    agent._page_records = AsyncMock(side_effect=fail_once)
+    await agent._pipeline_pages(state, observations[0])
+    assert calls == 2 and state.paging_failed
+    assert page.act.await_count == 1
+    assert any(e.url == captures[1].url for e in state.notes.evidence.values())
+    assert not state.incomplete
+    assert not state.notes.evidenced("r1")
+    # A records read does not spend the serial read of this page.
+    assert not await agent._step(state, observations[1], _code_decision(Operation.READ, None), capture=captures[1])
+    assert state.next_page
+
+
+async def test_pipeline_load_failure_keeps_captured_records_and_stops_navigating() -> None:
+    agent, state, page, observations, captures, _ = await _pipeline_fixture()
+    page.act.side_effect = [
+        ActResult(outcome=StepOutcome.EXECUTED, page_changed=True),
+        NavigationTimeout("load failed"),
+    ]
+    await agent._pipeline_pages(state, observations[0])
+    assert state.paging_failed and not state.next_page
+    assert page.act.await_count == 2
+    assert [e.url for e in state.notes.evidence.values()] == [c.url for c in captures[:2]]
+    assert not state.notes.evidenced("r1")
+
+
+async def test_pipeline_cancellation_joins_background_readers() -> None:
+    agent, state, page, observations, _, _ = await _pipeline_fixture()
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def blocked(*args: Any) -> Any:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    agent._page_records = AsyncMock(side_effect=blocked)
+    running = asyncio.create_task(agent._pipeline_pages(state, observations[0]))
+    await started.wait()
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert cancelled.is_set()
+    assert page.act.await_count < 3
+
+
+@pytest.mark.parametrize("href", ["https://other.test/list/2", "//other.test/list/2", "other.test/list/2", "#next"])
+def test_code_pager_never_follows_another_site_or_same_page(href: str) -> None:
+    assert agent_module.next_page_control(_at("https://example.test/list/1", _link("n", "Next", href))) is None
+
+
+def test_disabled_pager_is_not_followed() -> None:
+    disabled = _link("next", "Next", "/list/2").model_copy(update={"operations": frozenset()})
+    assert agent_module.next_page_control(_at("https://example.test/list/1", disabled)) is None
+
+
+async def test_pipeline_final_read_error_leaves_current_capture_readable() -> None:
+    agent, state, _, observations, captures, llm = await _pipeline_fixture(config=Config(max_pages=1))
+    original = llm.generate
+    calls = 0
+
+    async def fail_once(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise agent_module.LLMError("read failed")
+        return await original(*args, **kwargs)
+
+    llm.generate = AsyncMock(side_effect=fail_once)
+    await agent._pipeline_pages(state, observations[0])
+    assert state.paging_failed and state.steps[-1].outcome is StepOutcome.FAILED
+    assert not await agent._step(state, observations[1], _code_decision(Operation.READ, None), capture=captures[1])
+    assert calls == 2
+
+
+async def test_pipeline_persistent_read_failure_leaves_comparison_incomplete() -> None:
+    agent, state, _, observations, _, _ = await _pipeline_fixture()
+    agent._page_records = AsyncMock(side_effect=agent_module.LLMError("read failed"))
+    await agent._pipeline_pages(state, observations[0])
+    assert state.paging_failed and state.incomplete == {"r1"}
+    assert state.steps[-1].outcome is StepOutcome.FAILED
+    assert state.history[-1].operation is Operation.READ
+    assert not state.notes.evidenced("r1")
+
+
+async def test_pipeline_time_limit_cancels_and_joins_readers() -> None:
+    agent, state, _, observations, _, _ = await _pipeline_fixture()
+    cancelled = asyncio.Event()
+
+    async def blocked(*args: Any, **kwargs: Any) -> Any:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    agent._page_records = AsyncMock(side_effect=blocked)
+    state.ledger.limits = Limits(max_seconds=0.02)
+    state.ledger.started = agent_module.time.monotonic()
+    with pytest.raises((TimeoutError, BudgetExceeded)):
+        async with asyncio.timeout(state.ledger.limits.max_seconds):
+            await agent._pipeline_pages(state, observations[0])
+    assert cancelled.is_set()
+
+
+async def test_loop_enters_pipeline_without_jev_between_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent, state, page, observations, _, _ = await _pipeline_fixture()
+    page.observe.side_effect = [*observations, observations[-1]]
+    decisions = 0
+
+    async def done(*args: Any, **kwargs: Any) -> Decision:
+        nonlocal decisions
+        decisions += 1
+        assert state.notes.evidenced("r1")
+        assert agent._observed is not None and agent._observed.url == observations[-1].url
+        return _code_decision(Operation.DONE, None)
+
+    monkeypatch.setattr(agent_module, "decide", done)
+    agent._finish = AsyncMock(side_effect=lambda *args: agent._result(state, state.ledger, Status.COMPLETE))
+    result = await agent._loop(state, None, None)
+    assert result.status is Status.COMPLETE and decisions == 1
+    assert page.act.await_count == 3
+
+
+@pytest.mark.parametrize("outcome", [StepOutcome.EXECUTED, StepOutcome.STALE, StepOutcome.COVERED])
+async def test_pipeline_stops_after_a_pager_click_that_does_not_load_a_page(outcome: StepOutcome) -> None:
+    agent, state, page, observations, _, _ = await _pipeline_fixture()
+    page.act.return_value = ActResult(outcome=outcome, page_changed=False)
+    agent._act_on_twin = AsyncMock(return_value=None)
+    await agent._pipeline_pages(state, observations[0])
+    assert page.act.await_count == 1
+    page.capture.assert_not_called()
+    assert not state.next_page and not state.notes.evidenced("r1")
+
+
+async def test_pipeline_read_events_keep_the_frame_of_the_captured_page() -> None:
+    agent, state, _, observations, captures, _ = await _pipeline_fixture(config=Config(step_frames=True))
+    events: list[StepEvent] = []
+
+    async def collect(event: StepEvent | BrowserEvent) -> None:
+        assert isinstance(event, StepEvent)
+        events.append(event)
+
+    agent._on_event = collect
+    agent._frame = AsyncMock(side_effect=[b"click2", b"read2", b"click3", b"read3", b"click4", b"read4"])
+    await agent._pipeline_pages(state, observations[0])
+    reads = [event for event in events if event.step.operation is Operation.READ]
+    assert [(event.step.url, event.frame) for event in reads] == list(
+        zip([c.url for c in captures[1:]], [b"read2", b"read3", b"read4"], strict=True)
+    )
+
+
+async def test_result_reports_latest_observed_url_with_result_redaction() -> None:
+    state = await run_state()
+    state.last_page = ("https://example.test/list/1", "old")
+    url = "https://example.test/list/2?token=hunter2"
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    page.observe = AsyncMock(return_value=_at(url))
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    agent._redactor.register("password", "hunter2")
+    await agent._observe()
+    result = agent._result(state, state.ledger, Status.BUDGET_EXCEEDED)
+    assert result.final_url == agent._redactor.redact(url)
+    assert result.final_url != agent._redactor.mask(url)

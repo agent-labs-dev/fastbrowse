@@ -82,7 +82,7 @@ from fastbrowse.policy import (
     StepContext,
     decide,
 )
-from fastbrowse.retrieval import ComposedAnswer, compose, draft_answer, partial_answer, read
+from fastbrowse.retrieval import ComposedAnswer, ReadOutcome, compose, draft_answer, partial_answer, read
 from fastbrowse.safety import (
     Redactor,
     irreversible_question,
@@ -216,6 +216,15 @@ class _TransactionCandidate:
 
 
 @dataclass(slots=True)
+class _PageRead:
+    capture: Capture
+    observation: Observation
+    task: asyncio.Task[ReadOutcome]
+    started: float
+    frame: bytes | None
+
+
+@dataclass(slots=True)
 class _RunState:
     task: str
     inputs: Mapping[str, str]
@@ -286,6 +295,9 @@ class _RunState:
     """The page state a next-page click left, so the page it opens is read without a decision."""
     pages: int = 0
     """Next pages opened by code this run."""
+    through_end: bool = False
+    """Every unresolved requirement needs the entire list, so intermediate pages can be read concurrently."""
+    paging_failed: bool = False
     first_url: str | None = None
     visited: dict[str, None] = field(default_factory=dict[str, None])
     """Every address the run has been on, in order, first the one it began on. The action record starts after that
@@ -492,6 +504,9 @@ class Agent:
             # none of the gates below, which is safe only because of what it can be: a pager link to another address.
             # The login check needs a decision Jev has not made yet, and the page it opens is judged on the next turn.
             # The confidence gates judge Jev's uncertainty, and there is none to judge here.
+            if state.next_page and state.through_end and not state.paging_failed:
+                await self._pipeline_pages(state, observation)
+                continue
             if (paging := _paging(state, observation)) is not None:
                 if await self._step(state, observation, paging, Decider.LLM, gate=False):
                     await self._recover(state, observation, _read_exhausted(state))
@@ -768,6 +783,7 @@ class Agent:
         *,
         capture: Capture | None = None,
         gate: bool = True,
+        require_all_evidence: bool = False,
     ) -> bool:
         """Return whether a duplicate read was skipped, so callers can recover or continue the interaction."""
         started = time.monotonic()
@@ -777,7 +793,9 @@ class Agent:
         typed: str | None = None
         effect_now: str | None = None
         if decision.operation is Operation.READ:
-            progressed, skipped = await self._read(state, capture or await self._capture(), observation)
+            progressed, skipped = await self._read(
+                state, capture or await self._capture(), observation, require_all_evidence=require_all_evidence
+            )
             state.read_here = True
             if skipped:
                 return True
@@ -1119,7 +1137,9 @@ class Agent:
             return False
         return True if decision.target.id not in written else None
 
-    async def _record_step(self, state: _RunState, step: StepResult) -> None:
+    async def _record_step(
+        self, state: _RunState, step: StepResult, *, capture_frame: bool = True, frame: bytes | None = None
+    ) -> None:
         state.steps.append(step)
         # A stale step dispatched nothing; the stall budget bounds redraw loops.
         if step.outcome is not StepOutcome.STALE:
@@ -1127,7 +1147,9 @@ class Agent:
         if self._on_event is None:
             return
         # Taken from the page the step acted on, before the next observation moves it on.
-        await self._on_event(StepEvent(step=step, frame=await self._frame() if self._config.step_frames else None))
+        if capture_frame and self._config.step_frames:
+            frame = await self._frame()
+        await self._on_event(StepEvent(step=step, frame=frame))
 
     async def _record_failure(
         self,
@@ -1502,7 +1524,12 @@ class Agent:
         return not await self._step(state, observation, reading, decided_by)
 
     async def _read(
-        self, state: _RunState, capture: Capture | None = None, observation: Observation | None = None
+        self,
+        state: _RunState,
+        capture: Capture | None = None,
+        observation: Observation | None = None,
+        *,
+        require_all_evidence: bool = False,
     ) -> tuple[bool, bool]:
         """Return (added evidence, skipped duplicate), since only new evidence makes a read progress."""
         capture = capture or await self._capture()
@@ -1575,6 +1602,7 @@ class Agent:
             notice=notice,
             continuing=state.continuing,
             incomplete=state.incomplete,
+            require_all_evidence=require_all_evidence or (state.through_end and state.pages > 0),
         )
         state.incomplete.update(outcome.incomplete)
         # Payout is what the notes did not already say. A fact is keyed by the capture it was read from, so a
@@ -1598,9 +1626,215 @@ class Agent:
             uncovered=outcome.uncovered,
         )
         spent(progressed)
+        state.through_end = bool(continues) and {r.id for r in wanted} <= set(outcome.through_end)
         if observation is not None:
             self._follow_pages(state, continues, following, observation, outcome.expands)
         return progressed, False
+
+    async def _page_records(self, state: _RunState, capture: Capture, wanted: Sequence[Requirement]) -> ReadOutcome:
+        return await read(
+            self._llm,
+            capture,
+            read_question(state.task, wanted, began_at=state.first_url),
+            [r.id for r in wanted],
+            Notes(),
+            tokens=self._config.tokens,
+            ledger=state.ledger,
+            records_only=True,
+        )
+
+    async def _join_page(self, state: _RunState, page: _PageRead, wanted: Sequence[Requirement]) -> None:
+        try:
+            outcome = await page.task
+        except LLMError:
+            # The browser has moved on, so retry the saved capture, never the page now on screen.
+            state.paging_failed = True
+            try:
+                outcome = await self._page_records(state, page.capture, wanted)
+            except LLMError as error:
+                state.incomplete.update(r.id for r in wanted)
+                reason = self._redactor.redact(f"Could not read saved page {page.capture.url}: {error}")
+                state.hint = reason
+                state.history.append(
+                    HistoryEntry(
+                        operation=Operation.READ,
+                        target=None,
+                        outcome=StepOutcome.FAILED,
+                        page_changed=False,
+                        effect=reason,
+                    )
+                )
+                await self._record_step(
+                    state,
+                    StepResult(
+                        index=len(state.steps),
+                        operation=Operation.READ,
+                        decided_by=Decider.LLM,
+                        outcome=StepOutcome.FAILED,
+                        url=page.capture.url,
+                        note=reason,
+                        duration_ms=0,
+                    ),
+                    capture_frame=False,
+                    frame=page.frame,
+                )
+                return
+        before = len(state.notes.facts)
+        outcome.merge_records(state.notes)
+        state.incomplete.update(outcome.incomplete)
+        state.history.append(
+            HistoryEntry(
+                operation=Operation.READ,
+                target=None,
+                outcome=StepOutcome.EXECUTED,
+                page_changed=False,
+                effect="Read captured pagination records.",
+            )
+        )
+        await self._record_step(
+            state,
+            StepResult(
+                index=len(state.steps),
+                operation=Operation.READ,
+                decided_by=Decider.LLM,
+                outcome=StepOutcome.EXECUTED,
+                url=page.capture.url,
+                facts=tuple(self._public_fact(fact) for fact in state.notes.facts[before:]),
+                duration_ms=int((time.monotonic() - page.started) * 1000),
+            ),
+            capture_frame=False,
+            frame=page.frame,
+        )
+        trace(
+            "read",
+            url=self._redactor.redact(page.capture.url),
+            records_only=True,
+            facts_added=len(state.notes.facts) - before,
+            incomplete=sorted(state.incomplete),
+            uncovered=outcome.uncovered,
+        )
+
+    async def _pipeline_pages(self, state: _RunState, observation: Observation) -> None:
+        wanted = [r for r in state.notes.unresolved(state.plan) if r.kind is RequirementKind.INFORMATION]
+        pending: list[_PageRead] = []
+        capture: Capture | None = None
+        origin = origin_of(observation.url)
+        seen = {observation.url}
+        state.next_page = False
+        before_click = len(state.steps)
+        try:
+            try:
+                while (target := next_page_control(observation)) is not None and state.pages < self._config.max_pages:
+                    state.ledger.check()
+                    # Each queued read still owes a step. Leave room for both the next click and its read.
+                    if state.ledger.steps + len(pending) + 2 > state.ledger.limits.max_steps:
+                        break
+                    if state.ledger.llm_calls >= state.ledger.limits.max_llm_calls:
+                        break
+                    if any(page.task.done() and page.task.exception() is not None for page in pending):
+                        state.paging_failed = True
+                        break
+                    state.pages += 1
+                    state.paged_from = state_key(observation)
+                    before_click = len(state.steps)
+                    await self._step(
+                        state, observation, _code_decision(Operation.CLICK, target), Decider.LLM, gate=False
+                    )
+                    if (
+                        len(state.steps) == before_click
+                        or state.steps[-1].outcome is not StepOutcome.EXECUTED
+                        or not state.steps[-1].page_changed
+                    ):
+                        break
+                    landed = await self._observe()
+                    state.visited[(self._raw_observation or landed).url] = None
+                    self._note_effect(state, landed)
+                    stalled = self._settle(state, landed)
+                    state.paged_from = None
+                    if stalled or landed.url in seen or origin_of(landed.url) != origin:
+                        break
+                    seen.add(landed.url)
+                    observation = landed
+                    capture = await self._capture()
+                    if not capture.text.strip() or capture.url != observation.url or observation.dialog is not None:
+                        state.paging_failed = True
+                        break
+                    following = next_page_control(observation)
+                    if (
+                        following is None
+                        or state.pages >= self._config.max_pages
+                        or state.ledger.steps + len(pending) + 3 > state.ledger.limits.max_steps
+                        or state.ledger.llm_calls + 1 >= state.ledger.limits.max_llm_calls
+                    ):
+                        break
+                    frame = await self._frame() if self._on_event and self._config.step_frames else None
+                    pending.append(
+                        _PageRead(
+                            capture,
+                            observation,
+                            asyncio.create_task(self._page_records(state, capture, wanted)),
+                            time.monotonic(),
+                            frame,
+                        )
+                    )
+                    capture = None
+                    # Let the client reserve its call before the next navigation checks the remaining budget.
+                    await asyncio.sleep(0)
+            except BrowserError as error:
+                state.paging_failed = True
+                state.next_page = False
+                state.hint = self._redactor.redact(
+                    f"Pagination stopped: {error}. Inspect the current page before continuing."
+                )
+                if len(state.steps) == before_click:
+                    label = _describe(target) if target else None
+                    state.history.append(
+                        HistoryEntry(
+                            operation=Operation.CLICK,
+                            target=label,
+                            outcome=StepOutcome.FAILED,
+                            page_changed=False,
+                            effect=state.hint,
+                        )
+                    )
+                    await self._record_failure(
+                        state, observation, Operation.CLICK, state.hint, target=label, decided_by=Decider.LLM
+                    )
+            for page in pending:
+                await self._join_page(state, page, wanted)
+        finally:
+            for page in pending:
+                page.task.cancel()
+            await asyncio.gather(*(page.task for page in pending), return_exceptions=True)
+        # No intermediate read can close the comparison. Only this read sees every earlier page's records.
+        if capture is not None and not state.paging_failed:
+            state.ledger.check()
+            try:
+                await self._step(
+                    state,
+                    observation,
+                    _code_decision(Operation.READ, None),
+                    Decider.LLM,
+                    capture=capture,
+                    require_all_evidence=True,
+                )
+            except LLMError as error:
+                state.paging_failed = True
+                state.reads.discard((observation.document_key, capture.sha256, tuple(r.id for r in wanted)))
+                state.hint = self._redactor.redact(f"Pagination read failed: {error}. Read this page again.")
+                state.history.append(
+                    HistoryEntry(
+                        operation=Operation.READ,
+                        target=None,
+                        outcome=StepOutcome.FAILED,
+                        page_changed=False,
+                        effect=state.hint,
+                    )
+                )
+                await self._record_failure(state, observation, Operation.READ, state.hint, decided_by=Decider.LLM)
+        else:
+            state.paged_from = None
+            state.next_page = False
 
     def _follow_pages(
         self,
@@ -2150,6 +2384,7 @@ class Agent:
         citations: tuple[Citation, ...] = (),
         error: str | None = None,
     ) -> RunResult:
+        observed = self._raw_observation or self._observed
         return RunResult(
             status=status,
             answer=answer,
@@ -2159,7 +2394,7 @@ class Agent:
             steps=tuple(state.steps) if state else (),
             cost=ledger.breakdown(),
             artifacts=self._page.artifacts[self._artifact_start :],
-            final_url=self._redactor.redact(state.last_page[0]) if state and state.last_page else None,
+            final_url=self._redactor.redact(observed.url) if state and observed else None,
             error=error,
             would_fire=tuple(state.would_fire) if state else (),
         )
@@ -2375,11 +2610,14 @@ def next_page_control(observation: Observation) -> Control | None:
     for control in observation.controls:
         if not pager_link(control) or control.href is None:
             continue
-        # The snapshot gives a same-site link as its path and query, and another site's as host and path.
-        if control.href.startswith("/"):
-            target = urlsplit(urljoin(observation.url, control.href))
-            if (target.path, target.query) == (here.path, here.query):
-                continue
+        # The snapshot gives a same-origin link as a path; a bare host/path denotes another site.
+        if not control.href.startswith(("/", "http://", "https://")):
+            continue
+        target = urlsplit(urljoin(observation.url, control.href))
+        if origin_of(target.geturl()) != origin_of(observation.url):
+            continue
+        if (target.path, target.query) == (here.path, here.query):
+            continue
         found.setdefault(control.href, control)
     return next(iter(found.values())) if len(found) == 1 else None
 

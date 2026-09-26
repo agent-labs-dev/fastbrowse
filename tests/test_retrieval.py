@@ -2349,3 +2349,127 @@ async def test_a_record_split_across_chunks_counts_once() -> None:
     assert notes.evidenced("r")
     assert notes.tallies[0].count == 1
     assert next(iter(notes.evidence.values())).quote == page.text
+
+
+async def test_isolated_records_merge_tallies_without_closing_or_double_counting_recaptures() -> None:
+    pages = [
+        capture((BlockKind.RECORD, "Ada: one"), (BlockKind.RECORD, "Ben: two")),
+        capture((BlockKind.RECORD, "Ada: one"), (BlockKind.RECORD, "Ben: two"), (BlockKind.PARAGRAPH, "redrawn")),
+        capture((BlockKind.RECORD, "Ada: three")).model_copy(update={"url": "https://example.test/2"}),
+    ]
+    responses: list[JsonValue] = [
+        {
+            "answered": True,
+            "claims": [],
+            "continues": [
+                {
+                    "requirement_id": "r",
+                    "tallies": [
+                        {"key": "Ada", "records": [{"first": "s0", "last": "s0"}]},
+                        {"key": "Ben", "records": [{"first": "s1", "last": "s1"}]},
+                    ],
+                }
+            ],
+        },
+    ] * 2 + [
+        {
+            "answered": True,
+            "claims": [],
+            "tallies": [
+                {
+                    "requirement_id": "r",
+                    "complete": True,
+                    "groups": [
+                        {"key": "Ada", "records": [{"first": "s0", "last": "s0"}]},
+                    ],
+                }
+            ],
+        },
+    ]
+    notes = Notes()
+    for page, response in zip(pages, responses, strict=True):
+        isolated = Notes()
+        outcome = await read(
+            ScriptedLLM([response]), page, "Count records by author", ["r"], isolated, records_only=True
+        )
+        assert not isolated.evidenced("r")
+        outcome.merge_records(notes)
+        assert not notes.evidenced("r")
+    assert [(tally.key, tally.count) for tally in notes.tallies] == [("Ada", 2), ("Ben", 1)]
+    notes.complete_tallies("r")
+    assert [item.quote for item in notes.supporting_evidence("r")] == ["Ada: one", "Ben: two", "Ada: three"]
+
+
+async def test_isolated_continuation_metadata_and_lost_records_survive_merge() -> None:
+    page = capture((BlockKind.RECORD, "Ada: one"))
+    result = await read(
+        ScriptedLLM(
+            [
+                {
+                    "answered": False,
+                    "claims": [],
+                    "continues": [
+                        {
+                            "requirement_id": "r",
+                            "records": [{"first": "s0", "last": "s0"}, {"first": "missing", "last": "missing"}],
+                        }
+                    ],
+                }
+            ]
+        ),
+        page,
+        "Count Ada's records",
+        ["r"],
+        Notes(),
+        records_only=True,
+    )
+    notes = Notes()
+    result.merge_records(notes)
+    assert result.incomplete == ("r",) and result.uncovered == 1
+    assert notes.has_untallied_records("r")
+    last = capture((BlockKind.RECORD, "Ada: two"))
+    completed = await read(
+        ScriptedLLM(
+            [
+                {
+                    "answered": True,
+                    "claims": [],
+                    "tallies": [
+                        {
+                            "requirement_id": "r",
+                            "complete": True,
+                            "groups": [{"key": "Ada", "records": [{"first": "s0", "last": "s0"}]}],
+                        }
+                    ],
+                }
+            ]
+        ),
+        last,
+        "Count Ada's records",
+        ["r"],
+        notes,
+        continuing={"r"},
+        incomplete=result.incomplete,
+    )
+    assert completed.incomplete == ("r",)
+    assert not notes.evidenced("r")
+
+
+async def test_final_page_refuses_to_drop_earlier_records_to_fit_prompt() -> None:
+    from fastbrowse.memory import NotesTooLarge
+
+    earlier = capture((BlockKind.RECORD, "earlier " * 2000))
+    evidence = block_evidence(earlier, "s0")
+    notes = Notes([Fact(text=evidence.quote, evidence=evidence, reader=FactReader.LLM)])
+    llm = ScriptedLLM([])
+    with pytest.raises(NotesTooLarge, match="every earlier record"):
+        await read(
+            llm,
+            capture((BlockKind.RECORD, "last")),
+            "Compare all pages",
+            ["r"],
+            notes,
+            tokens=TokenBudget(state_plus_largest_question=5000),
+            require_all_evidence=True,
+        )
+    assert not llm.calls
