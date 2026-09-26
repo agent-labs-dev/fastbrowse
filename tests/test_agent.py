@@ -130,6 +130,29 @@ async def test_field_writer_receives_popup_context_and_other_field_values() -> N
     assert prompt["requirements"] == list(steps)
 
 
+async def test_a_field_given_values_in_turn_types_them_in_order() -> None:
+    """Told the order, the writer still typed the correction first; the values it lists are typed in turn."""
+    target = field("First Name")
+    state = await run_state()
+    listed: JsonValue = {"missing": False, "text": "Priya Sharman", "values": ["Priya Sharma", "Priya Sharman"]}
+    llm = ScriptedLLM([listed, listed, listed])
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), llm)
+    obs = observation((target,))
+
+    assert await agent._generate_text(state, obs, target) == "Priya Sharma"
+    typed = HistoryEntry(
+        operation=Operation.FILL,
+        target="First Name",
+        outcome=StepOutcome.EXECUTED,
+        page_changed=False,
+        text="Priya Sharma",
+    )
+    state.history.append(typed.model_copy(update={"outcome": StepOutcome.COVERED}))
+    assert await agent._generate_text(state, obs, target) == "Priya Sharma"
+    state.history.append(typed)
+    assert await agent._generate_text(state, obs, target) == "Priya Sharman"
+
+
 def test_a_value_typed_before_the_recent_window_stays_in_the_record() -> None:
     """A long wizard pushed its first fill out of the recent actions, and the correction then showed no order."""
     first = HistoryEntry(
@@ -139,6 +162,17 @@ def test_a_value_typed_before_the_recent_window_stays_in_the_record() -> None:
     limits = ObservationLimits(history_entries=2, earlier_history_entries=1)
     record = _record([first, *[click] * 5], limits)
     assert record[0].text == "Ada"
+    assert len(record) == 4
+
+
+def test_a_box_ticked_before_the_recent_window_stays_in_the_record() -> None:
+    """A wizard's newsletter tick fell out of the recent actions, and the verifier held the form unfilled."""
+    tick = HistoryEntry(
+        operation=Operation.CLICK, target="Newsletter", outcome=StepOutcome.EXECUTED, page_changed=True, setting=True
+    )
+    click = HistoryEntry(operation=Operation.CLICK, target="Next", outcome=StepOutcome.EXECUTED, page_changed=True)
+    record = _record([tick, *[click] * 5], ObservationLimits(history_entries=2, earlier_history_entries=1))
+    assert record[0].target == "Newsletter"
     assert len(record) == 4
 
 

@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A value the task changes later is typed in order.** Asked to enter one value and later correct it, the
+  field writer typed the correction on the first pass, so no step could show the change. It now lists the
+  values a field holds in turn, and the run types the first one not yet typed there. A box ticked or option
+  chosen early in a long form stays in the record the completion checks read, as typed values already did.
 - **Paginated lists are read while the next page loads.** After the reader identifies a list needed in full,
   intermediate pages collect records concurrently. Their quotes merge in page order before the final page
   answers the comparison, within the run's page, step, call and time limits.

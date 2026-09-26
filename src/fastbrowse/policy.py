@@ -133,6 +133,9 @@ class HistoryEntry(Frozen):
     """Entered value, redacted before storage; secrets are represented only by a marker."""
     effect: str | None = None
     """What the action visibly did: the address, controls shown or removed, and values before and after."""
+    setting: bool | None = None
+    """True for a click that chose an option or ticked a box, a value set and kept in the record as a typed one is;
+    unset otherwise, so the actions a model is shown do not each carry it."""
 
 
 class StepContext(Frozen):
