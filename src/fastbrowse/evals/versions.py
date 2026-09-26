@@ -708,6 +708,8 @@ def protocol_docs() -> str:
         "correct answers whose sessions showed no sign of failing or giving up.",
         "An attempt that fails while the task's site answers its start URL with a 5xx, or not at all, is an outage "
         "too: a site serving errors fails every arm alike.",
+        'A hosted session Browser Use itself ends in `error` ("Task ended unexpectedly.") is a Browser Use outage: '
+        "its agent neither answered nor gave up.",
         "A fastbrowse attempt in which any Jev call took over 2 seconds, retries included, is a Jev outage: healthy "
         "calls take about half a second at any page size, and no worse than 0.93 seconds in 45 measured.",
         "An attempt an outage ended is waited out and run again, up to five times over about 25 minutes.",

@@ -461,6 +461,10 @@ async def test_a_hosted_session_whose_output_fails_the_schema_keeps_its_cost(mon
     outcome, report = await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
     assert outcome.answer == "[Session cost limit reached]"
     assert report.dollars == 0.37 and report.status == "stopped"
+    # Browser Use ending the session itself is its outage, retried like a 503, not its agent's failure.
+    session.output, session.status = "Task ended unexpectedly.", SimpleNamespace(value="error")
+    with pytest.raises(Unavailable):
+        await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
 
 
 async def test_a_hosted_run_is_timed_to_its_agents_answer_not_to_the_session_stopping(

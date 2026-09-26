@@ -432,6 +432,10 @@ async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
         output = session.output
     else:
         raise error
+    if session.status.value == "error":
+        # Browser Use's own infrastructure ending the session ("Task ended unexpectedly."), not its agent giving up
+        # or answering wrong: it appeared in none of 0.5.7's sessions and in 13 of one day's 114.
+        raise Unavailable("Browser Use ended the session in error")
     answered = await hosted_answer(client, str(session.id), output)
     if isinstance(output, BaseModel):
         outcome = Outcome(output.model_dump_json(), output.model_dump(), None, unobservable=True)
