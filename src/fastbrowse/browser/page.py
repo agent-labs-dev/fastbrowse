@@ -214,6 +214,9 @@ _SETTLE_QUIET_SECONDS = 0.2
 # is waiting for does not exist yet. Its own budget, inside `_SETTLE_SECONDS`, is what keeps a page that spins
 # forever from paying the whole settle budget on every action: past it, quiet and ready decide alone.
 _SETTLE_LOADING_SECONDS = 1.5
+# How long a capture waits on a loading indicator an action's settle gave up on. A read of "Loading..." costs a
+# 2 to 3 second LLM call and a second read after it, where the-internet's dynamic loading needs about 5 seconds.
+_CAPTURE_LOADING_SECONDS = 3.0
 _SCREENSHOT_WAIT_SECONDS = 1.0
 _NAVIGATE_ATTEMPTS = 2
 _NAVIGATE_RETRY_SECONDS = 1.0
@@ -434,6 +437,8 @@ class CdpPage(Page):
         return missing
 
     async def capture(self) -> Capture:
+        with suppress(BrowserError):
+            await self._loaded(_CAPTURE_LOADING_SECONDS)
         text_parts: list[str] = []
         blocks: list[Block] = []
         offset = 0
@@ -1217,6 +1222,18 @@ class CdpPage(Page):
             "if (document.hidden) poll(); else requestAnimationFrame(() => setTimeout(poll, 0)); })",
         )
         return _SETTLED.validate_python(result)
+
+    async def _loaded(self, timeout_seconds: float) -> None:
+        """Wait, in the renderer, for a visible loading indicator to go. Only the indicator is waited on: a page
+        that keeps changing, a ticker or a clock, is readable now and would never go quiet."""
+        await self._evaluate(
+            self._session.active_session_id,
+            f"new Promise(resolve => {{ const sample = {_PAGE_JS}; "
+            f"const deadline = performance.now() + {timeout_seconds * 1000}; "
+            "const poll = () => { const state = sample('fingerprint'); "
+            "if (!state.loading || state.hidden || performance.now() >= deadline) { resolve(null); return; } "
+            f"setTimeout(poll, {_SETTLE_POLL_SECONDS * 1000}); }}; poll(); }})",
+        )
 
     async def _evaluate(self, session_id: str, expression: str) -> JsonValue:
         out = await self._session.client.send.Runtime.evaluate(

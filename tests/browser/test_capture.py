@@ -376,3 +376,11 @@ async def test_record_candidates_preserve_frame_and_shadow_boundaries(
     else:
         assert all(block.frame_id is None and "/shadow:" in block.source_id for block in inner)
         assert len({block.source_id.rsplit(":", 1)[0] for block in inner}) == 3
+
+
+async def test_a_capture_waits_for_a_loading_indicator_an_action_gave_up_on(page: CdpPage, main_site: str) -> None:
+    """A read of "Loading..." costs an LLM call and a second read once the page has drawn what it was loading."""
+    await page.navigate(f"{main_site}/loading.html")
+    capture = await page.capture()
+    assert "Hello World!" in capture.text
+    assert "Loading..." not in capture.text

@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+  <head><title>Loading fixture</title></head>
+  <body>
+    <h1>Dynamic loading</h1>
+    <div id="loading">Loading...</div>
+    <div id="finish" hidden><h4>Hello World!</h4></div>
+    <script>
+      // Longer than an action's 1.5s spinner budget, as the-internet's dynamic loading example is.
+      setTimeout(() => {
+        document.getElementById("loading").hidden = true;
+        document.getElementById("finish").hidden = false;
+      }, 2500);
+    </script>
+  </body>
+</html>

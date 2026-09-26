@@ -29,6 +29,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - **A comparison is read without restating every record.** The reader names the records a winner or count rests
   on as block ranges, and code copies their quotes in, where it wrote a claim for each: a priciest-book read took
   4.8 seconds rather than 7.9.
+- **A page is read once it has finished loading.** A capture waits up to 3 seconds for a visible loading
+  indicator to go, where it read "Loading..." with the LLM and then read the page again.
 
 ## [0.5.7] - 2026-09-25
 
