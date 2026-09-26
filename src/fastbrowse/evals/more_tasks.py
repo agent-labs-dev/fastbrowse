@@ -87,6 +87,22 @@ def _has_truth(outcome: Outcome, truth: object) -> str | None:
     return _has(str(truth))(outcome, truth)
 
 
+def _whole(value: str) -> Check:
+    """The answer states this whole number: 251 is not 1251 or 25.1."""
+
+    def check(outcome: Outcome, _: object) -> str | None:
+        return None if re.search(_number(value), _prose(outcome)) else f"answer lacks {value}: {outcome.answer!r}"
+
+    return check
+
+
+def _all(*checks: Check) -> Check:
+    def check(outcome: Outcome, truth: object) -> str | None:
+        return "; ".join(e for c in checks if (e := c(outcome, truth))) or None
+
+    return check
+
+
 def _exactly(needle: str) -> Check:
     """Case matters: the page's own capitals are the evidence that the answer was read, not echoed from the task."""
 
@@ -211,6 +227,15 @@ DEV: tuple[LiveTask, ...] = (
         _has("man of success", "man of value"),
         Category.LOOKUP,
     ),
+    # The dev pair of quotes-einstein-count: one author's quotes counted across every page.
+    LiveTask(
+        "quotes-rowling-count",
+        "https://quotes.toscrape.com/",
+        "How many quotes by J.K. Rowling are there across the whole site?",
+        _fixed(None),
+        _has("9"),
+        Category.LOOKUP,
+    ),
 )
 
 HELDOUT: tuple[LiveTask, ...] = (
@@ -252,6 +277,38 @@ HELDOUT: tuple[LiveTask, ...] = (
         "What is the oldest Python version the latest httpx release supports?",
         _httpx_requires,
         _has_truth,
+        Category.LOOKUP,
+    ),
+    LiveTask(
+        "new-tab-page",
+        "https://www.qa-practice.com/elements/new_tab/link",
+        "Follow the link that opens a new tab and tell me the sentence the new page shows.",
+        _fixed(None),
+        _has("I am a new page in a new tab"),
+        Category.WIDGET,
+    ),
+    LiveTask(
+        "countries-namibia-area",
+        "https://www.scrapethissite.com/pages/simple/",
+        "What area, in square kilometres, does this page list for Namibia?",
+        _fixed(None),
+        _has("825418"),
+        Category.LOOKUP,
+    ),
+    LiveTask(
+        "table-total-due",
+        "https://the-internet.herokuapp.com/tables",
+        "In the second table, what is the total amount due across all of its rows?",
+        _fixed(None),
+        _whole("251"),
+        Category.LOOKUP,
+    ),
+    LiveTask(
+        "quotes-search-lewis",
+        "https://quotes.toscrape.com/search.aspx",
+        "Use the search form to find C.S. Lewis's quote tagged god, and tell me what it says.",
+        _fixed(None),
+        _has("wondering how painful", "turn out to be"),
         Category.LOOKUP,
     ),
 )
@@ -357,6 +414,21 @@ def _first_friday_check(outcome: Outcome, truth: object) -> str | None:
     return _says(outcome, friday, weekday=True)
 
 
+async def _last_sunday_after_next(_: httpx.AsyncClient) -> object:
+    after_next = (_today().replace(day=1) + timedelta(days=62)).replace(day=1)
+    last = (after_next + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    sunday = last - timedelta(days=(last.weekday() - 6) % 7)
+    return {"date": sunday.isoformat(), "dmy": f"{sunday:%d/%m/%Y}"}
+
+
+def _last_sunday_check(outcome: Outcome, truth: object) -> str | None:
+    """Graded on the answer: the date field has no label, so the captured controls never include it."""
+    assert isinstance(truth, dict)
+    if truth["dmy"] in _prose(outcome):
+        return None
+    return _says(outcome, date.fromisoformat(truth["date"]))
+
+
 STRETCH_DEV: tuple[LiveTask, ...] = (
     LiveTask(
         "stretch-wizard-review",
@@ -451,5 +523,23 @@ STRETCH_HELDOUT: tuple[LiveTask, ...] = (
         _fixed(None),
         _pairs(("Galaxy S20 Ultra", "1399"), ("Galaxy Note 20 Ultra", "1299"), ("Galaxy S20+", "1199")),
         Category.WIDGET,
+    ),
+    LiveTask(
+        "stretch-datepicker-last-sunday",
+        "https://testautomationpractice.blogspot.com/",
+        "Using Date Picker 2, the dd/mm/yyyy calendar, select the last Sunday of the month after next. Tell me "
+        "the date the field shows.",
+        _last_sunday_after_next,
+        _last_sunday_check,
+        Category.WIDGET,
+    ),
+    LiveTask(
+        "stretch-books-sequential-art-one-star",
+        "https://books.toscrape.com/catalogue/category/books/sequential-art_5/index.html",
+        "Across every page of the Sequential Art category, how many books are rated one star, and which of them "
+        "is the most expensive, at what price?",
+        _fixed(None),
+        _all(_whole("13"), _has("Sandman", "54.81")),
+        Category.LOOKUP,
     ),
 )

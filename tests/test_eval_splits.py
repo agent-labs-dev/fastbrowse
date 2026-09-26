@@ -23,6 +23,15 @@ RIGHT = {
     "table-largest-due": ("Jason Doe, who owes $100.00.", None),
     "httpx-requires-python": ("Python 3.8 or later.", "3.8"),
     "quotes-search": ("\u201cTry not to become a man of success. Rather become a man of value.\u201d", None),
+    "quotes-rowling-count": ("There are 9 quotes by J.K. Rowling.", None),
+    "new-tab-page": ("The new page says: I am a new page in a new tab", None),
+    "countries-namibia-area": ("Namibia's area is listed as 825418.0 km\u00b2.", None),
+    "table-total-due": ("The rows owe $251.00 in total.", None),
+    "quotes-search-lewis": (
+        "\u201cWe are not necessarily doubting that God will do the best for us; we are wondering how painful the "
+        "best will turn out to be.\u201d",
+        None,
+    ),
 }
 
 

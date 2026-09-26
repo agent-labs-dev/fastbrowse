@@ -160,6 +160,7 @@ For example, `--only books-mystery-cheapest quotes-einstein-count` selects those
 | `countries-mongolia` | lookup | 5 | What population does this page list for Mongolia? |
 | `table-largest-due` | widget | 6 | In the first table, whose amount due is the largest? |
 | `quotes-search` | lookup | 5 | Use the search form to find Albert Einstein's quote tagged success, and tell me what it says. |
+| `quotes-rowling-count` | lookup | 1 | How many quotes by J.K. Rowling are there across the whole site? |
 <!-- /evals:tasks:dev -->
 
 <!-- evals:tasks:heldout -->
@@ -170,6 +171,10 @@ For example, `--only books-mystery-cheapest quotes-einstein-count` selects those
 | `quotes-js-page2` | lookup | 5 | Who wrote the first quote on the second page? |
 | `crates-serde` | lookup | 5 | What is the latest stable version of the serde crate? |
 | `httpx-requires-python` | lookup | 5 | What is the oldest Python version the latest httpx release supports? |
+| `new-tab-page` | widget | 1 | Follow the link that opens a new tab and tell me the sentence the new page shows. |
+| `countries-namibia-area` | lookup | 1 | What area, in square kilometres, does this page list for Namibia? |
+| `table-total-due` | lookup | 1 | In the second table, what is the total amount due across all of its rows? |
+| `quotes-search-lewis` | lookup | 1 | Use the search form to find C.S. Lewis's quote tagged god, and tell me what it says. |
 <!-- /evals:tasks:heldout -->
 
 The rule that makes the split worth having: **agent changes are iterated against `dev` only.** `heldout` is run
@@ -214,6 +219,8 @@ Date truth is computed when the attempt runs, and form and date tasks are graded
 | Task | Category | Version | Asks |
 |---|---|---|---|
 | `stretch-bstack-apple-samsung` | widget | 6 | Filter the product list to Apple and Samsung together, then remove the Apple filter so only Samsung remains. Sort by price highest to lowest, and tell me the three most expensive phones and their prices. |
+| `stretch-datepicker-last-sunday` | widget | 1 | Using Date Picker 2, the dd/mm/yyyy calendar, select the last Sunday of the month after next. Tell me the date the field shows. |
+| `stretch-books-sequential-art-one-star` | lookup | 1 | Across every page of the Sequential Art category, how many books are rated one star, and which of them is the most expensive, at what price? |
 <!-- /evals:tasks:stretch-heldout -->
 
 ## Versions
@@ -242,10 +249,10 @@ when they differ:
 | Suite | Tasks | Version |
 |---|---|---|
 | `core` | 20 | `bd7a00ba` |
-| `dev` | 12 | `02caf37f` |
-| `heldout` | 5 | `4457adfd` |
+| `dev` | 13 | `6b9d5227` |
+| `heldout` | 9 | `86a31db4` |
 | `stretch-dev` | 7 | `7f6979c7` |
-| `stretch-heldout` | 1 | `46f70885` |
+| `stretch-heldout` | 3 | `0ab6d8fe` |
 | local fixtures | 6 | `dda8ba89` |
 
 Tasks past version 1: `arxiv-open` v4, `arxiv-title` v5, `books-mystery-cheapest` v5, `books-travel-priciest` v5, `countries-mongolia` v5, `crates-serde` v5, `dynamic-loading` v6, `expandtesting-login` v5, `flights-search` v4, `frame-heading` v2, `github-license` v5, `github-open` v4, `google-flights` v5, `hn-comments` v4, `hn-top` v5, `hockey-bruins-1990` v5, `hover-profile` v6, `httpx-requires-python` v5, `new-window` v6, `oscars-2012` v5, `pizza-order` v5, `practice-login` v5, `pypi-newer` v5, `pypi-open` v4, `pypi-structured` v5, `pypi-version` v5, `quotes-einstein-count` v5, `quotes-js-page2` v5, `quotes-search` v5, `ruff-release` v5, `saucedemo-cart` v5, `saucedemo-checkout` v5, `saucedemo-locked-out` v5, `saucedemo-pause` v4, `stretch-books-nonfiction-five-star` v7, `stretch-bstack-apple-google` v6, `stretch-bstack-apple-samsung` v6, `stretch-calendar-first-friday` v7, `stretch-date-range-monday` v6, `stretch-quotes-top-authors` v6, `stretch-wizard-correction` v6, `stretch-wizard-review` v5, `table-largest-due` v6, `wiki-godel` v5, `wiki-open` v4.

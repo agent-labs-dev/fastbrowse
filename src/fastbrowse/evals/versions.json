@@ -31,6 +31,10 @@
     "version": 5,
     "fingerprint": "6586ec5b5c6ff5d9"
   },
+  "countries-namibia-area": {
+    "version": 1,
+    "fingerprint": "0eeb6b0feb1b345b"
+  },
   "crates-serde": {
     "version": 5,
     "fingerprint": "a97df36fcd71c100"
@@ -87,6 +91,10 @@
     "version": 1,
     "fingerprint": "851683583e9044a8"
   },
+  "new-tab-page": {
+    "version": 1,
+    "fingerprint": "34239c77f41a9aeb"
+  },
   "new-window": {
     "version": 6,
     "fingerprint": "3e7d103a752a4054"
@@ -127,9 +135,17 @@
     "version": 5,
     "fingerprint": "0fe6dec077e2f3b2"
   },
+  "quotes-rowling-count": {
+    "version": 1,
+    "fingerprint": "3360fefe266ed3c7"
+  },
   "quotes-search": {
     "version": 5,
     "fingerprint": "cda12ede3847dbfc"
+  },
+  "quotes-search-lewis": {
+    "version": 1,
+    "fingerprint": "305e0f15d3ee8a88"
   },
   "ruff-release": {
     "version": 5,
@@ -159,6 +175,10 @@
     "version": 7,
     "fingerprint": "4ecbca4528f0d0fd"
   },
+  "stretch-books-sequential-art-one-star": {
+    "version": 1,
+    "fingerprint": "729a63e09f7a000c"
+  },
   "stretch-bstack-apple-google": {
     "version": 6,
     "fingerprint": "699683019f3c9938"
@@ -174,6 +194,10 @@
   "stretch-date-range-monday": {
     "version": 6,
     "fingerprint": "adacd1fb6f21d7d5"
+  },
+  "stretch-datepicker-last-sunday": {
+    "version": 1,
+    "fingerprint": "d63f08d3e623580b"
   },
   "stretch-quotes-top-authors": {
     "version": 6,
@@ -194,6 +218,10 @@
   "table-largest-due": {
     "version": 6,
     "fingerprint": "94f18cfdb277c82e"
+  },
+  "table-total-due": {
+    "version": 1,
+    "fingerprint": "83bdcd0705c4f79c"
   },
   "wiki-godel": {
     "version": 5,
