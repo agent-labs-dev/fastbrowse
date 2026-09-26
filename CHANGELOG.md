@@ -26,6 +26,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   waited on for 12 seconds.
 - **A run reaches its first page sooner.** `run_task` asks for the plan and the shortcut while the browser starts,
   so the tab opens straight onto the shortcut, and opening the tab sends its independent browser commands at once.
+- **A comparison is read without restating every record.** The reader names the records a winner or count rests
+  on as block ranges, and code copies their quotes in, where it wrote a claim for each: a priciest-book read took
+  4.8 seconds rather than 7.9.
 
 ## [0.5.7] - 2026-09-25
 

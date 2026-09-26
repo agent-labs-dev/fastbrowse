@@ -269,6 +269,11 @@ class _ReadClaim(Frozen):
             "claim:N for an earlier claim in this response's claims array, indexed from zero."
         ),
     )
+    records: tuple[_Cite, ...] = Field(
+        default=(),
+        description="Every record from this chunk compared by this claim, as block ranges only. Code copies "
+        "their quotes into the claim's basis; do not also write a prose claim for each record.",
+    )
     orders_list: _Cite | None = Field(
         default=None,
         description=(
@@ -516,11 +521,13 @@ async def read(
                     "# Reader\nAnswer the question from this capture's source blocks and the collected "
                     "evidence. Each claim states only what its cited blocks, and the claims it draws on, show.\n\n"
                     "# Claims\n"
-                    "- A claim cites one run of blocks. Records outside one run are separate claims, joined by "
-                    "a conclusion that draws on them.\n"
+                    "- A claim cites one run of blocks. For a comparison, put every compared record from this "
+                    "chunk in the conclusion's records as block ranges only. Code copies their quotes into its "
+                    "basis; never write a prose claim for each compared record. Use draws_on for earlier "
+                    "evidence and context claims.\n"
                     "- The answer is checked later without the page, so a comparison also needs claims for the "
                     "query, filters, date and sort that make it valid, with a null requirement id.\n"
-                    "- A count, total or winner draws on every record it counts or compares and on those "
+                    "- A count, total or winner rests on every record it counts or compares and on those "
                     "context claims. It cites blocks only when the page itself states it.\n"
                     "- Give a claim a requirement id only when it answers that whole requirement with its "
                     "constraints; otherwise null. Set answered only when the collected evidence and this capture "
@@ -543,7 +550,8 @@ async def read(
                     "being compared, the leading record answers: give the claim citing it its requirement id and cite "
                     "that statement in orders_list rather than listing the requirement in continues. "
                     "Once the collected evidence and this capture cover every page, the "
-                    "conclusion takes the requirement id and draws on each record once. A task that bounds the "
+                    "conclusion takes the requirement id, includes this chunk's records and draws on earlier "
+                    "records once each. A task that bounds the "
                     "pages it covers ends at the last page it names.\n\n"
                     f"# Trust\n{UNTRUSTED} Never infer facts the capture and evidence do not show."
                 ),
@@ -613,6 +621,31 @@ async def read(
                 if missing:
                     lost[tally_read.requirement_id] = None
         for index, claim in enumerate(result.data.claims):
+            records: dict[str, Fact] = {}
+            missing = max(0, len(claim.records) - _MAX_CONTINUING_RECORDS)
+            for cite in claim.records[:_MAX_CONTINUING_RECORDS]:
+                evidence = _cited(capture, part, cite)
+                if evidence is None:
+                    missing += 1
+                else:
+                    record = _quoted(evidence)
+                    records[fact_id(record)] = record
+            if missing:
+                # A comparison missing an operand cannot close here or on a later page using these notes.
+                affected = (
+                    (claim.requirement_id,)
+                    if claim.requirement_id is not None and claim.requirement_id in requirement_ids
+                    else requirement_ids
+                )
+                lost.update(dict.fromkeys(affected))
+                uncovered += missing
+                rejected_here += 1
+                continue
+            for key, record in records.items():
+                so_far.add(record)
+                found.append(record)
+                references[key] = key
+            claim = claim.model_copy(update={"draws_on": (*claim.draws_on, *records)})
             # Carried to the next chunk without its requirement id, which only the whole page can settle.
             fact = _remember(capture, part, claim.model_copy(update={"requirement_id": None}), so_far, references)
             if fact is None:

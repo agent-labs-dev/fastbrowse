@@ -1763,6 +1763,110 @@ async def test_a_count_the_page_does_not_state_is_derived_and_judged_by_its_reco
     assert "Oak $19" in unsupported and "Pine $7" in unsupported and "MISSING" not in unsupported
 
 
+async def test_compact_comparison_records_keep_each_quote_once_in_the_answer_basis() -> None:
+    page = capture(
+        (BlockKind.HEADING, "Travel books"),
+        (BlockKind.RECORD, "Oak\n$19"),
+        (BlockKind.RECORD, "Pine\n$7"),
+    )
+    requirement = Requirement(id="r", text="Which travel book is cheapest?", kind=RequirementKind.INFORMATION)
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {"text": "Travel books", "cite": {"first": "s0", "last": "s0"}},
+                    {
+                        "requirement_id": "r",
+                        "text": "Pine is cheapest at $7.",
+                        "cite": None,
+                        "draws_on": ["claim:0"],
+                        "records": [
+                            {"first": "s1", "last": "s1"},
+                            {"first": "s2", "last": "s2"},
+                            {"first": "s1", "last": "s1"},
+                        ],
+                    },
+                ],
+                "answered": True,
+            }
+        ]
+    )
+    notes = Notes()
+    outcome = await read(llm, page, requirement.text, ["r"], notes)
+    assert len(outcome.facts) == 4 and not outcome.rejected_claims
+    ((_, winner),) = notes.supporting("r")
+    assert winner.evidence is None and winner.basis == tuple(notes.evidence)
+    draft = draft_answer(Plan(requirements=(requirement,), answer_expected=True), notes)
+    assert draft is not None and draft.answer == winner.text
+    assert [citation.quote for citation in draft.citations] == ["Travel books", "Oak\n$19", "Pine\n$7"]
+    unsupported = claim_check_questions(draft, notes)["unsupported_0"].instructions
+    assert all(evidence.model_dump_json() in unsupported for evidence in notes.evidence.values())
+
+
+@pytest.mark.parametrize("bad_record", ["unknown", "reversed", "frame", "overflow"])
+async def test_a_compact_comparison_with_a_lost_record_cannot_close_later(bad_record: str) -> None:
+    page = capture((BlockKind.RECORD, "Oak $19"), (BlockKind.RECORD, "Pine $7"))
+    records: list[JsonValue] = [{"first": "s0", "last": "s0"}]
+    if bad_record == "overflow":
+        records *= 61
+    elif bad_record == "frame":
+        page = page.model_copy(
+            update={"blocks": (page.blocks[0], page.blocks[1].model_copy(update={"frame_id": "other"}))}
+        )
+        records.append({"first": "s0", "last": "s1"})
+    else:
+        records.append({"first": "s1", "last": "missing" if bad_record == "unknown" else "s0"})
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [{"requirement_id": "r", "text": "Pine is cheapest", "cite": None, "records": records}],
+                "answered": True,
+            },
+            {
+                "claims": [{"requirement_id": "r", "text": "Pine is cheapest", "cite": {"first": "s1", "last": "s1"}}],
+                "answered": True,
+            },
+        ]
+    )
+    notes = Notes()
+    outcome = await read(llm, page, "Cheapest?", ["r"], notes)
+    assert outcome.rejected_claims == outcome.uncovered == 1
+    assert outcome.incomplete == ("r",) and not notes.evidenced("r")
+    await read(llm, page, "Cheapest?", ["r"], notes, incomplete=outcome.incomplete)
+    assert not notes.evidenced("r")
+
+
+async def test_compact_records_survive_chunks_and_join_an_earlier_pages_evidence() -> None:
+    earlier = capture((BlockKind.RECORD, "Oak $19"))
+    source = block_evidence(earlier, "s0")
+    notes = Notes([Fact(text=source.quote, evidence=source, reader=FactReader.LLM)])
+    page = capture((BlockKind.RECORD, "Elm $12"), (BlockKind.RECORD, "Pine $7"))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [{"text": "Elm costs $12", "cite": None, "records": [{"first": "s0", "last": "s0"}]}],
+                "answered": False,
+            },
+            {
+                "claims": [
+                    {
+                        "requirement_id": "r",
+                        "text": "Pine is cheapest at $7",
+                        "cite": None,
+                        "draws_on": [evidence_id(source), evidence_id(block_evidence(page, "s0"))],
+                        "records": [{"first": "s1", "last": "s1"}],
+                    }
+                ],
+                "answered": True,
+            },
+        ]
+    )
+    outcome = await read(llm, page, "Cheapest?", ["r"], notes, max_chars=7, continuing={"r"})
+    assert outcome.coverage == (0, 1)
+    assert [evidence.quote for evidence in notes.supporting_evidence("r")] == ["Oak $19", "Elm $12", "Pine $7"]
+    assert "Elm $12" in llm.calls[1][1][-1].content
+
+
 async def test_basis_references_cannot_name_rejected_or_later_claims() -> None:
     page = capture((BlockKind.PARAGRAPH, "A $3"), (BlockKind.PARAGRAPH, "B $5"))
     llm = ScriptedLLM(
