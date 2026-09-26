@@ -12,8 +12,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 ## [Unreleased]
 
 - **Evals never count a provider's outage against an agent.** Browser Use is now scored on its own agent's
-  `done`, not on Browser Use's later `is_task_successful` verdict, which failed six correct 0.5.7 answers. It is
-  timed to that `done`, not to the session reporting stopped, which came up to two minutes later. Outage waits
+  answer (its `done`, or its final reply when it never calls `done`), not on Browser Use's later
+  `is_task_successful` verdict, which failed six correct 0.5.7 answers. It is timed to that answer, not to the
+  session reporting stopped, which came up to two minutes later. Outage waits
   fastbrowse measures inside a run are left out of every published time. A fastbrowse attempt in which any Jev call
   took over 2 seconds (healthy calls take about half a second at any page size) is a Jev outage, run again rather
   than scored. The 0.5.7 results are republished under these rules.

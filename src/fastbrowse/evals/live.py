@@ -369,18 +369,26 @@ async def _down(task: LiveTask, http: httpx.AsyncClient) -> str | None:
     return None
 
 
-async def hosted_answer(client: Any, session_id: str) -> datetime | None:
-    """When the hosted agent answered: its last `done` result that was not an error, or None if it never did."""
-    answered, after = None, None
+async def hosted_answer(client: Any, session_id: str, output: object) -> datetime | None:
+    """When the hosted agent answered, or None if it never did: its last `done` result that was not an error. An
+    agent that answers without calling `done` (0.5.7's github-license, among others) replies in a message, which
+    the session keeps as its output; that last reply is its answer."""
+    done: datetime | None = None
+    reply: datetime | None = None
+    called_done, after = False, None
     for _ in range(100):
         page = await client.sessions.messages(session_id, limit=100, **({"after": after} if after else {}))
         for message in page.messages:
-            if message.type == "completion_result" and not json.loads(message.data or "{}").get("is_error"):
-                answered = max(answered or message.created_at, message.created_at)
+            if message.type == "completion_result":
+                called_done = True
+                if not json.loads(message.data or "{}").get("is_error"):
+                    done = max(done or message.created_at, message.created_at)
+            elif message.type == "assistant_message":
+                reply = max(reply or message.created_at, message.created_at)
         if not page.messages or not getattr(page, "has_more", False):
-            return answered
+            break
         after = str(page.messages[-1].id)
-    return answered
+    return done if called_done else reply if output else None
 
 
 def answer_seconds(created_after: float, session: Any, answered: datetime | None, wall: float) -> float:
@@ -424,7 +432,7 @@ async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
         output = session.output
     else:
         raise error
-    answered = await hosted_answer(client, str(session.id))
+    answered = await hosted_answer(client, str(session.id), output)
     if isinstance(output, BaseModel):
         outcome = Outcome(output.model_dump_json(), output.model_dump(), None, unobservable=True)
     elif isinstance(output, dict):

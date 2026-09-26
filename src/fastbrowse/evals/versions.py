@@ -701,7 +701,8 @@ def protocol_docs() -> str:
         "Rows keep raw `status`, `task_successful` and `normalized_status`: "
         "`done`, `stopped`, `budget`, `timeout`, `error`, `blocked` or `unavailable`.",
         "A pass requires a correct grade and `done`, or the exact expected fastbrowse stop.",
-        "The hosted arm is `done` when its agent called `done` with a result that was not an error: its own "
+        "The hosted arm is `done` when its agent answered: it called `done` with a result that was not an error, "
+        "or, never calling `done`, replied with the answer the session kept as its output. That is its own "
         "completion, as fastbrowse is held to its own. Browser Use's `is_task_successful` is kept in the row "
         "(`task_successful`) but decides nothing: it is Browser Use's later judgement of the session, and it failed "
         "correct answers whose sessions showed no sign of failing or giving up.",
@@ -715,7 +716,7 @@ def protocol_docs() -> str:
         "Time runs from the start of an attempt to the agent's answer. Provider outage waits measured inside an "
         "attempt (`transient_seconds`: failed requests and the backoff between them) are left out of every time "
         "published; only fastbrowse's client can see its own, so the other arms' are 0.",
-        "The hosted arm's time ends at its agent's `done`, by Browser Use's own clock from the session's creation. "
+        "The hosted arm's time ends at its agent's answer, by Browser Use's own clock from the session's creation. "
         "Its API reports the session stopped as much as two minutes later (`session_seconds`), which is not counted.",
         "Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the row.",
         "Existing timing includes browser setup. These rows do not claim the planned handoff-only timing protocol.",

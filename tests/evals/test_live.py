@@ -511,8 +511,12 @@ async def test_a_hosted_run_is_timed_to_its_agents_answer_not_to_the_session_sto
     monkeypatch.setattr(live, "load_settings", lambda: SimpleNamespace(browser_key=lambda: "key"))
     _, report = await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
     assert report.answered is True and report.task_successful is False
-    answered = await live.hosted_answer(Client(), "s1")
+    answered = await live.hosted_answer(Client(), "s1", "0.28.1")
     assert answered == created + timedelta(seconds=7)  # the `done` that was an error is not an answer
+    # An agent that answered in a reply without calling `done` answered at that reply, if the session kept it.
+    messages[1:] = []
+    assert await live.hosted_answer(Client(), "s1", "0.28.1") == created + timedelta(seconds=3)
+    assert await live.hosted_answer(Client(), "s1", None) is None
     # Half a second until the session existed, then 7s by its own clock; never past the session's own wall time.
     assert live.answer_seconds(0.5, session, answered, 120.0) == 7.5
     assert live.answer_seconds(0.5, session, answered, 3.0) == 3.0

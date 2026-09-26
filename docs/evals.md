@@ -46,13 +46,13 @@ Its Pydantic pin conflicts with the hosted SDK, so it is not a project extra.
 The jev-ultrafast runner answers a one-option choice itself, as fastbrowse does, because Jev refuses it, and drops a code fence its text helper's model wraps around JSON, which upstream's strict parse rejects.
 Rows keep raw `status`, `task_successful` and `normalized_status`: `done`, `stopped`, `budget`, `timeout`, `error`, `blocked` or `unavailable`.
 A pass requires a correct grade and `done`, or the exact expected fastbrowse stop.
-The hosted arm is `done` when its agent called `done` with a result that was not an error: its own completion, as fastbrowse is held to its own. Browser Use's `is_task_successful` is kept in the row (`task_successful`) but decides nothing: it is Browser Use's later judgement of the session, and it failed correct answers whose sessions showed no sign of failing or giving up.
+The hosted arm is `done` when its agent answered: it called `done` with a result that was not an error, or, never calling `done`, replied with the answer the session kept as its output. That is its own completion, as fastbrowse is held to its own. Browser Use's `is_task_successful` is kept in the row (`task_successful`) but decides nothing: it is Browser Use's later judgement of the session, and it failed correct answers whose sessions showed no sign of failing or giving up.
 An attempt that fails while the task's site answers its start URL with a 5xx, or not at all, is an outage too: a site serving errors fails every arm alike.
 A fastbrowse attempt in which any Jev call took over 2 seconds, retries included, is a Jev outage: healthy calls take about half a second at any page size, and no worse than 0.93 seconds in 45 measured.
 An attempt an outage ended is waited out and run again, up to five times over about 25 minutes.
 A row still unavailable after that is recorded but scores nothing, and neither does one attempt of every other arm at that task: each comparison scores its arms on the same attempts at the same tasks.
 Time runs from the start of an attempt to the agent's answer. Provider outage waits measured inside an attempt (`transient_seconds`: failed requests and the backoff between them) are left out of every time published; only fastbrowse's client can see its own, so the other arms' are 0.
-The hosted arm's time ends at its agent's `done`, by Browser Use's own clock from the session's creation. Its API reports the session stopped as much as two minutes later (`session_seconds`), which is not counted.
+The hosted arm's time ends at its agent's answer, by Browser Use's own clock from the session's creation. Its API reports the session stopped as much as two minutes later (`session_seconds`), which is not counted.
 Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the row.
 Existing timing includes browser setup. These rows do not claim the planned handoff-only timing protocol.
 Jev is priced at list ($0.042 per million input tokens) whenever the gateway meters a request at $0, for fastbrowse and jev-ultrafast alike.
