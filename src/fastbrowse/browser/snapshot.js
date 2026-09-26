@@ -55,8 +55,10 @@
       if (roots.has(root)) return;
       roots.add(root);
       observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true });
-      // Property changes and scrolling can affect controls without producing mutation records.
-      for (const event of ['input', 'change', 'scroll']) root.addEventListener(event, changed, true);
+      // Input handlers can defer a navigation or redraw without mutating yet. Start the quiet clock at the
+      // event, so the reply's travel time counts toward settling even when the action changes nothing.
+      for (const event of ['input', 'change', 'scroll', 'wheel', 'pointermove', 'pointerdown', 'pointerup',
+        'keydown', 'keyup']) root.addEventListener(event, changed, true);
       changed();
     };
     registry.track(document);

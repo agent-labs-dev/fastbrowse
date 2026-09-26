@@ -446,7 +446,7 @@ async def test_an_unstable_target_expires_without_a_press(page: CdpPage, monkeyp
     monkeypatch.setattr(page_module, "_TARGET_STABILITY_SECONDS", 0)
     monkeypatch.setattr(page, "_move", AsyncMock())
     monkeypatch.setattr(page, "_evaluate", AsyncMock())
-    monkeypatch.setattr(page, "_before_action", AsyncMock(return_value=("fingerprint", ["guard"], (20.0, 20.0))))
+    monkeypatch.setattr(page, "_before_action", AsyncMock(return_value=("fingerprint", ["guard"], (20.0, 20.0), False)))
     pressed = AsyncMock()
     monkeypatch.setattr(page, "_input", pressed)
     outcome, _ = await page._click_point(("session", "main", 1, ["guard"]), (10.0, 10.0))

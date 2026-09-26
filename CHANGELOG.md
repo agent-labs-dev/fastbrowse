@@ -11,6 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Browser steps spend less time waiting on remote commands.** Clicks check for a popup with their target
+  guard, fills prepare focus with the editor check, and reads wait for loading and capture text in one call.
+  Navigation waits for a readiness event, input starts the settling clock before its reply returns, and new
+  tabs activate while their browser domains are enabled. Stale targets, covered controls, dialogs and secret
+  fields keep their checks, and a press still completes before a release is sent.
 - **A click that opens a new tab carries on in that tab.** The run stayed on the opening page, so the next
   step was spent choosing the new tab, and a read before it could credit the opening page's heading to the
   new window. The previous tab is still listed and can be switched back to.

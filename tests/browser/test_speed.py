@@ -51,6 +51,13 @@ def settling_site() -> Iterator[str]:
                 time.sleep(1.2)
                 body = b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
                 mime = "image/svg+xml"
+            elif self.path == "/parser.js":
+                time.sleep(0.35)
+                body = b"document.title = 'Parsed';"
+                mime = "application/javascript"
+            elif self.path == "/parsing":
+                body = b'<!doctype html><script src="/parser.js"></script><button>Ready</button>'
+                mime = "text/html"
             elif self.path == "/ready":
                 body = b"""<!doctype html><title>Settling fixture</title>
                 <button id="state">Stage 0</button><img src="/slow.svg">
@@ -144,6 +151,19 @@ async def test_settling_waits_out_staged_hydration(
     assert find(await page.observe(), "Stage 3")
     # The slow image is still loading: settling no longer waits for readyState complete.
     assert await eval_value(browser_session, browser_session.active_session_id, "document.readyState") == "interactive"
+
+
+async def test_readiness_waits_for_the_parser_in_one_call(
+    page: CdpPage, browser_session: BrowserSession, settling_site: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = browser_session.active_session_id
+    await browser_session.client.send.Page.navigate(params={"url": f"{settling_site}/parsing"}, session_id=session_id)
+    evaluate = AsyncMock(wraps=page._evaluate)
+    monkeypatch.setattr(page, "_evaluate", evaluate)
+    assert await page._ready(session_id, 2)
+    assert evaluate.await_count == 1
+    observation = await page.observe()
+    assert observation.title == "Parsed" and find(observation, "Ready")
 
 
 @pytest.mark.parametrize("nested", ["document", "shadow", "iframe"])
@@ -320,3 +340,57 @@ async def test_cancelled_observation_drains_history_and_snapshot(monkeypatch: py
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("operation", [Operation.CLICK, Operation.HOVER, Operation.ENTER])
+async def test_deferred_input_changes_are_settled_before_observation(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, operation: Operation
+) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.body.innerHTML = '<button>Change</button><p>Before</p>'; "
+        "const change = () => setTimeout(() => { document.querySelector('p').textContent = 'After'; }, 150); "
+        "const button = document.querySelector('button'); "
+        f"button.{'onpointerenter' if operation is Operation.HOVER else 'onclick'} = change;",
+    )
+    obs = await page.observe()
+    await asyncio.sleep(0.25)
+    result = await page.act(Action(operation=operation, target_id=find(obs, "Change").id), obs)
+    assert result.outcome is StepOutcome.EXECUTED and result.page_changed
+    assert "After" in (await page.observe()).viewport_text
+
+
+async def test_noop_input_still_waits_for_quiet(page: CdpPage, browser_session: BrowserSession, main_site: str) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session, browser_session.active_session_id, "document.body.innerHTML = '<button>Idle</button>'"
+    )
+    obs = await page.observe()
+    result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Idle").id), obs)
+    assert result.outcome is StepOutcome.EXECUTED and not result.page_changed
+    quiet = await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "performance.now() - window.__fastbrowse.lastMutation",
+    )
+    assert quiet >= page_module._SETTLE_QUIET_SECONDS * 1000
+
+
+async def test_capture_waits_for_loading_in_the_same_renderer_call(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await page.navigate(f"{main_site}/dispatch.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.body.innerHTML = '<p aria-busy=true>Loading</p>'; "
+        "setTimeout(() => { const p = document.querySelector('p'); "
+        "p.removeAttribute('aria-busy'); p.textContent = 'Ready to read'; }, 150);",
+    )
+    evaluate = AsyncMock(wraps=page._evaluate)
+    monkeypatch.setattr(page, "_evaluate", evaluate)
+    capture = await page.capture()
+    assert "Ready to read" in capture.text and "Loading" not in capture.text
+    assert evaluate.await_count == 1

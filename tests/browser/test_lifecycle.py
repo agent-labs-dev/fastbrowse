@@ -94,6 +94,27 @@ async def test_session_setup_sends_independent_commands_at_once(monkeypatch: pyt
     assert took < 0.6
 
 
+async def test_popup_activation_and_preparation_overlap_and_drain_on_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CdpTransport(monkeypatch)
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+        activating = transport.blocked["Target.activateTarget"] = asyncio.Event()
+        preparing = transport.blocked["Runtime.enable"] = asyncio.Event()
+        adopted = asyncio.get_running_loop().create_future()
+        session._popups["popup"] = ("owned", adopted)
+        task = asyncio.create_task(session._adopt_popup("popup", "owned"))
+        try:
+            async with asyncio.timeout(2):
+                await activating.wait()
+                await preparing.wait()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        assert not adopted.result()
+        assert {"Target.activateTarget", "Runtime.enable"} <= transport.finished
+
+
 @pytest.mark.parametrize(
     "method", ["Target.setDiscoverTargets", "Target.attachToTarget", "Runtime.enable", "Fetch.enable"]
 )

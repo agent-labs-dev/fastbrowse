@@ -416,8 +416,10 @@ class BrowserSession:
         try:
             attach = await self.client.send.Target.attachToTarget(params={"targetId": target_id, "flatten": True})
             session_id = attach["sessionId"]
-            await self.client.send.Target.activateTarget(params={"targetId": target_id})
-            await self._prepare_session(session_id)
+            await _together(
+                self.client.send.Target.activateTarget(params={"targetId": target_id}),
+                self._prepare_session(session_id),
+            )
             self._tabs[target_id] = _TabState(target_id=target_id, session_id=session_id, opener_id=opener_id)
             # The popup may already have navigated to its final URL before this coroutine got scheduled
             # (targetCreated -> targetInfoChanged can both fire while we're still awaiting attachToTarget

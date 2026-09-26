@@ -149,12 +149,12 @@ _HANDED_FOCUS_JS = (
     "if (was.doc.hidden) start(); else requestAnimationFrame(() => setTimeout(start, 0)); }))"
 )
 type _Point = tuple[float, float] | Literal["covered"] | None
-_TARGET_STATE = TypeAdapter(tuple[str, list[object] | None, _Point])
-"""[fingerprint, live guard, hit-test point] from the pre-action check."""
+_TARGET_STATE = TypeAdapter(tuple[str, list[object] | None, _Point, bool])
+"""[fingerprint, live guard, hit-test point, popup announced] from the pre-action check."""
 _SETTLED = TypeAdapter(tuple[bool, str | None])
 _NODE_ID = TypeAdapter(int | None)
 _LANDED = TypeAdapter(tuple[bool, bool])
-_FILL_TARGET = TypeAdapter(tuple[int | None, bool])
+_FILL_TARGET = TypeAdapter(tuple[int | None, bool, bool | None])
 
 
 class _SnapshotControl(Frozen):
@@ -422,19 +422,30 @@ class CdpPage(Page):
         coverage = {frame.session_id: frame.raw.inaccessible_frames for frame in result.values()}
         return result, self._inaccessible_frames(coverage)
 
-    async def _read_frames[T: _FrameText](self, expression: str, shape: type[T]) -> dict[str, _FrameObservation[T]]:
+    async def _read_frames[T: _FrameText](
+        self, expression: str, shape: type[T], *, wait_loaded: bool = False
+    ) -> dict[str, _FrameObservation[T]]:
         result: dict[str, _FrameObservation[T]] = {}
         main_session = self._session.active_session_id
         target_id = self._session.active_target_id
         sources = [(_MAIN, main_session), *self._session.frame_sessions().items()]
 
         async def read(frame_key: str, session_id: str) -> _FrameObservation[T] | None:
+            script = expression
+            if wait_loaded and frame_key == _MAIN:
+                script = (
+                    f"(async () => {{ await {self._loaded_script(_CAPTURE_LOADING_SECONDS)}; "
+                    f"return ({expression}); }})()"
+                )
             try:
-                raw = await self._evaluate(session_id, expression)
+                raw = await self._evaluate(session_id, script)
             except BrowserError:
-                if frame_key == _MAIN:
+                if frame_key != _MAIN:
+                    return None
+                if not wait_loaded:
                     raise
-                return None
+                # A navigation can discard the loading wait. Read the new document as capture did before.
+                raw = await self._evaluate(session_id, expression)
             if raw is None:
                 return None
             try:
@@ -444,6 +455,11 @@ class CdpPage(Page):
                 raise BrowserError(f"page script returned an unexpected {shape.__name__}: {exc}") from exc
             return _FrameObservation(None if frame_key == _MAIN else frame_key, session_id, parsed)
 
+        if wait_loaded:
+            if main := await read(_MAIN, main_session):
+                result[_MAIN] = main
+            # Loading can attach or replace child frames; read them only after that wait, as before.
+            sources = list(self._session.frame_sessions().items())
         # Preserve source order regardless of completion order so capture offsets and hashes stay stable.
         tasks = [asyncio.create_task(read(key, sid)) for key, sid in sources]
         try:
@@ -469,13 +485,11 @@ class CdpPage(Page):
         return missing
 
     async def capture(self) -> Capture:
-        with suppress(BrowserError):
-            await self._loaded(_CAPTURE_LOADING_SECONDS)
         text_parts: list[str] = []
         blocks: list[Block] = []
         offset = 0
         coverage: dict[str, int] = {}
-        frames = await self._read_frames(_CAPTURE_JS, _CaptureSnapshot)
+        frames = await self._read_frames(_CAPTURE_JS, _CaptureSnapshot, wait_loaded=True)
         main = frames.get(_MAIN)
         title = main.raw.title if main else ""
         url = main.raw.url if main else await self.origin()
@@ -529,8 +543,9 @@ class CdpPage(Page):
         # A pending dialog already blocks the renderer's main thread; evaluating now would hang.
         before_fingerprint = ""
         point: _Point = None
+        announced = False
         if self._session.pending_dialog() is None:
-            before_fingerprint, live_guard, point = await self._before_action(
+            before_fingerprint, live_guard, point, announced = await self._before_action(
                 target,
                 hit_test=action.operation in TARGETED,
             )
@@ -549,7 +564,18 @@ class CdpPage(Page):
             return ActResult(outcome=StepOutcome.FAILED, page_changed=True, detail="form changed during fill")
         if outcome != StepOutcome.EXECUTED:
             return ActResult(outcome=outcome, page_changed=self._session.pending_dialog() is not None, detail=detail)
-        changed = await self._changed_since(before_fingerprint, filled=action.operation is Operation.FILL)
+        if action.operation is Operation.CLICK and target is not None and announced:
+            await self._until_dialog(self._await_popup(target[0], target[2]))
+        changed = await self._changed_since(
+            before_fingerprint,
+            input_settling=(
+                action.operation is Operation.FILL
+                or (
+                    action.operation not in {Operation.BACK, Operation.SWITCH_TAB, Operation.DIALOG}
+                    and (target is None or target[0] == self._session.active_session_id)
+                )
+            ),
+        )
         if action.operation in _OPENS_TABS and await self._session.follow_popup(popups, _POPUP_ADOPT_SECONDS):
             return ActResult(outcome=StepOutcome.EXECUTED, page_changed=True, detail="opened a new tab, now active")
         unchanged = False
@@ -634,18 +660,11 @@ class CdpPage(Page):
     ) -> tuple[StepOutcome, str | None]:
         if target is None:
             return StepOutcome.FAILED, "click requires a target"
-        session_id, _frame, _local_id, _guard = target
         if point is None:
             return StepOutcome.STALE, "target disconnected"
         if point == "covered":
             return StepOutcome.COVERED, None
-        announced = await self._announces_popup(session_id, _local_id)
-        outcome, detail = await self._click_point(target, point)
-        if outcome is not StepOutcome.EXECUTED:
-            return outcome, detail
-        if announced:
-            await self._await_popup(session_id, _local_id)
-        return StepOutcome.EXECUTED, None
+        return await self._click_point(target, point)
 
     async def _hover(
         self, target: tuple[str, str, int, list[object] | None] | None, point: _Point
@@ -659,20 +678,6 @@ class CdpPage(Page):
         # The pointer stays where it lands, so what the hover reveals is still shown when the page is next read.
         await self._move(target[0], point)
         return StepOutcome.EXECUTED, None
-
-    async def _announces_popup(self, session_id: str, local_id: int) -> bool:
-        """Whether this control says, before it is clicked, that clicking opens something it does not yet show."""
-        with suppress(Exception):
-            return bool(
-                await self._evaluate(
-                    session_id,
-                    f"(e => !!e && e.getAttribute('aria-expanded') !== 'true' && "
-                    "(!!e.getAttribute('aria-haspopup') || e.getAttribute('aria-expanded') === 'false' "
-                    "|| !!e.getAttribute('aria-controls') || !!e.getAttribute('aria-owns')))"
-                    f"(window.__fastbrowse?.nodes.get({local_id}))",
-                )
-            )
-        return False
 
     async def _await_popup(self, session_id: str, local_id: int) -> None:
         """Give a menu, picker or dialog the click opens time to arrive before the page is observed.
@@ -723,11 +728,14 @@ class CdpPage(Page):
         outcome, detail = await self._click_point(target, point, prepare_fill=True)
         if outcome is not StepOutcome.EXECUTED:
             return outcome, detail
-        handed, native_date = _FILL_TARGET.validate_python(
+        handed, native_date, focused = _FILL_TARGET.validate_python(
             await self._evaluate(
                 session_id,
-                f"({_HANDED_FOCUS_JS})({local_id}, {json.dumps(secret)}).then(id => "
-                f"[id, {json.dumps(_DATE_INPUT_TYPES)}.includes(window.__fastbrowse?.nodes.get(id)?.type)])",
+                f"({_HANDED_FOCUS_JS})({local_id}, {json.dumps(secret)}).then(async id => {{ "
+                f"const native = {json.dumps(_DATE_INPUT_TYPES)}.includes(window.__fastbrowse?.nodes.get(id)?.type); "
+                f"const focused = id === null || (native && !{json.dumps(secret)}) ? false : "
+                f"await ({self._focus_script(prepare_fill=True, secret=secret)})(id, false); "
+                "return [id, native, focused]; })",
             )
         )
         if handed is None:
@@ -736,7 +744,11 @@ class CdpPage(Page):
         if not secret and native_date:
             return await self._fill_native_date(session_id, local_id, text)
         for attempt in range(2):
-            if not await self._focus(session_id, local_id, prepare_fill=True, secret=secret):
+            if attempt or focused is None:
+                focused = await self._focus(
+                    session_id, local_id, prepare_fill=True, secret=secret, activate=focused is None
+                )
+            if not focused:
                 return StepOutcome.FAILED, "target did not receive keyboard focus"
             # A secret must be checked and inserted in one renderer task: CDP insertText would leave a
             # navigation/focus race between checking the origin and dispatching the secret to the page.
@@ -1013,7 +1025,7 @@ class CdpPage(Page):
                 await asyncio.wait({check, dialog}, return_when=asyncio.FIRST_COMPLETED)
                 if self._session.pending_dialog() is not None:
                     return StepOutcome.FAILED, "pointer movement opened a dialog before press"
-                _, guard, fresh = check.result()
+                _, guard, fresh, _ = check.result()
             finally:
                 check.cancel()
                 dialog.cancel()
@@ -1162,15 +1174,25 @@ class CdpPage(Page):
 
     async def _ready(self, session_id: str, timeout_seconds: float) -> bool:
         deadline = asyncio.get_event_loop().time() + timeout_seconds
-        while asyncio.get_event_loop().time() < deadline:
-            if await self._evaluate(session_id, "document.readyState") in {"interactive", "complete"}:
+        while (remaining := deadline - asyncio.get_event_loop().time()) > 0:
+            state = await self._evaluate(
+                session_id,
+                "new Promise(resolve => { "
+                "if (document.readyState !== 'loading') { resolve(document.readyState); return; } "
+                "const done = () => { if (document.readyState !== 'loading') finish(); }; "
+                "const finish = () => { clearTimeout(timer); document.removeEventListener('readystatechange', done); "
+                "resolve(document.readyState); }; "
+                f"const timer = setTimeout(finish, {remaining * 1000}); "
+                "document.addEventListener('readystatechange', done); })",
+            )
+            if state in {"interactive", "complete"}:
                 return True
-            await asyncio.sleep(0.05)
         return False
 
     # -- shared helpers -------------------------------------------------------------------------------
 
-    async def _focus(self, session_id: str, local_id: int, *, prepare_fill: bool = False, secret: bool = False) -> bool:
+    @staticmethod
+    def _focus_script(*, prepare_fill: bool = False, secret: bool = False) -> str:
         mask = (
             "e.dataset.fastbrowseSecret = '1'; e.style.setProperty('-webkit-text-security', 'disc', 'important'); "
             if secret
@@ -1185,7 +1207,7 @@ class CdpPage(Page):
             if prepare_fill
             else ""
         )
-        script = (
+        return (
             "((id, activated) => { const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return false; "
             "if (!activated && !e.ownerDocument.hasFocus()) return null; "
             + mask
@@ -1206,8 +1228,21 @@ class CdpPage(Page):
             "if (Date.now() > deadline) { resolve(false); return; } "
             "setTimeout(check, 10); }; check(); }); })"
         )
+
+    async def _focus(
+        self,
+        session_id: str,
+        local_id: int,
+        *,
+        prepare_fill: bool = False,
+        secret: bool = False,
+        activate: bool = False,
+    ) -> bool:
         # A pointer click normally focused the document already; background tabs still need activation.
-        result = await self._evaluate(session_id, f"{script}({local_id}, false)")
+        script = self._focus_script(prepare_fill=prepare_fill, secret=secret)
+        if activate:
+            await self._session.client.send.Target.activateTarget(params={"targetId": self._session.active_target_id})
+        result = await self._evaluate(session_id, f"{script}({local_id}, {json.dumps(activate)})")
         if result is None:
             await self._session.client.send.Target.activateTarget(params={"targetId": self._session.active_target_id})
             result = await self._evaluate(session_id, f"{script}({local_id}, true)")
@@ -1224,9 +1259,9 @@ class CdpPage(Page):
         hit_test: bool,
         prepare_fill: bool = False,
         after_move: bool = False,
-    ) -> tuple[str, list[object] | None, _Point]:
+    ) -> tuple[str, list[object] | None, _Point, bool]:
         if target is None:
-            return await self._fingerprint(), None, None
+            return await self._fingerprint(), None, None, False
         session_id, _frame, local_id, guard = target
         same_session = session_id == self._session.active_session_id
         # Input routing uses the top frame's drawn layout. An OOPIF cannot wait for that frame in its own
@@ -1234,7 +1269,7 @@ class CdpPage(Page):
         if after_move and not same_session:
             await self._evaluate(self._session.active_session_id, _PRESENTED_JS)
 
-        async def target_state() -> tuple[str, list[object] | None, _Point]:
+        async def target_state() -> tuple[str, list[object] | None, _Point, bool]:
             # Guard validation and hit testing share a renderer task, so no page script can swap the
             # verified control between them. Stale controls must never be scrolled into view.
             result = await self._evaluate(
@@ -1254,7 +1289,11 @@ class CdpPage(Page):
                     if prepare_fill
                     else ""
                 )
-                + "return [fingerprint, guard, point]; })()",
+                + f"const e = r?.nodes.get({local_id}); "
+                "const announced = !!e && e.getAttribute('aria-expanded') !== 'true' && "
+                "(!!e.getAttribute('aria-haspopup') || e.getAttribute('aria-expanded') === 'false' || "
+                "!!e.getAttribute('aria-controls') || !!e.getAttribute('aria-owns')); "
+                "return [fingerprint, guard, point, announced]; })()",
             )
             return _TARGET_STATE.validate_python(result)
 
@@ -1263,14 +1302,14 @@ class CdpPage(Page):
         fingerprint_task = asyncio.create_task(self._fingerprint())
         target_task = asyncio.create_task(target_state())
         try:
-            fingerprint, (_, live_guard, point) = await asyncio.gather(fingerprint_task, target_task)
-            return fingerprint, live_guard, point
+            fingerprint, (_, live_guard, point, announced) = await asyncio.gather(fingerprint_task, target_task)
+            return fingerprint, live_guard, point, announced
         finally:
             fingerprint_task.cancel()
             target_task.cancel()
             await asyncio.gather(fingerprint_task, target_task, return_exceptions=True)
 
-    async def _changed_since(self, before: str, *, filled: bool = False) -> bool:
+    async def _changed_since(self, before: str, *, input_settling: bool = False) -> bool:
         """Wait for the page to settle after an action, then report whether it changed.
 
         A click that navigates returns before the navigation starts, so an immediate fingerprint would describe
@@ -1280,8 +1319,9 @@ class CdpPage(Page):
         deadline = time.monotonic() + _SETTLE_SECONDS
         dialog = asyncio.create_task(self._session.wait_for_dialog())
         try:
-            # Input events already start the renderer's quiet clock; sleeping here pays its full delay again.
-            if not filled:
+            # Fills already check retention after insertion. Other inputs start the top renderer's quiet clock;
+            # events in a separate frame cannot reach it, so those still need the delay.
+            if not input_settling:
                 await asyncio.sleep(_SETTLE_QUIET_SECONDS)
             while (remaining := deadline - time.monotonic()) > 0:
                 if self._session.pending_dialog() is not None:
@@ -1333,16 +1373,16 @@ class CdpPage(Page):
         )
         return _SETTLED.validate_python(result)
 
-    async def _loaded(self, timeout_seconds: float) -> None:
+    @staticmethod
+    def _loaded_script(timeout_seconds: float) -> str:
         """Wait, in the renderer, for a visible loading indicator to go. Only the indicator is waited on: a page
         that keeps changing, a ticker or a clock, is readable now and would never go quiet."""
-        await self._evaluate(
-            self._session.active_session_id,
+        return (
             f"new Promise(resolve => {{ const sample = {_PAGE_JS}; "
             f"const deadline = performance.now() + {timeout_seconds * 1000}; "
             "const poll = () => { const state = sample('fingerprint'); "
             "if (!state.loading || state.hidden || performance.now() >= deadline) { resolve(null); return; } "
-            f"setTimeout(poll, {_SETTLE_POLL_SECONDS * 1000}); }}; poll(); }})",
+            f"setTimeout(poll, {_SETTLE_POLL_SECONDS * 1000}); }}; poll(); }})"
         )
 
     async def _evaluate(self, session_id: str, expression: str) -> JsonValue:
