@@ -167,6 +167,15 @@ DEV: tuple[LiveTask, ...] = (
         Category.CHECKOUT,
         authorize=True,
     ),
+    # Held out until 0.5.8: a change to fastbrowse was measured on it, which spent its value as a held-out task.
+    LiveTask(
+        "new-window",
+        "https://the-internet.herokuapp.com/windows",
+        "Follow the link that opens a new window and tell me that window's heading.",
+        _fixed(None),
+        _exactly("New Window"),
+        Category.WIDGET,
+    ),
 )
 
 HELDOUT: tuple[LiveTask, ...] = (
@@ -209,14 +218,6 @@ HELDOUT: tuple[LiveTask, ...] = (
         _serde_version,
         _has_truth,
         Category.LOOKUP,
-    ),
-    LiveTask(
-        "new-window",
-        "https://the-internet.herokuapp.com/windows",
-        "Follow the link that opens a new window and tell me that window's heading.",
-        _fixed(None),
-        _exactly("New Window"),
-        Category.WIDGET,
     ),
     LiveTask(
         "table-largest-due",

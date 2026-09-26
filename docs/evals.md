@@ -47,11 +47,12 @@ The jev-ultrafast runner answers a one-option choice itself, as fastbrowse does,
 Rows keep raw `status`, `task_successful` and `normalized_status`: `done`, `stopped`, `budget`, `timeout`, `error`, `blocked` or `unavailable`.
 A pass requires a correct grade and `done`, or the exact expected fastbrowse stop.
 The hosted arm is `done` when its agent answered: it called `done` with a result that was not an error, or, never calling `done`, replied with the answer the session kept as its output. That is its own completion, as fastbrowse is held to its own. Browser Use's `is_task_successful` is kept in the row (`task_successful`) but decides nothing: it is Browser Use's later judgement of the session, and it failed correct answers whose sessions showed no sign of failing or giving up.
-An attempt that fails while the task's site answers its start URL with a 5xx, or not at all, is an outage too: a site serving errors fails every arm alike.
-A hosted session Browser Use itself ends in `error` ("Task ended unexpectedly.") is a Browser Use outage: its agent neither answered nor gave up. So is a hosted session still running after 15 minutes, which is stopped: its slowest finished sessions took about two minutes.
-A fastbrowse attempt in which any Jev call took over 2 seconds, retries included, is a Jev outage: healthy calls take about half a second at any page size, and no worse than 0.93 seconds in 45 measured.
+An attempt that fails while the task's site answers its start URL with a 5xx, or not at all, is an outage too: a site serving errors fails every arm alike. fastbrowse's first page never loading is an outage only when that same check finds the site down; otherwise it is fastbrowse's failure.
+A hosted session Browser Use itself ends with "Task ended unexpectedly." is a Browser Use outage: its agent neither answered nor gave up. A session ending in `error` with any other output is scored as its failure.
+An attempt of any arm still running after 15 minutes is stopped as an outage: the slowest finished attempts took about three minutes.
+A fastbrowse attempt in which any Jev call took over 2 seconds, retries included, is a Jev outage: healthy calls take about half a second at any page size, and no worse than 0.93 seconds in 45 measured. This rule applies to fastbrowse alone, since no other arm's provider calls are visible to the harness.
 An attempt an outage ended is waited out and run again, up to five times over about 25 minutes.
-A row still unavailable after that is recorded but scores nothing, and neither does one attempt of every other arm at that task: each comparison scores its arms on the same attempts at the same tasks.
+A row still unavailable after that is recorded but scores nothing, and neither does the same repeat of every other arm at that task: each comparison scores its arms on the same attempts at the same tasks.
 Time runs from the start of an attempt to the agent's answer. Provider outage waits measured inside an attempt (`transient_seconds`: failed requests and the backoff between them) are left out of every time published; only fastbrowse's client can see its own, so the other arms' are 0.
 The hosted arm's time ends at its agent's answer, by Browser Use's own clock from the session's creation. Its API reports the session stopped as much as two minutes later (`session_seconds`), which is not counted.
 Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the row.
@@ -153,6 +154,7 @@ For example, `--only books-mystery-cheapest quotes-einstein-count` selects those
 | `hover-profile` | widget | 5 | Which user name is revealed when you hover over the second profile picture? |
 | `ruff-release` | lookup | 5 | What is the latest release of ruff on GitHub? |
 | `pizza-order` | checkout | 5 | Order a large pizza with mushroom for Ada Lovelace, telephone 020 7946 0000, email ada@example.com, and submit it. Tell me which size the server received. |
+| `new-window` | widget | 5 | Follow the link that opens a new window and tell me that window's heading. |
 <!-- /evals:tasks:dev -->
 
 <!-- evals:tasks:heldout -->
@@ -163,7 +165,6 @@ For example, `--only books-mystery-cheapest quotes-einstein-count` selects those
 | `countries-mongolia` | lookup | 5 | What population does this page list for Mongolia? |
 | `quotes-js-page2` | lookup | 5 | Who wrote the first quote on the second page? |
 | `crates-serde` | lookup | 5 | What is the latest stable version of the serde crate? |
-| `new-window` | widget | 5 | Follow the link that opens a new window and tell me that window's heading. |
 | `table-largest-due` | widget | 5 | In the first table, whose amount due is the largest? |
 | `httpx-requires-python` | lookup | 5 | What is the oldest Python version the latest httpx release supports? |
 | `quotes-search` | lookup | 5 | Use the search form to find Albert Einstein's quote tagged success, and tell me what it says. |
@@ -232,8 +233,8 @@ when they differ:
 | Suite | Tasks | Version |
 |---|---|---|
 | `core` | 21 | `af816f31` |
-| `dev` | 8 | `f696dab6` |
-| `heldout` | 9 | `90b5446e` |
+| `dev` | 9 | `a1c23415` |
+| `heldout` | 8 | `a9a449aa` |
 | `stretch-dev` | 5 | `c174a854` |
 | `stretch-heldout` | 3 | `d7d3a074` |
 | local fixtures | 6 | `dda8ba89` |

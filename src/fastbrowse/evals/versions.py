@@ -412,8 +412,9 @@ def _by_comparison(rows: Sequence[Mapping[str, Any]]) -> list[_Comparison]:
 
     A task runs only on the arms it grades on equal terms (`LiveTask.arms`): pooled, a suite set fastbrowse on 21
     tasks beside Browser Use on 14. An attempt a provider outage ended measured nothing; dropping it from one arm
-    alone would score the arms on different tasks, so at each task every arm keeps as many attempts as the arm with
-    fewest measured, its earliest, and a task some arm has none at is left out. Groups with most arms first."""
+    alone would score the arms on different attempts, so at each task an attempt counts only where every arm measured
+    the same repeat of it (rows from before repeats were recorded pair earliest first), and a task some arm has none at
+    is left out. Groups with most arms first."""
     ran: dict[str, set[str]] = {}
     for row in rows:
         ran.setdefault(row["task"], set()).add(row["arm"])
@@ -428,12 +429,23 @@ def _by_comparison(rows: Sequence[Mapping[str, Any]]) -> list[_Comparison]:
         scored: list[Mapping[str, Any]] = []
         for per_arm in tasks.values():
             if len(per_arm) == len(arms):
-                fewest = min(map(len, per_arm.values()))
-                for attempts in per_arm.values():
-                    scored += sorted(attempts, key=lambda r: r.get("at") or 0.0)[:fewest]
+                scored += _paired(per_arm)
         left_out = sorted({r["task"] for r in group} - {r["task"] for r in scored})
         comparisons.append(_Comparison(arms, group, scored, left_out))
     return comparisons
+
+
+def _paired(per_arm: Mapping[str, list[Mapping[str, Any]]]) -> list[Mapping[str, Any]]:
+    """The attempts at one task every arm measured: matched by repeat, or earliest first for rows without one."""
+    if all(r.get("repeat") is not None for attempts in per_arm.values() for r in attempts):
+        shared = set.intersection(*({_pass(r) for r in attempts} for attempts in per_arm.values()))
+        return [r for attempts in per_arm.values() for r in attempts if _pass(r) in shared]
+    fewest = min(map(len, per_arm.values()))
+    return [r for attempts in per_arm.values() for r in sorted(attempts, key=lambda r: r.get("at") or 0.0)[:fewest]]
+
+
+def _pass(row: Mapping[str, Any]) -> tuple[object, int]:
+    return (row.get("run") or {}).get("run_id"), row["repeat"]
 
 
 def results_table(release: str, rows: Sequence[Mapping[str, Any]]) -> str:
@@ -707,15 +719,18 @@ def protocol_docs() -> str:
         "(`task_successful`) but decides nothing: it is Browser Use's later judgement of the session, and it failed "
         "correct answers whose sessions showed no sign of failing or giving up.",
         "An attempt that fails while the task's site answers its start URL with a 5xx, or not at all, is an outage "
-        "too: a site serving errors fails every arm alike.",
-        'A hosted session Browser Use itself ends in `error` ("Task ended unexpectedly.") is a Browser Use outage: '
-        "its agent neither answered nor gave up. So is a hosted session still running after 15 minutes, which is "
-        "stopped: its slowest finished sessions took about two minutes.",
+        "too: a site serving errors fails every arm alike. fastbrowse's first page never loading is an outage only "
+        "when that same check finds the site down; otherwise it is fastbrowse's failure.",
+        'A hosted session Browser Use itself ends with "Task ended unexpectedly." is a Browser Use outage: its agent '
+        "neither answered nor gave up. A session ending in `error` with any other output is scored as its failure.",
+        "An attempt of any arm still running after 15 minutes is stopped as an outage: the slowest finished attempts "
+        "took about three minutes.",
         "A fastbrowse attempt in which any Jev call took over 2 seconds, retries included, is a Jev outage: healthy "
-        "calls take about half a second at any page size, and no worse than 0.93 seconds in 45 measured.",
+        "calls take about half a second at any page size, and no worse than 0.93 seconds in 45 measured. This rule "
+        "applies to fastbrowse alone, since no other arm's provider calls are visible to the harness.",
         "An attempt an outage ended is waited out and run again, up to five times over about 25 minutes.",
-        "A row still unavailable after that is recorded but scores nothing, and neither does one attempt of every "
-        "other arm at that task: each comparison scores its arms on the same attempts at the same tasks.",
+        "A row still unavailable after that is recorded but scores nothing, and neither does the same repeat of "
+        "every other arm at that task: each comparison scores its arms on the same attempts at the same tasks.",
         "Time runs from the start of an attempt to the agent's answer. Provider outage waits measured inside an "
         "attempt (`transient_seconds`: failed requests and the backoff between them) are left out of every time "
         "published; only fastbrowse's client can see its own, so the other arms' are 0.",

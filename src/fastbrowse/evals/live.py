@@ -74,9 +74,14 @@ ULTRAFAST_TEXT_MODEL = "inception/mercury-2.5"
 OUTAGE_RETRIES = 5
 """Runs of a row a provider outage ended, after the first, waiting 1, 2, 4, 8 then 10 minutes: about 25 minutes, past
 the 503 spells seen so far. A row still unavailable then is recorded, and left out of every published figure."""
-HOSTED_STUCK_SECONDS = 900
-"""A hosted session that has not ended by now is stuck on Browser Use's side: its slowest finished sessions took about
-two minutes, and two of one day's sat unfinished for over half an hour."""
+STUCK_SECONDS = 900
+"""An attempt of any arm still running by now is stuck, and is stopped as an outage: each arm's agent is bounded by
+steps long before this (Browser Use's slowest finished sessions took about two minutes, fastbrowse's about three), and
+two of one day's Browser Use sessions sat unfinished for over half an hour."""
+HOSTED_OUTAGE = "Task ended unexpectedly."
+"""The output Browser Use gives a session its own infrastructure ended."""
+NAVIGATION_FAILED = "Page.navigate failed"
+"""How fastbrowse reports a first page that never loaded."""
 
 
 def _watch(arm: str, task: LiveTask, live_url: str | None) -> None:
@@ -200,6 +205,8 @@ class EvalRow(ArmReport):
     at: float
     concurrency: int | None = None
     status: str | None = None  # a crashed arm reports nothing, unless a provider was unavailable
+    repeat: int | None = None
+    """Which of the invocation's `--repeat` passes this is: every arm's attempt at a task in one pass is paired."""
     retries: int = 0
     """Runs discarded before this one because a provider stayed unavailable: they say nothing about the agent."""
     normalized_status: Ending = Ending.ERROR
@@ -423,15 +430,17 @@ async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
     created_after = time.monotonic() - started
     if run.session_id is not None:
         _watch("browser-use", task, (await client.sessions.get(run.session_id)).live_url)
-    # wait, not await: the SDK raises on output that fails the task's schema, before the session's cost is read.
-    await asyncio.wait({finishing}, timeout=HOSTED_STUCK_SECONDS)
-    if not finishing.done():
+    try:
+        # gather, not await: the SDK raises on output that fails the task's schema, before the session's cost is read.
+        await asyncio.gather(finishing, return_exceptions=True)
+    except asyncio.CancelledError:
+        # The attempt's cap cancelled it: the session would otherwise run on, billing, with nothing waiting for it.
         finishing.cancel()
         await asyncio.gather(finishing, return_exceptions=True)
         if run.session_id is not None:
             with suppress(BrowserUseError, httpx.HTTPError):
                 await client.sessions.stop(run.session_id)
-        raise Unavailable(f"Browser Use session still running after {HOSTED_STUCK_SECONDS // 60} minutes")
+        raise
     seconds = time.monotonic() - started
     if (error := finishing.exception()) is None:
         result = finishing.result()
@@ -443,10 +452,10 @@ async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
         output = session.output
     else:
         raise error
-    if session.status.value == "error":
-        # Browser Use's own infrastructure ending the session ("Task ended unexpectedly."), not its agent giving up
-        # or answering wrong: it appeared in none of 0.5.7's sessions and in 13 of one day's 114.
-        raise Unavailable("Browser Use ended the session in error")
+    if session.status.value == "error" and HOSTED_OUTAGE in str(output or ""):
+        # Browser Use's own infrastructure ending the session, not its agent giving up or answering wrong: it
+        # appeared in none of 0.5.7's sessions and in 13 of one day's 114. Any other error is scored as its failure.
+        raise Unavailable(f"Browser Use ended the session: {HOSTED_OUTAGE}")
     answered = await hosted_answer(client, str(session.id), output)
     if isinstance(output, BaseModel):
         outcome = Outcome(output.model_dump_json(), output.model_dump(), None, unobservable=True)
@@ -528,6 +537,18 @@ def _slow_jev(events: list[object]) -> float:
     )
 
 
+async def _site_checked(row: EvalRow, task: LiveTask, http: httpx.AsyncClient) -> EvalRow:
+    """`row` with its ending settled by the harness's own look at the site, the same for every arm: a failed attempt
+    at a site that is down is an outage, and fastbrowse's first page never loading is one only if the site is down,
+    since that can be its own browser."""
+    if row.normalized_status == Ending.UNAVAILABLE and NAVIGATION_FAILED in (row.error or ""):
+        if await _down(task, http) is None:
+            return row.model_copy(update={"normalized_status": Ending.ERROR})
+    elif not row.passed and row.normalized_status != Ending.UNAVAILABLE and (down := await _down(task, http)):
+        return row.model_copy(update={"normalized_status": Ending.UNAVAILABLE, "failure": down})
+    return row
+
+
 async def run_arm(
     arm: str,
     task: LiveTask,
@@ -542,15 +563,17 @@ async def run_arm(
     started = time.monotonic()
     at = time.time()
     try:
-        outcome, report = await ARMS[arm].runner(
-            task, http, downloads, bitwarden=bitwarden, record=record, started=started
-        )
+        async with asyncio.timeout(STUCK_SECONDS) as cap:
+            outcome, report = await ARMS[arm].runner(
+                task, http, downloads, bitwarden=bitwarden, record=record, started=started
+            )
     except Exception as exc:  # a crashed arm is a failed task, recorded rather than aborting the comparison
-        unavailable = isinstance(exc, (Unavailable, *TRANSIENT_TRANSPORT))
+        error = Unavailable(f"still running after {STUCK_SECONDS // 60} minutes") if cap.expired() else exc
+        unavailable = isinstance(error, (Unavailable, *TRANSIENT_TRANSPORT))
         return _crashed(
             arm,
             task,
-            f"{type(exc).__name__}: {exc}",
+            f"{type(error).__name__}: {error}",
             at=at,
             seconds=time.monotonic() - started,
             status=Status.UNAVAILABLE.value if unavailable else None,
@@ -916,7 +939,7 @@ async def main(argv: list[str]) -> int:
     ):
         async with httpx.AsyncClient(timeout=60, event_hooks={"request": [_github_token]}) as http:
 
-            async def one(arm: str, task: LiveTask, record: Path | None) -> EvalRow:
+            async def one(arm: str, task: LiveTask, record: Path | None, repeat: int) -> EvalRow:
                 # An outage is waited out and the row run again; bounded, so a dead provider cannot hold a run forever.
                 for retries in itertools.count():
                     # The answer key is read once the row holds its slot: read while it queued, a live key (the
@@ -933,12 +956,7 @@ async def main(argv: list[str]) -> int:
                         row = await run_arm(
                             arm, task, truth, http, Path(downloads), bitwarden=args.bitwarden, record=record
                         )
-                    if (
-                        not row.passed
-                        and row.normalized_status != Ending.UNAVAILABLE
-                        and (down := await _down(task, http))
-                    ):
-                        row = row.model_copy(update={"normalized_status": Ending.UNAVAILABLE, "failure": down})
+                    row = await _site_checked(row, task, http)
                     if row.normalized_status != Ending.UNAVAILABLE or retries >= OUTAGE_RETRIES:
                         break
                     wait = min(60 * 2**retries, 600)
@@ -948,6 +966,7 @@ async def main(argv: list[str]) -> int:
                     update={
                         "concurrency": args.concurrency,
                         "retries": retries,
+                        "repeat": repeat,
                         "suite": suite_of[task.id],
                         "suite_version": suite_versions[suite_of[task.id]],
                         "task_version": task_version(task.id, lock),
@@ -966,13 +985,13 @@ async def main(argv: list[str]) -> int:
                 return row
 
             planned = [
-                (arm, task, None if args.record is None else video_path(args.record, arm, task))
-                for _ in range(args.repeat)
+                (arm, task, None if args.record is None else video_path(args.record, arm, task), repeat)
+                for repeat in range(args.repeat)
                 for task in tasks
                 for arm in args.arms
                 if eligible(arm, task)
             ]
-            rows = list(await asyncio.gather(*(one(arm, task, record) for arm, task, record in planned)))
+            rows = list(await asyncio.gather(*(one(*plan) for plan in planned)))
     summarize(rows, args.arms)
     return 0
 

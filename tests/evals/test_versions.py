@@ -266,6 +266,21 @@ def test_an_outage_scores_no_arm_and_takes_a_matching_attempt_from_each() -> Non
     assert "`hn-top` is left out, with no fastbrowse attempt measured." in note
 
 
+def test_an_outage_drops_the_same_repeat_from_every_arm() -> None:
+    """Paired earliest first, fastbrowse's second attempt was scored beside Browser Use's first when fastbrowse's
+    first was lost to an outage."""
+    fast = [
+        _row("pypi-version") | {"normalized_status": "unavailable", "repeat": 0},
+        _row("pypi-version", passed=False) | {"repeat": 1},
+    ]
+    hosted = [
+        _row("pypi-version", arm="browser-use") | {"repeat": 0, "at": 1.0},
+        _row("pypi-version", arm="browser-use", passed=False) | {"repeat": 1, "at": 2.0},
+    ]
+    arms = versions.summary([("1.0.0", [*fast, *hosted])]).releases[0].arms
+    assert [(a.passed, a.total) for a in arms.values()] == [(0, 1), (0, 1)]
+
+
 def test_every_comparison_sets_arms_on_the_same_tasks() -> None:
     """Pooled, core set fastbrowse on 21 tasks beside Browser Use on 14 and jev-ultrafast on 6."""
     rows = [

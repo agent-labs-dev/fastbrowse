@@ -131,6 +131,39 @@ async def test_an_attempt_with_a_slow_jev_call_is_an_outage_run_again(monkeypatc
     assert row.failure == "Jev unavailable: a call took 7.2s"
 
 
+async def test_an_attempt_of_any_arm_still_running_at_the_cap_is_an_outage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two of one day's Browser Use sessions sat unfinished for over half an hour; the cap holds every arm alike."""
+
+    async def ultrafast_arm(_: LiveTask, __: httpx.AsyncClient, *, record: Path | None) -> Any:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(live, "ultrafast_arm", ultrafast_arm)
+    monkeypatch.setattr(live, "STUCK_SECONDS", 0.05)
+    async with httpx.AsyncClient() as http:
+        row = await live.run_arm("jev-ultrafast", task("arxiv-title"), None, http, Path(), bitwarden=False, record=None)
+    assert row.normalized_status == Ending.UNAVAILABLE
+
+
+@pytest.mark.parametrize(("site", "ending"), [(200, Ending.ERROR), (503, Ending.UNAVAILABLE)])
+async def test_a_first_page_that_never_loaded_is_an_outage_only_at_a_site_that_is_down(
+    site: int, ending: Ending
+) -> None:
+    """fastbrowse's own browser failing to load a site that is up is its failure, as it would be any other arm's."""
+    row = live._crashed(
+        "fastbrowse",
+        task("pypi-newer"),
+        "SiteUnreachable",
+        at=0.0,
+        seconds=1.0,
+        status=Ending.UNAVAILABLE.value,
+        record=None,
+    ).model_copy(update={"error": "Page.navigate failed (net::ERR_EMPTY_RESPONSE)"})
+    transport = httpx.MockTransport(lambda _: httpx.Response(site))
+    async with httpx.AsyncClient(transport=transport) as http:
+        checked = await live._site_checked(row, task("pypi-newer"), http)
+    assert checked.normalized_status == ending
+
+
 async def test_a_grader_that_raises_fails_only_its_own_row(monkeypatch: pytest.MonkeyPatch) -> None:
     """The agent chooses where a run ends, and urlparse raises on a bracket in the host: one such run once
     discarded 59 of 63 runs in a live suite."""
@@ -466,7 +499,12 @@ async def test_a_hosted_session_whose_output_fails_the_schema_keeps_its_cost(mon
     with pytest.raises(Unavailable):
         await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
 
-    # A session Browser Use never ends is stopped and waited out as its outage, not left to hang the eval.
+    # Any other error ending is its agent's failure, scored like one.
+    session.output = "Failed to complete the task"
+    outcome, report = await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
+    assert report.status == "error"
+
+    # A session the attempt's cap cancels is stopped, not left running and billing with nothing waiting for it.
     class Stuck(Run):
         def __await__(self) -> Any:
             return asyncio.Event().wait().__await__()
@@ -478,9 +516,9 @@ async def test_a_hosted_session_whose_output_fails_the_schema_keeps_its_cost(mon
         "__init__",
         lambda self, **_: setattr(self, "sessions", SimpleNamespace(get=AsyncMock(return_value=session), stop=stop)),
     )
-    monkeypatch.setattr(live, "HOSTED_STUCK_SECONDS", 0.05)
-    with pytest.raises(Unavailable):
-        await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.05):
+            await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
     stop.assert_awaited_once_with("s1")
 
 
