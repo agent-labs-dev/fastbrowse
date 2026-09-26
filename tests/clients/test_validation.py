@@ -5,6 +5,7 @@ import time
 import httpx
 import pytest
 
+from fastbrowse.clients import validation
 from fastbrowse.clients.typesafe import TypeSafeJevClient
 from fastbrowse.clients.validation import RETRY_DELAYS_SECONDS, RequestUsage, post, post_with_retry, with_discarded
 from fastbrowse.clients.vercel import VercelGatewayJevClient
@@ -249,3 +250,15 @@ async def test_time_lost_to_a_503_is_traced_for_evals_to_leave_out(monkeypatch: 
                 )
     lost = [e for e in events if isinstance(e, dict) and e["event"] == "request_transient"]
     assert len(lost) == 1 and lost[0]["call"] == "jev" and lost[0]["ended"] >= lost[0]["began"]
+
+
+async def test_a_slow_jev_call_is_traced_for_evals_to_rerun(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Jev answers in about half a second at any page size; a call past the limit is its outage, not the agent."""
+    ticks = iter([0.0, 0.6, 10.0, 12.5])  # a healthy call, then one past the limit
+    monkeypatch.setattr(validation, "monotonic", lambda: next(ticks))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={}))) as http:
+        with traced() as events:
+            await post(http, "https://jev.test/v1", "key", {})
+            await post(http, "https://jev.test/v1", "key", {})
+    slow = [e for e in events if isinstance(e, dict) and e["event"] == "request_slow"]
+    assert slow == [{"event": "request_slow", "call": "jev", "seconds": 2.5}]

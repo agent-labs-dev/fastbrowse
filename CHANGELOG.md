@@ -11,6 +11,96 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Filtered counts across pages use recorded tallies.** The plan identifies requests for one count,
+  and code counts their matching records even when a reader returns plain continuation records or varies
+  the group's label between pages. Overlapping record ranges count each record once, and reaching the
+  list's end closes the tally without asking the reader to calculate a total.
+- **Placing an order reliably pauses for confirmation.** The check before an irreversible click rated a
+  checkout's final button barely above its threshold, so an unauthorized order could go through. The question
+  now names placing an order among the changes that cannot be undone.
+- **Six held-out eval tasks moved to the dev sets.** Changes in this release were profiled or measured on
+  `new-window`, `countries-mongolia`, `table-largest-due`, `quotes-search`, `stretch-calendar-first-friday` and
+  `stretch-quotes-top-authors`, so their scores no longer test unseen work. Fresh tasks for the same skills
+  replace them in the held-out sets.
+- **Browser steps spend less time waiting on remote commands.** Clicks check for a popup with their target
+  guard, fills prepare focus with the editor check, and reads wait for loading and capture text in one call.
+  Navigation waits for a readiness event, input starts the settling clock before its reply returns, and new
+  tabs activate while their browser domains are enabled. Stale targets, covered controls, dialogs and secret
+  fields keep their checks, and a press still completes before a release is sent.
+- **A click that opens a new tab carries on in that tab.** The run stayed on the opening page, so the next
+  step was spent choosing the new tab, and a read before it could credit the opening page's heading to the
+  new window. The previous tab is still listed and can be switched back to.
+- **Forms can fill more than one empty field from a single model call.** After a confident field choice, the writer
+  supplies values for the same form and each fill checks that the page and other fields stayed unchanged.
+  A new field, changed value, dialog or navigation returns to the usual decision loop. Secrets, populated
+  fields and submission keep their existing checks, and corrections still follow the task's value order.
+  Fills also avoid activating an already focused tab and let the page's input events drive settling.
+- **Repeated lists need fewer model reads to count.** The reader can identify a field shared by every record,
+  and code groups and counts the original captured blocks. For an unfiltered count across all pages, later
+  pages reuse that field only while their title, section and record structure match; a change goes back to the
+  reader. The final page confirms the list ended, and merged tallies keep every record's quote and page address.
+- **A date picker's controls say which month they show.** A table's header cell no longer names what sits
+  outside its row, so a jQuery UI datepicker's Next and days are named by the month in its title rather than
+  by the "Su" weekday header, and every month reads differently. Choices are also told today's date, so a run
+  asked for "next month" stops there instead of going back and forth past it or paging on for months.
+- **Text inside a same-origin frame is read where the frame stands.** It was read after the whole page, so a
+  subscription form's own heading followed the footer and the page's heading above the frame was reported in
+  its place. Readers are also told which blocks are headings and which lie inside an embedded frame.
+- **A field the task gives no value for is not offered again.** Once a field was found to have no value in
+  the task, the next choice could pick it again and end the run `needs_input`, as a blog's unrelated "Enter
+  Name" did to a date-range booking already made. Recovery can still send a run back to it, and a field the
+  task cannot go on without still ends the run there.
+- **Paginated comparisons spend less time reading and navigating.** Pager links open their observed
+  same-origin address directly, with each followed page still recorded. Readers keep matching records from
+  the first page, use a smaller response for intermediate pages, and cite earlier evidence with short
+  references that resolve to the original capture spans. Answered comparisons go straight to the final checks.
+- **A page read before is read again when what it said is gone.** A wizard's Review step, read before the
+  run went back to correct a field, still answered for it afterwards, so the answer could name the value from
+  before the correction. On a return to a page state whose quoted evidence the page no longer shows, the
+  requirement is reopened and the page read as it is now.
+- **Stepping back and forth through a wizard is quicker.** A page the run left unread is not read on the way
+  back when nothing on it changed; an empty fill into an empty field goes to recovery instead of being typed;
+  an unsure pick the run already took from the same page recovers instead of retracing it; and a Next that
+  only shows the values a step already held no longer counts as a setting put back, which tripped the
+  stall recovery on the pass after a correction.
+- **A site that drops the first page load ends the run `unavailable`, not `error`.** Chrome's empty,
+  reset, refused or proxy-failed connection before the first step says the site was down, as a timeout already
+  did; an address that does not resolve still ends `error`.
+- **A value the task changes later is typed in order.** Asked to enter one value and later correct it, the
+  field writer typed the correction on the first pass, so no step could show the change. It now lists the
+  values a field holds in turn, and the run types the next one in that order, so a field set back to an earlier
+  value is not skipped past it. A box ticked or option
+  chosen early in a long form stays in the record the completion checks read, as typed values already did.
+- **An answer read on a page the run guessed the address of is always checked when doubted.** A doubted answer
+  read on a built address, such as `github.com/owner/repo`, goes to the verifier, and the verifier finding it
+  read off the wrong page sends the run back to work. Only answers read on pages the run clicked to skip it.
+- **Paginated lists are read while the next page loads.** After the reader identifies a list needed in full,
+  intermediate pages collect records concurrently. Their quotes merge in page order before the final page
+  answers the comparison, within the run's page, step, call and time limits.
+- **Cloud clicks, fills and observations use fewer round trips.** The pre-press frame wait shares its
+  page evaluation with the target guard and hit test, field hand-off also reads the input type, and page
+  snapshots run beside the history read. Pointer, focus and secret checks still gate input.
+- **Evals never count a provider's outage against an agent.** Browser Use is now scored on its own agent's
+  answer (its `done`, or its final reply when it never calls `done`), not on Browser Use's later
+  `is_task_successful` verdict, which failed six correct 0.5.7 answers. It is timed to that answer, not to the
+  session reporting stopped, which came up to two minutes later. Outage waits
+  fastbrowse measures inside a run are left out of every published time. A fastbrowse attempt in which any Jev call
+  took over 2 seconds (healthy calls take about half a second at any page size) is a Jev outage, run again rather
+  than scored. The 0.5.7 results are republished under these rules.
+- **Fewer model hand-offs on the way to an answer.** A lookup whose every requirement cites evidence finishes
+  without the screenshot verifier, which never found an ungrounded claim in 76 0.5.7 verifications. Only an
+  answer read on a search the run built itself (an address with a query) is still verified. A verifier naming a
+  requirement as `req_1` or `1` now names `req-1` rather than nothing. A read that answers a lookup finishes
+  without another decision or another look at the page it read, and a page with text but no controls is no longer
+  waited on for 12 seconds.
+- **A run reaches its first page sooner.** `run_task` asks for the plan and the shortcut while the browser starts,
+  so the tab opens straight onto the shortcut, and opening the tab sends its independent browser commands at once.
+- **A comparison is read without restating every record.** The reader names the records a winner or count rests
+  on as block ranges, and code copies their quotes in, where it wrote a claim for each: a priciest-book read took
+  4.8 seconds rather than 7.9.
+- **A page is read once it has finished loading.** A capture waits up to 3 seconds for a visible loading
+  indicator to go, where it read "Loading..." with the LLM and then read the page again.
+
 ## [0.5.7] - 2026-09-25
 
 - **Every eval comparison sets its arms on the same attempts, and an outage scores no arm.** Each suite is split

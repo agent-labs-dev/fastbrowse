@@ -32,9 +32,11 @@ import sys
 import tempfile
 import time
 from collections import Counter
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 from unittest import mock
@@ -72,8 +74,19 @@ ULTRAFAST_TEXT_MODEL = "inception/mercury-2.5"
 OUTAGE_RETRIES = 5
 """Runs of a row a provider outage ended, after the first, waiting 1, 2, 4, 8 then 10 minutes: about 25 minutes, past
 the 503 spells seen so far. A row still unavailable then is recorded, and left out of every published figure."""
-VERDICT_WAIT = 90.0
-"""Seconds to wait for Browser Use to judge a stopped session; a verdict still missing then counts as an outage."""
+STUCK_SECONDS = 900
+"""An attempt of any arm still running by now is stuck, and is stopped as an outage: each arm's agent is bounded by
+steps long before this (Browser Use's slowest finished sessions took about two minutes, fastbrowse's about three), and
+two of one day's Browser Use sessions sat unfinished for over half an hour."""
+HOSTED_OUTAGE = "Task ended unexpectedly."
+"""The output Browser Use gives a session its own infrastructure ended."""
+NAVIGATION_FAILED = "Page.navigate failed"
+"""How fastbrowse reports a first page that never loaded."""
+SITE_PROBE_SECONDS = 15
+"""How often the harness fetches each task site's start page while a run goes on."""
+SITE_STALL_SECONDS = 10
+"""A start page fetch slower than this is the site stalling: every site in the suites answers in under two seconds
+between stalls."""
 
 
 def _watch(arm: str, task: LiveTask, live_url: str | None) -> None:
@@ -158,9 +171,9 @@ class ArmReport(BaseModel):
     status: str
     task_successful: bool | None = None
     seconds: float
-    """Wall time, including retries; browser setup is included for existing arms."""
+    """Time to the answer, including browser setup; the hosted arm ends at its agent's `done` (`session_seconds`)."""
     transient_seconds: float = 0.0
-    """Retry time measured by fastbrowse, retained as a diagnostic without subtracting it from wall time."""
+    """Provider outage waits fastbrowse measured inside the run; every published time leaves them out."""
     dollars: float | None
     """None when some of the run's spend could not be priced: a known total would then be only a floor."""
     error: str | None = None
@@ -182,6 +195,10 @@ class ArmReport(BaseModel):
     # the Browser Use agent
     model: str | None = None
     session_id: str | None = None
+    answered: bool | None = None
+    """Its agent called `done` with a result that was not an error: its own completion, as fastbrowse's is."""
+    session_seconds: float | None = None
+    """Until the API reported the session stopped, which can be well after the answer; `seconds` ends at the answer."""
 
 
 class EvalRow(ArmReport):
@@ -193,6 +210,8 @@ class EvalRow(ArmReport):
     at: float
     concurrency: int | None = None
     status: str | None = None  # a crashed arm reports nothing, unless a provider was unavailable
+    repeat: int | None = None
+    """Which of the invocation's `--repeat` passes this is: every arm's attempt at a task in one pass is paired."""
     retries: int = 0
     """Runs discarded before this one because a provider stayed unavailable: they say nothing about the agent."""
     normalized_status: Ending = Ending.ERROR
@@ -366,14 +385,75 @@ async def _down(task: LiveTask, http: httpx.AsyncClient) -> str | None:
     return None
 
 
-async def _judged(client: Any, session: Any) -> Any:
-    """The session once Browser Use has judged it. The verdict lands after the session stops, so a session read
-    as soon as the run returns is ungraded, and the grader would read that as a failure."""
-    deadline = time.monotonic() + VERDICT_WAIT
-    while getattr(session, "is_task_successful", None) is None and time.monotonic() < deadline:
-        await asyncio.sleep(2)
-        session = await client.sessions.get(session.id)
-    return session
+class SiteWatch:
+    """Each task site's start page fetched every `SITE_PROBE_SECONDS` through a run, by the harness itself.
+
+    One day's the-internet.herokuapp.com held requests for 30 seconds at a time, a plain fetch included: attempts
+    it held took 36s where the same task took 7s between stalls, for whichever arm drew them. An attempt that a
+    fetch saw its site stall during is an outage for every arm alike, as a site serving errors already was."""
+
+    def __init__(self, http: httpx.AsyncClient, tasks: Sequence[LiveTask]) -> None:
+        self._http = http
+        self._starts = {origin_of(t.start): t.start for t in reversed(tasks)}
+        self._stalls: dict[str, list[tuple[float, float, str]]] = {origin: [] for origin in self._starts}
+
+    async def run(self) -> None:
+        await asyncio.gather(*(self._probe(origin, url) for origin, url in self._starts.items()))
+
+    async def _probe(self, origin: str, url: str) -> None:
+        while True:
+            began = time.time()
+            why = None
+            try:
+                response = await self._http.get(url, follow_redirects=True, timeout=SITE_STALL_SECONDS * 3)
+                if response.status_code >= 500:
+                    why = f"answered HTTP {response.status_code}"
+            except httpx.TransportError as error:
+                why = f"unreachable ({type(error).__name__})"
+            ended = time.time()
+            if why is None and ended - began > SITE_STALL_SECONDS:
+                why = f"took {ended - began:.0f}s to answer"
+            if why is not None:
+                self._stalls[origin].append((began, ended, why))
+            await asyncio.sleep(max(0.0, SITE_PROBE_SECONDS - (ended - began)))
+
+    def stalled(self, task: LiveTask, start: float, end: float) -> str | None:
+        """Why the task's site stalled between `start` and `end`, or None if every fetch then was answered."""
+        for began, ended, why in self._stalls.get(origin_of(task.start), ()):
+            if began < end and ended > start:
+                return f"site stalled: {task.start} {why}"
+        return None
+
+
+async def hosted_answer(client: Any, session_id: str, output: object) -> datetime | None:
+    """When the hosted agent answered, or None if it never did: its last `done` result that was not an error. An
+    agent that answers without calling `done` (0.5.7's github-license, among others) replies in a message, which
+    the session keeps as its output; that last reply is its answer."""
+    done: datetime | None = None
+    reply: datetime | None = None
+    called_done, after = False, None
+    for _ in range(100):
+        page = await client.sessions.messages(session_id, limit=100, **({"after": after} if after else {}))
+        for message in page.messages:
+            if message.type == "completion_result":
+                called_done = True
+                if not json.loads(message.data or "{}").get("is_error"):
+                    done = max(done or message.created_at, message.created_at)
+            elif message.type == "assistant_message":
+                reply = max(reply or message.created_at, message.created_at)
+        if not page.messages or not getattr(page, "has_more", False):
+            break
+        after = str(page.messages[-1].id)
+    return done if called_done else reply if output else None
+
+
+def answer_seconds(created_after: float, session: Any, answered: datetime | None, wall: float) -> float:
+    """Time to the hosted agent's answer: the client's wait for the session to exist, then the server's own clock
+    from its creation to the answer. The session reports stopped as much as two minutes after that, on Browser Use's
+    side, while fastbrowse's clock stops when its run returns its answer."""
+    if answered is None:
+        return wall
+    return min(wall, created_after + max(0.0, (answered - session.created_at).total_seconds()))
 
 
 async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path | None) -> tuple[Outcome, ArmReport]:
@@ -392,10 +472,20 @@ async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
     # The session id appears once the SDK has created the session, which is when its live URL exists.
     while run.session_id is None and not finishing.done():
         await asyncio.wait({finishing}, timeout=0.2)
+    created_after = time.monotonic() - started
     if run.session_id is not None:
         _watch("browser-use", task, (await client.sessions.get(run.session_id)).live_url)
-    # gather, not await: the SDK raises on output that fails the task's schema, before the session's cost is read.
-    await asyncio.gather(finishing, return_exceptions=True)
+    try:
+        # gather, not await: the SDK raises on output that fails the task's schema, before the session's cost is read.
+        await asyncio.gather(finishing, return_exceptions=True)
+    except asyncio.CancelledError:
+        # The attempt's cap cancelled it: the session would otherwise run on, billing, with nothing waiting for it.
+        finishing.cancel()
+        await asyncio.gather(finishing, return_exceptions=True)
+        if run.session_id is not None:
+            with suppress(BrowserUseError, httpx.HTTPError):
+                await client.sessions.stop(run.session_id)
+        raise
     seconds = time.monotonic() - started
     if (error := finishing.exception()) is None:
         result = finishing.result()
@@ -407,7 +497,11 @@ async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
         output = session.output
     else:
         raise error
-    session = await _judged(client, session)
+    if session.status.value == "error" and HOSTED_OUTAGE in str(output or ""):
+        # Browser Use's own infrastructure ending the session, not its agent giving up or answering wrong: it
+        # appeared in none of 0.5.7's sessions and in 13 of one day's 114. Any other error is scored as its failure.
+        raise Unavailable(f"Browser Use ended the session: {HOSTED_OUTAGE}")
+    answered = await hosted_answer(client, str(session.id), output)
     if isinstance(output, BaseModel):
         outcome = Outcome(output.model_dump_json(), output.model_dump(), None, unobservable=True)
     elif isinstance(output, dict):
@@ -418,7 +512,9 @@ async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
     report = ArmReport(
         status=session.status.value,
         task_successful=getattr(session, "is_task_successful", None),
-        seconds=round(seconds, 2),
+        answered=answered is not None,
+        seconds=round(answer_seconds(created_after, session, answered, seconds), 2),
+        session_seconds=round(seconds, 2),
         dollars=None if cost is None else float(cost),
         model=str(session.model.value if hasattr(session.model, "value") else session.model),
         steps=session.step_count,
@@ -479,6 +575,25 @@ def _crashed(
     )
 
 
+def _slow_jev(events: list[object]) -> float:
+    """The slowest Jev call past `JEV_SLOW_SECONDS` in a run's trace, or 0."""
+    return max(
+        (float(e["seconds"]) for e in events if isinstance(e, dict) and e.get("event") == "request_slow"), default=0.0
+    )
+
+
+async def _site_checked(row: EvalRow, task: LiveTask, http: httpx.AsyncClient) -> EvalRow:
+    """`row` with its ending settled by the harness's own look at the site, the same for every arm: a failed attempt
+    at a site that is down is an outage, and fastbrowse's first page never loading is one only if the site is down,
+    since that can be its own browser."""
+    if row.normalized_status == Ending.UNAVAILABLE and NAVIGATION_FAILED in (row.error or ""):
+        if await _down(task, http) is None:
+            return row.model_copy(update={"normalized_status": Ending.ERROR})
+    elif not row.passed and row.normalized_status != Ending.UNAVAILABLE and (down := await _down(task, http)):
+        return row.model_copy(update={"normalized_status": Ending.UNAVAILABLE, "failure": down})
+    return row
+
+
 async def run_arm(
     arm: str,
     task: LiveTask,
@@ -493,15 +608,17 @@ async def run_arm(
     started = time.monotonic()
     at = time.time()
     try:
-        outcome, report = await ARMS[arm].runner(
-            task, http, downloads, bitwarden=bitwarden, record=record, started=started
-        )
+        async with asyncio.timeout(STUCK_SECONDS) as cap:
+            outcome, report = await ARMS[arm].runner(
+                task, http, downloads, bitwarden=bitwarden, record=record, started=started
+            )
     except Exception as exc:  # a crashed arm is a failed task, recorded rather than aborting the comparison
-        unavailable = isinstance(exc, (Unavailable, *TRANSIENT_TRANSPORT))
+        error = Unavailable(f"still running after {STUCK_SECONDS // 60} minutes") if cap.expired() else exc
+        unavailable = isinstance(error, (Unavailable, *TRANSIENT_TRANSPORT))
         return _crashed(
             arm,
             task,
-            f"{type(exc).__name__}: {exc}",
+            f"{type(error).__name__}: {error}",
             at=at,
             seconds=time.monotonic() - started,
             status=Status.UNAVAILABLE.value if unavailable else None,
@@ -516,15 +633,17 @@ async def run_arm(
     # Right and proven are graded apart: a correct answer the agent could not back with quotes is a
     # different defect from a wrong one, and one pass/fail column hid which the suite was showing.
     correct = failure is None
-    if failure is None and not status_matches(arm, report.status, task.expect, report.task_successful):
+    if failure is None and not status_matches(arm, report.status, task.expect, bool(report.answered)):
         failure = f"status {report.status}, expected {task.expect.value}"
+    ending = normalize(report.status, hosted=arm == "browser-use", answered=bool(report.answered))
+    if slow := _slow_jev(report.events):
+        # Jev answers in under a second; a slower call is its outage, and the attempt is run again, never scored.
+        ending, failure = Ending.UNAVAILABLE, f"Jev unavailable: a call took {slow:.1f}s"
     return EvalRow.model_validate(
         report.model_dump()
         | {
             "arm": arm,
-            "normalized_status": normalize(
-                report.status, hosted=arm == "browser-use", hosted_success=report.task_successful
-            ),
+            "normalized_status": ending,
             "task": task.id,
             "category": task.category.value,
             "at": at,
@@ -751,7 +870,7 @@ def summarize(rows: list[EvalRow], arms: list[str]) -> None:
         passed = sum(r.passed for r in arm_rows)
         correct = sum(r.correct for r in arm_rows)
         priced = [r.dollars for r in arm_rows if r.dollars is not None]
-        seconds = [r.seconds for r in arm_rows]
+        seconds = [max(0.0, r.seconds - r.transient_seconds) for r in arm_rows]
         unknown = len(arm_rows) - len(priced)
         print(
             f"{arm}: {passed}/{len(arm_rows)} passed, {correct} correct, median {statistics.median(seconds):.1f}s, "
@@ -760,7 +879,7 @@ def summarize(rows: list[EvalRow], arms: list[str]) -> None:
         if excluded := len(ran) - len(arm_rows):
             print(f"  {excluded} runs ended by a provider outage, excluded")
         if lost := sum(r.transient_seconds for r in arm_rows):
-            print(f"  {'transient':18} {lost / len(arm_rows):5.1f}s a task, included in the median")
+            print(f"  {'transient':18} {lost / len(arm_rows):5.1f}s a task, left out of the median")
         calls: dict[str, float] = {}
         for r in arm_rows:
             for label, spent in r.seconds_by_call.items():
@@ -864,8 +983,10 @@ async def main(argv: list[str]) -> int:
         args.out.open("a", encoding="utf-8") as out,
     ):
         async with httpx.AsyncClient(timeout=60, event_hooks={"request": [_github_token]}) as http:
+            watch = SiteWatch(http, tasks)
+            watching = asyncio.create_task(watch.run())
 
-            async def one(arm: str, task: LiveTask, record: Path | None) -> EvalRow:
+            async def one(arm: str, task: LiveTask, record: Path | None, repeat: int) -> EvalRow:
                 # An outage is waited out and the row run again; bounded, so a dead provider cannot hold a run forever.
                 for retries in itertools.count():
                     # The answer key is read once the row holds its slot: read while it queued, a live key (the
@@ -882,12 +1003,11 @@ async def main(argv: list[str]) -> int:
                         row = await run_arm(
                             arm, task, truth, http, Path(downloads), bitwarden=args.bitwarden, record=record
                         )
-                    if (
-                        not row.passed
-                        and row.normalized_status != Ending.UNAVAILABLE
-                        and (down := await _down(task, http))
+                    row = await _site_checked(row, task, http)
+                    if row.normalized_status != Ending.UNAVAILABLE and (
+                        stalled := watch.stalled(task, row.at, time.time())
                     ):
-                        row = row.model_copy(update={"normalized_status": Ending.UNAVAILABLE, "failure": down})
+                        row = row.model_copy(update={"normalized_status": Ending.UNAVAILABLE, "failure": stalled})
                     if row.normalized_status != Ending.UNAVAILABLE or retries >= OUTAGE_RETRIES:
                         break
                     wait = min(60 * 2**retries, 600)
@@ -897,6 +1017,7 @@ async def main(argv: list[str]) -> int:
                     update={
                         "concurrency": args.concurrency,
                         "retries": retries,
+                        "repeat": repeat,
                         "suite": suite_of[task.id],
                         "suite_version": suite_versions[suite_of[task.id]],
                         "task_version": task_version(task.id, lock),
@@ -915,13 +1036,16 @@ async def main(argv: list[str]) -> int:
                 return row
 
             planned = [
-                (arm, task, None if args.record is None else video_path(args.record, arm, task))
-                for _ in range(args.repeat)
+                (arm, task, None if args.record is None else video_path(args.record, arm, task), repeat)
+                for repeat in range(args.repeat)
                 for task in tasks
                 for arm in args.arms
                 if eligible(arm, task)
             ]
-            rows = list(await asyncio.gather(*(one(arm, task, record) for arm, task, record in planned)))
+            try:
+                rows = list(await asyncio.gather(*(one(*plan) for plan in planned)))
+            finally:
+                watching.cancel()
     summarize(rows, args.arms)
     return 0
 

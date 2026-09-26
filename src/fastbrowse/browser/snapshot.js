@@ -38,6 +38,15 @@
   const LOADING = '[aria-busy="true"],[role="progressbar"],progress:not([value]),' +
     ['spinner', 'loading', 'loader', 'skeleton', 'shimmer']
       .flatMap(name => [`[class*="${name}" i]`, `[id*="${name}" i]`]).join(',');
+  // Only an indicator on screen is waited on. GitHub keeps an empty fixed progress bar and lazy skeletons below
+  // the fold, which load only once scrolled to: waiting on them spent the full wait on every GitHub page.
+  const showing = e => {
+    if (!e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+    const r = e.getBoundingClientRect();
+    const view = e.ownerDocument.defaultView || window;
+    return r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < view.innerHeight &&
+      r.left < view.innerWidth;
+  };
   if (!registry.track) {
     const roots = new WeakSet();
     const changed = () => { registry.lastMutation = performance.now(); };
@@ -46,8 +55,10 @@
       if (roots.has(root)) return;
       roots.add(root);
       observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true });
-      // Property changes and scrolling can affect controls without producing mutation records.
-      for (const event of ['input', 'change', 'scroll']) root.addEventListener(event, changed, true);
+      // Input handlers can defer a navigation or redraw without mutating yet. Start the quiet clock at the
+      // event, so the reply's travel time counts toward settling even when the action changes nothing.
+      for (const event of ['input', 'change', 'scroll', 'wheel', 'pointermove', 'pointerdown', 'pointerup',
+        'keydown', 'keyup']) root.addEventListener(event, changed, true);
       changed();
     };
     registry.track(document);
@@ -60,8 +71,7 @@
     };
     const include = root => {
       registry.track(root);
-      loading ||= [...root.querySelectorAll(LOADING)].some(e => e.checkVisibility({ checkOpacity: true,
-        checkVisibilityCSS: true }));
+      loading ||= [...root.querySelectorAll(LOADING)].some(showing);
       const text = root.body?.innerText ?? root.textContent ?? '';
       hashText(text);
       // innerText omits shadow trees and child documents even when their content is visible.
@@ -231,6 +241,18 @@
   };
 
   const controls = [];
+  const fieldScope = e => {
+    if (!e.matches('input,textarea,select')) return null;
+    const form = e.form || e.closest('form,fieldset,[role="form"]');
+    if (form) return String(identity(form));
+    // Script-built forms can use a local group of labelled fields without an HTML form owner.
+    // Stop at document sections so a sidebar search never joins the content's fields.
+    for (let p = e.parentElement; p && !p.matches('body,main,article,section,aside,nav,header,footer');
+      p = p.parentElement) {
+      if (p.querySelectorAll('input:not([type=hidden]),textarea,select').length > 1) return String(identity(p));
+    }
+    return null;
+  };
   for (const e of walk(document)) {
     if (!safe(e) || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]')) continue;
     const source = sourceOf(e);
@@ -246,6 +268,7 @@
       distance: (y < 0 || y >= innerHeight) ? 1 + Math.abs(y - innerHeight / 2) : 0,
       sensitive: secret(source), input_type: source.type || null,
       frame_origin: e.ownerDocument.location.origin, frame_path: framePath(e.ownerDocument),
+      form_id: fieldScope(source),
       submit_semantics: submitSemantics(e),
     };
     if (rname === 'link' && e.href) {
@@ -297,25 +320,35 @@
   const titles = scope => [...scope.querySelectorAll(`${HEADINGS},label`)].filter(
     e => (e.localName !== 'label' || !e.control) && e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
   );
+  // A table's header cell names its own row, and a caption its own table, never what sits outside them: a jQuery UI
+  // datepicker's Next button was named "Su", its weekday header, and every month's Next read the same.
+  const reaches = (title, element) =>
+    !['th', 'caption'].includes(title.localName) || title.parentElement.contains(element);
   // The title nearest before the element names its section; the scope's first title is the fallback, and the
   // only answer when `nearest` is false.
   const sectionOf = (scope, element, label, nearest = true) => {
     let first = '', before = '';
     for (const title of titles(scope)) {
       const text = firstLine(title.innerText);
-      if (!text || text === label || title.contains(element)) continue;
+      if (!text || text === label || title.contains(element) || !reaches(title, element)) continue;
       first ||= text;
       if (title.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) before = text;
     }
     return (nearest && before) || first;
   };
+  // Labels more than one control shares, filled in once every control is listed.
+  const repeated = new Set();
   const nameOf = (scope, element, label, nearest) => {
     const aria = (scope.getAttribute('aria-label') || '').trim();
     if (aria && aria !== label) return aria;
     const section = sectionOf(scope, element, label, nearest);
     if (section) return section;
-    const text = scope.innerText || '';
-    return firstLine(label ? text.split(label).join(' ') : text);
+    // A line that is itself a repeated control's label ("Prev") reads the same in every repeat, so it names none:
+    // past it, a datepicker's first line is the month it shows. The label is cut out as whole words, since a day
+    // labelled "2" cut out of "October 2026" left "October 0 6".
+    const lines = (scope.innerText || '').split('\n').map(line => line.replace(/\s+/g, ' ').trim())
+      .filter(line => line && !repeated.has(line));
+    return firstLine(lines.map(line => label ? ` ${line} `.split(` ${label} `).join(' ') : line).join('\n'));
   };
   const contextOf = (element, twins, label, nearest = true) => {
     // The widest twin-free ancestor is the card, row or section the twins repeat over. A narrower one names
@@ -412,6 +445,7 @@
     if (!byLabel.has(key)) byLabel.set(key, []);
     byLabel.get(key).push(c);
   }
+  for (const group of byLabel.values()) if (group.length > 1) repeated.add(group[0].label);
   for (const group of byLabel.values()) {
     if (group.length < 2) continue;
     const twins = group.map(c => registry.nodes.get(c.id));
@@ -487,6 +521,26 @@
 
   const guards = {};
   for (const c of controls) guards[c.id] = registry.guard(registry.nodes.get(c.id));
+  // A dependent field can appear without changing page text. Compare all controls,
+  // excusing only the value and required marker of the field just filled.
+  const formState = controls.map(({ distance, offscreen, ...c }) => {
+    const form = registry.nodes.get(c.id)?.form;
+    return {...c, form: form ? [form.action, form.method, form.target] : null};
+  });
+  const formPage = JSON.stringify([location.href, performance.timeOrigin, document.title, viewport_text]);
+  if (typeof mode === 'object') {
+    const previous = registry.formObserved;
+    if (!previous || previous.page !== formPage) return false;
+    const expected = previous.controls.map(c => {
+      if (c.id !== mode.id) return c;
+      const {blocking, ...filled} = c;
+      return mode.text ? {...filled, value: mode.text} : c;
+    });
+    const same = JSON.stringify(expected) === JSON.stringify(formState);
+    if (same) registry.formObserved = {page: formPage, controls: formState};
+    return same;
+  }
+  registry.formObserved = {page: formPage, controls: formState};
   // Kept so a later check can ask whether any of these controls changed without sending the guards back.
   registry.observed = new Map(controls.map(c => [c.id, JSON.stringify(guards[c.id])]));
   const field_state = [...document.querySelectorAll('input,textarea,select')].filter(safe)

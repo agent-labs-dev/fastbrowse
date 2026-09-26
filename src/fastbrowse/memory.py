@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Self
 from urllib.parse import urlsplit
 
@@ -131,6 +131,10 @@ class Notes:
     def add_continuation(self, requirement_id: str, record_id: str) -> None:
         self._continuation_records.setdefault(requirement_id, set()).add(record_id)
 
+    def comparison_records(self, requirement_id: str) -> tuple[str, ...]:
+        records = self._continuation_records.get(requirement_id, set())
+        return tuple(key for key in self._facts if key in records)
+
     def has_untallied_records(self, requirement_id: str) -> bool:
         tallied = {
             key
@@ -218,7 +222,12 @@ class Notes:
         ).text
 
     def render_with_ids(
-        self, max_chars: int, *, preserve_requirements: bool = False, json_encoded: bool = False
+        self,
+        max_chars: int,
+        *,
+        preserve_requirements: bool = False,
+        json_encoded: bool = False,
+        labels: Mapping[str, str] | None = None,
     ) -> RenderedNotes:
         """Every fact in read order when they all fit; otherwise unrelated context is dropped before requirement
         evidence and its basis, each group kept in read order.
@@ -231,13 +240,14 @@ class Notes:
             raise ValueError("max_chars must be nonnegative")
 
         aliases = {key: index for index, key in enumerate(self._facts, 1)}
+        shown_ids = labels or {}
         evidence = self.evidence
         counted = {key for fact in self._facts.values() if fact.tally is not None for key in fact.basis}
 
         def basis_text(fact: Fact) -> str:
             # A ranking can cite every counted record again; full span ids undo the tally's compact rendering.
             records = ",".join(str(aliases[key]) for key in fact.basis if key in counted)
-            other = [key for key in fact.basis if key not in counted]
+            other = [shown_ids.get(key, key) for key in fact.basis if key not in counted]
             parts = [f"records({records})"] if records else []
             if other:
                 parts.append(json.dumps(other))
@@ -247,7 +257,7 @@ class Notes:
             if fact.tally is not None:
                 urls = tuple(dict.fromkeys(evidence[record].url for record in fact.basis))
                 return (
-                    f"[{key}] {json.dumps(fact.text, ensure_ascii=False)} "
+                    f"[{shown_ids.get(key, key)}] {json.dumps(fact.text, ensure_ascii=False)} "
                     f"requirements={','.join(sorted(self._requirements[key])) or '-'} "
                     f"tally_for={fact.tally.requirement_id}{basis_text(fact)} urls={json.dumps(urls)}"
                 )
@@ -258,7 +268,7 @@ class Notes:
                 f"quote={json.dumps(fact.evidence.quote, ensure_ascii=False)}"
             )
             return (
-                f"[{key}] {json.dumps(fact.text, ensure_ascii=False)} "
+                f"[{shown_ids.get(key, key)}] {json.dumps(fact.text, ensure_ascii=False)} "
                 f"requirements={','.join(sorted(self._requirements[key])) or '-'} {source}" + basis_text(fact)
             )
 

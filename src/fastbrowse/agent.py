@@ -8,10 +8,12 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 from collections import deque
 from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence, Set
 from dataclasses import dataclass, field
+from typing import Self
 from urllib.parse import urljoin, urlsplit
 
 from pydantic import BaseModel, Field, JsonValue
@@ -39,6 +41,7 @@ from fastbrowse.models import (
     Authorization,
     Citation,
     CostComponent,
+    CostLine,
     Decider,
     EventHandler,
     Evidence,
@@ -67,6 +70,7 @@ from fastbrowse.page import (
     NavigationTimeout,
     Observation,
     Page,
+    SiteUnreachable,
     pager_link,
 )
 from fastbrowse.planner import Plan, Requirement, RequirementKind, make_plan
@@ -79,7 +83,16 @@ from fastbrowse.policy import (
     StepContext,
     decide,
 )
-from fastbrowse.retrieval import ComposedAnswer, compose, draft_answer, partial_answer, read
+from fastbrowse.retrieval import (
+    ComposedAnswer,
+    ReadOutcome,
+    TallyReader,
+    compose,
+    draft_answer,
+    partial_answer,
+    read,
+    read_tallies,
+)
 from fastbrowse.safety import (
     Redactor,
     irreversible_question,
@@ -107,9 +120,9 @@ GENERATE = "generate"
 # Long enough for a browser-verification page to run its check and hand over, short enough that a page
 # which never moves still ends as needs_login well inside a run's time budget.
 _INTERSTITIAL_SECONDS = 12.0
-# How long a shortcut may outlast the start page's load. Flash-lite answers in about 0.8s and a cloud page
-# loads in one to two, so a proposal later than this is an outlier costing more than it saves.
-_SHORTCUT_GRACE_SECONDS = 1.0
+# How long the first load waits for a shortcut. Flash-lite answers in 0.5 to 1s, and a start page loads in one
+# to four, so a proposal later than this is an outlier and the start page is opened instead.
+_SHORTCUT_WAIT_SECONDS = 2.0
 _INTERSTITIAL_POLL_SECONDS = 0.5
 _REDRAW_WATCH_SECONDS = 10.0
 """Longer than deciding takes: a watch ends with the work it watches, and this only bounds a stuck one."""
@@ -146,20 +159,48 @@ class _FieldText(Frozen):
         )
     )
     text: str = Field(description="Exactly the text to type into the field, with no commentary; empty when missing.")
+    values: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Only when the task has this field hold more than one value in turn (enter one, later change it): each "
+            "value, written as it would be typed, in the order the task wants them typed. Otherwise empty."
+        ),
+    )
 
 
-_FIELD_WRITER = (
-    "# Field writer\nWrite only the text for one form field. "
+class _FormField(_FieldText):
+    id: str
+
+
+class _FormText(Frozen):
+    fields: tuple[_FormField, ...] = Field(
+        description="Fields safe to fill now, in order, starting with the chosen field. Omit any uncertain field."
+    )
+
+
+_FIELD_RULES = (
     "Infer its meaning from the task, current value, page context and recent actions. "
     "Use the field's displayed format for dates, except in a field whose input_type is date, datetime-local, month, "
     "week or time, which takes ISO 8601 (2026-09-25, 2026-09-25T14:30, 2026-09, 2026-W39, 14:30). "
     "A fact the task states in another shape is given, not missing: take the part of a "
     "stated name, address or date this field asks for and write it in the field's shape. "
     "The requirements are the task's steps in the order it wants them done. When more than one gives this field "
-    "a value (enter one, later change it), write the value of the earliest such requirement that no recent "
-    "action has already typed into this field; a later value is written only after the earlier one was.\n\n"
+    "a value (enter one, later change it), list every such value in values, in that order, and write in text the "
+    "earliest one no recent action has already typed into this field.\n\n"
     f"# Trust\n{UNTRUSTED}"
 )
+
+_FIELD_WRITER = "# Field writer\nWrite only the text for one form field. " + _FIELD_RULES
+
+_FORM_WRITER = (
+    "# Form writer\nWrite text for ALL the listed empty fields whose values the task or notes supply. "
+    "These fields belong to one form. Filling several contact or address fields together is one task step: "
+    "include every known value, starting with chosen_field. Each value will be typed separately. "
+    "Omit fields that need a result from an intervening task step, or that would require inventing a value. "
+    "Omit optional fields the task does not supply. If only the chosen field can be filled yet, return it alone. "
+    "Copy each field's id exactly. For a value to correct later, still list all values in task order; "
+    "only the first pending value will be typed now. "
+) + _FIELD_RULES
 
 
 class _Recovery(Frozen):
@@ -210,6 +251,15 @@ class _TransactionCandidate:
     from_url: str
     landed_url: str | None = None
     committing: bool | None = None
+
+
+@dataclass(slots=True)
+class _PageRead:
+    capture: Capture
+    observation: Observation
+    task: asyncio.Task[ReadOutcome]
+    started: float
+    frame: bytes | None
 
 
 @dataclass(slots=True)
@@ -277,12 +327,25 @@ class _RunState:
     barren: dict[ReadKey, int] = field(default_factory=dict[ReadKey, int])
     """Reads by document, page state and outstanding requirements that added no fact. Keyed by what can be done
     on the page rather than by its exact text, so a page rewriting itself cannot mint a fresh key for ever."""
+    passed: set[str] = field(default_factory=set[str])
+    """Page states, by `_seen`, the run acted on without reading them: Jev judged them not worth a read then."""
+    typed_on_passed: bool = False
+    """Every action since the run was last on a passed state only typed into a field on it."""
+    acted_on: str | None = None
+    """The page state, by `_seen`, the last action was taken on."""
+    evidenced_at: dict[str, dict[str, str]] = field(default_factory=dict[str, dict[str, str]])
+    """By page state, each requirement a read of it evidenced and the capture it read, so a return to that state
+    can tell the evidence went stale."""
     next_page: bool = False
     """Open this page's next page, set when the reader says a list the run needs goes on past the page it read."""
     paged_from: str | None = None
     """The page state a next-page click left, so the page it opens is read without a decision."""
     pages: int = 0
     """Next pages opened by code this run."""
+    through_end: bool = False
+    """Every unresolved requirement needs the entire list, so intermediate pages can be read concurrently."""
+    tally_readers: tuple[TallyReader, ...] = ()
+    paging_failed: bool = False
     first_url: str | None = None
     visited: dict[str, None] = field(default_factory=dict[str, None])
     """Every address the run has been on, in order, first the one it began on. The action record starts after that
@@ -301,6 +364,9 @@ class _RunState:
     record that was lost."""
     transaction_candidates: list[_TransactionCandidate] = field(default_factory=list[_TransactionCandidate])
     """Authorized clicks can just navigate, so only candidates with notes are classified when answering."""
+    form_continues: bool = False
+    form_rejected: set[tuple[str, str | None, str]] = field(default_factory=set)
+    form_values: dict[tuple[str, str], tuple[Control, _FieldText]] = field(default_factory=dict)
 
     @property
     def plan(self) -> Plan:
@@ -317,6 +383,45 @@ class _RunState:
             self.ledger.record(planned.cost)
             self.ready_plan = planned.data
         return self.ready_plan
+
+
+@dataclass
+class HeadStart:
+    """The calls a run can make from the task alone, begun before there is a browser to drive.
+
+    Starting a cloud browser and opening its tab takes 2 to 3 seconds, and the plan and the shortcut need only the
+    task and the start page, so `run_task` begins them first: the shortcut is waiting when the tab opens instead of
+    being asked for then. The calls reserve against `ledger`, which the run takes over, so they count against its
+    limits and are billed in its result.
+    """
+
+    ledger: Ledger
+    task: str
+    start: str | None
+    planning: asyncio.Task[Generation[Plan]]
+    proposing: asyncio.Task[Shortcut] | None
+
+    @classmethod
+    def begin(cls, llm: LLMClient, task: str, *, start: str | None = None, limits: Limits | None = None) -> Self:
+        ledger = Ledger(limits or Limits())
+        # The plan is needed to read, to judge DONE and to answer, and the start page, the first fills and clicks
+        # all come before those, so it is written from the task while they run.
+        planning = asyncio.create_task(make_plan(llm, task, start=start, ledger=ledger))
+        proposing = None if start is None else asyncio.create_task(_propose(llm, task, start, ledger))
+        return cls(ledger, task, start, planning, proposing)
+
+    async def discard(self) -> None:
+        """Cancel what is still being written, so nothing bills a run that has already ended."""
+        await _discard(self.planning)
+        if self.proposing is not None:
+            await _discard(self.proposing)
+
+    async def abandon(self) -> tuple[CostLine, ...]:
+        """What a run that never began spent: a shortcut bills itself, and a plan that finished is billed here."""
+        await self.discard()
+        if not self.planning.cancelled() and self.planning.exception() is None:
+            self.ledger.lines.append(self.planning.result().cost)
+        return tuple(self.ledger.lines)
 
 
 class Agent:
@@ -339,6 +444,8 @@ class Agent:
         self._redactor = Redactor()
         self._secret_on_screen = False
         self._raw_observation: Observation | None = None
+        # The last observation `_observe` returned, which `_finish` judges again only if it is not the one it got.
+        self._observed: Observation | None = None
         self._artifact_start = 0
 
     async def run(
@@ -353,31 +460,40 @@ class Agent:
         limits: Limits | None = None,
         authorization: Authorization | None = None,
         until: UntilCheck | None = None,
+        head_start: HeadStart | None = None,
     ) -> RunResult:
-        ledger = Ledger(limits or Limits())
+        """Pursue `task` from `start`. A `head_start` is the plan and shortcut already asked for with this task and
+        start; it carries the limits it was begun with, so `limits` is not read alongside it."""
+        if head_start is not None and (limits is not None or (head_start.task, head_start.start) != (task, start)):
+            # A plan written for another task or start would be followed without complaint.
+            raise ValueError("a head start carries its own limits and must be begun with this task and start")
+        head = head_start or HeadStart.begin(self._llm, task, start=start, limits=limits)
+        ledger = head.ledger
+        # The run's clock starts here, as it did before there was a head start: a browser slow to start is not time
+        # spent on the task, and `max_seconds` bounds the deadline below from this moment too.
+        ledger.started = time.monotonic()
         self._artifact_start = len(self._page.artifacts)
         state: _RunState | None = None
-        planning: asyncio.Task[Generation[Plan]] | None = None
         # The ledger checks `max_seconds` between operations; only a deadline around the awaits bounds a
         # browser or provider call that never returns.
         deadline = asyncio.timeout(ledger.limits.max_seconds)
         with jev_spend(ledger.lines, ledger=ledger):
             try:
                 async with deadline:
-                    # The plan is needed to read, to judge DONE and to answer, and the start page, the first fills
-                    # and clicks all come before those, so it is written from the task while they run.
-                    planning = asyncio.create_task(make_plan(self._llm, task, start=start, ledger=ledger))
                     # `start=None` leaves the browser where it is, which is what a caller stepping a run on
                     # from a page it opened itself wants. `choose_start` is the other case: a caller with a goal
                     # and no page at all, who wants the first address worked out from the task.
                     opening = start if start is not None or not choose_start else await self._first_page(task, ledger)
-                    history, invented = ([], set[str]()) if opening is None else await self._open(task, opening, ledger)
+                    proposing = head.proposing if opening is not None and opening == head.start else None
+                    history, invented = (
+                        ([], set[str]()) if opening is None else await self._open(task, opening, ledger, proposing)
+                    )
                     if start is None and opening is not None:
                         # The caller gave a goal and no page, so this address was worked out from the task too.
                         invented.add(opening)
                         await self._front_page_if_blank(opening)
                     state = _RunState(
-                        task, inputs or {}, tuple(attachments), authorization or Authorization(), ledger, planning
+                        task, inputs or {}, tuple(attachments), authorization or Authorization(), ledger, head.planning
                     )
                     state.history.extend(history)
                     state.invented = invented
@@ -413,13 +529,14 @@ class Agent:
             except (JevError, LLMError, BrowserError) as error:
                 message = self._redactor.redact(str(error))[:500]
                 trace("run_error", kind=type(error).__name__, step=len(state.steps) if state else 0, error=message)
-                unavailable = isinstance(error, Unavailable) or (state is None and isinstance(error, NavigationTimeout))
+                unavailable = isinstance(error, Unavailable) or (
+                    state is None and isinstance(error, NavigationTimeout | SiteUnreachable)
+                )
                 status = Status.UNAVAILABLE if unavailable else Status.ERROR
                 return self._result(state, ledger, status, error=message)
             finally:
                 # A run can end before it ever needed the plan, and a plan still being written would bill it.
-                if planning is not None:
-                    await _discard(planning)
+                await head.discard()
 
     async def _loop(
         self, state: _RunState, output_schema: type[BaseModel] | None, until: UntilCheck | None
@@ -440,6 +557,21 @@ class Agent:
             # none of the gates below, which is safe only because of what it can be: a pager link to another address.
             # The login check needs a decision Jev has not made yet, and the page it opens is judged on the next turn.
             # The confidence gates judge Jev's uncertainty, and there is none to judge here.
+            if state.next_page and state.through_end and not state.paging_failed:
+                await self._pipeline_pages(state, observation)
+                if (
+                    not state.paging_failed
+                    and not state.owes_read
+                    and _lookup(state.plan)
+                    and _answered(state.plan, state.notes)
+                    and self._observed is not None
+                ):
+                    result = await self._finish(state, self._observed, output_schema, until)
+                    if result is not None:
+                        return result
+                continue
+            if await self._reread_if_changed(state, observation):
+                continue
             if (paging := _paging(state, observation)) is not None:
                 if await self._step(state, observation, paging, Decider.LLM, gate=False):
                     await self._recover(state, observation, _read_exhausted(state))
@@ -455,7 +587,12 @@ class Agent:
             fresh = page != state.last_page
             context = self._context(state, secrets, check_login=fresh and not secrets, check_bot=fresh)
             decision = await self._unless_redrawn(
-                state, decide(self._jev, observation, context, self._config, ledger=state.ledger), observation, None
+                state,
+                decide(
+                    self._jev, _without_missing(observation, state.missing), context, self._config, ledger=state.ledger
+                ),
+                observation,
+                None,
             )
             if decision is None:
                 continue
@@ -481,7 +618,12 @@ class Agent:
             ) is not None:
                 decision, uncertain, decided_by = directed, False, Decider.LLM
             if await self._read_before_interaction(state, observation, decision, decided_by):
-                continue
+                answered = (plan := state.ready_plan) is not None and _lookup(plan) and _answered(plan, state.notes)
+                if not answered:
+                    continue
+                # The read answered a lookup, and deciding again on the same page only arrived at DONE: a shortlist
+                # and a decision, 1 to 2s, in 11 of 138 0.5.7 runs. `_finish` still judges whether DONE holds.
+                decision, uncertain, decided_by = _code_decision(Operation.DONE, None), False, Decider.LLM
             pager = (
                 decision.operation is Operation.CLICK and decision.target is not None and pager_link(decision.target)
             )
@@ -491,8 +633,7 @@ class Agent:
                 # A lookup has nothing left to do once it is answered: with the cheapest flight read, Jev went on to
                 # click "Select flight", which the page covered, and the recording showed a failed click after the
                 # answer. A click recovery directed stands, so a DONE the verifier refused is not asked again.
-                lookup = all(r.kind is RequirementKind.INFORMATION for r in plan.requirements)
-                if (pager or (lookup and decided_by is Decider.JEV)) and _answered(plan, state.notes):
+                if (pager or (_lookup(plan) and decided_by is Decider.JEV)) and _answered(plan, state.notes):
                     # Everything asked to be found is evidenced, so another page is wandering: Jev, offered the pager,
                     # kept turning pages through a whole catalogue after the two the task named had been read. DONE
                     # is judged again by `_finish`, which carries on if it does not hold.
@@ -505,9 +646,10 @@ class Agent:
                         decision.model_copy(update={"operation": Operation.READ, "target": None}),
                         False,
                     )
-            if uncertain and not raw.controls and await self._outwait(raw):
-                # Nothing to act on and no idea what to do is a page still rendering: a script-built app settles
-                # before it draws, and recovery on it saw an empty login form and spent 5 to 13s saying so.
+            if uncertain and not _drew_something(raw) and await self._outwait(raw):
+                # A blank page and no idea what to do is a page still rendering: a script-built app settles before it
+                # draws, and recovery on it saw an empty login form and spent 5 to 13s saying so. A page with text is
+                # drawn: waiting on the-internet's bare "New Window" page cost every run the whole 12s.
                 continue
             if uncertain and state.ready_plan is None:
                 # Unsure without the requirements: the plan is already in flight and costs less than recovery.
@@ -524,14 +666,20 @@ class Agent:
                     # the reader named to show more was cleared right after the read that named it, and Flights
                     # runs went to recovery without clicking View more flights. A skipped read spends nothing.
                     held, state.directed = state.directed, None
+                    recoveries = state.recoveries
                     if not await self._step(state, observation, reading, decided_by):
-                        continue
-                    state.directed = held
-                    if not _unread(plan, state.notes):
+                        if not (_lookup(plan) and _answered(plan, state.notes) and state.recoveries == recoveries):
+                            continue
+                        # A read does not change the page, so observing it again and deciding only arrived at
+                        # DONE, 1.5 to 2s a lookup. A tripwire that sent the read to recovery left it work to do.
+                        decision = decision.model_copy(update={"operation": Operation.DONE, "target": None})
+                    elif not _unread(plan, state.notes):
+                        state.directed = held
                         # Only an owed read gets here: a scroll changes the page but not its text, so the read
                         # found content already read, and the notes already describe what the interaction drew.
                         decision = decision.model_copy(update={"operation": Operation.DONE, "target": None})
                     else:
+                        state.directed = held
                         directed = (
                             decision
                             if decision.directed
@@ -549,7 +697,7 @@ class Agent:
             # READ on the page that shows the answer sent every such run to recovery, and one spent the whole
             # recovery budget there and ended without an answer.
             if decision.operation is Operation.ESCALATE or (
-                uncertain and decision.operation not in _NOT_ACTING and not _try_unsure(state, observation)
+                uncertain and decision.operation not in _NOT_ACTING and not _try_unsure(state, observation, decision)
             ):
                 await self._recover(state, observation, f"uncertain next step ({decision.confidence:.2f})")
                 continue
@@ -569,6 +717,8 @@ class Agent:
                 await self._recover(state, observation, reason)
                 continue
             try:
+                if not uncertain and not decision.directed and await self._fill_form(state, observation, decision):
+                    continue
                 if await self._step(state, observation, decision, decided_by):
                     await self._recover(state, observation, _read_exhausted(state))
             except _Unsure as unsure:
@@ -645,25 +795,28 @@ class Agent:
         trace("start_page_blank", proposed=opened, front=front)
         await self._page.navigate(front)
 
-    async def _open(self, task: str, start: str, ledger: Ledger) -> tuple[list[HistoryEntry], set[str]]:
-        """Open `start`, or a direct address for the task on its site when one is proposed in time.
+    async def _open(
+        self, task: str, start: str, ledger: Ledger, proposing: asyncio.Task[Shortcut] | None
+    ) -> tuple[list[HistoryEntry], set[str]]:
+        """Open a direct address for the task on `start`'s site when one is proposed in time, else `start`.
 
-        The proposal is written while the start page loads, so it costs no wall time unless it outlasts the load,
-        and the start page stays one BACK away for when the shortcut lands somewhere unhelpful.
+        The shortcut is opened in place of the start page, not after it: loading github.com's front page only to
+        leave it cost 1 to 4 seconds of every shortcut run. The start page stays one BACK away all the same.
+        `proposing` is the proposal a head start already asked for, and a run without one asks now.
         """
-        proposing = asyncio.create_task(self._propose(task, start, ledger))
+        if proposing is None:
+            proposing = asyncio.create_task(_propose(self._llm, task, start, ledger))
         try:
-            await self._page.navigate(start)
-            proposal = await asyncio.wait_for(asyncio.shield(proposing), _SHORTCUT_GRACE_SECONDS)
+            # A proposal still being written when the wait ends is cancelled, so it bills nothing.
+            proposal = await asyncio.wait_for(proposing, _SHORTCUT_WAIT_SECONDS)
         except (TimeoutError, LLMError):
-            return [], set()
-        finally:
-            await _discard(proposing)
-        shortcut = accept(proposal.url, start)
+            proposal = None
+        shortcut = None if proposal is None else accept(proposal.url, start)
         if shortcut is None:
+            await self._page.navigate(start)
             return [], set()
         try:
-            await self._page.navigate(shortcut)
+            await self._page.navigate(shortcut, back_to=start)
             # `accept` saw only the proposed address; a redirect can still land on another site.
             landed = await self._page.address()
             status = await self._page.response_status()
@@ -679,16 +832,10 @@ class Agent:
             logger.info("shortcut %s answered HTTP %s; staying on the start page", shortcut, status)
             await self._page.navigate(start)
             return [], set()
-        note = f"opened {shortcut} directly instead of clicking there; the start page {start} is one BACK away"
+        note = f"opened {shortcut} directly instead of the start page {start}, which is one BACK away"
         opened = HistoryEntry(operation=None, target=None, outcome=StepOutcome.EXECUTED, page_changed=True, note=note)
         # The facts cite where the page landed, so a redirect's address is the one they can be matched against.
         return [opened], {shortcut, landed}
-
-    async def _propose(self, task: str, start: str, ledger: Ledger) -> Shortcut:
-        # Recorded here, not by the caller: a proposal that finished is billed even when the run ends first.
-        generation = await propose_shortcut(self._llm, task, start, ledger=ledger)
-        ledger.record(generation.cost)
-        return generation.data
 
     async def _outwait(self, stuck: Observation) -> bool:
         """Re-observe until the page is no longer `stuck`, returning whether it moved in time."""
@@ -708,17 +855,27 @@ class Agent:
         *,
         capture: Capture | None = None,
         gate: bool = True,
+        require_all_evidence: bool = False,
+        follow_pager: bool = False,
+        prepared_action: Action | None = None,
     ) -> bool:
         """Return whether a duplicate read was skipped, so callers can recover or continue the interaction."""
         started = time.monotonic()
+        state.form_continues = False
+        if decision.operation not in {Operation.FILL, Operation.SCROLL}:
+            state.form_values.clear()
         facts_before = len(state.notes.facts)
         reason = state.hint if decision.directed else None
         label = _describe(decision.target) if decision.target else decision.tab_id
         typed: str | None = None
         effect_now: str | None = None
+        setting = False
         if decision.operation is Operation.READ:
-            progressed, skipped = await self._read(state, capture or await self._capture(), observation)
+            progressed, skipped = await self._read(
+                state, capture or await self._capture(), observation, require_all_evidence=require_all_evidence
+            )
             state.read_here = True
+            state.typed_on_passed = False
             if skipped:
                 return True
             changed = False
@@ -727,17 +884,25 @@ class Agent:
                 effect_now += f" {_read_exhausted(state)}"
             act = ActResult(outcome=StepOutcome.EXECUTED, page_changed=False, detail=effect_now)
         else:
-            action = await self._unless_redrawn(
+            action = prepared_action or await self._unless_redrawn(
                 state, self._action(state, observation, decision, gate=gate), observation, decision.target
             )
             if action is None:
                 return False
             state.redecided = False
+            if action.operation is Operation.FILL and not action.text and not _require(decision.target).value:
+                # Typing nothing into an empty field does nothing. Jev, unsure between wizard steps, picked a page's
+                # search box, the writer found no text for it, and the empty fill was taken three times over.
+                raise _Unsure(f"the task gives no text for {_describe(_require(decision.target))!r}: leave it empty")
             if action.secret:
                 # Held from the keystrokes on: a page may mirror the value, and only the next reading shows it.
                 self._page.withhold_frames(True)
-            act = await self._page.act(action, self._raw_observation or observation)
-            if act.outcome is StepOutcome.STALE and decision.target is not None:
+            raw = self._raw_observation or observation
+            act = await self._follow_pager(action, raw) if follow_pager else await self._page.act(action, raw)
+            state.form_continues = (
+                action.form_fill and act.form_unchanged and not act.page_changed and act.outcome is StepOutcome.EXECUTED
+            )
+            if act.outcome is StepOutcome.STALE and decision.target is not None and not action.form_fill:
                 act = await self._act_on_twin(action, observation, decision.target) or act
             if act.outcome is StepOutcome.EXECUTED and state.authorization.irreversible_actions:
                 question = None
@@ -752,6 +917,13 @@ class Agent:
             if act.outcome is StepOutcome.EXECUTED and action.text is not None:
                 typed = "<secret>" if action.secret else self._redactor.mask(action.text)
             changed = act.page_changed
+            if act.outcome is StepOutcome.EXECUTED:
+                typing = decision.operation in {Operation.FILL, Operation.SELECT} and not changed
+                seen = _seen(observation)
+                state.typed_on_passed = typing and (seen in state.passed or state.typed_on_passed)
+                if not state.read_here:
+                    state.passed.add(seen)
+                state.acted_on = seen
             state.owes_read = state.owes_read or (act.outcome is StepOutcome.EXECUTED and changed)
             # A value edit answers "was this progress" itself, and its answer beats `changed`: the popup a fill
             # draws IS a page change, so `changed` alone kept crediting the identical re-fill even once the
@@ -779,7 +951,7 @@ class Agent:
                 done = effect(observation, landed, target)
                 state.pending_move = move(observation, landed)
                 state.acted_from = None
-                effective = done.set_something
+                effective = setting = done.set_something
                 if not done.set_something:
                     progressed = False
                     act = act.model_copy(update={"detail": f"no effect: {done.summary}"})
@@ -800,6 +972,7 @@ class Agent:
                 page_changed=changed,
                 text=typed,
                 effect=effect_now,
+                setting=setting or None,
             )
         )
         step = StepResult(
@@ -832,6 +1005,7 @@ class Agent:
         for tripped in self._tripwires(state):
             if tripped.tripwire is Tripwire.NO_PROGRESS or self._config.stall.tripwires is TripwireMode.ARMED:
                 await self._recover(state, observation, str(tripped))
+                state.form_continues = False
                 return False
             state.would_fire.append(tripped.tripwire)
             logger.info(
@@ -841,6 +1015,23 @@ class Agent:
                 extra={"tripwire": tripped.tripwire.value},
             )
         return False
+
+    async def _follow_pager(self, action: Action, observation: Observation) -> ActResult:
+        target = next_page_control(observation)
+        if (
+            action.operation is not Operation.CLICK
+            or target is None
+            or target.id != action.target_id
+            or await self._page.address() != observation.url
+        ):
+            return ActResult(outcome=StepOutcome.STALE, page_changed=False)
+        # A known pager address needs no pointer events, whose guards and settling cost a cloud round trip each.
+        await self._page.navigate(urljoin(observation.url, target.href))
+        return ActResult(
+            outcome=StepOutcome.EXECUTED,
+            page_changed=await self._page.address() != observation.url,
+            detail="Followed next-page link by URL.",
+        )
 
     async def _act_on_twin(self, action: Action, observation: Observation, target: Control) -> ActResult | None:
         """Act on the one control now standing where `target` stood, if the page redrew it since it was observed.
@@ -931,6 +1122,7 @@ class Agent:
         if (
             made is None
             or made.values_after == made.values_before
+            or not (made.set_a_value or state.history[-1].setting)
             or state.history[-1].outcome is not StepOutcome.EXECUTED
             # Scrolling shows and hides controls without changing a setting.
             or state.history[-1].operation in _PAGE_OPERATIONS
@@ -984,7 +1176,7 @@ class Agent:
             )
             for control in observation.controls
         )
-        return observation.model_copy(
+        self._observed = observation.model_copy(
             update={
                 "url": mask(observation.url),
                 "title": mask(observation.title),
@@ -1005,6 +1197,7 @@ class Agent:
                 else None,
             }
         )
+        return self._observed
 
     async def _capture(self) -> Capture:
         capture = await self._page.capture()
@@ -1058,7 +1251,9 @@ class Agent:
             return False
         return True if decision.target.id not in written else None
 
-    async def _record_step(self, state: _RunState, step: StepResult) -> None:
+    async def _record_step(
+        self, state: _RunState, step: StepResult, *, capture_frame: bool = True, frame: bytes | None = None
+    ) -> None:
         state.steps.append(step)
         # A stale step dispatched nothing; the stall budget bounds redraw loops.
         if step.outcome is not StepOutcome.STALE:
@@ -1066,7 +1261,9 @@ class Agent:
         if self._on_event is None:
             return
         # Taken from the page the step acted on, before the next observation moves it on.
-        await self._on_event(StepEvent(step=step, frame=await self._frame() if self._config.step_frames else None))
+        if capture_frame and self._config.step_frames:
+            frame = await self._frame()
+        await self._on_event(StepEvent(step=step, frame=frame))
 
     async def _record_failure(
         self,
@@ -1202,6 +1399,12 @@ class Agent:
         )
         state.ledger.record(evaluation.cost)
         answer = evaluation.answers.get("irreversible")
+        trace(
+            "irreversible",
+            target=label,
+            context=decision.target.context if decision.target else None,
+            probability=answer.probability if isinstance(answer, NoulAnswer) else None,
+        )
         if isinstance(answer, NoulAnswer) and answer.probability <= thresholds.irreversible_above:
             return
         what = f"{decision.operation.value} {label!r}"
@@ -1283,9 +1486,41 @@ class Agent:
         return value
 
     async def _generate_text(self, state: _RunState, observation: Observation, target: Control) -> str:
+        known = state.form_values.pop((observation.document_key, target.id), None)
+        if known is not None and known[0].model_copy(update={"offscreen": target.offscreen}) == target:
+            value = known[1]
+            return _next_value(value.values, state.history, target.label) if len(value.values) > 1 else value.text
+        context = await self._field_context(state, observation, target)
+        messages = [
+            Message(role="system", content=_FIELD_WRITER),
+            Message(role="user", content=json.dumps(context)),
+        ]
+        written = await self._write_field(state, messages, target)
+        if written is not None:
+            return written
+        # A surname can be present inside a full name. Confirm absence before ending the run on one writer's doubt.
+        if await self._value_absent(state, observation, target):
+            raise self._missing(state, target)
+        insisted = [
+            *messages,
+            Message(
+                role="user",
+                content=(
+                    "You reported this value as missing, but the task or notes appear to state it, or to state "
+                    "something it is part of. Look again and write it. Report it missing only if it truly is "
+                    "not there: never invent one."
+                ),
+            ),
+        ]
+        written = await self._write_field(state, insisted, target)
+        if written is None:
+            raise self._missing(state, target)
+        return written
+
+    async def _field_context(self, state: _RunState, observation: Observation, target: Control) -> dict[str, JsonValue]:
         # Adapted from browser-use/jev-ultrafast (MIT), model.py:field_context. A popup's field
         # can have a generic label; the opening action and surrounding values explain its purpose.
-        context = {
+        return {
             "task": state.task,
             # Given only the task, the writer typed "enter X, later correct it to Y" as Y on the first pass every
             # time, and no Back could then show a correction; in order, it typed X first and Y after going back.
@@ -1311,34 +1546,88 @@ class Agent:
             ],
             "notes": state.notes.render(self._config.observation.working_notes_chars),
         }
-        messages = [
-            Message(role="system", content=_FIELD_WRITER),
-            Message(role="user", content=json.dumps(context)),
-        ]
-        written = await self._write_field(state, messages)
-        if written is not None:
-            return written
-        # Ending a run on "you never told me" is right, and one low-effort call is a thin thing to end it on:
-        # the writer called a surname the task had given it missing in a third of checkout runs. Jev reads the
-        # same task and notes, so it is asked whether the value really is absent before the run stops, and the
-        # writer gets one more attempt with the disagreement put to it.
-        if await self._value_absent(state, observation, target):
-            raise self._missing(state, target)
-        insisted = [
-            *messages,
-            Message(
-                role="user",
-                content=(
-                    "You reported this value as missing, but the task or notes appear to state it, or to state "
-                    "something it is part of. Look again and write it. Report it missing only if it truly is "
-                    "not there: never invent one."
-                ),
-            ),
-        ]
-        written = await self._write_field(state, insisted)
+
+    async def _fill_form(self, state: _RunState, observation: Observation, decision: Decision) -> bool:
+        target = decision.target
+        if decision.operation is not Operation.FILL or target is None or state.inputs or observation.dialog:
+            return False
+        if target.form_id is None or observation.omitted_controls or observation.inaccessible_frames:
+            return False
+        form_key = (observation.document_key, target.frame_id, target.form_id)
+        if form_key in state.form_rejected:
+            return False
+        same_form = [c for c in observation.controls if (c.frame_id, c.form_id) == (target.frame_id, target.form_id)]
+        if any(c.sensitive for c in same_form):
+            return False
+        fields = {c.id: c for c in same_form if Operation.FILL in c.operations and not c.value and c.role == "textbox"}
+        if target.id not in fields or len(fields) < 2:
+            return False
+        # A form that cannot be batched gets the ordinary field path on its next decision.
+        state.form_rejected.add(form_key)
+
+        async def write() -> _FormText:
+            context = await self._field_context(state, observation, target)
+            context["chosen_field"] = context.pop("field")
+            context["fields"] = [c.model_dump(mode="json", exclude_none=True) for c in fields.values()]
+            generation = await self._llm.generate(
+                LLMPurpose.FIELD_TEXT,
+                [Message(role="system", content=_FORM_WRITER), Message(role="user", content=json.dumps(context))],
+                _FormText,
+                ledger=state.ledger,
+            )
+            state.ledger.record(generation.cost)
+            return generation.data
+
+        try:
+            written = await self._unless_redrawn(state, write(), observation, target)
+        except LLMError:
+            return False
         if written is None:
-            raise self._missing(state, target)
-        return written
+            return True
+        ids = [f.id for f in written.fields]
+        trace("form_values", chosen=target.id, fields=ids)
+        if not ids or ids[0] != target.id or len(set(ids)) != len(ids) or any(id not in fields for id in ids):
+            return False
+        trace("form_batch", fields=ids)
+        # Scrolling to the first field ends a batch too. A later Jev choice can reuse its value only while
+        # the field's identity, meaning and empty value survive the fresh observation.
+        for value in written.fields:
+            if not value.missing and value.text and not self._redactor.reveals(value.model_dump_json()):
+                state.form_values[(observation.document_key, value.id)] = (fields[value.id], value)
+        for index, value in enumerate(written.fields):
+            control = fields[value.id]
+            text = _next_value(value.values, state.history, control.label) if len(value.values) > 1 else value.text
+            if value.missing or not text or self._redactor.reveals(text):
+                return index > 0
+            state.ledger.check()
+            state.form_values.pop((observation.document_key, control.id), None)
+            action = Action(operation=Operation.FILL, target_id=control.id, text=text, form_fill=True)
+            await self._step(
+                state,
+                observation,
+                decision if index == 0 else _code_decision(Operation.FILL, control),
+                Decider.JEV if index == 0 else Decider.LLM,
+                prepared_action=action,
+            )
+            if not state.form_continues:
+                break
+            observation = observation.model_copy(
+                update={
+                    "controls": tuple(
+                        c.model_copy(update={"value": text, "blocking": None}) if c.id == control.id else c
+                        for c in observation.controls
+                    )
+                }
+            )
+            self._note_effect(state, observation)
+            undone, renews, put_back = self._reversal(state)
+            stalled = self._settle(state, observation, renews=renews, put_back=put_back)
+            if undone or stalled:
+                await self._recover(state, observation, undone or stalled or "form changed")
+                break
+        else:
+            state.form_rejected.discard(form_key)
+        return True
 
     @staticmethod
     def _missing(state: _RunState, target: Control) -> Exception:
@@ -1356,11 +1645,14 @@ class Agent:
             gives_up_as=Status.NEEDS_INPUT,
         )
 
-    async def _write_field(self, state: _RunState, messages: Sequence[Message]) -> str | None:
+    async def _write_field(self, state: _RunState, messages: Sequence[Message], target: Control) -> str | None:
         """The text for one field, or None when the writer says the value was never given."""
         generation = await self._llm.generate(LLMPurpose.FIELD_TEXT, list(messages), _FieldText, ledger=state.ledger)
         state.ledger.record(generation.cost)
-        return None if generation.data.missing else generation.data.text
+        written = generation.data
+        if written.missing:
+            return None
+        return _next_value(written.values, state.history, target.label) if len(written.values) > 1 else written.text
 
     async def _value_absent(self, state: _RunState, observation: Observation, target: Control) -> bool:
         state.ledger.reserve(CostComponent.JEV)
@@ -1433,6 +1725,16 @@ class Agent:
             decision.read_assessment is not ReadAssessment.EVIDENCE and not unread_scroll
         ):
             return False
+        if state.read_here and _only_typed_since_read(state.history):
+            # The page was read, and since then only a field's own text changed, which is the run's own writing:
+            # pypi-newer read its httpx results again after typing "requests", only because the box's text had.
+            return False
+        seen = _seen(observation)
+        if (seen in state.passed and seen != state.acted_on) or state.typed_on_passed:
+            # Back on a page exactly as the run left it unread, perhaps with its own typing added: Jev judged it
+            # had nothing to read then, and nothing it holds has changed. Walking back through a wizard to correct
+            # a field, Jev called each earlier step evidence on the way, and reading them cost 4s a step.
+            return False
         plan = await state.await_plan()
         if not _unread(plan, state.notes):
             return False
@@ -1440,8 +1742,50 @@ class Agent:
         reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
         return not await self._step(state, observation, reading, decided_by)
 
+    async def _reread_if_changed(self, state: _RunState, observation: Observation) -> bool:
+        """Read a page state again when what an earlier read of it evidenced is no longer on it; whether it read.
+
+        A wizard's Review step was read, the run went back and corrected a field, and on reaching Review again its
+        requirement was already evidenced, so nothing read it: the answer named the value Review showed before the
+        correction. The requirement is reopened, keeping the old fact as context, and asked of the page as it is."""
+        if not (state.history and state.history[-1].page_changed):
+            return False
+        key = state_key(observation)
+        read = state.evidenced_at.get(key, {})
+        if not (ids := {r: sha for r, sha in read.items() if state.notes.evidenced(r)}):
+            return False
+        capture = await self._capture()
+
+        def gone(quote: str) -> bool:
+            # Whole words: "Priya Sharma" is inside the corrected "Priya Sharman".
+            return re.search(rf"(?<!\w){re.escape(quote)}(?!\w)", capture.text) is None
+
+        stale = {
+            r
+            for r, sha in ids.items()
+            if any(e.capture_sha256 == sha and gone(e.quote) for e in state.notes.supporting_evidence(r))
+        }
+        if not stale:
+            return False
+        trace("reread", requirements=sorted(stale))
+        state.notes.unevidence(stale)
+        for r in stale:
+            del read[r]
+        # What the page paid out before was read off content it no longer shows.
+        for spent in [k for k in state.barren if k[:2] == (observation.document_key, key)]:
+            del state.barren[spent]
+        reading = _code_decision(Operation.READ, None)
+        if await self._step(state, observation, reading, Decider.LLM, capture=capture):
+            await self._recover(state, observation, _read_exhausted(state))
+        return True
+
     async def _read(
-        self, state: _RunState, capture: Capture | None = None, observation: Observation | None = None
+        self,
+        state: _RunState,
+        capture: Capture | None = None,
+        observation: Observation | None = None,
+        *,
+        require_all_evidence: bool = False,
     ) -> tuple[bool, bool]:
         """Return (added evidence, skipped duplicate), since only new evidence makes a read progress."""
         capture = capture or await self._capture()
@@ -1514,8 +1858,10 @@ class Agent:
             notice=notice,
             continuing=state.continuing,
             incomplete=state.incomplete,
+            require_all_evidence=require_all_evidence or (state.through_end and state.pages > 0),
         )
         state.incomplete.update(outcome.incomplete)
+        state.tally_readers = outcome.tally_readers
         # Payout is what the notes did not already say. A fact is keyed by the capture it was read from, so a
         # page that rewrites a line re-mints the same records as new facts, and counting them read it for ever.
         progressed = any(fact.text not in known for fact in state.notes.facts) or any(
@@ -1537,9 +1883,260 @@ class Agent:
             uncovered=outcome.uncovered,
         )
         spent(progressed)
+        if observation is not None and (newly := {r.id for r in wanted if state.notes.evidenced(r.id)} - evidenced):
+            state.evidenced_at.setdefault(state_key(observation), {}).update(dict.fromkeys(newly, capture.sha256))
+        state.through_end = bool(continues) and {r.id for r in wanted} <= set(outcome.through_end)
         if observation is not None:
             self._follow_pages(state, continues, following, observation, outcome.expands)
         return progressed, False
+
+    async def _page_records(
+        self, state: _RunState, capture: Capture, wanted: Sequence[Requirement], *, reuse: bool = True
+    ) -> ReadOutcome:
+        if reuse and (counted := read_tallies(capture, state.tally_readers, [r.id for r in wanted])) is not None:
+            return counted
+        return await read(
+            self._llm,
+            capture,
+            read_question(state.task, wanted, began_at=state.first_url),
+            [r.id for r in wanted],
+            Notes(),
+            tokens=self._config.tokens,
+            ledger=state.ledger,
+            requirements=wanted,
+            records_only=True,
+        )
+
+    async def _join_page(self, state: _RunState, page: _PageRead, wanted: Sequence[Requirement]) -> ReadOutcome | None:
+        try:
+            outcome = await page.task
+        except LLMError:
+            # The browser has moved on, so retry the saved capture, never the page now on screen.
+            state.paging_failed = True
+            try:
+                outcome = await self._page_records(state, page.capture, wanted)
+            except LLMError as error:
+                state.incomplete.update(r.id for r in wanted)
+                reason = self._redactor.redact(f"Could not read saved page {page.capture.url}: {error}")
+                state.hint = reason
+                state.history.append(
+                    HistoryEntry(
+                        operation=Operation.READ,
+                        target=None,
+                        outcome=StepOutcome.FAILED,
+                        page_changed=False,
+                        effect=reason,
+                    )
+                )
+                await self._record_step(
+                    state,
+                    StepResult(
+                        index=len(state.steps),
+                        operation=Operation.READ,
+                        decided_by=Decider.LLM,
+                        outcome=StepOutcome.FAILED,
+                        url=page.capture.url,
+                        note=reason,
+                        duration_ms=0,
+                    ),
+                    capture_frame=False,
+                    frame=page.frame,
+                )
+                return
+        before = len(state.notes.facts)
+        outcome.merge_records(state.notes)
+        state.incomplete.update(outcome.incomplete)
+        state.history.append(
+            HistoryEntry(
+                operation=Operation.READ,
+                target=None,
+                outcome=StepOutcome.EXECUTED,
+                page_changed=False,
+                effect="Read captured pagination records.",
+            )
+        )
+        await self._record_step(
+            state,
+            StepResult(
+                index=len(state.steps),
+                operation=Operation.READ,
+                decided_by=Decider.LLM,
+                outcome=StepOutcome.EXECUTED,
+                url=page.capture.url,
+                facts=tuple(self._public_fact(fact) for fact in state.notes.facts[before:]),
+                duration_ms=int((time.monotonic() - page.started) * 1000),
+            ),
+            capture_frame=False,
+            frame=page.frame,
+        )
+        trace(
+            "read",
+            url=self._redactor.redact(page.capture.url),
+            records_only=True,
+            facts_added=len(state.notes.facts) - before,
+            incomplete=sorted(state.incomplete),
+            uncovered=outcome.uncovered,
+        )
+        return outcome
+
+    async def _pipeline_pages(self, state: _RunState, observation: Observation) -> None:
+        wanted = [r for r in state.notes.unresolved(state.plan) if r.kind is RequirementKind.INFORMATION]
+        pending: list[_PageRead] = []
+        last_tally: _PageRead | None = None
+        ended: tuple[str, ...] = ()
+        capture: Capture | None = None
+        origin = origin_of(observation.url)
+        seen = {observation.url}
+        state.next_page = False
+        before_click = len(state.steps)
+        try:
+            try:
+                while (target := next_page_control(observation)) is not None and state.pages < self._config.max_pages:
+                    state.ledger.check()
+                    # Each queued read still owes a step. Leave room for both the next click and its read.
+                    if state.ledger.steps + len(pending) + 2 > state.ledger.limits.max_steps:
+                        break
+                    if state.ledger.llm_calls >= state.ledger.limits.max_llm_calls:
+                        break
+                    if any(page.task.done() and page.task.exception() is not None for page in pending):
+                        state.paging_failed = True
+                        break
+                    state.pages += 1
+                    state.paged_from = state_key(observation)
+                    before_click = len(state.steps)
+                    await self._step(
+                        state,
+                        observation,
+                        _code_decision(Operation.CLICK, target),
+                        Decider.LLM,
+                        gate=False,
+                        follow_pager=True,
+                    )
+                    if (
+                        len(state.steps) == before_click
+                        or state.steps[-1].outcome is not StepOutcome.EXECUTED
+                        or not state.steps[-1].page_changed
+                    ):
+                        break
+                    landed = await self._observe()
+                    state.visited[(self._raw_observation or landed).url] = None
+                    self._note_effect(state, landed)
+                    stalled = self._settle(state, landed)
+                    state.paged_from = None
+                    if stalled or landed.url in seen or origin_of(landed.url) != origin:
+                        break
+                    seen.add(landed.url)
+                    observation = landed
+                    capture = await self._capture()
+                    if not capture.text.strip() or capture.url != observation.url or observation.dialog is not None:
+                        state.paging_failed = True
+                        break
+                    following = next_page_control(observation)
+                    if following is None and {r.id for r in wanted} <= {t.requirement_id for t in state.notes.tallies}:
+                        # Counts merge in code, so the last page need not wait for earlier readers to finish.
+                        frame = await self._frame() if self._on_event and self._config.step_frames else None
+                        last_tally = _PageRead(
+                            capture,
+                            observation,
+                            asyncio.create_task(self._page_records(state, capture, wanted, reuse=False)),
+                            time.monotonic(),
+                            frame,
+                        )
+                        pending.append(last_tally)
+                        capture = None
+                        break
+                    if (
+                        following is None
+                        or state.pages >= self._config.max_pages
+                        or state.ledger.steps + len(pending) + 3 > state.ledger.limits.max_steps
+                        or state.ledger.llm_calls + 1 >= state.ledger.limits.max_llm_calls
+                    ):
+                        break
+                    frame = await self._frame() if self._on_event and self._config.step_frames else None
+                    pending.append(
+                        _PageRead(
+                            capture,
+                            observation,
+                            asyncio.create_task(self._page_records(state, capture, wanted)),
+                            time.monotonic(),
+                            frame,
+                        )
+                    )
+                    capture = None
+                    # Let the client reserve its call before the next navigation checks the remaining budget.
+                    await asyncio.sleep(0)
+            except BrowserError as error:
+                state.paging_failed = True
+                state.next_page = False
+                state.hint = self._redactor.redact(
+                    f"Pagination stopped: {error}. Inspect the current page before continuing."
+                )
+                if len(state.steps) == before_click:
+                    label = _describe(target) if target else None
+                    state.history.append(
+                        HistoryEntry(
+                            operation=Operation.CLICK,
+                            target=label,
+                            outcome=StepOutcome.FAILED,
+                            page_changed=False,
+                            effect=state.hint,
+                        )
+                    )
+                    await self._record_failure(
+                        state, observation, Operation.CLICK, state.hint, target=label, decided_by=Decider.LLM
+                    )
+            for page in pending:
+                outcome = await self._join_page(state, page, wanted)
+                if page is last_tally and outcome is not None:
+                    ended = outcome.ended
+        finally:
+            for page in pending:
+                page.task.cancel()
+            await asyncio.gather(*(page.task for page in pending), return_exceptions=True)
+        if last_tally is not None and not state.paging_failed:
+            for requirement_id in ended:
+                if requirement_id not in state.incomplete and not state.notes.has_untallied_records(requirement_id):
+                    state.notes.complete_tallies(requirement_id)
+            if all(state.notes.evidenced(r.id) for r in wanted):
+                state.continuing.clear()
+                state.through_end = False
+                state.owes_read = False
+                state.read_here = True
+                state.typed_on_passed = False
+                state.evidenced_at.setdefault(state_key(observation), {}).update(
+                    {r.id: last_tally.capture.sha256 for r in wanted}
+                )
+            else:
+                capture = last_tally.capture
+        # No intermediate read can close the comparison. Only this read sees every earlier page's records.
+        if capture is not None and not state.paging_failed:
+            state.ledger.check()
+            try:
+                await self._step(
+                    state,
+                    observation,
+                    _code_decision(Operation.READ, None),
+                    Decider.LLM,
+                    capture=capture,
+                    require_all_evidence=True,
+                )
+            except LLMError as error:
+                state.paging_failed = True
+                state.reads.discard((observation.document_key, capture.sha256, tuple(r.id for r in wanted)))
+                state.hint = self._redactor.redact(f"Pagination read failed: {error}. Read this page again.")
+                state.history.append(
+                    HistoryEntry(
+                        operation=Operation.READ,
+                        target=None,
+                        outcome=StepOutcome.FAILED,
+                        page_changed=False,
+                        effect=state.hint,
+                    )
+                )
+                await self._record_failure(state, observation, Operation.READ, state.hint, decided_by=Decider.LLM)
+        else:
+            state.paged_from = None
+            state.next_page = False
 
     def _follow_pages(
         self,
@@ -1578,6 +2175,7 @@ class Agent:
     async def _recover(
         self, state: _RunState, observation: Observation, reason: str, *, gives_up_as: Status = Status.STUCK
     ) -> None:
+        state.form_values.clear()
         reason = self._redactor.redact(reason)
         state.recoveries += 1
         # Recovery spends every tripwire's evidence so the same threshold crossing cannot trigger it again.
@@ -1701,8 +2299,13 @@ class Agent:
         output_schema: type[BaseModel] | None,
         until: UntilCheck | None,
     ) -> RunResult | None:
-        """Return the final result when DONE holds up; None sends the loop back to work."""
-        fresh = await self._observe()
+        """Return the final result when DONE holds up; None sends the loop back to work.
+
+        DONE is judged on `observation` when it is still the page's last: nothing acts between the loop's observation
+        and here, and observing a page nothing changed cost 0.35s a run. A wait or a twin search that observed since
+        judges the page as it is now.
+        """
+        fresh = observation if observation is self._observed else await self._observe()
         state.ledger.reserve(CostComponent.JEV)
         await state.await_plan()
         draft = draft_answer(state.plan, state.notes) if state.plan.answer_expected else None
@@ -1726,9 +2329,16 @@ class Agent:
             requirements={r.id: r.text for r in state.plan.requirements},
         )
         state.ledger.record(check.cost)
-        if check.verdict is DoneVerdict.ACCEPT and _guessed(state.plan, state.notes, state.invented):
-            # Jev judges the notes, not where they were read, so only the verifier is shown the guessed addresses.
+        guessed = _guessed(state.plan, state.notes, state.invented)
+        if check.verdict is DoneVerdict.ACCEPT and _guessed(state.plan, state.notes, state.invented, searches=True):
+            # Jev judges the notes, not where they were read, so only the verifier is shown the guessed searches.
             check = check.model_copy(update={"verdict": DoneVerdict.VERIFY})
+        elif check.verdict is DoneVerdict.VERIFY and not guessed and _lookup(state.plan):
+            # A doubted lookup reaches here with every requirement cited, and the verifier excuses a cited
+            # requirement (`_verified`), so all it could still do was refuse naming nothing, which it never did in
+            # 76 0.5.7 verifications. It cost a screenshot and a vision call, 3 to 8s, on half of all runs. Every
+            # claim of the answer is still checked against its quotes.
+            check = check.model_copy(update={"verdict": DoneVerdict.ACCEPT})
         accepted = check.verdict is DoneVerdict.ACCEPT
         missing: tuple[str, ...] = ()
         misread: set[str] = set()
@@ -2077,6 +2687,7 @@ class Agent:
         citations: tuple[Citation, ...] = (),
         error: str | None = None,
     ) -> RunResult:
+        observed = self._raw_observation or self._observed
         return RunResult(
             status=status,
             answer=answer,
@@ -2086,7 +2697,7 @@ class Agent:
             steps=tuple(state.steps) if state else (),
             cost=ledger.breakdown(),
             artifacts=self._page.artifacts[self._artifact_start :],
-            final_url=self._redactor.redact(state.last_page[0]) if state and state.last_page else None,
+            final_url=self._redactor.redact(observed.url) if state and observed else None,
             error=error,
             would_fire=tuple(state.would_fire) if state else (),
         )
@@ -2097,6 +2708,11 @@ def _unread(plan: Plan, notes: Notes) -> bool:
     # owes an answer with nothing read would hand the composer empty notes: one did, and ended complete on "".
     unresolved = any(r.kind is RequirementKind.INFORMATION for r in notes.unresolved(plan))
     return unresolved or (plan.answer_expected and not notes.facts)
+
+
+def _lookup(plan: Plan) -> bool:
+    """Whether the plan only asks to find things, with nothing to do on the site."""
+    return bool(plan.requirements) and all(r.kind is RequirementKind.INFORMATION for r in plan.requirements)
 
 
 def _answered(plan: Plan, notes: Notes) -> bool:
@@ -2135,12 +2751,27 @@ def _place(url: str) -> tuple[str, str]:
     return origin_of(url), urlsplit(url).path or "/"
 
 
-def _guessed(plan: Plan, notes: Notes, invented: Set[str]) -> set[str]:
-    """The requirements with a fact read on an address the run built from the task rather than clicked to."""
-    places = {_place(url) for url in invented}
+def _guessed(plan: Plan, notes: Notes, invented: Set[str], *, searches: bool = False) -> set[str]:
+    """The requirements with a fact read on an address the run built from the task rather than clicked to.
+
+    A guessed address can load a real page about the wrong thing, so a doubted answer read on one is always shown
+    to the verifier. `searches` narrows it to built searches, whose state is in the address (the one built, or the
+    one the site wrote back): a page of the right shape with the wrong results, as a proposed Google Flights address
+    was, is sent to the verifier even when Jev does not doubt it."""
+    places = {_place(url): _searched(url) for url in invented}
     return {
-        r.id for r in plan.requirements if any(_place(item.url) in places for item in notes.supporting_evidence(r.id))
+        r.id
+        for r in plan.requirements
+        if any(
+            _place(item.url) in places and (not searches or places[_place(item.url)] or _searched(item.url))
+            for item in notes.supporting_evidence(r.id)
+        )
     }
+
+
+def _searched(url: str) -> bool:
+    parts = urlsplit(url)
+    return bool(parts.query or parts.fragment)
 
 
 def _misread(verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str]) -> set[str]:
@@ -2150,7 +2781,23 @@ def _misread(verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str]) 
     address opened a flights summary, the reader quoted a price from it, and the requirement counted as cited.
     A page reached by clicking was chosen off the site itself, so there the verifier's doubt is only doubt.
     """
-    return set(verdict.ungrounded) & _guessed(plan, notes, invented)
+    return _plan_ids(verdict.ungrounded, plan) & _guessed(plan, notes, invented)
+
+
+def _plan_ids(ids: Iterable[str], plan: Plan) -> set[str]:
+    """The plan's requirements the verifier named, however it spelled their ids.
+
+    It wrote `req_1` and `1` for `req-1` in 4 of 6 refusals in 0.5.7, and an id the plan lacks was a doubt nothing
+    could excuse: a Wikipedia lookup with its one requirement cited went back to work ten steps. A name matching no
+    requirement names nothing."""
+    known = {re.sub(r"[^a-z0-9]", "", r.id.lower()): r.id for r in plan.requirements}
+    numbered = {digits.group(): r.id for r in plan.requirements if (digits := re.search(r"\d+$", r.id))}
+    found = set()
+    for raw in ids:
+        key = re.sub(r"[^a-z0-9]", "", raw.lower())
+        if (match := known.get(key) or (numbered.get(key) if key.isdigit() else None)) is not None:
+            found.add(match)
+    return found
 
 
 def _verified(verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str]) -> bool:
@@ -2163,7 +2810,7 @@ def _verified(verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str])
     """
     cited = {r.id for r in plan.requirements if r.kind is RequirementKind.INFORMATION and notes.evidenced(r.id)}
     misread = _misread(verdict, plan, notes, invented)
-    named = set(verdict.missing) | (set(verdict.ungrounded) & {r.id for r in plan.requirements})
+    named = _plan_ids(verdict.missing, plan) | _plan_ids(verdict.ungrounded, plan)
     doubted = named - (cited - misread)
     return not doubted and (verdict.complete or bool(named))
 
@@ -2179,11 +2826,44 @@ def _history(history: Sequence[HistoryEntry], limits: ObservationLimits) -> tupl
     return (*(entry.model_copy(update={"effect": None}) for entry in earlier), *history[max(0, split) :])
 
 
+def _next_value(values: Sequence[str], history: Sequence[HistoryEntry], label: str | None) -> str:
+    """The next of a field's values in turn after those its fills have typed so far, in order, else the last.
+
+    Told the order in its prompt, the writer still typed "enter X, later correct it to Y" as Y on the first pass
+    in every wizard run, so no Back could show a correction; it lists the values, and code keeps the order. The
+    order is walked, not a set of what was typed: a field set back to an earlier value would otherwise skip it."""
+    done = 0
+    for e in history:
+        if e.operation is Operation.FILL and e.outcome is StepOutcome.EXECUTED and e.target == label:
+            done += done < len(values) and e.text == values[done]
+    return values[min(done, len(values) - 1)]
+
+
+def _seen(observation: Observation) -> str:
+    """A page state with its visible text, which a state key leaves out: a review step keeps its controls when
+    the values it shows change."""
+    return f"{state_key(observation)}:{hashlib.sha256(observation.viewport_text.encode()).hexdigest()}"
+
+
+def _only_typed_since_read(history: Sequence[HistoryEntry]) -> bool:
+    """Whether every action since the last read typed into a field and changed nothing else on the page."""
+    for entry in reversed(history):
+        if entry.operation is Operation.READ:
+            return entry.outcome is StepOutcome.EXECUTED
+        if entry.operation is not Operation.FILL or entry.page_changed:
+            return False
+    return False
+
+
 def _record(history: Sequence[HistoryEntry], limits: ObservationLimits) -> tuple[HistoryEntry, ...]:
-    """The recent actions, after every value typed before them: a correction is judged against the first value,
-    which a long wizard can push out of the recent window."""
+    """The recent actions, after every value typed or set before them: a correction is judged against the first
+    value, and a form's checkbox against its tick, both of which a long wizard can push out of the recent window."""
     recent = _history(history, limits)
-    typed = (e.model_copy(update={"effect": None}) for e in history[: len(history) - len(recent)] if e.text is not None)
+    typed = (
+        e.model_copy(update={"effect": None})
+        for e in history[: len(history) - len(recent)]
+        if e.text is not None or e.setting
+    )
     return (*typed, *recent)
 
 
@@ -2266,11 +2946,14 @@ def next_page_control(observation: Observation) -> Control | None:
     for control in observation.controls:
         if not pager_link(control) or control.href is None:
             continue
-        # The snapshot gives a same-site link as its path and query, and another site's as host and path.
-        if control.href.startswith("/"):
-            target = urlsplit(urljoin(observation.url, control.href))
-            if (target.path, target.query) == (here.path, here.query):
-                continue
+        # The snapshot gives a same-origin link as a path; a bare host/path denotes another site.
+        if not control.href.startswith(("/", "http://", "https://")):
+            continue
+        target = urlsplit(urljoin(observation.url, control.href))
+        if origin_of(target.geturl()) != origin_of(observation.url):
+            continue
+        if (target.path, target.query) == (here.path, here.query):
+            continue
         found.setdefault(control.href, control)
     return next(iter(found.values())) if len(found) == 1 else None
 
@@ -2327,19 +3010,38 @@ def _code_decision(operation: Operation, target: Control | None) -> Decision:
     )
 
 
-def _try_unsure(state: _RunState, observation: Observation) -> bool:
-    """Whether to act on Jev's unsure pick rather than recover: once per page state.
+def _try_unsure(state: _RunState, observation: Observation, decision: Decision) -> bool:
+    """Whether to act on Jev's unsure pick rather than recover: once per page state, and never a pick the run
+    already took from this state.
 
     Recovery costs about 5s, and on a flights form 9 of 12 recoveries for an unsure step named the control Jev
     had already picked. Acting costs one step when the pick is wrong, and a wrong pick is still caught: one that
     changes nothing leaves Jev unsure on the same state, which then recovers, one that goes round is caught by
     the revisit check, and one that may commit something irreversible is asked about before it dispatches.
+
+    An unsure repeat is the run going back where it has been: one Back from a wizard's Review to correct its first
+    step, Jev was unsure and clicked Next to Review again, and got back only after a wrong pick and a recovery.
     """
     key = state_key(observation)
-    if key in state.tried_unsure:
+    if key in state.tried_unsure or _signature(decision, observation) in state.attempts:
         return False
     state.tried_unsure.add(key)
     return True
+
+
+def _without_missing(observation: Observation, missing: Set[tuple[str, str | None]]) -> Observation:
+    """The page as Jev is offered it: without the fields the task was already found to give no value for.
+
+    Asked to book a stay in a blog's date range picker, Jev chose the post's unrelated "Enter Name" field again
+    after recovery had moved on, and the second choice ended the run needs_input with the stay booked and read. A
+    field the task cannot go on without is still reached through recovery, which stops the run there (`_missing`).
+    """
+    if not missing:
+        return observation
+    kept = tuple(
+        c for c in observation.controls if Operation.FILL not in c.operations or (c.label, c.context) not in missing
+    )
+    return observation if len(kept) == len(observation.controls) else observation.model_copy(update={"controls": kept})
 
 
 def _follow_recovery(
@@ -2360,6 +3062,13 @@ def _follow_recovery(
     if target is None:
         return None
     return decision.model_copy(update={"operation": operation, "target": target, "directed": True})
+
+
+async def _propose(llm: LLMClient, task: str, start: str, ledger: Ledger) -> Shortcut:
+    # Recorded here, not by the caller: a proposal that finished is billed even when the run ends first.
+    generation = await propose_shortcut(llm, task, start, ledger=ledger)
+    ledger.record(generation.cost)
+    return generation.data
 
 
 async def _discard[T](task: asyncio.Task[T]) -> None:

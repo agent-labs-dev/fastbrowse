@@ -15,15 +15,15 @@ class Ending(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
-def normalize(status: str | None, *, hosted: bool = False, hosted_success: bool | None = None) -> Ending:
+def normalize(status: str | None, *, hosted: bool = False, answered: bool = False) -> Ending:
+    """`answered` is the hosted agent's own `done`: it delivered a result that was not an error. Browser Use's
+    `is_task_successful` is not used; it is Browser Use's own later judgement of the session, which failed correct
+    answers whose sessions showed no sign of failing, and fastbrowse is held only to its own completion."""
     value = (status or "").lower()
     if hosted:
         # The SDK ends a finished session as `stopped`, or `idle` where it keeps the session open.
-        if value in {"stopped", "idle"} and hosted_success is True:
-            return Ending.DONE
-        if value in {"stopped", "idle"} and hosted_success is None:
-            # Browser Use never said how its run ended: that is the provider's silence, not the agent's failure.
-            return Ending.UNAVAILABLE
+        if value in {"stopped", "idle"}:
+            return Ending.DONE if answered else Ending.STOPPED
         if value in {"complete", "done"}:
             return Ending.ERROR
     if value in {"complete", "done"}:
@@ -50,8 +50,8 @@ def normalize(status: str | None, *, hosted: bool = False, hosted_success: bool 
     return Ending.ERROR
 
 
-def status_matches(arm: str, status: str | None, expected: Status, success: bool | None = None) -> bool:
+def status_matches(arm: str, status: str | None, expected: Status, answered: bool = False) -> bool:
     # Distinct safe stops share a summary class, but a login wall cannot pass a confirmation task.
     if expected != Status.COMPLETE:
         return arm == "fastbrowse" and status == expected.value
-    return normalize(status, hosted=arm == "browser-use", hosted_success=success) == Ending.DONE
+    return normalize(status, hosted=arm == "browser-use", answered=answered) == Ending.DONE

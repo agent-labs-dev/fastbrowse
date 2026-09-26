@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from fastbrowse.adapters.browser_use_cloud import BrowserUseCloudBrowser
 from fastbrowse.adapters.local_chrome import async_local_chrome
-from fastbrowse.agent import Agent
+from fastbrowse.agent import Agent, HeadStart
 from fastbrowse.artifacts import DirectorySink
 from fastbrowse.browser import BrowserSession, CdpPage
 from fastbrowse.browser.recording import Recording
@@ -142,6 +142,9 @@ async def run_task(
             session: BrowserSession | None = None
             result: RunResult | None = None
             recording: Recording | None = None
+            # Begun before the browser, which takes 2 to 3 seconds to start and open a tab, so the shortcut is
+            # ready to open when the tab is.
+            head = HeadStart.begin(llm, task, start=start, limits=limits)
             try:
                 async with _browser(
                     browser_api_key,
@@ -174,9 +177,9 @@ async def run_task(
                                 output_schema=output_schema,
                                 inputs=inputs,
                                 attachments=attachments,
-                                limits=limits,
                                 authorization=authorization,
                                 until=until,
+                                head_start=head,
                             )
                             if recording is not None:
                                 await recording.show_result(task, result)
@@ -189,10 +192,14 @@ async def run_task(
                     data=None,
                     evidence=(),
                     steps=(),
-                    cost=CostBreakdown(),
+                    # The plan and shortcut were asked for before the browser failed, and what they spent is real.
+                    cost=CostBreakdown(lines=await head.abandon()),
                     artifacts=session.artifacts if session is not None else (),
                 )
                 result = result.model_copy(update={"status": status, "error": str(exc)})
+            finally:
+                # A run that never began leaves its head start running; one that did has discarded it already.
+                await head.discard()
             # Read after the browser closes either way: a failed result card still leaves the finished videos.
             if recording is not None:
                 result = result.model_copy(update={"recordings": recording.outputs})

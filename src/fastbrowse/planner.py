@@ -24,6 +24,12 @@ class Requirement(Frozen):
     id: str = Field(min_length=1)
     text: str = Field(min_length=1)
     kind: RequirementKind
+    count_records: bool = Field(
+        default=False,
+        description="True when this requirement asks for one total number of records matching its filters. "
+        "False for a ranking or separate counts by group, a sum of record values, a count of distinct "
+        "attribute values, or a comparison such as the cheapest record. Code counts the matching records.",
+    )
 
 
 class Plan(Frozen):
@@ -44,9 +50,12 @@ def _instructions() -> Message:
             "# Planner\nList the outcomes the user asked for as individually checkable requirements, each one short "
             "sentence. Split compound requests into separate requirements. An information requirement is a fact "
             "to find; an action requirement is a change the user asked for (log in, add to cart, submit). "
-            "Navigating, searching or opening a page is how the work gets done, not a requirement; but when "
-            "reaching a page is all the user asked for, reaching it is the one action requirement. An address the "
-            "task says to start at or go to before asking for something else is where the work begins, and the "
+            "Navigating, searching or opening a page is how the work gets done, not a requirement, even when the "
+            "task names the search to run or the page to open before what it asks: 'search for X, open its page and "
+            "tell me Y' has one requirement, to find Y. That is only searching and opening pages: a click, entry or "
+            "submission the task names is still an action requirement. But when reaching a page is all the user "
+            "asked for, reaching it is the one action requirement. An address the task says to start at or go to "
+            "before asking for something else is where the work begins, and the "
             "browser may already be there: it is not a requirement of its own. A search the "
             "user asked only to run is such a page: it is one action requirement, to leave the search showing with "
             "the filters the user named applied, and not a fact to find. Every task has "

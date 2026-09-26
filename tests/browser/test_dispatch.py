@@ -244,6 +244,40 @@ async def test_pointer_entry_rechecks_the_target_before_pressing(
         assert selected == "false"
 
 
+@pytest.mark.parametrize("framed", [False, True])
+@pytest.mark.parametrize("change", ["cover", "relabel", "detach"])
+async def test_target_changed_in_a_pointer_entry_frame_is_never_pressed(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, framed: bool, change: str
+) -> None:
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    if framed:
+        # Chrome throttles animation frames in offscreen children; this fixture needs its entry frame to run.
+        await eval_value(browser_session, session_id, "document.querySelector('iframe').scrollIntoView()")
+        obs = await observe_until(page, "Frame button")
+        frame_id = find(obs, "Frame button").frame_id
+        assert frame_id is not None
+        session_id = browser_session.frame_sessions()[frame_id]
+    mutation = {
+        "cover": "document.getElementById('cover').style.display = 'block'",
+        "relabel": "e.textContent = 'Delete reservation'",
+        "detach": "e.replaceWith(e.cloneNode(true))",
+    }[change]
+    await eval_value(
+        browser_session,
+        session_id,
+        "document.body.innerHTML = '<button id=target>One way</button><div id=cover "
+        'style="display:none;position:fixed;inset:0;background:white;z-index:1"></div>\'; '
+        "window.presses = 0; document.addEventListener('mousedown', () => window.presses++); "
+        "const e = document.getElementById('target'); "
+        f"e.onpointerenter = () => requestAnimationFrame(() => {{ {mutation}; }});",
+    )
+    obs = await observe_until(page, "One way")
+    result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "One way").id), obs)
+    assert result.outcome is (StepOutcome.COVERED if change == "cover" else StepOutcome.STALE)
+    assert await eval_value(browser_session, session_id, "window.presses") == 0
+
+
 @pytest.mark.parametrize("mode", ["replace", "replace-late", "replace-decoy"])
 @pytest.mark.parametrize("framed", [False, True])
 async def test_fill_follows_a_replacement_only_at_the_original_position(
@@ -412,7 +446,7 @@ async def test_an_unstable_target_expires_without_a_press(page: CdpPage, monkeyp
     monkeypatch.setattr(page_module, "_TARGET_STABILITY_SECONDS", 0)
     monkeypatch.setattr(page, "_move", AsyncMock())
     monkeypatch.setattr(page, "_evaluate", AsyncMock())
-    monkeypatch.setattr(page, "_before_action", AsyncMock(return_value=("fingerprint", ["guard"], (20.0, 20.0))))
+    monkeypatch.setattr(page, "_before_action", AsyncMock(return_value=("fingerprint", ["guard"], (20.0, 20.0), False)))
     pressed = AsyncMock()
     monkeypatch.setattr(page, "_input", pressed)
     outcome, _ = await page._click_point(("session", "main", 1, ["guard"]), (10.0, 10.0))

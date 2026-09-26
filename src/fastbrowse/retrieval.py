@@ -32,7 +32,7 @@ from fastbrowse.jev import (
     NoulQuestion,
 )
 from fastbrowse.llm import Generation, LLMClient, Message
-from fastbrowse.memory import Fact, Notes, Tally, evidence_id, fact_id
+from fastbrowse.memory import Fact, Notes, NotesTooLarge, Tally, evidence_id, fact_id
 from fastbrowse.models import UNTRUSTED, Citation, CostComponent, CostLine, Evidence, FactReader, Frozen, LLMPurpose
 from fastbrowse.page import Block, BlockKind, Capture
 from fastbrowse.planner import Plan, Requirement, RequirementKind
@@ -269,6 +269,11 @@ class _ReadClaim(Frozen):
             "claim:N for an earlier claim in this response's claims array, indexed from zero."
         ),
     )
+    records: tuple[_Cite, ...] = Field(
+        default=(),
+        description="Every record from this chunk compared by this claim, as block ranges only. Code copies "
+        "their quotes into the claim's basis; do not also write a prose claim for each record.",
+    )
     orders_list: _Cite | None = Field(
         default=None,
         description=(
@@ -309,6 +314,22 @@ def _cited(capture: Capture, part: Chunk, cite: _Cite) -> Evidence | None:
     return _evidence(capture, run[0], max(run[0].start, part.start), min(run[-1].end, part.end))
 
 
+def _record_cites(capture: Capture, part: Chunk, cites: Sequence[_Cite]) -> tuple[_Cite, ...]:
+    result: list[_Cite] = []
+    for cite in cites:
+        evidence = _cited(capture, part, cite)
+        blocks = (
+            []
+            if evidence is None
+            else [b for b in _offered(capture, part) if b.start < evidence.end and b.end > evidence.start]
+        )
+        if blocks and all(b.kind is BlockKind.RECORD and b.start >= part.start and b.end <= part.end for b in blocks):
+            result.extend(_Cite(first=b.source_id, last=b.source_id) for b in blocks)
+        else:
+            result.append(cite)
+    return tuple(result)
+
+
 def _remember(
     capture: Capture,
     part: Chunk,
@@ -345,11 +366,50 @@ def _remember(
 _MAX_CONTINUING_RECORDS = 60
 
 
+class _TallyField(Frozen):
+    span: _Cite
+    prefix: str
+    suffix: str
+
+
 class _TallyGroup(Frozen):
     key: str | None = Field(
         description="The label stated in each record, such as its author; null for an ungrouped count."
     )
-    records: tuple[_Cite, ...]
+    records: tuple[_Cite, ...] = Field(
+        default=(),
+        description="The source block ranges of matching records only. Use explicit ranges when a filter "
+        "excludes records between matches; a field range cannot filter them. Empty when none match this page.",
+    )
+    field: _TallyField | None = Field(
+        default=None,
+        description="Instead of enumerating records: a range containing only complete record blocks, each "
+        "counted once, grouped by the text between the exact prefix and suffix in each record. Use only when "
+        "every record in the range matches the task. Set key=null and records=[] when using field.",
+    )
+
+
+def _field_groups(capture: Capture, part: Chunk, field: _TallyField) -> tuple[_TallyGroup, ...] | None:
+    evidence = _cited(capture, part, field.span)
+    if evidence is None or not field.prefix or not field.suffix:
+        return None
+    blocks = [b for b in _offered(capture, part) if b.start < evidence.end and b.end > evidence.start]
+    if not blocks or len(blocks) > _MAX_CONTINUING_RECORDS:
+        return None
+    groups: dict[str, list[_Cite]] = {}
+    for block in blocks:
+        # A paragraph may hold more than one record, and a split record may hide a second matching field.
+        if block.kind is not BlockKind.RECORD or block.start < part.start or block.end > part.end:
+            return None
+        text = capture.text[block.start : block.end]
+        matches = list(re.finditer(re.escape(field.prefix) + r"([^\n]*?)" + re.escape(field.suffix), text))
+        if len(matches) != 1:
+            return None
+        key = matches[0][1].strip()
+        if not key or len(key) > 200 or field.prefix in key:
+            return None
+        groups.setdefault(key, []).append(_Cite(first=block.source_id, last=block.source_id))
+    return tuple(_TallyGroup(key=key, records=tuple(records)) for key, records in groups.items())
 
 
 class _TallyRead(Frozen):
@@ -360,7 +420,23 @@ class _TallyRead(Frozen):
 
 
 class _Continuation(Frozen):
-    tallies: tuple[_TallyGroup, ...] = ()
+    tallies: tuple[_TallyGroup, ...] = Field(
+        default=(),
+        description="For every count of matching records, including filtered counts, or ranking by count. "
+        "Group matching records by their stated label, or use key=null for an ungrouped count. "
+        "Use explicit record ranges when matches are not contiguous. Leave records empty.",
+    )
+    reuse_field: bool = Field(
+        default=False,
+        description="True only for an unfiltered count of EVERY record in this entire paginated list, grouped "
+        "by the same field. Never for a count conditioned on any record attribute. Code may reuse the field "
+        "on later pages only while every record has the same structure.",
+    )
+    through_end: bool = Field(
+        default=False,
+        description="True only when the task needs every remaining page of this list. False when the task "
+        "bounds the pages (such as this page and the next), or the rest is behind an expander rather than a pager.",
+    )
     requirement_id: str = Field(
         description=(
             "A requirement whose answer ranges over a list this capture shows only part of, because it continues "
@@ -377,7 +453,8 @@ class _Continuation(Frozen):
     records: tuple[_Cite, ...] = Field(
         default=(),
         description=(
-            "Every record this capture adds to that comparison, each as the run of source blocks holding it and "
+            "For comparisons of record values, not counts: every record this capture adds to that comparison, "
+            "each as the run of source blocks holding it and "
             "the value being compared. A later page cannot show what its winner beat unless this page names the "
             "records it was compared against, so list every one this capture shows; a capture holding only the "
             "pager lists none."
@@ -390,6 +467,41 @@ class _ReadResponse(Frozen):
     claims: tuple[_ReadClaim, ...]
     answered: bool
     continues: tuple[_Continuation, ...] = ()
+
+
+class _RecordSet(Frozen):
+    requirement_id: str
+    tallies: tuple[_TallyGroup, ...] = Field(
+        default=(),
+        description="For every count of matching records, including filtered counts, or ranking by count. "
+        "Group matching records by their stated label, or use key=null for an ungrouped count. "
+        "Use explicit record ranges when matches are not contiguous. Leave records empty.",
+    )
+    records: tuple[_Cite, ...] = Field(
+        default=(),
+        description="For comparisons of record values, not counts: every matching record as source block ranges "
+        "including the compared value and attributes that show it matches. Counts belong in tallies.",
+    )
+
+
+class _RecordsResponse(Frozen):
+    continues: tuple[_RecordSet, ...]
+    context: tuple[_Cite, ...] = ()
+    ended: tuple[str, ...] = Field(
+        default=(),
+        description="Requirement ids whose requested list this capture shows reaching its end. Empty for a "
+        "partial list, a loading page, an unrelated page, or a list continuing behind any control.",
+    )
+
+
+class TallyReader(Frozen):
+    requirement_id: str
+    count_label: str | None = None
+    title: str
+    heading_path: tuple[str, ...]
+    frame_id: str | None
+    prefix: str
+    suffix: str
 
 
 def _quoted(evidence: Evidence) -> Fact:
@@ -412,6 +524,65 @@ class ReadOutcome(Frozen):
     expands: str | None = None
     """The label the reader gave for the control that shows the rest of the list, so the run can open it
     instead of being told only that the list goes on."""
+    through_end: tuple[str, ...] = ()
+    continuation_records: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    ended: tuple[str, ...] = ()
+    tally_readers: tuple[TallyReader, ...] = ()
+
+    def merge_records(self, notes: Notes) -> None:
+        """Merge an isolated records read in page order, using the same span and tally deduplication."""
+        for fact in self.facts:
+            if fact.tally is None:
+                notes.add(fact.model_copy(update={"requirement_id": None}))
+        for fact in self.facts:
+            if fact.tally is not None:
+                notes.add_tally(fact.tally)
+        for requirement_id, records in self.continuation_records.items():
+            for record in records:
+                notes.add_continuation(requirement_id, record)
+
+
+def read_tallies(
+    capture: Capture, readers: Sequence[TallyReader], requirement_ids: Sequence[str]
+) -> ReadOutcome | None:
+    if capture.inaccessible_frames or len(capture.text) > _READ_CHUNK_CHARS:
+        return None
+    records = [b for b in capture.blocks if b.kind is BlockKind.RECORD]
+    if not records or {r.requirement_id for r in readers} != set(requirement_ids):
+        return None
+    parts = chunk(capture, _READ_CHUNK_CHARS)
+    if len(parts) != 1:
+        return None
+    notes = Notes()
+    for reader in readers:
+        if capture.title != reader.title or any(
+            (b.heading_path, b.frame_id) != (reader.heading_path, reader.frame_id) for b in records
+        ):
+            return None
+        field = _TallyField(
+            span=_Cite(first=records[0].source_id, last=records[-1].source_id),
+            prefix=reader.prefix,
+            suffix=reader.suffix,
+        )
+        groups = _field_groups(capture, parts[0], field)
+        if groups is None:
+            return None
+        for group in groups:
+            keys: list[str] = []
+            for cite in group.records:
+                evidence = _cited(capture, parts[0], cite)
+                assert evidence is not None
+                fact = _quoted(evidence)
+                notes.add(fact)
+                keys.append(fact_id(fact))
+            notes.add_tally(
+                Tally(
+                    requirement_id=reader.requirement_id,
+                    key=reader.count_label or group.key or "records",
+                    records=tuple(keys),
+                )
+            )
+    return ReadOutcome(facts=notes.facts, coverage=(0,), rejected_claims=0, cost_lines=())
 
 
 def _notes_room(tokens: TokenBudget, messages: Sequence[Message], response: type[Frozen]) -> int:
@@ -419,6 +590,17 @@ def _notes_room(tokens: TokenBudget, messages: Sequence[Message], response: type
     return tokens.remaining_chars(
         "".join(message.content for message in messages) + json.dumps(response.model_json_schema())
     )
+
+
+def _marks(block: Block) -> str:
+    """What the text alone does not say about a block. A frame's text reads like the page around it, and a heading
+    like any line: asked for the heading an embedded form shows, the reader gave the page's heading above the frame,
+    and once shown which text was the frame's, called the form's own <h1> a placeholder."""
+    marks = [
+        *(["heading"] if block.kind is BlockKind.HEADING else []),
+        *(["inside an embedded frame"] if block.frame_id else []),
+    ]
+    return f"({', '.join(marks)}) " if marks else ""
 
 
 def _read_message(
@@ -431,7 +613,9 @@ def _read_message(
     offered = _offered(capture, part)
     # A table cut mid-rows is shown under its header, which lies before the chunk, so its columns keep their names.
     sources = "\n".join(
-        f"[{block.source_id}] "
+        f"[{block.source_id}] ({block.kind.value}"
+        + (", inside an embedded frame" if block.frame_id else "")
+        + ") "
         + (f"{part.header}\n" if part.header and block.start < part.start else "")
         + capture.text[max(block.start, part.start) : min(block.end, part.end)]
         for block in offered
@@ -461,6 +645,8 @@ async def read(
     notice: str = "",
     continuing: Collection[str] = (),
     incomplete: Collection[str] = (),
+    records_only: bool = False,
+    require_all_evidence: bool = False,
 ) -> ReadOutcome:
     """`notice` is what the caller knows about the page that its text does not say, such as its next-page control;
     it goes with every question the reader is asked, however the question is narrowed. `continuing` names the
@@ -477,6 +663,11 @@ async def read(
     ordered: set[str] = set()
     expands: str | None = None
     tally_complete: set[str] = set()
+    through_end: tuple[str, ...] = ()
+    continuation_records: dict[str, list[str]] = {}
+    ended: tuple[str, ...] = ()
+    tally_readers: list[TallyReader] = []
+    counting = {r.id: r.text for r in requirements if r.kind is RequirementKind.INFORMATION and r.count_records}
     wanted = [
         r
         for r in requirements
@@ -486,7 +677,7 @@ async def read(
         and r.id not in incomplete
     ]
     # A pager notice is a caveat on what this page can answer, and the choice model picks quotes without weighing one.
-    if jev is not None and wanted and not notice:
+    if jev is not None and wanted and not notice and not records_only:
         chosen = await _read_choices(jev, capture, wanted, tokens=tokens, ledger=ledger)
         costs.extend(chosen.cost_lines)
         for fact in chosen.facts:
@@ -504,6 +695,21 @@ async def read(
         )
     if notice:
         question += f"\n\n{notice}"
+    if require_all_evidence:
+        question += (
+            "\n\nCode attaches every earlier comparison record to each requirement's conclusion. You need not "
+            "repeat those references in draws_on; use it for any extra context the claim needs. Still include "
+            "every compared record from this capture in records, and state the requested values in the answer."
+        )
+    if records_only:
+        question += (
+            "\n\nThis page is being read while earlier pages are still being read. Collect this page's records "
+            "for each requirement in continues.records or continues.tallies, with any quoted context needed "
+            "to interpret them. Apply the requirement's filters: include every matching record with its "
+            "compared value and the attributes that show it matches; omit records those filters exclude. "
+            "Do not select only this page's winners. Do not conclude a comparison or mark a tally complete. "
+            "A later read will receive all pages' records and answer the question."
+        )
     # LLM claims reach the run's notes only once the whole page is read. Carry earlier chunks and Jev's facts
     # into each chunk so a count or comparison is not asked in ignorance of what was already collected.
     so_far = deepcopy(notes)
@@ -516,11 +722,13 @@ async def read(
                     "# Reader\nAnswer the question from this capture's source blocks and the collected "
                     "evidence. Each claim states only what its cited blocks, and the claims it draws on, show.\n\n"
                     "# Claims\n"
-                    "- A claim cites one run of blocks. Records outside one run are separate claims, joined by "
-                    "a conclusion that draws on them.\n"
+                    "- A claim cites one run of blocks. For a comparison, put every compared record from this "
+                    "chunk in the conclusion's records as block ranges only. Code copies their quotes into its "
+                    "basis; never write a prose claim for each compared record. Use draws_on for earlier "
+                    "evidence and context claims.\n"
                     "- The answer is checked later without the page, so a comparison also needs claims for the "
                     "query, filters, date and sort that make it valid, with a null requirement id.\n"
-                    "- A count, total or winner draws on every record it counts or compares and on those "
+                    "- A count, total or winner rests on every record it counts or compares and on those "
                     "context claims. It cites blocks only when the page itself states it.\n"
                     "- Give a claim a requirement id only when it answers that whole requirement with its "
                     "constraints; otherwise null. Set answered only when the collected evidence and this capture "
@@ -533,33 +741,107 @@ async def read(
                     "their text, calculate totals or write claims for counted records. Code deduplicates, counts "
                     "and ranks them, preserving their quotes behind the tally references. Reuse a tally reference "
                     "as a basis instead of listing every earlier record. Keep other claims concise, at most 60.\n\n"
+                    "A filtered count also uses tallies: select only matching records, grouped by their stated "
+                    "label (key=null for an ungrouped count). If matches are separated by excluded records, "
+                    "list their block ranges explicitly in the group's records. Never put counted records in "
+                    "continues.records. A page with no matches contributes an empty group.\n\n"
+                    "For repeated record blocks with the grouping label between the same literal delimiters, "
+                    "prefer one tally group with key=null, records=[] and field: span covers the records, "
+                    "prefix and suffix are the exact text surrounding the label, each occurring once per record "
+                    "(include a newline in the prefix when it starts a line). Code extracts each record's "
+                    "label and counts it. Every block in the range must be a complete record matching the task; "
+                    "do not include headings, navigation or records excluded by a filter. When using tallies, "
+                    "leave the continuation's records empty.\n\n"
+                    "Set reuse_field=true for an unfiltered count of every record across this whole list, "
+                    "when all record blocks use this same grouping field. Code can then read later pages "
+                    "with the same structure. Any condition selecting records forbids reuse_field.\n\n"
                     "# Lists over several pages\nA count, total or superlative over a list needs the whole "
                     "list. Earlier pages are in the collected evidence under their own URLs. When the list goes "
                     "on past this capture and the collected evidence does not cover the rest, add an entry to "
-                    "continues naming the requirement, and give in its records every record this capture adds "
-                    "to that comparison, each as the blocks holding it and the value compared. "
+                    "continues naming the requirement. For counts, put matching records in its tallies as above. "
+                    "For comparisons of record values, give in its records every record this capture adds "
+                    "to that comparison, each as the blocks holding it and the value compared. Apply the "
+                    "requirement's filters on every page: include every matching record with its compared "
+                    "value and the attributes that show it matches; omit records those filters exclude. "
                     "Name in expands the control on this page that shows the rest, when one is offered. "
                     "If instead the page states that the list is ordered or filtered by the very quantity "
                     "being compared, the leading record answers: give the claim citing it its requirement id and cite "
                     "that statement in orders_list rather than listing the requirement in continues. "
                     "Once the collected evidence and this capture cover every page, the "
-                    "conclusion takes the requirement id and draws on each record once. A task that bounds the "
+                    "tally uses complete=true; a comparison's conclusion takes the requirement id, includes "
+                    "this chunk's records and draws on earlier records once each. A task that bounds the "
                     "pages it covers ends at the last page it names.\n\n"
                     f"# Trust\n{UNTRUSTED} Never infer facts the capture and evidence do not show."
                 ),
             ),
             _read_message(capture, part, question, requirement_ids),
         ]
-        room = _notes_room(tokens, messages, _ReadResponse)
-        offered = so_far.render_with_ids(room, preserve_requirements=True)
+        if records_only:
+            messages[0] = Message(
+                role="system",
+                content=(
+                    "# Page records\nCollect the records on this page for the requested requirements. "
+                    "Return each requirement in continues even when no records match. For counts of matching "
+                    "records, including filtered counts, or rankings by count, use continues.tallies, grouped "
+                    "by the label stated in each record (key=null for an ungrouped count). Select only matching "
+                    "records. If excluded records separate matches, list each matching block range explicitly "
+                    "in the group's records. A page with no matches contributes an empty group. "
+                    "For comparisons of record values, use continues.records, including the compared value "
+                    "and the attributes that show each record matches. "
+                    "Prefer a tally field range for complete record blocks with the grouping label "
+                    "between the same exact prefix and suffix: key=null, records=[], field={span, prefix, suffix}. "
+                    "Delimiters must occur once per record; include the newline for a field starting a line. "
+                    "Every block in that range must be a matching record. When using tallies, leave the "
+                    "continuation's records empty. Omit records excluded by the task's "
+                    "filters, but never select only the page's winners. Earlier pages are being read separately. "
+                    "Use context for source block ranges needed to interpret these records, such as filters "
+                    f"or table headers. Do not conclude comparisons.\n\n# Trust\n{UNTRUSTED}"
+                ),
+            )
+        room = _notes_room(tokens, messages, _RecordsResponse if records_only else _ReadResponse)
+        labels = {fact_id(fact): f"e{i}" for i, fact in enumerate(so_far.facts)}
+        offered = so_far.render_with_ids(room, preserve_requirements=True, labels=labels)
+        if require_all_evidence and {fact_id(fact) for fact in so_far.facts} - set(offered.evidence_ids):
+            raise NotesTooLarge("The final page cannot fit every earlier record in its collected evidence")
         messages[-1] = _read_message(capture, part, question, requirement_ids, offered.text)
-        result = await llm.generate(
-            LLMPurpose.READ,
-            messages,
-            _ReadResponse,
-            max_output_tokens=tokens.read_output_tokens,
-            ledger=ledger,
-        )
+        if records_only:
+            collected = await llm.generate(
+                LLMPurpose.READ,
+                messages,
+                _RecordsResponse,
+                max_output_tokens=tokens.read_output_tokens,
+                ledger=ledger,
+            )
+            ended = tuple(key for key in collected.data.ended if key in requirement_ids)
+            context: list[_ReadClaim] = []
+            for cite in collected.data.context:
+                evidence = _cited(capture, part, cite)
+                if evidence is None:
+                    lost.update(dict.fromkeys(requirement_ids))
+                    uncovered += 1
+                else:
+                    context.append(_ReadClaim(cite=cite, text=evidence.quote))
+            # An omitted requirement could have lost a whole page. An explicit empty record set means none matched.
+            lost.update(dict.fromkeys(set(requirement_ids) - {c.requirement_id for c in collected.data.continues}))
+            result = Generation(
+                data=_ReadResponse(
+                    claims=tuple(context),
+                    answered=False,
+                    continues=tuple(
+                        _Continuation(requirement_id=c.requirement_id, records=c.records, tallies=c.tallies)
+                        for c in collected.data.continues
+                    ),
+                ),
+                cost=collected.cost,
+            )
+        else:
+            result = await llm.generate(
+                LLMPurpose.READ,
+                messages,
+                _ReadResponse,
+                max_output_tokens=tokens.read_output_tokens,
+                ledger=ledger,
+            )
         if ledger is not None:
             ledger.record(result.cost)
         costs.append(result.cost)
@@ -569,10 +851,48 @@ async def read(
         # The latest chunk decides: it holds the page's foot, where a pager sits, reads every earlier chunk's
         # records in its collected evidence, and is given the caller's next-page notice. An earlier chunk's
         # "continues" meant the list went on into this chunk; a union let it block the last chunk's conclusion.
-        carried = [c for c in result.data.continues if c.requirement_id in requirement_ids]
+        carried = [
+            c.model_copy(update={"records": _record_cites(capture, part, c.records)})
+            for c in result.data.continues
+            if c.requirement_id in requirement_ids
+        ]
+        # A count returned as plain continuation records otherwise reaches the last page with no tally to close.
+        carried = [
+            c.model_copy(update={"tallies": (*c.tallies, _TallyGroup(key=None, records=c.records)), "records": ()})
+            if c.requirement_id in counting and c.records
+            else c
+            for c in carried
+        ]
         continues = dict.fromkeys(c.requirement_id for c in carried)
+        through_end = tuple(c.requirement_id for c in carried if c.through_end)
         expands = next((c.expands for c in carried if c.expands), None)
-        references = {key: key for key in offered.evidence_ids}
+        for continuation in carried:
+            if not continuation.reuse_field or not continuation.through_end or len(continuation.tallies) != 1:
+                continue
+            group = continuation.tallies[0]
+            field = group.field
+            records = [b for b in capture.blocks if b.kind is BlockKind.RECORD]
+            if (
+                field is not None
+                and group.key is None
+                and not group.records
+                and part.total == 1
+                and records
+                and field.span == _Cite(first=records[0].source_id, last=records[-1].source_id)
+            ):
+                reader = TallyReader(
+                    requirement_id=continuation.requirement_id,
+                    count_label=counting.get(continuation.requirement_id),
+                    title=capture.title,
+                    heading_path=records[0].heading_path,
+                    frame_id=records[0].frame_id,
+                    prefix=field.prefix,
+                    suffix=field.suffix,
+                )
+                if read_tallies(capture, [reader], [reader.requirement_id]) is not None:
+                    tally_readers.append(reader)
+        references = {labels[key]: key for key in offered.evidence_ids}
+        references.update((key, key) for key in offered.evidence_ids)
         tally_reads = [t for t in result.data.tallies if t.requirement_id in requirement_ids]
         tally_reads.extend(_TallyRead(requirement_id=c.requirement_id, groups=c.tallies) for c in carried if c.tallies)
         for tally_read in tally_reads:
@@ -580,10 +900,22 @@ async def read(
             so_far.unevidence((tally_read.requirement_id,))
             if tally_read.complete and result.data.answered and part.index == part.total - 1:
                 tally_complete.add(tally_read.requirement_id)
+            groups: list[_TallyGroup] = []
             for group in tally_read.groups:
+                if group.field is None:
+                    groups.append(group)
+                elif (
+                    group.key is None and not group.records and (expanded := _field_groups(capture, part, group.field))
+                ):
+                    groups.extend(expanded)
+                else:
+                    lost[tally_read.requirement_id] = None
+                    uncovered += 1
+            for group in groups:
                 records = []
-                missing = max(0, len(group.records) - _MAX_CONTINUING_RECORDS)
-                for cite in group.records[:_MAX_CONTINUING_RECORDS]:
+                cites = _record_cites(capture, part, group.records)
+                missing = max(0, len(cites) - _MAX_CONTINUING_RECORDS)
+                for cite in cites[:_MAX_CONTINUING_RECORDS]:
                     evidence = _cited(capture, part, cite)
                     if evidence is None or (
                         group.key is not None
@@ -602,8 +934,11 @@ async def read(
                     records.append(fact_id(record))
                     facts[(fact_id(record), None)] = record
                 if records:
+                    # Pages may label the same count differently; the requirement keeps its total and filter together.
                     tally = Tally(
-                        requirement_id=tally_read.requirement_id, key=group.key or "records", records=tuple(records)
+                        requirement_id=tally_read.requirement_id,
+                        key=counting.get(tally_read.requirement_id, group.key or "records"),
+                        records=tuple(records),
                     )
                     so_far.add_tally(tally)
                     fact = notes.add_tally(tally)
@@ -613,6 +948,36 @@ async def read(
                 if missing:
                     lost[tally_read.requirement_id] = None
         for index, claim in enumerate(result.data.claims):
+            if require_all_evidence and claim.requirement_id is not None and claim.requirement_id in requirement_ids:
+                # A winner must retain the records it beat even when the reader cites only its chosen rows.
+                claim = claim.model_copy(
+                    update={"draws_on": (*claim.draws_on, *so_far.comparison_records(claim.requirement_id))}
+                )
+            records: dict[str, Fact] = {}
+            missing = max(0, len(claim.records) - _MAX_CONTINUING_RECORDS)
+            for cite in claim.records[:_MAX_CONTINUING_RECORDS]:
+                evidence = _cited(capture, part, cite)
+                if evidence is None:
+                    missing += 1
+                else:
+                    record = _quoted(evidence)
+                    records[fact_id(record)] = record
+            if missing:
+                # A comparison missing an operand cannot close here or on a later page using these notes.
+                affected = (
+                    (claim.requirement_id,)
+                    if claim.requirement_id is not None and claim.requirement_id in requirement_ids
+                    else requirement_ids
+                )
+                lost.update(dict.fromkeys(affected))
+                uncovered += missing
+                rejected_here += 1
+                continue
+            for key, record in records.items():
+                so_far.add(record)
+                found.append(record)
+                references[key] = key
+            claim = claim.model_copy(update={"draws_on": (*claim.draws_on, *records)})
             # Carried to the next chunk without its requirement id, which only the whole page can settle.
             fact = _remember(capture, part, claim.model_copy(update={"requirement_id": None}), so_far, references)
             if fact is None:
@@ -660,7 +1025,9 @@ async def read(
                     continue
                 record = _quoted(evidence)
                 so_far.add(record)
+                so_far.add_continuation(continuation.requirement_id, fact_id(record))
                 notes.add_continuation(continuation.requirement_id, fact_id(record))
+                continuation_records.setdefault(continuation.requirement_id, []).append(fact_id(record))
                 found.append(record)
             uncovered += missing
             if missing:
@@ -676,6 +1043,7 @@ async def read(
             and not rejected_here
             and not continues
             and not notice
+            and not records_only
             and (not tally_reads or part.index == part.total - 1)
         ):
             break
@@ -692,6 +1060,8 @@ async def read(
         if notes.has_untallied_records(requirement_id):
             lost[requirement_id] = None
     blocked = (set(incomplete) | lost.keys()) - ordered
+    if records_only:
+        blocked.update(requirement_ids)
     for fact in found:
         if fact.requirement_id in continues or fact.requirement_id in blocked:
             fact = fact.model_copy(update={"requirement_id": None})
@@ -709,6 +1079,10 @@ async def read(
         incomplete=tuple(lost),
         uncovered=uncovered,
         expands=expands if continues else None,
+        through_end=tuple(key for key in through_end if key in continues),
+        continuation_records={key: tuple(dict.fromkeys(records)) for key, records in continuation_records.items()},
+        ended=tuple(key for key in ended if key not in lost),
+        tally_readers=tuple(reader for reader in tally_readers if reader.requirement_id not in lost),
     )
 
 
@@ -742,17 +1116,18 @@ def _spans(text: str, annotation: object) -> tuple[tuple[int, int, str], ...]:
     return tuple((match.start(), match.end(), match.group()) for match in re.finditer(pattern, text, re.IGNORECASE))
 
 
-def _context(text: str, start: int, end: int, kind: BlockKind) -> str:
-    """A table value is told apart by its column header and its row, not by the whole table."""
-    if kind is not BlockKind.TABLE:
-        return text
+def _context(text: str, start: int, end: int, block: Block) -> str:
+    """A table value is told apart by its column header and its row, not by the whole table; any value by what its
+    block is (`_marks`), which Jev chose a page heading above a frame by as the heading the frame's form shows."""
+    if block.kind is not BlockKind.TABLE:
+        return _marks(block) + text
     line_start = text.rfind("\n", 0, start) + 1
     line_end = text.find("\n", end)
     row = text[line_start : len(text) if line_end == -1 else line_end]
     header_cells = [cell for _, _, cell in _cells(text.split("\n", 1)[0])]
     column = len(re.findall(r"(?<!\\)\|", text[line_start:start])) - 1
     name = header_cells[column] if 0 <= column < len(header_cells) else "?"
-    return f"column {name!r} in row: {row}"
+    return f"{_marks(block)}column {name!r} in row: {row}"
 
 
 def _cells(table: str) -> tuple[tuple[int, int, str], ...]:
@@ -806,7 +1181,7 @@ def field_candidates(capture: Capture, field: FieldInfo) -> tuple[Candidate, ...
                     id=f"c{len(candidates)}",
                     value=value,
                     evidence=_evidence(capture, block, block.start + start, block.start + end),
-                    context=_context(text, start, end, block.kind),
+                    context=_context(text, start, end, block),
                 )
             )
     return tuple(candidates)
@@ -1016,7 +1391,7 @@ def _iter_read_candidates(capture: Capture, blocks: Sequence[Block]) -> Iterator
                 id=f"c{index}",
                 value=text[start:end],
                 evidence=_evidence(capture, block, block.start + quote_start, block.start + end),
-                context=_context(text, start, end, block.kind),
+                context=_context(text, start, end, block),
             )
             index += 1
 
@@ -1194,7 +1569,7 @@ async def _read_choices(
     for requirement in requirements:
         answer = evaluation.answers.get(requirement.id)
         if not isinstance(answer, ChoiceAnswer) or answer.confidence < _READ_CONFIDENCE:
-            logger.debug("read reader=llm requirement=%s reason=uncertain_choice", requirement.id)
+            logger.debug("read reader=llm requirement=%s reason=uncertain_choice answer=%r", requirement.id, answer)
             continue
         if answer.choice == "absent":
             if focused:

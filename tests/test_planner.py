@@ -59,3 +59,14 @@ async def test_planning_reads_only_the_task_and_start_address_and_preserves_cost
 def test_plan_rejects_duplicate_ids() -> None:
     with pytest.raises(ValidationError, match="unique"):
         Plan(requirements=example_plan().requirements * 2, answer_expected=True)
+
+
+async def test_planning_keeps_a_spelled_out_search_out_of_the_requirements() -> None:
+    # "Search for X, open that article, and tell me the year" became an action requirement to search in 22 plans
+    # of 30. A shortcut that opened the article directly then failed the verifier on it, and recovery typed into
+    # the site's search box for up to 70s more. A click the task names is work of its own and stays one.
+    llm = PlannerLLM()
+    await make_plan(llm, "Search for X, open that article, and tell me the year.")
+    prompt = "\n".join(message.content for message in llm.calls[0][1])
+    assert "'search for X, open its page and tell me Y' has one requirement, to find Y" in prompt
+    assert "a click, entry or submission the task names is still an action requirement" in prompt

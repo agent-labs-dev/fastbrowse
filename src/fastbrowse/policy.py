@@ -133,6 +133,9 @@ class HistoryEntry(Frozen):
     """Entered value, redacted before storage; secrets are represented only by a marker."""
     effect: str | None = None
     """What the action visibly did: the address, controls shown or removed, and values before and after."""
+    setting: bool | None = None
+    """True for a click that chose an option or ticked a box, a value set and kept in the record as a typed one is;
+    unset otherwise, so the actions a model is shown do not each carry it."""
 
 
 class StepContext(Frozen):
@@ -564,6 +567,9 @@ async def _evaluate(
 def _state(observation: Observation, controls: Sequence[Control], context: StepContext, compact: bool) -> JsonValue:
     state: dict[str, JsonValue] = {
         "task": context.task,
+        # "Next month" and "the next Monday" are relative to today, which only the done check was told: shown
+        # which month a date picker was on, Jev clicked Next through two years of months looking for next month.
+        "date": observation.captured_at.date().isoformat(),
         "subgoal": context.subgoal,
         "page": {"url": observation.url, "title": observation.title, "text": observation.viewport_text},
         "requirements": list(context.requirements),

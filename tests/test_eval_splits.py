@@ -10,7 +10,7 @@ RIGHT = {
     "hockey-bruins-1990": ("The Boston Bruins won 44 games in 1990.", None),
     "oscars-2012": ("Argo won Best Picture.", None),
     "dynamic-loading": ("It shows \u201cHello World!\u201d.", None),
-    "nested-frames": ("The middle frame shows MIDDLE.", None),
+    "frame-heading": ("The frame's heading reads \u201cSend updates to my inbox ...\u201d", None),
     "hover-profile": ("name: user2", None),
     "ruff-release": ("The latest release is 0.16.8.", "0.16.8"),
     "pizza-order": ("The server received size: large.", None),
@@ -19,10 +19,19 @@ RIGHT = {
     "countries-mongolia": ("Mongolia's population is listed as 3,086,918.", None),
     "quotes-js-page2": ("Marilyn Monroe wrote it.", None),
     "crates-serde": ("serde 1.0.229", "1.0.229"),
-    "new-window": ("The new window's heading is New Window.", None),
+    "new-window": ("It reads: Example of a new window page for Automation Testing Practice", None),
     "table-largest-due": ("Jason Doe, who owes $100.00.", None),
     "httpx-requires-python": ("Python 3.8 or later.", "3.8"),
     "quotes-search": ("\u201cTry not to become a man of success. Rather become a man of value.\u201d", None),
+    "quotes-rowling-count": ("There are 9 quotes by J.K. Rowling.", None),
+    "new-tab-page": ("The new page says: I am a new page in a new tab", None),
+    "countries-namibia-area": ("Namibia's area is listed as 825418.0 km\u00b2.", None),
+    "table-total-due": ("The rows owe $251.00 in total.", None),
+    "quotes-search-lewis": (
+        "\u201cWe are not necessarily doubting that God will do the best for us; we are wondering how painful the "
+        "best will turn out to be.\u201d",
+        None,
+    ),
 }
 
 
@@ -39,9 +48,9 @@ def test_the_split_is_disjoint_and_covers_every_task() -> None:
     assert len(ids) == len(set(ids)) == len(RIGHT)
 
 
-def test_nested_frames_needs_the_page_capitals() -> None:
-    (task,) = [t for t in DEV if t.id == "nested-frames"]
-    assert task.check(Outcome(answer="The middle frame.", data=None, final_url=None), None) is not None
+def test_the_frame_heading_needs_the_frames_own_text() -> None:
+    (task,) = [t for t in DEV if t.id == "frame-heading"]
+    assert task.check(Outcome(answer="Email Subscription", data=None, final_url=None), None) is not None
 
 
 def test_an_order_that_never_reached_the_server_fails() -> None:

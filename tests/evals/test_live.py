@@ -2,8 +2,9 @@ import asyncio
 import json
 import logging
 import runpy
+import time
 from base64 import urlsafe_b64decode, urlsafe_b64encode
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -14,6 +15,7 @@ import pytest
 
 from fastbrowse.evals import live, live_tasks, more_tasks
 from fastbrowse.evals.live_tasks import TASKS, LiveTask, Outcome
+from fastbrowse.evals.status import Ending
 from fastbrowse.models import Unavailable
 from fastbrowse.telemetry import TRACE, trace, traced
 
@@ -103,6 +105,64 @@ async def test_ultrafast_passes_only_on_a_correct_outcome_it_called_done(
     assert row.correct is True
     assert row.passed is passed
     assert row.seconds == 3.0
+
+
+async def test_an_attempt_with_a_slow_jev_call_is_an_outage_run_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """0.5.7 timed runs whose single Jev call took up to 41s; a slow provider must never count against the agent."""
+
+    async def ultrafast_arm(
+        _: LiveTask, __: httpx.AsyncClient, *, record: Path | None
+    ) -> tuple[Outcome, live.ArmReport]:
+        slow = {"event": "request_slow", "call": "jev", "seconds": 7.25}
+        outcome = Outcome("Attention Is All You Need", None, "https://arxiv.org/abs/1706.03762")
+        return outcome, live.ArmReport(status="done", dollars=0.001, seconds=12.0, events=[slow])
+
+    monkeypatch.setattr(live, "ultrafast_arm", ultrafast_arm)
+    async with httpx.AsyncClient() as http:
+        row = await live.run_arm(
+            "jev-ultrafast",
+            task("arxiv-title"),
+            "Attention Is All You Need",
+            http,
+            Path(),
+            bitwarden=False,
+            record=None,
+        )
+    assert row.normalized_status == Ending.UNAVAILABLE
+    assert row.failure == "Jev unavailable: a call took 7.2s"
+
+
+async def test_an_attempt_of_any_arm_still_running_at_the_cap_is_an_outage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two of one day's Browser Use sessions sat unfinished for over half an hour; the cap holds every arm alike."""
+
+    async def ultrafast_arm(_: LiveTask, __: httpx.AsyncClient, *, record: Path | None) -> Any:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(live, "ultrafast_arm", ultrafast_arm)
+    monkeypatch.setattr(live, "STUCK_SECONDS", 0.05)
+    async with httpx.AsyncClient() as http:
+        row = await live.run_arm("jev-ultrafast", task("arxiv-title"), None, http, Path(), bitwarden=False, record=None)
+    assert row.normalized_status == Ending.UNAVAILABLE
+
+
+@pytest.mark.parametrize(("site", "ending"), [(200, Ending.ERROR), (503, Ending.UNAVAILABLE)])
+async def test_a_first_page_that_never_loaded_is_an_outage_only_at_a_site_that_is_down(
+    site: int, ending: Ending
+) -> None:
+    """fastbrowse's own browser failing to load a site that is up is its failure, as it would be any other arm's."""
+    row = live._crashed(
+        "fastbrowse",
+        task("pypi-newer"),
+        "SiteUnreachable",
+        at=0.0,
+        seconds=1.0,
+        status=Ending.UNAVAILABLE.value,
+        record=None,
+    ).model_copy(update={"error": "Page.navigate failed (net::ERR_EMPTY_RESPONSE)"})
+    transport = httpx.MockTransport(lambda _: httpx.Response(site))
+    async with httpx.AsyncClient(transport=transport) as http:
+        checked = await live._site_checked(row, task("pypi-newer"), http)
+    assert checked.normalized_status == ending
 
 
 async def test_a_grader_that_raises_fails_only_its_own_row(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -422,7 +482,10 @@ async def test_a_hosted_session_whose_output_fails_the_schema_keeps_its_cost(mon
 
     class Client:
         def __init__(self, **_: object) -> None:
-            self.sessions = SimpleNamespace(get=AsyncMock(return_value=session))
+            self.sessions = SimpleNamespace(
+                get=AsyncMock(return_value=session),
+                messages=AsyncMock(return_value=SimpleNamespace(messages=[], has_more=False)),
+            )
 
         def run(self, *_: object, **__: object) -> Run:
             return Run()
@@ -432,45 +495,92 @@ async def test_a_hosted_session_whose_output_fails_the_schema_keeps_its_cost(mon
     outcome, report = await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
     assert outcome.answer == "[Session cost limit reached]"
     assert report.dollars == 0.37 and report.status == "stopped"
+    # Browser Use ending the session itself is its outage, retried like a 503, not its agent's failure.
+    session.output, session.status = "Task ended unexpectedly.", SimpleNamespace(value="error")
+    with pytest.raises(Unavailable):
+        await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
+
+    # Any other error ending is its agent's failure, scored like one.
+    session.output = "Failed to complete the task"
+    outcome, report = await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
+    assert report.status == "error"
+
+    # A session the attempt's cap cancels is stopped, not left running and billing with nothing waiting for it.
+    class Stuck(Run):
+        def __await__(self) -> Any:
+            return asyncio.Event().wait().__await__()
+
+    stop = AsyncMock()
+    monkeypatch.setattr(Client, "run", lambda *_, **__: Stuck())
+    monkeypatch.setattr(
+        Client,
+        "__init__",
+        lambda self, **_: setattr(self, "sessions", SimpleNamespace(get=AsyncMock(return_value=session), stop=stop)),
+    )
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.05):
+            await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
+    stop.assert_awaited_once_with("s1")
 
 
-async def test_a_hosted_session_is_graded_on_the_verdict_that_lands_after_it_stops(
+async def test_a_hosted_run_is_timed_to_its_agents_answer_not_to_the_session_stopping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """0.5.7: Browser Use reported sessions stopped up to 114s after its agent's `done`, and that wait was timed."""
     import browser_use_sdk.v3  # an optional extra
 
-    def session(verdict: bool | None) -> SimpleNamespace:
-        return SimpleNamespace(
-            id="s1",
-            is_task_successful=verdict,
-            total_cost_usd=0.1,
-            status=SimpleNamespace(value="stopped"),
-            model="m",
-            step_count=2,
-            live_url=None,
-        )
+    created = datetime(2026, 9, 25, 22, 0, tzinfo=UTC)
+    session = SimpleNamespace(
+        id="s1",
+        created_at=created,
+        is_task_successful=False,
+        total_cost_usd=0.1,
+        status=SimpleNamespace(value="stopped"),
+        model="m",
+        step_count=2,
+        live_url=None,
+    )
+
+    def message(kind: str, after: float, error: bool = False) -> SimpleNamespace:
+        data = json.dumps({"tool_name": "done", "is_error": error})
+        return SimpleNamespace(id=kind, type=kind, data=data, created_at=created + timedelta(seconds=after))
+
+    messages = [message("assistant_message", 3), message("completion_result", 7), message("completion_result", 9, True)]
 
     class Run:
         session_id = "s1"
 
         def __await__(self) -> Any:
             async def finish() -> SimpleNamespace:
-                return SimpleNamespace(session=session(None), output="0.28.1")
+                await asyncio.sleep(0.05)
+                return SimpleNamespace(session=session, output="0.28.1")
 
             return finish().__await__()
 
     class Client:
         def __init__(self, **_: object) -> None:
-            self.sessions = SimpleNamespace(get=AsyncMock(side_effect=[session(None), session(None), session(True)]))
+            self.sessions = SimpleNamespace(
+                get=AsyncMock(return_value=session),
+                messages=AsyncMock(return_value=SimpleNamespace(messages=messages, has_more=False)),
+            )
 
         def run(self, *_: object, **__: object) -> Run:
             return Run()
 
     monkeypatch.setattr(browser_use_sdk.v3, "AsyncBrowserUse", Client)
     monkeypatch.setattr(live, "load_settings", lambda: SimpleNamespace(browser_key=lambda: "key"))
-    monkeypatch.setattr(live.asyncio, "sleep", AsyncMock())
     _, report = await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
-    assert report.task_successful is True
+    assert report.answered is True and report.task_successful is False
+    answered = await live.hosted_answer(Client(), "s1", "0.28.1")
+    assert answered == created + timedelta(seconds=7)  # the `done` that was an error is not an answer
+    # An agent that answered in a reply without calling `done` answered at that reply, if the session kept it.
+    messages[1:] = []
+    assert await live.hosted_answer(Client(), "s1", "0.28.1") == created + timedelta(seconds=3)
+    assert await live.hosted_answer(Client(), "s1", None) is None
+    # Half a second until the session existed, then 7s by its own clock; never past the session's own wall time.
+    assert live.answer_seconds(0.5, session, answered, 120.0) == 7.5
+    assert live.answer_seconds(0.5, session, answered, 3.0) == 3.0
+    assert live.answer_seconds(0.5, session, None, 120.0) == 120.0
 
 
 async def test_a_hosted_outage_retries_without_quoting_the_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -557,3 +667,19 @@ def test_an_error_sent_with_http_200_is_not_an_answer() -> None:
         model = SimpleNamespace(CLIENT=SimpleNamespace(post=lambda *_, response=response, **__: response))
         with pytest.raises(raised, match=f"error {code} in HTTP 200"):
             RUNNER["_post"](model, "https://openrouter.ai/api/v1/chat/completions", {}, {})
+
+
+async def test_an_attempt_its_site_stalled_during_is_an_outage_for_any_arm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One day's the-internet.herokuapp.com held requests 30s at a time: nested-frames took 36s, and 7s between."""
+    served = iter([httpx.Response(200), httpx.Response(503)])
+    http = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: next(served, httpx.Response(200))))
+    monkeypatch.setattr(live, "SITE_PROBE_SECONDS", 0.01)
+    frames = task("expandtesting-login")
+    watch = live.SiteWatch(http, [frames])
+    start = time.time()
+    watching = asyncio.create_task(watch.run())
+    await asyncio.sleep(0.1)
+    watching.cancel()
+    assert watch.stalled(frames, start, time.time()) == f"site stalled: {frames.start} answered HTTP 503"
+    assert watch.stalled(frames, start - 10, start - 5) is None
+    assert watch.stalled(task("pypi-newer"), start, time.time()) is None

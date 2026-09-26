@@ -49,6 +49,8 @@ class Control(Frozen):
     """Kept across observations for as long as the same DOM node survives."""
     frame_id: str | None
     frame_origin: str | None = None
+    form_id: str | None = None
+    """Owner form or local field group, scoped to the frame and document that observed it."""
     retarget_key: str | None = Field(default=None, exclude=True)
     """Browser guard without node ids, tying a replacement to the same semantics and receiving document."""
     role: str
@@ -196,6 +198,8 @@ class Action(Frozen):
     """Origin authorized by the resolver; the receiving document must still match at insertion."""
     files: tuple[Attachment, ...] = ()
     accept_dialog: bool | None = None
+    form_fill: bool = False
+    """Check whether this ordinary fill leaves the observed form safe to continue without another observation."""
 
 
 class BrowserError(RuntimeError):
@@ -209,10 +213,18 @@ class NavigationTimeout(BrowserError):
     navigation timed out and the run ends `error` as any other browser failure does."""
 
 
+class SiteUnreachable(BrowserError):
+    """`Page.navigate` got nothing from the site: Chrome named a dropped, refused or empty connection.
+
+    Treated as `NavigationTimeout` is: before the first step the site was down, not the agent wrong. A name that
+    does not resolve is not one of these; that can be a mistyped address."""
+
+
 class ActResult(Frozen):
     outcome: StepOutcome
     page_changed: bool
     detail: str | None = None
+    form_unchanged: bool = False
 
 
 class Page(Protocol):
@@ -221,7 +233,10 @@ class Page(Protocol):
 
     async def observe(self) -> Observation: ...
 
-    async def navigate(self, url: str) -> None: ...
+    async def navigate(self, url: str, *, back_to: str | None = None) -> None:
+        """`back_to` is the page BACK opens when this tab has no earlier entry on its site: a run that went straight
+        to a deep address keeps the start page it skipped one BACK away without spending a load on it."""
+        ...
 
     async def capture(self) -> Capture: ...
 

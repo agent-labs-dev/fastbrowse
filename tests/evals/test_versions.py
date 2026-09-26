@@ -249,8 +249,8 @@ def test_the_feed_leads_each_release_with_the_core_suite() -> None:
 
 
 def test_an_outage_scores_no_arm_and_takes_a_matching_attempt_from_each() -> None:
-    """0.5.6 dropped fastbrowse's outages alone, leaving it on 13 core tasks beside Browser Use on 14. Time is wall
-    time: only fastbrowse measures its outage waits, so subtracting them would favour it."""
+    """0.5.6 dropped fastbrowse's outages alone, leaving it on 13 core tasks beside Browser Use on 14. An outage
+    wait measured inside an attempt is left out of its time: a 503 and its backoff say nothing about the agent."""
     waited = _row("pypi-version") | {"seconds": 40.0, "transient_seconds": 30.0, "at": 1.0}
     outage = _row("pypi-version") | {"normalized_status": "unavailable", "passed": False, "seconds": 300.0}
     first = _row("pypi-version", arm="browser-use") | {"at": 1.0}
@@ -260,10 +260,25 @@ def test_an_outage_scores_no_arm_and_takes_a_matching_attempt_from_each() -> Non
     arms = versions.summary([("1.0.0", rows)]).releases[0]
     assert arms.tasks == 1
     assert [(a.passed, a.total, a.excluded) for a in arms.arms.values()] == [(1, 1, 2), (1, 1, 2)]
-    assert arms.arms["fastbrowse"].seconds.median == 40.0
+    assert arms.arms["fastbrowse"].seconds.median == 10.0
     note = versions.headline("1.0.0", rows)
     assert "so each arm is scored on the same 1: an attempt one arm lost is dropped for every arm" in note
     assert "`hn-top` is left out, with no fastbrowse attempt measured." in note
+
+
+def test_an_outage_drops_the_same_repeat_from_every_arm() -> None:
+    """Paired earliest first, fastbrowse's second attempt was scored beside Browser Use's first when fastbrowse's
+    first was lost to an outage."""
+    fast = [
+        _row("pypi-version") | {"normalized_status": "unavailable", "repeat": 0},
+        _row("pypi-version", passed=False) | {"repeat": 1},
+    ]
+    hosted = [
+        _row("pypi-version", arm="browser-use") | {"repeat": 0, "at": 1.0},
+        _row("pypi-version", arm="browser-use", passed=False) | {"repeat": 1, "at": 2.0},
+    ]
+    arms = versions.summary([("1.0.0", [*fast, *hosted])]).releases[0].arms
+    assert [(a.passed, a.total) for a in arms.values()] == [(0, 1), (0, 1)]
 
 
 def test_every_comparison_sets_arms_on_the_same_tasks() -> None:

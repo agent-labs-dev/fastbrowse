@@ -25,6 +25,7 @@ from fastbrowse.policy import (
     Reduction,
     StepContext,
     _element,
+    build_request,
     decide,
 )
 
@@ -404,3 +405,10 @@ async def test_a_page_under_the_limit_costs_no_relevance_pass() -> None:
     jev = RelevanceJev({"operation": "click"}, set())
     await decide(jev, observation(_dense(20)), context(), Config())
     assert len(jev.requests) == 1
+
+
+def test_the_choice_is_told_today_for_a_task_relative_to_it() -> None:
+    """Asked for next month's first Friday, Jev clicked a date picker's Next through two years of months."""
+    page = observation(()).model_copy(update={"captured_at": datetime(2026, 9, 26, 20, tzinfo=UTC)})
+    state = build_request(page, (), context(task="Select next month's first Friday"), Config()).state
+    assert isinstance(state, dict) and state["date"] == "2026-09-26"
