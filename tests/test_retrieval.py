@@ -55,7 +55,7 @@ def capture(*parts: tuple[BlockKind, str]) -> Capture:
     blocks: list[Block] = []
     start = 0
     for i, (kind, part) in enumerate(parts):
-        blocks.append(Block(source_id=f"s{i}", kind=kind, frame_id="frame", start=start, end=start + len(part)))
+        blocks.append(Block(source_id=f"s{i}", kind=kind, frame_id=None, start=start, end=start + len(part)))
         start += len(part) + 2
     return Capture(
         url="https://example.test",
@@ -155,6 +155,24 @@ def test_chunk_repeats_markdown_table_header_and_keeps_rows_grounded() -> None:
         assert any(row in part.text for part in parts)
     # The reader is shown each continuation under the header too, or its columns lose their names.
     assert all(header in _read_message(page, part, "Find the cost", ["r"]).content for part in parts)
+
+
+def test_the_reader_is_told_which_blocks_are_headings_and_which_a_frame_holds() -> None:
+    """Asked for the heading a framed form shows, the LLM reader and Jev alike gave the page's heading above the
+    frame."""
+    parts = (BlockKind.HEADING, "Email Subscription"), (BlockKind.HEADING, "Send updates"), (BlockKind.PARAGRAPH, "Go")
+    page = capture(*parts)
+    page = page.model_copy(
+        update={"blocks": (page.blocks[0], *(block.model_copy(update={"frame_id": "f"}) for block in page.blocks[1:]))}
+    )
+    content = _read_message(page, chunk(page, 1000)[0], "Find the form's heading", ["r"]).content
+    assert "[s0] (heading) Email Subscription\n[s1] (heading, inside an embedded frame) Send updates\n" in content
+    assert "[s2] (paragraph, inside an embedded frame) Go" in content
+    assert [candidate.context for candidate in read_candidates(page)] == [
+        "(heading) Email Subscription",
+        "(heading, inside an embedded frame) Send updates",
+        "(inside an embedded frame) Go",
+    ]
 
 
 def test_chunk_repeats_nearest_header_when_table_rows_are_separate_blocks() -> None:

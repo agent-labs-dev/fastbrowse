@@ -394,3 +394,30 @@ async def test_a_capture_does_not_wait_on_an_indicator_off_screen(page: CdpPage,
     capture = await page.capture()
     assert "BSD-3-Clause" in capture.text
     assert time.monotonic() - started < 1.0
+
+
+async def test_a_same_origin_frame_is_read_where_it_stands(page: CdpPage, browser_session: BrowserSession) -> None:
+    """Read after the whole page, a subscription form's heading followed the footer, and the reader gave the page's
+    heading above the frame as the heading the form shows."""
+    await page.navigate("about:blank")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        """document.body.innerHTML = '<h1>Frames</h1><h2>Email Subscription</h2><iframe></iframe><p>Footer</p>';
+        document.querySelector('iframe').srcdoc = '<p>Send updates to my inbox</p>';""",
+    )
+
+    async def frame_loaded() -> bool:
+        return await eval_value(
+            browser_session,
+            browser_session.active_session_id,
+            "!!document.querySelector('iframe').contentDocument?.body?.innerText.includes('Send updates')",
+        )
+
+    await wait_until(frame_loaded)
+    capture = await page.capture()
+    texts = [capture.text[block.start : block.end] for block in capture.blocks]
+    assert texts == ["Frames", "Email Subscription", "Send updates to my inbox", "Footer"]
+    inside = capture.blocks[2]
+    assert inside.frame_id and inside.heading_path == ("Frames", "Email Subscription")
+    assert capture.inaccessible_frames == 0

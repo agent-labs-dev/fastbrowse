@@ -709,6 +709,29 @@ async def test_twins_keep_their_card_names_past_shared_hidden_and_control_labels
     assert [c.context for c in obs.controls if c.label == "Add to cart"] == ["Brass Kettle", "Copper Pan"]
 
 
+async def test_calendar_twins_are_named_by_the_month_they_show(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    """A jQuery UI datepicker's Next and days were named "Su", its weekday header, so every month read alike: the
+    run could not tell which month it was on and went back and forth past the one it wanted."""
+    calendar = (
+        '<div><div><a style="float:left">Prev</a><a style="float:right">Next</a>'
+        "<div><span>{month}</span> <span>2026</span></div></div>"
+        "<table><thead><tr><th>Su</th><th>Mo</th></tr></thead><tbody><tr><td><a>1</a></td><td><a>2</a></td></tr>"
+        "</tbody></table></div>"
+    )
+    await page.navigate(f"{main_site}/icons.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        f"document.body.innerHTML = '{calendar.format(month='September')}{calendar.format(month='October')}';"
+        "for (const a of document.querySelectorAll('a')) a.href = '#';",
+    )
+    obs = await observe_until(page, "Next")
+    for label in ("Prev", "Next", "2"):
+        assert [c.context for c in obs.controls if c.label == label] == ["September 2026", "October 2026"]
+
+
 async def test_a_browser_handed_over_by_cdp_url_drives_and_survives_the_run(
     chrome_connection: BrowserConnection, artifact_sink: RecordingArtifactSink, main_site: str
 ) -> None:

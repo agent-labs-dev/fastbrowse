@@ -15,6 +15,17 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   and code groups and counts the original captured blocks. For an unfiltered count across all pages, later
   pages reuse that field only while their title, section and record structure match; a change goes back to the
   reader. The final page confirms the list ended, and merged tallies keep every record's quote and page address.
+- **A date picker's controls say which month they show.** A table's header cell no longer names what sits
+  outside its row, so a jQuery UI datepicker's Next and days are named by the month in its title rather than
+  by the "Su" weekday header, and every month reads differently. Choices are also told today's date, so a run
+  asked for "next month" stops there instead of going back and forth past it or paging on for months.
+- **Text inside a same-origin frame is read where the frame stands.** It was read after the whole page, so a
+  subscription form's own heading followed the footer and the page's heading above the frame was reported in
+  its place. Readers are also told which blocks are headings and which lie inside an embedded frame.
+- **A field the task gives no value for is not offered again.** Once a field was found to have no value in
+  the task, the next choice could pick it again and end the run `needs_input`, as a blog's unrelated "Enter
+  Name" did to a date-range booking already made. Recovery can still send a run back to it, and a field the
+  task cannot go on without still ends the run there.
 - **Paginated comparisons spend less time reading and navigating.** Pager links open their observed
   same-origin address directly, with each followed page still recorded. Readers keep matching records from
   the first page, use a smaller response for intermediate pages, and cite earlier evidence with short

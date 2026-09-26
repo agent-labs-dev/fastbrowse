@@ -563,7 +563,12 @@ class Agent:
             fresh = page != state.last_page
             context = self._context(state, secrets, check_login=fresh and not secrets, check_bot=fresh)
             decision = await self._unless_redrawn(
-                state, decide(self._jev, observation, context, self._config, ledger=state.ledger), observation, None
+                state,
+                decide(
+                    self._jev, _without_missing(observation, state.missing), context, self._config, ledger=state.ledger
+                ),
+                observation,
+                None,
             )
             if decision is None:
                 continue
@@ -2894,6 +2899,21 @@ def _try_unsure(state: _RunState, observation: Observation, decision: Decision) 
         return False
     state.tried_unsure.add(key)
     return True
+
+
+def _without_missing(observation: Observation, missing: Set[tuple[str, str | None]]) -> Observation:
+    """The page as Jev is offered it: without the fields the task was already found to give no value for.
+
+    Asked to book a stay in a blog's date range picker, Jev chose the post's unrelated "Enter Name" field again
+    after recovery had moved on, and the second choice ended the run needs_input with the stay booked and read. A
+    field the task cannot go on without is still reached through recovery, which stops the run there (`_missing`).
+    """
+    if not missing:
+        return observation
+    kept = tuple(
+        c for c in observation.controls if Operation.FILL not in c.operations or (c.label, c.context) not in missing
+    )
+    return observation if len(kept) == len(observation.controls) else observation.model_copy(update={"controls": kept})
 
 
 def _follow_recovery(

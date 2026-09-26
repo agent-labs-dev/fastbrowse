@@ -305,25 +305,35 @@
   const titles = scope => [...scope.querySelectorAll(`${HEADINGS},label`)].filter(
     e => (e.localName !== 'label' || !e.control) && e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
   );
+  // A table's header cell names its own row, and a caption its own table, never what sits outside them: a jQuery UI
+  // datepicker's Next button was named "Su", its weekday header, and every month's Next read the same.
+  const reaches = (title, element) =>
+    !['th', 'caption'].includes(title.localName) || title.parentElement.contains(element);
   // The title nearest before the element names its section; the scope's first title is the fallback, and the
   // only answer when `nearest` is false.
   const sectionOf = (scope, element, label, nearest = true) => {
     let first = '', before = '';
     for (const title of titles(scope)) {
       const text = firstLine(title.innerText);
-      if (!text || text === label || title.contains(element)) continue;
+      if (!text || text === label || title.contains(element) || !reaches(title, element)) continue;
       first ||= text;
       if (title.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) before = text;
     }
     return (nearest && before) || first;
   };
+  // Labels more than one control shares, filled in once every control is listed.
+  const repeated = new Set();
   const nameOf = (scope, element, label, nearest) => {
     const aria = (scope.getAttribute('aria-label') || '').trim();
     if (aria && aria !== label) return aria;
     const section = sectionOf(scope, element, label, nearest);
     if (section) return section;
-    const text = scope.innerText || '';
-    return firstLine(label ? text.split(label).join(' ') : text);
+    // A line that is itself a repeated control's label ("Prev") reads the same in every repeat, so it names none:
+    // past it, a datepicker's first line is the month it shows. The label is cut out as whole words, since a day
+    // labelled "2" cut out of "October 2026" left "October 0 6".
+    const lines = (scope.innerText || '').split('\n').map(line => line.replace(/\s+/g, ' ').trim())
+      .filter(line => line && !repeated.has(line));
+    return firstLine(lines.map(line => label ? ` ${line} `.split(` ${label} `).join(' ') : line).join('\n'));
   };
   const contextOf = (element, twins, label, nearest = true) => {
     // The widest twin-free ancestor is the card, row or section the twins repeat over. A narrower one names
@@ -420,6 +430,7 @@
     if (!byLabel.has(key)) byLabel.set(key, []);
     byLabel.get(key).push(c);
   }
+  for (const group of byLabel.values()) if (group.length > 1) repeated.add(group[0].label);
   for (const group of byLabel.values()) {
     if (group.length < 2) continue;
     const twins = group.map(c => registry.nodes.get(c.id));

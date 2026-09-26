@@ -30,6 +30,7 @@ from fastbrowse.agent import (
     _Unsure,
     _verified,
     _visited,
+    _without_missing,
 )
 from fastbrowse.batches import evaluate_batches
 from fastbrowse.citations import text_fragment
@@ -223,6 +224,20 @@ async def test_missing_personal_information_stops_once_recovery_returns_to_it() 
         await agent._generate_text(state, observation((target,)), target)
     assert stopped.value.status is Status.NEEDS_INPUT
     page.act.assert_not_called()
+
+
+def test_a_field_found_to_have_no_value_is_no_longer_offered_to_jev() -> None:
+    """Jev chose a blog's unrelated "Enter Name" again after recovery moved on, and the run ended needs_input with
+    the task done. Recovery still sees the field, so a required one still ends the run."""
+    name = field("Enter Name").model_copy(update={"id": "name"})
+    submit = Control(
+        id="submit", frame_id=None, role="button", label="Enter Name", operations=frozenset({Operation.CLICK})
+    )
+    page = observation((name, submit, field("Start Date")))
+    assert _without_missing(page, set()) is page
+    offered = _without_missing(page, {("Enter Name", None)})
+    assert [c.id for c in offered.controls] == ["submit", "field"]
+    assert [c.id for c in page.controls] == ["name", "submit", "field"]
 
 
 async def test_a_value_the_task_states_is_asked_for_again_rather_than_ending_the_run() -> None:

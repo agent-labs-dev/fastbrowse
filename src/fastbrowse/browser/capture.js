@@ -183,7 +183,13 @@
         run.push(node);
         continue;
       }
-      if (node.nodeType !== 1 || SKIP.has(node.tagName) || hidden(node)) continue;
+      if (node.nodeType !== 1 || hidden(node)) continue;
+      if (FRAMES.has(node.tagName)) {
+        flush(run);
+        enter(node, path);
+        continue;
+      }
+      if (SKIP.has(node.tagName)) continue;
       if (!isBlock(node) && recordText(node) === null) {
         run.push(node);
         continue;
@@ -227,22 +233,33 @@
     walk(el);
   }
 
-  function scope(root, frame, source) {
+  // A same-origin frame is read where it stands, under the headings above it: read after the whole page, an
+  // embedded subscription form's heading followed the footer, and the reader, asked for the heading the
+  // frame shows, answered with the page's heading over the frame instead.
+  const FRAMES = new Set(['IFRAME', 'FRAME']);
+  const entered = new WeakSet();
+  function enter(e, headings) {
+    entered.add(e);
+    let inner = null;
+    try { inner = e.contentDocument; } catch { inner = null; }
+    if (!inner?.body) {
+      inaccessible++;
+      return;
+    }
+    const child = `${framePath || 'root'}/${identity(e)}`;
+    scope(inner.body, child, child, headings);
+  }
+
+  function scope(root, frame, source, headings = []) {
     const previous = [path, framePath, sourcePath];
-    path = [];
+    path = [...headings];
     framePath = frame;
     sourcePath = source;
     walk(root);
     for (const e of root.querySelectorAll('*')) {
       if (e.shadowRoot) scope(e.shadowRoot, frame, `${source}/shadow:${identity(e)}`);
-      if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
-        let inner = null;
-        try { inner = e.contentDocument; } catch { inner = null; }
-        if (inner?.body) {
-          const child = `${frame || 'root'}/${identity(e)}`;
-          scope(inner.body, child, child);
-        } else inaccessible++;
-      }
+      // A frame the walk never reached (hidden, or inside a record or table read as one block) is still read.
+      if (FRAMES.has(e.tagName) && !entered.has(e)) enter(e, []);
     }
     [path, framePath, sourcePath] = previous;
   }

@@ -568,6 +568,17 @@ def _notes_room(tokens: TokenBudget, messages: Sequence[Message], response: type
     )
 
 
+def _marks(block: Block) -> str:
+    """What the text alone does not say about a block. A frame's text reads like the page around it, and a heading
+    like any line: asked for the heading an embedded form shows, the reader gave the page's heading above the frame,
+    and once shown which text was the frame's, called the form's own <h1> a placeholder."""
+    marks = [
+        *(["heading"] if block.kind is BlockKind.HEADING else []),
+        *(["inside an embedded frame"] if block.frame_id else []),
+    ]
+    return f"({', '.join(marks)}) " if marks else ""
+
+
 def _read_message(
     capture: Capture,
     part: Chunk,
@@ -578,7 +589,9 @@ def _read_message(
     offered = _offered(capture, part)
     # A table cut mid-rows is shown under its header, which lies before the chunk, so its columns keep their names.
     sources = "\n".join(
-        f"[{block.source_id}] ({block.kind.value}) "
+        f"[{block.source_id}] ({block.kind.value}"
+        + (", inside an embedded frame" if block.frame_id else "")
+        + ") "
         + (f"{part.header}\n" if part.header and block.start < part.start else "")
         + capture.text[max(block.start, part.start) : min(block.end, part.end)]
         for block in offered
@@ -1058,17 +1071,18 @@ def _spans(text: str, annotation: object) -> tuple[tuple[int, int, str], ...]:
     return tuple((match.start(), match.end(), match.group()) for match in re.finditer(pattern, text, re.IGNORECASE))
 
 
-def _context(text: str, start: int, end: int, kind: BlockKind) -> str:
-    """A table value is told apart by its column header and its row, not by the whole table."""
-    if kind is not BlockKind.TABLE:
-        return text
+def _context(text: str, start: int, end: int, block: Block) -> str:
+    """A table value is told apart by its column header and its row, not by the whole table; any value by what its
+    block is (`_marks`), which Jev chose a page heading above a frame by as the heading the frame's form shows."""
+    if block.kind is not BlockKind.TABLE:
+        return _marks(block) + text
     line_start = text.rfind("\n", 0, start) + 1
     line_end = text.find("\n", end)
     row = text[line_start : len(text) if line_end == -1 else line_end]
     header_cells = [cell for _, _, cell in _cells(text.split("\n", 1)[0])]
     column = len(re.findall(r"(?<!\\)\|", text[line_start:start])) - 1
     name = header_cells[column] if 0 <= column < len(header_cells) else "?"
-    return f"column {name!r} in row: {row}"
+    return f"{_marks(block)}column {name!r} in row: {row}"
 
 
 def _cells(table: str) -> tuple[tuple[int, int, str], ...]:
@@ -1122,7 +1136,7 @@ def field_candidates(capture: Capture, field: FieldInfo) -> tuple[Candidate, ...
                     id=f"c{len(candidates)}",
                     value=value,
                     evidence=_evidence(capture, block, block.start + start, block.start + end),
-                    context=_context(text, start, end, block.kind),
+                    context=_context(text, start, end, block),
                 )
             )
     return tuple(candidates)
@@ -1332,7 +1346,7 @@ def _iter_read_candidates(capture: Capture, blocks: Sequence[Block]) -> Iterator
                 id=f"c{index}",
                 value=text[start:end],
                 evidence=_evidence(capture, block, block.start + quote_start, block.start + end),
-                context=_context(text, start, end, block.kind),
+                context=_context(text, start, end, block),
             )
             index += 1
 
