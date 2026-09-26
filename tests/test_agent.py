@@ -417,9 +417,24 @@ async def test_jev_still_unsure_after_recovery_takes_the_action_recovery_named()
 async def test_an_unsure_pick_is_acted_on_once_per_page_state() -> None:
     state = await run_state()
     first, second = observation((_button("Done"),)), observation((_button("Close dialog"),))
-    assert _try_unsure(state, first)
-    assert not _try_unsure(state, first)
-    assert _try_unsure(state, second)
+    done, close = _code_decision(Operation.CLICK, _button("Done")), _code_decision(Operation.CLICK, _button("Close"))
+    assert _try_unsure(state, first, done)
+    assert not _try_unsure(state, first, done)
+    assert _try_unsure(state, second, close)
+
+
+async def test_an_unsure_pick_the_run_already_took_from_this_state_recovers() -> None:
+    """One Back from a wizard's Review, Jev was unsure and clicked Next to Review again."""
+    state = await run_state()
+    step = observation((_button("Back"), _button("Next")))
+    page = Mock(spec=Page)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
+    state.authorization = Authorization(irreversible_actions=True)
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    following = _code_decision(Operation.CLICK, _button("Next"))
+    await agent._step(state, step, following)
+    assert not _try_unsure(state, step, following)
+    assert _try_unsure(state, step, _code_decision(Operation.CLICK, _button("Back")))
 
 
 @pytest.mark.parametrize(("confidence", "raised"), [(0.3, _Unsure), (0.9, _Stop)])
@@ -513,7 +528,8 @@ async def test_url_edits_are_not_reads_but_each_result_in_one_document_is_preser
     relevant = decision.model_copy(update={"read_assessment": ReadAssessment.EVIDENCE})
     results_url = obs.url
     for text in ("First result: 12", "Second result: 18"):
-        obs = obs.model_copy(update={"url": results_url})
+        # The page shows each result set, so the observation differs from the one the edits left unread.
+        obs = obs.model_copy(update={"url": results_url, "viewport_text": text})
         page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, text)).model_copy(update={"url": obs.url}))
         assert await agent._read_before_interaction(state, obs, relevant)
         # Even a URL rewrite and another choice to READ cannot re-read this content and requirement set.
@@ -1225,6 +1241,99 @@ async def test_scrolling_controls_in_and_out_of_view_is_not_a_reversal() -> None
         agent._note_effect(state, after)
         agent._settle(state, after)
         assert agent._reversal(state) == (None, True, False)
+
+
+def _wizard_step(label: str, value: str, viewport_text: str = "") -> Observation:
+    box = field(label).model_copy(update={"id": label.lower(), "value": value, "role": "textbox"})
+    search = field("Search modules").model_copy(update={"id": "search", "value": "", "role": "textbox"})
+    controls = (search, box, _button("Back"), _button("Next"))
+    return observation(controls).model_copy(update={"document_key": "wizard", "viewport_text": viewport_text})
+
+
+async def test_stepping_a_wizard_through_values_it_already_holds_is_not_a_setting_put_back() -> None:
+    """After a correction, each Next showed a step whose fields held the values typed there before, and three
+    Nexts counted as three settings put back tripped the stall recovery on the way to Review."""
+    name, city = _wizard_step("First Name", "Priya"), _wizard_step("City", "Manchester")
+    page = Mock(spec=Page)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    state = await run_state()
+    state.authorization = Authorization(irreversible_actions=True)
+    agent._settle(state, name)
+    for here, there, label in ((name, city, "Next"), (city, name, "Back"), (name, city, "Next")):
+        await agent._step(state, here, _code_decision(Operation.CLICK, _button(label)))
+        agent._note_effect(state, there)
+        assert agent._reversal(state) == (None, True, False)
+
+
+async def test_typing_nothing_into_an_empty_field_goes_to_recovery_rather_than_acting() -> None:
+    page = Mock(spec=Page)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=False))
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    state = await run_state()
+    empty = field("Search modules").model_copy(update={"value": None})
+    agent._action = AsyncMock(return_value=Action(operation=Operation.FILL, target_id=empty.id, text=""))
+    with pytest.raises(_Unsure):
+        await agent._step(state, observation((empty,)), _code_decision(Operation.FILL, empty))
+    page.act.assert_not_called()
+    assert not state.missing
+    # Clearing a field that holds text is an edit.
+    await agent._step(state, observation((field(),)), _code_decision(Operation.FILL, field()))
+    page.act.assert_awaited_once()
+
+
+@pytest.mark.parametrize("changed", [False, True])
+async def test_a_page_left_unread_is_not_read_on_the_way_back_unless_it_changed(changed: bool) -> None:
+    """Walking back through a wizard, Jev called each earlier step evidence, and each read cost 4s."""
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r1", text="Find the confirmation", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    state.authorization = Authorization(irreversible_actions=True)
+    name, review = _wizard_step("First Name", "Priya", "Step 1"), _wizard_step("City", "Manchester", "Review")
+    page = Mock(spec=Page)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "Step 1")))
+    llm = ScriptedLLM([{"claims": [], "answered": False}])
+    jev = ScriptedJev({"operation": "click", "click_target": "next", "read_assessment": "evidence", "r1": "synthesis"})
+    agent = Agent(page, jev, llm)
+    decision = await decide(jev, name, context(), Config())
+    await agent._step(state, name, decision)
+    await agent._step(state, review, _code_decision(Operation.CLICK, _button("Back")))
+    back = name.model_copy(update={"viewport_text": "Step 1, with an error"}) if changed else name
+    assert await agent._read_before_interaction(state, back, decision) is changed
+    assert len(llm.calls) == changed
+
+
+async def test_a_page_read_before_is_read_again_when_what_it_evidenced_is_gone() -> None:
+    """A wizard's Review was read, the run went back and corrected the name, and the answer named the value Review
+    showed before the correction, because nothing read Review again."""
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r1", text="Find the name Review shows last", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    review = _wizard_step("City", "Manchester", "Review")
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"")
+    page.artifacts = ()
+    llm = ScriptedLLM(
+        [
+            {"claims": [{"text": n, "cite": {"first": "s0", "last": "s0"}, "requirement_id": "r1"}], "answered": True}
+            for n in ("Priya Sharma", "Priya Sharman")
+        ]
+    )
+    agent = Agent(page, ScriptedJev({}), llm)
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "Priya Sharma")))
+    await agent._read(state, await page.capture(), review)
+    arrived = HistoryEntry(operation=Operation.CLICK, target="Next", outcome=StepOutcome.EXECUTED, page_changed=True)
+    state.history.append(arrived)
+    assert not await agent._reread_if_changed(state, review)
+    page.capture.return_value = capture((BlockKind.PARAGRAPH, "Priya Sharman"))
+    state.history.append(arrived)
+    assert await agent._reread_if_changed(state, review)
+    assert [e.quote for e in state.notes.supporting_evidence("r1")] == ["Priya Sharman"]
 
 
 @pytest.mark.parametrize("recoveries", [2, 6])
