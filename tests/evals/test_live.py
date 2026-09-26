@@ -466,6 +466,23 @@ async def test_a_hosted_session_whose_output_fails_the_schema_keeps_its_cost(mon
     with pytest.raises(Unavailable):
         await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
 
+    # A session Browser Use never ends is stopped and waited out as its outage, not left to hang the eval.
+    class Stuck(Run):
+        def __await__(self) -> Any:
+            return asyncio.Event().wait().__await__()
+
+    stop = AsyncMock()
+    monkeypatch.setattr(Client, "run", lambda *_, **__: Stuck())
+    monkeypatch.setattr(
+        Client,
+        "__init__",
+        lambda self, **_: setattr(self, "sessions", SimpleNamespace(get=AsyncMock(return_value=session), stop=stop)),
+    )
+    monkeypatch.setattr(live, "HOSTED_STUCK_SECONDS", 0.05)
+    with pytest.raises(Unavailable):
+        await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
+    stop.assert_awaited_once_with("s1")
+
 
 async def test_a_hosted_run_is_timed_to_its_agents_answer_not_to_the_session_stopping(
     monkeypatch: pytest.MonkeyPatch,

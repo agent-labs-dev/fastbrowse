@@ -33,6 +33,7 @@ import tempfile
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
@@ -73,6 +74,9 @@ ULTRAFAST_TEXT_MODEL = "inception/mercury-2.5"
 OUTAGE_RETRIES = 5
 """Runs of a row a provider outage ended, after the first, waiting 1, 2, 4, 8 then 10 minutes: about 25 minutes, past
 the 503 spells seen so far. A row still unavailable then is recorded, and left out of every published figure."""
+HOSTED_STUCK_SECONDS = 900
+"""A hosted session that has not ended by now is stuck on Browser Use's side: its slowest finished sessions took about
+two minutes, and two of one day's sat unfinished for over half an hour."""
 
 
 def _watch(arm: str, task: LiveTask, live_url: str | None) -> None:
@@ -419,8 +423,15 @@ async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
     created_after = time.monotonic() - started
     if run.session_id is not None:
         _watch("browser-use", task, (await client.sessions.get(run.session_id)).live_url)
-    # gather, not await: the SDK raises on output that fails the task's schema, before the session's cost is read.
-    await asyncio.gather(finishing, return_exceptions=True)
+    # wait, not await: the SDK raises on output that fails the task's schema, before the session's cost is read.
+    await asyncio.wait({finishing}, timeout=HOSTED_STUCK_SECONDS)
+    if not finishing.done():
+        finishing.cancel()
+        await asyncio.gather(finishing, return_exceptions=True)
+        if run.session_id is not None:
+            with suppress(BrowserUseError, httpx.HTTPError):
+                await client.sessions.stop(run.session_id)
+        raise Unavailable(f"Browser Use session still running after {HOSTED_STUCK_SECONDS // 60} minutes")
     seconds = time.monotonic() - started
     if (error := finishing.exception()) is None:
         result = finishing.result()
