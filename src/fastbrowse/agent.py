@@ -1399,6 +1399,12 @@ class Agent:
         )
         state.ledger.record(evaluation.cost)
         answer = evaluation.answers.get("irreversible")
+        trace(
+            "irreversible",
+            target=label,
+            context=decision.target.context if decision.target else None,
+            probability=answer.probability if isinstance(answer, NoulAnswer) else None,
+        )
         if isinstance(answer, NoulAnswer) and answer.probability <= thresholds.irreversible_above:
             return
         what = f"{decision.operation.value} {label!r}"

@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Six held-out eval tasks moved to the dev sets.** Changes in this release were profiled or measured on
+  `new-window`, `countries-mongolia`, `table-largest-due`, `quotes-search`, `stretch-calendar-first-friday` and
+  `stretch-quotes-top-authors`, so their scores no longer test unseen work. Fresh tasks for the same skills
+  replace them in the held-out sets.
 - **Browser steps spend less time waiting on remote commands.** Clicks check for a popup with their target
   guard, fills prepare focus with the editor check, and reads wait for loading and capture text in one call.
   Navigation waits for a readiness event, input starts the settling clock before its reply returns, and new

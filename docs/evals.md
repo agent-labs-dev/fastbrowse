@@ -157,6 +157,9 @@ For example, `--only books-mystery-cheapest quotes-einstein-count` selects those
 | `ruff-release` | lookup | 5 | What is the latest release of ruff on GitHub? |
 | `pizza-order` | checkout | 5 | Order a large pizza with mushroom for Ada Lovelace, telephone 020 7946 0000, email ada@example.com, and submit it. Tell me which size the server received. |
 | `new-window` | widget | 6 | Follow the link that opens a new window and tell me that window's heading. |
+| `countries-mongolia` | lookup | 5 | What population does this page list for Mongolia? |
+| `table-largest-due` | widget | 6 | In the first table, whose amount due is the largest? |
+| `quotes-search` | lookup | 5 | Use the search form to find Albert Einstein's quote tagged success, and tell me what it says. |
 <!-- /evals:tasks:dev -->
 
 <!-- evals:tasks:heldout -->
@@ -164,18 +167,22 @@ For example, `--only books-mystery-cheapest quotes-einstein-count` selects those
 |---|---|---|---|
 | `books-mystery-cheapest` | lookup | 5 | Which is the cheapest book in the Mystery category, and what does it cost? |
 | `quotes-einstein-count` | lookup | 5 | How many quotes by Albert Einstein are there across the whole site? |
-| `countries-mongolia` | lookup | 5 | What population does this page list for Mongolia? |
 | `quotes-js-page2` | lookup | 5 | Who wrote the first quote on the second page? |
 | `crates-serde` | lookup | 5 | What is the latest stable version of the serde crate? |
-| `table-largest-due` | widget | 6 | In the first table, whose amount due is the largest? |
 | `httpx-requires-python` | lookup | 5 | What is the oldest Python version the latest httpx release supports? |
-| `quotes-search` | lookup | 5 | Use the search form to find Albert Einstein's quote tagged success, and tell me what it says. |
 <!-- /evals:tasks:heldout -->
 
 The rule that makes the split worth having: **agent changes are iterated against `dev` only.** `heldout` is run
 before and after a round of changes and never debugged, so its score says whether a round improved the agent or
 only its dev score. A change made to fix a named held-out task spends that set's value, and the next held-out
 score is no longer a clean before-and-after.
+
+That happened to six held-out tasks during 0.5.8: fastbrowse changes were profiled or measured on them. They moved
+to the dev sets rather than stay as a held-out score that measured the changes made on them: `new-window`,
+`countries-mongolia`, `table-largest-due` and `quotes-search` to `dev`, and `stretch-calendar-first-friday` and
+`stretch-quotes-top-authors` to `stretch-dev`. Fresh tasks for the same skills took their places in `heldout` and
+`stretch-heldout`, written and checked against their sites without running either agent on them, apart from the
+stretch selection rule below.
 
 Third-party loaders are preparation for independent evaluation; see [External benchmarks](#external-benchmarks).
 Their tasks are not scored by the home-suite graders.
@@ -199,13 +206,13 @@ Date truth is computed when the attempt runs, and form and date tasks are graded
 | `stretch-books-nonfiction-five-star` | lookup | 7 | Across every page of the Nonfiction category, which three five-star-rated books are the cheapest, and what does each cost? |
 | `stretch-bstack-apple-google` | widget | 6 | Filter the product list to Apple and Google together. Then remove the Apple filter, so only Google remains. Sort by price lowest to highest, and tell me the two cheapest Google phones and their prices. |
 | `stretch-wizard-correction` | checkout | 6 | In the Live Interactive Form widget, fill First Name 'Priya Sharma', Email 'priya.sharma@example.com', Address '221B Baker Street', City 'Manchester', Language 'Turkish', and check the QA newsletter box. Reach the Review step, then go back and correct the first name to 'Priya Sharman' before continuing through Submit. Tell me the first name the Review step showed last and what the confirmation says. |
+| `stretch-calendar-first-friday` | widget | 7 | Using the jQuery UI Datepicker (the calendar popup, not the native date input), navigate to next month and select its first Friday. Tell me the date, day, and month it shows. |
+| `stretch-quotes-top-authors` | lookup | 6 | Across every page of this site, which three authors have the most quotes attributed to them, and how many quotes does each have? |
 <!-- /evals:tasks:stretch-dev -->
 
 <!-- evals:tasks:stretch-heldout -->
 | Task | Category | Version | Asks |
 |---|---|---|---|
-| `stretch-calendar-first-friday` | widget | 7 | Using the jQuery UI Datepicker (the calendar popup, not the native date input), navigate to next month and select its first Friday. Tell me the date, day, and month it shows. |
-| `stretch-quotes-top-authors` | lookup | 6 | Across every page of this site, which three authors have the most quotes attributed to them, and how many quotes does each have? |
 | `stretch-bstack-apple-samsung` | widget | 6 | Filter the product list to Apple and Samsung together, then remove the Apple filter so only Samsung remains. Sort by price highest to lowest, and tell me the three most expensive phones and their prices. |
 <!-- /evals:tasks:stretch-heldout -->
 
@@ -235,10 +242,10 @@ when they differ:
 | Suite | Tasks | Version |
 |---|---|---|
 | `core` | 20 | `bd7a00ba` |
-| `dev` | 9 | `3e9e6206` |
-| `heldout` | 8 | `3859541c` |
-| `stretch-dev` | 5 | `c174a854` |
-| `stretch-heldout` | 3 | `d7d3a074` |
+| `dev` | 12 | `02caf37f` |
+| `heldout` | 5 | `4457adfd` |
+| `stretch-dev` | 7 | `7f6979c7` |
+| `stretch-heldout` | 1 | `46f70885` |
 | local fixtures | 6 | `dda8ba89` |
 
 Tasks past version 1: `arxiv-open` v4, `arxiv-title` v5, `books-mystery-cheapest` v5, `books-travel-priciest` v5, `countries-mongolia` v5, `crates-serde` v5, `dynamic-loading` v6, `expandtesting-login` v5, `flights-search` v4, `frame-heading` v2, `github-license` v5, `github-open` v4, `google-flights` v5, `hn-comments` v4, `hn-top` v5, `hockey-bruins-1990` v5, `hover-profile` v6, `httpx-requires-python` v5, `new-window` v6, `oscars-2012` v5, `pizza-order` v5, `practice-login` v5, `pypi-newer` v5, `pypi-open` v4, `pypi-structured` v5, `pypi-version` v5, `quotes-einstein-count` v5, `quotes-js-page2` v5, `quotes-search` v5, `ruff-release` v5, `saucedemo-cart` v5, `saucedemo-checkout` v5, `saucedemo-locked-out` v5, `saucedemo-pause` v4, `stretch-books-nonfiction-five-star` v7, `stretch-bstack-apple-google` v6, `stretch-bstack-apple-samsung` v6, `stretch-calendar-first-friday` v7, `stretch-date-range-monday` v6, `stretch-quotes-top-authors` v6, `stretch-wizard-correction` v6, `stretch-wizard-review` v5, `table-largest-due` v6, `wiki-godel` v5, `wiki-open` v4.

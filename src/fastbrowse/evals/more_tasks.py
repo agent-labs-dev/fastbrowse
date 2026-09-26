@@ -13,6 +13,10 @@ infrastructure, when it was chosen; a candidate that passed every run was droppe
 with a correction, a date relative to today, a list aggregated across pages, and a filter changed and then undone.
 The form-with-a-correction task moved to the dev set once a fix was debugged against it.
 
+A held-out task that fastbrowse changes were profiled or measured on moves to its dev set, marked where it now
+sits, and a fresh task for the same skill takes its place: during 0.5.8, `new-window`, `countries-mongolia`,
+`table-largest-due`, `quotes-search`, `stretch-calendar-first-friday` and `stretch-quotes-top-authors`.
+
 Truth is fixed by a practice site, fetched from a live API at run time as in `live_tasks`, or computed from the
 date an attempt runs on.
 """
@@ -167,7 +171,8 @@ DEV: tuple[LiveTask, ...] = (
         Category.CHECKOUT,
         authorize=True,
     ),
-    # Held out until 0.5.8: a change to fastbrowse was measured on it, which spent its value as a held-out task.
+    # Held out until 0.5.8: fastbrowse changes were profiled or measured on it, which spent its value as a
+    # held-out task.
     LiveTask(
         "new-window",
         "https://practice.expandtesting.com/windows",
@@ -175,6 +180,36 @@ DEV: tuple[LiveTask, ...] = (
         _fixed(None),
         _has("Example of a new window page"),
         Category.WIDGET,
+    ),
+    # Held out until 0.5.8: fastbrowse changes were profiled or measured on it, which spent its value as a
+    # held-out task.
+    LiveTask(
+        "countries-mongolia",
+        "https://www.scrapethissite.com/pages/simple/",
+        "What population does this page list for Mongolia?",
+        _fixed(None),
+        _has("3086918"),
+        Category.LOOKUP,
+    ),
+    # Held out until 0.5.8: fastbrowse changes were profiled or measured on it, which spent its value as a
+    # held-out task.
+    LiveTask(
+        "table-largest-due",
+        "https://practice.expandtesting.com/tables",
+        "In the first table, whose amount due is the largest?",
+        _fixed(None),
+        _has("Jason", "Doe"),
+        Category.WIDGET,
+    ),
+    # Held out until 0.5.8: fastbrowse changes were profiled or measured on it, which spent its value as a
+    # held-out task.
+    LiveTask(
+        "quotes-search",
+        "https://quotes.toscrape.com/search.aspx",
+        "Use the search form to find Albert Einstein's quote tagged success, and tell me what it says.",
+        _fixed(None),
+        _has("man of success", "man of value"),
+        Category.LOOKUP,
     ),
 )
 
@@ -196,14 +231,6 @@ HELDOUT: tuple[LiveTask, ...] = (
         Category.LOOKUP,
     ),
     LiveTask(
-        "countries-mongolia",
-        "https://www.scrapethissite.com/pages/simple/",
-        "What population does this page list for Mongolia?",
-        _fixed(None),
-        _has("3086918"),
-        Category.LOOKUP,
-    ),
-    LiveTask(
         "quotes-js-page2",
         "https://quotes.toscrape.com/js/",
         "Who wrote the first quote on the second page?",
@@ -220,27 +247,11 @@ HELDOUT: tuple[LiveTask, ...] = (
         Category.LOOKUP,
     ),
     LiveTask(
-        "table-largest-due",
-        "https://practice.expandtesting.com/tables",
-        "In the first table, whose amount due is the largest?",
-        _fixed(None),
-        _has("Jason", "Doe"),
-        Category.WIDGET,
-    ),
-    LiveTask(
         "httpx-requires-python",
         "https://pypi.org/",
         "What is the oldest Python version the latest httpx release supports?",
         _httpx_requires,
         _has_truth,
-        Category.LOOKUP,
-    ),
-    LiveTask(
-        "quotes-search",
-        "https://quotes.toscrape.com/search.aspx",
-        "Use the search form to find Albert Einstein's quote tagged success, and tell me what it says.",
-        _fixed(None),
-        _has("man of success", "man of value"),
         Category.LOOKUP,
     ),
 )
@@ -406,9 +417,8 @@ STRETCH_DEV: tuple[LiveTask, ...] = (
         Category.CHECKOUT,
         authorize=True,
     ),
-)
-
-STRETCH_HELDOUT: tuple[LiveTask, ...] = (
+    # Held out until 0.5.8: fastbrowse changes were profiled or measured on it, which spent its value as a
+    # held-out task.
     LiveTask(
         "stretch-calendar-first-friday",
         "https://practice.softwaretestingmentor.com/calendar/",
@@ -418,6 +428,8 @@ STRETCH_HELDOUT: tuple[LiveTask, ...] = (
         _first_friday_check,
         Category.WIDGET,
     ),
+    # Held out until 0.5.8: fastbrowse changes were profiled or measured on it, which spent its value as a
+    # held-out task.
     LiveTask(
         "stretch-quotes-top-authors",
         "https://quotes.toscrape.com/",
@@ -427,6 +439,9 @@ STRETCH_HELDOUT: tuple[LiveTask, ...] = (
         _pairs(("Albert Einstein", "10"), ("J.K. Rowling", "9"), ("Marilyn Monroe", "7")),
         Category.LOOKUP,
     ),
+)
+
+STRETCH_HELDOUT: tuple[LiveTask, ...] = (
     LiveTask(
         "stretch-bstack-apple-samsung",
         "https://bstackdemo.com/",
