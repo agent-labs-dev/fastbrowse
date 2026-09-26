@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 from collections import deque
 from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence, Set
@@ -481,7 +482,12 @@ class Agent:
             ) is not None:
                 decision, uncertain, decided_by = directed, False, Decider.LLM
             if await self._read_before_interaction(state, observation, decision, decided_by):
-                continue
+                answered = (plan := state.ready_plan) is not None and _lookup(plan) and _answered(plan, state.notes)
+                if not answered:
+                    continue
+                # The read answered a lookup, and deciding again on the same page only arrived at DONE: a shortlist
+                # and a decision, 1 to 2s, in 11 of 138 0.5.7 runs. `_finish` still judges whether DONE holds.
+                decision, uncertain, decided_by = _code_decision(Operation.DONE, None), False, Decider.LLM
             pager = (
                 decision.operation is Operation.CLICK and decision.target is not None and pager_link(decision.target)
             )
@@ -491,8 +497,7 @@ class Agent:
                 # A lookup has nothing left to do once it is answered: with the cheapest flight read, Jev went on to
                 # click "Select flight", which the page covered, and the recording showed a failed click after the
                 # answer. A click recovery directed stands, so a DONE the verifier refused is not asked again.
-                lookup = all(r.kind is RequirementKind.INFORMATION for r in plan.requirements)
-                if (pager or (lookup and decided_by is Decider.JEV)) and _answered(plan, state.notes):
+                if (pager or (_lookup(plan) and decided_by is Decider.JEV)) and _answered(plan, state.notes):
                     # Everything asked to be found is evidenced, so another page is wandering: Jev, offered the pager,
                     # kept turning pages through a whole catalogue after the two the task named had been read. DONE
                     # is judged again by `_finish`, which carries on if it does not hold.
@@ -505,9 +510,10 @@ class Agent:
                         decision.model_copy(update={"operation": Operation.READ, "target": None}),
                         False,
                     )
-            if uncertain and not raw.controls and await self._outwait(raw):
-                # Nothing to act on and no idea what to do is a page still rendering: a script-built app settles
-                # before it draws, and recovery on it saw an empty login form and spent 5 to 13s saying so.
+            if uncertain and not _drew_something(raw) and await self._outwait(raw):
+                # A blank page and no idea what to do is a page still rendering: a script-built app settles before it
+                # draws, and recovery on it saw an empty login form and spent 5 to 13s saying so. A page with text is
+                # drawn: waiting on the-internet's bare "New Window" page cost every run the whole 12s.
                 continue
             if uncertain and state.ready_plan is None:
                 # Unsure without the requirements: the plan is already in flight and costs less than recovery.
@@ -1726,9 +1732,16 @@ class Agent:
             requirements={r.id: r.text for r in state.plan.requirements},
         )
         state.ledger.record(check.cost)
-        if check.verdict is DoneVerdict.ACCEPT and _guessed(state.plan, state.notes, state.invented):
-            # Jev judges the notes, not where they were read, so only the verifier is shown the guessed addresses.
+        guessed = _guessed(state.plan, state.notes, state.invented)
+        if check.verdict is DoneVerdict.ACCEPT and guessed:
+            # Jev judges the notes, not where they were read, so only the verifier is shown the guessed searches.
             check = check.model_copy(update={"verdict": DoneVerdict.VERIFY})
+        elif check.verdict is DoneVerdict.VERIFY and not guessed and _lookup(state.plan):
+            # A doubted lookup reaches here with every requirement cited, and the verifier excuses a cited
+            # requirement (`_verified`), so all it could still do was refuse naming nothing, which it never did in
+            # 76 0.5.7 verifications. It cost a screenshot and a vision call, 3 to 8s, on half of all runs. Every
+            # claim of the answer is still checked against its quotes.
+            check = check.model_copy(update={"verdict": DoneVerdict.ACCEPT})
         accepted = check.verdict is DoneVerdict.ACCEPT
         missing: tuple[str, ...] = ()
         misread: set[str] = set()
@@ -2099,6 +2112,11 @@ def _unread(plan: Plan, notes: Notes) -> bool:
     return unresolved or (plan.answer_expected and not notes.facts)
 
 
+def _lookup(plan: Plan) -> bool:
+    """Whether the plan only asks to find things, with nothing to do on the site."""
+    return bool(plan.requirements) and all(r.kind is RequirementKind.INFORMATION for r in plan.requirements)
+
+
 def _answered(plan: Plan, notes: Notes) -> bool:
     """Whether the plan asks to find something and every such requirement is evidenced.
 
@@ -2136,11 +2154,26 @@ def _place(url: str) -> tuple[str, str]:
 
 
 def _guessed(plan: Plan, notes: Notes, invented: Set[str]) -> set[str]:
-    """The requirements with a fact read on an address the run built from the task rather than clicked to."""
-    places = {_place(url) for url in invented}
+    """The requirements with a fact read on a search the run built from the task rather than clicked to.
+
+    A search is where a page of the right shape can show the wrong results, as a proposed Google Flights address
+    did, and its state is in the address: the one built, or the one the site wrote back. A plain page the run built
+    (`github.com/encode/httpx`) is that page or fails to load, and counting it as guessed sent 23 of 138 0.5.7 runs
+    to the verifier, which found nothing wrong on any of them."""
+    places = {_place(url): _searched(url) for url in invented}
     return {
-        r.id for r in plan.requirements if any(_place(item.url) in places for item in notes.supporting_evidence(r.id))
+        r.id
+        for r in plan.requirements
+        if any(
+            _place(item.url) in places and (places[_place(item.url)] or _searched(item.url))
+            for item in notes.supporting_evidence(r.id)
+        )
     }
+
+
+def _searched(url: str) -> bool:
+    parts = urlsplit(url)
+    return bool(parts.query or parts.fragment)
 
 
 def _misread(verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str]) -> set[str]:
@@ -2150,7 +2183,23 @@ def _misread(verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str]) 
     address opened a flights summary, the reader quoted a price from it, and the requirement counted as cited.
     A page reached by clicking was chosen off the site itself, so there the verifier's doubt is only doubt.
     """
-    return set(verdict.ungrounded) & _guessed(plan, notes, invented)
+    return _plan_ids(verdict.ungrounded, plan) & _guessed(plan, notes, invented)
+
+
+def _plan_ids(ids: Iterable[str], plan: Plan) -> set[str]:
+    """The plan's requirements the verifier named, however it spelled their ids.
+
+    It wrote `req_1` and `1` for `req-1` in 4 of 6 refusals in 0.5.7, and an id the plan lacks was a doubt nothing
+    could excuse: a Wikipedia lookup with its one requirement cited went back to work ten steps. A name matching no
+    requirement names nothing."""
+    known = {re.sub(r"[^a-z0-9]", "", r.id.lower()): r.id for r in plan.requirements}
+    numbered = {digits.group(): r.id for r in plan.requirements if (digits := re.search(r"\d+$", r.id))}
+    found = set()
+    for raw in ids:
+        key = re.sub(r"[^a-z0-9]", "", raw.lower())
+        if (match := known.get(key) or (numbered.get(key) if key.isdigit() else None)) is not None:
+            found.add(match)
+    return found
 
 
 def _verified(verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str]) -> bool:
@@ -2163,7 +2212,7 @@ def _verified(verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str])
     """
     cited = {r.id for r in plan.requirements if r.kind is RequirementKind.INFORMATION and notes.evidenced(r.id)}
     misread = _misread(verdict, plan, notes, invented)
-    named = set(verdict.missing) | (set(verdict.ungrounded) & {r.id for r in plan.requirements})
+    named = _plan_ids(verdict.missing, plan) | _plan_ids(verdict.ungrounded, plan)
     doubted = named - (cited - misread)
     return not doubted and (verdict.complete or bool(named))
 

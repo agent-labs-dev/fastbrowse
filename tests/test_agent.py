@@ -18,6 +18,7 @@ from fastbrowse.agent import (
     _follow_recovery,
     _guessed,
     _history,
+    _plan_ids,
     _record,
     _RunState,
     _Stop,
@@ -1342,12 +1343,21 @@ class _ConfirmingJev(ScriptedJev):
         )
 
 
-@pytest.mark.parametrize("guessed", [True, False])
-async def test_a_confident_finish_resting_on_a_guessed_address_is_still_verified(guessed: bool) -> None:
-    summary = "https://example.test/flights/summary"
+@pytest.mark.parametrize(
+    ("invented", "verified"),
+    [
+        ("https://example.test/flights/summary?from=BRS", True),
+        # A plain page the run built is that page or fails to load; only a search can show the wrong results.
+        ("https://example.test/flights/summary", False),
+        (None, False),
+    ],
+)
+async def test_a_confident_finish_resting_on_a_guessed_search_is_still_verified(
+    invented: str | None, verified: bool
+) -> None:
     state = await run_state()
-    state.invented = {summary} if guessed else set()
-    state.notes.add(_fare(summary, "summary"))
+    state.invented = {invented} if invented else set()
+    state.notes.add(_fare(invented or "https://example.test/flights/summary", "summary"))
     llm = ScriptedLLM([{"missing": [], "complete": True}])
     agent, on = await _finishing(state, llm, noul=0.99)
     agent._jev = _ConfirmingJev({})
@@ -1355,7 +1365,7 @@ async def test_a_confident_finish_resting_on_a_guessed_address_is_still_verified
     result = await agent._finish(state, on, None, None)
 
     assert result is not None and result.status is Status.COMPLETE
-    assert [purpose for purpose, _ in llm.calls] == ([LLMPurpose.VERIFY] if guessed else [])
+    assert [purpose for purpose, _ in llm.calls] == ([LLMPurpose.VERIFY] if verified else [])
 
 
 @pytest.mark.parametrize("draws", [True, False])
@@ -2686,7 +2696,7 @@ async def test_notes_overflow_returns_bounded_grounded_partial_evidence(monkeypa
 
 
 async def test_tallies_keep_guessed_sources_subject_to_verification() -> None:
-    source = evidence().model_copy(update={"quote": "A quote by Ada"})
+    source = evidence().model_copy(update={"quote": "A quote by Ada", "url": "https://example.test/quotes?tag=ada"})
     record = Fact(text=source.quote, evidence=source, reader=FactReader.LLM)
     notes = Notes((record,))
     notes.add_tally(Tally(requirement_id="r", key="Ada", records=(fact_id(record),)))
@@ -2696,3 +2706,29 @@ async def test_tallies_keep_guessed_sources_subject_to_verification() -> None:
     )
     assert _guessed(plan, notes, {source.url}) == {"r"}
     assert source.url in _grounding(notes, plan, ())
+
+
+def test_a_verifier_naming_a_requirement_by_another_spelling_names_that_requirement() -> None:
+    """0.5.7's verifier wrote `req_1` and `1` for `req-1` in 4 of 6 refusals; each was a doubt nothing could excuse."""
+    plan = Plan(
+        requirements=(
+            Requirement(id="req-1", text="a", kind=RequirementKind.INFORMATION),
+            Requirement(id="req-2", text="b", kind=RequirementKind.ACTION),
+        ),
+        answer_expected=True,
+    )
+    assert _plan_ids(["req_1", "2", "REQ-2", "req-9", "summary"], plan) == {"req-1", "req-2"}
+
+
+async def test_a_doubted_lookup_with_every_requirement_cited_finishes_without_the_verifier() -> None:
+    """The verifier excuses a cited requirement, so on a lookup it could only refuse naming nothing, which it never
+    did in 76 0.5.7 verifications; each cost a screenshot and a vision call. The claims are still checked."""
+    state = await run_state()
+    state.notes.add(_fare("https://example.test/flights/results", "results"))
+    llm = ScriptedLLM([])
+    agent, on = await _finishing(state, llm, noul=0.5)
+
+    result = await agent._finish(state, on, None, None)
+
+    assert result is not None and result.status is Status.COMPLETE
+    assert LLMPurpose.VERIFY not in [purpose for purpose, _ in llm.calls]

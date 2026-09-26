@@ -18,6 +18,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   fastbrowse measures inside a run are left out of every published time. A fastbrowse attempt in which any Jev call
   took over 2 seconds (healthy calls take about half a second at any page size) is a Jev outage, run again rather
   than scored. The 0.5.7 results are republished under these rules.
+- **Fewer model hand-offs on the way to an answer.** A lookup whose every requirement cites evidence finishes
+  without the screenshot verifier, which never found an ungrounded claim in 76 0.5.7 verifications. Only an
+  answer read on a search the run built itself (an address with a query) is still verified. A verifier naming a
+  requirement as `req_1` or `1` now names `req-1` rather than nothing. A page answered by its first read finishes
+  without another decision, and a page with text but no controls is no longer waited on for 12 seconds.
 
 ## [0.5.7] - 2026-09-25
 
