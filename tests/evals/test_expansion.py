@@ -31,7 +31,6 @@ _PAGE_GRADED = {
     "arxiv-title": ("Attention Is All You Need", "Attention Is All You Need"),
     "saucedemo-checkout": (live_tasks._SAUCE_TOTAL, live_tasks._SAUCE_TOTAL),
     "saucedemo-cart": ("Sauce Labs Backpack", None),
-    "internet-login": ("You logged into a secure area!", None),
     "expandtesting-login": ("You logged into a secure area!", None),
     "practice-login": ("Logged In Successfully", None),
     "google-flights": ("JetBlue, $846", None),
@@ -405,4 +404,5 @@ async def test_a_run_failed_on_a_site_serving_errors_is_an_outage() -> None:
 def test_new_window_needs_the_heading_not_the_prompt_echoed() -> None:
     (task,) = [t for t in more_tasks.DEV if t.id == "new-window"]
     assert task.check(Outcome("It opens a new window", None, None), None)
-    assert task.check(Outcome('The heading is "New Window"', None, None), None) is None
+    heading = 'The heading is "Example of a new window page for Automation Testing Practice"'
+    assert task.check(Outcome(heading, None, None), None) is None

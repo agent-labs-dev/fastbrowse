@@ -492,16 +492,6 @@ TASKS: tuple[LiveTask, ...] = (
         secrets={"password": "secret_sauce"},
     ),
     LiveTask(
-        "internet-login",
-        "https://the-internet.herokuapp.com/login",
-        "Sign in and tell me the message the page shows.",
-        lambda _: _constant(None),
-        _signed_in("/secure", "secure area"),
-        Category.LOGIN,
-        secrets={"username": "tomsmith", "password": "SuperSecretPassword!"},
-        bitwarden_item="fastbrowse eval: the-internet",
-    ),
-    LiveTask(
         "expandtesting-login",
         "https://practice.expandtesting.com/login",
         "Sign in and tell me the message the page shows.",

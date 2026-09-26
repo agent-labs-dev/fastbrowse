@@ -127,23 +127,23 @@ DEV: tuple[LiveTask, ...] = (
     ),
     LiveTask(
         "dynamic-loading",
-        "https://the-internet.herokuapp.com/dynamic_loading/2",
+        "https://practice.expandtesting.com/dynamic-loading/2",
         "Start the example and tell me the text that appears when loading finishes.",
         _fixed(None),
         _has("Hello World"),
         Category.WIDGET,
     ),
     LiveTask(
-        "nested-frames",
-        "https://the-internet.herokuapp.com/nested_frames",
-        "What text does the frame in the middle of the top row show?",
+        "frame-heading",
+        "https://practice.expandtesting.com/frames",
+        "Inside the email subscription frame, what heading does the form itself show?",
         _fixed(None),
-        _exactly("MIDDLE"),
+        _has("Send updates to my inbox"),
         Category.WIDGET,
     ),
     LiveTask(
         "hover-profile",
-        "https://the-internet.herokuapp.com/hovers",
+        "https://practice.expandtesting.com/hovers",
         "Which user name is revealed when you hover over the second profile picture?",
         _fixed(None),
         _has("user2"),
@@ -170,10 +170,10 @@ DEV: tuple[LiveTask, ...] = (
     # Held out until 0.5.8: a change to fastbrowse was measured on it, which spent its value as a held-out task.
     LiveTask(
         "new-window",
-        "https://the-internet.herokuapp.com/windows",
+        "https://practice.expandtesting.com/windows",
         "Follow the link that opens a new window and tell me that window's heading.",
         _fixed(None),
-        _exactly("New Window"),
+        _has("Example of a new window page"),
         Category.WIDGET,
     ),
 )
@@ -221,7 +221,7 @@ HELDOUT: tuple[LiveTask, ...] = (
     ),
     LiveTask(
         "table-largest-due",
-        "https://the-internet.herokuapp.com/tables",
+        "https://practice.expandtesting.com/tables",
         "In the first table, whose amount due is the largest?",
         _fixed(None),
         _has("Jason", "Doe"),

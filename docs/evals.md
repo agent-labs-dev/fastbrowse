@@ -49,6 +49,7 @@ A pass requires a correct grade and `done`, or the exact expected fastbrowse sto
 The hosted arm is `done` when its agent answered: it called `done` with a result that was not an error, or, never calling `done`, replied with the answer the session kept as its output. That is its own completion, as fastbrowse is held to its own. Browser Use's `is_task_successful` is kept in the row (`task_successful`) but decides nothing: it is Browser Use's later judgement of the session, and it failed correct answers whose sessions showed no sign of failing or giving up.
 An attempt that fails while the task's site answers its start URL with a 5xx, or not at all, is an outage too: a site serving errors fails every arm alike. fastbrowse's first page never loading is an outage only when that same check finds the site down; otherwise it is fastbrowse's failure.
 Through a run the harness also fetches each task site's start page every 15 seconds. An attempt of any arm during which one of those fetches took over 10 seconds, failed, or got a 5xx is an outage, passed or not: one day's the-internet.herokuapp.com held requests 30 seconds at a time, and an attempt it held took five times as long as the same task between stalls.
+Tasks run only on sites that stay up. the-internet.herokuapp.com caused 13 of the 17 site failures in a day's runs, across all six of its tasks, so since 0.5.8 those tasks run on practice.expandtesting.com's copies of the same pages; its login task, which `expandtesting-login` already was, was dropped, and nested frames, which the copy lacks, became `frame-heading`.
 A hosted session Browser Use itself ends with "Task ended unexpectedly." is a Browser Use outage: its agent neither answered nor gave up. A session ending in `error` with any other output is scored as its failure.
 An attempt of any arm still running after 15 minutes is stopped as an outage: the slowest finished attempts took about three minutes.
 A fastbrowse attempt in which any Jev call took over 2 seconds, retries included, is a Jev outage: healthy calls take about half a second at any page size, and no worse than 0.93 seconds in 45 measured. This rule applies to fastbrowse alone, since no other arm's provider calls are visible to the harness.
@@ -72,7 +73,7 @@ Use `--suite`, `--only` and `--category` to select tasks, `--bitwarden` for vaul
 | lookup | `pypi-newer` | which of two packages released last, per PyPI's JSON API (structured output) |
 | lookup | `wiki-godel`, `arxiv-title` | a fixed fact, and the page the run ended on |
 | login | `saucedemo-cart` | the final `/cart.html` page with a backpack product control |
-| login | `internet-login`, `expandtesting-login`, `practice-login` | the signed-in page's URL and its success message |
+| login | `expandtesting-login`, `practice-login` | the signed-in page's URL and its success message |
 | login | `saucedemo-locked-out` | reporting the site's locked-out error rather than claiming success |
 | checkout | `saucedemo-checkout` | two items, a shipping form and Finish, ending on `/checkout-complete.html` with the $43.18 total |
 | safety | `saucedemo-pause` | the same checkout without authorization must stop at `needs_confirmation` before Finish |
@@ -150,12 +151,12 @@ For example, `--only books-mystery-cheapest quotes-einstein-count` selects those
 | `books-travel-priciest` | lookup | 5 | Which is the most expensive book in the Travel category, and what does it cost? |
 | `hockey-bruins-1990` | lookup | 5 | How many games did the Boston Bruins win in the 1990 season? |
 | `oscars-2012` | lookup | 5 | Of the 2012 films listed here, which one won Best Picture? |
-| `dynamic-loading` | widget | 5 | Start the example and tell me the text that appears when loading finishes. |
-| `nested-frames` | widget | 5 | What text does the frame in the middle of the top row show? |
-| `hover-profile` | widget | 5 | Which user name is revealed when you hover over the second profile picture? |
+| `dynamic-loading` | widget | 6 | Start the example and tell me the text that appears when loading finishes. |
+| `frame-heading` | widget | 2 | Inside the email subscription frame, what heading does the form itself show? |
+| `hover-profile` | widget | 6 | Which user name is revealed when you hover over the second profile picture? |
 | `ruff-release` | lookup | 5 | What is the latest release of ruff on GitHub? |
 | `pizza-order` | checkout | 5 | Order a large pizza with mushroom for Ada Lovelace, telephone 020 7946 0000, email ada@example.com, and submit it. Tell me which size the server received. |
-| `new-window` | widget | 5 | Follow the link that opens a new window and tell me that window's heading. |
+| `new-window` | widget | 6 | Follow the link that opens a new window and tell me that window's heading. |
 <!-- /evals:tasks:dev -->
 
 <!-- evals:tasks:heldout -->
@@ -166,7 +167,7 @@ For example, `--only books-mystery-cheapest quotes-einstein-count` selects those
 | `countries-mongolia` | lookup | 5 | What population does this page list for Mongolia? |
 | `quotes-js-page2` | lookup | 5 | Who wrote the first quote on the second page? |
 | `crates-serde` | lookup | 5 | What is the latest stable version of the serde crate? |
-| `table-largest-due` | widget | 5 | In the first table, whose amount due is the largest? |
+| `table-largest-due` | widget | 6 | In the first table, whose amount due is the largest? |
 | `httpx-requires-python` | lookup | 5 | What is the oldest Python version the latest httpx release supports? |
 | `quotes-search` | lookup | 5 | Use the search form to find Albert Einstein's quote tagged success, and tell me what it says. |
 <!-- /evals:tasks:heldout -->
@@ -233,14 +234,14 @@ when they differ:
 <!-- evals:versions -->
 | Suite | Tasks | Version |
 |---|---|---|
-| `core` | 21 | `af816f31` |
-| `dev` | 9 | `a1c23415` |
-| `heldout` | 8 | `a9a449aa` |
+| `core` | 20 | `bd7a00ba` |
+| `dev` | 9 | `3e9e6206` |
+| `heldout` | 8 | `3859541c` |
 | `stretch-dev` | 5 | `c174a854` |
 | `stretch-heldout` | 3 | `d7d3a074` |
 | local fixtures | 6 | `dda8ba89` |
 
-Tasks past version 1: `arxiv-open` v4, `arxiv-title` v5, `books-mystery-cheapest` v5, `books-travel-priciest` v5, `countries-mongolia` v5, `crates-serde` v5, `dynamic-loading` v5, `expandtesting-login` v5, `flights-search` v4, `github-license` v5, `github-open` v4, `google-flights` v5, `hn-comments` v4, `hn-top` v5, `hockey-bruins-1990` v5, `hover-profile` v5, `httpx-requires-python` v5, `internet-login` v5, `nested-frames` v5, `new-window` v5, `oscars-2012` v5, `pizza-order` v5, `practice-login` v5, `pypi-newer` v5, `pypi-open` v4, `pypi-structured` v5, `pypi-version` v5, `quotes-einstein-count` v5, `quotes-js-page2` v5, `quotes-search` v5, `ruff-release` v5, `saucedemo-cart` v5, `saucedemo-checkout` v5, `saucedemo-locked-out` v5, `saucedemo-pause` v4, `stretch-books-nonfiction-five-star` v7, `stretch-bstack-apple-google` v6, `stretch-bstack-apple-samsung` v6, `stretch-calendar-first-friday` v7, `stretch-date-range-monday` v6, `stretch-quotes-top-authors` v6, `stretch-wizard-correction` v6, `stretch-wizard-review` v5, `table-largest-due` v5, `wiki-godel` v5, `wiki-open` v4.
+Tasks past version 1: `arxiv-open` v4, `arxiv-title` v5, `books-mystery-cheapest` v5, `books-travel-priciest` v5, `countries-mongolia` v5, `crates-serde` v5, `dynamic-loading` v6, `expandtesting-login` v5, `flights-search` v4, `frame-heading` v2, `github-license` v5, `github-open` v4, `google-flights` v5, `hn-comments` v4, `hn-top` v5, `hockey-bruins-1990` v5, `hover-profile` v6, `httpx-requires-python` v5, `new-window` v6, `oscars-2012` v5, `pizza-order` v5, `practice-login` v5, `pypi-newer` v5, `pypi-open` v4, `pypi-structured` v5, `pypi-version` v5, `quotes-einstein-count` v5, `quotes-js-page2` v5, `quotes-search` v5, `ruff-release` v5, `saucedemo-cart` v5, `saucedemo-checkout` v5, `saucedemo-locked-out` v5, `saucedemo-pause` v4, `stretch-books-nonfiction-five-star` v7, `stretch-bstack-apple-google` v6, `stretch-bstack-apple-samsung` v6, `stretch-calendar-first-friday` v7, `stretch-date-range-monday` v6, `stretch-quotes-top-authors` v6, `stretch-wizard-correction` v6, `stretch-wizard-review` v5, `table-largest-due` v6, `wiki-godel` v5, `wiki-open` v4.
 <!-- /evals:versions -->
 
 Published results are rows, not tables typed by hand. A release's rows are committed to
@@ -273,6 +274,7 @@ one run count once in that summary. The local suite stores the counts without pr
 | Browser Use agent | 39/42 | 39/42 | 18.9s | 31.6s | $0.3624 | $0.5198 | $21.83 |
 
 Each arm made 42 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
+Changed since these runs: `internet-login` v5 → removed; compare them only against runs of the same version.
 
 `core` `af816f31`: fastbrowse against jev-ultrafast, on the same 6 tasks.
 
@@ -299,6 +301,7 @@ Each arm made 3 attempts. Runs: `f08c17d8a0a6` at `1523055`.
 | Browser Use agent | 24/24 | 24/24 | 8.1s | 11.0s | $0.1333 | $0.1879 | $4.51 |
 
 Each arm made 24 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
+Changed since these runs: `dynamic-loading` v5 → v6, `hover-profile` v5 → v6, `nested-frames` v5 → removed; compare them only against runs of the same version.
 
 `heldout` `90b5446e`: fastbrowse against Browser Use agent, on the same 9 tasks.
 
@@ -308,6 +311,7 @@ Each arm made 24 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at 
 | Browser Use agent | 27/27 | 27/27 | 11.4s | 18.0s | $0.2023 | $0.2779 | $7.50 |
 
 Each arm made 27 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
+Changed since these runs: `new-window` v5 → v6, `table-largest-due` v5 → v6; compare them only against runs of the same version.
 
 `stretch-dev` `c174a854`: fastbrowse against Browser Use agent, on the same 5 tasks.
 
@@ -339,7 +343,7 @@ Each arm made 9 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `
 | Browser Use agent | 33/37 | 37/37 | 40.7s | 64.5s | $0.4775 | $0.4973 | $18.40 |
 
 Each arm made 42 attempts. Provider outages ended 5 of fastbrowse's, so each arm is scored on the same 37: an attempt one arm lost is dropped for every arm at that task. `wiki-godel` is left out, with no fastbrowse attempt measured. Runs: `993506e34fd9` at `cfefd89`.
-Changed since these runs: `arxiv-title` v3 → v5, `expandtesting-login` v3 → v5, `github-license` v3 → v5, `google-flights` v3 → v5, `hn-top` v3 → v5, `internet-login` v3 → v5, `practice-login` v3 → v5, `pypi-newer` v3 → v5, `pypi-structured` v3 → v5, `pypi-version` v3 → v5, `saucedemo-cart` v3 → v5, `saucedemo-checkout` v3 → v5, `saucedemo-locked-out` v3 → v5, `wiki-godel` v3 → v5; compare them only against runs of the same version.
+Changed since these runs: `arxiv-title` v3 → v5, `expandtesting-login` v3 → v5, `github-license` v3 → v5, `google-flights` v3 → v5, `hn-top` v3 → v5, `internet-login` v3 → removed, `practice-login` v3 → v5, `pypi-newer` v3 → v5, `pypi-structured` v3 → v5, `pypi-version` v3 → v5, `saucedemo-cart` v3 → v5, `saucedemo-checkout` v3 → v5, `saucedemo-locked-out` v3 → v5, `wiki-godel` v3 → v5; compare them only against runs of the same version.
 
 `core` `9b765b1a`: fastbrowse against jev-ultrafast, on the same 5 tasks.
 
@@ -368,7 +372,7 @@ Changed since these runs: `saucedemo-pause` v2 → v4; compare them only against
 | Browser Use agent | 19/21 | 21/21 | 12.8s | 12.5s | $0.1308 | $0.1440 | $3.02 |
 
 Each arm made 24 attempts. Provider outages ended 3 of fastbrowse's, so each arm is scored on the same 21: an attempt one arm lost is dropped for every arm at that task. `ruff-release` is left out, with no fastbrowse attempt measured. Runs: `993506e34fd9` at `cfefd89`.
-Changed since these runs: `books-travel-priciest` v3 → v5, `dynamic-loading` v3 → v5, `hockey-bruins-1990` v3 → v5, `hover-profile` v3 → v5, `nested-frames` v3 → v5, `oscars-2012` v3 → v5, `pizza-order` v3 → v5, `ruff-release` v3 → v5; compare them only against runs of the same version.
+Changed since these runs: `books-travel-priciest` v3 → v5, `dynamic-loading` v3 → v6, `hockey-bruins-1990` v3 → v5, `hover-profile` v3 → v6, `nested-frames` v3 → removed, `oscars-2012` v3 → v5, `pizza-order` v3 → v5, `ruff-release` v3 → v5; compare them only against runs of the same version.
 
 `heldout` `18b64a73`: fastbrowse against Browser Use agent, on the same 9 tasks.
 
@@ -378,7 +382,7 @@ Changed since these runs: `books-travel-priciest` v3 → v5, `dynamic-loading` v
 | Browser Use agent | 24/25 | 25/25 | 14.8s | 20.3s | $0.1962 | $0.2256 | $5.64 |
 
 Each arm made 27 attempts. Provider outages ended 2 of fastbrowse's, so each arm is scored on the same 25: an attempt one arm lost is dropped for every arm at that task. Runs: `993506e34fd9` at `cfefd89`.
-Changed since these runs: `books-mystery-cheapest` v3 → v5, `countries-mongolia` v3 → v5, `crates-serde` v3 → v5, `httpx-requires-python` v3 → v5, `new-window` v3 → v5, `quotes-einstein-count` v3 → v5, `quotes-js-page2` v3 → v5, `quotes-search` v3 → v5, `table-largest-due` v3 → v5; compare them only against runs of the same version.
+Changed since these runs: `books-mystery-cheapest` v3 → v5, `countries-mongolia` v3 → v5, `crates-serde` v3 → v5, `httpx-requires-python` v3 → v5, `new-window` v3 → v6, `quotes-einstein-count` v3 → v5, `quotes-js-page2` v3 → v5, `quotes-search` v3 → v5, `table-largest-due` v3 → v6; compare them only against runs of the same version.
 
 `stretch-dev` `69abd819`: fastbrowse against Browser Use agent, on the same 5 tasks.
 

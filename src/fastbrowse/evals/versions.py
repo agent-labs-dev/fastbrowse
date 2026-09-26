@@ -725,6 +725,10 @@ def protocol_docs() -> str:
         "arm during which one of those fetches took over 10 seconds, failed, or got a 5xx is an outage, passed or "
         "not: one day's the-internet.herokuapp.com held requests 30 seconds at a time, and an attempt it held took "
         "five times as long as the same task between stalls.",
+        "Tasks run only on sites that stay up. the-internet.herokuapp.com caused 13 of the 17 site failures in a "
+        "day's runs, across all six of its tasks, so since 0.5.8 those tasks run on practice.expandtesting.com's "
+        "copies of the same pages; its login task, which `expandtesting-login` already was, was dropped, and "
+        "nested frames, which the copy lacks, became `frame-heading`.",
         'A hosted session Browser Use itself ends with "Task ended unexpectedly." is a Browser Use outage: its agent '
         "neither answered nor gave up. A session ending in `error` with any other output is scored as its failure.",
         "An attempt of any arm still running after 15 minutes is stopped as an outage: the slowest finished attempts "

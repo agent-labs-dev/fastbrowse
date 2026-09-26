@@ -36,8 +36,8 @@
     "fingerprint": "a97df36fcd71c100"
   },
   "dynamic-loading": {
-    "version": 5,
-    "fingerprint": "0e22b6a1d483fc8f"
+    "version": 6,
+    "fingerprint": "ff94f1c5182b7f6e"
   },
   "expandtesting-login": {
     "version": 5,
@@ -46,6 +46,10 @@
   "flights-search": {
     "version": 4,
     "fingerprint": "55c71a7068a20817"
+  },
+  "frame-heading": {
+    "version": 2,
+    "fingerprint": "815deed6182a3ead"
   },
   "github-license": {
     "version": 5,
@@ -72,28 +76,20 @@
     "fingerprint": "6261ea5a4db86219"
   },
   "hover-profile": {
-    "version": 5,
-    "fingerprint": "3a9b2c33ff5dd5d2"
+    "version": 6,
+    "fingerprint": "7e7cb657235f8b1e"
   },
   "httpx-requires-python": {
     "version": 5,
     "fingerprint": "7b3639223dcee1c7"
   },
-  "internet-login": {
-    "version": 5,
-    "fingerprint": "c6b4f98b899a55bc"
-  },
   "login-wall": {
     "version": 1,
     "fingerprint": "851683583e9044a8"
   },
-  "nested-frames": {
-    "version": 5,
-    "fingerprint": "60f230fd3ccae4ca"
-  },
   "new-window": {
-    "version": 5,
-    "fingerprint": "0766f2d126ee2776"
+    "version": 6,
+    "fingerprint": "3e7d103a752a4054"
   },
   "oscars-2012": {
     "version": 5,
@@ -196,8 +192,8 @@
     "fingerprint": "695205cb80b45f0a"
   },
   "table-largest-due": {
-    "version": 5,
-    "fingerprint": "cdf53dfb7420147a"
+    "version": 6,
+    "fingerprint": "94f18cfdb277c82e"
   },
   "wiki-godel": {
     "version": 5,

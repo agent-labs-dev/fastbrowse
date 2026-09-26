@@ -674,7 +674,7 @@ async def test_an_attempt_its_site_stalled_during_is_an_outage_for_any_arm(monke
     served = iter([httpx.Response(200), httpx.Response(503)])
     http = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: next(served, httpx.Response(200))))
     monkeypatch.setattr(live, "SITE_PROBE_SECONDS", 0.01)
-    frames = task("internet-login")
+    frames = task("expandtesting-login")
     watch = live.SiteWatch(http, [frames])
     start = time.time()
     watching = asyncio.create_task(watch.run())
