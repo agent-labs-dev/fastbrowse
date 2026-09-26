@@ -149,6 +149,13 @@ class _FieldText(Frozen):
         )
     )
     text: str = Field(description="Exactly the text to type into the field, with no commentary; empty when missing.")
+    values: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Only when the task has this field hold more than one value in turn (enter one, later change it): each "
+            "value, written as it would be typed, in the order the task wants them typed. Otherwise empty."
+        ),
+    )
 
 
 _FIELD_WRITER = (
@@ -159,8 +166,8 @@ _FIELD_WRITER = (
     "A fact the task states in another shape is given, not missing: take the part of a "
     "stated name, address or date this field asks for and write it in the field's shape. "
     "The requirements are the task's steps in the order it wants them done. When more than one gives this field "
-    "a value (enter one, later change it), write the value of the earliest such requirement that no recent "
-    "action has already typed into this field; a later value is written only after the earlier one was.\n\n"
+    "a value (enter one, later change it), list every such value in values, in that order, and write in text the "
+    "earliest one no recent action has already typed into this field.\n\n"
     f"# Trust\n{UNTRUSTED}"
 )
 
@@ -792,6 +799,7 @@ class Agent:
         label = _describe(decision.target) if decision.target else decision.tab_id
         typed: str | None = None
         effect_now: str | None = None
+        setting = False
         if decision.operation is Operation.READ:
             progressed, skipped = await self._read(
                 state, capture or await self._capture(), observation, require_all_evidence=require_all_evidence
@@ -857,7 +865,7 @@ class Agent:
                 done = effect(observation, landed, target)
                 state.pending_move = move(observation, landed)
                 state.acted_from = None
-                effective = done.set_something
+                effective = setting = done.set_something
                 if not done.set_something:
                     progressed = False
                     act = act.model_copy(update={"detail": f"no effect: {done.summary}"})
@@ -878,6 +886,7 @@ class Agent:
                 page_changed=changed,
                 text=typed,
                 effect=effect_now,
+                setting=setting or None,
             )
         )
         step = StepResult(
@@ -1398,7 +1407,7 @@ class Agent:
             Message(role="system", content=_FIELD_WRITER),
             Message(role="user", content=json.dumps(context)),
         ]
-        written = await self._write_field(state, messages)
+        written = await self._write_field(state, messages, target)
         if written is not None:
             return written
         # Ending a run on "you never told me" is right, and one low-effort call is a thin thing to end it on:
@@ -1418,7 +1427,7 @@ class Agent:
                 ),
             ),
         ]
-        written = await self._write_field(state, insisted)
+        written = await self._write_field(state, insisted, target)
         if written is None:
             raise self._missing(state, target)
         return written
@@ -1439,11 +1448,14 @@ class Agent:
             gives_up_as=Status.NEEDS_INPUT,
         )
 
-    async def _write_field(self, state: _RunState, messages: Sequence[Message]) -> str | None:
+    async def _write_field(self, state: _RunState, messages: Sequence[Message], target: Control) -> str | None:
         """The text for one field, or None when the writer says the value was never given."""
         generation = await self._llm.generate(LLMPurpose.FIELD_TEXT, list(messages), _FieldText, ledger=state.ledger)
         state.ledger.record(generation.cost)
-        return None if generation.data.missing else generation.data.text
+        written = generation.data
+        if written.missing:
+            return None
+        return _next_value(written.values, state.history, target.label) if len(written.values) > 1 else written.text
 
     async def _value_absent(self, state: _RunState, observation: Observation, target: Control) -> bool:
         state.ledger.reserve(CostComponent.JEV)
@@ -2523,11 +2535,28 @@ def _history(history: Sequence[HistoryEntry], limits: ObservationLimits) -> tupl
     return (*(entry.model_copy(update={"effect": None}) for entry in earlier), *history[max(0, split) :])
 
 
+def _next_value(values: Sequence[str], history: Sequence[HistoryEntry], label: str | None) -> str:
+    """The first of a field's values in turn that no fill has typed into it yet, else the last.
+
+    Told the order in its prompt, the writer still typed "enter X, later correct it to Y" as Y on the first pass
+    in every wizard run, so no Back could show a correction; it lists the values, and code keeps the order."""
+    typed = {
+        e.text
+        for e in history
+        if e.operation is Operation.FILL and e.outcome is StepOutcome.EXECUTED and e.target == label
+    }
+    return next((value for value in values if value not in typed), values[-1])
+
+
 def _record(history: Sequence[HistoryEntry], limits: ObservationLimits) -> tuple[HistoryEntry, ...]:
-    """The recent actions, after every value typed before them: a correction is judged against the first value,
-    which a long wizard can push out of the recent window."""
+    """The recent actions, after every value typed or set before them: a correction is judged against the first
+    value, and a form's checkbox against its tick, both of which a long wizard can push out of the recent window."""
     recent = _history(history, limits)
-    typed = (e.model_copy(update={"effect": None}) for e in history[: len(history) - len(recent)] if e.text is not None)
+    typed = (
+        e.model_copy(update={"effect": None})
+        for e in history[: len(history) - len(recent)]
+        if e.text is not None or e.setting
+    )
     return (*typed, *recent)
 
 
