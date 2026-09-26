@@ -76,11 +76,24 @@ class CdpTransport:
             finally:
                 await asyncio.sleep(0)
                 self.finished.add(method)
+        if method == "Runtime.evaluate":
+            # A document still loading, as the readiness poll and the settle wait each report it.
+            loading = "loading" if params["expression"] == "document.readyState" else [False, None]
+            return {"result": {"value": loading}}
         return {
             "Target.createTarget": {"targetId": "owned"},
             "Target.attachToTarget": {"sessionId": "session"},
-            "Runtime.evaluate": {"result": {"value": "loading"}},
         }.get(method, {})
+
+
+async def test_session_setup_sends_independent_commands_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each command is a cloud round trip, and discovery and foregrounding need not wait for the tab or its domains."""
+    transport = CdpTransport(monkeypatch)
+    transport.delays = {"Target.setDiscoverTargets": 0.2, "Target.activateTarget": 0.2, "Runtime.enable": 0.2}
+    began = time.monotonic()
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()):
+        took = time.monotonic() - began
+    assert took < 0.35
 
 
 @pytest.mark.parametrize(
@@ -151,7 +164,7 @@ async def test_cdp_errors_are_typed_with_safe_messages(monkeypatch: pytest.Monke
 
 LOADED = {"result": {"value": "complete"}}
 SETTLED = {"result": {"value": [True, "fingerprint"]}}
-"""Navigation waits for a loaded document, then for its DOM to go quiet."""
+"""Navigation waits in the page for a loaded document whose DOM has gone quiet."""
 
 
 @pytest.mark.parametrize(
@@ -167,7 +180,7 @@ async def test_a_failed_navigation_is_tried_again_once(
 ) -> None:
     transport = CdpTransport(monkeypatch)
     transport.results["Page.navigate"] = [{"errorText": error} for error in errors]
-    transport.results["Runtime.evaluate"] = [LOADED, SETTLED]
+    transport.results["Runtime.evaluate"] = [SETTLED]
     monkeypatch.setattr(page_module, "_NAVIGATE_RETRY_SECONDS", 0)
     async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
         navigating = CdpPage(session, Config()).navigate("https://example.test")
@@ -188,9 +201,28 @@ async def test_a_page_that_never_loads_is_tried_again_once(monkeypatch: pytest.M
     async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
         with pytest.raises(NavigationTimeout, match=re.escape("Page.navigate failed (TimeoutError)")):
             await CdpPage(session, Config()).navigate("https://example.test", load_timeout_seconds=0.1)
-        transport.results["Runtime.evaluate"] = [LOADED, SETTLED]
+        transport.results["Runtime.evaluate"] = [SETTLED]
         await CdpPage(session, Config()).navigate("https://example.test", load_timeout_seconds=0.1)
     assert transport.calls.count("Page.navigate") == 3
+
+
+async def test_navigation_loads_and_settles_in_one_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Polling `readyState` from here cost a cloud round trip or two before the settle wait began."""
+    transport = CdpTransport(monkeypatch)
+    transport.results["Runtime.evaluate"] = [SETTLED]
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+        await CdpPage(session, Config()).navigate("https://example.test")
+    assert transport.calls.count("Runtime.evaluate") == 1
+
+
+async def test_a_redirect_during_the_settle_wait_still_waits_for_a_usable_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A redirect destroys the settle promise with its document; the page it went to is waited on until usable."""
+    transport = CdpTransport(monkeypatch)
+    monkeypatch.setattr(CdpPage, "_settled_fingerprint", AsyncMock(side_effect=BrowserError("context destroyed")))
+    transport.results["Runtime.evaluate"] = [{"result": {"value": "loading"}}, LOADED]
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+        await CdpPage(session, Config()).navigate("https://example.test")
+    assert transport.calls.count("Runtime.evaluate") == 2
 
 
 def _history(entries: list[str], current: int) -> dict[str, Any]:

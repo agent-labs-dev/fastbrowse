@@ -269,8 +269,12 @@ class BrowserSession:
         try:
             await self._client.start()
             self._register_events()
-            await self.client.send.Target.setDiscoverTargets(params={"discover": True})
-            await self._open_owned_tab("about:blank")
+            # Discovery has to be on only before the tab can open a popup, which it cannot do while it is still
+            # being created, so the two are sent at once rather than paying a cloud round trip for each.
+            await _together(
+                self.client.send.Target.setDiscoverTargets(params={"discover": True}),
+                self._open_owned_tab("about:blank"),
+            )
         except BaseException:
             with contextlib.suppress(Exception):
                 await self._close()
@@ -322,8 +326,10 @@ class BrowserSession:
         self._owned.add(target_id)
         attach = await self.client.send.Target.attachToTarget(params={"targetId": target_id, "flatten": True})
         session_id = attach["sessionId"]
-        await self.client.send.Target.activateTarget(params={"targetId": target_id})
-        await self._prepare_session(session_id)
+        # Foregrounding the tab and enabling its session are independent, and both finish before the tab is used.
+        await _together(
+            self.client.send.Target.activateTarget(params={"targetId": target_id}), self._prepare_session(session_id)
+        )
         self._tabs[target_id] = _TabState(target_id=target_id, session_id=session_id, url=url)
         self._set_active_target(target_id)
         return target_id
@@ -338,30 +344,21 @@ class BrowserSession:
 
     async def _prepare_session(self, session_id: str) -> None:
         # These domains are independent, but all must be ready before the session can be used.
-        try:
-            async with asyncio.TaskGroup() as tasks:
-                for domain in _ENABLE_DOMAINS:
-                    tasks.create_task(self.client.send_raw(f"{domain}.enable", session_id=session_id))
-                tasks.create_task(
-                    self.client.send_raw(
-                        "Target.setAutoAttach",
-                        {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True},
-                        session_id=session_id,
-                    )
-                )
-                tasks.create_task(
-                    self.client.send.Fetch.enable(params={"patterns": list(DOWNLOAD_PATTERNS)}, session_id=session_id)
-                )
-                # Track parsing and hydration before the first post-navigation read, so an already
-                # quiet document does not pay another full window just to install its observer.
-                for source in self._new_document_scripts:
-                    tasks.create_task(
-                        self.client.send.Page.addScriptToEvaluateOnNewDocument(
-                            params={"source": source}, session_id=session_id
-                        )
-                    )
-        except* BrowserError as errors:
-            raise errors.exceptions[0] from errors
+        await _together(
+            *(self.client.send_raw(f"{domain}.enable", session_id=session_id) for domain in _ENABLE_DOMAINS),
+            self.client.send_raw(
+                "Target.setAutoAttach",
+                {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True},
+                session_id=session_id,
+            ),
+            self.client.send.Fetch.enable(params={"patterns": list(DOWNLOAD_PATTERNS)}, session_id=session_id),
+            # Track parsing and hydration before the first post-navigation read, so an already
+            # quiet document does not pay another full window just to install its observer.
+            *(
+                self.client.send.Page.addScriptToEvaluateOnNewDocument(params={"source": source}, session_id=session_id)
+                for source in self._new_document_scripts
+            ),
+        )
 
     def _register_events(self) -> None:
         client = self.client
@@ -555,6 +552,17 @@ class BrowserSession:
         name = _filename_from_disposition(disposition) or url.rsplit("/", 1)[-1] or "download"
         artifact = await self._artifact_sink.put(ArtifactKind.DOWNLOAD, name, "application/octet-stream", raw)
         self._artifacts.append(artifact)
+
+
+async def _together(*commands: Coroutine[Any, Any, object]) -> None:
+    """Send independent commands at once and wait for all of them, raising the first `BrowserError` as sequential
+    sends would, and cancelling the rest when one fails so none outlives the session it was sent on."""
+    try:
+        async with asyncio.TaskGroup() as tasks:
+            for command in commands:
+                tasks.create_task(command)
+    except* BrowserError as errors:
+        raise errors.exceptions[0] from errors
 
 
 def _filename_from_disposition(disposition: str) -> str | None:

@@ -1044,10 +1044,16 @@ class CdpPage(Page):
             if error := result.get("errorText"):
                 failure, timed_out = (error if _NET_ERROR.fullmatch(error) else "NavigationError"), False
                 continue
-            if await self._ready(session_id, load_timeout_seconds):
-                # Unsettled by the deadline is still a usable page, and a redirect destroys the promise mid-wait.
-                with suppress(BrowserError):
-                    await self._settled_fingerprint(_SETTLE_SECONDS)
+            deadline = time.monotonic() + load_timeout_seconds
+            # One round trip for loading and settling both: the renderer waits for an interactive document and then
+            # for it to go quiet, where polling `readyState` from here first cost a cloud round trip or two a load.
+            try:
+                _, fingerprint = await self._settled_fingerprint(load_timeout_seconds)
+            except BrowserError:
+                # A redirect destroys the promise with its document, and a hidden tab answers with one sample, so
+                # the page is then only waited on until it is usable. Unsettled by the deadline is usable too.
+                fingerprint = None
+            if fingerprint is not None or await self._ready(session_id, deadline - time.monotonic()):
                 return
             failure, timed_out = "TimeoutError", True
         # A timeout says nothing about the page's content; a caller with no step of its own yet needs the
@@ -1199,10 +1205,15 @@ class CdpPage(Page):
         result = await self._evaluate(
             self._session.active_session_id,
             f"new Promise(resolve => {{ const sample = {_PAGE_JS}; "
-            f"const deadline = performance.now() + {timeout_seconds * 1000}; "
-            f"const spinning = performance.now() + {_SETTLE_LOADING_SECONDS * 1000}; "
+            f"let deadline = performance.now() + {timeout_seconds * 1000}; "
+            "let spinning = null; "
             "const poll = () => { "
             "const state = sample('fingerprint'); "
+            # The settle budgets run from the moment the document is usable, so a navigation's wait for it to load
+            # and to settle can share one call: a page that never goes quiet still pays `_SETTLE_SECONDS` at most.
+            "if (state.ready && spinning === null) { const now = performance.now(); "
+            f"spinning = now + {_SETTLE_LOADING_SECONDS * 1000}; "
+            f"deadline = Math.min(deadline, now + {_SETTLE_SECONDS * 1000}); }} "
             f"const quiet = state.ready && state.quietFor >= {_SETTLE_QUIET_SECONDS * 1000}; "
             "const stable = quiet && (!state.loading || performance.now() >= spinning); "
             "if (stable || state.hidden || performance.now() >= deadline) { "

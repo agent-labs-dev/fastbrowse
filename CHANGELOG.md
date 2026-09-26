@@ -23,6 +23,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   answer read on a search the run built itself (an address with a query) is still verified. A verifier naming a
   requirement as `req_1` or `1` now names `req-1` rather than nothing. A page answered by its first read finishes
   without another decision, and a page with text but no controls is no longer waited on for 12 seconds.
+- **A run reaches its first page sooner.** `run_task` asks for the plan and the shortcut while the browser starts,
+  so the tab opens straight onto the shortcut. Opening the tab sends its independent browser commands at once, and a
+  navigation waits for its page to load and settle in one browser call instead of polling for it first. On four
+  live lookups, three runs each, a run took 1.7 seconds less on average.
 
 ## [0.5.7] - 2026-09-25
 

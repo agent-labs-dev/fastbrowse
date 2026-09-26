@@ -13,6 +13,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence, Set
 from dataclasses import dataclass, field
+from typing import Self
 from urllib.parse import urljoin, urlsplit
 
 from pydantic import BaseModel, Field, JsonValue
@@ -40,6 +41,7 @@ from fastbrowse.models import (
     Authorization,
     Citation,
     CostComponent,
+    CostLine,
     Decider,
     EventHandler,
     Evidence,
@@ -320,6 +322,44 @@ class _RunState:
         return self.ready_plan
 
 
+@dataclass
+class HeadStart:
+    """The calls a run can make from the task alone, begun before there is a browser to drive.
+
+    Starting a cloud browser and opening its tab takes 2 to 3 seconds, and the plan and the shortcut need only the
+    task and the start page, so `run_task` begins them first: the shortcut is waiting when the tab opens instead of
+    being asked for then. The calls reserve against `ledger`, which the run takes over, so they count against its
+    limits and are billed in its result.
+    """
+
+    ledger: Ledger
+    start: str | None
+    planning: asyncio.Task[Generation[Plan]]
+    proposing: asyncio.Task[Shortcut] | None
+
+    @classmethod
+    def begin(cls, llm: LLMClient, task: str, *, start: str | None = None, limits: Limits | None = None) -> Self:
+        ledger = Ledger(limits or Limits())
+        # The plan is needed to read, to judge DONE and to answer, and the start page, the first fills and clicks
+        # all come before those, so it is written from the task while they run.
+        planning = asyncio.create_task(make_plan(llm, task, start=start, ledger=ledger))
+        proposing = None if start is None else asyncio.create_task(_propose(llm, task, start, ledger))
+        return cls(ledger, start, planning, proposing)
+
+    async def discard(self) -> None:
+        """Cancel what is still being written, so nothing bills a run that has already ended."""
+        await _discard(self.planning)
+        if self.proposing is not None:
+            await _discard(self.proposing)
+
+    async def abandon(self) -> tuple[CostLine, ...]:
+        """What a run that never began spent: a shortcut bills itself, and a plan that finished is billed here."""
+        await self.discard()
+        if not self.planning.cancelled() and self.planning.exception() is None:
+            self.ledger.lines.append(self.planning.result().cost)
+        return tuple(self.ledger.lines)
+
+
 class Agent:
     def __init__(
         self,
@@ -354,31 +394,37 @@ class Agent:
         limits: Limits | None = None,
         authorization: Authorization | None = None,
         until: UntilCheck | None = None,
+        head_start: HeadStart | None = None,
     ) -> RunResult:
-        ledger = Ledger(limits or Limits())
+        """Pursue `task` from `start`. A `head_start` is the plan and shortcut already asked for with this task and
+        start; it carries the limits it was begun with, so `limits` is not read alongside it."""
+        head = head_start or HeadStart.begin(self._llm, task, start=start, limits=limits)
+        ledger = head.ledger
+        # The run's clock starts here, as it did before there was a head start: a browser slow to start is not time
+        # spent on the task, and `max_seconds` bounds the deadline below from this moment too.
+        ledger.started = time.monotonic()
         self._artifact_start = len(self._page.artifacts)
         state: _RunState | None = None
-        planning: asyncio.Task[Generation[Plan]] | None = None
         # The ledger checks `max_seconds` between operations; only a deadline around the awaits bounds a
         # browser or provider call that never returns.
         deadline = asyncio.timeout(ledger.limits.max_seconds)
         with jev_spend(ledger.lines, ledger=ledger):
             try:
                 async with deadline:
-                    # The plan is needed to read, to judge DONE and to answer, and the start page, the first fills
-                    # and clicks all come before those, so it is written from the task while they run.
-                    planning = asyncio.create_task(make_plan(self._llm, task, start=start, ledger=ledger))
                     # `start=None` leaves the browser where it is, which is what a caller stepping a run on
                     # from a page it opened itself wants. `choose_start` is the other case: a caller with a goal
                     # and no page at all, who wants the first address worked out from the task.
                     opening = start if start is not None or not choose_start else await self._first_page(task, ledger)
-                    history, invented = ([], set[str]()) if opening is None else await self._open(task, opening, ledger)
+                    proposing = head.proposing if opening is not None and opening == head.start else None
+                    history, invented = (
+                        ([], set[str]()) if opening is None else await self._open(task, opening, ledger, proposing)
+                    )
                     if start is None and opening is not None:
                         # The caller gave a goal and no page, so this address was worked out from the task too.
                         invented.add(opening)
                         await self._front_page_if_blank(opening)
                     state = _RunState(
-                        task, inputs or {}, tuple(attachments), authorization or Authorization(), ledger, planning
+                        task, inputs or {}, tuple(attachments), authorization or Authorization(), ledger, head.planning
                     )
                     state.history.extend(history)
                     state.invented = invented
@@ -419,8 +465,7 @@ class Agent:
                 return self._result(state, ledger, status, error=message)
             finally:
                 # A run can end before it ever needed the plan, and a plan still being written would bill it.
-                if planning is not None:
-                    await _discard(planning)
+                await head.discard()
 
     async def _loop(
         self, state: _RunState, output_schema: type[BaseModel] | None, until: UntilCheck | None
@@ -651,14 +696,20 @@ class Agent:
         trace("start_page_blank", proposed=opened, front=front)
         await self._page.navigate(front)
 
-    async def _open(self, task: str, start: str, ledger: Ledger) -> tuple[list[HistoryEntry], set[str]]:
+    async def _open(
+        self, task: str, start: str, ledger: Ledger, proposing: asyncio.Task[Shortcut] | None
+    ) -> tuple[list[HistoryEntry], set[str]]:
         """Open a direct address for the task on `start`'s site when one is proposed in time, else `start`.
 
         The shortcut is opened in place of the start page, not after it: loading github.com's front page only to
         leave it cost 1 to 4 seconds of every shortcut run. The start page stays one BACK away all the same.
+        `proposing` is the proposal a head start already asked for, and a run without one asks now.
         """
+        if proposing is None:
+            proposing = asyncio.create_task(_propose(self._llm, task, start, ledger))
         try:
-            proposal = await asyncio.wait_for(self._propose(task, start, ledger), _SHORTCUT_WAIT_SECONDS)
+            # A proposal still being written when the wait ends is cancelled, so it bills nothing.
+            proposal = await asyncio.wait_for(proposing, _SHORTCUT_WAIT_SECONDS)
         except (TimeoutError, LLMError):
             proposal = None
         shortcut = None if proposal is None else accept(proposal.url, start)
@@ -686,12 +737,6 @@ class Agent:
         opened = HistoryEntry(operation=None, target=None, outcome=StepOutcome.EXECUTED, page_changed=True, note=note)
         # The facts cite where the page landed, so a redirect's address is the one they can be matched against.
         return [opened], {shortcut, landed}
-
-    async def _propose(self, task: str, start: str, ledger: Ledger) -> Shortcut:
-        # Recorded here, not by the caller: a proposal that finished is billed even when the run ends first.
-        generation = await propose_shortcut(self._llm, task, start, ledger=ledger)
-        ledger.record(generation.cost)
-        return generation.data
 
     async def _outwait(self, stuck: Observation) -> bool:
         """Re-observe until the page is no longer `stuck`, returning whether it moved in time."""
@@ -2406,6 +2451,13 @@ def _follow_recovery(
     if target is None:
         return None
     return decision.model_copy(update={"operation": operation, "target": target, "directed": True})
+
+
+async def _propose(llm: LLMClient, task: str, start: str, ledger: Ledger) -> Shortcut:
+    # Recorded here, not by the caller: a proposal that finished is billed even when the run ends first.
+    generation = await propose_shortcut(llm, task, start, ledger=ledger)
+    ledger.record(generation.cost)
+    return generation.data
 
 
 async def _discard[T](task: asyncio.Task[T]) -> None:
