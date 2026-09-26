@@ -262,74 +262,67 @@ one run count once in that summary. The local suite stores the counts without pr
 ### 0.5.7, 2026-09-25
 
 <!-- evals:results:0.5.7 -->
-`core` `391f8d42`: fastbrowse against Browser Use agent, on the same 14 tasks.
+`core` `af816f31`: fastbrowse against Browser Use agent, on the same 14 tasks.
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.7) | 42/42 | 42/42 | 19.6s | 25.3s | $0.0085 | $0.0123 | $0.52 |
-| Browser Use agent | 37/42 | 39/42 | 21.4s | 52.8s | $0.3624 | $0.5198 | $21.83 |
+| fastbrowse (0.5.7) | 41/42 | 41/42 | 20.4s | 27.3s | $0.0081 | $0.0124 | $0.52 |
+| Browser Use agent | 39/42 | 39/42 | 18.9s | 31.6s | $0.3624 | $0.5198 | $21.83 |
 
-Each arm made 42 attempts. Runs: `9caefa930c72` at `e265dd1`.
-Changed since these runs: `arxiv-title` v4 → v5, `expandtesting-login` v4 → v5, `github-license` v4 → v5, `google-flights` v4 → v5, `hn-top` v4 → v5, `internet-login` v4 → v5, `practice-login` v4 → v5, `pypi-newer` v4 → v5, `pypi-structured` v4 → v5, `pypi-version` v4 → v5, `saucedemo-cart` v4 → v5, `saucedemo-checkout` v4 → v5, `saucedemo-locked-out` v4 → v5, `wiki-godel` v4 → v5; compare them only against runs of the same version.
+Each arm made 42 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
 
-`core` `391f8d42`: fastbrowse against jev-ultrafast, on the same 6 tasks.
+`core` `af816f31`: fastbrowse against jev-ultrafast, on the same 6 tasks.
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.7) | 18/18 | 18/18 | 10.0s | 18.1s | $0.0028 | $0.0046 | $0.08 |
+| fastbrowse (0.5.7) | 17/18 | 17/18 | 9.6s | 11.9s | $0.0026 | $0.0035 | $0.06 |
 | jev-ultrafast | 12/18 | 12/18 | 11.8s | 30.3s | $0.0014 | $0.0077 | $0.14 |
 
-Each arm made 18 attempts. Runs: `9caefa930c72` at `e265dd1`.
-Changed since these runs: `arxiv-open` v3 → v4, `flights-search` v3 → v4, `github-open` v3 → v4, `hn-comments` v3 → v4, `pypi-open` v3 → v4, `wiki-open` v3 → v4; compare them only against runs of the same version.
+Each arm made 18 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
 
-`core` `391f8d42`: fastbrowse alone, on the 1 task only it ran.
-
-| | passed | correct | median time | mean time | median cost | mean cost | total cost |
-|:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.7) | 3/3 | 3/3 | 34.3s | 34.4s | $0.0047 | $0.0048 | $0.01 |
-
-Each arm made 3 attempts. Runs: `9caefa930c72` at `e265dd1`.
-Changed since these runs: `saucedemo-pause` v3 → v4; compare them only against runs of the same version.
-
-`dev` `fe57fc77`: fastbrowse against Browser Use agent, on the same 8 tasks.
+`core` `af816f31`: fastbrowse alone, on the 1 task only it ran.
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.7) | 24/24 | 24/24 | 16.7s | 17.9s | $0.0058 | $0.0078 | $0.19 |
-| Browser Use agent | 23/24 | 24/24 | 8.9s | 12.3s | $0.1333 | $0.1879 | $4.51 |
+| fastbrowse (0.5.7) | 3/3 | 3/3 | 36.6s | 36.6s | $0.0048 | $0.0047 | $0.01 |
 
-Each arm made 24 attempts. Runs: `9caefa930c72` at `e265dd1`.
-Changed since these runs: `books-travel-priciest` v4 → v5, `dynamic-loading` v4 → v5, `hockey-bruins-1990` v4 → v5, `hover-profile` v4 → v5, `nested-frames` v4 → v5, `oscars-2012` v4 → v5, `pizza-order` v4 → v5, `ruff-release` v4 → v5; compare them only against runs of the same version.
+Each arm made 3 attempts. Runs: `f08c17d8a0a6` at `1523055`.
 
-`heldout` `0e3d5bb8`: fastbrowse against Browser Use agent, on the same 9 tasks.
+`dev` `f696dab6`: fastbrowse against Browser Use agent, on the same 8 tasks.
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.7) | 27/27 | 27/27 | 15.6s | 26.0s | $0.0084 | $0.0185 | $0.50 |
-| Browser Use agent | 24/27 | 27/27 | 12.9s | 24.2s | $0.2023 | $0.2779 | $7.50 |
+| fastbrowse (0.5.7) | 24/24 | 24/24 | 18.9s | 17.7s | $0.0058 | $0.0089 | $0.21 |
+| Browser Use agent | 24/24 | 24/24 | 8.1s | 11.0s | $0.1333 | $0.1879 | $4.51 |
 
-Each arm made 27 attempts. Runs: `9caefa930c72` at `e265dd1`.
-Changed since these runs: `books-mystery-cheapest` v4 → v5, `countries-mongolia` v4 → v5, `crates-serde` v4 → v5, `httpx-requires-python` v4 → v5, `new-window` v4 → v5, `quotes-einstein-count` v4 → v5, `quotes-js-page2` v4 → v5, `quotes-search` v4 → v5, `table-largest-due` v4 → v5; compare them only against runs of the same version.
+Each arm made 24 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
 
-`stretch-dev` `63ceceeb`: fastbrowse against Browser Use agent, on the same 5 tasks.
-
-| | passed | correct | median time | mean time | median cost | mean cost | total cost |
-|:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.7) | 12/15 | 12/15 | 40.8s | 58.9s | $0.0308 | $0.0478 | $0.72 |
-| Browser Use agent | 15/15 | 15/15 | 61.6s | 71.7s | $0.5711 | $0.5722 | $8.58 |
-
-Each arm made 15 attempts. Runs: `9caefa930c72` at `e265dd1`.
-Changed since these runs: `stretch-books-nonfiction-five-star` v6 → v7, `stretch-bstack-apple-google` v5 → v6, `stretch-date-range-monday` v5 → v6, `stretch-wizard-correction` v5 → v6, `stretch-wizard-review` v4 → v5; compare them only against runs of the same version.
-
-`stretch-heldout` `456fd056`: fastbrowse against Browser Use agent, on the same 3 tasks.
+`heldout` `90b5446e`: fastbrowse against Browser Use agent, on the same 9 tasks.
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.7) | 6/9 | 6/9 | 53.2s | 71.1s | $0.0487 | $0.0973 | $0.88 |
-| Browser Use agent | 9/9 | 9/9 | 29.7s | 50.7s | $0.2227 | $0.3111 | $2.80 |
+| fastbrowse (0.5.7) | 27/27 | 27/27 | 17.1s | 27.9s | $0.0078 | $0.0196 | $0.53 |
+| Browser Use agent | 27/27 | 27/27 | 11.4s | 18.0s | $0.2023 | $0.2779 | $7.50 |
 
-Each arm made 9 attempts. Runs: `9caefa930c72` at `e265dd1`.
-Changed since these runs: `stretch-bstack-apple-samsung` v5 → v6, `stretch-calendar-first-friday` v6 → v7, `stretch-quotes-top-authors` v5 → v6; compare them only against runs of the same version.
+Each arm made 27 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
+
+`stretch-dev` `c174a854`: fastbrowse against Browser Use agent, on the same 5 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.7) | 13/15 | 13/15 | 35.7s | 59.7s | $0.0302 | $0.0513 | $0.77 |
+| Browser Use agent | 15/15 | 15/15 | 44.3s | 42.9s | $0.5711 | $0.5722 | $8.58 |
+
+Each arm made 15 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
+
+`stretch-heldout` `d7d3a074`: fastbrowse against Browser Use agent, on the same 3 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.7) | 6/9 | 6/9 | 50.0s | 78.8s | $0.0459 | $0.1098 | $0.99 |
+| Browser Use agent | 9/9 | 9/9 | 26.4s | 37.8s | $0.2227 | $0.3111 | $2.80 |
+
+Each arm made 9 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
 <!-- /evals:results:0.5.7 -->
 
 ### 0.5.6, 2026-09-25

@@ -3,9 +3,9 @@
   "releases": [
     {
       "fastbrowse_version": "0.5.7",
-      "date": "2026-09-25",
+      "date": "2026-09-26",
       "suite": "core",
-      "suite_version": "391f8d42",
+      "suite_version": "af816f31",
       "compared": [
         "fastbrowse",
         "browser-use"
@@ -13,27 +13,27 @@
       "tasks": 14,
       "arms": {
         "fastbrowse": {
-          "passed": 42,
+          "passed": 41,
           "total": 42,
           "excluded": 0,
           "priced": 42,
           "seconds": {
-            "median": 19.6,
-            "mean": 25.275
+            "median": 20.4,
+            "mean": 27.27857142857143
           },
           "dollars": {
-            "median": 0.00846,
-            "mean": 0.012287142857142858
+            "median": 0.00806,
+            "mean": 0.012363333333333334
           }
         },
         "browser-use": {
-          "passed": 37,
+          "passed": 39,
           "total": 42,
           "excluded": 0,
           "priced": 42,
           "seconds": {
-            "median": 21.45,
-            "mean": 52.81190476190476
+            "median": 18.85,
+            "mean": 31.590476190476192
           },
           "dollars": {
             "median": 0.36238,
@@ -48,7 +48,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -57,7 +57,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -66,7 +66,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -75,7 +75,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -84,7 +84,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -93,7 +93,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -102,7 +102,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -111,7 +111,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -120,7 +120,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -129,7 +129,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -138,7 +138,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -147,7 +147,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -156,7 +156,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -165,16 +165,16 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         }
       ]
     },
     {
       "fastbrowse_version": "0.5.7",
-      "date": "2026-09-25",
+      "date": "2026-09-26",
       "suite": "core",
-      "suite_version": "391f8d42",
+      "suite_version": "af816f31",
       "compared": [
         "fastbrowse",
         "jev-ultrafast"
@@ -182,17 +182,17 @@
       "tasks": 6,
       "arms": {
         "fastbrowse": {
-          "passed": 18,
+          "passed": 17,
           "total": 18,
           "excluded": 0,
           "priced": 18,
           "seconds": {
-            "median": 10.015,
-            "mean": 18.105
+            "median": 9.600000000000001,
+            "mean": 11.944444444444445
           },
           "dollars": {
-            "median": 0.00277,
-            "mean": 0.00455
+            "median": 0.002635,
+            "mean": 0.003468888888888889
           }
         },
         "jev-ultrafast": {
@@ -217,7 +217,7 @@
             2
           ],
           "current": [
-            3
+            4
           ]
         },
         {
@@ -226,7 +226,7 @@
             2
           ],
           "current": [
-            3
+            4
           ]
         },
         {
@@ -235,7 +235,7 @@
             2
           ],
           "current": [
-            3
+            4
           ]
         },
         {
@@ -244,7 +244,7 @@
             2
           ],
           "current": [
-            3
+            4
           ]
         },
         {
@@ -253,7 +253,7 @@
             2
           ],
           "current": [
-            3
+            4
           ]
         },
         {
@@ -262,16 +262,16 @@
             2
           ],
           "current": [
-            3
+            4
           ]
         }
       ]
     },
     {
       "fastbrowse_version": "0.5.7",
-      "date": "2026-09-25",
+      "date": "2026-09-26",
       "suite": "core",
-      "suite_version": "391f8d42",
+      "suite_version": "af816f31",
       "compared": [
         "fastbrowse"
       ],
@@ -283,12 +283,12 @@
           "excluded": 0,
           "priced": 3,
           "seconds": {
-            "median": 34.33,
-            "mean": 34.376666666666665
+            "median": 36.6,
+            "mean": 36.56666666666666
           },
           "dollars": {
-            "median": 0.00474,
-            "mean": 0.004773333333333333
+            "median": 0.00476,
+            "mean": 0.004743333333333334
           }
         }
       },
@@ -299,16 +299,16 @@
             2
           ],
           "current": [
-            3
+            4
           ]
         }
       ]
     },
     {
       "fastbrowse_version": "0.5.7",
-      "date": "2026-09-25",
+      "date": "2026-09-26",
       "suite": "dev",
-      "suite_version": "fe57fc77",
+      "suite_version": "f696dab6",
       "compared": [
         "fastbrowse",
         "browser-use"
@@ -321,22 +321,22 @@
           "excluded": 0,
           "priced": 24,
           "seconds": {
-            "median": 16.68,
-            "mean": 17.926666666666666
+            "median": 18.85,
+            "mean": 17.7125
           },
           "dollars": {
-            "median": 0.005835,
-            "mean": 0.007824583333333333
+            "median": 0.00584,
+            "mean": 0.008855416666666666
           }
         },
         "browser-use": {
-          "passed": 23,
+          "passed": 24,
           "total": 24,
           "excluded": 0,
           "priced": 24,
           "seconds": {
-            "median": 8.95,
-            "mean": 12.304166666666667
+            "median": 8.100000000000001,
+            "mean": 10.983333333333334
           },
           "dollars": {
             "median": 0.13332,
@@ -351,7 +351,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -360,7 +360,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -369,7 +369,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -378,7 +378,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -387,7 +387,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -396,7 +396,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -405,7 +405,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -414,16 +414,16 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         }
       ]
     },
     {
       "fastbrowse_version": "0.5.7",
-      "date": "2026-09-25",
+      "date": "2026-09-26",
       "suite": "heldout",
-      "suite_version": "0e3d5bb8",
+      "suite_version": "90b5446e",
       "compared": [
         "fastbrowse",
         "browser-use"
@@ -436,22 +436,22 @@
           "excluded": 0,
           "priced": 27,
           "seconds": {
-            "median": 15.6,
-            "mean": 26.04148148148148
+            "median": 17.1,
+            "mean": 27.885185185185186
           },
           "dollars": {
-            "median": 0.0084,
-            "mean": 0.01848296296296296
+            "median": 0.00777,
+            "mean": 0.019624074074074075
           }
         },
         "browser-use": {
-          "passed": 24,
+          "passed": 27,
           "total": 27,
           "excluded": 0,
           "priced": 27,
           "seconds": {
-            "median": 12.9,
-            "mean": 24.24074074074074
+            "median": 11.4,
+            "mean": 17.992592592592594
           },
           "dollars": {
             "median": 0.20228,
@@ -466,7 +466,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -475,7 +475,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -484,7 +484,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -493,7 +493,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -502,7 +502,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -511,7 +511,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -520,7 +520,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -529,7 +529,7 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         },
         {
@@ -538,16 +538,16 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         }
       ]
     },
     {
       "fastbrowse_version": "0.5.7",
-      "date": "2026-09-25",
+      "date": "2026-09-26",
       "suite": "stretch-dev",
-      "suite_version": "63ceceeb",
+      "suite_version": "c174a854",
       "compared": [
         "fastbrowse",
         "browser-use"
@@ -555,17 +555,17 @@
       "tasks": 5,
       "arms": {
         "fastbrowse": {
-          "passed": 12,
+          "passed": 13,
           "total": 15,
           "excluded": 0,
           "priced": 15,
           "seconds": {
-            "median": 40.830000000000005,
-            "mean": 58.89866666666667
+            "median": 35.7,
+            "mean": 59.74666666666667
           },
           "dollars": {
-            "median": 0.03084,
-            "mean": 0.047750666666666663
+            "median": 0.03018,
+            "mean": 0.05130933333333333
           }
         },
         "browser-use": {
@@ -574,8 +574,8 @@
           "excluded": 0,
           "priced": 15,
           "seconds": {
-            "median": 61.6,
-            "mean": 71.70666666666666
+            "median": 44.3,
+            "mean": 42.92
           },
           "dollars": {
             "median": 0.57112,
@@ -590,7 +590,7 @@
             5
           ],
           "current": [
-            6
+            7
           ]
         },
         {
@@ -599,7 +599,7 @@
             4
           ],
           "current": [
-            5
+            6
           ]
         },
         {
@@ -608,7 +608,7 @@
             4
           ],
           "current": [
-            5
+            6
           ]
         },
         {
@@ -617,7 +617,7 @@
             4
           ],
           "current": [
-            5
+            6
           ]
         },
         {
@@ -626,16 +626,16 @@
             3
           ],
           "current": [
-            4
+            5
           ]
         }
       ]
     },
     {
       "fastbrowse_version": "0.5.7",
-      "date": "2026-09-25",
+      "date": "2026-09-26",
       "suite": "stretch-heldout",
-      "suite_version": "456fd056",
+      "suite_version": "d7d3a074",
       "compared": [
         "fastbrowse",
         "browser-use"
@@ -648,12 +648,12 @@
           "excluded": 0,
           "priced": 9,
           "seconds": {
-            "median": 53.160000000000004,
-            "mean": 71.10555555555555
+            "median": 50.0,
+            "mean": 78.77777777777777
           },
           "dollars": {
-            "median": 0.04872,
-            "mean": 0.09730222222222222
+            "median": 0.04589,
+            "mean": 0.10979
           }
         },
         "browser-use": {
@@ -662,8 +662,8 @@
           "excluded": 0,
           "priced": 9,
           "seconds": {
-            "median": 29.7,
-            "mean": 50.71111111111111
+            "median": 26.4,
+            "mean": 37.8
           },
           "dollars": {
             "median": 0.22272,
@@ -678,7 +678,7 @@
             4
           ],
           "current": [
-            5
+            6
           ]
         },
         {
@@ -687,7 +687,7 @@
             5
           ],
           "current": [
-            6
+            7
           ]
         },
         {
@@ -696,7 +696,7 @@
             4
           ],
           "current": [
-            5
+            6
           ]
         }
       ]
