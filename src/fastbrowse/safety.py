@@ -54,8 +54,8 @@ def irreversible_question(task: str, operation: Operation, control: Control) -> 
             f"doing this task: {task}\n"
             + (f"It sits under {control.context!r} on the page.\n" if control.context else "")
             + (f"Enter submits this form: {control.submit_semantics}\n" if operation is Operation.ENTER else "")
-            + "Would doing so commit something that cannot be undone, such as spending money, sending a "
-            "message, submitting an application, or deleting or publishing data?"
+            + "Would doing so commit something that cannot be undone, such as placing an order or spending money, "
+            "sending a message, submitting an application, or deleting or publishing data?"
         ),
         true="It commits an irreversible or externally visible change.",
         false="It only navigates, filters, reveals or edits a draft that can still be changed.",

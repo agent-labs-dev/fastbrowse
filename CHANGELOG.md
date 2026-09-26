@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Placing an order reliably pauses for confirmation.** The check before an irreversible click rated a
+  checkout's final button barely above its threshold, so an unauthorized order could go through. The question
+  now names placing an order among the changes that cannot be undone.
 - **Six held-out eval tasks moved to the dev sets.** Changes in this release were profiled or measured on
   `new-window`, `countries-mongolia`, `table-largest-due`, `quotes-search`, `stretch-calendar-first-friday` and
   `stretch-quotes-top-authors`, so their scores no longer test unseen work. Fresh tasks for the same skills
