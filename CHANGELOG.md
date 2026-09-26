@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Cloud clicks, fills and observations use fewer round trips.** The pre-press frame wait shares its
+  page evaluation with the target guard and hit test, field hand-off also reads the input type, and page
+  snapshots run beside the history read. Pointer, focus and secret checks still gate input.
 - **Evals never count a provider's outage against an agent.** Browser Use is now scored on its own agent's
   answer (its `done`, or its final reply when it never calls `done`), not on Browser Use's later
   `is_task_successful` verdict, which failed six correct 0.5.7 answers. It is timed to that answer, not to the

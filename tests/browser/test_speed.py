@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from contextlib import suppress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from cdp_use.cdp.fetch.events import RequestPausedEvent
@@ -26,6 +27,17 @@ from tests.browser.test_browser import eval_value, find, observe_until, wait_unt
 from tests.browser.test_lifecycle import CONNECTION, CdpTransport
 
 page_module = importlib.import_module("fastbrowse.browser.page")
+
+
+async def test_frame_wait_includes_later_callbacks_in_the_same_frame(page: CdpPage, main_site: str) -> None:
+    await page.navigate(main_site)
+    assert await page._evaluate(
+        page._session.active_session_id,
+        "(async () => { let changed = false; "
+        f"const presented = {page_module._PRESENTED_JS}; "
+        "requestAnimationFrame(() => requestAnimationFrame(() => { changed = true; })); "
+        "await presented; return changed; })()",
+    )
 
 
 @pytest.fixture(scope="module")
@@ -258,7 +270,10 @@ async def test_continuous_mutations_are_bounded(
         await eval_value(browser_session, browser_session.active_session_id, "clearInterval(window.animation)")
 
 
-async def test_cancelled_settling_drains_renderer_and_dialog_waits(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("press", [False, True])
+async def test_cancelled_browser_check_drains_renderer_and_dialog_waits(
+    monkeypatch: pytest.MonkeyPatch, press: bool
+) -> None:
     transport = CdpTransport(monkeypatch)
     started = transport.blocked["Runtime.evaluate"] = asyncio.Event()
     dialog_finished = asyncio.Event()
@@ -272,7 +287,10 @@ async def test_cancelled_settling_drains_renderer_and_dialog_waits(monkeypatch: 
     async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
         monkeypatch.setattr(session, "wait_for_dialog", wait_for_dialog)
         page = CdpPage(session, Config())
-        task = asyncio.create_task(page._changed_since("before"))
+        monkeypatch.setattr(page, "_move", AsyncMock())
+        task = asyncio.create_task(
+            page._click_point(("session", "main", 1, []), (10, 10)) if press else page._changed_since("before")
+        )
         try:
             await asyncio.wait_for(started.wait(), timeout=2)
             task.cancel()
@@ -280,6 +298,25 @@ async def test_cancelled_settling_drains_renderer_and_dialog_waits(monkeypatch: 
                 await task
             assert "Runtime.evaluate" in transport.finished
             assert dialog_finished.is_set()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_cancelled_observation_drains_history_and_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = CdpTransport(monkeypatch)
+    history = transport.blocked["Page.getNavigationHistory"] = asyncio.Event()
+    snapshot = transport.blocked["Runtime.evaluate"] = asyncio.Event()
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+        task = asyncio.create_task(CdpPage(session, Config()).observe())
+        try:
+            async with asyncio.timeout(2):
+                await history.wait()
+                await snapshot.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert {"Page.getNavigationHistory", "Runtime.evaluate"} <= transport.finished
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)

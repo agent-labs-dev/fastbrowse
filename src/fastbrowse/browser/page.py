@@ -106,9 +106,12 @@ _HIT_TEST_JS = (
 _HANDOFF_SECONDS = 0.6
 _HANDOFF_QUIET_SECONDS = 0.1
 _TARGET_STABILITY_SECONDS = 1.0
+# A guard resumed inside an animation callback can miss other callbacks in that same frame. Resolve in the
+# next task so a combined frame wait and hit test sees their DOM changes too.
 _PRESENTED_JS = (
     "new Promise(done => { const t = setTimeout(done, 100); "
-    "requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(t); done(); })); })"
+    "requestAnimationFrame(() => requestAnimationFrame(() => "
+    "setTimeout(() => { clearTimeout(t); done(); }, 0))); })"
 )
 """Resolves once the page has drawn a frame, or after 100ms where a hidden page never draws one."""
 
@@ -149,6 +152,7 @@ _TARGET_STATE = TypeAdapter(tuple[str, list[object] | None, _Point])
 """[fingerprint, live guard, hit-test point] from the pre-action check."""
 _SETTLED = TypeAdapter(tuple[bool, str | None])
 _NODE_ID = TypeAdapter(int | None)
+_FILL_TARGET = TypeAdapter(tuple[int | None, bool])
 
 
 class _SnapshotControl(Frozen):
@@ -308,8 +312,14 @@ class CdpPage(Page):
         if dialog is not None:
             # A JavaScript dialog blocks the renderer, so any page evaluate would hang until it is handled.
             return self._dialog_observation(dialog)
-        can_go_back = await self._can_go_back()
-        frames, inaccessible = await self._snapshot_all_frames()
+        history = asyncio.create_task(self._can_go_back())
+        snapshot = asyncio.create_task(self._snapshot_all_frames())
+        try:
+            can_go_back, (frames, inaccessible) = await asyncio.gather(history, snapshot)
+        finally:
+            history.cancel()
+            snapshot.cancel()
+            await asyncio.gather(history, snapshot, return_exceptions=True)
         main = frames.get(_MAIN)
         controls: list[Control] = []
         control_state: dict[str, tuple[str, str, int, list[object] | None]] = {}
@@ -643,13 +653,17 @@ class CdpPage(Page):
         outcome, detail = await self._click_point(target, point, prepare_fill=True)
         if outcome is not StepOutcome.EXECUTED:
             return outcome, detail
-        handed = _NODE_ID.validate_python(
-            await self._evaluate(session_id, f"({_HANDED_FOCUS_JS})({local_id}, {json.dumps(secret)})")
+        handed, native_date = _FILL_TARGET.validate_python(
+            await self._evaluate(
+                session_id,
+                f"({_HANDED_FOCUS_JS})({local_id}, {json.dumps(secret)}).then(id => "
+                f"[id, {json.dumps(_DATE_INPUT_TYPES)}.includes(window.__fastbrowse?.nodes.get(id)?.type)])",
+            )
         )
         if handed is None:
             return StepOutcome.FAILED, "clicked field has no replacement in the same document and position"
         local_id = handed
-        if not secret and await self._is_native_date(session_id, local_id):
+        if not secret and native_date:
             return await self._fill_native_date(session_id, local_id, text)
         for attempt in range(2):
             if not await self._focus(session_id, local_id, prepare_fill=True, secret=secret):
@@ -704,15 +718,6 @@ class CdpPage(Page):
             local_id = handed
         await self._await_suggestions(session_id, local_id)
         return StepOutcome.EXECUTED, None
-
-    async def _is_native_date(self, session_id: str, local_id: int) -> bool:
-        return bool(
-            await self._evaluate(
-                session_id,
-                f"(id => {{ const e = window.__fastbrowse?.nodes.get(id); "
-                f"return !!e && {json.dumps(_DATE_INPUT_TYPES)}.includes(e.type); }})({local_id})",
-            )
-        )
 
     async def _fill_native_date(self, session_id: str, local_id: int, value: str) -> tuple[StepOutcome, str | None]:
         """Commit an ISO value to a native date/time input the way its own picker would.
@@ -915,12 +920,19 @@ class CdpPage(Page):
         deadline = time.monotonic() + _TARGET_STABILITY_SECONDS
         while True:
             await self._move(session_id, point)
-            # Bounded as in `_move`: a dialog the pointer opens in the next frame leaves this wait unanswered.
-            with suppress(TimeoutError):
-                await asyncio.wait_for(self._evaluate(self._session.active_session_id, _PRESENTED_JS), 0.5)
-            if self._session.pending_dialog() is not None:
-                return StepOutcome.FAILED, "pointer movement opened a dialog before press"
-            _, guard, fresh = await self._before_action(target, hit_test=True, prepare_fill=prepare_fill)
+            check = asyncio.create_task(
+                self._before_action(target, hit_test=True, prepare_fill=prepare_fill, after_move=True)
+            )
+            dialog = asyncio.create_task(self._session.wait_for_dialog())
+            try:
+                await asyncio.wait({check, dialog}, return_when=asyncio.FIRST_COMPLETED)
+                if self._session.pending_dialog() is not None:
+                    return StepOutcome.FAILED, "pointer movement opened a dialog before press"
+                _, guard, fresh = check.result()
+            finally:
+                check.cancel()
+                dialog.cancel()
+                await asyncio.gather(check, dialog, return_exceptions=True)
             if guard != target[3] or fresh is None:
                 return StepOutcome.STALE, "control changed before pointer press"
             if fresh == "covered":
@@ -1122,19 +1134,26 @@ class CdpPage(Page):
         *,
         hit_test: bool,
         prepare_fill: bool = False,
+        after_move: bool = False,
     ) -> tuple[str, list[object] | None, _Point]:
         if target is None:
             return await self._fingerprint(), None, None
         session_id, _frame, local_id, guard = target
         same_session = session_id == self._session.active_session_id
+        # Input routing uses the top frame's drawn layout. An OOPIF cannot wait for that frame in its own
+        # renderer, so only that path needs a separate round trip before checking the target.
+        if after_move and not same_session:
+            await self._evaluate(self._session.active_session_id, _PRESENTED_JS)
 
         async def target_state() -> tuple[str, list[object] | None, _Point]:
             # Guard validation and hit testing share a renderer task, so no page script can swap the
             # verified control between them. Stale controls must never be scrolled into view.
             result = await self._evaluate(
                 session_id,
-                "(() => { const r = window.__fastbrowse; "
-                f"const fingerprint = {_FINGERPRINT_JS if same_session else "''"}; "
+                "(async () => { "
+                + (f"await {_PRESENTED_JS}; " if after_move and same_session else "")
+                + "const r = window.__fastbrowse; "
+                f"const fingerprint = {_FINGERPRINT_JS if same_session and not after_move else "''"}; "
                 f"const guard = r?.guard ? r.guard(r.nodes.get({local_id})) : null; "
                 f"const point = {json.dumps(hit_test)} && JSON.stringify(guard) === "
                 f"JSON.stringify({json.dumps(guard)}) ? ({_HIT_TEST_JS})({local_id}) : null; "
@@ -1150,7 +1169,7 @@ class CdpPage(Page):
             )
             return _TARGET_STATE.validate_python(result)
 
-        if same_session:
+        if same_session or after_move:
             return await target_state()
         fingerprint_task = asyncio.create_task(self._fingerprint())
         target_task = asyncio.create_task(target_state())
