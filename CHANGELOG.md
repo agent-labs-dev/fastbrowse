@@ -15,6 +15,15 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   same-origin address directly, with each followed page still recorded. Readers keep matching records from
   the first page, use a smaller response for intermediate pages, and cite earlier evidence with short
   references that resolve to the original capture spans. Answered comparisons go straight to the final checks.
+- **A page read before is read again when what it said is gone.** A wizard's Review step, read before the
+  run went back to correct a field, still answered for it afterwards, so the answer could name the value from
+  before the correction. On a return to a page state whose quoted evidence the page no longer shows, the
+  requirement is reopened and the page read as it is now.
+- **Stepping back and forth through a wizard is quicker.** A page the run left unread is not read on the way
+  back when nothing on it changed; an empty fill into an empty field goes to recovery instead of being typed;
+  an unsure pick the run already took from the same page recovers instead of retracing it; and a Next that
+  only shows the values a step already held no longer counts as a setting put back, which tripped the
+  stall recovery on the pass after a correction.
 - **A site that drops the first page load ends the run `unavailable`, not `error`.** Chrome's empty,
   reset, refused or proxy-failed connection before the first step says the site was down, as a timeout already
   did; an address that does not resolve still ends `error`.

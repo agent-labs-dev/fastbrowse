@@ -297,6 +297,15 @@ class _RunState:
     barren: dict[ReadKey, int] = field(default_factory=dict[ReadKey, int])
     """Reads by document, page state and outstanding requirements that added no fact. Keyed by what can be done
     on the page rather than by its exact text, so a page rewriting itself cannot mint a fresh key for ever."""
+    passed: set[str] = field(default_factory=set[str])
+    """Page states, by `_seen`, the run acted on without reading them: Jev judged them not worth a read then."""
+    typed_on_passed: bool = False
+    """Every action since the run was last on a passed state only typed into a field on it."""
+    acted_on: str | None = None
+    """The page state, by `_seen`, the last action was taken on."""
+    evidenced_at: dict[str, dict[str, str]] = field(default_factory=dict[str, dict[str, str]])
+    """By page state, each requirement a read of it evidenced and the capture it read, so a return to that state
+    can tell the evidence went stale."""
     next_page: bool = False
     """Open this page's next page, set when the reader says a list the run needs goes on past the page it read."""
     paged_from: str | None = None
@@ -527,6 +536,8 @@ class Agent:
                     if result is not None:
                         return result
                 continue
+            if await self._reread_if_changed(state, observation):
+                continue
             if (paging := _paging(state, observation)) is not None:
                 if await self._step(state, observation, paging, Decider.LLM, gate=False):
                     await self._recover(state, observation, _read_exhausted(state))
@@ -647,7 +658,7 @@ class Agent:
             # READ on the page that shows the answer sent every such run to recovery, and one spent the whole
             # recovery budget there and ended without an answer.
             if decision.operation is Operation.ESCALATE or (
-                uncertain and decision.operation not in _NOT_ACTING and not _try_unsure(state, observation)
+                uncertain and decision.operation not in _NOT_ACTING and not _try_unsure(state, observation, decision)
             ):
                 await self._recover(state, observation, f"uncertain next step ({decision.confidence:.2f})")
                 continue
@@ -819,6 +830,7 @@ class Agent:
                 state, capture or await self._capture(), observation, require_all_evidence=require_all_evidence
             )
             state.read_here = True
+            state.typed_on_passed = False
             if skipped:
                 return True
             changed = False
@@ -833,6 +845,10 @@ class Agent:
             if action is None:
                 return False
             state.redecided = False
+            if action.operation is Operation.FILL and not action.text and not _require(decision.target).value:
+                # Typing nothing into an empty field does nothing. Jev, unsure between wizard steps, picked a page's
+                # search box, the writer found no text for it, and the empty fill was taken three times over.
+                raise _Unsure(f"the task gives no text for {_describe(_require(decision.target))!r}: leave it empty")
             if action.secret:
                 # Held from the keystrokes on: a page may mirror the value, and only the next reading shows it.
                 self._page.withhold_frames(True)
@@ -853,6 +869,13 @@ class Agent:
             if act.outcome is StepOutcome.EXECUTED and action.text is not None:
                 typed = "<secret>" if action.secret else self._redactor.mask(action.text)
             changed = act.page_changed
+            if act.outcome is StepOutcome.EXECUTED:
+                typing = decision.operation in {Operation.FILL, Operation.SELECT} and not changed
+                seen = _seen(observation)
+                state.typed_on_passed = typing and (seen in state.passed or state.typed_on_passed)
+                if not state.read_here:
+                    state.passed.add(seen)
+                state.acted_on = seen
             state.owes_read = state.owes_read or (act.outcome is StepOutcome.EXECUTED and changed)
             # A value edit answers "was this progress" itself, and its answer beats `changed`: the popup a fill
             # draws IS a page change, so `changed` alone kept crediting the identical re-fill even once the
@@ -1050,6 +1073,7 @@ class Agent:
         if (
             made is None
             or made.values_after == made.values_before
+            or not (made.set_a_value or state.history[-1].setting)
             or state.history[-1].outcome is not StepOutcome.EXECUTED
             # Scrolling shows and hides controls without changing a setting.
             or state.history[-1].operation in _PAGE_OPERATIONS
@@ -1564,12 +1588,55 @@ class Agent:
             # The page was read, and since then only a field's own text changed, which is the run's own writing:
             # pypi-newer read its httpx results again after typing "requests", only because the box's text had.
             return False
+        seen = _seen(observation)
+        if (seen in state.passed and seen != state.acted_on) or state.typed_on_passed:
+            # Back on a page exactly as the run left it unread, perhaps with its own typing added: Jev judged it
+            # had nothing to read then, and nothing it holds has changed. Walking back through a wizard to correct
+            # a field, Jev called each earlier step evidence on the way, and reading them cost 4s a step.
+            return False
         plan = await state.await_plan()
         if not _unread(plan, state.notes):
             return False
         # An interaction can remove evidence, so read first and reconsider before authorizing the next action.
         reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
         return not await self._step(state, observation, reading, decided_by)
+
+    async def _reread_if_changed(self, state: _RunState, observation: Observation) -> bool:
+        """Read a page state again when what an earlier read of it evidenced is no longer on it; whether it read.
+
+        A wizard's Review step was read, the run went back and corrected a field, and on reaching Review again its
+        requirement was already evidenced, so nothing read it: the answer named the value Review showed before the
+        correction. The requirement is reopened, keeping the old fact as context, and asked of the page as it is."""
+        if not (state.history and state.history[-1].page_changed):
+            return False
+        key = state_key(observation)
+        read = state.evidenced_at.get(key, {})
+        if not (ids := {r: sha for r, sha in read.items() if state.notes.evidenced(r)}):
+            return False
+        capture = await self._capture()
+
+        def gone(quote: str) -> bool:
+            # Whole words: "Priya Sharma" is inside the corrected "Priya Sharman".
+            return re.search(rf"(?<!\w){re.escape(quote)}(?!\w)", capture.text) is None
+
+        stale = {
+            r
+            for r, sha in ids.items()
+            if any(e.capture_sha256 == sha and gone(e.quote) for e in state.notes.supporting_evidence(r))
+        }
+        if not stale:
+            return False
+        trace("reread", requirements=sorted(stale))
+        state.notes.unevidence(stale)
+        for r in stale:
+            del read[r]
+        # What the page paid out before was read off content it no longer shows.
+        for spent in [k for k in state.barren if k[:2] == (observation.document_key, key)]:
+            del state.barren[spent]
+        reading = _code_decision(Operation.READ, None)
+        if await self._step(state, observation, reading, Decider.LLM, capture=capture):
+            await self._recover(state, observation, _read_exhausted(state))
+        return True
 
     async def _read(
         self,
@@ -1674,6 +1741,8 @@ class Agent:
             uncovered=outcome.uncovered,
         )
         spent(progressed)
+        if observation is not None and (newly := {r.id for r in wanted if state.notes.evidenced(r.id)} - evidenced):
+            state.evidenced_at.setdefault(state_key(observation), {}).update(dict.fromkeys(newly, capture.sha256))
         state.through_end = bool(continues) and {r.id for r in wanted} <= set(outcome.through_end)
         if observation is not None:
             self._follow_pages(state, continues, following, observation, outcome.expands)
@@ -2589,6 +2658,12 @@ def _next_value(values: Sequence[str], history: Sequence[HistoryEntry], label: s
     return values[min(done, len(values) - 1)]
 
 
+def _seen(observation: Observation) -> str:
+    """A page state with its visible text, which a state key leaves out: a review step keeps its controls when
+    the values it shows change."""
+    return f"{state_key(observation)}:{hashlib.sha256(observation.viewport_text.encode()).hexdigest()}"
+
+
 def _only_typed_since_read(history: Sequence[HistoryEntry]) -> bool:
     """Whether every action since the last read typed into a field and changed nothing else on the page."""
     for entry in reversed(history):
@@ -2754,16 +2829,20 @@ def _code_decision(operation: Operation, target: Control | None) -> Decision:
     )
 
 
-def _try_unsure(state: _RunState, observation: Observation) -> bool:
-    """Whether to act on Jev's unsure pick rather than recover: once per page state.
+def _try_unsure(state: _RunState, observation: Observation, decision: Decision) -> bool:
+    """Whether to act on Jev's unsure pick rather than recover: once per page state, and never a pick the run
+    already took from this state.
 
     Recovery costs about 5s, and on a flights form 9 of 12 recoveries for an unsure step named the control Jev
     had already picked. Acting costs one step when the pick is wrong, and a wrong pick is still caught: one that
     changes nothing leaves Jev unsure on the same state, which then recovers, one that goes round is caught by
     the revisit check, and one that may commit something irreversible is asked about before it dispatches.
+
+    An unsure repeat is the run going back where it has been: one Back from a wizard's Review to correct its first
+    step, Jev was unsure and clicked Next to Review again, and got back only after a wrong pick and a recovery.
     """
     key = state_key(observation)
-    if key in state.tried_unsure:
+    if key in state.tried_unsure or _signature(decision, observation) in state.attempts:
         return False
     state.tried_unsure.add(key)
     return True
