@@ -58,7 +58,7 @@ from fastbrowse.policy import Decision, HistoryEntry, ReadAssessment, build_requ
 from fastbrowse.retrieval import TRANSACTION_CONTRADICTED, ComposedAnswer
 from fastbrowse.safety import Redactor, ScopedSecrets
 from fastbrowse.shortcut import Shortcut
-from fastbrowse.telemetry import Ledger
+from fastbrowse.telemetry import BudgetExceeded, Ledger
 from fastbrowse.tripwires import Tripwire
 from fastbrowse.verification import LLMVerdict, _grounding
 from tests.test_memory import evidence
@@ -528,8 +528,6 @@ async def test_a_message_is_read_before_mutation_and_the_next_action_is_reconsid
         page.act.assert_not_awaited()
         agent._finish.assert_awaited_once()
     else:
-        from fastbrowse.telemetry import BudgetExceeded
-
         with pytest.raises(BudgetExceeded):
             await agent._loop(state, None, None)
         page.act.assert_awaited_once()
@@ -750,6 +748,53 @@ async def test_directed_done_still_requires_verification_after_an_exhausted_read
     assert any(step.operation is Operation.DONE and step.outcome is StepOutcome.FAILED for step in state.steps)
     assert len(llm.calls) == 1
     page.act.assert_not_called()
+
+
+@pytest.mark.parametrize("lookup", [True, False])
+async def test_a_read_that_answers_a_lookup_finishes_on_the_page_it_read(lookup: bool) -> None:
+    """A read does not change the page, so observing it again and deciding only arrived at DONE. A plan with
+    something left to do on the site is decided again."""
+    kinds = (RequirementKind.INFORMATION,) if lookup else (RequirementKind.INFORMATION, RequirementKind.ACTION)
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=tuple(Requirement(id=f"r{i}", text="The license", kind=kind) for i, kind in enumerate(kinds, 1)),
+        answer_expected=True,
+    )
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=observation((_button("Code"),)))
+    page.redrawn = AsyncMock(return_value=False)
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "BSD-3-Clause license")))
+    page.artifacts = ()
+    claim: JsonValue = {"text": "BSD-3-Clause", "cite": {"first": "s0", "last": "s0"}, "requirement_id": "r1"}
+    agent = Agent(
+        page, ScriptedJev({"operation": "read"}, noul=0.0), ScriptedLLM([{"claims": [claim], "answered": True}])
+    )
+    agent._finish = AsyncMock(return_value=agent._result(state, state.ledger, Status.COMPLETE))
+    # One step: a lookup reaches its finish on it, and anything else is stopped deciding its second.
+    state.ledger.limits = Limits(max_steps=1)
+    if lookup:
+        await asyncio.wait_for(agent._loop(state, None, None), timeout=1)
+        page.observe.assert_awaited_once()
+        assert agent._finish.await_args is not None and agent._finish.await_args.args[1] is agent._observed
+    else:
+        with pytest.raises(BudgetExceeded):
+            await asyncio.wait_for(agent._loop(state, None, None), timeout=1)
+        agent._finish.assert_not_awaited()
+
+
+async def test_a_finish_judges_the_last_observation_without_observing_again() -> None:
+    """Nothing acts between the loop's observation and `_finish`; one that is stale by then is judged afresh."""
+    state = await run_state()
+    state.notes.add(_fare("https://example.test/flights/results", "results"))
+    agent, on = await _finishing(state, ScriptedLLM([]), noul=0.99)
+    observe = agent._page.observe
+    assert isinstance(observe, AsyncMock)
+    last = await agent._observe()
+    observe.reset_mock()
+    assert await agent._finish(state, last, None, None) is not None
+    observe.assert_not_awaited()
+    assert await agent._finish(state, on, None, None) is not None
+    observe.assert_awaited_once()
 
 
 def _button(label: str) -> Control:

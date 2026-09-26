@@ -340,6 +340,8 @@ class Agent:
         self._redactor = Redactor()
         self._secret_on_screen = False
         self._raw_observation: Observation | None = None
+        # The last observation `_observe` returned, which `_finish` judges again only if it is not the one it got.
+        self._observed: Observation | None = None
         self._artifact_start = 0
 
     async def run(
@@ -530,14 +532,20 @@ class Agent:
                     # the reader named to show more was cleared right after the read that named it, and Flights
                     # runs went to recovery without clicking View more flights. A skipped read spends nothing.
                     held, state.directed = state.directed, None
+                    recoveries = state.recoveries
                     if not await self._step(state, observation, reading, decided_by):
-                        continue
-                    state.directed = held
-                    if not _unread(plan, state.notes):
+                        if not (_lookup(plan) and _answered(plan, state.notes) and state.recoveries == recoveries):
+                            continue
+                        # A read does not change the page, so observing it again and deciding only arrived at
+                        # DONE, 1.5 to 2s a lookup. A tripwire that sent the read to recovery left it work to do.
+                        decision = decision.model_copy(update={"operation": Operation.DONE, "target": None})
+                    elif not _unread(plan, state.notes):
+                        state.directed = held
                         # Only an owed read gets here: a scroll changes the page but not its text, so the read
                         # found content already read, and the notes already describe what the interaction drew.
                         decision = decision.model_copy(update={"operation": Operation.DONE, "target": None})
                     else:
+                        state.directed = held
                         directed = (
                             decision
                             if decision.directed
@@ -987,7 +995,7 @@ class Agent:
             )
             for control in observation.controls
         )
-        return observation.model_copy(
+        self._observed = observation.model_copy(
             update={
                 "url": mask(observation.url),
                 "title": mask(observation.title),
@@ -1008,6 +1016,7 @@ class Agent:
                 else None,
             }
         )
+        return self._observed
 
     async def _capture(self) -> Capture:
         capture = await self._page.capture()
@@ -1704,8 +1713,13 @@ class Agent:
         output_schema: type[BaseModel] | None,
         until: UntilCheck | None,
     ) -> RunResult | None:
-        """Return the final result when DONE holds up; None sends the loop back to work."""
-        fresh = await self._observe()
+        """Return the final result when DONE holds up; None sends the loop back to work.
+
+        DONE is judged on `observation` when it is still the page's last: nothing acts between the loop's observation
+        and here, and observing a page nothing changed cost 0.35s a run. A wait or a twin search that observed since
+        judges the page as it is now.
+        """
+        fresh = observation if observation is self._observed else await self._observe()
         state.ledger.reserve(CostComponent.JEV)
         await state.await_plan()
         draft = draft_answer(state.plan, state.notes) if state.plan.answer_expected else None
