@@ -26,7 +26,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - **A click that opens a new tab carries on in that tab.** The run stayed on the opening page, so the next
   step was spent choosing the new tab, and a read before it could credit the opening page's heading to the
   new window. The previous tab is still listed and can be switched back to.
-- **Forms can fill several empty fields from one model call.** After a confident field choice, the writer
+- **Forms can fill more than one empty field from a single model call.** After a confident field choice, the writer
   supplies values for the same form and each fill checks that the page and other fields stayed unchanged.
   A new field, changed value, dialog or navigation returns to the usual decision loop. Secrets, populated
   fields and submission keep their existing checks, and corrections still follow the task's value order.

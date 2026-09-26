@@ -394,7 +394,7 @@ def _field_groups(capture: Capture, part: Chunk, field: _TallyField) -> tuple[_T
         return None
     groups: dict[str, list[_Cite]] = {}
     for block in blocks:
-        # A paragraph may hold several records, and a split record may hide a second matching field.
+        # A paragraph may hold more than one record, and a split record may hide a second matching field.
         if block.kind is not BlockKind.RECORD or block.start < part.start or block.end > part.end:
             return None
         text = capture.text[block.start : block.end]
