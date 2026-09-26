@@ -83,6 +83,17 @@ class CdpTransport:
         }.get(method, {})
 
 
+async def test_session_setup_sends_independent_commands_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each command is a cloud round trip, and discovery and foregrounding need not wait for the tab or its domains."""
+    transport = CdpTransport(monkeypatch)
+    transport.delays = {"Target.setDiscoverTargets": 0.3, "Target.activateTarget": 0.3, "Runtime.enable": 0.3}
+    began = time.monotonic()
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()):
+        took = time.monotonic() - began
+    # In sequence the three take 0.9s.
+    assert took < 0.6
+
+
 @pytest.mark.parametrize(
     "method", ["Target.setDiscoverTargets", "Target.attachToTarget", "Runtime.enable", "Fetch.enable"]
 )

@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections.abc import Mapping
 from itertools import pairwise
+from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import httpx
@@ -13,6 +14,7 @@ from pydantic import JsonValue
 from fastbrowse import agent as agent_module
 from fastbrowse.agent import (
     Agent,
+    HeadStart,
     _answered,
     _code_decision,
     _follow_recovery,
@@ -773,12 +775,12 @@ async def test_a_read_that_answers_a_lookup_finishes_on_the_page_it_read(lookup:
     if recovered:
         step = agent._step
 
-        async def tripped(*args: object, **kwargs: object) -> bool:
+        async def tripped(*args: Any, **kwargs: Any) -> bool:
             skipped = await step(*args, **kwargs)
             state.recoveries += 1
             return skipped
 
-        agent._step = tripped
+        agent._step = tripped  # ty: ignore[invalid-assignment]
     # One step: a lookup reaches its finish on it, and anything else is stopped deciding its second.
     state.ledger.limits = Limits(max_steps=1)
     if lookup and not recovered:
@@ -1361,7 +1363,7 @@ async def test_the_page_a_run_began_on_is_shown_to_the_checks_after_a_shortcut_l
         [{"missing": ["req-1"], "complete": False}, {"diagnosis": "", "next_subgoal": "", "give_up": False}]
     )
     agent = Agent(page, ScriptedJev({}, noul=0.5), llm)
-    monkeypatch.setattr(agent, "_propose", AsyncMock(return_value=Shortcut(url=release)))
+    monkeypatch.setattr(agent_module, "_propose", AsyncMock(return_value=Shortcut(url=release)))
 
     async def finish(state: _RunState, output_schema: object, until: object) -> RunResult:
         state.notes.add(_fare(release, "release").model_copy(update={"requirement_id": "req-2", "text": "0.16.9"}))
@@ -1942,7 +1944,7 @@ async def test_a_shortcut_the_site_does_not_serve_returns_to_the_start_page(stat
     page.response_status = AsyncMock(return_value=status)
     agent = Agent(page, ScriptedJev({}), ScriptedLLM([{"url": guessed}]))
 
-    history, invented = await agent._open("Which is the cheapest mystery book?", start, Ledger(Limits()))
+    history, invented = await agent._open("Which is the cheapest mystery book?", start, Ledger(Limits()), None)
 
     assert bool(history) is stays
     assert page.navigate.await_args_list[-1].args == ((guessed,) if stays else (start,))
@@ -1951,6 +1953,63 @@ async def test_a_shortcut_the_site_does_not_serve_returns_to_the_start_page(stat
     assert page.navigate.await_args_list[0].kwargs == {"back_to": start}
     # Only an address the run actually stayed on is one the verifier has to weigh.
     assert invented == ({guessed, landed} if stays else set())
+
+
+async def test_a_shortcut_begun_before_the_browser_is_opened_without_being_asked_for_again() -> None:
+    """`run_task` asks for the shortcut while the browser starts, so the tab opens straight onto it."""
+    start, guessed = "https://books.test/", "https://books.test/catalogue/"
+    page = Mock(spec=Page)
+    page.navigate = AsyncMock()
+    page.address = AsyncMock(return_value=guessed)
+    page.response_status = AsyncMock(return_value=200)
+    llm = ScriptedLLM([{"url": guessed}])
+    ledger = Ledger(Limits())
+    proposing = asyncio.create_task(agent_module._propose(llm, "Which is the cheapest book?", start, ledger))
+    await proposing
+
+    history, _ = await Agent(page, ScriptedJev({}), ScriptedLLM([]))._open(
+        "Which is the cheapest book?", start, ledger, proposing
+    )
+
+    assert history and page.navigate.await_args_list[0].args == (guessed,)
+    assert len(llm.calls) == 1 and len(ledger.lines) == 1
+
+
+async def test_a_head_start_a_run_never_took_bills_what_finished_and_cancels_the_rest() -> None:
+    """A browser that fails to start ends the run before it begins; a plan already written was still paid for."""
+    head = HeadStart.begin(ScriptedLLM([{"requirements": [], "answer_expected": True}]), "What is the top story?")
+    await head.planning
+    proposing = head.proposing = asyncio.create_task(asyncio.Event().wait())  # ty: ignore[invalid-assignment]
+
+    lines = await head.abandon()
+
+    assert len(lines) == 1 and proposing.cancelled()
+
+
+@pytest.mark.parametrize(
+    ("task", "start", "limits"),
+    [
+        ("Another task", "https://news.test/", None),
+        ("What is the top story?", None, None),
+        ("What is the top story?", "https://news.test/", Limits(max_steps=3)),
+    ],
+)
+async def test_a_head_start_begun_for_another_run_is_refused(
+    task: str, start: str | None, limits: Limits | None
+) -> None:
+    """Its plan would be followed, and its limits enforced, without complaint."""
+    head = HeadStart.begin(
+        ScriptedLLM([{"requirements": [], "answer_expected": True}, {"url": None}]),
+        "What is the top story?",
+        start="https://news.test/",
+    )
+    try:
+        with pytest.raises(ValueError, match="head start"):
+            await Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([])).run(
+                task, start=start, limits=limits, head_start=head
+            )
+    finally:
+        await head.discard()
 
 
 @pytest.mark.parametrize(

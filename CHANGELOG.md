@@ -24,6 +24,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   requirement as `req_1` or `1` now names `req-1` rather than nothing. A read that answers a lookup finishes
   without another decision or another look at the page it read, and a page with text but no controls is no longer
   waited on for 12 seconds.
+- **A run reaches its first page sooner.** `run_task` asks for the plan and the shortcut while the browser starts,
+  so the tab opens straight onto the shortcut, and opening the tab sends its independent browser commands at once.
 
 ## [0.5.7] - 2026-09-25
 
