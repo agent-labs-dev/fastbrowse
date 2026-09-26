@@ -24,6 +24,12 @@ class Requirement(Frozen):
     id: str = Field(min_length=1)
     text: str = Field(min_length=1)
     kind: RequirementKind
+    count_records: bool = Field(
+        default=False,
+        description="True when this requirement asks for one total number of records matching its filters. "
+        "False for a ranking or separate counts by group, a sum of record values, a count of distinct "
+        "attribute values, or a comparison such as the cheapest record. Code counts the matching records.",
+    )
 
 
 class Plan(Frozen):

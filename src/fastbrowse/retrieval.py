@@ -376,7 +376,11 @@ class _TallyGroup(Frozen):
     key: str | None = Field(
         description="The label stated in each record, such as its author; null for an ungrouped count."
     )
-    records: tuple[_Cite, ...] = ()
+    records: tuple[_Cite, ...] = Field(
+        default=(),
+        description="The source block ranges of matching records only. Use explicit ranges when a filter "
+        "excludes records between matches; a field range cannot filter them. Empty when none match this page.",
+    )
     field: _TallyField | None = Field(
         default=None,
         description="Instead of enumerating records: a range containing only complete record blocks, each "
@@ -416,7 +420,12 @@ class _TallyRead(Frozen):
 
 
 class _Continuation(Frozen):
-    tallies: tuple[_TallyGroup, ...] = ()
+    tallies: tuple[_TallyGroup, ...] = Field(
+        default=(),
+        description="For every count of matching records, including filtered counts, or ranking by count. "
+        "Group matching records by their stated label, or use key=null for an ungrouped count. "
+        "Use explicit record ranges when matches are not contiguous. Leave records empty.",
+    )
     reuse_field: bool = Field(
         default=False,
         description="True only for an unfiltered count of EVERY record in this entire paginated list, grouped "
@@ -444,7 +453,8 @@ class _Continuation(Frozen):
     records: tuple[_Cite, ...] = Field(
         default=(),
         description=(
-            "Every record this capture adds to that comparison, each as the run of source blocks holding it and "
+            "For comparisons of record values, not counts: every record this capture adds to that comparison, "
+            "each as the run of source blocks holding it and "
             "the value being compared. A later page cannot show what its winner beat unless this page names the "
             "records it was compared against, so list every one this capture shows; a capture holding only the "
             "pager lists none."
@@ -461,8 +471,17 @@ class _ReadResponse(Frozen):
 
 class _RecordSet(Frozen):
     requirement_id: str
-    records: tuple[_Cite, ...] = ()
-    tallies: tuple[_TallyGroup, ...] = ()
+    tallies: tuple[_TallyGroup, ...] = Field(
+        default=(),
+        description="For every count of matching records, including filtered counts, or ranking by count. "
+        "Group matching records by their stated label, or use key=null for an ungrouped count. "
+        "Use explicit record ranges when matches are not contiguous. Leave records empty.",
+    )
+    records: tuple[_Cite, ...] = Field(
+        default=(),
+        description="For comparisons of record values, not counts: every matching record as source block ranges "
+        "including the compared value and attributes that show it matches. Counts belong in tallies.",
+    )
 
 
 class _RecordsResponse(Frozen):
@@ -477,6 +496,7 @@ class _RecordsResponse(Frozen):
 
 class TallyReader(Frozen):
     requirement_id: str
+    count_label: str | None = None
     title: str
     heading_path: tuple[str, ...]
     frame_id: str | None
@@ -556,7 +576,11 @@ def read_tallies(
                 notes.add(fact)
                 keys.append(fact_id(fact))
             notes.add_tally(
-                Tally(requirement_id=reader.requirement_id, key=group.key or "records", records=tuple(keys))
+                Tally(
+                    requirement_id=reader.requirement_id,
+                    key=reader.count_label or group.key or "records",
+                    records=tuple(keys),
+                )
             )
     return ReadOutcome(facts=notes.facts, coverage=(0,), rejected_claims=0, cost_lines=())
 
@@ -643,6 +667,7 @@ async def read(
     continuation_records: dict[str, list[str]] = {}
     ended: tuple[str, ...] = ()
     tally_readers: list[TallyReader] = []
+    counting = {r.id: r.text for r in requirements if r.kind is RequirementKind.INFORMATION and r.count_records}
     wanted = [
         r
         for r in requirements
@@ -716,6 +741,10 @@ async def read(
                     "their text, calculate totals or write claims for counted records. Code deduplicates, counts "
                     "and ranks them, preserving their quotes behind the tally references. Reuse a tally reference "
                     "as a basis instead of listing every earlier record. Keep other claims concise, at most 60.\n\n"
+                    "A filtered count also uses tallies: select only matching records, grouped by their stated "
+                    "label (key=null for an ungrouped count). If matches are separated by excluded records, "
+                    "list their block ranges explicitly in the group's records. Never put counted records in "
+                    "continues.records. A page with no matches contributes an empty group.\n\n"
                     "For repeated record blocks with the grouping label between the same literal delimiters, "
                     "prefer one tally group with key=null, records=[] and field: span covers the records, "
                     "prefix and suffix are the exact text surrounding the label, each occurring once per record "
@@ -729,7 +758,8 @@ async def read(
                     "# Lists over several pages\nA count, total or superlative over a list needs the whole "
                     "list. Earlier pages are in the collected evidence under their own URLs. When the list goes "
                     "on past this capture and the collected evidence does not cover the rest, add an entry to "
-                    "continues naming the requirement, and give in its records every record this capture adds "
+                    "continues naming the requirement. For counts, put matching records in its tallies as above. "
+                    "For comparisons of record values, give in its records every record this capture adds "
                     "to that comparison, each as the blocks holding it and the value compared. Apply the "
                     "requirement's filters on every page: include every matching record with its compared "
                     "value and the attributes that show it matches; omit records those filters exclude. "
@@ -738,8 +768,8 @@ async def read(
                     "being compared, the leading record answers: give the claim citing it its requirement id and cite "
                     "that statement in orders_list rather than listing the requirement in continues. "
                     "Once the collected evidence and this capture cover every page, the "
-                    "conclusion takes the requirement id, includes this chunk's records and draws on earlier "
-                    "records once each. A task that bounds the "
+                    "tally uses complete=true; a comparison's conclusion takes the requirement id, includes "
+                    "this chunk's records and draws on earlier records once each. A task that bounds the "
                     "pages it covers ends at the last page it names.\n\n"
                     f"# Trust\n{UNTRUSTED} Never infer facts the capture and evidence do not show."
                 ),
@@ -751,11 +781,14 @@ async def read(
                 role="system",
                 content=(
                     "# Page records\nCollect the records on this page for the requested requirements. "
-                    "Return each requirement in continues even when no records match. Put every matching "
-                    "record in its records as source block ranges, including the compared value and the "
-                    "attributes that show it matches. For counts or rankings by count use continues.tallies "
-                    "instead, grouped by the label stated in each record. Omit records excluded by the task's "
-                    "filters. Prefer a tally field range for complete record blocks with the grouping label "
+                    "Return each requirement in continues even when no records match. For counts of matching "
+                    "records, including filtered counts, or rankings by count, use continues.tallies, grouped "
+                    "by the label stated in each record (key=null for an ungrouped count). Select only matching "
+                    "records. If excluded records separate matches, list each matching block range explicitly "
+                    "in the group's records. A page with no matches contributes an empty group. "
+                    "For comparisons of record values, use continues.records, including the compared value "
+                    "and the attributes that show each record matches. "
+                    "Prefer a tally field range for complete record blocks with the grouping label "
                     "between the same exact prefix and suffix: key=null, records=[], field={span, prefix, suffix}. "
                     "Delimiters must occur once per record; include the newline for a field starting a line. "
                     "Every block in that range must be a matching record. When using tallies, leave the "
@@ -823,6 +856,13 @@ async def read(
             for c in result.data.continues
             if c.requirement_id in requirement_ids
         ]
+        # A count returned as plain continuation records otherwise reaches the last page with no tally to close.
+        carried = [
+            c.model_copy(update={"tallies": (*c.tallies, _TallyGroup(key=None, records=c.records)), "records": ()})
+            if c.requirement_id in counting and c.records
+            else c
+            for c in carried
+        ]
         continues = dict.fromkeys(c.requirement_id for c in carried)
         through_end = tuple(c.requirement_id for c in carried if c.through_end)
         expands = next((c.expands for c in carried if c.expands), None)
@@ -842,6 +882,7 @@ async def read(
             ):
                 reader = TallyReader(
                     requirement_id=continuation.requirement_id,
+                    count_label=counting.get(continuation.requirement_id),
                     title=capture.title,
                     heading_path=records[0].heading_path,
                     frame_id=records[0].frame_id,
@@ -872,8 +913,9 @@ async def read(
                     uncovered += 1
             for group in groups:
                 records = []
-                missing = max(0, len(group.records) - _MAX_CONTINUING_RECORDS)
-                for cite in group.records[:_MAX_CONTINUING_RECORDS]:
+                cites = _record_cites(capture, part, group.records)
+                missing = max(0, len(cites) - _MAX_CONTINUING_RECORDS)
+                for cite in cites[:_MAX_CONTINUING_RECORDS]:
                     evidence = _cited(capture, part, cite)
                     if evidence is None or (
                         group.key is not None
@@ -892,8 +934,11 @@ async def read(
                     records.append(fact_id(record))
                     facts[(fact_id(record), None)] = record
                 if records:
+                    # Pages may label the same count differently; the requirement keeps its total and filter together.
                     tally = Tally(
-                        requirement_id=tally_read.requirement_id, key=group.key or "records", records=tuple(records)
+                        requirement_id=tally_read.requirement_id,
+                        key=counting.get(tally_read.requirement_id, group.key or "records"),
+                        records=tuple(records),
                     )
                     so_far.add_tally(tally)
                     fact = notes.add_tally(tally)

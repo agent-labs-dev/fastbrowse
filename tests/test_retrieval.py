@@ -2051,6 +2051,132 @@ async def test_tally_read_counts_unique_records_across_pages_and_closes_only_at_
     assert draft.answer.index("Ben: 2") < draft.answer.index("Ada: 1")
 
 
+@pytest.mark.parametrize("records_only", [False, True])
+@pytest.mark.parametrize("last_matches", [False, True])
+@pytest.mark.parametrize("plain_records", [False, True])
+async def test_filtered_tally_counts_record_ranges_through_empty_pages_and_recaptures(
+    records_only: bool, last_matches: bool, plain_records: bool
+) -> None:
+    question = "How many open records belong to Ada across the whole list?"
+    plan = Plan(
+        requirements=(Requirement(id="r", text=question, kind=RequirementKind.INFORMATION, count_records=True),),
+        answer_expected=True,
+    )
+    first = capture(
+        (BlockKind.RECORD, "One - Ada - open"),
+        (BlockKind.RECORD, "Two - Ada - open"),
+        (BlockKind.RECORD, "Three - Ben - open"),
+        (BlockKind.RECORD, "Four - Ada - open"),
+        (BlockKind.RECORD, "Five - Ada - closed"),
+    )
+    group: dict[str, JsonValue] = {
+        "key": "Ada",
+        "records": [
+            {"first": "s0", "last": "s1"},
+            {"first": "s1", "last": "s1"},
+            {"first": "s3", "last": "s3"},
+        ],
+    }
+    notes = Notes()
+    result = await read(
+        ScriptedLLM(
+            [
+                {
+                    "claims": [],
+                    "answered": False,
+                    "continues": [
+                        {
+                            "requirement_id": "r",
+                            "through_end": True,
+                            **({"records": group["records"]} if plain_records else {"tallies": [group]}),
+                        }
+                    ],
+                }
+            ]
+        ),
+        first,
+        question,
+        ["r"],
+        notes,
+        requirements=plan.requirements,
+    )
+    assert result.through_end == ("r",)
+    assert notes.tallies[0].count == 3
+    assert not notes.evidenced("r") and not notes.has_untallied_records("r")
+
+    recaptured = capture(
+        *((block.kind, first.text[block.start : block.end]) for block in first.blocks),
+        (BlockKind.PARAGRAPH, "Updated footer"),
+    )
+    empty = capture((BlockKind.RECORD, "Six - Ben - open")).model_copy(update={"url": "https://example.test/2"})
+    intermediate: tuple[tuple[Capture, JsonValue], ...] = (
+        (recaptured, {**group, "key": None}),
+        (empty, {"key": "Ada", "records": []}),
+    )
+    for page, page_group in intermediate:
+        outcome = await read(
+            ScriptedLLM([{"continues": [{"requirement_id": "r", "tallies": [page_group]}]}]),
+            page,
+            question,
+            ["r"],
+            Notes(),
+            requirements=plan.requirements,
+            records_only=True,
+        )
+        assert not outcome.incomplete and not outcome.uncovered
+        outcome.merge_records(notes)
+        assert notes.tallies[0].count == 3
+        assert not notes.evidenced("r") and not notes.has_untallied_records("r")
+
+    last = capture((BlockKind.RECORD, "Seven - Ada - open" if last_matches else "Seven - Ben - open")).model_copy(
+        update={"url": "https://example.test/3"}
+    )
+    groups: list[JsonValue] = [{"key": "Ada", "records": [{"first": "s0", "last": "s0"}] if last_matches else []}]
+    response: JsonValue = (
+        {
+            "continues": [
+                {
+                    "requirement_id": "r",
+                    **(
+                        {"records": [{"first": "s0", "last": "s0"}] if last_matches else []}
+                        if plain_records
+                        else {"tallies": groups}
+                    ),
+                }
+            ],
+            "ended": ["r"],
+        }
+        if records_only
+        else {"claims": [], "answered": True, "tallies": [{"requirement_id": "r", "groups": groups, "complete": True}]}
+    )
+    outcome = await read(
+        ScriptedLLM([response]),
+        last,
+        question,
+        ["r"],
+        Notes() if records_only else notes,
+        requirements=plan.requirements,
+        records_only=records_only,
+    )
+    assert not outcome.incomplete and not outcome.uncovered
+    if records_only:
+        outcome.merge_records(notes)
+        assert not notes.evidenced("r") and not notes.has_untallied_records("r")
+        assert outcome.ended == ("r",)
+        notes.complete_tallies("r")
+    assert notes.evidenced("r")
+    draft = draft_answer(plan, notes)
+    assert draft is not None and draft.answer == f"{question}: {3 + last_matches}"
+    assert draft.claims[0].evidence_ids == (fact_id(notes.supporting("r")[0][1]),)
+    assert draft.claims[0].evidence_ids[0].startswith("tally:")
+    assert [citation.quote for citation in draft.citations] == [
+        "One - Ada - open",
+        "Two - Ada - open",
+        "Four - Ada - open",
+        *(["Seven - Ada - open"] if last_matches else []),
+    ]
+
+
 def _field_tally(last: str = "s2") -> dict[str, JsonValue]:
     return {
         "key": None,
@@ -2125,20 +2251,36 @@ async def test_invalid_tally_field_cannot_close_or_partially_count_a_list(fault:
 
 
 @pytest.mark.parametrize("reuse", [False, True])
-async def test_tally_reader_requires_explicit_unfiltered_scope_and_revalidates_every_record(reuse: bool) -> None:
-    page = capture(*((BlockKind.RECORD, f"Record {i}\nOwner: Ada\nState: open") for i in range(3)))
+@pytest.mark.parametrize("count_records", [False, True])
+async def test_tally_reader_requires_explicit_unfiltered_scope_and_revalidates_every_record(
+    reuse: bool, count_records: bool
+) -> None:
+    page = capture(
+        *(
+            (BlockKind.RECORD, f"Record {i}\nOwner: {owner}\nState: open")
+            for i, owner in enumerate(["Ada", "Ben", "Ada"])
+        )
+    )
+    requirement = Requirement(
+        id="r",
+        text="Count all records" if count_records else "Count all records by owner",
+        kind=RequirementKind.INFORMATION,
+        count_records=count_records,
+    )
     response: JsonValue = {
         "claims": [],
         "answered": False,
         "continues": [{"requirement_id": "r", "reuse_field": reuse, "through_end": True, "tallies": [_field_tally()]}],
     }
-    result = await read(ScriptedLLM([response]), page, "Count all records by owner", ["r"], Notes())
+    result = await read(ScriptedLLM([response]), page, requirement.text, ["r"], Notes(), requirements=[requirement])
     assert bool(result.tally_readers) is reuse
     if not reuse:
         return
     counted = read_tallies(page, result.tally_readers, ["r"])
     assert counted is not None and not counted.cost_lines
-    assert [f.tally.count for f in counted.facts if f.tally] == [3]
+    assert [(f.tally.key, f.tally.count) for f in counted.facts if f.tally] == (
+        [(requirement.text, 3)] if count_records else [("Ada", 2), ("Ben", 1)]
+    )
     assert not counted.ended
     for changed in [
         page.model_copy(update={"title": "Another list"}),
@@ -2536,8 +2678,12 @@ async def test_isolated_records_merge_tallies_without_closing_or_double_counting
     assert [item.quote for item in notes.supporting_evidence("r")] == ["Ada: one", "Ben: two", "Ada: three"]
 
 
-async def test_isolated_continuation_metadata_and_lost_records_survive_merge() -> None:
+@pytest.mark.parametrize("count_records", [False, True])
+async def test_isolated_continuation_metadata_and_lost_records_survive_merge(count_records: bool) -> None:
     page = capture((BlockKind.RECORD, "Ada: one"))
+    requirement = Requirement(
+        id="r", text="Count Ada's records", kind=RequirementKind.INFORMATION, count_records=count_records
+    )
     result = await read(
         ScriptedLLM(
             [
@@ -2555,12 +2701,13 @@ async def test_isolated_continuation_metadata_and_lost_records_survive_merge() -
         "Count Ada's records",
         ["r"],
         Notes(),
+        requirements=[requirement],
         records_only=True,
     )
     notes = Notes()
     result.merge_records(notes)
     assert result.incomplete == ("r",) and result.uncovered == 1
-    assert notes.has_untallied_records("r")
+    assert notes.has_untallied_records("r") is not count_records
     last = capture((BlockKind.RECORD, "Ada: two"))
     completed = await read(
         ScriptedLLM(
@@ -2582,10 +2729,11 @@ async def test_isolated_continuation_metadata_and_lost_records_survive_merge() -
         "Count Ada's records",
         ["r"],
         notes,
+        requirements=[requirement],
         continuing={"r"},
         incomplete=result.incomplete,
     )
-    assert completed.incomplete == ("r",)
+    assert completed.incomplete == (() if count_records else ("r",))
     assert not notes.evidenced("r")
 
 

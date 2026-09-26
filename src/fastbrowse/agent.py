@@ -1903,6 +1903,7 @@ class Agent:
             Notes(),
             tokens=self._config.tokens,
             ledger=state.ledger,
+            requirements=wanted,
             records_only=True,
         )
 

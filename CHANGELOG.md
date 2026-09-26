@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Filtered counts across pages use recorded tallies.** The plan identifies requests for one count,
+  and code counts their matching records even when a reader returns plain continuation records or varies
+  the group's label between pages. Overlapping record ranges count each record once, and reaching the
+  list's end closes the tally without asking the reader to calculate a total.
 - **Placing an order reliably pauses for confirmation.** The check before an irreversible click rated a
   checkout's final button barely above its threshold, so an unauthorized order could go through. The question
   now names placing an order among the changes that cannot be undone.
