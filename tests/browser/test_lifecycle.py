@@ -255,6 +255,28 @@ async def test_back_navigates_to_a_same_origin_predecessor_and_can_be_taken_twic
     assert transport.calls.count("Page.navigateToHistoryEntry") == 2
 
 
+async def test_back_from_a_page_opened_in_place_of_the_start_page_opens_the_start_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shortcut is loaded instead of the start page, so the tab holds no entry for BACK to return to."""
+    transport = CdpTransport(monkeypatch)
+    history = _history(["about:blank", "https://example.test/deep"], 1)
+    transport.results["Page.getNavigationHistory"] = [history, history]
+    opened: list[str] = []
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+        page = CdpPage(session, Config())
+        page._back_to[session.active_session_id] = "https://example.test/"
+
+        async def navigate(url: str, *args: object, **kwargs: object) -> None:
+            opened.append(url)
+
+        monkeypatch.setattr(page, "navigate", navigate)
+        assert await page._can_go_back()
+        assert await page._back() == (StepOutcome.EXECUTED, None)
+    assert opened == ["https://example.test/"]
+    assert "Page.navigateToHistoryEntry" not in transport.calls
+
+
 async def test_background_finalizers_finish_before_socket_stops(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = CdpTransport(monkeypatch)
     started = transport.blocked["Fetch.getResponseBody"] = asyncio.Event()
@@ -309,7 +331,8 @@ async def test_initial_navigation_error_returns_error_result(monkeypatch: pytest
         yield CONNECTION
 
     monkeypatch.setattr(chrome_adapter, "local_chrome", chrome)
-    result = await run_task("Read", start="https://example.test", jev=ScriptedJev({}), llm=ScriptedLLM([]))
+    no_shortcut = ScriptedLLM([{"url": None}, {"url": None}])
+    result = await run_task("Read", start="https://example.test", jev=ScriptedJev({}), llm=no_shortcut)
     assert result.status is Status.ERROR
     assert result.error == "Page.navigate failed (ConnectionError)"
 

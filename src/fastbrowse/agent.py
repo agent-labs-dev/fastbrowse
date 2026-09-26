@@ -108,9 +108,9 @@ GENERATE = "generate"
 # Long enough for a browser-verification page to run its check and hand over, short enough that a page
 # which never moves still ends as needs_login well inside a run's time budget.
 _INTERSTITIAL_SECONDS = 12.0
-# How long a shortcut may outlast the start page's load. Flash-lite answers in about 0.8s and a cloud page
-# loads in one to two, so a proposal later than this is an outlier costing more than it saves.
-_SHORTCUT_GRACE_SECONDS = 1.0
+# How long the first load waits for a shortcut. Flash-lite answers in 0.5 to 1s, and a start page loads in one
+# to four, so a proposal later than this is an outlier and the start page is opened instead.
+_SHORTCUT_WAIT_SECONDS = 2.0
 _INTERSTITIAL_POLL_SECONDS = 0.5
 _REDRAW_WATCH_SECONDS = 10.0
 """Longer than deciding takes: a watch ends with the work it watches, and this only bounds a stuck one."""
@@ -652,24 +652,21 @@ class Agent:
         await self._page.navigate(front)
 
     async def _open(self, task: str, start: str, ledger: Ledger) -> tuple[list[HistoryEntry], set[str]]:
-        """Open `start`, or a direct address for the task on its site when one is proposed in time.
+        """Open a direct address for the task on `start`'s site when one is proposed in time, else `start`.
 
-        The proposal is written while the start page loads, so it costs no wall time unless it outlasts the load,
-        and the start page stays one BACK away for when the shortcut lands somewhere unhelpful.
+        The shortcut is opened in place of the start page, not after it: loading github.com's front page only to
+        leave it cost 1 to 4 seconds of every shortcut run. The start page stays one BACK away all the same.
         """
-        proposing = asyncio.create_task(self._propose(task, start, ledger))
         try:
-            await self._page.navigate(start)
-            proposal = await asyncio.wait_for(asyncio.shield(proposing), _SHORTCUT_GRACE_SECONDS)
+            proposal = await asyncio.wait_for(self._propose(task, start, ledger), _SHORTCUT_WAIT_SECONDS)
         except (TimeoutError, LLMError):
-            return [], set()
-        finally:
-            await _discard(proposing)
-        shortcut = accept(proposal.url, start)
+            proposal = None
+        shortcut = None if proposal is None else accept(proposal.url, start)
         if shortcut is None:
+            await self._page.navigate(start)
             return [], set()
         try:
-            await self._page.navigate(shortcut)
+            await self._page.navigate(shortcut, back_to=start)
             # `accept` saw only the proposed address; a redirect can still land on another site.
             landed = await self._page.address()
             status = await self._page.response_status()
@@ -685,7 +682,7 @@ class Agent:
             logger.info("shortcut %s answered HTTP %s; staying on the start page", shortcut, status)
             await self._page.navigate(start)
             return [], set()
-        note = f"opened {shortcut} directly instead of clicking there; the start page {start} is one BACK away"
+        note = f"opened {shortcut} directly instead of the start page {start}, which is one BACK away"
         opened = HistoryEntry(operation=None, target=None, outcome=StepOutcome.EXECUTED, page_changed=True, note=note)
         # The facts cite where the page landed, so a redirect's address is the one they can be matched against.
         return [opened], {shortcut, landed}

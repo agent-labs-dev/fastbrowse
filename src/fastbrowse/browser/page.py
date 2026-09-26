@@ -21,7 +21,7 @@ from typing import Literal, assert_never
 from urllib.parse import SplitResult, urlsplit
 
 from cdp_use.cdp.input.commands import DispatchMouseEventParameters
-from cdp_use.cdp.page.commands import CaptureScreenshotParameters
+from cdp_use.cdp.page.commands import CaptureScreenshotParameters, GetNavigationHistoryReturns
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from fastbrowse.browser.session import BrowserSession
@@ -289,6 +289,7 @@ class CdpPage(Page):
         self._session = session
         self._config = config
         self._last: _ObservedState | None = None
+        self._back_to: dict[str, str] = {}
 
     @property
     def artifacts(self) -> tuple[Artifact, ...]:
@@ -353,11 +354,18 @@ class CdpPage(Page):
         history = await self._session.client.send.Page.getNavigationHistory(
             params=None, session_id=self._session.active_session_id
         )
-        index = history["currentIndex"]
-        if index <= 0:
-            return False
-        entries = history["entries"]
-        return _same_http_origin(entries[index - 1]["url"], entries[index]["url"])
+        return self._back_target(history) is not None
+
+    def _back_target(self, history: GetNavigationHistoryReturns) -> int | str | None:
+        """The earlier same-origin history entry's id, else the start page this tab skipped, else None."""
+        index, entries = history["currentIndex"], history["entries"]
+        if index > 0 and _same_http_origin(entries[index - 1]["url"], entries[index]["url"]):
+            return entries[index - 1]["id"]
+        skipped = self._back_to.get(self._session.active_session_id)
+        current = entries[index]["url"] if entries else ""
+        if skipped is not None and skipped != current and _same_http_origin(skipped, current):
+            return skipped
+        return None
 
     def _dialog_observation(self, dialog: Dialog) -> Observation:
         active = next((t for t in self._session.tabs() if t.active), None)
@@ -829,11 +837,17 @@ class CdpPage(Page):
         # gated it is checked again against the live history rather than trusted from the stale observation.
         session_id = self._session.active_session_id
         history = await self._session.client.send.Page.getNavigationHistory(params=None, session_id=session_id)
-        index = history["currentIndex"]
-        if index <= 0 or not _same_http_origin(history["entries"][index - 1]["url"], history["entries"][index]["url"]):
+        target = self._back_target(history)
+        if target is None:
             return StepOutcome.FAILED, "no same-origin earlier history entry"
-        entry_id = history["entries"][index - 1]["id"]
-        await self._session.client.send.Page.navigateToHistoryEntry(params={"entryId": entry_id}, session_id=session_id)
+        if isinstance(target, str):
+            # Loaded once, it is an ordinary entry, and BACK from it returns to the page the run began on.
+            del self._back_to[session_id]
+            await self.navigate(target)
+        else:
+            await self._session.client.send.Page.navigateToHistoryEntry(
+                params={"entryId": target}, session_id=session_id
+            )
         return StepOutcome.EXECUTED, None
 
     async def _upload(
@@ -1004,7 +1018,7 @@ class CdpPage(Page):
         # Chrome reports 0 for a document it did not fetch over HTTP, which says nothing about success.
         return raw if isinstance(raw, int) and raw > 0 else None
 
-    async def navigate(self, url: str, load_timeout_seconds: float = 15.0) -> None:
+    async def navigate(self, url: str, load_timeout_seconds: float = 15.0, *, back_to: str | None = None) -> None:
         """Setup helper (tests, initial task URL): navigate the active tab and wait until its document is usable.
 
         Waiting for `complete` also waits on every image and tracker, which behind a proxy can outlast the page
@@ -1014,6 +1028,10 @@ class CdpPage(Page):
         still "Loading results" had to be taken twice.
         """
         session_id = self._session.active_session_id
+        if back_to is None:
+            self._back_to.pop(session_id, None)
+        else:
+            self._back_to[session_id] = back_to
         # A cloud browser's proxy drops a first connection now and then, or leaves a document loading, and a run
         # that never started was scored as a failed task. Chrome's error names (net::ERR_...) carry no page
         # content, so they are shown.

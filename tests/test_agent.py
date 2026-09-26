@@ -1892,6 +1892,9 @@ async def test_a_shortcut_the_site_does_not_serve_returns_to_the_start_page(stat
 
     assert bool(history) is stays
     assert page.navigate.await_args_list[-1].args == ((guessed,) if stays else (start,))
+    # The guess is opened in place of the start page, which stays one BACK away rather than being loaded first.
+    assert page.navigate.await_args_list[0].args == (guessed,)
+    assert page.navigate.await_args_list[0].kwargs == {"back_to": start}
     # Only an address the run actually stayed on is one the verifier has to weigh.
     assert invented == ({guessed, landed} if stays else set())
 
@@ -2634,7 +2637,8 @@ async def test_navigation_timeout_is_unavailable_only_while_opening(
     page = Mock(spec=Page)
     page.artifacts = ()
     page.navigate = AsyncMock(side_effect=NavigationTimeout("navigation timed out"))
-    llm = ScriptedLLM([])
+    # No shortcut is proposed, whichever of the plan and the proposal asks first, so the start page is opened.
+    llm = ScriptedLLM([{"url": None}, {"url": None}])
     agent = Agent(page, ScriptedJev({}), llm)
 
     async def loop(state: _RunState, output_schema: object, until: object) -> RunResult:
@@ -2666,7 +2670,7 @@ async def test_opening_deadline_still_exhausts_the_budget() -> None:
         await asyncio.Event().wait()
 
     page.navigate = navigate
-    result = await Agent(page, ScriptedJev({}), ScriptedLLM([])).run(
+    result = await Agent(page, ScriptedJev({}), ScriptedLLM([{"url": None}, {"url": None}])).run(
         "Open the page", start="https://example.test", limits=Limits(max_seconds=0.01)
     )
     assert result.status is Status.BUDGET_EXCEEDED
