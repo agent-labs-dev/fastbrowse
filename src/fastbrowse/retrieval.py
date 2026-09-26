@@ -1524,7 +1524,7 @@ async def _read_choices(
     for requirement in requirements:
         answer = evaluation.answers.get(requirement.id)
         if not isinstance(answer, ChoiceAnswer) or answer.confidence < _READ_CONFIDENCE:
-            logger.debug("read reader=llm requirement=%s reason=uncertain_choice", requirement.id)
+            logger.debug("read reader=llm requirement=%s reason=uncertain_choice answer=%r", requirement.id, answer)
             continue
         if answer.choice == "absent":
             if focused:

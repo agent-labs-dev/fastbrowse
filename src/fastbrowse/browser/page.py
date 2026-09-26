@@ -224,6 +224,9 @@ _SETTLE_LOADING_SECONDS = 1.5
 # 2 to 3 second LLM call and a second read after it, where the-internet's dynamic loading needs about 5 seconds.
 _CAPTURE_LOADING_SECONDS = 3.0
 _SCREENSHOT_WAIT_SECONDS = 1.0
+# How long a click that opened a tab waits for it to be attached before the run carries on in the opener.
+_POPUP_ADOPT_SECONDS = 2.0
+_OPENS_TABS = frozenset({Operation.CLICK, Operation.ENTER})
 _NAVIGATE_ATTEMPTS = 2
 _NAVIGATE_RETRY_SECONDS = 1.0
 _NET_ERROR = re.compile(r"net::ERR_[A-Z_]+")
@@ -535,6 +538,7 @@ class CdpPage(Page):
                     outcome=StepOutcome.STALE, page_changed=False, detail="control changed since observation"
                 )
 
+        popups = self._session.popups()
         try:
             outcome, detail = await self._dispatch(action, target, point)
         except BrowserError:
@@ -545,6 +549,8 @@ class CdpPage(Page):
         if outcome != StepOutcome.EXECUTED:
             return ActResult(outcome=outcome, page_changed=self._session.pending_dialog() is not None, detail=detail)
         changed = await self._changed_since(before_fingerprint, filled=action.operation is Operation.FILL)
+        if action.operation in _OPENS_TABS and await self._session.follow_popup(popups, _POPUP_ADOPT_SECONDS):
+            return ActResult(outcome=StepOutcome.EXECUTED, page_changed=True, detail="opened a new tab, now active")
         unchanged = False
         if action.form_fill and not changed and target is not None and not action.secret:
             unchanged = await self._form_unchanged(target, action.text or "")

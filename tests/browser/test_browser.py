@@ -208,24 +208,25 @@ async def test_cross_origin_iframe_control_is_observed_and_clickable(
     assert value == "Clicked"
 
 
-async def test_popup_becomes_tab_and_switch_tab_works(loaded_page: CdpPage, browser_session: BrowserSession) -> None:
+async def test_a_click_that_opens_a_tab_continues_there(loaded_page: CdpPage, browser_session: BrowserSession) -> None:
     obs = await loaded_page.observe()
+    opener_tab = next(t for t in obs.tabs if t.active)
     open_popup = find(obs, "Open popup")
     result = await loaded_page.act(Action(operation=Operation.CLICK, target_id=open_popup.id), obs)
     assert result.outcome == StepOutcome.EXECUTED
+    assert result.page_changed
 
     async def popup_loaded() -> bool:
         return any("popup.html" in t.url for t in browser_session.tabs())
 
     await wait_until(popup_loaded)
-
     obs2 = await loaded_page.observe()
-    popup_tab = next(t for t in obs2.tabs if "popup.html" in t.url)
-    switch = await loaded_page.act(Action(operation=Operation.SWITCH_TAB, tab_id=popup_tab.id), obs2)
-    assert switch.outcome == StepOutcome.EXECUTED
+    assert "popup.html" in obs2.url
+    assert find(obs2, "Popup button")
 
-    obs3 = await loaded_page.observe()
-    assert "popup.html" in obs3.url
+    back = await loaded_page.act(Action(operation=Operation.SWITCH_TAB, tab_id=opener_tab.id), obs2)
+    assert back.outcome == StepOutcome.EXECUTED
+    assert find(await loaded_page.observe(), "Open popup")
 
 
 async def test_confirm_dialog_handled_via_dialog_operation(

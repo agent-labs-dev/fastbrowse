@@ -178,6 +178,8 @@ class BrowserSession:
         self._client: CDPClient | None = None
         self._tabs: dict[str, _TabState] = {}
         self._owned: set[str] = set()
+        self._popups: dict[str, tuple[str, asyncio.Future[bool]]] = {}
+        """Popup target id -> (opener target id, whether it was adopted), in the order they opened."""
         self._active_target_id = ""
         self._on_frame = on_frame
         # Set while the page may show a secret: frames are still acked, so the cast keeps pace, but not delivered.
@@ -407,20 +409,45 @@ class BrowserSession:
         opener_id = info.get("openerId")
         if not self._closing and info["type"] == "page" and opener_id in self._owned:
             self._owned.add(info["targetId"])
+            self._popups[info["targetId"]] = (opener_id, asyncio.get_running_loop().create_future())
             self._spawn(self._adopt_popup(info["targetId"], opener_id))
 
     async def _adopt_popup(self, target_id: str, opener_id: str) -> None:
-        attach = await self.client.send.Target.attachToTarget(params={"targetId": target_id, "flatten": True})
-        session_id = attach["sessionId"]
-        await self.client.send.Target.activateTarget(params={"targetId": target_id})
-        await self._prepare_session(session_id)
-        self._tabs[target_id] = _TabState(target_id=target_id, session_id=session_id, opener_id=opener_id)
-        # The popup may already have navigated to its final URL before this coroutine got scheduled
-        # (targetCreated -> targetInfoChanged can both fire while we're still awaiting attachToTarget
-        # above), so a targetInfoChanged event carrying it can arrive and be dropped because the tab
-        # wasn't in self._tabs yet. Fetch current info now rather than relying on a future event.
-        info = await self.client.send.Target.getTargetInfo(params={"targetId": target_id})
-        self.set_tab_info(target_id, info["targetInfo"]["url"], info["targetInfo"]["title"])
+        try:
+            attach = await self.client.send.Target.attachToTarget(params={"targetId": target_id, "flatten": True})
+            session_id = attach["sessionId"]
+            await self.client.send.Target.activateTarget(params={"targetId": target_id})
+            await self._prepare_session(session_id)
+            self._tabs[target_id] = _TabState(target_id=target_id, session_id=session_id, opener_id=opener_id)
+            # The popup may already have navigated to its final URL before this coroutine got scheduled
+            # (targetCreated -> targetInfoChanged can both fire while we're still awaiting attachToTarget
+            # above), so a targetInfoChanged event carrying it can arrive and be dropped because the tab
+            # wasn't in self._tabs yet. Fetch current info now rather than relying on a future event.
+            info = await self.client.send.Target.getTargetInfo(params={"targetId": target_id})
+            self.set_tab_info(target_id, info["targetInfo"]["url"], info["targetInfo"]["title"])
+        finally:
+            adopted = self._popups[target_id][1]
+            if not adopted.done():
+                adopted.set_result(target_id in self._tabs)
+
+    def popups(self) -> tuple[str, ...]:
+        return tuple(self._popups)
+
+    async def follow_popup(self, known: tuple[str, ...], within: float) -> str | None:
+        """Make active the latest tab the active tab opened since `known` once it is adopted, and return its id.
+
+        A link that opens its page in a new window left the run on the opener: the next step was spent choosing
+        the new tab, and the read before it credited the opener's heading to the new window.
+        """
+        opener = self._active_target_id
+        fresh = [t for t, (o, _) in self._popups.items() if o == opener and t not in known]
+        if not fresh:
+            return None
+        with contextlib.suppress(TimeoutError):
+            if await asyncio.wait_for(asyncio.shield(self._popups[fresh[-1]][1]), within) and fresh[-1] in self._tabs:
+                await self.switch_tab(fresh[-1])
+                return fresh[-1]
+        return None
 
     def _on_target_info_changed(self, event: TargetInfoChangedEvent, session_id: str | None) -> None:
         info = event["targetInfo"]
