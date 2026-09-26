@@ -1531,6 +1531,10 @@ class Agent:
             decision.read_assessment is not ReadAssessment.EVIDENCE and not unread_scroll
         ):
             return False
+        if state.read_here and _only_typed_since_read(state.history):
+            # The page was read, and since then only a field's own text changed, which is the run's own writing:
+            # pypi-newer read its httpx results again after typing "requests", only because the box's text had.
+            return False
         plan = await state.await_plan()
         if not _unread(plan, state.notes):
             return False
@@ -2549,6 +2553,16 @@ def _next_value(values: Sequence[str], history: Sequence[HistoryEntry], label: s
         if e.operation is Operation.FILL and e.outcome is StepOutcome.EXECUTED and e.target == label
     }
     return next((value for value in values if value not in typed), values[-1])
+
+
+def _only_typed_since_read(history: Sequence[HistoryEntry]) -> bool:
+    """Whether every action since the last read typed into a field and changed nothing else on the page."""
+    for entry in reversed(history):
+        if entry.operation is Operation.READ:
+            return entry.outcome is StepOutcome.EXECUTED
+        if entry.operation is not Operation.FILL or entry.page_changed:
+            return False
+    return False
 
 
 def _record(history: Sequence[HistoryEntry], limits: ObservationLimits) -> tuple[HistoryEntry, ...]:

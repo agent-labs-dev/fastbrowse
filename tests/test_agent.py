@@ -671,6 +671,43 @@ async def test_an_interaction_is_not_replayed_on_a_control_that_changed_during_t
     assert Operation.CLICK not in [step.operation for step in state.steps]
 
 
+@pytest.mark.parametrize(
+    ("operation", "page_changed", "reread"),
+    [
+        (Operation.FILL, False, False),
+        (Operation.FILL, True, True),
+        (Operation.CLICK, False, True),
+    ],
+)
+async def test_a_page_read_before_typing_is_not_read_again_for_the_typed_text(
+    operation: Operation, page_changed: bool, reread: bool
+) -> None:
+    """pypi-newer read its httpx results again after typing "requests": the capture held the box's new text."""
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r1", text="Find the newer release", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    button = _button("Search")
+    obs = observation((button,))
+    page = Mock(spec=Page)
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "httpx 0.28.1")))
+    llm = ScriptedLLM([{"claims": [], "answered": False}] * 2)
+    jev = ScriptedJev(
+        {"operation": "click", "click_target": button.id, "read_assessment": "evidence", "r1": "synthesis"}
+    )
+    decision = await decide(jev, obs, context(), Config())
+    agent = Agent(page, jev, llm)
+    assert await agent._read_before_interaction(state, obs, decision)
+    state.history.append(
+        HistoryEntry(operation=operation, target="Search", outcome=StepOutcome.EXECUTED, page_changed=page_changed)
+    )
+    state.read_here = not page_changed
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "httpx 0.28.1 requests")))
+    assert await agent._read_before_interaction(state, obs, decision) is reread
+    assert len(llm.calls) == 1 + reread
+
+
 async def test_unchanged_unsuccessful_preservation_does_not_loop_or_authorize_the_action() -> None:
     state = await run_state()
     state.ready_plan = Plan(
