@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-09-27
+
 - **A lookup's explicitly unmet requirements reach the verifier.** Completion skipped the verifier for
   answers read on known pages even when the done check named a missing requirement. Only doubts with no
   unmet requirements can take that shortcut.
@@ -669,7 +671,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.7...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.8...HEAD
+[0.5.8]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.8
 [0.5.7]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.7
 [0.5.6]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.6
 [0.5.5]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.5
