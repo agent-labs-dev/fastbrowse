@@ -37,7 +37,7 @@ from fastbrowse.effects import (
 )
 from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, JevClient, JevError, NoulAnswer, NoulQuestion
 from fastbrowse.llm import Generation, LLMClient, LLMError, Message
-from fastbrowse.memory import Fact, Notes, NotesTooLarge
+from fastbrowse.memory import Fact, Notes, NotesTooLarge, shows
 from fastbrowse.models import (
     UNTRUSTED,
     Attachment,
@@ -341,6 +341,10 @@ class _RunState:
     evidenced_at: dict[str, dict[str, str]] = field(default_factory=dict[str, dict[str, str]])
     """By page state, each requirement a read of it evidenced and the capture it read, so a return to that state
     can tell the evidence went stale."""
+    read_at: dict[str, str] = field(default_factory=dict[str, str])
+    """By page state, the capture its last read read, evidence or not: a requirement asked of two pages (the name
+    Review showed and the confirmation) is evidenced by neither alone, and Review, reached again after a correction,
+    must still be read again."""
     next_page: bool = False
     """Open this page's next page, set when the reader says a list the run needs goes on past the page it read."""
     paged_from: str | None = None
@@ -1766,20 +1770,30 @@ class Agent:
             return False
         key = state_key(observation)
         read = state.evidenced_at.get(key, {})
-        if not (ids := {r: sha for r, sha in read.items() if state.notes.evidenced(r)}):
+        ids = {r: sha for r, sha in read.items() if state.notes.evidenced(r)}
+        last = state.read_at.get(key)
+        if not ids and last is None:
             return False
         capture = await self._capture()
+        if capture.sha256 == last:
+            return False
 
-        def gone(quote: str) -> bool:
-            # Whole words: "Priya Sharma" is inside the corrected "Priya Sharman".
-            return re.search(rf"(?<!\w){re.escape(quote)}(?!\w)", capture.text) is None
-
+        # A read of this state is checked even once a read of another state of the same address superseded it: a
+        # wizard's first step does not show the name its Review showed, and that alone must not stop Review, reached
+        # again after a correction, from being read again.
         stale = {
             r
             for r, sha in ids.items()
-            if any(e.capture_sha256 == sha and gone(e.quote) for e in state.notes.supporting_evidence(r))
+            if any(e.capture_sha256 == sha and not shows(capture.text, e.quote) for e in state.notes.read_for(r))
         }
-        if not stale:
+        # A read that evidenced nothing yet still left facts the answer can draw on once another page completes it.
+        drew = any(
+            fact.evidence is not None
+            and fact.evidence.capture_sha256 == last
+            and not shows(capture.text, fact.evidence.quote)
+            for fact in state.notes.facts
+        )
+        if not stale and not drew:
             return False
         trace("reread", requirements=sorted(stale))
         state.notes.unevidence(stale)
@@ -1900,6 +1914,8 @@ class Agent:
             uncovered=outcome.uncovered,
         )
         spent(progressed)
+        if observation is not None:
+            state.read_at[state_key(observation)] = capture.sha256
         if observation is not None and (newly := {r.id for r in wanted if state.notes.evidenced(r.id)} - evidenced):
             state.evidenced_at.setdefault(state_key(observation), {}).update(dict.fromkeys(newly, capture.sha256))
         state.through_end = bool(continues) and {r.id for r in wanted} <= set(outcome.through_end)

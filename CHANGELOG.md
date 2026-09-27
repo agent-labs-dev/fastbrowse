@@ -20,6 +20,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   again and read the new date, but its answer still quoted the first: both readings evidenced the question. A
   read that evidences a question now drops earlier readings of the same address whose quote the page no
   longer shows. They stay as context.
+- **A page read before is read again when what it showed has changed, even if that read answered nothing yet.**
+  A task asked for the name a wizard's Review step showed last and the confirmation, as one question. Reading
+  Review answered nothing alone, so after the run went back and corrected the name, Review was not read
+  again, and the answer named the old name. A return to any page state read before now reads it again once a
+  quote from that read is gone. Superseded readings are compared as whole words ("Priya Sharma" is not shown
+  by "Priya Sharman").
 - **A pager a loader hid no longer ends the pages.** A list read page by page looked for the next page in
   controls observed while the capture could still be waiting out a loader. With no pager in view, the pages
   ended early. The page is observed again once the capture has waited.

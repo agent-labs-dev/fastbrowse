@@ -50,6 +50,13 @@ def test_a_new_read_of_an_address_retires_quotes_it_no_longer_shows(shown: str, 
     assert len(notes.facts) == 2
 
 
+def test_a_quote_inside_a_longer_word_is_not_still_shown() -> None:
+    notes = Notes([_quoted("Priya Sharma", "before"), _quoted("Priya Sharman", "after")])
+    notes.supersede("r1", "https://example.test", "after", "Name: Priya Sharman")
+    assert [fact.text for _, fact in notes.supporting("r1")] == ["Priya Sharman"]
+    assert [e.quote for e in notes.read_for("r1")] == ["Priya Sharma", "Priya Sharman"]
+
+
 def test_a_read_that_evidenced_nothing_retires_nothing() -> None:
     notes = Notes([_quoted("SelectedDate: 31/10/2026", "before")])
     notes.supersede("r1", "https://example.test", "after", "SelectedDate: 28/11/2026")

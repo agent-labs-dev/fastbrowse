@@ -1365,6 +1365,71 @@ async def test_a_page_read_before_is_read_again_when_what_it_evidenced_is_gone()
     assert [e.quote for e in state.notes.supporting_evidence("r1")] == ["Priya Sharman"]
 
 
+async def test_review_is_read_again_after_a_read_of_another_step_superseded_it() -> None:
+    """A wizard keeps one address. Reading its first step on the way back retired Review's reading of the name,
+    and Review, reached again after the correction, was never read again: the answer named the old name."""
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r1", text="Find the name Review shows last", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    review, first = _wizard_step("City", "Manchester", "Review"), _wizard_step("First Name", "Priya Sharma")
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"")
+    page.artifacts = ()
+    llm = ScriptedLLM(
+        [
+            {"claims": [{"text": n, "cite": {"first": "s0", "last": "s0"}, "requirement_id": "r1"}], "answered": True}
+            for n in ("Priya Sharma", "First Name is Priya Sharma", "Priya Sharman")
+        ]
+    )
+    agent = Agent(page, ScriptedJev({}), llm)
+    await agent._read(state, capture((BlockKind.PARAGRAPH, "Priya Sharma · priya@example.test")), review)
+    state.owes_read = True
+    await agent._read(state, capture((BlockKind.PARAGRAPH, "First Name Priya Sharma")), first)
+    assert [e.quote for e in state.notes.supporting_evidence("r1")] == ["First Name Priya Sharma"]
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "Priya Sharman · priya@example.test")))
+    state.history.append(
+        HistoryEntry(operation=Operation.CLICK, target="Next", outcome=StepOutcome.EXECUTED, page_changed=True)
+    )
+    assert await agent._reread_if_changed(state, review)
+    assert [e.quote for e in state.notes.supporting_evidence("r1")] == ["Priya Sharman · priya@example.test"]
+
+
+async def test_a_page_read_before_is_read_again_when_what_it_showed_is_gone_though_it_evidenced_nothing() -> None:
+    """Asked for the name Review showed last and the confirmation as one requirement, a read of Review evidenced
+    nothing alone. Reached again after the correction, Review was not read, and the answer named the old name."""
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(
+            Requirement(
+                id="r1", text="Find the name Review shows last and the confirmation", kind=RequirementKind.INFORMATION
+            ),
+        ),
+        answer_expected=True,
+    )
+    review = _wizard_step("City", "Manchester", "Review")
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"")
+    page.artifacts = ()
+    unanswered: list[JsonValue] = [
+        {"claims": [{"text": name, "cite": {"first": "s0", "last": "s0"}}], "answered": False}
+        for name in ("Priya Sharma", "Priya Sharman")
+    ]
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM(unanswered))
+    await agent._read(state, capture((BlockKind.PARAGRAPH, "Priya Sharma")), review)
+    # As when the reader answered only in part: the fact stays as context and nothing is evidenced.
+    state.notes.unevidence(("r1",))
+    state.evidenced_at.clear()
+    arrived = HistoryEntry(operation=Operation.CLICK, target="Next", outcome=StepOutcome.EXECUTED, page_changed=True)
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "Priya Sharma")))
+    state.history.append(arrived)
+    assert not await agent._reread_if_changed(state, review)
+    page.capture.return_value = capture((BlockKind.PARAGRAPH, "Priya Sharman"))
+    state.history.append(arrived)
+    assert await agent._reread_if_changed(state, review)
+
+
 @pytest.mark.parametrize("recoveries", [2, 6])
 async def test_recovery_prompts_and_requests_remember_the_last_four_diagnoses_redacted(recoveries: int) -> None:
     page = Mock(spec=Page)

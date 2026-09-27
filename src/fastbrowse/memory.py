@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 from collections.abc import Iterable, Mapping
 from typing import Self
 from urllib.parse import urlsplit
@@ -48,6 +49,11 @@ class NotesTooLarge(RuntimeError):
 class RenderedNotes(Frozen):
     text: str
     evidence_ids: tuple[str, ...]
+
+
+def shows(text: str, quote: str) -> bool:
+    """Whether `text` still shows `quote` as whole words: "Priya Sharma" is inside the corrected "Priya Sharman"."""
+    return re.search(rf"(?<!\w){re.escape(quote)}(?!\w)", text) is not None
 
 
 def _address(url: str) -> str:
@@ -201,16 +207,25 @@ class Notes:
         supporting = self.supporting(requirement_id)
         if not any(fact.evidence and fact.evidence.capture_sha256 == sha256 for _, fact in supporting):
             return
-        address, shown = _address(url), " ".join(text.split())
+        address = _address(url)
         for key, fact in supporting:
             evidence = fact.evidence
             if (
                 evidence is not None
                 and evidence.capture_sha256 != sha256
                 and _address(evidence.url) == address
-                and " ".join(evidence.quote.split()) not in shown
+                and not shows(text, evidence.quote)
             ):
                 self._requirements[key].discard(requirement_id)
+
+    def read_for(self, requirement_id: str) -> tuple[Evidence, ...]:
+        """The spans read as evidence of a requirement, including those a later read superseded."""
+        supporting = {key for key, _ in self.supporting(requirement_id)}
+        return tuple(
+            fact.evidence
+            for key, fact in self._facts.items()
+            if fact.evidence is not None and (key in supporting or fact.requirement_id == requirement_id)
+        )
 
     def supporting(self, requirement_id: str) -> tuple[tuple[str, Fact], ...]:
         """A tally is ranked by code; other facts keep the order they were read in."""
