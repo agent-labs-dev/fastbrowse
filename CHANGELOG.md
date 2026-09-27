@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Model calls go to the fastest endpoint OpenRouter serves.** OpenRouter's default routing sent
+  gemini-3.8-flash reads to Vertex at a 2.4s median, where Google AI Studio answered the same read in
+  1.3s. Requests now ask OpenRouter to sort endpoints by latency, still requiring structured output
+  and keeping its fallbacks.
 - **Counts and comparisons read matching list records before leaving the page.** The existing read
   assessment treats a paginated list as partial evidence even before its total is known, avoiding detail-page
   detours before counting. Pagination observes controls and captures records concurrently after navigation

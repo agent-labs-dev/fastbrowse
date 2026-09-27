@@ -241,7 +241,9 @@ class OpenAICompatibleLLM:
                 },
             },
             # An endpoint that ignores response_format would treat the schema as a hint, so none is routed to.
-            "provider": {"require_parameters": True},
+            # OpenRouter's default routing sent gemini-3.8-flash reads to Vertex at a 2.4s median where AI Studio
+            # answered the same read in 1.3s; sorting by latency keeps fallbacks and follows the faster endpoint.
+            "provider": {"require_parameters": True, "sort": "latency"},
         }
         if self._reasoning_effort is not None:
             body["reasoning"] = {"effort": self._reasoning_effort.value}
