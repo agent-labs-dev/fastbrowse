@@ -123,9 +123,26 @@ def _field(value: JsonValue, *keys: str) -> JsonValue:
     return value
 
 
+def _wrapped_reason(body: JsonValue) -> str | None:
+    """What the provider said, from inside the error a gateway wraps it in.
+
+    A gateway answers a refusal it did not make itself with `{"error": {"message": "typesafe returned status
+    400"}}` and the provider's own reason in a nested error, the AI SDK's serialized `APICallError`. Read without
+    it, a line names only that the provider answered with a status, so a request over an input limit, an option
+    count over the model's and an outage behind the gateway all read the same, and a report of a 503 says nothing
+    about why it happened.
+    """
+    for key in ("message", "error"):
+        reason = _field(body, "error", "param", key)
+        if isinstance(reason, str) and reason:
+            return reason
+    return None
+
+
 def describe(response: httpx.Response) -> str:
     """A failed response as one line someone can act on: the status, the provider's own error type and message,
-    and the upstream provider a gateway routed to. The start of the body when it is not the usual error JSON."""
+    what the provider said when a gateway only repeats its status, and the upstream a gateway routed to. The start
+    of the body when it is not the usual error JSON."""
     try:
         body: JsonValue = response.json()
     except ValueError:
@@ -138,6 +155,9 @@ def describe(response: httpx.Response) -> str:
     # Scrubbed before it is cut: a cut through an echoed key leaves a fragment no exact replacement matches.
     text = f"HTTP {response.status_code}{f' {kind}' if isinstance(kind, str) else ''}: "
     text += _scrubbed(response, message)[:300] + (f" (via {upstream})" if isinstance(upstream, str) else "")
+    reason = _wrapped_reason(body)
+    if reason is not None and reason != message:
+        text += _scrubbed(response, f"; the provider said: {reason[:200]}")
     return _scrubbed(response, text)
 
 
@@ -161,6 +181,43 @@ RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 
 to reach the provider behind it: a 520 arrived seconds after a retried 503 from the same outage and, unlisted, failed
 its eval row for good. A status still listed once the retries run out ends the run unavailable, not in error, so
 the eval harness retries the row too."""
+
+
+INPUT_TOO_LARGE_REASONS = ("max_tokens_exceeded", "request body too large")
+"""What either provider calls a request past an input limit, matched anywhere in the body.
+
+Both refuse the request rather than the provider failing, so both have to reach the caller as an input too large:
+that is the one Jev failure the step's shed path answers by asking the same question again smaller, where anything
+else ends the run. A gateway relays the provider's own wording inside a nested error and which wording arrives
+depends on which ceiling was passed, so a match on one of them left the other reading as a failed request.
+"""
+
+
+def _refused_for_size(response: httpx.Response) -> bool:
+    return any(reason in response.text for reason in INPUT_TOO_LARGE_REASONS)
+
+
+def retryable(response: httpx.Response) -> bool:
+    """Whether a repeat can clear this response: a status that says nothing about the request, or the gateway's own
+    verdict that the error may be retried.
+
+    The status set is hand kept and has twice been too short, and an unlisted status that outlasted a repeat failed
+    its row for good. The AI SDK derives its own flag from the status (408, 409, 429 and every 5xx), so following it
+    covers the statuses this set does not name and changes nothing for the ones it does. A status the gateway marks
+    not retryable says the request itself is at fault, and is left to the caller rather than repeated on the chance
+    it clears.
+    """
+    if response.status_code in RETRYABLE_STATUS:
+        return True
+    if response.is_success:
+        return False
+    try:
+        body: JsonValue = response.json()
+    except ValueError:
+        return False
+    return _field(body, "error", "param", "isRetryable") is True or _field(body, "error", "isRetryable") is True
+
+
 TRANSIENT_TRANSPORT = (
     httpx.TimeoutException,
     httpx.NetworkError,
@@ -268,7 +325,7 @@ async def post_with_retry(
             usage=usage,
             allow_hedge=request_limit is None or usage.requests + 1 < request_limit,
         )
-        if response is not None and response.status_code not in RETRYABLE_STATUS:
+        if response is not None and not retryable(response):
             if attempt:
                 _transient(call, began, attempted)
             return response
@@ -343,7 +400,7 @@ async def _hedged(
             done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
             for request in done:
                 response = request.result()
-                if response is not None and response.status_code not in RETRYABLE_STATUS:
+                if response is not None and not retryable(response):
                     winner = request
                     return response
         return response
@@ -380,7 +437,7 @@ async def _send(
         failure = f"no response ({type(error).__name__})"
         response = None
     else:
-        if response.status_code not in RETRYABLE_STATUS:
+        if not retryable(response):
             return response
         failure = describe(response)
     usage.consecutive_5xx = usage.consecutive_5xx + 1 if response is not None and response.status_code >= 500 else 0
@@ -427,7 +484,7 @@ async def post(
         trace("request_slow", call="jev", seconds=round(seconds, 2))
     if response is None:
         raise JevTransportFailed(f"Jev transport failed after {usage.history(seconds)}; last: {usage.failures[-1]}")
-    if response.status_code in RETRYABLE_STATUS:
+    if retryable(response):
         last = describe(response)
         raise JevRetriesExhausted(
             exhausted(usage.requests, seconds, last),
@@ -436,7 +493,7 @@ async def post(
             unaccounted_requests=usage.unaccounted_requests,
             last=last,
         )
-    if response.status_code == 400 and "max_tokens_exceeded" in response.text:
+    if response.status_code == 400 and _refused_for_size(response):
         raise JevInputTooLarge(f"Jev input too large; {describe(response)}")
     if not response.is_success:
         raise response_error(response, "Jev request failed")
