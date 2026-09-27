@@ -9,12 +9,20 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
           python-version: "3.14"
       # A tag that disagrees with the package version would publish one number under another's name.
       - run: test "v$(uv version --short)" = "$GITHUB_REF_NAME"
+      # PyPI cannot take a version back, so only a commit already on main (reviewed, CI-gated) is published;
+      # a tag pushed on a branch or a stray local commit stops here.
+      - run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - run: uv build
+      # Install the wheel alone, outside the checkout, before anything is published: a module or data file
+      # (snapshot.js is read at import) missing from the wheel fails here instead of on users' machines.
+      - run: uv run --isolated --no-project --with dist/*.whl python -c "import fastbrowse.browser.page, fastbrowse.cli"
       # The release notes ARE the changelog entry, so the GitHub release, the repository and the site all
       # say the same thing about a version. A tag whose version has no entry fails here rather than
       # publishing notes nobody wrote.
