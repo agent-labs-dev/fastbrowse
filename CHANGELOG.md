@@ -20,6 +20,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   again and read the new date, but its answer still quoted the first: both readings evidenced the question. A
   read that evidences a question now drops earlier readings of the same address whose quote the page no
   longer shows. They stay as context.
+- **A pager a loader hid no longer ends the pages.** A list read page by page looked for the next page in
+  controls observed while the capture could still be waiting out a loader. With no pager in view, the pages
+  ended early. The page is observed again once the capture has waited.
+- **A head start is not timed before the run begins.** The plan and shortcut start before the browser. A call
+  that finished after `max_seconds` of browser startup ended the run over time the limit does not count.
+- **Published eval rows keep their repeat.** Arms are paired attempt by attempt; without the repeat, the report
+  paired each arm's earliest attempts, which can differ when an outage costs one arm a repeat.
 - **A failed history read no longer ends a run.** Every observation asks the browser for its history to decide
   whether to offer BACK. When that failed as the first page opened, the run ended. BACK is now not offered,
   and taking BACK still reads the history again.

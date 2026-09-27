@@ -2326,6 +2326,18 @@ async def test_a_head_start_a_run_never_took_bills_what_finished_and_cancels_the
     assert len(lines) == 1 and proposing.cancelled()
 
 
+async def test_a_head_start_is_not_timed_until_the_run_takes_it_over() -> None:
+    """A shortcut can finish after `max_seconds` of browser startup; that time is not the run's."""
+    head = HeadStart.begin(
+        ScriptedLLM([{"requirements": [], "answer_expected": True}]),
+        "What is the top story?",
+        limits=Limits(max_seconds=0.01),
+    )
+    await asyncio.sleep(0.02)
+    head.ledger.check()
+    await head.discard()
+
+
 @pytest.mark.parametrize(
     ("task", "start", "limits"),
     [
@@ -3345,7 +3357,8 @@ async def _pipeline_fixture(
     ]
     page = Mock(spec=Page)
     page.artifacts = ()
-    page.observe = AsyncMock(side_effect=observations[1:])
+    # The last page, showing no pager, is observed again once its capture has outwaited any loader.
+    page.observe = AsyncMock(side_effect=[*observations[1:], observations[-1]])
     page.capture = AsyncMock(side_effect=captures[1:])
     current_url = observations[0].url
 
@@ -3491,6 +3504,15 @@ async def test_pipeline_drains_capture_when_observation_stops_paging(stop: str) 
     assert cancelled.is_set()
     assert page.navigate.await_count == 1
     assert not state.notes.evidenced("r1")
+
+
+async def test_a_pager_a_loader_hid_from_the_first_look_does_not_end_the_pages() -> None:
+    agent, state, page, observations, _, _ = await _pipeline_fixture()
+    loading = _at(observations[1].url)
+    page.observe.side_effect = [loading, observations[1], *observations[2:], observations[-1]]
+    await agent._pipeline_pages(state, observations[0])
+    assert page.navigate.await_count == 3
+    assert state.notes.evidenced("r1")
 
 
 async def test_pipeline_rejects_capture_from_a_different_page_than_its_controls() -> None:

@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import re
 import time
 from collections import deque
@@ -409,6 +410,9 @@ class HeadStart:
     @classmethod
     def begin(cls, llm: LLMClient, task: str, *, start: str | None = None, limits: Limits | None = None) -> Self:
         ledger = Ledger(limits or Limits())
+        # The run's clock starts when the run takes the ledger over. Until then, a call finishing past `max_seconds`
+        # of browser startup would end the run over time the limit does not count.
+        ledger.started = math.inf
         # The plan is needed to read, to judge DONE and to answer, and the start page, the first fills and clicks
         # all come before those, so it is written from the task while they run.
         planning = asyncio.create_task(make_plan(llm, task, start=start, ledger=ledger))
@@ -2070,6 +2074,12 @@ class Agent:
                         state.paging_failed = True
                         break
                     following = next_page_control(observation)
+                    if following is None:
+                        # The capture outwaits a loader the concurrent observation may have seen, and a loader can
+                        # hide the pager: only controls observed after that wait can end the pages.
+                        settled = await self._observe()
+                        if settled.url == observation.url:
+                            observation, following = settled, next_page_control(settled)
                     computable = {t.requirement_id for t in state.notes.tallies} | state.comparisons.keys()
                     fallback_room = not state.comparisons or (
                         state.ledger.steps + len(pending) + 2 <= state.ledger.limits.max_steps
