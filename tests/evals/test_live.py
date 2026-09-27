@@ -107,20 +107,30 @@ async def test_ultrafast_passes_only_on_a_correct_outcome_it_called_done(
     assert row.seconds == 3.0
 
 
-async def test_an_attempt_with_a_slow_jev_call_is_an_outage_run_again(monkeypatch: pytest.MonkeyPatch) -> None:
-    """0.5.7 timed runs whose single Jev call took up to 41s; a slow provider must never count against the agent."""
+@pytest.mark.parametrize(
+    ("report", "failure"),
+    [
+        (
+            {"events": [{"event": "request_slow", "call": "jev", "seconds": 7.25}]},
+            "Jev unavailable: a call took 7.2s",
+        ),
+        ({"transient_seconds": 4.5}, "provider unavailable: 4.5s of failed requests"),
+    ],
+)
+async def test_an_attempt_a_provider_slowed_is_an_outage_run_again(
+    monkeypatch: pytest.MonkeyPatch, report: dict[str, Any], failure: str
+) -> None:
+    """0.5.7 timed runs whose single Jev call took up to 41s, and earlier releases subtracted failed requests from
+    fastbrowse's time alone; a slow provider must never count for or against the agent."""
 
-    async def ultrafast_arm(
-        _: LiveTask, __: httpx.AsyncClient, *, record: Path | None
-    ) -> tuple[Outcome, live.ArmReport]:
-        slow = {"event": "request_slow", "call": "jev", "seconds": 7.25}
+    async def fast_report(*_: Any, **__: Any) -> tuple[Outcome, live.ArmReport]:
         outcome = Outcome("Attention Is All You Need", None, "https://arxiv.org/abs/1706.03762")
-        return outcome, live.ArmReport(status="done", dollars=0.001, seconds=12.0, events=[slow])
+        return outcome, live.ArmReport(status="complete", dollars=0.001, seconds=12.0, **report)
 
-    monkeypatch.setattr(live, "ultrafast_arm", ultrafast_arm)
+    monkeypatch.setattr(live, "_fast_report", fast_report)
     async with httpx.AsyncClient() as http:
         row = await live.run_arm(
-            "jev-ultrafast",
+            "fastbrowse",
             task("arxiv-title"),
             "Attention Is All You Need",
             http,
@@ -129,7 +139,7 @@ async def test_an_attempt_with_a_slow_jev_call_is_an_outage_run_again(monkeypatc
             record=None,
         )
     assert row.normalized_status == Ending.UNAVAILABLE
-    assert row.failure == "Jev unavailable: a call took 7.2s"
+    assert row.failure == failure
 
 
 async def test_an_attempt_of_any_arm_still_running_at_the_cap_is_an_outage(monkeypatch: pytest.MonkeyPatch) -> None:

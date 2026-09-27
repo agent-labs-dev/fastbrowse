@@ -718,8 +718,8 @@
           "excluded": 5,
           "priced": 37,
           "seconds": {
-            "median": 20.7,
-            "mean": 28.37027027027027
+            "median": 22.7,
+            "mean": 34.921621621621625
           },
           "dollars": {
             "median": 0.00407,
@@ -760,8 +760,8 @@
           "excluded": 5,
           "priced": 13,
           "seconds": {
-            "median": 19.560000000000002,
-            "mean": 32.56769230769231
+            "median": 32.7,
+            "mean": 40.91538461538462
           },
           "dollars": {
             "median": 0.00307,
@@ -801,8 +801,8 @@
           "excluded": 0,
           "priced": 3,
           "seconds": {
-            "median": 37.769999999999996,
-            "mean": 43.89666666666666
+            "median": 38.8,
+            "mean": 45.233333333333334
           },
           "dollars": {
             "median": 0.0025,
@@ -830,7 +830,7 @@
           "priced": 21,
           "seconds": {
             "median": 18.2,
-            "mean": 17.70904761904762
+            "mean": 19.79047619047619
           },
           "dollars": {
             "median": 0.00513,
@@ -871,8 +871,8 @@
           "excluded": 2,
           "priced": 25,
           "seconds": {
-            "median": 19.3,
-            "mean": 27.8436
+            "median": 19.5,
+            "mean": 29.844
           },
           "dollars": {
             "median": 0.00716,
@@ -913,8 +913,8 @@
           "excluded": 0,
           "priced": 15,
           "seconds": {
-            "median": 44.9,
-            "mean": 57.57333333333333
+            "median": 57.0,
+            "mean": 78.79333333333334
           },
           "dollars": {
             "median": 0.02709,
@@ -955,8 +955,8 @@
           "excluded": 1,
           "priced": 8,
           "seconds": {
-            "median": 70.585,
-            "mean": 76.70375
+            "median": 101.55,
+            "mean": 94.3125
           },
           "dollars": {
             "median": 0.028325000000000003,

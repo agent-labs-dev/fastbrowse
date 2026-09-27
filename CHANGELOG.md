@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Published eval times are wall time.** Earlier releases subtracted the failed requests and backoff that
+  fastbrowse's client measured inside an attempt, which no other arm's time could have taken out. An attempt with
+  any failed request is now an outage and is run again, and 0.5.6's published times, the only ones that
+  subtracted any, are shown in full: its core median rises from 20.7s to 22.7s.
 - **Model calls go to the fastest endpoint OpenRouter serves.** OpenRouter's default routing sent
   gemini-3.8-flash reads to Vertex at a 2.4s median, where Google AI Studio answered the same read in
   1.3s. Requests now ask OpenRouter to sort endpoints by latency, still requiring structured output

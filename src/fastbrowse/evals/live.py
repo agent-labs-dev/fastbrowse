@@ -639,6 +639,11 @@ async def run_arm(
     if slow := _slow_jev(report.events):
         # Jev answers in under a second; a slower call is its outage, and the attempt is run again, never scored.
         ending, failure = Ending.UNAVAILABLE, f"Jev unavailable: a call took {slow:.1f}s"
+    elif report.transient_seconds:
+        # Failed requests and their backoff are a provider's outage, not the agent's time. Subtracting them would
+        # credit fastbrowse alone, since no other arm's requests are visible, so the attempt is run again instead.
+        failure = f"provider unavailable: {report.transient_seconds:.1f}s of failed requests"
+        ending = Ending.UNAVAILABLE
     return EvalRow.model_validate(
         report.model_dump()
         | {
@@ -870,7 +875,7 @@ def summarize(rows: list[EvalRow], arms: list[str]) -> None:
         passed = sum(r.passed for r in arm_rows)
         correct = sum(r.correct for r in arm_rows)
         priced = [r.dollars for r in arm_rows if r.dollars is not None]
-        seconds = [max(0.0, r.seconds - r.transient_seconds) for r in arm_rows]
+        seconds = [r.seconds for r in arm_rows]
         unknown = len(arm_rows) - len(priced)
         print(
             f"{arm}: {passed}/{len(arm_rows)} passed, {correct} correct, median {statistics.median(seconds):.1f}s, "
@@ -878,8 +883,6 @@ def summarize(rows: list[EvalRow], arms: list[str]) -> None:
         )
         if excluded := len(ran) - len(arm_rows):
             print(f"  {excluded} runs ended by a provider outage, excluded")
-        if lost := sum(r.transient_seconds for r in arm_rows):
-            print(f"  {'transient':18} {lost / len(arm_rows):5.1f}s a task, left out of the median")
         calls: dict[str, float] = {}
         for r in arm_rows:
             for label, spent in r.seconds_by_call.items():

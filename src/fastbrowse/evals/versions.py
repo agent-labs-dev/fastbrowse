@@ -321,18 +321,12 @@ def _measured(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     return [r for r in rows if r.get("normalized_status") != "unavailable"]
 
 
-def _active(row: Mapping[str, Any]) -> float:
-    """A row's time without the provider outage waits measured inside it: a 503 and its backoff say nothing about
-    the agent, so no published time includes them."""
-    return max(0.0, row["seconds"] - (row.get("transient_seconds") or 0.0))
-
-
 def _arm_stats(rows: Sequence[Mapping[str, Any]]) -> dict[str, str]:
     if not rows:
         return dict.fromkeys(
             ("passed", "correct", "median time", "mean time", "median cost", "mean cost", "total cost"), "-"
         )
-    seconds = [_active(r) for r in rows]
+    seconds = [r["seconds"] for r in rows]
     dollars = [r["dollars"] for r in rows if r["dollars"] is not None]
     unpriced = f" ({len(rows) - len(dollars)} unpriced)" if len(dollars) < len(rows) else ""
     return {
@@ -650,7 +644,7 @@ def summary(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) 
                     total=len(arm_rows),
                     excluded=len(attempts) - len(arm_rows),
                     priced=len(prices),
-                    seconds=_metrics([_active(r) for r in arm_rows]),
+                    seconds=_metrics([r["seconds"] for r in arm_rows]),
                     dollars=_metrics(prices if len(prices) == len(arm_rows) else []),
                 )
             changes = [
@@ -736,12 +730,14 @@ def protocol_docs() -> str:
         "A fastbrowse attempt in which any Jev call took over 2 seconds, retries included, is a Jev outage: healthy "
         "calls take about half a second at any page size, and no worse than 0.93 seconds in 45 measured. This rule "
         "applies to fastbrowse alone, since no other arm's provider calls are visible to the harness.",
+        "From 0.5.8, a fastbrowse attempt in which any provider request failed and was retried "
+        "(`transient_seconds` above 0) is an outage too, for the same reason.",
         "An attempt an outage ended is waited out and run again, up to five times over about 25 minutes.",
         "A row still unavailable after that is recorded but scores nothing, and neither does the same repeat of "
         "every other arm at that task: each comparison scores its arms on the same attempts at the same tasks.",
-        "Time runs from the start of an attempt to the agent's answer. Provider outage waits measured inside an "
-        "attempt (`transient_seconds`: failed requests and the backoff between them) are left out of every time "
-        "published; only fastbrowse's client can see its own, so the other arms' are 0.",
+        "Time runs from the start of an attempt to the agent's answer, all of it counted. Releases up to 0.5.7 "
+        "subtracted the failed requests and backoff fastbrowse's client measured inside an attempt, which no other "
+        "arm could; every published time, those releases' included, is now wall time.",
         "The hosted arm's time ends at its agent's answer, by Browser Use's own clock from the session's creation. "
         "Its API reports the session stopped as much as two minutes later (`session_seconds`), which is not counted.",
         "Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the row.",

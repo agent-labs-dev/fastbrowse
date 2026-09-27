@@ -53,9 +53,10 @@ Tasks run only on sites that stay up. the-internet.herokuapp.com caused 13 of th
 A hosted session Browser Use itself ends with "Task ended unexpectedly." is a Browser Use outage: its agent neither answered nor gave up. A session ending in `error` with any other output is scored as its failure.
 An attempt of any arm still running after 15 minutes is stopped as an outage: the slowest finished attempts took about three minutes.
 A fastbrowse attempt in which any Jev call took over 2 seconds, retries included, is a Jev outage: healthy calls take about half a second at any page size, and no worse than 0.93 seconds in 45 measured. This rule applies to fastbrowse alone, since no other arm's provider calls are visible to the harness.
+From 0.5.8, a fastbrowse attempt in which any provider request failed and was retried (`transient_seconds` above 0) is an outage too, for the same reason.
 An attempt an outage ended is waited out and run again, up to five times over about 25 minutes.
 A row still unavailable after that is recorded but scores nothing, and neither does the same repeat of every other arm at that task: each comparison scores its arms on the same attempts at the same tasks.
-Time runs from the start of an attempt to the agent's answer. Provider outage waits measured inside an attempt (`transient_seconds`: failed requests and the backoff between them) are left out of every time published; only fastbrowse's client can see its own, so the other arms' are 0.
+Time runs from the start of an attempt to the agent's answer, all of it counted. Releases up to 0.5.7 subtracted the failed requests and backoff fastbrowse's client measured inside an attempt, which no other arm could; every published time, those releases' included, is now wall time.
 The hosted arm's time ends at its agent's answer, by Browser Use's own clock from the session's creation. Its API reports the session stopped as much as two minutes later (`session_seconds`), which is not counted.
 Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the row.
 Existing timing includes browser setup. These rows do not claim the planned handoff-only timing protocol.
@@ -354,7 +355,7 @@ Each arm made 9 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 36/37 | 36/37 | 20.7s | 28.4s | $0.0041 | $0.0069 | $0.25 |
+| fastbrowse (0.5.6) | 36/37 | 36/37 | 22.7s | 34.9s | $0.0041 | $0.0069 | $0.25 |
 | Browser Use agent | 33/37 | 37/37 | 40.7s | 64.5s | $0.4775 | $0.4973 | $18.40 |
 
 Each arm made 42 attempts. Provider outages ended 5 of fastbrowse's, so each arm is scored on the same 37: an attempt one arm lost is dropped for every arm at that task. `wiki-godel` is left out, with no fastbrowse attempt measured. Runs: `993506e34fd9` at `cfefd89`.
@@ -364,7 +365,7 @@ Changed since these runs: `arxiv-title` v3 → v5, `expandtesting-login` v3 → 
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 13/13 | 13/13 | 19.6s | 32.6s | $0.0031 | $0.0043 | $0.06 |
+| fastbrowse (0.5.6) | 13/13 | 13/13 | 32.7s | 40.9s | $0.0031 | $0.0043 | $0.06 |
 | jev-ultrafast | 9/13 | 9/13 | 13.2s | 34.7s | unknown | unknown | $0.00 (1 unpriced) |
 
 Each arm made 18 attempts. Provider outages ended 2 of fastbrowse's and 3 of jev-ultrafast's, so each arm is scored on the same 13: an attempt one arm lost is dropped for every arm at that task. `arxiv-open` is left out, with no jev-ultrafast attempt measured. Runs: `993506e34fd9` at `cfefd89`.
@@ -374,7 +375,7 @@ Changed since these runs: `arxiv-open` v2 → v4, `flights-search` v2 → v4, `g
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 3/3 | 3/3 | 37.8s | 43.9s | $0.0025 | $0.0062 | $0.02 |
+| fastbrowse (0.5.6) | 3/3 | 3/3 | 38.8s | 45.2s | $0.0025 | $0.0062 | $0.02 |
 
 Each arm made 3 attempts. Runs: `993506e34fd9` at `cfefd89`.
 Changed since these runs: `saucedemo-pause` v2 → v4; compare them only against runs of the same version.
@@ -383,7 +384,7 @@ Changed since these runs: `saucedemo-pause` v2 → v4; compare them only against
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 21/21 | 21/21 | 18.2s | 17.7s | $0.0051 | $0.0068 | $0.14 |
+| fastbrowse (0.5.6) | 21/21 | 21/21 | 18.2s | 19.8s | $0.0051 | $0.0068 | $0.14 |
 | Browser Use agent | 19/21 | 21/21 | 12.8s | 12.5s | $0.1308 | $0.1440 | $3.02 |
 
 Each arm made 24 attempts. Provider outages ended 3 of fastbrowse's, so each arm is scored on the same 21: an attempt one arm lost is dropped for every arm at that task. `ruff-release` is left out, with no fastbrowse attempt measured. Runs: `993506e34fd9` at `cfefd89`.
@@ -393,7 +394,7 @@ Changed since these runs: `books-travel-priciest` v3 → v5, `dynamic-loading` v
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 25/25 | 25/25 | 19.3s | 27.8s | $0.0072 | $0.0174 | $0.43 |
+| fastbrowse (0.5.6) | 25/25 | 25/25 | 19.5s | 29.8s | $0.0072 | $0.0174 | $0.43 |
 | Browser Use agent | 24/25 | 25/25 | 14.8s | 20.3s | $0.1962 | $0.2256 | $5.64 |
 
 Each arm made 27 attempts. Provider outages ended 2 of fastbrowse's, so each arm is scored on the same 25: an attempt one arm lost is dropped for every arm at that task. Runs: `993506e34fd9` at `cfefd89`.
@@ -403,7 +404,7 @@ Changed since these runs: `books-mystery-cheapest` v3 → v5, `countries-mongoli
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 12/15 | 12/15 | 44.9s | 57.6s | $0.0271 | $0.0366 | $0.55 |
+| fastbrowse (0.5.6) | 12/15 | 12/15 | 57.0s | 78.8s | $0.0271 | $0.0366 | $0.55 |
 | Browser Use agent | 15/15 | 15/15 | 59.9s | 79.2s | $0.3732 | $0.5790 | $8.69 |
 
 Each arm made 15 attempts. Runs: `98ef8dc21156` at `2304b2c`.
@@ -413,7 +414,7 @@ Changed since these runs: `stretch-books-nonfiction-five-star` v5 → v7, `stret
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.6) | 6/8 | 6/8 | 70.6s | 76.7s | $0.0283 | $0.0990 | $0.79 |
+| fastbrowse (0.5.6) | 6/8 | 6/8 | 101.5s | 94.3s | $0.0283 | $0.0990 | $0.79 |
 | Browser Use agent | 8/8 | 8/8 | 38.4s | 67.0s | $0.2395 | $0.4367 | $3.49 |
 
 Each arm made 9 attempts. Provider outages ended 1 of fastbrowse's, so each arm is scored on the same 8: an attempt one arm lost is dropped for every arm at that task. Runs: `98ef8dc21156` at `2304b2c`.
