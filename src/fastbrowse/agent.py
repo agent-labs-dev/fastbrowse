@@ -13,6 +13,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence, Set
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Self
 from urllib.parse import urljoin, urlsplit
 
@@ -183,6 +184,8 @@ _FIELD_RULES = (
     "Infer its meaning from the task, current value, page context and recent actions. "
     "Use the field's displayed format for dates, except in a field whose input_type is date, datetime-local, month, "
     "week or time, which takes ISO 8601 (2026-09-25, 2026-09-25T14:30, 2026-09, 2026-W39, 14:30). "
+    "A day named relative to today (tomorrow, the next Friday) is the first matching entry of page.next_days, "
+    "never a date you count yourself. "
     "A fact the task states in another shape is given, not missing: take the part of a "
     "stated name, address or date this field asks for and write it in the field's shape. "
     "The requirements are the task's steps in the order it wants them done. When more than one gives this field "
@@ -1540,7 +1543,12 @@ class Agent:
                 "url": observation.url,
                 "title": observation.title,
                 "text": observation.viewport_text,
-                "date": observation.captured_at.date().isoformat(),
+                "date": observation.today,
+                # Told only that today was Sunday, the writer still booked "the next Monday" a week late in one run
+                # of four: a relative day is looked up here rather than counted.
+                "next_days": [
+                    f"{observation.captured_at + timedelta(days=ahead):%A %Y-%m-%d}" for ahead in range(1, 8)
+                ],
             },
             "recent_actions": [
                 entry.model_dump(mode="json", exclude_none=True)
@@ -2261,7 +2269,7 @@ class Agent:
                         f"## Recent steps\n{steps}\n\n"
                         "## Recovery memory\n"
                         f"{_recovery_memory(state, self._config.stall.max_recoveries, self._redactor)}\n\n"
-                        f"## Current date\n{observation.captured_at.date().isoformat()}\n\n"
+                        f"## Current date\n{observation.today}\n\n"
                         f"## Still to find\n{open_requirements or 'nothing'}\n\n"
                         f"## Task\n{state.task}\n\n## Problem\n{reason}"
                     ),

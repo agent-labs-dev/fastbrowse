@@ -13,6 +13,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.5.8] - 2026-09-27
 
+- **Days named relative to today land on the right date.** The models were told today's date without its
+  weekday, and on a Sunday the field writer booked "the next Monday strictly after today" a week late in three
+  runs of three. Every check now sees the weekday, and field writers look up a relative day in a list of the next
+  seven dates instead of counting; the same task then passed six runs of six.
 - **A lookup's explicitly unmet requirements reach the verifier.** Completion skipped the verifier for
   answers read on known pages even when the done check named a missing requirement. Only doubts with no
   unmet requirements can take that shortcut.

@@ -154,6 +154,12 @@ class Observation(Frozen):
     """A same-origin http(s) entry sits immediately before the current one in browser history: BACK would leave
     the task's own site otherwise, as a wizard sharing one URL with no earlier entry but `about:blank` does."""
 
+    @property
+    def today(self) -> str:
+        """The capture date with its weekday. Given 2026-09-27 alone, a Sunday, the field writer booked "the next
+        Monday strictly after today" as 2026-10-05 in three runs of three."""
+        return f"{self.captured_at:%Y-%m-%d (%A)}"
+
 
 class BlockKind(StrEnum):
     HEADING = "heading"

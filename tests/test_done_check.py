@@ -277,7 +277,7 @@ async def test_the_checks_are_shown_the_date_and_what_each_action_typed_and_did(
     llm = ScriptedLLM([{"complete": True, "missing": []}])
     await llm_verify(llm, "Sign up", plan, _PAGE, (), Notes(), history)
     prompt = llm.calls[0][1][-1].content
-    today = _PAGE.captured_at.date().isoformat()
+    today = _PAGE.today
     assert f"## Current date\n{today}" in prompt
     steps = prompt[prompt.index("## Steps taken\n") :]
     assert steps.index("fill First Name = 'Ada' -> executed") < steps.index("click Back -> executed")

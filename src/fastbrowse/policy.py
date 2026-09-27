@@ -576,7 +576,7 @@ def _state(observation: Observation, controls: Sequence[Control], context: StepC
         "task": context.task,
         # "Next month" and "the next Monday" are relative to today, which only the done check was told: shown
         # which month a date picker was on, Jev clicked Next through two years of months looking for next month.
-        "date": observation.captured_at.date().isoformat(),
+        "date": observation.today,
         "subgoal": context.subgoal,
         "page": {"url": observation.url, "title": observation.title, "text": observation.viewport_text},
         "requirements": list(context.requirements),

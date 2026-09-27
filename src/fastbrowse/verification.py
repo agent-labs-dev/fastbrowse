@@ -217,7 +217,7 @@ async def check_done(
             false="No, it answers the task as written.",
         )
     # "The next Monday after today" cannot be confirmed by someone who does not know today.
-    context: dict[str, JsonValue] = {"task": task, "date": observation.captured_at.date().isoformat()}
+    context: dict[str, JsonValue] = {"task": task, "date": observation.today}
     if history:
         context["actions"] = "\n".join(map(_step, history))
     if visited:
@@ -370,7 +370,7 @@ async def llm_verify(
         Message(
             role="user",
             content=(
-                f"## Task\n{task}\n\n## Current date\n{observation.captured_at.date().isoformat()}\n\n"
+                f"## Task\n{task}\n\n## Current date\n{observation.today}\n\n"
                 f"## Requirements\n{requirements}\n\n## Steps taken\n{steps}\n\n"
                 f"## Set controls\n{json.dumps(_controls(stateful))}\n\n{_grounding(notes, plan, invented)}"
                 f"{_visited(visited)}## Page\n{observation.url}\n"
