@@ -20,10 +20,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   requirement on one page left a cross-page count incomplete, while later reads repeated totals without the
   missing evidence. The reader now retries that saved capture once before merging its records. Successful
   reads need no extra call; a second invalid read still leaves the count open.
-- **A connection error opening the first page is tried four times.** A cloud browser's proxy timed out
-  connecting to a site on both of fastbrowse's two tries, a second apart, in two of three runs of one task,
-  while the site answered other clients. Connection errors now get four tries, waiting 1, 2 and 4 seconds
-  between them; a page that connects but never loads is still tried twice.
+- **A page that fails to open is tried four times.** Behind a cloud browser's proxy, a first page failed both
+  of fastbrowse's tries, a second apart, four times in three evals of about 300 runs: a certificate error, two
+  connection timeouts and a document that never became ready, each while the site answered other clients.
+  Navigation now tries four times, waiting 1, 2 and 4 seconds between them.
 - **Days named relative to today land on the right date.** The models were told today's date without its
   weekday, and on a Sunday the field writer booked "the next Monday strictly after today" a week late in three
   runs of three. Every check now sees the weekday, and field writers look up a relative day in a list of the next

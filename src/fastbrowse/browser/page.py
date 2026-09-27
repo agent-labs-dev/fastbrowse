@@ -228,12 +228,12 @@ _SCREENSHOT_WAIT_SECONDS = 1.0
 # How long a click that opened a tab waits for it to be attached before the run carries on in the opener.
 _POPUP_ADOPT_SECONDS = 2.0
 _OPENS_TABS = frozenset({Operation.CLICK, Operation.ENTER})
-_NAVIGATE_ATTEMPTS = 2
-_NET_ERROR_ATTEMPTS = 4
-"""A connection error is tried more often than a page that never loads: a cloud browser's proxy timed out
-connecting to a site twice a second apart in two of three runs of one task, while the site answered the harness
-and Browser Use's agent reloaded its way through."""
+_NAVIGATE_ATTEMPTS = 4
+"""Two tries a second apart were not enough behind a cloud browser's proxy: in three 0.5.8 evals of about 300 runs,
+a first page failed both, once on a certificate error, twice timing out connecting and once never becoming ready,
+each while the site answered the harness and Browser Use's agent reloaded its way through."""
 _NAVIGATE_RETRY_SECONDS = 1.0
+"""Doubled after each failed try."""
 _NET_ERROR = re.compile(r"net::ERR_[A-Z_]+")
 # The site or the connection to it gave nothing: the-internet.herokuapp.com answered ERR_EMPTY_RESPONSE for
 # a quarter hour of one eval. Not ERR_NAME_NOT_RESOLVED, which a mistyped address also gives.
@@ -1166,10 +1166,8 @@ class CdpPage(Page):
         # content, so they are shown.
         failure = "NavigationError"
         timed_out = False
-        for attempt in range(_NET_ERROR_ATTEMPTS):
+        for attempt in range(_NAVIGATE_ATTEMPTS):
             if attempt:
-                if attempt >= _NAVIGATE_ATTEMPTS and not _NET_ERROR.fullmatch(failure):
-                    break
                 await asyncio.sleep(_NAVIGATE_RETRY_SECONDS * 2 ** (attempt - 1))
             result = await self._session.client.send.Page.navigate(params={"url": url}, session_id=session_id)
             if error := result.get("errorText"):
