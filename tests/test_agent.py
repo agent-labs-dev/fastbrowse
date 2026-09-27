@@ -3278,6 +3278,94 @@ async def test_pager_reads_overlap_and_final_read_sees_records_in_page_order() -
     assert agent._result(state, state.ledger, Status.COMPLETE).final_url == observations[-1].url
 
 
+async def test_pipeline_observes_while_capturing_but_waits_for_both_before_navigating() -> None:
+    agent, state, page, observations, captures, _ = await _pipeline_fixture()
+    capturing, observed, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def observe() -> Observation:
+        index = page.navigate.await_count
+        if index == 1:
+            await capturing.wait()
+            observed.set()
+        return observations[index]
+
+    async def capture_page() -> Capture:
+        index = page.navigate.await_count
+        if index == 1:
+            capturing.set()
+            await observed.wait()
+            await release.wait()
+            assert page.navigate.await_count == index
+        return captures[index]
+
+    page.observe.side_effect = observe
+    page.capture.side_effect = capture_page
+    async with asyncio.timeout(2):
+        running = asyncio.create_task(agent._pipeline_pages(state, observations[0]))
+        try:
+            await observed.wait()
+            assert page.navigate.await_count == 1
+            release.set()
+            await running
+        finally:
+            running.cancel()
+            await asyncio.gather(running, return_exceptions=True)
+    assert state.notes.evidenced("r1")
+    assert [e.url for e in state.notes.supporting_evidence("r1")] == [c.url for c in captures]
+
+
+@pytest.mark.parametrize("stop", ["redirect", "dialog", "observe_error", "cancel"])
+async def test_pipeline_drains_capture_when_observation_stops_paging(stop: str) -> None:
+    agent, state, page, observations, _, _ = await _pipeline_fixture()
+    capturing, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def capture_page() -> Capture:
+        capturing.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+        raise AssertionError("capture should have been cancelled")
+
+    async def observe() -> Observation:
+        await capturing.wait()
+        if stop == "observe_error":
+            raise BrowserError("observation failed")
+        if stop == "cancel":
+            await asyncio.Event().wait()
+        if stop == "redirect":
+            return _at("https://other.test/login")
+        return observations[1].model_copy(update={"dialog": Dialog(kind="alert", message="Paused")})
+
+    page.observe.side_effect = observe
+    page.capture.side_effect = capture_page
+    async with asyncio.timeout(2):
+        running = asyncio.create_task(agent._pipeline_pages(state, observations[0]))
+        try:
+            await capturing.wait()
+            if stop == "cancel":
+                running.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await running
+            else:
+                await running
+        finally:
+            running.cancel()
+            await asyncio.gather(running, return_exceptions=True)
+    assert cancelled.is_set()
+    assert page.navigate.await_count == 1
+    assert not state.notes.evidenced("r1")
+
+
+async def test_pipeline_rejects_capture_from_a_different_page_than_its_controls() -> None:
+    agent, state, page, observations, captures, _ = await _pipeline_fixture()
+    page.capture.side_effect = [captures[2]]
+    await agent._pipeline_pages(state, observations[0])
+    assert state.paging_failed and not state.notes.evidenced("r1")
+    assert page.navigate.await_count == 1
+    assert [e.url for e in state.notes.evidence.values()] == [captures[0].url]
+
+
 @pytest.mark.parametrize(
     "limits,config,pages",
     [

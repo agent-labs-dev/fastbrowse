@@ -421,12 +421,19 @@ def build_request(
         )
     }
     if context.unread_requirements is None or context.unread_requirements:
+        listing = (
+            "Matching records in a paginated list are evidence for a count or comparison even when this page "
+            "cannot supply the final answer. Read those records before opening a record's detail link or "
+            "leaving the list. "
+            if any(pager_link(control) for control in observation.controls)
+            else ""
+        )
         questions["read_assessment"] = ChoiceQuestion(
             instructions=(
                 f"{UNTRUSTED}\nDoes the current page contain evidence for an unanswered information "
                 "requirement that should be read before further interaction? Use unread_requirements, the "
                 "collected notes and recent actions; while planning, judge from the task. Evidence can answer "
-                "part of a comparison or explain a failed action. A relevant error, refusal, result or total "
+                f"part of a comparison or explain a failed action. {listing}A relevant error, refusal, result or total "
                 "must be preserved even when the page also has an editable form. Field values, suggestions "
                 "and previews are inputs, not results, and so are the prices or availability a picker shows beside "
                 "its options (a calendar's fare per day) while a value is still being chosen. A review page before "

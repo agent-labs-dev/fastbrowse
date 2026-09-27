@@ -2021,17 +2021,27 @@ class Agent:
                         or not state.steps[-1].page_changed
                     ):
                         break
-                    landed = await self._observe()
-                    state.visited[(self._raw_observation or landed).url] = None
-                    self._note_effect(state, landed)
-                    stalled = self._settle(state, landed)
-                    state.paged_from = None
-                    if stalled or landed.url in seen or origin_of(landed.url) != origin:
-                        break
-                    seen.add(landed.url)
-                    observation = landed
-                    capture = await self._capture()
-                    if not capture.text.strip() or capture.url != observation.url or observation.dialog is not None:
+                    # Navigation already settled this page. Its controls and source blocks are independent reads,
+                    # and waiting for one before starting the other costs a cloud round trip on every page.
+                    capturing = asyncio.create_task(self._capture())
+                    try:
+                        landed = await self._observe()
+                        state.visited[(self._raw_observation or landed).url] = None
+                        self._note_effect(state, landed)
+                        stalled = self._settle(state, landed)
+                        state.paged_from = None
+                        if stalled or landed.url in seen or origin_of(landed.url) != origin:
+                            break
+                        seen.add(landed.url)
+                        observation = landed
+                        if observation.dialog is not None:
+                            state.paging_failed = True
+                            break
+                        capture = await capturing
+                    finally:
+                        capturing.cancel()
+                        await asyncio.gather(capturing, return_exceptions=True)
+                    if not capture.text.strip() or capture.url != observation.url:
                         state.paging_failed = True
                         break
                     following = next_page_control(observation)

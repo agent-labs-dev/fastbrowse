@@ -11,6 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Counts and comparisons read matching list records before leaving the page.** The existing read
+  assessment treats a paginated list as partial evidence even before its total is known, avoiding detail-page
+  detours before counting. Pagination observes controls and captures records concurrently after navigation
+  settles, then waits for both before following the next link. Each page still supplies its own captured
+  records, and the final page must confirm the list ended.
 - **Short answers finish with fewer waits and rewrites.** Completion and claim checks now run together on
   the reader's draft. A labelled value or a comparison with its supporting values can stand as written,
   without a model call to turn it into a sentence or remove the supporting facts. Failed claims still go
