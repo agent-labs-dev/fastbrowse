@@ -110,6 +110,18 @@ def test_reopening_controls_with_new_results_is_not_a_value_reversal(value: str)
     assert earlier is not None and later is not None and reversal(later, earlier) is None
 
 
+def test_a_wizard_step_swapping_its_fields_sets_no_value() -> None:
+    search = control("search", "Search", "textbox", value="")
+    name = observation((search, control("name", "First Name", "textbox", value="Priya")))
+    city = observation((search, control("city", "City", "textbox", value="Manchester")))
+    searched = observation((search.model_copy(update={"value": "forms"}), name.controls[1]))
+    wizard = {"document_key": "wizard"}
+    swapped = move(name.model_copy(update=wizard), city.model_copy(update=wizard))
+    typed = move(name.model_copy(update=wizard), searched.model_copy(update=wizard))
+    assert swapped is not None and not swapped.set_a_value
+    assert typed is not None and typed.set_a_value
+
+
 def test_a_value_set_on_the_field_an_overlay_stood_in_for_counts() -> None:
     editor = control("editor", "Where from? ", "combobox", value="Lond")
     choice = control("london", "London, United Kingdom", "option")

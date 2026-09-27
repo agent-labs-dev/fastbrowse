@@ -208,24 +208,25 @@ async def test_cross_origin_iframe_control_is_observed_and_clickable(
     assert value == "Clicked"
 
 
-async def test_popup_becomes_tab_and_switch_tab_works(loaded_page: CdpPage, browser_session: BrowserSession) -> None:
+async def test_a_click_that_opens_a_tab_continues_there(loaded_page: CdpPage, browser_session: BrowserSession) -> None:
     obs = await loaded_page.observe()
+    opener_tab = next(t for t in obs.tabs if t.active)
     open_popup = find(obs, "Open popup")
     result = await loaded_page.act(Action(operation=Operation.CLICK, target_id=open_popup.id), obs)
     assert result.outcome == StepOutcome.EXECUTED
+    assert result.page_changed
 
     async def popup_loaded() -> bool:
         return any("popup.html" in t.url for t in browser_session.tabs())
 
     await wait_until(popup_loaded)
-
     obs2 = await loaded_page.observe()
-    popup_tab = next(t for t in obs2.tabs if "popup.html" in t.url)
-    switch = await loaded_page.act(Action(operation=Operation.SWITCH_TAB, tab_id=popup_tab.id), obs2)
-    assert switch.outcome == StepOutcome.EXECUTED
+    assert "popup.html" in obs2.url
+    assert find(obs2, "Popup button")
 
-    obs3 = await loaded_page.observe()
-    assert "popup.html" in obs3.url
+    back = await loaded_page.act(Action(operation=Operation.SWITCH_TAB, tab_id=opener_tab.id), obs2)
+    assert back.outcome == StepOutcome.EXECUTED
+    assert find(await loaded_page.observe(), "Open popup")
 
 
 async def test_confirm_dialog_handled_via_dialog_operation(
@@ -707,6 +708,60 @@ async def test_twins_keep_their_card_names_past_shared_hidden_and_control_labels
     )
     obs = await observe_until(page, "Add to cart")
     assert [c.context for c in obs.controls if c.label == "Add to cart"] == ["Brass Kettle", "Copper Pan"]
+
+
+async def test_calendar_twins_are_named_by_the_month_they_show(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    """A jQuery UI datepicker's Next and days were named "Su", its weekday header, so every month read alike: the
+    run could not tell which month it was on and went back and forth past the one it wanted."""
+    calendar = (
+        '<div><div><a style="float:left">Prev</a><a style="float:right">Next</a>'
+        "<div><span>{month}</span> <span>2026</span></div></div>"
+        "<table><thead><tr><th>Su</th><th>Mo</th></tr></thead><tbody><tr><td><a>1</a></td><td><a>2</a></td></tr>"
+        "</tbody></table></div>"
+    )
+    await page.navigate(f"{main_site}/icons.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        f"document.body.innerHTML = '{calendar.format(month='September')}{calendar.format(month='October')}';"
+        "for (const a of document.querySelectorAll('a')) a.href = '#';",
+    )
+    obs = await observe_until(page, "Next")
+    for label in ("Prev", "Next"):
+        assert [c.context for c in obs.controls if c.label == label] == ["September 2026", "October 2026"]
+    assert [c.context for c in obs.controls if c.label == "2"] == [
+        "September 2026; column: Mo",
+        "October 2026; column: Mo",
+    ]
+
+
+async def test_table_controls_keep_columns_across_empty_cells_and_spans(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/icons.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        """document.body.innerHTML = `
+        <table><thead><tr><th rowspan="2">Week</th><th colspan="2">October 2026</th></tr>
+        <tr><th><span title="Thursday">Th</span></th><th><abbr title="Friday">Fr</abbr></th></tr></thead>
+        <tbody><tr><th scope="row" rowspan="2">A</th><td></td><td><button>2</button></td></tr>
+        <tr><td><button>8</button></td><td><button>9</button></td></tr></tbody></table>
+        <table><tr><th id="other">Price</th><th>Quantity</th></tr>
+        <tr><td><button>Buy</button></td><td headers="other"><button>Quote</button></td></tr></table>
+        <table><thead><tr><th>Product</th><th>Price</th></tr></thead>
+        <tbody><tr><th scope="row" rowspan="0">A</th><td>10</td></tr></tbody>
+        <tbody><tr><td>B</td><td><button>Offer</button></td></tr></tbody></table>`""",
+    )
+    obs = await observe_until(page, "Quote")
+    assert find(obs, "2").context == "column: October 2026 / Friday"
+    assert find(obs, "8").context == "column: October 2026 / Thursday"
+    assert find(obs, "9").context == "column: October 2026 / Friday"
+    assert find(obs, "Buy").context == "column: Price"
+    assert find(obs, "Quote").context == "column: Price"
+    assert find(obs, "Offer").context == "column: Price"
 
 
 async def test_a_browser_handed_over_by_cdp_url_drives_and_survives_the_run(

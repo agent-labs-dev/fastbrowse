@@ -37,7 +37,7 @@ from fastbrowse.models import (
     StepOutcome,
     Unavailable,
 )
-from fastbrowse.page import BrowserError, NavigationTimeout
+from fastbrowse.page import BrowserError, NavigationTimeout, SiteUnreachable
 from fastbrowse.run import _browser, run_task
 from tests.browser.conftest import RecordingArtifactSink
 from tests.test_policy import ScriptedJev
@@ -81,6 +81,38 @@ class CdpTransport:
             "Target.attachToTarget": {"sessionId": "session"},
             "Runtime.evaluate": {"result": {"value": "loading"}},
         }.get(method, {})
+
+
+async def test_session_setup_sends_independent_commands_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each command is a cloud round trip, and discovery and foregrounding need not wait for the tab or its domains."""
+    transport = CdpTransport(monkeypatch)
+    transport.delays = {"Target.setDiscoverTargets": 0.3, "Target.activateTarget": 0.3, "Runtime.enable": 0.3}
+    began = time.monotonic()
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()):
+        took = time.monotonic() - began
+    # In sequence the three take 0.9s.
+    assert took < 0.6
+
+
+async def test_popup_activation_and_preparation_overlap_and_drain_on_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CdpTransport(monkeypatch)
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+        activating = transport.blocked["Target.activateTarget"] = asyncio.Event()
+        preparing = transport.blocked["Runtime.enable"] = asyncio.Event()
+        adopted = asyncio.get_running_loop().create_future()
+        session._popups["popup"] = ("owned", adopted)
+        task = asyncio.create_task(session._adopt_popup("popup", "owned"))
+        try:
+            async with asyncio.timeout(2):
+                await activating.wait()
+                await preparing.wait()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        assert not adopted.result()
+        assert {"Target.activateTarget", "Runtime.enable"} <= transport.finished
 
 
 @pytest.mark.parametrize(
@@ -158,11 +190,13 @@ SETTLED = {"result": {"value": [True, "fingerprint"]}}
     ("errors", "raised"),
     [
         (["net::ERR_TUNNEL_CONNECTION_FAILED"], None),
-        (["net::ERR_TUNNEL_CONNECTION_FAILED"] * 2, "Page.navigate failed (net::ERR_TUNNEL_CONNECTION_FAILED)"),
-        (["secret https://example.test/secret"] * 2, "Page.navigate failed (NavigationError)"),
+        (["net::ERR_TIMED_OUT"] * 3, None),
+        (["net::ERR_TUNNEL_CONNECTION_FAILED"] * 4, "Page.navigate failed (net::ERR_TUNNEL_CONNECTION_FAILED)"),
+        (["secret https://example.test/secret"] * 4, "Page.navigate failed (NavigationError)"),
+        (["net::ERR_NAME_NOT_RESOLVED"] * 4, "Page.navigate failed (net::ERR_NAME_NOT_RESOLVED)"),
     ],
 )
-async def test_a_failed_navigation_is_tried_again_once(
+async def test_a_failed_navigation_is_tried_again(
     monkeypatch: pytest.MonkeyPatch, errors: list[str], raised: str | None
 ) -> None:
     transport = CdpTransport(monkeypatch)
@@ -179,10 +213,12 @@ async def test_a_failed_navigation_is_tried_again_once(
             with pytest.raises(BrowserError, match=re.escape(raised)) as caught:
                 await navigating
             assert not isinstance(caught.value, NavigationTimeout)
-    assert transport.calls.count("Page.navigate") == min(len(errors) + 1, 2)
+            # The site or connection dropping it is an outage; a name that never resolved can be a typo.
+            assert isinstance(caught.value, SiteUnreachable) is ("TUNNEL" in raised)
+    assert transport.calls.count("Page.navigate") == min(len(errors) + 1, page_module._NAVIGATE_ATTEMPTS)
 
 
-async def test_a_page_that_never_loads_is_tried_again_once(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_page_that_never_loads_is_tried_again(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = CdpTransport(monkeypatch)
     monkeypatch.setattr(page_module, "_NAVIGATE_RETRY_SECONDS", 0)
     async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
@@ -190,7 +226,7 @@ async def test_a_page_that_never_loads_is_tried_again_once(monkeypatch: pytest.M
             await CdpPage(session, Config()).navigate("https://example.test", load_timeout_seconds=0.1)
         transport.results["Runtime.evaluate"] = [LOADED, SETTLED]
         await CdpPage(session, Config()).navigate("https://example.test", load_timeout_seconds=0.1)
-    assert transport.calls.count("Page.navigate") == 3
+    assert transport.calls.count("Page.navigate") == page_module._NAVIGATE_ATTEMPTS + 1
 
 
 def _history(entries: list[str], current: int) -> dict[str, Any]:
@@ -211,6 +247,13 @@ async def test_can_go_back_is_false_without_a_same_origin_predecessor(
 ) -> None:
     transport = CdpTransport(monkeypatch)
     transport.results["Page.getNavigationHistory"] = [_history(entries, current)]
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+        assert await CdpPage(session, Config())._can_go_back() is False
+
+
+async def test_a_failed_history_read_offers_no_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = CdpTransport(monkeypatch)
+    transport.failures["Page.getNavigationHistory"] = RuntimeError({"code": -32000, "message": "secret"})
     async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
         assert await CdpPage(session, Config())._can_go_back() is False
 
@@ -253,6 +296,28 @@ async def test_back_navigates_to_a_same_origin_predecessor_and_can_be_taken_twic
     assert first == (StepOutcome.EXECUTED, None)
     assert second == (StepOutcome.EXECUTED, None)
     assert transport.calls.count("Page.navigateToHistoryEntry") == 2
+
+
+async def test_back_from_a_page_opened_in_place_of_the_start_page_opens_the_start_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shortcut is loaded instead of the start page, so the tab holds no entry for BACK to return to."""
+    transport = CdpTransport(monkeypatch)
+    history = _history(["about:blank", "https://example.test/deep"], 1)
+    transport.results["Page.getNavigationHistory"] = [history, history]
+    opened: list[str] = []
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+        page = CdpPage(session, Config())
+        page._back_to[session.active_session_id] = "https://example.test/"
+
+        async def navigate(url: str, *args: object, **kwargs: object) -> None:
+            opened.append(url)
+
+        monkeypatch.setattr(page, "navigate", navigate)
+        assert await page._can_go_back()
+        assert await page._back() == (StepOutcome.EXECUTED, None)
+    assert opened == ["https://example.test/"]
+    assert "Page.navigateToHistoryEntry" not in transport.calls
 
 
 async def test_background_finalizers_finish_before_socket_stops(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -309,7 +374,8 @@ async def test_initial_navigation_error_returns_error_result(monkeypatch: pytest
         yield CONNECTION
 
     monkeypatch.setattr(chrome_adapter, "local_chrome", chrome)
-    result = await run_task("Read", start="https://example.test", jev=ScriptedJev({}), llm=ScriptedLLM([]))
+    no_shortcut = ScriptedLLM([{"url": None}, {"url": None}])
+    result = await run_task("Read", start="https://example.test", jev=ScriptedJev({}), llm=no_shortcut)
     assert result.status is Status.ERROR
     assert result.error == "Page.navigate failed (ConnectionError)"
 

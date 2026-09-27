@@ -95,6 +95,8 @@ def page_state(
     page: dict[str, JsonValue] = {"url": observation.url, "title": observation.title, "text": observation.viewport_text}
     state: dict[str, JsonValue] = {
         **(context or {}),
+        # The dropdown choice runs apart from the action choice; it also needs today's date for relative months.
+        "date": observation.today,
         "page": page,
         # Inputs and ARIA selection states are absent from innerText; without them a preview can
         # pass completion even though the requested filters were never applied.
@@ -204,15 +206,19 @@ async def check_done(
         questions["draft_needs_writing"] = NoulQuestion(
             instructions=(
                 f"{UNTRUSTED}\nDoes the draft in state need rewriting before it answers the task? It does if it "
-                "misses part of what was asked, repeats or contradicts itself, includes facts the task did not ask "
-                "for, leaves a comparison, count or calculation undone, or gives a value without saying which part "
-                "of the task it answers when that is not plain."
+                "misses part of what was asked, repeats or contradicts itself, includes unrelated facts, leaves "
+                "a comparison, count or calculation undone, or gives a value without saying which part of the "
+                "task it answers when that is not plain. A short quoted value or labelled field can answer as "
+                "written; it does not need a full sentence. A comparison that states its result can include the "
+                "values it compared. These are supporting facts, not unrelated ones. Judge the requested answer: "
+                "when a task asks to perform actions and report a fact, the answer need only report that fact, "
+                "not recap each action. "
+                "Completion of the actions is checked separately."
             ),
             true="Yes, it needs rewriting before it answers the task.",
             false="No, it answers the task as written.",
         )
-    # "The next Monday after today" cannot be confirmed by someone who does not know today.
-    context: dict[str, JsonValue] = {"task": task, "date": observation.captured_at.date().isoformat()}
+    context: dict[str, JsonValue] = {"task": task}
     if history:
         context["actions"] = "\n".join(map(_step, history))
     if visited:
@@ -254,6 +260,13 @@ async def check_done(
     # An answer Jev did not give is not a yes: only a present, confident "no rewrite needed" skips the composer.
     doubt = evaluation.answers.get("draft_needs_writing")
     ready = isinstance(doubt, NoulAnswer) and doubt.probability < thresholds.rewrite_from
+    if draft is not None:
+        trace(
+            "draft",
+            rewrite=doubt.probability if isinstance(doubt, NoulAnswer) else None,
+            ready=ready,
+            claims=len(draft.claims),
+        )
     return DoneCheck(
         verdict=verdict,
         complete=complete,
@@ -358,7 +371,7 @@ async def llm_verify(
         Message(
             role="user",
             content=(
-                f"## Task\n{task}\n\n## Current date\n{observation.captured_at.date().isoformat()}\n\n"
+                f"## Task\n{task}\n\n## Current date\n{observation.today}\n\n"
                 f"## Requirements\n{requirements}\n\n## Steps taken\n{steps}\n\n"
                 f"## Set controls\n{json.dumps(_controls(stateful))}\n\n{_grounding(notes, plan, invented)}"
                 f"{_visited(visited)}## Page\n{observation.url}\n"

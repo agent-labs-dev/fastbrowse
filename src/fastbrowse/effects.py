@@ -32,6 +32,17 @@ class Move(Frozen):
     values_before: dict[ControlKey, ControlValue]
     values_after: dict[ControlKey, ControlValue]
 
+    @property
+    def set_a_value(self) -> bool:
+        """Whether a control on the page both before and after now holds another value.
+
+        A wizard's Next swaps one step's fields for the next step's, whose values are the ones typed there before:
+        nothing was set, and counting it as a setting put back tripped the stall recovery on the pass after a
+        correction."""
+        return any(
+            self.values_before[key] != self.values_after[key] for key in self.values_before.keys() & self.values_after
+        )
+
 
 def _control_values(observation: Observation) -> dict[ControlKey, ControlValue]:
     controls: dict[ControlKey, list[Control]] = {}

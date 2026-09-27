@@ -133,6 +133,9 @@ class HistoryEntry(Frozen):
     """Entered value, redacted before storage; secrets are represented only by a marker."""
     effect: str | None = None
     """What the action visibly did: the address, controls shown or removed, and values before and after."""
+    setting: bool | None = None
+    """True for a click that chose an option or ticked a box, a value set and kept in the record as a typed one is;
+    unset otherwise, so the actions a model is shown do not each carry it."""
 
 
 class StepContext(Frozen):
@@ -418,12 +421,19 @@ def build_request(
         )
     }
     if context.unread_requirements is None or context.unread_requirements:
+        listing = (
+            "Matching records in a paginated list are evidence for a count or comparison even when this page "
+            "cannot supply the final answer. Read those records before opening a record's detail link or "
+            "leaving the list. "
+            if any(pager_link(control) for control in observation.controls)
+            else ""
+        )
         questions["read_assessment"] = ChoiceQuestion(
             instructions=(
                 f"{UNTRUSTED}\nDoes the current page contain evidence for an unanswered information "
                 "requirement that should be read before further interaction? Use unread_requirements, the "
                 "collected notes and recent actions; while planning, judge from the task. Evidence can answer "
-                "part of a comparison or explain a failed action. A relevant error, refusal, result or total "
+                f"part of a comparison or explain a failed action. {listing}A relevant error, refusal, result or total "
                 "must be preserved even when the page also has an editable form. Field values, suggestions "
                 "and previews are inputs, not results, and so are the prices or availability a picker shows beside "
                 "its options (a calendar's fare per day) while a value is still being chosen. A review page before "
@@ -564,6 +574,9 @@ async def _evaluate(
 def _state(observation: Observation, controls: Sequence[Control], context: StepContext, compact: bool) -> JsonValue:
     state: dict[str, JsonValue] = {
         "task": context.task,
+        # "Next month" and "the next Monday" are relative to today, which only the done check was told: shown
+        # which month a date picker was on, Jev clicked Next through two years of months looking for next month.
+        "date": observation.today,
         "subgoal": context.subgoal,
         "page": {"url": observation.url, "title": observation.title, "text": observation.viewport_text},
         "requirements": list(context.requirements),

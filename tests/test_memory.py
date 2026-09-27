@@ -21,6 +21,48 @@ def evidence(*, sha: str = "capture", start: int = 0, end: int = 4) -> Evidence:
     )
 
 
+def _quoted(quote: str, sha: str, url: str = "https://example.test") -> Fact:
+    span = evidence(sha=sha).model_copy(update={"quote": quote, "url": url, "end": len(quote)})
+    return Fact(requirement_id="r1", text=quote, evidence=span, reader=FactReader.LLM)
+
+
+@pytest.mark.parametrize(
+    ("shown", "url", "kept"),
+    [
+        ("SelectedDate: 28/11/2026", "https://example.test", ["SelectedDate: 28/11/2026"]),
+        (
+            "SelectedDate: 28/11/2026 was SelectedDate: 31/10/2026",
+            "https://example.test",
+            ["SelectedDate: 31/10/2026", "SelectedDate: 28/11/2026"],
+        ),
+        (
+            "SelectedDate: 28/11/2026",
+            "https://example.test/2",
+            ["SelectedDate: 31/10/2026", "SelectedDate: 28/11/2026"],
+        ),
+    ],
+    ids=["gone from the page", "still shown", "another address"],
+)
+def test_a_new_read_of_an_address_retires_quotes_it_no_longer_shows(shown: str, url: str, kept: list[str]) -> None:
+    notes = Notes([_quoted("SelectedDate: 31/10/2026", "before"), _quoted("SelectedDate: 28/11/2026", "after", url)])
+    notes.supersede("r1", url, "after", shown)
+    assert [fact.text for _, fact in notes.supporting("r1")] == kept
+    assert len(notes.facts) == 2
+
+
+def test_a_quote_inside_a_longer_word_is_not_still_shown() -> None:
+    notes = Notes([_quoted("Priya Sharma", "before"), _quoted("Priya Sharman", "after")])
+    notes.supersede("r1", "https://example.test", "after", "Name: Priya Sharman")
+    assert [fact.text for _, fact in notes.supporting("r1")] == ["Priya Sharman"]
+    assert [e.quote for e in notes.read_for("r1")] == ["Priya Sharma", "Priya Sharman"]
+
+
+def test_a_read_that_evidenced_nothing_retires_nothing() -> None:
+    notes = Notes([_quoted("SelectedDate: 31/10/2026", "before")])
+    notes.supersede("r1", "https://example.test", "after", "SelectedDate: 28/11/2026")
+    assert notes.evidenced("r1")
+
+
 def test_notes_deduplicate_spans_without_losing_requirement_coverage() -> None:
     notes = Notes()
     assert notes.add(Fact(reader=FactReader.LLM, requirement_id="r1", text="First fact", evidence=evidence()))

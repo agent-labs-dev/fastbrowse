@@ -11,6 +11,169 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-09-27
+
+- **The date given to every choice names the next two months.** Told only a September date, Jev once took
+  "the month after next" as October and clicked a calendar's Next once. Today's date now comes with the month
+  one and two months on.
+- **A corrected choice replaces its old reading in the answer.** A run chose a date, found it wrong, chose
+  again and read the new date, but its answer still quoted the first: both readings evidenced the question. A
+  read that evidences a question now drops earlier readings of the same address whose quote the page no
+  longer shows. They stay as context.
+- **A page read before is read again when what it showed has changed, even if that read answered nothing yet.**
+  A task asked for the name a wizard's Review step showed last and the confirmation, as one question. Reading
+  Review answered nothing alone, so after the run went back and corrected the name, Review was not read
+  again, and the answer named the old name. A return to any page state read before now reads it again once a
+  quote from that read is gone. Superseded readings are compared as whole words ("Priya Sharma" is not shown
+  by "Priya Sharman").
+- **A pager a loader hid no longer ends the pages.** A list read page by page looked for the next page in
+  controls observed while the capture could still be waiting out a loader. With no pager in view, the pages
+  ended early. The page is observed again once the capture has waited.
+- **A head start is not timed before the run begins.** The plan and shortcut start before the browser. A call
+  that finished after `max_seconds` of browser startup ended the run over time the limit does not count.
+- **Published eval rows keep their repeat.** Arms are paired attempt by attempt; without the repeat, the report
+  paired each arm's earliest attempts, which can differ when an outage costs one arm a repeat.
+- **A failed history read no longer ends a run.** Every observation asks the browser for its history to decide
+  whether to offer BACK. When that failed as the first page opened, the run ended. BACK is now not offered,
+  and taking BACK still reads the history again.
+- **Dropdown choices see today's date.** The action chooser knew today's date and weekday, but the separate
+  choice of a dropdown option did not. A calendar asked for the month after next could select one month too
+  far ahead. Shared page state now gives the option choice the same date as the action and completion checks.
+- **A rejected page read can recover before its records enter a tally.** An invalid record range or omitted
+  requirement on one page left a cross-page count incomplete, while later reads repeated totals without the
+  missing evidence. The reader now retries that saved capture once before merging its records. Successful
+  reads need no extra call; a second invalid read still leaves the count open.
+- **A page that fails to open is tried four times.** Behind a cloud browser's proxy, a first page failed both
+  of fastbrowse's tries, a second apart, four times in three evals of about 300 runs: a certificate error, two
+  connection timeouts and a document that never became ready, each while the site answered other clients.
+  Navigation now tries four times, waiting 1, 2 and 4 seconds between them.
+- **Days named relative to today land on the right date.** The models were told today's date without its
+  weekday, and on a Sunday the field writer booked "the next Monday strictly after today" a week late in three
+  runs of three. Every check now sees the weekday, and field writers look up a relative day in a list of the next
+  seven dates instead of counting; the same task then passed six runs of six.
+- **A lookup's explicitly unmet requirements reach the verifier.** Completion skipped the verifier for
+  answers read on known pages even when the done check named a missing requirement. Only doubts with no
+  unmet requirements can take that shortcut.
+- **Completion follows page changes during reading and answering.** A redirect or document replacement
+  now refreshes the page used for the caller's completion check and final URL. An unchanged page keeps its
+  observation, avoiding another scan of its controls.
+- **Published eval times are wall time.** Earlier releases subtracted the failed requests and backoff that
+  fastbrowse's client measured inside an attempt, which no other arm's time could have taken out. An attempt with
+  any failed request is now an outage and is run again, and 0.5.6's published times, the only ones that
+  subtracted any, are shown in full: its core median rises from 20.7s to 22.7s.
+- **Model calls go to the fastest endpoint OpenRouter serves.** OpenRouter's default routing sent
+  gemini-3.8-flash reads to Vertex at a 2.4s median, where Google AI Studio answered the same read in
+  1.3s. Requests now ask OpenRouter to sort endpoints by latency, still requiring structured output
+  and keeping its fallbacks.
+- **Counts and comparisons read matching list records before leaving the page.** The existing read
+  assessment treats a paginated list as partial evidence even before its total is known, avoiding detail-page
+  detours before counting. Pagination observes controls and captures records concurrently after navigation
+  settles, then waits for both before following the next link. Each page still supplies its own captured
+  records, and the final page must confirm the list ended.
+- **Short answers finish with fewer waits and rewrites.** Completion and claim checks now run together on
+  the reader's draft. A labelled value or a comparison with its supporting values can stand as written,
+  without a model call to turn it into a sentence or remove the supporting facts. Failed claims still go
+  to the composer, and its answer keeps the same evidence and receipt checks.
+- **Numeric rankings compare records from every page in code.** The reader identifies matching records
+  and the fields holding their labels and values; code ranks the collected values when the list ends. A
+  winner from an earlier page keeps its quote and page address in the answer's citations. Missing records,
+  ambiguous fields, mixed currencies and ties at the cutoff leave the comparison to the reader.
+  Records used for both counts and value comparisons keep their quoted values visible to the answer checks.
+- **Calendar days keep their weekday column.** Controls inside tables now carry their header names,
+  preserving empty cells and row and column spans, and expanding abbreviations from the page's titles.
+  A request for the first Friday can choose the day in that column instead of reconstructing the calendar
+  from flattened text, which picked a Tuesday and spent extra steps correcting it.
+- **Filtered counts across pages use recorded tallies.** The plan identifies requests for one count,
+  and code counts their matching records even when a reader returns plain continuation records or varies
+  the group's label between pages. Overlapping record ranges count each record once, and reaching the
+  list's end closes the tally without asking the reader to calculate a total. A counted range of adjacent list
+  items counts each item, as a range of records already did, rather than counting it as one.
+- **Placing an order reliably pauses for confirmation.** The check before an irreversible click rated a
+  checkout's final button barely above its threshold, so an unauthorized order could go through. The question
+  now names placing an order among the changes that cannot be undone.
+- **Six held-out eval tasks moved to the dev sets.** Changes in this release were profiled or measured on
+  `new-window`, `countries-mongolia`, `table-largest-due`, `quotes-search`, `stretch-calendar-first-friday` and
+  `stretch-quotes-top-authors`, so their scores no longer test unseen work. Fresh tasks for the same skills
+  replace them in the held-out sets.
+- **Browser steps spend less time waiting on remote commands.** Clicks check for a popup with their target
+  guard, fills prepare focus with the editor check, and reads wait for loading and capture text in one call.
+  Navigation waits for a readiness event, input starts the settling clock before its reply returns, and new
+  tabs activate while their browser domains are enabled. Stale targets, covered controls, dialogs and secret
+  fields keep their checks, and a press still completes before a release is sent.
+- **A click that opens a new tab carries on in that tab.** The run stayed on the opening page, so the next
+  step was spent choosing the new tab, and a read before it could credit the opening page's heading to the
+  new window. The previous tab is still listed and can be switched back to.
+- **Forms can fill more than one empty field from a single model call.** After a confident field choice, the writer
+  supplies values for the same form and each fill checks that the page and other fields stayed unchanged.
+  A new field, changed value, dialog or navigation returns to the usual decision loop. Secrets, populated
+  fields and submission keep their existing checks, and corrections still follow the task's value order.
+  Fills also avoid activating an already focused tab and let the page's input events drive settling.
+- **Repeated lists need fewer model reads to count.** The reader can identify a field shared by every record,
+  and code groups and counts the original captured blocks. For an unfiltered count across all pages, later
+  pages reuse that field only while their title, section and record structure match; a change goes back to the
+  reader. The final page confirms the list ended, and merged tallies keep every record's quote and page address.
+- **A date picker's controls say which month they show.** A table's header cell no longer names what sits
+  outside its row, so a jQuery UI datepicker's Next and days are named by the month in its title rather than
+  by the "Su" weekday header, and every month reads differently. Choices are also told today's date, so a run
+  asked for "next month" stops there instead of going back and forth past it or paging on for months.
+- **Text inside a same-origin frame is read where the frame stands.** It was read after the whole page, so a
+  subscription form's own heading followed the footer and the page's heading above the frame was reported in
+  its place. Readers are also told which blocks are headings and which lie inside an embedded frame.
+- **A field the task gives no value for is not offered again.** Once a field was found to have no value in
+  the task, the next choice could pick it again and end the run `needs_input`, as a blog's unrelated "Enter
+  Name" did to a date-range booking already made. Recovery can still send a run back to it, and a field the
+  task cannot go on without still ends the run there.
+- **Paginated comparisons spend less time reading and navigating.** Pager links open their observed
+  same-origin address directly, with each followed page still recorded. Readers keep matching records from
+  the first page, use a smaller response for intermediate pages, and cite earlier evidence with short
+  references that resolve to the original capture spans. Answered comparisons go straight to the final checks.
+- **A page read before is read again when what it said is gone.** A wizard's Review step, read before the
+  run went back to correct a field, still answered for it afterwards, so the answer could name the value from
+  before the correction. On a return to a page state whose quoted evidence the page no longer shows, the
+  requirement is reopened and the page read as it is now.
+- **Stepping back and forth through a wizard is quicker.** A page the run left unread is not read on the way
+  back when nothing on it changed; an empty fill into an empty field goes to recovery instead of being typed;
+  an unsure pick the run already took from the same page recovers instead of retracing it; and a Next that
+  only shows the values a step already held no longer counts as a setting put back, which tripped the
+  stall recovery on the pass after a correction.
+- **A site that drops the first page load ends the run `unavailable`, not `error`.** Chrome's empty,
+  reset, refused or proxy-failed connection before the first step says the site was down, as a timeout already
+  did; an address that does not resolve still ends `error`.
+- **A value the task changes later is typed in order.** Asked to enter one value and later correct it, the
+  field writer typed the correction on the first pass, so no step could show the change. It now lists the
+  values a field holds in turn, and the run types the next one in that order, so a field set back to an earlier
+  value is not skipped past it. A box ticked or option
+  chosen early in a long form stays in the record the completion checks read, as typed values already did.
+- **An answer read on a page the run guessed the address of is always checked when doubted.** A doubted answer
+  read on a built address, such as `github.com/owner/repo`, goes to the verifier, and the verifier finding it
+  read off the wrong page sends the run back to work. Only answers read on pages the run clicked to skip it.
+- **Paginated lists are read while the next page loads.** After the reader identifies a list needed in full,
+  intermediate pages collect records concurrently. Their quotes merge in page order before the final page
+  answers the comparison, within the run's page, step, call and time limits.
+- **Cloud clicks, fills and observations use fewer round trips.** The pre-press frame wait shares its
+  page evaluation with the target guard and hit test, field hand-off also reads the input type, and page
+  snapshots run beside the history read. Pointer, focus and secret checks still gate input.
+- **Evals never count a provider's outage against an agent.** Browser Use is now scored on its own agent's
+  answer (its `done`, or its final reply when it never calls `done`), not on Browser Use's later
+  `is_task_successful` verdict, which failed six correct 0.5.7 answers. It is timed to that answer, not to the
+  session reporting stopped, which came up to two minutes later. Outage waits
+  fastbrowse measures inside a run are left out of every published time. A fastbrowse attempt in which any Jev call
+  took over 2 seconds (healthy calls take about half a second at any page size) is a Jev outage, run again rather
+  than scored. The 0.5.7 results are republished under these rules.
+- **Fewer model hand-offs on the way to an answer.** A lookup whose every requirement cites evidence finishes
+  without the screenshot verifier, which never found an ungrounded claim in 76 0.5.7 verifications. Only an
+  answer read on a search the run built itself (an address with a query) is still verified. A verifier naming a
+  requirement as `req_1` or `1` now names `req-1` rather than nothing. A read that answers a lookup finishes
+  without another decision or another look at the page it read, and a page with text but no controls is no longer
+  waited on for 12 seconds.
+- **A run reaches its first page sooner.** `run_task` asks for the plan and the shortcut while the browser starts,
+  so the tab opens straight onto the shortcut, and opening the tab sends its independent browser commands at once.
+- **A comparison is read without restating every record.** The reader names the records a winner or count rests
+  on as block ranges, and code copies their quotes in, where it wrote a claim for each: a priciest-book read took
+  4.8 seconds rather than 7.9.
+- **A page is read once it has finished loading.** A capture waits up to 3 seconds for a visible loading
+  indicator to go, where it read "Loading..." with the LLM and then read the page again.
+
 ## [0.5.7] - 2026-09-25
 
 - **Every eval comparison sets its arms on the same attempts, and an outage scores no arm.** Each suite is split
@@ -546,7 +709,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.7...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.8...HEAD
+[0.5.8]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.8
 [0.5.7]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.7
 [0.5.6]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.6
 [0.5.5]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.5

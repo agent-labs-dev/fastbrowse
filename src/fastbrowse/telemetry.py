@@ -123,8 +123,9 @@ def traced() -> Generator[list[object]]:
 
 def transient_seconds(events: Iterable[object], began: float, ended: float) -> float:
     """Time within `began`..`ended` that calls spent on transient provider failures, calls that overlapped
-    counted once. Evals take it out of a run's time: a 503 and its backoff say nothing about the agent. An upper
-    bound on the delay: a call running beside the failed one may have taken as long anyway."""
+    counted once. Evals run an attempt with any of it again rather than subtract it, which would credit the one arm
+    whose requests are visible. An upper bound on the delay: a call running beside the failed one may have taken as
+    long anyway."""
     spans = sorted(
         (max(float(event["began"]), began), min(float(event["ended"]), ended))
         for event in events

@@ -33,63 +33,54 @@ something that was never on the page. Every claim in an answer cites a verbatim 
 ### Against Browser Use
 
 <!-- evals:headline -->
-Measured on 2026-09-25 with the build released as 0.5.7: 46 tasks, 273 attempts across all arms, on cloud browsers.
+Measured on 2026-09-27 with the build released as 0.5.8: 54 tasks, 303 attempts across all arms, on cloud browsers.
 
-Suite `core` `391f8d42`: fastbrowse against Browser Use agent, on the same 14 tasks.
-
-| | passed | cost per task | median time |
-|:--|:--|:--|:--|
-| fastbrowse | 42/42 | $0.0085 (median), $0.0123 mean | 21.4s |
-| Browser Use agent | 37/42 | $0.3624 (median), $0.5198 mean | 21.4s |
-
-Each arm made 42 attempts.
-
-Suite `core` `391f8d42`: fastbrowse against jev-ultrafast, on the same 6 tasks.
+Suite `core` `bd7a00ba`: fastbrowse against Browser Use agent, on the same 13 tasks.
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 18/18 | $0.0028 (median), $0.0046 mean | 10.6s |
-| jev-ultrafast | 12/18 | $0.0014 (median), $0.0077 mean | 11.8s |
+| fastbrowse | 39/39 | $0.0053 (median), $0.0063 mean | 13.9s |
+| Browser Use agent | 36/39 | $0.3763 (median), $0.5037 mean | 19.2s |
 
-Each arm made 18 attempts.
+Each arm made 39 attempts.
 
-Suite `dev` `fe57fc77`: fastbrowse against Browser Use agent, on the same 8 tasks.
-
-| | passed | cost per task | median time |
-|:--|:--|:--|:--|
-| fastbrowse | 24/24 | $0.0058 (median), $0.0078 mean | 17.6s |
-| Browser Use agent | 23/24 | $0.1333 (median), $0.1879 mean | 8.9s |
-
-Each arm made 24 attempts.
-
-Suite `heldout` `0e3d5bb8`: fastbrowse against Browser Use agent, on the same 9 tasks.
+Suite `dev` `6b9d5227`: fastbrowse against Browser Use agent, on the same 13 tasks.
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 27/27 | $0.0084 (median), $0.0185 mean | 16.4s |
-| Browser Use agent | 24/27 | $0.2023 (median), $0.2779 mean | 12.9s |
+| fastbrowse | 39/39 | $0.0038 (median), $0.0049 mean | 9.9s |
+| Browser Use agent | 39/39 | $0.1826 (median), $0.2473 mean | 12.7s |
+
+Each arm made 39 attempts.
+
+Suite `heldout` `86a31db4`: fastbrowse against Browser Use agent, on the same 9 tasks.
+
+| | passed | cost per task | median time |
+|:--|:--|:--|:--|
+| fastbrowse | 27/27 | $0.0034 (median), $0.0074 mean | 8.7s |
+| Browser Use agent | 27/27 | $0.1970 (median), $0.2703 mean | 12.6s |
 
 Each arm made 27 attempts.
 
-Suite `stretch-dev` `63ceceeb`: fastbrowse against Browser Use agent, on the same 5 tasks.
+Suite `stretch-dev` `534fb29f`: fastbrowse against Browser Use agent, on the same 9 tasks.
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 12/15 | $0.0308 (median), $0.0478 mean | 46.2s |
-| Browser Use agent | 15/15 | $0.5711 (median), $0.5722 mean | 61.6s |
+| fastbrowse | 27/27 | $0.0146 (median), $0.0150 mean | 20.1s |
+| Browser Use agent | 27/27 | $0.3115 (median), $0.4322 mean | 39.8s |
 
-Each arm made 15 attempts.
+Each arm made 27 attempts.
 
-Suite `stretch-heldout` `456fd056`: fastbrowse against Browser Use agent, on the same 3 tasks.
+Suite `stretch-heldout` `0ab6d8fe`: fastbrowse against Browser Use agent, on the same 3 tasks.
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 6/9 | $0.0487 (median), $0.0973 mean | 64.4s |
-| Browser Use agent | 9/9 | $0.2227 (median), $0.3111 mean | 29.7s |
+| fastbrowse | 9/9 | $0.0116 (median), $0.0117 mean | 15.1s |
+| Browser Use agent | 9/9 | $0.3396 (median), $0.5467 mean | 45.2s |
 
 Each arm made 9 attempts.
 
-1 task graded on fastbrowse alone is in [docs/evals.md](docs/evals.md#results).
+7 tasks graded on fastbrowse alone are in [docs/evals.md](docs/evals.md#results).
 <!-- /evals:headline -->
 
 Compare rows only at matching task versions. See [eval results and workflow](docs/evals.md).

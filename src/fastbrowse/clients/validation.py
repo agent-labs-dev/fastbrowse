@@ -173,6 +173,9 @@ invalid URL) fails the same way every time, so it is raised at once rather than 
 _MAX_BACKOFF_SECONDS = 10.0
 JEV_ATTEMPT_SECONDS = 15.0
 """Jev answers in about a second, so an attempt this old is stuck upstream, and a retry beats waiting on it."""
+JEV_SLOW_SECONDS = 2.0
+"""A Jev call slower than this is the provider's outage: 45 measured gateway calls from 10 to 600 controls (670 to
+25k input tokens) took 0.40 to 0.48s median and 0.93s at worst. Retries and backoff count toward it."""
 LLM_ATTEMPT_SECONDS = 30.0
 """Leaves room for long reads and verification while bounding upstream stalls; flash-lite plans take about 0.8s."""
 JEV_HEDGE_SECONDS = 1.5
@@ -419,6 +422,9 @@ async def post(
     except httpx.HTTPError as error:
         raise JevError(f"Jev request could not be sent ({type(error).__name__})") from None
     seconds = monotonic() - started
+    if seconds > JEV_SLOW_SECONDS:
+        # Evals rerun an attempt that saw one, so a slow provider never counts against the agent.
+        trace("request_slow", call="jev", seconds=round(seconds, 2))
     if response is None:
         raise JevTransportFailed(f"Jev transport failed after {usage.history(seconds)}; last: {usage.failures[-1]}")
     if response.status_code in RETRYABLE_STATUS:

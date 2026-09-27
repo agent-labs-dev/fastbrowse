@@ -91,6 +91,7 @@ def _row(task: str, *, arm: str = "fastbrowse", passed: bool = True, **run: Any)
         "seconds": 10.0,
         "dollars": 0.01,
         "retries": 0,
+        "repeat": 0,
         "failure": None if passed else "answer lacks x",
         "model": "hosted-model-7",
         "trace": ["dropped from the published row"],
@@ -142,6 +143,8 @@ def test_published_rows_are_slim_immutable_and_generate_the_tables(results: Path
     # The model and invocation are provenance: a hosted arm's score means nothing without the model behind it.
     kept = json.loads(published.read_text(encoding="utf-8").splitlines()[0])
     assert kept["model"] == "hosted-model-7" and kept["run"]["argv"] == ["--suite", "core"]
+    # Arms are compared attempt by attempt: without its repeat, a row pairs with whichever came first.
+    assert kept["repeat"] == 0
     with pytest.raises(ValueError, match="never rewritten"):
         _publish(results, [_row("pypi-version")])
     table = versions.docs_blocks()["results:9.9.9"]
@@ -249,12 +252,14 @@ def test_the_feed_leads_each_release_with_the_core_suite() -> None:
 
 
 def test_an_outage_scores_no_arm_and_takes_a_matching_attempt_from_each() -> None:
-    """0.5.6 dropped fastbrowse's outages alone, leaving it on 13 core tasks beside Browser Use on 14. Time is wall
-    time: only fastbrowse measures its outage waits, so subtracting them would favour it."""
+    """0.5.6 dropped fastbrowse's outages alone, leaving it on 13 core tasks beside Browser Use on 14. Failed
+    requests measured inside an attempt stay in its time: only fastbrowse's could be seen, so subtracting them
+    credited it alone."""
     waited = _row("pypi-version") | {"seconds": 40.0, "transient_seconds": 30.0, "at": 1.0}
-    outage = _row("pypi-version") | {"normalized_status": "unavailable", "passed": False, "seconds": 300.0}
-    first = _row("pypi-version", arm="browser-use") | {"at": 1.0}
-    later = _row("pypi-version", arm="browser-use", passed=False) | {"at": 2.0}
+    outage = _row("pypi-version") | {"normalized_status": "unavailable", "passed": False, "seconds": 300.0, "repeat": 1}
+    first = _row("pypi-version", arm="browser-use") | {"at": 2.0}
+    # Earlier than its pair, it still pairs with fastbrowse's lost repeat, not the one fastbrowse measured.
+    later = _row("pypi-version", arm="browser-use", passed=False) | {"at": 0.5, "repeat": 1}
     lost = [_row("hn-top") | {"normalized_status": "unavailable"}, _row("hn-top", arm="browser-use")]
     rows = [waited, outage, first, later, *lost]
     arms = versions.summary([("1.0.0", rows)]).releases[0]
@@ -264,6 +269,21 @@ def test_an_outage_scores_no_arm_and_takes_a_matching_attempt_from_each() -> Non
     note = versions.headline("1.0.0", rows)
     assert "so each arm is scored on the same 1: an attempt one arm lost is dropped for every arm" in note
     assert "`hn-top` is left out, with no fastbrowse attempt measured." in note
+
+
+def test_an_outage_drops_the_same_repeat_from_every_arm() -> None:
+    """Paired earliest first, fastbrowse's second attempt was scored beside Browser Use's first when fastbrowse's
+    first was lost to an outage."""
+    fast = [
+        _row("pypi-version") | {"normalized_status": "unavailable", "repeat": 0},
+        _row("pypi-version", passed=False) | {"repeat": 1},
+    ]
+    hosted = [
+        _row("pypi-version", arm="browser-use") | {"repeat": 0, "at": 1.0},
+        _row("pypi-version", arm="browser-use", passed=False) | {"repeat": 1, "at": 2.0},
+    ]
+    arms = versions.summary([("1.0.0", [*fast, *hosted])]).releases[0].arms
+    assert [(a.passed, a.total) for a in arms.values()] == [(0, 1), (0, 1)]
 
 
 def test_every_comparison_sets_arms_on_the_same_tasks() -> None:

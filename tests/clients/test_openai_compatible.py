@@ -57,7 +57,7 @@ async def test_schema_repair_keeps_images_and_accounts_for_both_calls() -> None:
     assert schema["required"] == list(properties)
     assert not any("default" in field for field in properties.values())
     assert properties["tags"]["description"] == "What was counted."
-    assert body["provider"] == {"require_parameters": True}
+    assert body["provider"] == {"require_parameters": True, "sort": "latency"}
     messages = body["messages"]
     assert isinstance(messages, list)
     assert messages[0] == {

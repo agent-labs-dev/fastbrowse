@@ -2,7 +2,8 @@
 
 import hashlib
 import json
-from collections.abc import Iterable
+import re
+from collections.abc import Iterable, Mapping
 from typing import Self
 from urllib.parse import urlsplit
 
@@ -48,6 +49,15 @@ class NotesTooLarge(RuntimeError):
 class RenderedNotes(Frozen):
     text: str
     evidence_ids: tuple[str, ...]
+
+
+def shows(text: str, quote: str) -> bool:
+    """Whether `text` still shows `quote` as whole words: "Priya Sharma" is inside the corrected "Priya Sharman"."""
+    return re.search(rf"(?<!\w){re.escape(quote)}(?!\w)", text) is not None
+
+
+def _address(url: str) -> str:
+    return urlsplit(url)._replace(fragment="").geturl()
 
 
 def evidence_id(evidence: Evidence) -> str:
@@ -103,8 +113,7 @@ class Notes:
                 raise ValueError("a tally record must cite a captured span")
             evidence = fact.evidence
             # Equal quotes on different addresses can be distinct rows; only recaptures share an identity.
-            address = urlsplit(evidence.url)._replace(fragment="").geturl()
-            identity = (tally.requirement_id, address, " ".join(evidence.quote.split()))
+            identity = (tally.requirement_id, _address(evidence.url), " ".join(evidence.quote.split()))
             occurrences = self._record_ids.setdefault(identity, [])
             sha = evidence.capture_sha256
             occurrence = next((item for item in occurrences if item.get(sha) == key), None)
@@ -130,6 +139,14 @@ class Notes:
 
     def add_continuation(self, requirement_id: str, record_id: str) -> None:
         self._continuation_records.setdefault(requirement_id, set()).add(record_id)
+
+    def comparison_records(self, requirement_id: str | None = None) -> tuple[str, ...]:
+        records = (
+            set().union(*self._continuation_records.values())
+            if requirement_id is None
+            else self._continuation_records.get(requirement_id, set())
+        )
+        return tuple(key for key in self._facts if key in records)
 
     def has_untallied_records(self, requirement_id: str) -> bool:
         tallied = {
@@ -181,6 +198,35 @@ class Notes:
         for requirements in self._requirements.values():
             requirements -= dropped
 
+    def supersede(self, requirement_id: str, url: str, sha256: str, text: str) -> None:
+        """Once a read of `url` evidences a requirement, earlier reads of that address whose quote the page no
+        longer shows stop evidencing it, and stay as context.
+
+        After a date picker's choice was corrected from 31/10 to 28/11, a new read quoted the new date, but the
+        answer still quoted the old one, since both facts evidenced the requirement."""
+        supporting = self.supporting(requirement_id)
+        if not any(fact.evidence and fact.evidence.capture_sha256 == sha256 for _, fact in supporting):
+            return
+        address = _address(url)
+        for key, fact in supporting:
+            evidence = fact.evidence
+            if (
+                evidence is not None
+                and evidence.capture_sha256 != sha256
+                and _address(evidence.url) == address
+                and not shows(text, evidence.quote)
+            ):
+                self._requirements[key].discard(requirement_id)
+
+    def read_for(self, requirement_id: str) -> tuple[Evidence, ...]:
+        """The spans read as evidence of a requirement, including those a later read superseded."""
+        supporting = {key for key, _ in self.supporting(requirement_id)}
+        return tuple(
+            fact.evidence
+            for key, fact in self._facts.items()
+            if fact.evidence is not None and (key in supporting or fact.requirement_id == requirement_id)
+        )
+
     def supporting(self, requirement_id: str) -> tuple[tuple[str, Fact], ...]:
         """A tally is ranked by code; other facts keep the order they were read in."""
         supporting = [(key, self._facts[key]) for key, ids in self._requirements.items() if requirement_id in ids]
@@ -218,7 +264,12 @@ class Notes:
         ).text
 
     def render_with_ids(
-        self, max_chars: int, *, preserve_requirements: bool = False, json_encoded: bool = False
+        self,
+        max_chars: int,
+        *,
+        preserve_requirements: bool = False,
+        json_encoded: bool = False,
+        labels: Mapping[str, str] | None = None,
     ) -> RenderedNotes:
         """Every fact in read order when they all fit; otherwise unrelated context is dropped before requirement
         evidence and its basis, each group kept in read order.
@@ -231,13 +282,16 @@ class Notes:
             raise ValueError("max_chars must be nonnegative")
 
         aliases = {key: index for index, key in enumerate(self._facts, 1)}
+        shown_ids = labels or {}
         evidence = self.evidence
         counted = {key for fact in self._facts.values() if fact.tally is not None for key in fact.basis}
+        # A record can be counted and compared by price; its tally alone cannot evidence the price comparison.
+        summarized = self._tally_records - set(self.comparison_records())
 
         def basis_text(fact: Fact) -> str:
             # A ranking can cite every counted record again; full span ids undo the tally's compact rendering.
             records = ",".join(str(aliases[key]) for key in fact.basis if key in counted)
-            other = [key for key in fact.basis if key not in counted]
+            other = [shown_ids.get(key, key) for key in fact.basis if key not in counted]
             parts = [f"records({records})"] if records else []
             if other:
                 parts.append(json.dumps(other))
@@ -247,7 +301,7 @@ class Notes:
             if fact.tally is not None:
                 urls = tuple(dict.fromkeys(evidence[record].url for record in fact.basis))
                 return (
-                    f"[{key}] {json.dumps(fact.text, ensure_ascii=False)} "
+                    f"[{shown_ids.get(key, key)}] {json.dumps(fact.text, ensure_ascii=False)} "
                     f"requirements={','.join(sorted(self._requirements[key])) or '-'} "
                     f"tally_for={fact.tally.requirement_id}{basis_text(fact)} urls={json.dumps(urls)}"
                 )
@@ -258,7 +312,7 @@ class Notes:
                 f"quote={json.dumps(fact.evidence.quote, ensure_ascii=False)}"
             )
             return (
-                f"[{key}] {json.dumps(fact.text, ensure_ascii=False)} "
+                f"[{shown_ids.get(key, key)}] {json.dumps(fact.text, ensure_ascii=False)} "
                 f"requirements={','.join(sorted(self._requirements[key])) or '-'} {source}" + basis_text(fact)
             )
 
@@ -266,9 +320,7 @@ class Notes:
             # A JSON state escapes quotes and newlines; its notes budget must count those extra characters.
             return len(json.dumps(text)) - len('""') if json_encoded else len(text)
 
-        visible = {
-            key: fact for key, fact in self._facts.items() if key not in self._tally_records or self._requirements[key]
-        }
+        visible = {key: fact for key, fact in self._facts.items() if key not in summarized or self._requirements[key]}
         # Counts are ranked in code; the reader need only select the output the task asked for.
         ranked = sorted(
             visible.items(),
@@ -293,10 +345,10 @@ class Notes:
         ordered = sorted(ranked, key=lambda item: item[0] not in required)
         keys = tuple(key for key, _ in ordered)
         for count in range(len(ordered) - 1, -1, -1):
-            kept = set(keys[:count]) | (set(self.expand_evidence_ids(keys[:count])) & self._tally_records)
+            kept = set(keys[:count]) | (set(self.expand_evidence_ids(keys[:count])) & summarized)
             if preserve_requirements and required - kept:
                 raise NotesTooLarge(f"Requirement evidence exceeds the {max_chars} character notes budget")
-            if any(set(fact.basis) - kept - self._tally_records for _, fact in ordered[:count]):
+            if any(set(fact.basis) - kept - summarized for _, fact in ordered[:count]):
                 continue
             result = "\n".join(filter(None, [render(ordered[:count]), f"[{len(ordered) - count} facts omitted]"]))
             if size(result) <= max_chars:
