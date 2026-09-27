@@ -280,6 +280,63 @@ Both suites write per-run `would_fire` counts for shadow tripwires. The live sum
 with at least one signal, divided by all passing runs, separately for each tripwire. Repeated signals within
 one run count once in that summary. The local suite stores the counts without printing that rate.
 
+### 0.5.8, 2026-09-27
+
+<!-- evals:results:0.5.8 -->
+`core` `bd7a00ba`: fastbrowse against Browser Use agent, on the same 13 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.8) | 39/39 | 39/39 | 13.6s | 16.3s | $0.0058 | $0.0065 | $0.25 |
+| Browser Use agent | 36/39 | 36/39 | 18.9s | 33.1s | $0.4787 | $0.5334 | $20.80 |
+
+Each arm made 39 attempts. Runs: `86d468e5312d` at `771525a`.
+
+`core` `bd7a00ba`: fastbrowse alone, on the 7 tasks only it ran.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.8) | 21/21 | 21/21 | 7.7s | 15.3s | $0.0029 | $0.0043 | $0.09 |
+
+Each arm made 21 attempts. Runs: `86d468e5312d` at `771525a`.
+
+`dev` `6b9d5227`: fastbrowse against Browser Use agent, on the same 13 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.8) | 39/39 | 39/39 | 10.1s | 11.8s | $0.0040 | $0.0049 | $0.19 |
+| Browser Use agent | 39/39 | 39/39 | 12.2s | 16.9s | $0.1989 | $0.2446 | $9.54 |
+
+Each arm made 39 attempts. Runs: `86d468e5312d` at `771525a`.
+
+`heldout` `86a31db4`: fastbrowse against Browser Use agent, on the same 9 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.8) | 27/27 | 27/27 | 10.1s | 12.1s | $0.0036 | $0.0078 | $0.21 |
+| Browser Use agent | 27/27 | 27/27 | 11.9s | 16.1s | $0.1984 | $0.2383 | $6.43 |
+
+Each arm made 27 attempts. Runs: `86d468e5312d` at `771525a`.
+
+`stretch-dev` `534fb29f`: fastbrowse against Browser Use agent, on the same 9 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.8) | 27/27 | 27/27 | 22.2s | 25.5s | $0.0143 | $0.0164 | $0.44 |
+| Browser Use agent | 27/27 | 27/27 | 36.9s | 36.8s | $0.2813 | $0.4129 | $11.15 |
+
+Each arm made 27 attempts. Runs: `86d468e5312d` at `771525a`.
+
+`stretch-heldout` `0ab6d8fe`: fastbrowse against Browser Use agent, on the same 3 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.8) | 9/9 | 9/9 | 16.6s | 16.8s | $0.0138 | $0.0126 | $0.11 |
+| Browser Use agent | 9/9 | 9/9 | 37.6s | 35.6s | $0.2828 | $0.3223 | $2.90 |
+
+Each arm made 9 attempts. Runs: `86d468e5312d` at `771525a`.
+<!-- /evals:results:0.5.8 -->
+
 ### 0.5.7, 2026-09-25
 
 <!-- evals:results:0.5.7 -->

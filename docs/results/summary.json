@@ -2,6 +2,353 @@
   "schema_version": 2,
   "releases": [
     {
+      "fastbrowse_version": "0.5.8",
+      "date": "2026-09-27",
+      "suite": "core",
+      "suite_version": "bd7a00ba",
+      "compared": [
+        "fastbrowse",
+        "browser-use"
+      ],
+      "tasks": 13,
+      "arms": {
+        "fastbrowse": {
+          "passed": 39,
+          "total": 39,
+          "excluded": 0,
+          "priced": 39,
+          "seconds": {
+            "median": 13.6,
+            "mean": 16.3025641025641
+          },
+          "dollars": {
+            "median": 0.0058,
+            "mean": 0.006508974358974359
+          }
+        },
+        "browser-use": {
+          "passed": 36,
+          "total": 39,
+          "excluded": 0,
+          "priced": 39,
+          "seconds": {
+            "median": 18.9,
+            "mean": 33.09230769230769
+          },
+          "dollars": {
+            "median": 0.47872,
+            "mean": 0.5334202564102564
+          }
+        }
+      },
+      "task_versions_changed": []
+    },
+    {
+      "fastbrowse_version": "0.5.8",
+      "date": "2026-09-27",
+      "suite": "core",
+      "suite_version": "bd7a00ba",
+      "compared": [
+        "fastbrowse"
+      ],
+      "tasks": 7,
+      "arms": {
+        "fastbrowse": {
+          "passed": 21,
+          "total": 21,
+          "excluded": 0,
+          "priced": 21,
+          "seconds": {
+            "median": 7.7,
+            "mean": 15.342857142857143
+          },
+          "dollars": {
+            "median": 0.00285,
+            "mean": 0.004292380952380952
+          }
+        }
+      },
+      "task_versions_changed": []
+    },
+    {
+      "fastbrowse_version": "0.5.8",
+      "date": "2026-09-27",
+      "suite": "dev",
+      "suite_version": "6b9d5227",
+      "compared": [
+        "fastbrowse",
+        "browser-use"
+      ],
+      "tasks": 13,
+      "arms": {
+        "fastbrowse": {
+          "passed": 39,
+          "total": 39,
+          "excluded": 0,
+          "priced": 39,
+          "seconds": {
+            "median": 10.1,
+            "mean": 11.797435897435898
+          },
+          "dollars": {
+            "median": 0.00395,
+            "mean": 0.004851538461538462
+          }
+        },
+        "browser-use": {
+          "passed": 39,
+          "total": 39,
+          "excluded": 0,
+          "priced": 39,
+          "seconds": {
+            "median": 12.2,
+            "mean": 16.892307692307693
+          },
+          "dollars": {
+            "median": 0.19892,
+            "mean": 0.24456358974358974
+          }
+        }
+      },
+      "task_versions_changed": [
+        {
+          "task": "dynamic-loading",
+          "previous": [
+            5
+          ],
+          "current": [
+            6
+          ]
+        },
+        {
+          "task": "frame-heading",
+          "previous": [],
+          "current": [
+            2
+          ]
+        },
+        {
+          "task": "hover-profile",
+          "previous": [
+            5
+          ],
+          "current": [
+            6
+          ]
+        },
+        {
+          "task": "new-window",
+          "previous": [
+            5
+          ],
+          "current": [
+            6
+          ]
+        },
+        {
+          "task": "quotes-rowling-count",
+          "previous": [],
+          "current": [
+            1
+          ]
+        },
+        {
+          "task": "table-largest-due",
+          "previous": [
+            5
+          ],
+          "current": [
+            6
+          ]
+        }
+      ]
+    },
+    {
+      "fastbrowse_version": "0.5.8",
+      "date": "2026-09-27",
+      "suite": "heldout",
+      "suite_version": "86a31db4",
+      "compared": [
+        "fastbrowse",
+        "browser-use"
+      ],
+      "tasks": 9,
+      "arms": {
+        "fastbrowse": {
+          "passed": 27,
+          "total": 27,
+          "excluded": 0,
+          "priced": 27,
+          "seconds": {
+            "median": 10.1,
+            "mean": 12.055555555555555
+          },
+          "dollars": {
+            "median": 0.00355,
+            "mean": 0.007784074074074074
+          }
+        },
+        "browser-use": {
+          "passed": 27,
+          "total": 27,
+          "excluded": 0,
+          "priced": 27,
+          "seconds": {
+            "median": 11.9,
+            "mean": 16.1
+          },
+          "dollars": {
+            "median": 0.19845,
+            "mean": 0.23828925925925926
+          }
+        }
+      },
+      "task_versions_changed": [
+        {
+          "task": "countries-namibia-area",
+          "previous": [],
+          "current": [
+            1
+          ]
+        },
+        {
+          "task": "new-tab-page",
+          "previous": [],
+          "current": [
+            1
+          ]
+        },
+        {
+          "task": "quotes-search-lewis",
+          "previous": [],
+          "current": [
+            1
+          ]
+        },
+        {
+          "task": "table-total-due",
+          "previous": [],
+          "current": [
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "fastbrowse_version": "0.5.8",
+      "date": "2026-09-27",
+      "suite": "stretch-dev",
+      "suite_version": "534fb29f",
+      "compared": [
+        "fastbrowse",
+        "browser-use"
+      ],
+      "tasks": 9,
+      "arms": {
+        "fastbrowse": {
+          "passed": 27,
+          "total": 27,
+          "excluded": 0,
+          "priced": 27,
+          "seconds": {
+            "median": 22.2,
+            "mean": 25.522222222222222
+          },
+          "dollars": {
+            "median": 0.01425,
+            "mean": 0.016414444444444443
+          }
+        },
+        "browser-use": {
+          "passed": 27,
+          "total": 27,
+          "excluded": 0,
+          "priced": 27,
+          "seconds": {
+            "median": 36.9,
+            "mean": 36.84814814814815
+          },
+          "dollars": {
+            "median": 0.28126,
+            "mean": 0.4128911111111111
+          }
+        }
+      },
+      "task_versions_changed": [
+        {
+          "task": "stretch-books-young-adult-one-star",
+          "previous": [],
+          "current": [
+            1
+          ]
+        },
+        {
+          "task": "stretch-datepicker-last-saturday",
+          "previous": [],
+          "current": [
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "fastbrowse_version": "0.5.8",
+      "date": "2026-09-27",
+      "suite": "stretch-heldout",
+      "suite_version": "0ab6d8fe",
+      "compared": [
+        "fastbrowse",
+        "browser-use"
+      ],
+      "tasks": 3,
+      "arms": {
+        "fastbrowse": {
+          "passed": 9,
+          "total": 9,
+          "excluded": 0,
+          "priced": 9,
+          "seconds": {
+            "median": 16.6,
+            "mean": 16.822222222222223
+          },
+          "dollars": {
+            "median": 0.01385,
+            "mean": 0.012644444444444444
+          }
+        },
+        "browser-use": {
+          "passed": 9,
+          "total": 9,
+          "excluded": 0,
+          "priced": 9,
+          "seconds": {
+            "median": 37.6,
+            "mean": 35.56666666666666
+          },
+          "dollars": {
+            "median": 0.28278,
+            "mean": 0.32233222222222224
+          }
+        }
+      },
+      "task_versions_changed": [
+        {
+          "task": "stretch-books-sequential-art-one-star",
+          "previous": [],
+          "current": [
+            1
+          ]
+        },
+        {
+          "task": "stretch-datepicker-last-sunday",
+          "previous": [],
+          "current": [
+            1
+          ]
+        }
+      ]
+    },
+    {
       "fastbrowse_version": "0.5.7",
       "date": "2026-09-26",
       "suite": "core",
