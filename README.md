@@ -39,8 +39,8 @@ Suite `core` `bd7a00ba`: fastbrowse against Browser Use agent, on the same 13 ta
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 39/39 | $0.0058 (median), $0.0065 mean | 13.6s |
-| Browser Use agent | 36/39 | $0.4787 (median), $0.5334 mean | 18.9s |
+| fastbrowse | 39/39 | $0.0053 (median), $0.0063 mean | 13.9s |
+| Browser Use agent | 36/39 | $0.3763 (median), $0.5037 mean | 19.2s |
 
 Each arm made 39 attempts.
 
@@ -48,8 +48,8 @@ Suite `dev` `6b9d5227`: fastbrowse against Browser Use agent, on the same 13 tas
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 39/39 | $0.0040 (median), $0.0049 mean | 10.1s |
-| Browser Use agent | 39/39 | $0.1989 (median), $0.2446 mean | 12.2s |
+| fastbrowse | 39/39 | $0.0038 (median), $0.0049 mean | 9.9s |
+| Browser Use agent | 39/39 | $0.1826 (median), $0.2473 mean | 12.7s |
 
 Each arm made 39 attempts.
 
@@ -57,8 +57,8 @@ Suite `heldout` `86a31db4`: fastbrowse against Browser Use agent, on the same 9 
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 27/27 | $0.0036 (median), $0.0078 mean | 10.1s |
-| Browser Use agent | 27/27 | $0.1984 (median), $0.2383 mean | 11.9s |
+| fastbrowse | 27/27 | $0.0034 (median), $0.0074 mean | 8.7s |
+| Browser Use agent | 27/27 | $0.1970 (median), $0.2703 mean | 12.6s |
 
 Each arm made 27 attempts.
 
@@ -66,8 +66,8 @@ Suite `stretch-dev` `534fb29f`: fastbrowse against Browser Use agent, on the sam
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 27/27 | $0.0143 (median), $0.0164 mean | 22.2s |
-| Browser Use agent | 27/27 | $0.2813 (median), $0.4129 mean | 36.9s |
+| fastbrowse | 27/27 | $0.0146 (median), $0.0150 mean | 20.1s |
+| Browser Use agent | 27/27 | $0.3115 (median), $0.4322 mean | 39.8s |
 
 Each arm made 27 attempts.
 
@@ -75,8 +75,8 @@ Suite `stretch-heldout` `0ab6d8fe`: fastbrowse against Browser Use agent, on the
 
 | | passed | cost per task | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 9/9 | $0.0138 (median), $0.0126 mean | 16.6s |
-| Browser Use agent | 9/9 | $0.2828 (median), $0.3223 mean | 37.6s |
+| fastbrowse | 9/9 | $0.0116 (median), $0.0117 mean | 15.1s |
+| Browser Use agent | 9/9 | $0.3396 (median), $0.5467 mean | 45.2s |
 
 Each arm made 9 attempts.
 
