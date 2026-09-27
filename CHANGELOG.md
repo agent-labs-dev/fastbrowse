@@ -11,6 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Jev defaults to OpenRouter using the LLM's existing key.** `OPENROUTER_API_KEY` alone now covers both
+  models. Set `AI_GATEWAY_API_KEY` for automatic Jev failover to the Vercel AI Gateway after retries run out.
+  OpenRouter's reported Jev cost is metered, with a list-price estimate when cost is missing or zero while
+  input tokens flow. Explicit model pins and custom endpoints disable failover.
+
 ## [0.5.8] - 2026-09-27
 
 - **The date given to every choice names the next two months.** Told only a September date, Jev once took

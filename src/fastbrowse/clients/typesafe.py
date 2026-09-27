@@ -1,4 +1,4 @@
-"""Direct TypeSafe System One transport, using caller-owned HTTP resources."""
+"""TypeSafe System One transport for OpenRouter and the direct API, using caller-owned HTTP resources."""
 
 from collections.abc import Mapping
 from time import monotonic
@@ -11,11 +11,11 @@ from fastbrowse.clients.validation import (
     asking_open,
     asking_split,
     error_detail,
-    estimated_cost,
     json_object,
     object_value,
     parse_answers,
     post,
+    reported_cost,
     response_error,
     token_count,
     wire_questions,
@@ -24,6 +24,8 @@ from fastbrowse.clients.validation import (
 from fastbrowse.jev import JEV_MODEL, Evaluation, Question
 
 TYPESAFE_URL = "https://api.typesafe.ai"
+OPENROUTER_URL = "https://openrouter.ai/api"
+OPENROUTER_MODEL = "jev-1.13"
 
 
 class TypeSafeJevClient:
@@ -65,6 +67,8 @@ class TypeSafeJevClient:
             payload = json_object(response)
             usage = object_value(payload.get("usage"))
             tokens = token_count(usage.get("input_tokens"))
+            output_tokens = token_count(usage.get("output_tokens", 0))
+            cost = reported_cost(usage.get("cost"), tokens, output_tokens)
             model = payload.get("model", self._model)
             if not isinstance(model, str):
                 raise ValueError("invalid model name")
@@ -73,9 +77,7 @@ class TypeSafeJevClient:
                 model=model,
                 answers=parse_answers(payload.get("answers"), questions),
                 input_tokens=tokens,
-                cost=with_discarded(
-                    estimated_cost(tokens, token_count(usage.get("output_tokens", 0))), sent
-                ).model_copy(update={"seconds": monotonic() - started}),
+                cost=with_discarded(cost, sent).model_copy(update={"seconds": monotonic() - started}),
             )
         except (ValueError, TypeError, OverflowError) as error:
             raise response_error(response, f"Invalid Jev response ({error_detail(error)})") from None

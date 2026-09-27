@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
+from pydantic import SecretStr
 
+from fastbrowse.clients.environment import Settings
 from fastbrowse.evals import live, live_tasks, more_tasks, observe
 from fastbrowse.evals.live_tasks import Outcome
 from fastbrowse.evals.status import Ending, normalize, status_matches
@@ -291,9 +293,7 @@ async def test_subprocess_uses_shared_prompt_and_harness_evidence(arm: str, monk
     monkeypatch.setattr(
         live,
         "load_settings",
-        lambda: SimpleNamespace(
-            browser_key=lambda: "cloud", openrouter_key=lambda: "text", typesafe_api_key=None, ai_gateway_api_key=None
-        ),
+        lambda: Settings.model_construct(browser_use_api_key=SecretStr("cloud"), openrouter_api_key=SecretStr("text")),
     )
     monkeypatch.setattr(live, "_invoke", invoke)
     monkeypatch.setattr(live, "observe_browser", observed)

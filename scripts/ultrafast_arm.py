@@ -7,9 +7,10 @@ JSON result on stdout:
     {"start", "goal", "cdp_ws", "max_steps", "record": path or null}
 
 The browser is the caller's: a Browser Use Cloud browser reached through `cdp_ws`, the same kind the fastbrowse arm
-drives, so both arms pay the same round trips. jev-ultrafast calls TypeSafe's direct API with
-TYPESAFE_API_KEY; with only AI_GATEWAY_API_KEY set, the same questions go through the Vercel AI Gateway, which
-is also how the fastbrowse arm reaches Jev. Its text helper uses TEXT_MODEL_API_KEY, an OpenRouter key.
+drives, so both arms pay the same round trips. The caller passes fastbrowse's selected Jev source: OpenRouter
+by default, or TypeSafe directly or the Vercel AI Gateway. OpenRouter uses the TypeSafe protocol and key slot
+at the supplied base URL. This arm keeps its own retry policy without failover.
+Its text helper uses TEXT_MODEL_API_KEY, an OpenRouter key.
 """
 
 import base64
@@ -81,10 +82,11 @@ class Meter:
 
 
 def patch_transport(model: Any, meter: Meter) -> None:
+    base_url = os.environ.get("FASTBROWSE_JEV_BASE_URL", "").rstrip("/")
     via_gateway = not os.environ.get("TYPESAFE_API_KEY")
     if via_gateway:
         if not os.environ.get("AI_GATEWAY_API_KEY"):
-            raise RuntimeError("set TYPESAFE_API_KEY or AI_GATEWAY_API_KEY for Jev")
+            raise RuntimeError("the caller must supply the selected Jev key")
         # jev-ultrafast reads its Jev key from here and passes it to post_json, which sends it to the gateway.
         os.environ["TYPESAFE_API_KEY"] = os.environ["AI_GATEWAY_API_KEY"]
 
@@ -115,16 +117,21 @@ def patch_transport(model: Any, meter: Meter) -> None:
         if "api.typesafe.ai" in url and via_gateway:
             payload = _post(
                 model,
-                GATEWAY_URL,
+                f"{base_url}/v4/ai/evaluation-model" if base_url else GATEWAY_URL,
                 {"Authorization": f"Bearer {key}", **GATEWAY_HEADERS},
                 {"state": body["state"], "questions": body["questions"]},
             )
             result, cost = systemone_answer(payload)
             _meter(meter, "jev", cost, (payload.get("usage") or {}).get("inputTokens"))
             return result
+        kind = "jev" if "api.typesafe.ai" in url else "text"
+        if kind == "jev":
+            if base_url:
+                url = f"{base_url}/v1/systemone"
+            if model_id := os.environ.get("FASTBROWSE_JEV_MODEL"):
+                body = {**body, "model": model_id}
         result = _post(model, url, {"Authorization": f"Bearer {key}"}, body)
         usage = result.get("usage") or {}
-        kind = "jev" if "api.typesafe.ai" in url else "text"
         _meter(meter, kind, usage.get("cost"), usage.get("inputTokens", usage.get("input_tokens")))
         return result
 

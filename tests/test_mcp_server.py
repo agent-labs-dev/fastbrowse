@@ -20,7 +20,7 @@ from mcp.types import CallToolResult, LoggingMessageNotificationParams, TextCont
 from pydantic import SecretStr
 
 from fastbrowse import mcp_server
-from fastbrowse.clients.environment import ConfigurationError, Settings
+from fastbrowse.clients.environment import ConfigurationError, JevSource, Settings
 from fastbrowse.mcp_server import (
     BearerAuth,
     DeclaredSecret,
@@ -312,7 +312,7 @@ async def test_configure_reads_secrets_and_ceilings_from_flags() -> None:
             "--allow-authorize",
         ]
     )
-    config = await configure(args, _settings(), {"SHOP_PASSWORD": "hunter2"})
+    config = await configure(args, _settings(ai_gateway_api_key=None), {"SHOP_PASSWORD": "hunter2"})
     assert config.secrets == (DeclaredSecret("password", "hunter2", "https://shop.example.com"),)
     assert config.ceilings.max_dollars == 0.25
     assert config.allow_authorize
@@ -329,7 +329,7 @@ async def test_configure_reads_secrets_and_ceilings_from_flags() -> None:
         # FASTBROWSE_HEADED alone still means local Chrome, as it did before cloud became the default.
         ([], {}, {"chrome": "no-such-chrome", "headed": True}, "Chrome was not found"),
         (["--local"], {}, {"openrouter_api_key": None}, "OPENROUTER_API_KEY"),
-        (["--local"], {}, {"ai_gateway_api_key": None}, "AI_GATEWAY_API_KEY"),
+        (["--local"], {}, {"ai_gateway_api_key": None, "jev_source": JevSource.GATEWAY}, "AI_GATEWAY_API_KEY"),
         (["--max-steps", "0"], {}, {}, "--max-steps"),
         (["--max-dollars", "-1"], {}, {}, "--max-dollars"),
     ],
