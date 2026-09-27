@@ -251,6 +251,13 @@ async def test_can_go_back_is_false_without_a_same_origin_predecessor(
         assert await CdpPage(session, Config())._can_go_back() is False
 
 
+async def test_a_failed_history_read_offers_no_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = CdpTransport(monkeypatch)
+    transport.failures["Page.getNavigationHistory"] = RuntimeError({"code": -32000, "message": "secret"})
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+        assert await CdpPage(session, Config())._can_go_back() is False
+
+
 async def test_can_go_back_is_true_with_a_same_origin_predecessor(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = CdpTransport(monkeypatch)
     transport.results["Page.getNavigationHistory"] = [

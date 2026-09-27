@@ -50,6 +50,10 @@ class RenderedNotes(Frozen):
     evidence_ids: tuple[str, ...]
 
 
+def _address(url: str) -> str:
+    return urlsplit(url)._replace(fragment="").geturl()
+
+
 def evidence_id(evidence: Evidence) -> str:
     return f"{evidence.capture_sha256}:{evidence.start}:{evidence.end}"
 
@@ -103,8 +107,7 @@ class Notes:
                 raise ValueError("a tally record must cite a captured span")
             evidence = fact.evidence
             # Equal quotes on different addresses can be distinct rows; only recaptures share an identity.
-            address = urlsplit(evidence.url)._replace(fragment="").geturl()
-            identity = (tally.requirement_id, address, " ".join(evidence.quote.split()))
+            identity = (tally.requirement_id, _address(evidence.url), " ".join(evidence.quote.split()))
             occurrences = self._record_ids.setdefault(identity, [])
             sha = evidence.capture_sha256
             occurrence = next((item for item in occurrences if item.get(sha) == key), None)
@@ -188,6 +191,26 @@ class Notes:
         dropped = set(requirement_ids)
         for requirements in self._requirements.values():
             requirements -= dropped
+
+    def supersede(self, requirement_id: str, url: str, sha256: str, text: str) -> None:
+        """Once a read of `url` evidences a requirement, earlier reads of that address whose quote the page no
+        longer shows stop evidencing it, and stay as context.
+
+        After a date picker's choice was corrected from 31/10 to 28/11, a new read quoted the new date, but the
+        answer still quoted the old one, since both facts evidenced the requirement."""
+        supporting = self.supporting(requirement_id)
+        if not any(fact.evidence and fact.evidence.capture_sha256 == sha256 for _, fact in supporting):
+            return
+        address, shown = _address(url), " ".join(text.split())
+        for key, fact in supporting:
+            evidence = fact.evidence
+            if (
+                evidence is not None
+                and evidence.capture_sha256 != sha256
+                and _address(evidence.url) == address
+                and " ".join(evidence.quote.split()) not in shown
+            ):
+                self._requirements[key].discard(requirement_id)
 
     def supporting(self, requirement_id: str) -> tuple[tuple[str, Fact], ...]:
         """A tally is ranked by code; other facts keep the order they were read in."""

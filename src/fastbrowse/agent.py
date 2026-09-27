@@ -1870,6 +1870,8 @@ class Agent:
             incomplete=state.incomplete,
             require_all_evidence=require_all_evidence or (state.through_end and state.pages > 0),
         )
+        for requirement in wanted:
+            state.notes.supersede(requirement.id, capture.url, capture.sha256, capture.text)
         state.incomplete.update(outcome.incomplete)
         state.tally_readers = outcome.tally_readers
         state.comparisons = outcome.comparisons

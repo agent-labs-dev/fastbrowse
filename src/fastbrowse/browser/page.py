@@ -390,9 +390,14 @@ class CdpPage(Page):
         )
 
     async def _can_go_back(self) -> bool:
-        history = await self._session.client.send.Page.getNavigationHistory(
-            params=None, session_id=self._session.active_session_id
-        )
+        # Only whether BACK is offered hangs on this, and BACK reads history again before it goes. A history read
+        # that failed (CDP -32000) as a run's first page opened ended the run at step 0.
+        try:
+            history = await self._session.client.send.Page.getNavigationHistory(
+                params=None, session_id=self._session.active_session_id
+            )
+        except BrowserError:
+            return False
         return self._back_target(history) is not None
 
     def _back_target(self, history: GetNavigationHistoryReturns) -> int | str | None:

@@ -6,7 +6,7 @@ and executes `Action`s. Nothing above this seam touches CDP.
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
 
@@ -157,8 +157,17 @@ class Observation(Frozen):
     @property
     def today(self) -> str:
         """The capture date with its weekday. Given 2026-09-27 alone, a Sunday, the field writer booked "the next
-        Monday strictly after today" as 2026-10-05 in three runs of three."""
-        return f"{self.captured_at:%Y-%m-%d (%A)}"
+        Monday strictly after today" as 2026-10-05 in three runs of three.
+
+        The coming months are named too: told only the date in September, Jev took "the month after next" as
+        October, clicking a calendar's Next once, in one run of four. Each is named by its distance: listed bare
+        as "the next three months", the last of them was taken for it in six runs of six."""
+        first = self.captured_at.replace(day=1)
+        months = []
+        for _ in range(2):
+            first = (first + timedelta(days=32)).replace(day=1)
+            months.append(f"{first:%B %Y}")
+        return f"{self.captured_at:%Y-%m-%d (%A)}. In one month: {months[0]}; in two months: {months[1]}"
 
 
 class BlockKind(StrEnum):

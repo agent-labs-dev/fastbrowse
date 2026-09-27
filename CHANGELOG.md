@@ -13,6 +13,16 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.5.8] - 2026-09-27
 
+- **The date given to every choice names the next two months.** Told only a September date, Jev once took
+  "the month after next" as October and clicked a calendar's Next once. Today's date now comes with the month
+  one and two months on.
+- **A corrected choice replaces its old reading in the answer.** A run chose a date, found it wrong, chose
+  again and read the new date, but its answer still quoted the first: both readings evidenced the question. A
+  read that evidences a question now drops earlier readings of the same address whose quote the page no
+  longer shows. They stay as context.
+- **A failed history read no longer ends a run.** Every observation asks the browser for its history to decide
+  whether to offer BACK. When that failed as the first page opened, the run ended. BACK is now not offered,
+  and taking BACK still reads the history again.
 - **Dropdown choices see today's date.** The action chooser knew today's date and weekday, but the separate
   choice of a dropdown option did not. A calendar asked for the month after next could select one month too
   far ahead. Shared page state now gives the option choice the same date as the action and completion checks.
