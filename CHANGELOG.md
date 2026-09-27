@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.9] - 2026-09-27
+
 - **Jev defaults to OpenRouter using the LLM's existing key.** `OPENROUTER_API_KEY` alone now covers both
   models. Set `AI_GATEWAY_API_KEY` for automatic Jev failover to the Vercel AI Gateway after retries run out.
   OpenRouter's reported Jev cost is metered, with a list-price estimate when cost is missing or zero while
@@ -714,7 +716,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.8...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.9...HEAD
+[0.5.9]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.9
 [0.5.8]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.8
 [0.5.7]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.7
 [0.5.6]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.6
