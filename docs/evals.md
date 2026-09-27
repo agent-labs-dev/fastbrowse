@@ -215,6 +215,7 @@ Date truth is computed when the attempt runs, and form and date tasks are graded
 | `stretch-calendar-first-friday` | widget | 7 | Using the jQuery UI Datepicker (the calendar popup, not the native date input), navigate to next month and select its first Friday. Tell me the date, day, and month it shows. |
 | `stretch-quotes-top-authors` | lookup | 6 | Across every page of this site, which three authors have the most quotes attributed to them, and how many quotes does each have? |
 | `stretch-books-young-adult-one-star` | lookup | 1 | Across every page of the Young Adult category, how many books are rated one star, and which of them is the most expensive, at what price? |
+| `stretch-datepicker-last-saturday` | widget | 1 | Using Date Picker 2, the dd/mm/yyyy calendar, select the last Saturday of the month after next. Tell me the date the field shows. |
 <!-- /evals:tasks:stretch-dev -->
 
 <!-- evals:tasks:stretch-heldout -->
@@ -253,7 +254,7 @@ when they differ:
 | `core` | 20 | `bd7a00ba` |
 | `dev` | 13 | `6b9d5227` |
 | `heldout` | 9 | `86a31db4` |
-| `stretch-dev` | 8 | `2ffd83ee` |
+| `stretch-dev` | 9 | `534fb29f` |
 | `stretch-heldout` | 3 | `0ab6d8fe` |
 | local fixtures | 6 | `dda8ba89` |
 

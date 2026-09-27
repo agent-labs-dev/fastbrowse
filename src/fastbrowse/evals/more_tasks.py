@@ -429,6 +429,13 @@ def _last_sunday_check(outcome: Outcome, truth: object) -> str | None:
     return _says(outcome, date.fromisoformat(truth["date"]))
 
 
+async def _last_saturday_after_next(_: httpx.AsyncClient) -> object:
+    after_next = (_today().replace(day=1) + timedelta(days=62)).replace(day=1)
+    last = (after_next + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    saturday = last - timedelta(days=(last.weekday() - 5) % 7)
+    return {"date": saturday.isoformat(), "dmy": f"{saturday:%d/%m/%Y}"}
+
+
 STRETCH_DEV: tuple[LiveTask, ...] = (
     LiveTask(
         "stretch-wizard-review",
@@ -521,6 +528,17 @@ STRETCH_DEV: tuple[LiveTask, ...] = (
         _fixed(None),
         _all(_whole("11"), _has("Caught", "55.35")),
         Category.LOOKUP,
+    ),
+    # The dev pair of stretch-datepicker-last-sunday, which 0.5.8's eval failed one run in three on two
+    # Sundays: a relative month on a calendar widget, debugged here without touching the held-out task.
+    LiveTask(
+        "stretch-datepicker-last-saturday",
+        "https://testautomationpractice.blogspot.com/",
+        "Using Date Picker 2, the dd/mm/yyyy calendar, select the last Saturday of the month after next. Tell me "
+        "the date the field shows.",
+        _last_saturday_after_next,
+        _last_sunday_check,
+        Category.WIDGET,
     ),
 )
 
