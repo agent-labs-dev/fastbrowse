@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Short answers finish with fewer waits and rewrites.** Completion and claim checks now run together on
+  the reader's draft. A labelled value or a comparison with its supporting values can stand as written,
+  without a model call to turn it into a sentence or remove the supporting facts. Failed claims still go
+  to the composer, and its answer keeps the same evidence and receipt checks.
 - **Numeric rankings compare records from every page in code.** The reader identifies matching records
   and the fields holding their labels and values; code ranks the collected values when the list ends. A
   winner from an earlier page keeps its quote and page address in the answer's citations. Missing records,

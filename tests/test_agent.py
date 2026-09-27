@@ -1477,6 +1477,124 @@ def _fare(url: str, sha: str) -> Fact:
     return Fact(reader=FactReader.LLM, requirement_id="r1", text="$320", evidence=read)
 
 
+@pytest.mark.parametrize("supported", [False, True])
+async def test_finish_checks_draft_claims_during_completion_and_rewrites_only_failed_claims(supported: bool) -> None:
+    state = await run_state()
+    llm = ScriptedLLM([])
+    agent, on = await _finishing(state, llm, noul=0.0)
+    state.ready_plan = state.plan.model_copy(update={"answer_expected": True})
+    fact = _fare(on.url, "fare")
+    state.notes.add(fact)
+    llm.responses.append({"claims": [{"text": "$320 nonstop", "evidence_ids": [fact_id(fact)]}]})
+    done_started, claims_started = asyncio.Event(), asyncio.Event()
+    batches: list[tuple[str, ...]] = []
+
+    class Jev(ScriptedJev):
+        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+            batches.append(tuple(questions))
+            if "complete" in questions:
+                done_started.set()
+                await claims_started.wait()
+            else:
+                claims_started.set()
+                await done_started.wait()
+            return Evaluation(
+                model="test",
+                answers={
+                    key: NoulAnswer(
+                        probability=0.99
+                        if key == "complete" or (key == "unsupported_0" and len(batches) == 2 and not supported)
+                        else 0.0
+                    )
+                    for key in questions
+                },
+                input_tokens=10,
+                cost=FREE,
+            )
+
+    agent._jev = Jev({})
+    async with asyncio.timeout(1):
+        result = await agent._finish(state, on, None, None)
+
+    assert result is not None and result.status is Status.COMPLETE
+    assert result.answer and ("$320 nonstop" if not supported else "$320") in result.answer
+    assert [purpose for purpose, _ in llm.calls] == ([] if supported else [LLMPurpose.COMPOSE])
+    assert len(batches) == state.ledger.jev_calls == (2 if supported else 3)
+    assert len(state.ledger.lines) == (2 if supported else 4)
+
+
+@pytest.mark.parametrize("failure", ["done", "claims", "cancel"])
+async def test_finish_joins_both_checks_on_failure_or_cancellation(failure: str) -> None:
+    state = await run_state()
+    agent, on = await _finishing(state, ScriptedLLM([]), noul=0.0)
+    state.ready_plan = state.plan.model_copy(update={"answer_expected": True})
+    state.notes.add(_fare(on.url, "fare"))
+    started = {key: asyncio.Event() for key in ("done", "claims")}
+    ended: set[str] = set()
+
+    class Jev(ScriptedJev):
+        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+            key = "done" if "complete" in questions else "claims"
+            started[key].set()
+            try:
+                await started["claims" if key == "done" else "done"].wait()
+                if key == failure:
+                    raise JevError("check failed")
+                if failure == "claims":
+                    return Evaluation(model="test", answers={}, input_tokens=10, cost=FREE)
+                await asyncio.Event().wait()
+                raise AssertionError("check should have been cancelled")
+            finally:
+                ended.add(key)
+
+    agent._jev = Jev({})
+    async with asyncio.timeout(1):
+        task = asyncio.create_task(agent._finish(state, on, None, None))
+        if failure == "cancel":
+            await asyncio.gather(*(event.wait() for event in started.values()))
+            task.cancel()
+        with pytest.raises(asyncio.CancelledError if failure == "cancel" else JevError):
+            await task
+    assert ended == {"done", "claims"}
+    if failure == "claims":
+        assert state.ledger.lines == [FREE]
+
+
+async def test_parallel_finish_checks_keep_the_jev_call_limit() -> None:
+    state = await run_state()
+    agent, on = await _finishing(state, ScriptedLLM([]), noul=0.0)
+    state.ready_plan = state.plan.model_copy(update={"answer_expected": True})
+    state.notes.add(_fare(on.url, "fare"))
+    state.ledger.limits = Limits(max_jev_calls=1)
+    with pytest.raises(BudgetExceeded, match="Jev call limit 1 reached"):
+        await agent._finish(state, on, None, None)
+    assert state.ledger.jev_calls == 1 and state.ledger.lines == [FREE]
+
+
+async def test_checked_draft_cannot_bypass_an_unmet_action() -> None:
+    state = await run_state()
+    llm = ScriptedLLM([{"missing": ["submit"], "complete": False}])
+    agent, on = await _finishing(state, llm, noul=0.0)
+    action = Requirement(id="submit", text="Submit the booking", kind=RequirementKind.ACTION)
+    state.ready_plan = Plan(requirements=(*state.plan.requirements, action), answer_expected=True)
+    state.notes.add(_fare(on.url, "fare"))
+
+    class Jev(ScriptedJev):
+        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+            return Evaluation(
+                model="test",
+                answers={key: NoulAnswer(probability=0.99 if key == "unmet_submit" else 0.0) for key in questions},
+                input_tokens=10,
+                cost=FREE,
+            )
+
+    agent._jev = Jev({})
+    agent._recover = AsyncMock()
+    assert await agent._finish(state, on, None, None) is None
+    agent._recover.assert_awaited_once()
+    assert [purpose for purpose, _ in llm.calls] == [LLMPurpose.VERIFY]
+
+
 async def test_a_requirement_read_off_a_guessed_address_reopens_until_the_right_page_is_read() -> None:
     """Refused as read off the wrong page with the fare left as the answer, every click after became DONE and
     every DONE the same refusal, told only "completion not confirmed", until the run stopped stuck."""

@@ -145,7 +145,7 @@ alone, which leaves the DOM as it was, so it is not judged by the DOM."""
 logger = logging.getLogger(__name__)
 
 type _Prepared = ComposedAnswer | asyncio.Task[Generation[ComposedAnswer]] | None
-"""An answer ready before conclusion: the reader's facts Jev accepted as written, or a composer in flight."""
+"""An answer whose claims passed, or a composer in flight."""
 
 type ReadKey = tuple[str, str, tuple[str, ...]]
 type Signature = tuple[Operation, str | None, str]
@@ -2319,18 +2319,33 @@ class Agent:
         state.ledger.reserve(CostComponent.JEV)
         await state.await_plan()
         draft = draft_answer(state.plan, state.notes) if state.plan.answer_expected else None
-        check = await check_done(
-            self._jev,
-            state.task,
-            state.plan,
-            fresh,
-            state.notes,
-            self._config.thresholds,
-            draft,
-            tokens=self._config.tokens,
-            history=_record(state.history, self._config.observation),
-            visited=_visited(state.visited, self._config.observation, self._redactor.redact),
+        checking = asyncio.create_task(
+            check_done(
+                self._jev,
+                state.task,
+                state.plan,
+                fresh,
+                state.notes,
+                self._config.thresholds,
+                draft,
+                tokens=self._config.tokens,
+                history=_record(state.history, self._config.observation),
+                visited=_visited(state.visited, self._config.observation, self._redactor.redact),
+            )
         )
+        # The draft and its quotes already exist. Checking them after DONE paid a second round trip
+        # for every short answer, although neither check needs the other's verdict.
+        claiming = asyncio.create_task(self._holds(state, draft)) if draft is not None else None
+        try:
+            check = await checking
+            state.ledger.record(check.cost)
+            held = await claiming if claiming is not None else None
+        finally:
+            for pending in (checking, claiming):
+                if pending is not None:
+                    await _discard(pending)
+        if check.answer is not None:
+            check = check.model_copy(update={"answer": held})
         trace(
             "done_check",
             verdict=check.verdict.value,
@@ -2338,7 +2353,6 @@ class Agent:
             unmet=list(check.unmet),
             requirements={r.id: r.text for r in state.plan.requirements},
         )
-        state.ledger.record(check.cost)
         guessed = _guessed(state.plan, state.notes, state.invented)
         if check.verdict is DoneVerdict.ACCEPT and _guessed(state.plan, state.notes, state.invented, searches=True):
             # Jev judges the notes, not where they were read, so only the verifier is shown the guessed searches.
@@ -2448,13 +2462,9 @@ class Agent:
                 await _discard(drafting)
 
     async def _answer(self, state: _RunState, prepared: _Prepared) -> tuple[ComposedAnswer, bool]:
-        """The answer and whether its claims held, composing only when nothing prepared survives the check."""
+        """Return the checked draft, or compose an answer and check its claims."""
         if isinstance(prepared, ComposedAnswer):
-            if (held := await self._holds(state, prepared)) is not None:
-                return held, True
-            # Jev took the reader's facts as the answer and then doubted a claim in them, which is what
-            # the composer exists for.
-            prepared = None
+            return prepared, True
         facts = draft_answer(state.plan, state.notes)
         try:
             composed = (
