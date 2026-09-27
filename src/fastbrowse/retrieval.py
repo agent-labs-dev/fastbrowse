@@ -946,7 +946,7 @@ async def read(
             for group in groups:
                 records = []
                 # Capture makes each leaf list item one unit, so a counted range of them is that many records;
-                # a compared record may still span several items, so only counting splits them.
+                # a compared record may still span more than one item, so only counting splits them.
                 cites = _record_cites(capture, part, group.records, _COUNTED_KINDS)
                 missing = max(0, len(cites) - _MAX_CONTINUING_RECORDS)
                 for cite in cites[:_MAX_CONTINUING_RECORDS]:
