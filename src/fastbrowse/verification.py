@@ -95,6 +95,8 @@ def page_state(
     page: dict[str, JsonValue] = {"url": observation.url, "title": observation.title, "text": observation.viewport_text}
     state: dict[str, JsonValue] = {
         **(context or {}),
+        # The dropdown choice runs apart from the action choice; it also needs today's date for relative months.
+        "date": observation.today,
         "page": page,
         # Inputs and ARIA selection states are absent from innerText; without them a preview can
         # pass completion even though the requested filters were never applied.
@@ -216,8 +218,7 @@ async def check_done(
             true="Yes, it needs rewriting before it answers the task.",
             false="No, it answers the task as written.",
         )
-    # "The next Monday after today" cannot be confirmed by someone who does not know today.
-    context: dict[str, JsonValue] = {"task": task, "date": observation.today}
+    context: dict[str, JsonValue] = {"task": task}
     if history:
         context["actions"] = "\n".join(map(_step, history))
     if visited:

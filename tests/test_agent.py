@@ -112,6 +112,19 @@ def field(label: str = "Search elsewhere") -> Control:
     )
 
 
+async def test_dropdown_option_choice_receives_today_without_the_action_choice_context() -> None:
+    jev = ScriptedJev({"pick": "1"})
+    jev.evaluate = AsyncMock(wraps=jev.evaluate)
+    agent = Agent(Mock(spec=Page), jev, ScriptedLLM([]))
+    state = await run_state()
+    state.task = "Choose the month after next"
+    obs = observation(())
+
+    assert await agent._choose(state, obs, "Which month?", ("Oct", "Nov", "Dec")) == "Nov"
+    shown = jev.evaluate.call_args.args[0]
+    assert shown["date"] == obs.today
+
+
 async def test_field_writer_receives_popup_context_and_other_field_values() -> None:
     target = field()
     other = field("Destination").model_copy(update={"id": "destination", "value": "York"})
@@ -3801,6 +3814,74 @@ async def test_tally_pipeline_reuses_only_intermediate_reads_and_cites_every_cap
     )
     assert state.evidenced_at[state_key(observations[-1])]["r1"] == captures[-1].sha256
     assert [step.url for step in state.steps if step.operation is Operation.READ] == [c.url for c in captures]
+
+
+@pytest.mark.parametrize("fault", ["range", "field", "requirement"])
+async def test_tally_pipeline_repairs_invalid_records_from_the_saved_capture(fault: str) -> None:
+    agent, state, page, observations, captures, llm = await _tally_pipeline_fixture()
+    before = state.ledger.llm_calls
+    state.tally_readers = ()
+    field_spec: dict[str, JsonValue] = {
+        "span": {"first": "s0", "last": "s0"},
+        "prefix": "\nOwner: ",
+        "suffix": "\nState:",
+    }
+    group: dict[str, JsonValue] = {"key": None, "field": field_spec}
+    broken: JsonValue = {"continues": []}
+    if fault != "requirement":
+        broken = {
+            "continues": [
+                {
+                    "requirement_id": "r1",
+                    "tallies": [
+                        {"key": None, "records": [{"first": "missing", "last": "missing"}]}
+                        if fault == "range"
+                        else {"key": None, "field": {**field_spec, "prefix": "absent"}}
+                    ],
+                }
+            ]
+        }
+    records: dict[str, JsonValue] = {"continues": [{"requirement_id": "r1", "tallies": [group]}]}
+    llm.responses = [broken, records, records, {**records, "ended": ["r1"]}]
+
+    await agent._pipeline_pages(state, observations[0])
+
+    assert not state.incomplete and state.notes.evidenced("r1")
+    assert [(t.key, t.count) for t in state.notes.tallies] == [("Ada", 2), ("Ben", 2)]
+    assert [e.url for e in state.notes.supporting_evidence("r1")] == [c.url for c in captures]
+    assert len(llm.calls) == 5 and state.ledger.llm_calls - before == 4
+    assert llm.calls[1][1] == llm.calls[2][1]
+    assert captures[1].url in llm.calls[2][1][-1].content
+    assert page.navigate.await_count == 3
+
+
+async def test_persistent_invalid_records_retry_once_and_keep_the_requirement_open() -> None:
+    agent, state, _, _, captures, llm = await _tally_pipeline_fixture()
+    before = state.ledger.llm_calls
+    invalid: JsonValue = {
+        "continues": [{"requirement_id": "r1", "records": [{"first": "missing", "last": "missing"}]}],
+        "ended": ["r1"],
+    }
+    llm.responses = [invalid, invalid]
+    outcome = await agent._page_records(state, captures[1], state.plan.requirements, reuse=False)
+
+    assert len(llm.calls) == 3 and state.ledger.llm_calls - before == 2
+    assert len(outcome.cost_lines) == 2
+    assert outcome.incomplete == ("r1",) and not outcome.ended
+    assert not state.notes.evidenced("r1")
+    assert [e.url for e in state.notes.evidence.values()] == [captures[0].url]
+
+
+async def test_invalid_records_cannot_retry_past_the_call_budget() -> None:
+    agent, state, _, _, captures, llm = await _tally_pipeline_fixture()
+    state.ledger.limits = Limits(max_llm_calls=state.ledger.llm_calls + 1)
+    llm.responses = [{"continues": []}]
+
+    with pytest.raises(BudgetExceeded):
+        await agent._page_records(state, captures[1], state.plan.requirements, reuse=False)
+
+    assert state.ledger.llm_calls == state.ledger.limits.max_llm_calls
+    assert not state.notes.evidenced("r1")
 
 
 @pytest.mark.parametrize("failure", ["incomplete", "untallied", "no_end", "limit"])

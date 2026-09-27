@@ -13,6 +13,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.5.8] - 2026-09-27
 
+- **Dropdown choices see today's date.** The action chooser knew today's date and weekday, but the separate
+  choice of a dropdown option did not. A calendar asked for the month after next could select one month too
+  far ahead. Shared page state now gives the option choice the same date as the action and completion checks.
+- **A rejected page read can recover before its records enter a tally.** An invalid record range or omitted
+  requirement on one page left a cross-page count incomplete, while later reads repeated totals without the
+  missing evidence. The reader now retries that saved capture once before merging its records. Successful
+  reads need no extra call; a second invalid read still leaves the count open.
 - **A connection error opening the first page is tried four times.** A cloud browser's proxy timed out
   connecting to a site on both of fastbrowse's two tries, a second apart, in two of three runs of one task,
   while the site answered other clients. Connection errors now get four tries, waiting 1, 2 and 4 seconds

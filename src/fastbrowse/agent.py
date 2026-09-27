@@ -1906,17 +1906,32 @@ class Agent:
     ) -> ReadOutcome:
         if reuse and (counted := read_tallies(capture, state.tally_readers, [r.id for r in wanted])) is not None:
             return counted
-        return await read(
-            self._llm,
-            capture,
-            read_question(state.task, wanted, began_at=state.first_url),
-            [r.id for r in wanted],
-            Notes(),
-            tokens=self._config.tokens,
-            ledger=state.ledger,
-            requirements=wanted,
-            records_only=True,
-        )
+        costs: list[CostLine] = []
+        retried = False
+        while True:
+            outcome = await read(
+                self._llm,
+                capture,
+                read_question(state.task, wanted, began_at=state.first_url),
+                [r.id for r in wanted],
+                Notes(),
+                tokens=self._config.tokens,
+                ledger=state.ledger,
+                requirements=wanted,
+                records_only=True,
+            )
+            costs.extend(outcome.cost_lines)
+            if not outcome.incomplete or retried:
+                return outcome.model_copy(update={"cost_lines": tuple(costs)})
+            # A bad record range used to poison the whole tally; later pages cannot repair its missing quotes.
+            # Retry the saved capture before merging anything, while the browser continues paging.
+            trace(
+                "read_retry",
+                url=self._redactor.redact(capture.url),
+                incomplete=list(outcome.incomplete),
+                uncovered=outcome.uncovered,
+            )
+            retried = True
 
     async def _join_page(self, state: _RunState, page: _PageRead, wanted: Sequence[Requirement]) -> ReadOutcome | None:
         try:
