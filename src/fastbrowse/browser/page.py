@@ -229,6 +229,10 @@ _SCREENSHOT_WAIT_SECONDS = 1.0
 _POPUP_ADOPT_SECONDS = 2.0
 _OPENS_TABS = frozenset({Operation.CLICK, Operation.ENTER})
 _NAVIGATE_ATTEMPTS = 2
+_NET_ERROR_ATTEMPTS = 4
+"""A connection error is tried more often than a page that never loads: a cloud browser's proxy timed out
+connecting to a site twice a second apart in two of three runs of one task, while the site answered the harness
+and Browser Use's agent reloaded its way through."""
 _NAVIGATE_RETRY_SECONDS = 1.0
 _NET_ERROR = re.compile(r"net::ERR_[A-Z_]+")
 # The site or the connection to it gave nothing: the-internet.herokuapp.com answered ERR_EMPTY_RESPONSE for
@@ -1162,9 +1166,11 @@ class CdpPage(Page):
         # content, so they are shown.
         failure = "NavigationError"
         timed_out = False
-        for attempt in range(_NAVIGATE_ATTEMPTS):
+        for attempt in range(_NET_ERROR_ATTEMPTS):
             if attempt:
-                await asyncio.sleep(_NAVIGATE_RETRY_SECONDS)
+                if attempt >= _NAVIGATE_ATTEMPTS and not _NET_ERROR.fullmatch(failure):
+                    break
+                await asyncio.sleep(_NAVIGATE_RETRY_SECONDS * 2 ** (attempt - 1))
             result = await self._session.client.send.Page.navigate(params={"url": url}, session_id=session_id)
             if error := result.get("errorText"):
                 failure, timed_out = (error if _NET_ERROR.fullmatch(error) else "NavigationError"), False

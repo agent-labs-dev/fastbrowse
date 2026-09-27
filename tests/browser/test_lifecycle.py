@@ -190,12 +190,13 @@ SETTLED = {"result": {"value": [True, "fingerprint"]}}
     ("errors", "raised"),
     [
         (["net::ERR_TUNNEL_CONNECTION_FAILED"], None),
-        (["net::ERR_TUNNEL_CONNECTION_FAILED"] * 2, "Page.navigate failed (net::ERR_TUNNEL_CONNECTION_FAILED)"),
+        (["net::ERR_TIMED_OUT"] * 3, None),
+        (["net::ERR_TUNNEL_CONNECTION_FAILED"] * 4, "Page.navigate failed (net::ERR_TUNNEL_CONNECTION_FAILED)"),
         (["secret https://example.test/secret"] * 2, "Page.navigate failed (NavigationError)"),
-        (["net::ERR_NAME_NOT_RESOLVED"] * 2, "Page.navigate failed (net::ERR_NAME_NOT_RESOLVED)"),
+        (["net::ERR_NAME_NOT_RESOLVED"] * 4, "Page.navigate failed (net::ERR_NAME_NOT_RESOLVED)"),
     ],
 )
-async def test_a_failed_navigation_is_tried_again_once(
+async def test_a_failed_navigation_is_tried_again(
     monkeypatch: pytest.MonkeyPatch, errors: list[str], raised: str | None
 ) -> None:
     transport = CdpTransport(monkeypatch)
@@ -214,7 +215,8 @@ async def test_a_failed_navigation_is_tried_again_once(
             assert not isinstance(caught.value, NavigationTimeout)
             # The site or connection dropping it is an outage; a name that never resolved can be a typo.
             assert isinstance(caught.value, SiteUnreachable) is ("TUNNEL" in raised)
-    assert transport.calls.count("Page.navigate") == min(len(errors) + 1, 2)
+    tries = page_module._NET_ERROR_ATTEMPTS if errors[0].startswith("net::") else page_module._NAVIGATE_ATTEMPTS
+    assert transport.calls.count("Page.navigate") == min(len(errors) + 1, tries)
 
 
 async def test_a_page_that_never_loads_is_tried_again_once(monkeypatch: pytest.MonkeyPatch) -> None:
