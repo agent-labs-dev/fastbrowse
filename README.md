@@ -103,8 +103,8 @@ from a container to a hosted browser with a CDP endpoint, is driven in place wit
 opens one tab and leaves the browser as it was found.
 
 ```sh
-export AI_GATEWAY_API_KEY=...   # or TYPESAFE_API_KEY, for Jev
-export OPENROUTER_API_KEY=...   # for the LLM that plans and reads
+export OPENROUTER_API_KEY=...   # for Jev and the LLM that plans and reads
+# export AI_GATEWAY_API_KEY=... # optional Jev backup through the Vercel AI Gateway
 export BROWSER_USE_API_KEY=...  # the cloud browser; or pass --local to use Chrome
 uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
@@ -291,10 +291,11 @@ tab and are acknowledged after delivery, with no fixed frame rate. Only the late
 Handler failures are logged without stopping the run. Live frames and recordings are held back while a
 resolved secret may show on the page, as PNG step frames are. No handler means no live capture.
 
-Jev comes from Typesafe directly or through the Vercel AI Gateway, whichever key is set
-(`FASTBROWSE_JEV_SOURCE=typesafe` or `gateway` picks the first provider when both are set). With both keys,
-a retryable HTTP failure that exhausts retries switches the run to the other provider. A custom
-`FASTBROWSE_JEV_BASE_URL` or nondefault `FASTBROWSE_JEV_MODEL` disables that failover.
+Jev defaults to OpenRouter using the same `OPENROUTER_API_KEY` as the LLM. If `AI_GATEWAY_API_KEY` is set,
+a retryable HTTP failure that exhausts retries switches the run to the Vercel AI Gateway.
+`FASTBROWSE_JEV_SOURCE=openrouter`, `typesafe` or `gateway` selects the first provider explicitly.
+`FASTBROWSE_JEV_BASE_URL` or an explicit `FASTBROWSE_JEV_MODEL` disables failover.
+See [Jev routing](docs/jev.md#provider-failover) for fallback order and model defaults.
 Any other source
 can be passed as `run_task(jev=...)`, implementing async `evaluate(state, questions)`; `run_task(llm=...)`
 accepts an implementation of the `LLMClient.generate(...)` protocol in `fastbrowse.llm`.
@@ -308,7 +309,7 @@ The answer contains numbered Markdown links. MCP's `citations` list contains `qu
 run's evidence; it does not expose the Python `Citation` ids, requirement ids or deep-link fields.
 
 ```sh
-claude mcp add fastbrowse -e OPENROUTER_API_KEY=... -e AI_GATEWAY_API_KEY=... -e BROWSER_USE_API_KEY=... \
+claude mcp add fastbrowse -e OPENROUTER_API_KEY=... -e BROWSER_USE_API_KEY=... \
   -- uvx --from 'fastbrowse[mcp]' fastbrowse-mcp --max-dollars 0.25
 ```
 
@@ -320,7 +321,7 @@ For a client configured by JSON, such as Claude Desktop:
     "fastbrowse": {
       "command": "uvx",
       "args": ["--from", "fastbrowse[mcp]", "fastbrowse-mcp"],
-      "env": { "OPENROUTER_API_KEY": "...", "AI_GATEWAY_API_KEY": "...", "BROWSER_USE_API_KEY": "..." }
+      "env": { "OPENROUTER_API_KEY": "...", "BROWSER_USE_API_KEY": "..." }
     }
   }
 }

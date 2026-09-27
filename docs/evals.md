@@ -21,7 +21,8 @@ Six tasks against small sites in `src/fastbrowse/evals/fixtures/`, served locall
 | `login-wall` | a sign-in wall with no credentials stops at `NEEDS_LOGIN` and submits nothing |
 | `confirm-dialog` | an irreversible delete behind a `confirm()` dialog |
 
-Needs Jev and LLM keys (see `fastbrowse.clients.environment`).
+Needs `OPENROUTER_API_KEY` for Jev and the LLM; `AI_GATEWAY_API_KEY` adds a Jev backup for fastbrowse
+(see `fastbrowse.clients.environment`).
 
 ## Live head-to-head
 

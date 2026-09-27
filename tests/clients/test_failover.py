@@ -7,7 +7,7 @@ import pytest
 
 from fastbrowse.clients.environment import JevSource, Settings
 from fastbrowse.clients.validation import RETRY_DELAYS_SECONDS, RETRYABLE_STATUS
-from fastbrowse.jev import JEV_MODEL, JevError, JevInputTooLarge, JevRetriesExhausted, NoulAnswer, NoulQuestion
+from fastbrowse.jev import JevError, JevInputTooLarge, JevRetriesExhausted, NoulAnswer, NoulQuestion
 from fastbrowse.models import CostBasis
 
 QUESTIONS = {"q": NoulQuestion(instructions="Is it?")}
@@ -15,11 +15,15 @@ ATTEMPTS = len(RETRY_DELAYS_SECONDS) + 1
 
 
 def source(request: httpx.Request) -> JevSource:
-    return JevSource.TYPESAFE if request.url.host == "api.typesafe.ai" else JevSource.GATEWAY
+    return {
+        "openrouter.ai": JevSource.OPENROUTER,
+        "api.typesafe.ai": JevSource.TYPESAFE,
+        "ai-gateway.vercel.sh": JevSource.GATEWAY,
+    }[request.url.host]
 
 
 def answer(provider: JevSource) -> httpx.Response:
-    if provider is JevSource.TYPESAFE:
+    if provider is not JevSource.GATEWAY:
         return httpx.Response(
             200,
             json={"answers": {"q": {"type": "noul", "noul": 1}}, "usage": {"input_tokens": 100, "output_tokens": 7}},
@@ -34,32 +38,53 @@ def answer(provider: JevSource) -> httpx.Response:
     )
 
 
-def settings(primary: JevSource) -> Settings:
+def settings(primary: JevSource | None, *, direct_key: bool = True) -> Settings:
     values: dict[str, Any] = {
-        "TYPESAFE_API_KEY": "direct-key",
+        "TYPESAFE_API_KEY": "direct-key" if direct_key else None,
         "AI_GATEWAY_API_KEY": "gateway-key",
+        "OPENROUTER_API_KEY": "openrouter-key",
         "jev_source": primary,
         "jev_base_url": None,
-        "jev_model": JEV_MODEL,
+        "jev_model": None,
     }
     return Settings(_env_file=None, **values)
 
 
-@pytest.mark.parametrize("primary", JevSource)
+@pytest.mark.parametrize(
+    ("source_setting", "direct_key"),
+    [
+        (None, True),
+        (JevSource.OPENROUTER, True),
+        (JevSource.TYPESAFE, True),
+        (JevSource.GATEWAY, True),
+        (JevSource.GATEWAY, False),
+    ],
+)
 @pytest.mark.parametrize("status", sorted(RETRYABLE_STATUS))
-async def test_exhausted_primary_switches_once_and_each_run_starts_fresh(primary: JevSource, status: int) -> None:
+async def test_exhausted_primary_switches_once_and_each_run_starts_fresh(
+    source_setting: JevSource | None, direct_key: bool, status: int
+) -> None:
     seen: list[JevSource] = []
-    backup = JevSource.GATEWAY if primary is JevSource.TYPESAFE else JevSource.TYPESAFE
+    primary = source_setting or JevSource.OPENROUTER
+    backup = (
+        (JevSource.TYPESAFE if direct_key else JevSource.OPENROUTER)
+        if primary is JevSource.GATEWAY
+        else JevSource.GATEWAY
+    )
 
     def handler(request: httpx.Request) -> httpx.Response:
         provider = source(request)
         seen.append(provider)
-        expected_key = "direct-key" if provider is JevSource.TYPESAFE else "gateway-key"
+        expected_key = {
+            JevSource.OPENROUTER: "openrouter-key",
+            JevSource.TYPESAFE: "direct-key",
+            JevSource.GATEWAY: "gateway-key",
+        }[provider]
         assert request.headers["authorization"] == f"Bearer {expected_key}"
         return httpx.Response(status) if provider is primary else answer(provider)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        configured = settings(primary)
+        configured = settings(source_setting, direct_key=direct_key)
         client = configured.jev(http)
         first = await client.evaluate("page", QUESTIONS)
         second = await client.evaluate("page", QUESTIONS)
@@ -205,7 +230,7 @@ async def test_cancellation_cleans_up_and_keeps_the_selected_provider(primary: J
         assert cancelled.is_set()
         result = await client.evaluate("page", QUESTIONS)
     assert result.answers == {"q": NoulAnswer(probability=1)}
-    backup = JevSource.GATEWAY if primary is JevSource.TYPESAFE else JevSource.TYPESAFE
+    backup = JevSource.TYPESAFE if primary is JevSource.GATEWAY else JevSource.GATEWAY
     assert seen == ([primary] * ATTEMPTS + [backup, backup] if after_switch else [primary, primary])
 
 

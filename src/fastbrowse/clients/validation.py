@@ -646,6 +646,20 @@ async def asking_open(
     return evaluation.model_copy(update={"answers": {**evaluation.answers, **forced}})
 
 
+def reported_cost(value: JsonValue, input_tokens: int, output_tokens: int = 0) -> CostLine:
+    cost = None if value is None else dollars(value)
+    # Providers have reported $0 while tokens flow, so missing or zero charges use list price.
+    if cost is None or (cost == 0 and input_tokens):
+        return estimated_cost(input_tokens, output_tokens)
+    return CostLine(
+        component=CostComponent.JEV,
+        basis=CostBasis.METERED,
+        dollars=cost,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+
+
 def estimated_cost(input_tokens: int, output_tokens: int = 0) -> CostLine:
     return CostLine(
         component=CostComponent.JEV,
