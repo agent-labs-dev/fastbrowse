@@ -909,10 +909,10 @@ async def test_a_read_that_answers_a_lookup_finishes_on_the_page_it_read(lookup:
 
 
 async def test_a_finish_judges_the_last_observation_without_observing_again() -> None:
-    """Nothing acts between the loop's observation and `_finish`; one that is stale by then is judged afresh."""
+    """An unchanged document keeps its observation; one superseded by another observation is judged afresh."""
     state = await run_state()
     state.notes.add(_fare("https://example.test/flights/results", "results"))
-    agent, on = await _finishing(state, ScriptedLLM([]), noul=0.99)
+    agent, on = await _finishing(state, ScriptedLLM([]), noul=0.5)
     observe = agent._page.observe
     assert isinstance(observe, AsyncMock)
     last = await agent._observe()
@@ -1457,6 +1457,7 @@ async def _finishing(state: _RunState, llm: ScriptedLLM, *, noul: float) -> tupl
     page = Mock(spec=Page)
     page.observe = AsyncMock(return_value=on)
     page.screenshot = AsyncMock(return_value=b"")
+    page.document_changed = AsyncMock(return_value=False)
     page.artifacts = ()
     plan = Plan(
         requirements=(Requirement(id="r1", text="The cheapest nonstop fare", kind=RequirementKind.INFORMATION),),
@@ -3180,6 +3181,128 @@ async def test_a_doubted_lookup_with_every_requirement_cited_finishes_without_th
 
     assert result is not None and result.status is Status.COMPLETE
     assert (LLMPurpose.VERIFY in [purpose for purpose, _ in llm.calls]) is guessed
+
+
+@pytest.mark.parametrize("accepted", [False, True])
+async def test_a_lookup_with_an_explicitly_unmet_requirement_calls_the_verifier(accepted: bool) -> None:
+    state = await run_state()
+    state.notes.add(_fare("https://example.test/flights/results", "results"))
+    llm = ScriptedLLM([{"missing": [], "complete": accepted}])
+    agent, on = await _finishing(state, llm, noul=0.99)
+    agent._recover = AsyncMock()
+    checked = await agent_module.check_done(
+        agent._jev, state.task, state.plan, on, state.notes, agent._config.thresholds
+    )
+    assert checked.verdict is agent_module.DoneVerdict.VERIFY and checked.unmet == ("r1",)
+
+    result = await agent._finish(state, on, None, None)
+
+    assert [purpose for purpose, _ in llm.calls] == [LLMPurpose.VERIFY]
+    assert (result is not None and result.status is Status.COMPLETE) is accepted
+
+
+@pytest.mark.parametrize("phase", [LLMPurpose.VERIFY, LLMPurpose.COMPOSE])
+@pytest.mark.parametrize("accepted", [False, True])
+async def test_completion_observes_a_redirect_during_verification_or_composition(
+    phase: LLMPurpose, accepted: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = await run_state()
+    llm = ScriptedLLM([])
+    agent, on = await _finishing(state, llm, noul=0.5)
+    state.notes.add(_fare(on.url, "results"))
+    changed = on.model_copy(update={"url": "https://example.test/login", "document_key": "login"})
+    current = on
+    page = agent._page
+    observe = AsyncMock(side_effect=lambda: current)
+    monkeypatch.setattr(page, "observe", observe)
+    monkeypatch.setattr(page, "document_changed", AsyncMock(side_effect=lambda observed: observed.url != current.url))
+    if phase is LLMPurpose.VERIFY:
+        state.invented.add(on.url)
+        llm.responses.append({"missing": [], "complete": True})
+    else:
+        state.ready_plan = state.plan.model_copy(update={"answer_expected": True})
+        llm.responses.append({"claims": [{"text": "$320 nonstop", "evidence_ids": [fact_id(state.notes.facts[0])]}]})
+        agent._holds = AsyncMock(
+            side_effect=lambda _, answer: answer if answer.claims[0].text == "$320 nonstop" else None
+        )
+    generate = llm.generate
+
+    async def redirect(*args: Any, **kwargs: Any) -> Any:
+        nonlocal current
+        current = changed
+        return await generate(*args, **kwargs)
+
+    monkeypatch.setattr(llm, "generate", redirect)
+    observed = await agent._observe()
+    until = AsyncMock(return_value=accepted)
+    agent._recover = AsyncMock()
+
+    result = await agent._finish(state, observed, None, until)
+
+    assert [purpose for purpose, _ in llm.calls] == [phase]
+    assert observe.await_count == 2
+    until.assert_awaited_once_with(changed.url)
+    if accepted:
+        assert result is not None and result.status is Status.COMPLETE and result.final_url == changed.url
+    else:
+        assert result is None
+        assert agent._recover.await_args is not None and agent._recover.await_args.args[1].url == changed.url
+
+
+@pytest.mark.parametrize("same_url", [False, True])
+async def test_completion_observes_a_document_that_changed_during_the_read(
+    same_url: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = await run_state()
+    llm = ScriptedLLM(
+        [
+            {
+                "answered": True,
+                "claims": [{"requirement_id": "r1", "text": "$320", "cite": {"first": "s0", "last": "s0"}}],
+            }
+        ]
+    )
+    agent, on = await _finishing(state, llm, noul=0.5)
+    on = on.model_copy(update={"document_key": "results"})
+    agent._jev = ScriptedJev({"r1": "synthesis"}, noul=0.5)
+    changed = on.model_copy(
+        update={
+            "url": on.url if same_url else "https://example.test/login",
+            "document_key": "login",
+            "viewport_text": "Sign in",
+        }
+    )
+    current = on
+    page = agent._page
+    observe = AsyncMock(side_effect=lambda: current)
+    monkeypatch.setattr(page, "observe", observe)
+    monkeypatch.setattr(
+        page,
+        "document_changed",
+        AsyncMock(
+            side_effect=lambda observed: (observed.url, observed.document_key) != (current.url, current.document_key)
+        ),
+    )
+    generate = llm.generate
+
+    async def redirect(*args: Any, **kwargs: Any) -> Any:
+        nonlocal current
+        current = changed
+        return await generate(*args, **kwargs)
+
+    monkeypatch.setattr(llm, "generate", redirect)
+    observed = await agent._observe()
+    captured = capture((BlockKind.PARAGRAPH, "$320")).model_copy(update={"url": on.url})
+    await agent._read(state, captured, observed)
+    assert current is changed and llm.calls[0][0] is LLMPurpose.READ
+    until = AsyncMock(return_value=True)
+
+    result = await agent._finish(state, observed, None, until)
+
+    assert observe.await_count == 2
+    assert agent._raw_observation == changed
+    until.assert_awaited_once_with(changed.url)
+    assert result is not None and result.final_url == changed.url
 
 
 def _continued(*, through_end: bool = True) -> dict[str, Any]:

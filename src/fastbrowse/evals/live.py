@@ -396,6 +396,7 @@ class SiteWatch:
         self._http = http
         self._starts = {origin_of(t.start): t.start for t in reversed(tasks)}
         self._stalls: dict[str, list[tuple[float, float, str]]] = {origin: [] for origin in self._starts}
+        self._pending: dict[str, tuple[float, asyncio.Event]] = {}
 
     async def run(self) -> None:
         await asyncio.gather(*(self._probe(origin, url) for origin, url in self._starts.items()))
@@ -403,23 +404,32 @@ class SiteWatch:
     async def _probe(self, origin: str, url: str) -> None:
         while True:
             began = time.time()
-            why = None
+            settled = asyncio.Event()
+            self._pending[origin] = began, settled
             try:
-                response = await self._http.get(url, follow_redirects=True, timeout=SITE_STALL_SECONDS * 3)
-                if response.status_code >= 500:
-                    why = f"answered HTTP {response.status_code}"
-            except httpx.TransportError as error:
-                why = f"unreachable ({type(error).__name__})"
-            ended = time.time()
-            if why is None and ended - began > SITE_STALL_SECONDS:
-                why = f"took {ended - began:.0f}s to answer"
-            if why is not None:
-                self._stalls[origin].append((began, ended, why))
+                why = None
+                try:
+                    response = await self._http.get(url, follow_redirects=True, timeout=SITE_STALL_SECONDS * 3)
+                    if response.status_code >= 500:
+                        why = f"answered HTTP {response.status_code}"
+                except httpx.TransportError as error:
+                    why = f"unreachable ({type(error).__name__})"
+                ended = time.time()
+                if why is None and ended - began > SITE_STALL_SECONDS:
+                    why = f"took {ended - began:.0f}s to answer"
+                if why is not None:
+                    self._stalls[origin].append((began, ended, why))
+            finally:
+                self._pending.pop(origin, None)
+                settled.set()
             await asyncio.sleep(max(0.0, SITE_PROBE_SECONDS - (ended - began)))
 
-    def stalled(self, task: LiveTask, start: float, end: float) -> str | None:
+    async def stalled(self, task: LiveTask, start: float, end: float) -> str | None:
         """Why the task's site stalled between `start` and `end`, or None if every fetch then was answered."""
-        for began, ended, why in self._stalls.get(origin_of(task.start), ()):
+        origin = origin_of(task.start)
+        if (pending := self._pending.get(origin)) is not None and pending[0] < end:
+            await pending[1].wait()
+        for began, ended, why in self._stalls.get(origin, ()):
             if began < end and ended > start:
                 return f"site stalled: {task.start} {why}"
         return None
@@ -1008,7 +1018,7 @@ async def main(argv: list[str]) -> int:
                         )
                     row = await _site_checked(row, task, http)
                     if row.normalized_status != Ending.UNAVAILABLE and (
-                        stalled := watch.stalled(task, row.at, time.time())
+                        stalled := await watch.stalled(task, row.at, time.time())
                     ):
                         row = row.model_copy(update={"normalized_status": Ending.UNAVAILABLE, "failure": stalled})
                     if row.normalized_status != Ending.UNAVAILABLE or retries >= OUTAGE_RETRIES:

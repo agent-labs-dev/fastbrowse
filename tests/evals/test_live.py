@@ -690,6 +690,80 @@ async def test_an_attempt_its_site_stalled_during_is_an_outage_for_any_arm(monke
     watching = asyncio.create_task(watch.run())
     await asyncio.sleep(0.1)
     watching.cancel()
-    assert watch.stalled(frames, start, time.time()) == f"site stalled: {frames.start} answered HTTP 503"
-    assert watch.stalled(frames, start - 10, start - 5) is None
-    assert watch.stalled(task("pypi-newer"), start, time.time()) is None
+    assert await watch.stalled(frames, start, time.time()) == f"site stalled: {frames.start} answered HTTP 503"
+    assert await watch.stalled(frames, start - 10, start - 5) is None
+    assert await watch.stalled(task("pypi-newer"), start, time.time()) is None
+
+
+async def test_grading_waits_for_a_probe_overlapping_the_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    started = asyncio.Event()
+
+    async def slow(request: httpx.Request) -> httpx.Response:
+        started.set()
+        await asyncio.sleep(0.06)
+        return httpx.Response(200)
+
+    monkeypatch.setattr(live, "SITE_STALL_SECONDS", 0.01)
+    frames = task("expandtesting-login")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(slow)) as http:
+        watch = live.SiteWatch(http, [frames])
+        start = time.time()
+        watching = asyncio.create_task(watch.run())
+        try:
+            await started.wait()
+            assert await watch.stalled(frames, start, time.time()) is not None
+        finally:
+            watching.cancel()
+            await asyncio.gather(watching, return_exceptions=True)
+
+
+async def test_grading_does_not_wait_for_an_unrelated_or_later_probe() -> None:
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def pending(request: httpx.Request) -> httpx.Response:
+        started.set()
+        await release.wait()
+        return httpx.Response(200)
+
+    frames = task("expandtesting-login")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(pending)) as http:
+        watch = live.SiteWatch(http, [frames])
+        start = time.time()
+        watching = asyncio.create_task(watch.run())
+        try:
+            await started.wait()
+            async with asyncio.timeout(1):
+                assert await watch.stalled(frames, start - 10, start - 5) is None
+                assert await watch.stalled(task("pypi-newer"), start, time.time()) is None
+        finally:
+            watching.cancel()
+            await asyncio.gather(watching, return_exceptions=True)
+
+
+async def test_cancelling_one_grade_leaves_the_overlapping_probe_for_another() -> None:
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def pending(request: httpx.Request) -> httpx.Response:
+        started.set()
+        await release.wait()
+        return httpx.Response(503)
+
+    frames = task("expandtesting-login")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(pending)) as http:
+        watch = live.SiteWatch(http, [frames])
+        start = time.time()
+        watching = asyncio.create_task(watch.run())
+        grading: list[asyncio.Task[str | None]] = []
+        try:
+            await started.wait()
+            grading = [asyncio.create_task(watch.stalled(frames, start, time.time())) for _ in range(2)]
+            await asyncio.sleep(0)
+            assert not any(grade.done() for grade in grading)
+            grading[0].cancel()
+            await asyncio.gather(grading[0], return_exceptions=True)
+            release.set()
+            assert await grading[1] == f"site stalled: {frames.start} answered HTTP 503"
+        finally:
+            for pending_task in [watching, *grading]:
+                pending_task.cancel()
+            await asyncio.gather(watching, *grading, return_exceptions=True)

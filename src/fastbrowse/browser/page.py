@@ -1124,6 +1124,17 @@ class CdpPage(Page):
         raw = await self._evaluate(self._session.active_session_id, "location.href")
         return str(raw) if raw is not None else ""
 
+    async def document_changed(self, observation: Observation) -> bool:
+        dialog = self._session.pending_dialog()
+        if dialog is not None or observation.dialog is not None:
+            return dialog != observation.dialog
+        raw = await self._evaluate(
+            self._session.active_session_id,
+            f"location.href !== {json.dumps(observation.url)} || "
+            f"String(performance.timeOrigin) !== {json.dumps(observation.document_key)}",
+        )
+        return raw is not False
+
     async def response_status(self) -> int | None:
         raw = await self._evaluate(
             self._session.active_session_id,

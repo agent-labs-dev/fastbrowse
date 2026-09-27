@@ -2312,6 +2312,11 @@ class Agent:
             ),
         )
 
+    async def _observe_if_changed(self, observation: Observation) -> Observation:
+        if observation is not self._observed or await self._page.document_changed(self._raw_observation or observation):
+            return await self._observe()
+        return observation
+
     async def _finish(
         self,
         state: _RunState,
@@ -2321,11 +2326,10 @@ class Agent:
     ) -> RunResult | None:
         """Return the final result when DONE holds up; None sends the loop back to work.
 
-        DONE is judged on `observation` when it is still the page's last: nothing acts between the loop's observation
-        and here, and observing a page nothing changed cost 0.35s a run. A wait or a twin search that observed since
-        judges the page as it is now.
+        A page can redirect while a model reads or verifies it. Check its URL and document before reusing the
+        observation: indexing unchanged controls again cost 0.35s a run.
         """
-        fresh = observation if observation is self._observed else await self._observe()
+        fresh = await self._observe_if_changed(observation)
         state.ledger.reserve(CostComponent.JEV)
         await state.await_plan()
         draft = draft_answer(state.plan, state.notes) if state.plan.answer_expected else None
@@ -2367,7 +2371,7 @@ class Agent:
         if check.verdict is DoneVerdict.ACCEPT and _guessed(state.plan, state.notes, state.invented, searches=True):
             # Jev judges the notes, not where they were read, so only the verifier is shown the guessed searches.
             check = check.model_copy(update={"verdict": DoneVerdict.VERIFY})
-        elif check.verdict is DoneVerdict.VERIFY and not guessed and _lookup(state.plan):
+        elif check.verdict is DoneVerdict.VERIFY and not check.unmet and not guessed and _lookup(state.plan):
             # A doubted lookup reaches here with every requirement cited, and the verifier excuses a cited
             # requirement (`_verified`), so all it could still do was refuse naming nothing, which it never did in
             # 76 0.5.7 verifications. It cost a screenshot and a vision call, 3 to 8s, on half of all runs. Every
@@ -2432,8 +2436,13 @@ class Agent:
                     missing=list(verdict.data.missing),
                     ungrounded=list(verdict.data.ungrounded),
                 )
-            if accepted and until is not None:
-                accepted = await until((self._raw_observation or fresh).url)
+            result = None
+            if accepted:
+                handed, drafting = drafting, None
+                result = await self._conclude(state, output_schema, check.answer or handed)
+                fresh = self._observed or fresh
+                if until is not None:
+                    accepted = await until((self._raw_observation or fresh).url)
             if not accepted:
                 requirements = {r.id: r.text for r in state.plan.requirements}
                 unmet = [
@@ -2462,11 +2471,10 @@ class Agent:
                 )
                 # The verifier only runs when Jev's done check doubts; otherwise Jev's verdict is the last word.
                 judge = Decider.LLM if check.verdict is DoneVerdict.VERIFY else Decider.JEV
-                await self._record_failure(state, observation, Operation.DONE, reason, decided_by=judge)
-                await self._recover(state, observation, reason)
+                await self._record_failure(state, fresh, Operation.DONE, reason, decided_by=judge)
+                await self._recover(state, fresh, reason)
                 return None
-            handed, drafting = drafting, None
-            return await self._conclude(state, output_schema, check.answer or handed)
+            return result
         finally:
             if drafting is not None:
                 await _discard(drafting)
@@ -2612,6 +2620,8 @@ class Agent:
         cited: dict[tuple[str, str], Evidence] = {}
         for item in evidence:
             cited.setdefault((item.url, item.quote), item)
+        if self._observed is not None:
+            await self._observe_if_changed(self._observed)
         return self._result(
             state, state.ledger, status, answer=answer, data=data, evidence=tuple(cited.values()), citations=citations
         )

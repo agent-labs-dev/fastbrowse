@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A lookup's explicitly unmet requirements reach the verifier.** Completion skipped the verifier for
+  answers read on known pages even when the done check named a missing requirement. Only doubts with no
+  unmet requirements can take that shortcut.
+- **Completion follows page changes during reading and answering.** A redirect or document replacement
+  now refreshes the page used for the caller's completion check and final URL. An unchanged page keeps its
+  observation, avoiding another scan of its controls.
 - **Published eval times are wall time.** Earlier releases subtracted the failed requests and backoff that
   fastbrowse's client measured inside an attempt, which no other arm's time could have taken out. An attempt with
   any failed request is now an outage and is run again, and 0.5.6's published times, the only ones that

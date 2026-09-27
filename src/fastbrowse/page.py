@@ -234,6 +234,10 @@ class Page(Protocol):
 
     async def observe(self) -> Observation: ...
 
+    async def document_changed(self, observation: Observation) -> bool:
+        """Whether the current URL or document differs, without indexing the page's controls again."""
+        ...
+
     async def navigate(self, url: str, *, back_to: str | None = None) -> None:
         """`back_to` is the page BACK opens when this tab has no earlier entry on its site: a run that went straight
         to a deep address keeps the start page it skipped one BACK away without spending a load on it."""
