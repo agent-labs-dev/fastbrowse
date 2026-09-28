@@ -1,3 +1,12 @@
+import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import httpx
+import pytest
+
+from fastbrowse.evals import compare_mock
 from fastbrowse.evals.compare_mock import comparison_task
 from fastbrowse.evals.live_tasks import Outcome
 from fastbrowse.evals.mock import Site
@@ -58,3 +67,61 @@ def test_fixture_server_resets_cookies_and_state_between_attempts() -> None:
             assert response.headers["Cache-Control"] == "no-store"
         assert second.sessions == {} and second.orders_placed == []
         assert first.sessions and len(first.orders_placed) == 1
+
+
+@pytest.mark.asyncio
+async def test_outage_is_retried_with_fresh_state_and_kept_out_of_scored_rows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls = 0
+
+    @asynccontextmanager
+    async def local_tunnel(local: str, http: httpx.AsyncClient) -> AsyncIterator[str]:
+        yield local
+
+    async def transient_then_pass(arm, task, http, downloads, base, site):
+        nonlocal calls
+        assert not site.orders_placed
+        site.place_order({"attempt": str(calls)})
+        calls += 1
+        return {
+            "arm": arm,
+            "task": task.id,
+            "normalized_status": "unavailable" if calls == 1 else "complete",
+            "passed": calls > 1,
+            "seconds": 1.0,
+            "dollars": 0.01,
+            "failure": "transport" if calls == 1 else None,
+        }
+
+    async def no_wait(seconds: float) -> None:
+        pass
+
+    monkeypatch.setattr(compare_mock, "tunnel", local_tunnel)
+    monkeypatch.setattr(compare_mock, "attempt", transient_then_pass)
+    monkeypatch.setattr(compare_mock.asyncio, "sleep", no_wait)
+    out = tmp_path / "rows.jsonl"
+    assert (
+        await compare_mock.main(
+            [
+                "--only",
+                "mock-order-pause",
+                "--arms",
+                "browser-use",
+                "--repeat",
+                "1",
+                "--repeat-offset",
+                "2",
+                "--concurrency",
+                "1",
+                "--out",
+                str(out),
+            ]
+        )
+        == 0
+    )
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    outages = [json.loads(line) for line in out.with_suffix(".outages.jsonl").read_text().splitlines()]
+    assert calls == 2 and len(rows) == 1 and len(outages) == 1
+    assert rows[0]["passed"] and rows[0]["repeat"] == 2 and rows[0]["retries"] == 1
+    assert outages[0]["normalized_status"] == "unavailable"

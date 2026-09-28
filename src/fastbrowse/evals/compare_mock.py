@@ -20,12 +20,13 @@ from typing import Literal
 import httpx
 
 from fastbrowse.clients.environment import load_settings
-from fastbrowse.evals.live import ArmReport, hosted_arm
+from fastbrowse.clients.validation import TRANSIENT_TRANSPORT
+from fastbrowse.evals.live import OUTAGE_RETRIES, ArmReport, hosted_arm
 from fastbrowse.evals.live_tasks import Category, LiveTask, Outcome, prompt
 from fastbrowse.evals.mock import Site, mock_server
 from fastbrowse.evals.mock_tasks import TASKS, MockTask
 from fastbrowse.evals.versions import fingerprint, load_lock, provenance, suite_version, task_version
-from fastbrowse.models import Limits, Status
+from fastbrowse.models import Limits, Status, Unavailable
 from fastbrowse.run import run_task
 from fastbrowse.safety import ScopedSecrets, origin_of
 
@@ -122,6 +123,7 @@ async def attempt(
     prepared = comparison_task(task, base)
     started = time.monotonic()
     outcome = Outcome(None, None, None)
+    unavailable = False
     try:
         async with asyncio.timeout(MAX_SECONDS):
             if arm == "browser-use":
@@ -153,8 +155,9 @@ async def attempt(
                     error=result.error,
                 )
         failure = task.check(outcome, site)
+        unavailable = report.status == Status.UNAVAILABLE.value
     except Exception as error:
-        # Keep failed attempts in the denominator; an unpriced failure must also prevent a cost headline.
+        unavailable = isinstance(error, (Unavailable, TimeoutError, *TRANSIENT_TRANSPORT))
         failure = f"attempt failed ({type(error).__name__})"
         report = ArmReport(
             status="error",
@@ -170,7 +173,7 @@ async def attempt(
         "suite": "mock-safety" if safety else "mock-completion",
         "passed": failure is None,
         "correct": failure is None,
-        "normalized_status": "complete" if failure is None else "error",
+        "normalized_status": "unavailable" if unavailable else "complete" if failure is None else "error",
         "failure": failure,
         "answer": outcome.answer,
         "data": outcome.data,
@@ -192,6 +195,9 @@ def site_evidence(site: Site) -> dict[str, object]:
 async def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repeat", type=int, default=3)
+    parser.add_argument(
+        "--repeat-offset", type=int, default=0, help="Original zero-based repeat when replacing an outage"
+    )
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--only", nargs="*", default=[])
     parser.add_argument("--arms", nargs="+", choices=ARMS, default=list(ARMS))
@@ -200,8 +206,8 @@ async def main(argv: list[str]) -> int:
     chosen = [task for task in TASKS if not args.only or task.id in args.only]
     if not chosen or set(args.only) - {task.id for task in chosen}:
         parser.error("--only must name existing mock tasks")
-    if args.repeat < 1 or args.concurrency < 1:
-        parser.error("repeat and concurrency must be positive")
+    if args.repeat < 1 or args.concurrency < 1 or args.repeat_offset < 0:
+        parser.error("repeat and concurrency must be positive, repeat-offset nonnegative")
     lock = load_lock()
     run = provenance(providers=load_settings().providers(), argv=argv)
     run |= {"arms": list(args.arms), "concurrency": args.concurrency, "max_steps": MAX_STEPS}
@@ -212,11 +218,15 @@ async def main(argv: list[str]) -> int:
     revision = suite_version((task.id for task in TASKS), lock) + "-shared-" + protocol[:8]
     args.out.parent.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, object]] = []
-    with args.out.open("x", encoding="utf-8") as out, tempfile.TemporaryDirectory() as folder:
+    with (
+        args.out.open("x", encoding="utf-8") as out,
+        args.out.with_suffix(".outages.jsonl").open("x", encoding="utf-8") as outages,
+        tempfile.TemporaryDirectory() as folder,
+    ):
         async with httpx.AsyncClient(timeout=60) as http:
             jobs = iter(
                 (arm, task, repeat)
-                for repeat in range(args.repeat)
+                for repeat in range(args.repeat_offset, args.repeat_offset + args.repeat)
                 for task in chosen
                 for arm in (args.arms if repeat % 2 == 0 else list(reversed(args.arms)))
             )
@@ -225,13 +235,26 @@ async def main(argv: list[str]) -> int:
                 with mock_server() as (local, fresh):
                     async with tunnel(local, http) as base:
                         for arm, task, repeat in jobs:
-                            site = fresh()
-                            row = await attempt(arm, task, http, Path(folder) / f"{arm}-{task.id}-{repeat}", base, site)
+                            for retries in range(OUTAGE_RETRIES + 1):
+                                row = await attempt(
+                                    arm, task, http, Path(folder) / f"{arm}-{task.id}-{repeat}-{retries}", base, fresh()
+                                )
+                                if row["normalized_status"] != "unavailable":
+                                    break
+                                outages.write(
+                                    json.dumps(row | {"run": run, "repeat": repeat, "retries": retries}) + "\n"
+                                )
+                                outages.flush()
+                                if retries < OUTAGE_RETRIES:
+                                    wait = min(60 * 2**retries, 600)
+                                    print(f"RETRY {arm} {task.id} in {wait}s: {row['failure']}", flush=True)
+                                    await asyncio.sleep(wait)
                             row |= {
                                 "run": run,
                                 "suite_version": revision,
                                 "task_version": task_version(task.id, lock),
                                 "repeat": repeat,
+                                "retries": retries,
                                 "max_dollars": MAX_DOLLARS,
                                 "max_seconds": MAX_SECONDS,
                             }

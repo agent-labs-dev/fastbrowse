@@ -568,8 +568,16 @@ between repeats. Both arms have a $2 configured spend cap and a 300-second timeo
 40-step cap; the hosted Browser Use API exposes no equivalent. Browser charges and cap enforcement differ
 between products, so these are documented limits rather than identical internal accounting. Timings include
 browser startup and end at the answer using the live harness's existing measurement. Cost includes browser
-charges when the provider reports them. Failures remain in the denominator; unknown costs prevent an aggregate
-cost claim. A fixture tunnel that cannot start aborts the comparison rather than creating an agent failure.
+charges when the provider reports them. Agent failures remain in the denominator; unknown costs prevent an aggregate
+cost claim. Both arms retry provider, transport and unresponsive-session outages with the live harness's
+five-retry backoff. Hard harness timeouts are outages; an agent's own budget or uncertain stop is still scored.
+Each retry resets the fixture and browser. Superseded outages are kept in the adjacent `.outages.jsonl` file,
+not scored. An outage still present after retries is marked unavailable, and the summary matches attempts
+across arms before scoring. A fixture tunnel that cannot start aborts the comparison rather than creating an agent failure.
+
+To replace a verified outage from an earlier run, use `--only TASK --arms ARM --repeat 1 --repeat-offset N`,
+where `N` is its original zero-based repeat. Retain the original attempt as outage evidence and substitute the
+new row for that arm, task and repeat; do not replace agent failures this way.
 
 These are development fixtures used to fix fastbrowse bugs, not an independent held-out benchmark. The shared
 prompt and task fingerprints identify this protocol separately from the fastbrowse-only local mock suite.
