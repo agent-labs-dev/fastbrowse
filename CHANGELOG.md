@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.10] - 2026-09-28
+
 - A supplied `TYPESAFE_API_KEY` selects direct Jev; otherwise OpenRouter is primary, with Vercel AI Gateway
   supported as a backup or explicit primary. `FASTBROWSE_JEV_SOURCE` overrides automatic selection.
 
