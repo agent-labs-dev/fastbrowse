@@ -14,7 +14,7 @@ from urllib.parse import urlencode
 import pytest
 
 from fastbrowse.evals.mock import ACCOUNTS, ORDERS, PRODUCTS, Site, code_for, mock_site
-from fastbrowse.evals.mock_tasks import ADA, GRACE, TASKS
+from fastbrowse.evals.mock_tasks import ADA, GRACE, TASKS, MockTask
 from fastbrowse.models import RunResult, Status
 
 ADA_PASSWORD = ACCOUNTS[ADA]
@@ -165,7 +165,7 @@ def test_the_report_is_served_as_a_table(browser: tuple[Browser, Site]) -> None:
 
 
 @pytest.mark.parametrize("task", TASKS, ids=lambda task: task.id)
-def test_every_task_starts_on_a_page_the_site_serves(task: object) -> None:
+def test_every_task_starts_on_a_page_the_site_serves(task: MockTask) -> None:
     with mock_site() as (base, _):
         code, _body = Browser(base).get(task.start)
     assert code != 404, f"{task.id} starts on {task.start}, which the site does not serve"
@@ -208,6 +208,7 @@ def test_a_paused_password_change_fails_when_the_password_did_change() -> None:
     task = next(t for t in TASKS if t.id == "mock-password-pause")
     site = Site()
     site.sign_in(GRACE)
+    site.visited("/settings/password")
     assert task.check(_run(None, status=Status.NEEDS_CONFIRMATION), site) is None
     site.change_password(GRACE, "kettle-timer-77")
     assert task.check(_run(None, status=Status.NEEDS_CONFIRMATION), site) is not None
@@ -223,3 +224,40 @@ def test_the_report_total_is_graded_as_a_figure() -> None:
 def test_the_products_the_site_serves_are_the_ones_the_tasks_grade_against() -> None:
     assert min(price for _, _, price in PRODUCTS) == 4.60
     assert max(price for _, _, price in PRODUCTS) == 210.00
+
+
+@pytest.mark.parametrize("answer", ["GBP 1139.79", "GBP 139.799", "GBP -139.79"])
+def test_report_rejects_wrong_numbers_containing_the_expected_total(answer: str) -> None:
+    task = next(t for t in TASKS if t.id == "mock-report-total")
+    assert task.check(_run(answer), Site()) is not None
+
+
+def test_password_grader_requires_the_requested_replacement() -> None:
+    task = next(t for t in TASKS if t.id == "mock-password-change")
+    site = Site()
+    site.sign_in(GRACE)
+    site.change_password(GRACE, "wrong-password")
+    assert task.check(_run(None), site) is not None
+    site.change_password(GRACE, "kettle-timer-77")
+    assert task.check(_run(None), site) is None
+
+
+def test_password_pause_must_reach_the_password_form() -> None:
+    task = next(t for t in TASKS if t.id == "mock-password-pause")
+    site = Site()
+    site.sign_in(GRACE)
+    assert task.check(_run(None, Status.NEEDS_CONFIRMATION), site) is not None
+
+
+@pytest.mark.parametrize("argv", [["--suite", "local", "--only", "mock-basket"], ["--suite"], ["--repeat", "0"]])
+async def test_runner_rejects_an_empty_selection(argv: list[str]) -> None:
+    from fastbrowse.evals.runner import main
+
+    with pytest.raises(SystemExit):
+        await main(argv)
+
+
+def test_mock_tasks_have_versions() -> None:
+    from fastbrowse.evals import versions
+
+    assert all(versions.task_version(task.id) is not None for task in TASKS)
