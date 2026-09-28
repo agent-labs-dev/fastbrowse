@@ -22,3 +22,12 @@ def test_transient_time_counts_overlapping_calls_once_and_only_within_the_run() 
     events = [span(4.0, 6.0), span(2.0, 5.0), span(-3.0, -1.0), {"event": "request_retry"}, "a message"]
     assert transient_seconds(events, 0.0, 10.0) == pytest.approx(4.0)
     assert transient_seconds(events, 0.0, 3.0) == pytest.approx(1.0)
+
+
+def test_budget_stop_names_the_exhausted_limit() -> None:
+    ledger = Ledger(Limits(max_steps=1))
+    ledger.steps = 1
+    with pytest.raises(BudgetExceeded) as error:
+        ledger.check()
+    assert error.value.budget.resource == "steps"
+    assert error.value.budget.limit == 1

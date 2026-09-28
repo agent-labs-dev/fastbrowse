@@ -42,6 +42,7 @@ from fastbrowse.models import (
     UNTRUSTED,
     Attachment,
     Authorization,
+    BudgetStop,
     Citation,
     CostComponent,
     CostLine,
@@ -520,10 +521,17 @@ class Agent:
             except TimeoutError:
                 if not deadline.expired():
                     raise
+                assert ledger.limits.max_seconds is not None
                 limit = f"time limit {ledger.limits.max_seconds}s reached"
-                return self._result(state, ledger, Status.BUDGET_EXCEEDED, error=limit)
+                return self._result(
+                    state,
+                    ledger,
+                    Status.BUDGET_EXCEEDED,
+                    error=limit,
+                    budget=BudgetStop(resource="seconds", limit=ledger.limits.max_seconds),
+                )
             except BudgetExceeded as error:
-                return self._result(state, ledger, Status.BUDGET_EXCEEDED, error=str(error))
+                return self._result(state, ledger, Status.BUDGET_EXCEEDED, error=str(error), budget=error.budget)
             except NotesTooLarge as error:
                 notes = state.notes if state else Notes()
                 partial = partial_answer(notes, self._config.observation.working_notes_chars)
@@ -2802,10 +2810,12 @@ class Agent:
         evidence: tuple[Evidence, ...] = (),
         citations: tuple[Citation, ...] = (),
         error: str | None = None,
+        budget: BudgetStop | None = None,
     ) -> RunResult:
         observed = self._raw_observation or self._observed
         return RunResult(
             status=status,
+            budget=budget,
             answer=answer,
             data=data,
             evidence=evidence,

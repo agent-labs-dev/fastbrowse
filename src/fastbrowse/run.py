@@ -196,7 +196,8 @@ async def run_task(
                     cost=CostBreakdown(lines=await head.abandon()),
                     artifacts=session.artifacts if session is not None else (),
                 )
-                result = result.model_copy(update={"status": status, "error": str(exc)})
+                # `budget` names the limit a budget_exceeded run hit, and means nothing under another status.
+                result = result.model_copy(update={"status": status, "error": str(exc), "budget": None})
             finally:
                 # A run that never began leaves its head start running; one that did has discarded it already.
                 await head.discard()

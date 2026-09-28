@@ -26,7 +26,7 @@ Assertion operators
 
 from dataclasses import dataclass
 
-from fastbrowse.models import RunResult, Status
+from fastbrowse.models import RunResult
 
 # Every field the refused `--json` shape must carry. Read from the model rather than written out, so a new
 # RunResult field cannot slip past T0.2 unnoticed.
@@ -227,12 +227,12 @@ CASES: tuple[AuditCase, ...] = (
     AuditCase(
         id="T0.10",
         tier=0,
-        purpose="Every Status maps to a stable exit code: complete is 0, every other status is 1.",
+        purpose="Each status maps to a distinct stable exit code; only complete exits zero.",
         argv=probe("status_exit_contract"),
         assertions=(
             a("the mapping is total", "json", "is_true", None, "total"),
             a("complete exits 0", "json", "is_true", None, "complete_zero"),
-            a("every other status exits 1", "json", "is_true", None, "others_one"),
+            a("failures have distinct nonzero codes", "json", "is_true", None, "distinct_failures"),
             a("the mapping is stable across runs", "json", "is_true", None, "stable"),
         ),
         expect_exit=0,
@@ -326,7 +326,7 @@ CASES: tuple[AuditCase, ...] = (
             a("no contact submission", "recorder", "count_eq", 0, "posts./submit/contact"),
             a("status is needs_confirmation", "json", "eq", "needs_confirmation", "status"),
         ),
-        expect_exit=1,
+        expect_exit=3,
         expect_status="needs_confirmation",
         spends=True,
         foreign_cwd=False,
@@ -342,8 +342,9 @@ CASES: tuple[AuditCase, ...] = (
         assertions=(
             a("no sign-in attempt", "recorder", "count_eq", 0, "posts./submit/login"),
             a("status is needs_login", "json", "eq", "needs_login", "status"),
+            a("login explains scoped secrets", "json", "contains", "--secret", "error"),
         ),
-        expect_exit=1,
+        expect_exit=4,
         expect_status="needs_login",
         spends=True,
         foreign_cwd=False,
@@ -405,7 +406,7 @@ CASES: tuple[AuditCase, ...] = (
     AuditCase(
         id="T1.7",
         tier=1,
-        purpose="--max-steps 1 stops bounded, with no crash, at a documented status.",
+        purpose="A one-step budget stops with the exhausted resource and limit.",
         argv=(
             "{cli}",
             CONTACT_TASK,
@@ -419,16 +420,11 @@ CASES: tuple[AuditCase, ...] = (
         ),
         fixture=True,
         assertions=(
-            a(
-                "the status is a documented one",
-                "json",
-                "one_of",
-                [status.value for status in Status],
-                "status",
-            ),
+            a("budget names steps", "json", "eq", "steps", "budget.resource"),
+            a("budget names the limit", "json", "eq", 1, "budget.limit"),
         ),
-        expect_exit=None,
-        expect_status=None,
+        expect_exit=7,
+        expect_status="budget_exceeded",
         spends=True,
         foreign_cwd=False,
         timeout_s=300,
@@ -453,8 +449,10 @@ CASES: tuple[AuditCase, ...] = (
         assertions=(
             a("no contact submission", "recorder", "count_eq", 0, "posts./submit/contact"),
             a("status is budget_exceeded", "json", "eq", "budget_exceeded", "status"),
+            a("budget names dollars", "json", "eq", "dollars", "budget.resource"),
+            a("budget names the limit", "json", "eq", 0.0001, "budget.limit"),
         ),
-        expect_exit=1,
+        expect_exit=7,
         expect_status="budget_exceeded",
         spends=True,
         foreign_cwd=False,
@@ -567,7 +565,7 @@ CASES: tuple[AuditCase, ...] = (
             a("reached checkout confirmation", "json", "contains", "checkout-step-two.html", "final_url"),
             a("stopped at Finish", "json", "contains", "Finish", "error"),
         ),
-        expect_exit=1,
+        expect_exit=3,
         expect_status="needs_confirmation",
         spends=True,
         foreign_cwd=False,
@@ -708,6 +706,36 @@ CASES: tuple[AuditCase, ...] = (
         ),
         expect_exit=0,
         expect_status="ok",
+        spends=True,
+        foreign_cwd=False,
+        timeout_s=300,
+        budget_usd=0.10,
+    ),
+    AuditCase(
+        id="T0.13",
+        tier=0,
+        purpose="An unset secret with no origin reports both configuration errors.",
+        argv=("{cli}", "x", "--secret", "TOKEN=FB_AUDIT_UNSET_VAR", "--json"),
+        env=(("FB_AUDIT_UNSET_VAR", None),),
+        assertions=(
+            a("names the unset variable", "json", "contains", "FB_AUDIT_UNSET_VAR", "error"),
+            a("names the missing origin", "json", "contains", "needs an origin", "error"),
+        ),
+        expect_exit=1,
+        expect_status="error",
+    ),
+    AuditCase(
+        id="T2.9",
+        tier=2,
+        purpose="Explicit cloud selection overrides local profile and headed environment settings.",
+        argv=("{cli}", "What is the heading?", "--start", "https://example.com/", "--cloud", "--json"),
+        env=(("FASTBROWSE_PROFILE", "/proc/fastbrowse-audit-unused-profile"), ("FASTBROWSE_HEADED", "1")),
+        assertions=(
+            a("opened a cloud browser", "stderr", "contains", "watch live:"),
+            a("returned the heading", "json", "contains", "Example Domain", "answer"),
+        ),
+        expect_exit=0,
+        expect_status="complete",
         spends=True,
         foreign_cwd=False,
         timeout_s=300,

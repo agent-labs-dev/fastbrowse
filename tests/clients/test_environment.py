@@ -31,11 +31,11 @@ def settings(**values: Any) -> Settings:
         ({"OPENROUTER_API_KEY": "o"}, "https://openrouter.ai/api/v1/systemone"),
         (
             {"OPENROUTER_API_KEY": "o", "TYPESAFE_API_KEY": "t", "AI_GATEWAY_API_KEY": "g"},
-            "https://openrouter.ai/api/v1/systemone",
+            "https://api.typesafe.ai/v1/systemone",
         ),
         (
-            {"OPENROUTER_API_KEY": "o", "TYPESAFE_API_KEY": "t", "jev_source": JevSource.TYPESAFE},
-            "https://api.typesafe.ai/v1/systemone",
+            {"OPENROUTER_API_KEY": "o", "TYPESAFE_API_KEY": "t", "jev_source": JevSource.OPENROUTER},
+            "https://openrouter.ai/api/v1/systemone",
         ),
         ({"TYPESAFE_API_KEY": "t", "AI_GATEWAY_API_KEY": "g"}, "https://api.typesafe.ai/v1/systemone"),
         (

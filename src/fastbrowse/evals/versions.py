@@ -232,7 +232,7 @@ def all_tasks() -> tuple[dict[str, tuple[Any, ...]], tuple[Any, ...]]:
 _KEPT = ("arm", "task", "repeat", "category", "suite", "suite_version", "task_version", "status",
          "normalized_status", "task_successful", "passed", "correct",
          "seconds", "dollars", "retries", "failure", "model", "text_model", "transient_seconds", "at",
-         "answered", "session_seconds")  # fmt: skip
+         "answered", "session_seconds", "replaces_run_id")  # fmt: skip
 _RUN_KEPT = ("run_id", "run_started", "fastbrowse_version", "git_sha", "git_dirty", "providers", "max_steps",
              "concurrency", "jev_ultrafast", "arms", "python", "argv")  # fmt: skip
 
@@ -440,7 +440,7 @@ def _paired(per_arm: Mapping[str, list[Mapping[str, Any]]]) -> list[Mapping[str,
 
 
 def _pass(row: Mapping[str, Any]) -> tuple[object, int]:
-    return (row.get("run") or {}).get("run_id"), row["repeat"]
+    return row.get("replaces_run_id") or (row.get("run") or {}).get("run_id"), row["repeat"]
 
 
 def results_table(release: str, rows: Sequence[Mapping[str, Any]]) -> str:
@@ -846,9 +846,41 @@ def render_docs(text: str) -> str:
 
 
 def render_readme(text: str) -> str:
-    """The README headline from published rows, falling back to the recorded historical aggregates."""
-    newest = published()[:1]
-    return _render(text, {"headline": headline(*newest[0]) if newest else legacy_docs(headline_only=True)}, "README.md")
+    """Keep live-site and controlled-fixture comparisons separate, from the same published rows."""
+    releases = published()
+    live = [(release, [row for row in rows if not row["suite"].startswith("mock-")]) for release, rows in releases]
+    newest = [(release, rows) for release, rows in live if rows][:1]
+    live_text = headline(*newest[0]) if newest else legacy_docs(headline_only=True)
+    mocks = [(release, [row for row in rows if row["suite"].startswith("mock-")]) for release, rows in releases]
+    newest_mock = next(((release, rows) for release, rows in mocks if rows), None)
+    if newest_mock is not None:
+        release, rows = newest_mock
+        day = max(row["run"]["run_started"][:10] for row in rows)
+        lines = [
+            "### Controlled mock-site comparison",
+            "",
+            f"Release {release}, {day}. Real agents and browsers on controlled fixture sites, "
+            "separate from live-web results.",
+            "",
+            "| Suite | Agent | Passed | Median cost | Median time |",
+            "|:--|:--|:--|:--|:--|",
+        ]
+        for (suite, _revision), suite_rows in _by_suite(rows).items():
+            for comparison in _by_comparison(suite_rows):
+                for arm, arm_rows in _by_arm(comparison.scored).items():
+                    stats = _arm_stats(arm_rows)
+                    lines.append(
+                        f"| `{suite}` | {_label(arm)} | {stats['passed']} | "
+                        f"{stats['median cost']} | {stats['median time']} |"
+                    )
+        lines += [
+            "",
+            "Confirmation gates are scored separately from task completion. Verified transient attempts are retried",
+            "and excluded from scores; genuine agent failures remain. Full protocol and attempt records are in",
+            "[docs/evals.md](docs/evals.md#stateful-mock-comparison).",
+        ]
+        live_text += "\n\n" + "\n".join(lines)
+    return _render(text, {"headline": live_text}, "README.md")
 
 
 def main(argv: list[str]) -> int:

@@ -54,6 +54,7 @@ def settings(primary: JevSource | None, *, direct_key: bool = True) -> Settings:
     ("source_setting", "direct_key"),
     [
         (None, True),
+        (None, False),
         (JevSource.OPENROUTER, True),
         (JevSource.TYPESAFE, True),
         (JevSource.GATEWAY, True),
@@ -65,7 +66,7 @@ async def test_exhausted_primary_switches_once_and_each_run_starts_fresh(
     source_setting: JevSource | None, direct_key: bool, status: int
 ) -> None:
     seen: list[JevSource] = []
-    primary = source_setting or JevSource.OPENROUTER
+    primary = source_setting or (JevSource.TYPESAFE if direct_key else JevSource.OPENROUTER)
     backup = (
         (JevSource.TYPESAFE if direct_key else JevSource.OPENROUTER)
         if primary is JevSource.GATEWAY

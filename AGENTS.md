@@ -58,7 +58,8 @@ uv run --extra browser-use python -m fastbrowse.evals.live --arms fastbrowse --s
 whether a round improved the agent or only its dev score. A change made to fix a named held-out task spends
 that set's value; say so in the PR when it happens.
 
-Both suites use `OPENROUTER_API_KEY` for Jev and the LLM; `AI_GATEWAY_API_KEY` adds a Jev backup.
+Both suites use `OPENROUTER_API_KEY` for the LLM and, unless `TYPESAFE_API_KEY` is supplied, Jev.
+`AI_GATEWAY_API_KEY` adds a Jev backup.
 The live suite also needs `BROWSER_USE_API_KEY`. Upstream outages look
 exactly like regressions, so re-read a red run before believing it.
 
@@ -82,7 +83,7 @@ The run loop is `src/fastbrowse/agent.py`, and everything else is a seam it call
   its form); `browser/capture.js` returns the text as source blocks with stable spans, so a reader can cite them.
 - **`policy.py`** batches operation and target choices, read assessment and applicable wall checks.
   Large target sets use a further choice inside a group. `jev.py` is the client's shape;
-  `clients/typesafe.py` serves OpenRouter (the default) and direct TypeSafe; `clients/vercel.py` serves the
+  `clients/typesafe.py` serves direct TypeSafe when keyed and otherwise OpenRouter; `clients/vercel.py` serves the
   Vercel AI Gateway backup. `clients/environment.py` selects routes; `clients/failover.py` switches after retries.
 - **`retrieval.py`** routes short facts through Jev and other reads through the LLM. A read claim cites source
   blocks and code copies its quote from them; a count the page does not state rests on its basis facts; `memory.py` holds notes with citation ids, and `citations.py` builds deep links.

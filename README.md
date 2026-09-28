@@ -16,9 +16,6 @@ Jev chooses each action, an LLM plans and reads, and code owns verification, saf
 
 </div>
 
-> **Warning**  
-> This project is highly experimental and not recommended for production use yet.
-
 ---
 
 ## Why
@@ -81,6 +78,21 @@ Suite `stretch-heldout` `0ab6d8fe`: fastbrowse against Browser Use agent, on the
 Each arm made 9 attempts.
 
 7 tasks graded on fastbrowse alone are in [docs/evals.md](docs/evals.md#results).
+
+### Controlled mock-site comparison
+
+Release 0.5.9, 2026-09-28. Real agents and browsers on controlled fixture sites, separate from live-web results.
+
+| Suite | Agent | Passed | Median cost | Median time |
+|:--|:--|:--|:--|:--|
+| `mock-completion` | fastbrowse | 53/54 | $0.0065 | 22.8s |
+| `mock-completion` | Browser Use agent | 54/54 | $0.2543 | 46.0s |
+| `mock-safety` | fastbrowse | 6/6 | $0.0103 | 30.4s |
+| `mock-safety` | Browser Use agent | 6/6 | $0.5763 | 85.7s |
+
+Confirmation gates are scored separately from task completion. Verified transient attempts are retried
+and excluded from scores; genuine agent failures remain. Full protocol and attempt records are in
+[docs/evals.md](docs/evals.md#stateful-mock-comparison).
 <!-- /evals:headline -->
 
 Compare rows only at matching task versions. See [eval results and workflow](docs/evals.md).
@@ -109,6 +121,10 @@ export BROWSER_USE_API_KEY=...  # the cloud browser; or pass --local to use Chro
 uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
 
+Jev uses direct TypeSafe when `TYPESAFE_API_KEY` is supplied; otherwise OpenRouter is primary.
+Vercel AI Gateway is supported as a backup or an explicit primary. `FASTBROWSE_JEV_SOURCE` overrides
+automatic selection; see [provider routing](docs/jev.md#provider-failover). The LLM uses OpenRouter.
+
 `uvx` runs the published package in an isolated cached environment. `uv tool install fastbrowse` keeps it on your
 PATH, and `uv add fastbrowse` puts it in a project. Service keys can live in a `.env` file in the working directory;
 [`.env.example`](.env.example) shows the settings. Values named by `--secret` must be in the process environment.
@@ -128,6 +144,7 @@ the quotes behind the answer, and cost by component.
 | Flag | Effect |
 |:--|:--|
 | `--start URL` | the page to open first; worked out from the task when omitted |
+| `--cloud` | force cloud Chrome even when `FASTBROWSE_PROFILE` or `FASTBROWSE_HEADED` is set |
 | `--local` | use local Chrome instead of a Browser Use Cloud browser. Cloud is the default: it passes bot checks a fresh Chrome fails, and prints a URL to watch the run live |
 | `--headed` | show the local Chrome window (implies `--local`) |
 | `--profile DIR` | keep the local Chrome profile in `DIR`, so a site signed into there stays signed in (implies `--local`) |
@@ -190,21 +207,26 @@ Override with `FASTBROWSE_LLM_MODEL` (every purpose), `FASTBROWSE_LLM_MODEL_<PUR
 
 ### Results
 
-The exit code is 0 only for `complete`.
+The exit code identifies the run status. Configuration refusals exit 1; invalid command syntax exits 2.
+Programs that only check zero versus nonzero continue to work.
 
-| Status | Meaning |
-|:--|:--|
-| `complete` | every information requirement is backed by a quote, and every action is confirmed on the page |
-| `unverified` | it believes it finished but could not back every claim |
-| `needs_confirmation` | stopped before an irreversible action; re-run with `--authorize` |
-| `needs_login` | a sign-in wall that no `--secret` covers |
-| `blocked` | a bot check (a CAPTCHA) that did not clear; not a sign-in, so no secret passes it |
-| `needs_input` | a required value or file is missing, or an upload exceeds the configured size limit |
-| `stuck` | recovery ran out without reaching a page state the run had not seen |
-| `budget_exceeded` | a step, call, time or dollar limit was reached |
-| `observation_limit` | the page or required evidence cannot fit the configured prompt budget |
-| `unavailable` | a model or browser provider stayed unavailable through every retry; the same run later may pass |
-| `error` | a model or browser failure |
+| Status | Exit | Meaning |
+|:--|--:|:--|
+| `complete` | 0 | every information requirement is backed by a quote, and every action is confirmed on the page |
+| `unverified` | 10 | it believes it finished but could not back every claim |
+| `needs_confirmation` | 3 | stopped before an irreversible action; re-run with `--authorize` |
+| `needs_login` | 4 | a sign-in wall that no `--secret` covers |
+| `blocked` | 6 | a bot check (a CAPTCHA) that did not clear; not a sign-in, so no secret passes it |
+| `needs_input` | 5 | a required value or file is missing, or an upload exceeds the configured size limit |
+| `stuck` | 9 | recovery ran out without reaching a page state the run had not seen |
+| `budget_exceeded` | 7 | a step, call, time or dollar limit was reached |
+| `observation_limit` | 11 | the page or required evidence cannot fit the configured prompt budget |
+| `unavailable` | 8 | a model or browser provider stayed unavailable through every retry; the same run later may pass |
+| `error` | 1 | a model or browser failure |
+
+A `budget_exceeded` JSON result includes `budget.resource` (`steps`, `seconds`, `dollars`, `jev_calls` or
+`llm_calls`) and `budget.limit`. Other results have `budget: null`. The embedding and MCP APIs carry the same
+optional object, so callers can identify the exhausted limit without parsing an error message.
 
 ## How it works
 
@@ -295,11 +317,8 @@ tab and are acknowledged after delivery, with no fixed frame rate. Only the late
 Handler failures are logged without stopping the run. Live frames and recordings are held back while a
 resolved secret may show on the page, as PNG step frames are. No handler means no live capture.
 
-Jev defaults to OpenRouter using the same `OPENROUTER_API_KEY` as the LLM. If `AI_GATEWAY_API_KEY` is set,
-a retryable HTTP failure that exhausts retries switches the run to the Vercel AI Gateway.
-`FASTBROWSE_JEV_SOURCE=openrouter`, `typesafe` or `gateway` selects the first provider explicitly.
-`FASTBROWSE_JEV_BASE_URL` or an explicit `FASTBROWSE_JEV_MODEL` disables failover.
-See [Jev routing](docs/jev.md#provider-failover) for fallback order and model defaults.
+Jev uses direct TypeSafe when keyed, otherwise OpenRouter, with Vercel AI Gateway also supported.
+See [Jev routing](docs/jev.md#provider-failover) for key precedence, overrides and failover.
 Any other source
 can be passed as `run_task(jev=...)`, implementing async `evaluate(state, questions)`; `run_task(llm=...)`
 accepts an implementation of the `LLMClient.generate(...)` protocol in `fastbrowse.llm`.
