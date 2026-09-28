@@ -109,6 +109,21 @@ async def test_picks_target_for_chosen_operation() -> None:
     assert decision.login_required is None
 
 
+async def test_jev_can_choose_to_scroll_back_up_to_evidence() -> None:
+    jev = ScriptedJev({"operation": "scroll_up"})
+    decision = await decide(
+        jev,
+        observation(()),
+        context(task="Show the article headline", subgoal="Scroll up from the footer to the headline"),
+        Config(),
+    )
+    assert decision.operation.value == "scroll_up"
+    assert decision.target is None
+    operation = jev.requests[-1]["operation"]
+    assert isinstance(operation, ChoiceQuestion)
+    assert "scroll_up" in operation.criteria
+
+
 @pytest.mark.parametrize("assessment", list(ReadAssessment))
 async def test_read_assessment_is_independent_of_the_chosen_action(assessment: ReadAssessment) -> None:
     jev = ScriptedJev({"operation": "click", "click_target": "b0", "read_assessment": assessment.value})

@@ -71,6 +71,28 @@ async def loaded_page(page: CdpPage, main_site: str) -> CdpPage:
     return page
 
 
+async def test_scroll_can_return_to_content_above_the_viewport(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/long-list.html")
+    session_id = browser_session.active_session_id
+    down = await page.act(Action(operation=Operation.SCROLL), await page.observe())
+    assert down.outcome is StepOutcome.EXECUTED
+
+    async def away_from_top() -> bool:
+        return await eval_value(browser_session, session_id, "window.scrollY") > 200
+
+    await wait_until(away_from_top)
+    before = await eval_value(browser_session, session_id, "window.scrollY")
+    up = await page.act(Action(operation=Operation("scroll_up")), await page.observe())
+    assert up.outcome is StepOutcome.EXECUTED
+
+    async def returned_upward() -> bool:
+        return await eval_value(browser_session, session_id, "window.scrollY") < before - 200
+
+    await wait_until(returned_upward)
+
+
 async def test_observe_lists_controls_and_masks_password(loaded_page: CdpPage) -> None:
     obs = await loaded_page.observe()
     sign_in = find(obs, "Sign in")

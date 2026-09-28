@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- The agent can scroll up to revisit content above the viewport. Recovery no longer sends every scroll downward.
+
 ## [0.5.10] - 2026-09-28
 
 - Required native radio groups stop blocking once an option in the same form is selected.

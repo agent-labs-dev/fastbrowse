@@ -36,6 +36,7 @@ def may_be_irreversible(operation: Operation, control: Control | None) -> bool:
             | Operation.SELECT
             | Operation.ESCAPE
             | Operation.SCROLL
+            | Operation.SCROLL_UP
             | Operation.BACK
             | Operation.SWITCH_TAB
             | Operation.UPLOAD

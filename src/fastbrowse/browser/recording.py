@@ -286,6 +286,7 @@ def _describe(step: StepResult) -> str:
             | Operation.ENTER
             | Operation.ESCAPE
             | Operation.SCROLL
+            | Operation.SCROLL_UP
             | Operation.BACK
             | Operation.SWITCH_TAB
             | Operation.UPLOAD

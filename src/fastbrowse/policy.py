@@ -84,7 +84,8 @@ OPERATION_LABELS: Mapping[Operation, str] = {
     Operation.ENTER: "Press Enter in a text field to submit or search for what it already contains.",
     Operation.UPLOAD: "Attach one of the task's files to a file input.",
     Operation.ESCAPE: "Press Escape to close a menu, popup or overlay.",
-    Operation.SCROLL: "Scroll the page to reveal content that is not observed yet.",
+    Operation.SCROLL: "Scroll down the page to reveal content below the viewport.",
+    Operation.SCROLL_UP: "Scroll up the page to return to content above the viewport.",
     Operation.BACK: "Go back to the previous page.",
     Operation.SWITCH_TAB: "Switch to another open tab.",
     Operation.DIALOG: "Respond to the open browser dialog.",
@@ -397,7 +398,14 @@ def _offered_operations(
             case Operation.BACK:
                 if observation.can_go_back:
                     available.append(operation)
-            case Operation.ESCAPE | Operation.SCROLL | Operation.READ | Operation.DONE | Operation.ESCALATE:
+            case (
+                Operation.ESCAPE
+                | Operation.SCROLL
+                | Operation.SCROLL_UP
+                | Operation.READ
+                | Operation.DONE
+                | Operation.ESCALATE
+            ):
                 available.append(operation)
             case Operation.DIALOG:
                 pass

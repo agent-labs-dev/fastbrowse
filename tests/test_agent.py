@@ -835,7 +835,7 @@ async def test_an_exhausted_read_recovers_instead_of_repeating_even_when_jev_is_
     assert next(iter(state.notes.evidence.values())).quote == "Total: $12"
 
 
-@pytest.mark.parametrize("operation", [Operation.READ, Operation.DONE])
+@pytest.mark.parametrize("operation", [Operation.READ, Operation.DONE, Operation.SCROLL_UP])
 async def test_recovery_can_direct_a_page_operation_with_no_control_to_name(operation: Operation) -> None:
     # A Flights run holding every answer was told twice to finish; a dropped DONE left Jev to stall until stuck.
     button = Control(id="next", frame_id=None, role="button", label="Next", operations=frozenset({Operation.CLICK}))
@@ -1259,7 +1259,8 @@ async def test_an_owed_read_is_not_skipped_by_a_budget_the_page_spent_before_the
     assert not state.owes_read
 
 
-async def test_scrolling_controls_in_and_out_of_view_is_not_a_reversal() -> None:
+@pytest.mark.parametrize("operation", [Operation.SCROLL, Operation.SCROLL_UP])
+async def test_scrolling_controls_in_and_out_of_view_is_not_a_reversal(operation: Operation) -> None:
     top = observation((_button("1"), _button("Search"))).model_copy(update={"document_key": "doc"})
     below = observation((_button("Search"),)).model_copy(update={"document_key": "doc"})
     page = Mock(spec=Page)
@@ -1268,7 +1269,8 @@ async def test_scrolling_controls_in_and_out_of_view_is_not_a_reversal() -> None
     state = await run_state()
     agent._settle(state, top)
     for before, after in ((top, below), (below, top), (top, below)):
-        await agent._step(state, before, _code_decision(Operation.SCROLL, None))
+        await agent._step(state, before, _code_decision(operation, None))
+        assert page.act.await_args is not None and page.act.await_args.args[0].operation is operation
         agent._note_effect(state, after)
         agent._settle(state, after)
         assert agent._reversal(state) == (None, True, False)
