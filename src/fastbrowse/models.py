@@ -71,6 +71,7 @@ class Operation(StrEnum):
     ENTER = "enter"
     ESCAPE = "escape"
     SCROLL = "scroll"
+    SCROLL_UP = "scroll_up"
     BACK = "back"
     SWITCH_TAB = "switch_tab"
     UPLOAD = "upload"
@@ -79,6 +80,8 @@ class Operation(StrEnum):
     DONE = "done"
     ESCALATE = "escalate"
 
+
+SCROLLING = frozenset({Operation.SCROLL, Operation.SCROLL_UP})
 
 TARGETED = frozenset(
     {Operation.CLICK, Operation.HOVER, Operation.FILL, Operation.SELECT, Operation.ENTER, Operation.UPLOAD}

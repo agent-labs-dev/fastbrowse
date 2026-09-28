@@ -663,8 +663,8 @@ class CdpPage(Page):
                 return await self._key(target, "Enter", point)
             case Operation.ESCAPE:
                 return await self._key(None, "Escape", None)
-            case Operation.SCROLL:
-                await self._scroll()
+            case Operation.SCROLL | Operation.SCROLL_UP:
+                await self._scroll(action.operation)
                 return StepOutcome.EXECUTED, None
             case Operation.BACK:
                 return await self._back()
@@ -976,10 +976,16 @@ class CdpPage(Page):
         )
         return StepOutcome.EXECUTED, None
 
-    async def _scroll(self) -> None:
+    async def _scroll(self, operation: Operation) -> None:
         session_id = self._session.active_session_id
         await self._session.client.send.Input.dispatchMouseEvent(
-            params={"type": "mouseWheel", "x": 550, "y": 650, "deltaX": 0, "deltaY": 560},
+            params={
+                "type": "mouseWheel",
+                "x": 550,
+                "y": 650,
+                "deltaX": 0,
+                "deltaY": -560 if operation is Operation.SCROLL_UP else 560,
+            },
             session_id=session_id,
         )
 

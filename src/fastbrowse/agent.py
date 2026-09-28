@@ -39,6 +39,7 @@ from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, JevClient, JevError, No
 from fastbrowse.llm import Generation, LLMClient, LLMError, Message
 from fastbrowse.memory import Fact, Notes, NotesTooLarge, shows
 from fastbrowse.models import (
+    SCROLLING,
     UNTRUSTED,
     Attachment,
     Authorization,
@@ -135,7 +136,7 @@ _NOT_ACTING = frozenset({Operation.READ, Operation.DONE})
 _REPEATS_BEFORE_CYCLE = 2
 """Times one action may be taken from one page and still count as progress. Scrolling is exempt: a long page
 takes many scrolls, each of which shows something new."""
-_PAGE_OPERATIONS = frozenset({Operation.READ, Operation.SCROLL, Operation.BACK, Operation.ESCAPE, Operation.DONE})
+_PAGE_OPERATIONS = frozenset({Operation.READ, *SCROLLING, Operation.BACK, Operation.ESCAPE, Operation.DONE})
 """Recovery can direct page operations without a control; directed DONE still requires verification."""
 _CYCLE_SHOWN = 4
 """Actions named when a run arrives back at a page state, the most recent last."""
@@ -217,7 +218,8 @@ class _Recovery(Frozen):
         default=None, description="The index of the one listed control the subgoal acts on, or null if none."
     )
     operation: Operation | None = Field(
-        default=None, description="What the subgoal does to that control, or to the page (read, scroll, back, escape)."
+        default=None,
+        description="Operation on the control or page; scroll goes down and scroll_up goes up.",
     )
     give_up: bool = Field(description="True only when the task cannot progress without the user.")
     needs_input: bool = Field(
@@ -934,7 +936,7 @@ class Agent:
                 raise failure.stop()
         started = time.monotonic()
         state.form_continues = False
-        if decision.operation not in {Operation.FILL, Operation.SCROLL}:
+        if decision.operation not in {Operation.FILL, *SCROLLING}:
             state.form_values.clear()
         facts_before = len(state.notes.facts)
         reason = state.hint if decision.directed else None
@@ -1015,7 +1017,7 @@ class Agent:
             signature = _signature(decision, observation)
             attempt = state.attempts.setdefault(signature, _Attempts())
             attempt.count += 1
-            if decision.operation is not Operation.SCROLL and attempt.count > _REPEATS_BEFORE_CYCLE:
+            if decision.operation not in SCROLLING and attempt.count > _REPEATS_BEFORE_CYCLE:
                 progressed = False
             state.acted_from = observation
             state.pending_link = (
@@ -1467,7 +1469,7 @@ class Agent:
                 return Action(operation=Operation.SWITCH_TAB, tab_id=decision.tab_id)
             case Operation.HOVER:
                 return Action(operation=Operation.HOVER, target_id=_require(target).id)
-            case Operation.ESCAPE | Operation.SCROLL | Operation.BACK:
+            case Operation.ESCAPE | Operation.SCROLL | Operation.SCROLL_UP | Operation.BACK:
                 return Action(operation=decision.operation)
             case Operation.READ | Operation.DONE | Operation.ESCALATE:
                 raise ValueError(f"{decision.operation} is handled by the loop, not dispatched")
@@ -1843,7 +1845,7 @@ class Agent:
     ) -> bool:
         # A read takes in the whole page, so a scroll over one never read only spends steps: Jev judges evidence from
         # the viewport, and scrolled a country list for Mongolia until recovery ran out and the run stopped stuck.
-        unread_scroll = decision.operation is Operation.SCROLL and not any(
+        unread_scroll = decision.operation in SCROLLING and not any(
             key[0] == observation.document_key for key in state.reads
         )
         if decision.operation in _NOT_ACTING or (
@@ -2415,8 +2417,10 @@ class Agent:
                         "# Recovery\nThe browsing agent is not making progress. Diagnose why from the screenshot "
                         "and history, then give one concrete next subgoal: a single operation, naming the index of "
                         "the observed control it acts on, with no alternatives. A read, scroll, back or escape acts "
-                        "on the page and names no control. A read takes in the whole page, so scroll only to reach "
-                        "a control or to load more. When the notes already answer every open requirement, the next "
+                        "on the page and names no control. scroll moves down; scroll_up moves up. "
+                        "A read takes in the whole page, so scroll only to reach a control, load more, or position "
+                        "content the task explicitly asks to see in the viewport. "
+                        "When the notes already answer every open requirement, the next "
                         "subgoal is to finish. Recovery memory records earlier diagnoses and subgoals; "
                         "use the recent steps to judge whether to try another way. "
                         "HTTP failures describe this browser session, not what the site permits in general. "
