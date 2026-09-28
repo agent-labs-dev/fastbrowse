@@ -866,3 +866,34 @@ async def test_hosted_idle_session_stops_after_the_published_reply(monkeypatch: 
     assert stopped.is_set()
     assert outcome.answer == session.output and report.dollars == 0.23
     assert seen["max_cost_usd"] == 2.0
+
+
+async def test_hosted_poll_failure_stops_session_before_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    import browser_use_sdk.v3
+
+    cancelled = asyncio.Event()
+    sessions = SimpleNamespace(
+        get=AsyncMock(side_effect=[SimpleNamespace(live_url=None), httpx.ReadError("poll failed")]),
+        stop=AsyncMock(),
+    )
+
+    class Run:
+        session_id = "poll-failure"
+
+        def __await__(self) -> Any:
+            async def finish() -> None:
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cancelled.set()
+
+            return finish().__await__()
+
+    client = SimpleNamespace(run=lambda *args, **kwargs: Run(), sessions=sessions)
+    monkeypatch.setattr(browser_use_sdk.v3, "AsyncBrowserUse", lambda **kwargs: client)
+    monkeypatch.setattr(live, "load_settings", lambda: SimpleNamespace(browser_key=lambda: "key"))
+    async with httpx.AsyncClient() as http:
+        with pytest.raises(live.Unavailable, match="ReadError"):
+            await live.hosted_arm(task("pypi-newer"), http, record=None, stop_at_answer=True)
+    assert cancelled.is_set()
+    sessions.stop.assert_awaited_once_with("poll-failure")
