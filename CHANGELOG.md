@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.11] - 2026-09-28
+
 - The agent can scroll up to revisit content above the viewport. Recovery no longer sends every scroll downward.
 
 ## [0.5.10] - 2026-09-28
@@ -755,7 +757,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.10...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.11...HEAD
+[0.5.11]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.11
 [0.5.10]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.10
 [0.5.9]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.9
 [0.5.8]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.8
