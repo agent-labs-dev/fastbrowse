@@ -526,8 +526,8 @@ async def _hosted_run(
                         break
         # gather, not await: the SDK raises on output that fails the task's schema, before the session's cost is read.
         await asyncio.gather(finishing, return_exceptions=True)
-    except asyncio.CancelledError:
-        # The attempt's cap cancelled it: the session would otherwise run on, billing, with nothing waiting for it.
+    except (asyncio.CancelledError, Exception):
+        # A cancelled attempt or failed status poll must stop billing before an outage retry starts.
         finishing.cancel()
         await asyncio.gather(finishing, return_exceptions=True)
         if run.session_id is not None:
