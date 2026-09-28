@@ -380,4 +380,6 @@ def test_mock_results_do_not_replace_the_live_site_headline(monkeypatch: pytest.
     monkeypatch.setattr(versions, "published", lambda: [("1.0.1", [mock_row]), ("1.0.0", [live_row])])
     text = versions.render_readme("<!-- evals:headline -->\n<!-- /evals:headline -->")
     assert "released as 1.0.0" in text
-    assert "mock-completion" not in text
+    assert text.index("released as 1.0.0") < text.index("Controlled mock-site comparison")
+    assert "Release 1.0.1" in text
+    assert "`mock-completion`" in text
