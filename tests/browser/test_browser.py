@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import inspect
+import json
 import os
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -839,3 +840,30 @@ async def test_page_javascript_cannot_forge_the_http_status(
     )
     assert (await page.observe()).response_status == 200
     assert await page.response_status() == 200
+
+
+async def test_required_radios_use_their_form_group_validity(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(main_site)
+    markup = (
+        '<form><label>First<input type="radio" name="choice" required checked></label>'
+        '<label>Second<input type="radio" name="choice" required></label>'
+        '<label>Terms<input type="checkbox" required></label></form>'
+        '<form><label>Other form<input type="radio" name="choice" required></label></form>'
+    )
+    await page._evaluate(browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}")
+    observed = await page.observe()
+    assert not find(observed, "First").blocking
+    assert not find(observed, "Second").blocking
+    assert find(observed, "Terms").blocking
+    assert find(observed, "Other form").blocking
+    await page._evaluate(browser_session.active_session_id, "document.querySelector('input').checked = false")
+    observed = await page.observe()
+    assert find(observed, "First").blocking
+    assert find(observed, "Second").blocking
+
+
+async def test_screenshots_match_the_png_frame_contract(page: CdpPage, main_site: str) -> None:
+    await page.navigate(main_site)
+    assert (await page.screenshot()).startswith(b"\x89PNG\r\n\x1a\n")

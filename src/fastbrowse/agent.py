@@ -942,7 +942,9 @@ class Agent:
         typed: str | None = None
         effect_now: str | None = None
         setting = False
+        frames = self._on_event is not None and self._config.step_frames
         if decision.operation is Operation.READ:
+            frame = await self._frame() if frames else None
             progressed, skipped = await self._read(
                 state, capture or await self._capture(), observation, require_all_evidence=require_all_evidence
             )
@@ -966,6 +968,8 @@ class Agent:
                 # Typing nothing into an empty field does nothing. Jev, unsure between wizard steps, picked a page's
                 # search box, the writer found no text for it, and the empty fill was taken three times over.
                 raise _Unsure(f"the task gives no text for {_describe(_require(decision.target))!r}: leave it empty")
+            # A click or Enter can replace this page before the step is recorded.
+            frame = await self._frame() if frames else None
             if action.secret:
                 # Held from the keystrokes on: a page may mirror the value, and only the next reading shows it.
                 self._page.withhold_frames(True)
@@ -1069,7 +1073,7 @@ class Agent:
             page_changed=None if decision.operation is Operation.READ else changed,
             duration_ms=int((time.monotonic() - started) * 1000),
         )
-        await self._record_step(state, step)
+        await self._record_step(state, step, capture_frame=False, frame=frame)
         if progressed and changed:
             # Whether a change moved the run forward depends on where it led, which the next observation shows.
             state.left = state_key(observation)
@@ -1359,7 +1363,6 @@ class Agent:
             state.ledger.steps += 1
         if self._on_event is None:
             return
-        # Taken from the page the step acted on, before the next observation moves it on.
         if capture_frame and self._config.step_frames:
             frame = await self._frame()
         await self._on_event(StepEvent(step=step, frame=frame))

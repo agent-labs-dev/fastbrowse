@@ -29,6 +29,9 @@ something that was never on the page. Every claim in an answer cites a verbatim 
 
 ### Against Browser Use
 
+The published 0.5.8 comparisons excluded slow or retried fastbrowse provider calls that other arms did not expose.
+Those results retain that selection bias; see the [evaluation protocol](docs/evals.md#live-head-to-head) for the corrected grading rule.
+
 <!-- evals:headline -->
 Measured on 2026-09-27 with the build released as 0.5.8: 54 tasks, 303 attempts across all arms, on cloud browsers.
 

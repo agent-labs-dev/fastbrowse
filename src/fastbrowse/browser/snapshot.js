@@ -405,7 +405,9 @@
       source.getAttribute('aria-invalid') === 'true' ||
       (['INPUT', 'SELECT', 'TEXTAREA'].includes(source.tagName) &&
         (source.required || source.getAttribute('aria-required') === 'true') &&
-        !(base.checked ?? (source.value ?? '').trim()))
+        (source.type === 'radio' && source.required
+          ? source.validity.valueMissing
+          : !(base.checked ?? (source.value ?? '').trim())))
     ) {
       base.blocking = true;
     }

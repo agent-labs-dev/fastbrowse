@@ -53,8 +53,8 @@ Through a run the harness also fetches each task site's start page every 15 seco
 Tasks run only on sites that stay up. the-internet.herokuapp.com caused 13 of the 17 site failures in a day's runs, across all six of its tasks, so since 0.5.8 those tasks run on practice.expandtesting.com's copies of the same pages; its login task, which `expandtesting-login` already was, was dropped, and nested frames, which the copy lacks, became `frame-heading`.
 A hosted session Browser Use itself ends with "Task ended unexpectedly." is a Browser Use outage: its agent neither answered nor gave up. A session ending in `error` with any other output is scored as its failure.
 An attempt of any arm still running after 15 minutes is stopped as an outage: the slowest finished attempts took about three minutes.
-A fastbrowse attempt in which any Jev call took over 2 seconds, retries included, is a Jev outage: healthy calls take about half a second at any page size, and no worse than 0.93 seconds in 45 measured. This rule applies to fastbrowse alone, since no other arm's provider calls are visible to the harness.
-From 0.5.8, a fastbrowse attempt in which any provider request failed and was retried (`transient_seconds` above 0) is an outage too, for the same reason.
+From 0.5.10, slow provider calls and recovered request failures stay in the scored attempt, with their full wall time and cost. Trace telemetry cannot turn a completed or failed attempt into an outage.
+Earlier releases excluded fastbrowse attempts with Jev calls over 2 seconds or recovered request failures, although other arms did not expose those measurements. Published rows retain that historical selection bias; the new task versions must not be compared with them as if the grading rules were unchanged.
 An attempt an outage ended is waited out and run again, up to five times over about 25 minutes.
 A row still unavailable after that is recorded but scores nothing, and neither does the same repeat of every other arm at that task: each comparison scores its arms on the same attempts at the same tasks.
 Time runs from the start of an attempt to the agent's answer, all of it counted. Releases up to 0.5.7 subtracted the failed requests and backoff fastbrowse's client measured inside an attempt, which no other arm could; every published time, those releases' included, is now wall time.
@@ -150,33 +150,33 @@ For example, `--only books-mystery-cheapest quotes-einstein-count` selects those
 <!-- evals:tasks:dev -->
 | Task | Category | Version | Asks |
 |---|---|---|---|
-| `books-travel-priciest` | lookup | 5 | Which is the most expensive book in the Travel category, and what does it cost? |
-| `hockey-bruins-1990` | lookup | 5 | How many games did the Boston Bruins win in the 1990 season? |
-| `oscars-2012` | lookup | 5 | Of the 2012 films listed here, which one won Best Picture? |
-| `dynamic-loading` | widget | 6 | Start the example and tell me the text that appears when loading finishes. |
-| `frame-heading` | widget | 2 | Inside the email subscription frame, what heading does the form itself show? |
-| `hover-profile` | widget | 6 | Which user name is revealed when you hover over the second profile picture? |
-| `ruff-release` | lookup | 5 | What is the latest release of ruff on GitHub? |
-| `pizza-order` | checkout | 5 | Order a large pizza with mushroom for Ada Lovelace, telephone 020 7946 0000, email ada@example.com, and submit it. Tell me which size the server received. |
-| `new-window` | widget | 6 | Follow the link that opens a new window and tell me that window's heading. |
-| `countries-mongolia` | lookup | 5 | What population does this page list for Mongolia? |
-| `table-largest-due` | widget | 6 | In the first table, whose amount due is the largest? |
-| `quotes-search` | lookup | 5 | Use the search form to find Albert Einstein's quote tagged success, and tell me what it says. |
-| `quotes-rowling-count` | lookup | 1 | How many quotes by J.K. Rowling are there across the whole site? |
+| `books-travel-priciest` | lookup | 6 | Which is the most expensive book in the Travel category, and what does it cost? |
+| `hockey-bruins-1990` | lookup | 6 | How many games did the Boston Bruins win in the 1990 season? |
+| `oscars-2012` | lookup | 6 | Of the 2012 films listed here, which one won Best Picture? |
+| `dynamic-loading` | widget | 7 | Start the example and tell me the text that appears when loading finishes. |
+| `frame-heading` | widget | 3 | Inside the email subscription frame, what heading does the form itself show? |
+| `hover-profile` | widget | 7 | Which user name is revealed when you hover over the second profile picture? |
+| `ruff-release` | lookup | 6 | What is the latest release of ruff on GitHub? |
+| `pizza-order` | checkout | 6 | Order a large pizza with mushroom for Ada Lovelace, telephone 020 7946 0000, email ada@example.com, and submit it. Tell me which size the server received. |
+| `new-window` | widget | 7 | Follow the link that opens a new window and tell me that window's heading. |
+| `countries-mongolia` | lookup | 6 | What population does this page list for Mongolia? |
+| `table-largest-due` | widget | 7 | In the first table, whose amount due is the largest? |
+| `quotes-search` | lookup | 6 | Use the search form to find Albert Einstein's quote tagged success, and tell me what it says. |
+| `quotes-rowling-count` | lookup | 2 | How many quotes by J.K. Rowling are there across the whole site? |
 <!-- /evals:tasks:dev -->
 
 <!-- evals:tasks:heldout -->
 | Task | Category | Version | Asks |
 |---|---|---|---|
-| `books-mystery-cheapest` | lookup | 5 | Which is the cheapest book in the Mystery category, and what does it cost? |
-| `quotes-einstein-count` | lookup | 5 | How many quotes by Albert Einstein are there across the whole site? |
-| `quotes-js-page2` | lookup | 5 | Who wrote the first quote on the second page? |
-| `crates-serde` | lookup | 5 | What is the latest stable version of the serde crate? |
-| `httpx-requires-python` | lookup | 5 | What is the oldest Python version the latest httpx release supports? |
-| `new-tab-page` | widget | 1 | Follow the link that opens a new tab and tell me the sentence the new page shows. |
-| `countries-namibia-area` | lookup | 1 | What area, in square kilometres, does this page list for Namibia? |
-| `table-total-due` | lookup | 1 | In the second table, what is the total amount due across all of its rows? |
-| `quotes-search-lewis` | lookup | 1 | Use the search form to find C.S. Lewis's quote tagged god, and tell me what it says. |
+| `books-mystery-cheapest` | lookup | 6 | Which is the cheapest book in the Mystery category, and what does it cost? |
+| `quotes-einstein-count` | lookup | 6 | How many quotes by Albert Einstein are there across the whole site? |
+| `quotes-js-page2` | lookup | 6 | Who wrote the first quote on the second page? |
+| `crates-serde` | lookup | 6 | What is the latest stable version of the serde crate? |
+| `httpx-requires-python` | lookup | 6 | What is the oldest Python version the latest httpx release supports? |
+| `new-tab-page` | widget | 2 | Follow the link that opens a new tab and tell me the sentence the new page shows. |
+| `countries-namibia-area` | lookup | 2 | What area, in square kilometres, does this page list for Namibia? |
+| `table-total-due` | lookup | 2 | In the second table, what is the total amount due across all of its rows? |
+| `quotes-search-lewis` | lookup | 2 | Use the search form to find C.S. Lewis's quote tagged god, and tell me what it says. |
 <!-- /evals:tasks:heldout -->
 
 The rule that makes the split worth having: **agent changes are iterated against `dev` only.** `heldout` is run
@@ -208,23 +208,23 @@ Date truth is computed when the attempt runs, and form and date tasks are graded
 <!-- evals:tasks:stretch-dev -->
 | Task | Category | Version | Asks |
 |---|---|---|---|
-| `stretch-wizard-review` | checkout | 5 | In the Automation Practice Lab section, fill out the Multi-Step Wizard: Full Name 'Ada Lovelace', Email 'ada.lovelace@example.com', City 'London', ZIP Code 'SW1A 1AA'. Review your details, submit, and tell me what the page says. |
-| `stretch-date-range-monday` | widget | 6 | Find Date Picker 3, the date range picker. Book a stay starting the next Monday that is strictly after today, for nine nights, then submit. Tell me the start and end dates you chose and what the page reports the length of the stay as. |
-| `stretch-books-nonfiction-five-star` | lookup | 7 | Across every page of the Nonfiction category, which three five-star-rated books are the cheapest, and what does each cost? |
-| `stretch-bstack-apple-google` | widget | 6 | Filter the product list to Apple and Google together. Then remove the Apple filter, so only Google remains. Sort by price lowest to highest, and tell me the two cheapest Google phones and their prices. |
-| `stretch-wizard-correction` | checkout | 6 | In the Live Interactive Form widget, fill First Name 'Priya Sharma', Email 'priya.sharma@example.com', Address '221B Baker Street', City 'Manchester', Language 'Turkish', and check the QA newsletter box. Reach the Review step, then go back and correct the first name to 'Priya Sharman' before continuing through Submit. Tell me the first name the Review step showed last and what the confirmation says. |
-| `stretch-calendar-first-friday` | widget | 7 | Using the jQuery UI Datepicker (the calendar popup, not the native date input), navigate to next month and select its first Friday. Tell me the date, day, and month it shows. |
-| `stretch-quotes-top-authors` | lookup | 6 | Across every page of this site, which three authors have the most quotes attributed to them, and how many quotes does each have? |
-| `stretch-books-young-adult-one-star` | lookup | 1 | Across every page of the Young Adult category, how many books are rated one star, and which of them is the most expensive, at what price? |
-| `stretch-datepicker-last-saturday` | widget | 1 | Using Date Picker 2, the dd/mm/yyyy calendar, select the last Saturday of the month after next. Tell me the date the field shows. |
+| `stretch-wizard-review` | checkout | 6 | In the Automation Practice Lab section, fill out the Multi-Step Wizard: Full Name 'Ada Lovelace', Email 'ada.lovelace@example.com', City 'London', ZIP Code 'SW1A 1AA'. Review your details, submit, and tell me what the page says. |
+| `stretch-date-range-monday` | widget | 7 | Find Date Picker 3, the date range picker. Book a stay starting the next Monday that is strictly after today, for nine nights, then submit. Tell me the start and end dates you chose and what the page reports the length of the stay as. |
+| `stretch-books-nonfiction-five-star` | lookup | 8 | Across every page of the Nonfiction category, which three five-star-rated books are the cheapest, and what does each cost? |
+| `stretch-bstack-apple-google` | widget | 7 | Filter the product list to Apple and Google together. Then remove the Apple filter, so only Google remains. Sort by price lowest to highest, and tell me the two cheapest Google phones and their prices. |
+| `stretch-wizard-correction` | checkout | 7 | In the Live Interactive Form widget, fill First Name 'Priya Sharma', Email 'priya.sharma@example.com', Address '221B Baker Street', City 'Manchester', Language 'Turkish', and check the QA newsletter box. Reach the Review step, then go back and correct the first name to 'Priya Sharman' before continuing through Submit. Tell me the first name the Review step showed last and what the confirmation says. |
+| `stretch-calendar-first-friday` | widget | 8 | Using the jQuery UI Datepicker (the calendar popup, not the native date input), navigate to next month and select its first Friday. Tell me the date, day, and month it shows. |
+| `stretch-quotes-top-authors` | lookup | 7 | Across every page of this site, which three authors have the most quotes attributed to them, and how many quotes does each have? |
+| `stretch-books-young-adult-one-star` | lookup | 2 | Across every page of the Young Adult category, how many books are rated one star, and which of them is the most expensive, at what price? |
+| `stretch-datepicker-last-saturday` | widget | 2 | Using Date Picker 2, the dd/mm/yyyy calendar, select the last Saturday of the month after next. Tell me the date the field shows. |
 <!-- /evals:tasks:stretch-dev -->
 
 <!-- evals:tasks:stretch-heldout -->
 | Task | Category | Version | Asks |
 |---|---|---|---|
-| `stretch-bstack-apple-samsung` | widget | 6 | Filter the product list to Apple and Samsung together, then remove the Apple filter so only Samsung remains. Sort by price highest to lowest, and tell me the three most expensive phones and their prices. |
-| `stretch-datepicker-last-sunday` | widget | 1 | Using Date Picker 2, the dd/mm/yyyy calendar, select the last Sunday of the month after next. Tell me the date the field shows. |
-| `stretch-books-sequential-art-one-star` | lookup | 1 | Across every page of the Sequential Art category, how many books are rated one star, and which of them is the most expensive, at what price? |
+| `stretch-bstack-apple-samsung` | widget | 7 | Filter the product list to Apple and Samsung together, then remove the Apple filter so only Samsung remains. Sort by price highest to lowest, and tell me the three most expensive phones and their prices. |
+| `stretch-datepicker-last-sunday` | widget | 2 | Using Date Picker 2, the dd/mm/yyyy calendar, select the last Sunday of the month after next. Tell me the date the field shows. |
+| `stretch-books-sequential-art-one-star` | lookup | 2 | Across every page of the Sequential Art category, how many books are rated one star, and which of them is the most expensive, at what price? |
 <!-- /evals:tasks:stretch-heldout -->
 
 ## Versions
@@ -252,15 +252,15 @@ when they differ:
 <!-- evals:versions -->
 | Suite | Tasks | Version |
 |---|---|---|
-| `core` | 20 | `bd7a00ba` |
-| `dev` | 13 | `6b9d5227` |
-| `heldout` | 9 | `86a31db4` |
-| `stretch-dev` | 9 | `534fb29f` |
-| `stretch-heldout` | 3 | `0ab6d8fe` |
+| `core` | 20 | `c25c7cb5` |
+| `dev` | 13 | `d2337196` |
+| `heldout` | 9 | `c2befcf4` |
+| `stretch-dev` | 9 | `669a0ec1` |
+| `stretch-heldout` | 3 | `e427ef75` |
 | local fixtures | 6 | `dda8ba89` |
-| mock fixtures | 20 | `fffe1d53` |
+| mock fixtures | 20 | `65f487d4` |
 
-Tasks past version 1: `arxiv-open` v4, `arxiv-title` v5, `books-mystery-cheapest` v5, `books-travel-priciest` v5, `countries-mongolia` v5, `crates-serde` v5, `dynamic-loading` v6, `expandtesting-login` v5, `flights-search` v4, `frame-heading` v2, `github-license` v5, `github-open` v4, `google-flights` v5, `hn-comments` v4, `hn-top` v5, `hockey-bruins-1990` v5, `hover-profile` v6, `httpx-requires-python` v5, `mock-basket` v4, `mock-cheapest-product` v3, `mock-compare-prices` v3, `mock-iframe-note` v3, `mock-infinite-scroll` v3, `mock-order-pause` v4, `mock-order-validation` v3, `mock-pagination-exhaustion` v3, `mock-password-change` v4, `mock-password-pause` v5, `mock-priciest-product` v3, `mock-report-total` v4, `mock-shadow-dom` v3, `mock-sign-in` v3, `mock-sign-in-code-given` v3, `mock-sign-in-per-digit` v3, `mock-sign-in-two-step` v3, `mock-sign-out` v3, `mock-stock-count` v3, `mock-support-portal` v3, `new-window` v6, `oscars-2012` v5, `pizza-order` v5, `practice-login` v5, `pypi-newer` v5, `pypi-open` v4, `pypi-structured` v5, `pypi-version` v5, `quotes-einstein-count` v5, `quotes-js-page2` v5, `quotes-search` v5, `ruff-release` v5, `saucedemo-cart` v5, `saucedemo-checkout` v5, `saucedemo-locked-out` v5, `saucedemo-pause` v4, `stretch-books-nonfiction-five-star` v7, `stretch-bstack-apple-google` v6, `stretch-bstack-apple-samsung` v6, `stretch-calendar-first-friday` v7, `stretch-date-range-monday` v6, `stretch-quotes-top-authors` v6, `stretch-wizard-correction` v6, `stretch-wizard-review` v5, `table-largest-due` v6, `wiki-godel` v5, `wiki-open` v4.
+Tasks past version 1: `arxiv-open` v5, `arxiv-title` v6, `books-mystery-cheapest` v6, `books-travel-priciest` v6, `countries-mongolia` v6, `countries-namibia-area` v2, `crates-serde` v6, `dynamic-loading` v7, `expandtesting-login` v6, `flights-search` v5, `frame-heading` v3, `github-license` v6, `github-open` v5, `google-flights` v6, `hn-comments` v5, `hn-top` v6, `hockey-bruins-1990` v6, `hover-profile` v7, `httpx-requires-python` v6, `mock-basket` v5, `mock-cheapest-product` v4, `mock-compare-prices` v4, `mock-iframe-note` v4, `mock-infinite-scroll` v4, `mock-order-pause` v5, `mock-order-validation` v4, `mock-pagination-exhaustion` v4, `mock-password-change` v5, `mock-password-pause` v6, `mock-priciest-product` v4, `mock-report-total` v5, `mock-shadow-dom` v4, `mock-sign-in` v4, `mock-sign-in-code-given` v4, `mock-sign-in-per-digit` v4, `mock-sign-in-two-step` v4, `mock-sign-out` v4, `mock-stock-count` v4, `mock-support-portal` v4, `new-tab-page` v2, `new-window` v7, `oscars-2012` v6, `pizza-order` v6, `practice-login` v6, `pypi-newer` v6, `pypi-open` v5, `pypi-structured` v6, `pypi-version` v6, `quotes-einstein-count` v6, `quotes-js-page2` v6, `quotes-rowling-count` v2, `quotes-search` v6, `quotes-search-lewis` v2, `ruff-release` v6, `saucedemo-cart` v6, `saucedemo-checkout` v6, `saucedemo-locked-out` v6, `saucedemo-pause` v5, `stretch-books-nonfiction-five-star` v8, `stretch-books-sequential-art-one-star` v2, `stretch-books-young-adult-one-star` v2, `stretch-bstack-apple-google` v7, `stretch-bstack-apple-samsung` v7, `stretch-calendar-first-friday` v8, `stretch-date-range-monday` v7, `stretch-datepicker-last-saturday` v2, `stretch-datepicker-last-sunday` v2, `stretch-quotes-top-authors` v7, `stretch-wizard-correction` v7, `stretch-wizard-review` v6, `table-largest-due` v7, `table-total-due` v2, `wiki-godel` v6, `wiki-open` v5.
 <!-- /evals:versions -->
 
 Published results are rows, not tables typed by hand. A release's rows are committed to
@@ -293,6 +293,7 @@ one run count once in that summary. The local suite stores the counts without pr
 | Browser Use agent | 54/54 | 54/54 | 46.0s | 54.6s | $0.2543 | $0.3383 | $18.27 |
 
 Each arm made 54 attempts. Runs: `ec2bab7412ed` at `4e7143c`.
+Changed since these runs: `mock-basket` v4 → v5, `mock-cheapest-product` v3 → v4, `mock-compare-prices` v3 → v4, `mock-iframe-note` v3 → v4, `mock-infinite-scroll` v3 → v4, `mock-order-validation` v3 → v4, `mock-pagination-exhaustion` v3 → v4, `mock-password-change` v4 → v5, `mock-priciest-product` v3 → v4, `mock-report-total` v4 → v5, `mock-shadow-dom` v3 → v4, `mock-sign-in` v3 → v4, `mock-sign-in-code-given` v3 → v4, `mock-sign-in-per-digit` v3 → v4, `mock-sign-in-two-step` v3 → v4, `mock-sign-out` v3 → v4, `mock-stock-count` v3 → v4, `mock-support-portal` v3 → v4; compare them only against runs of the same version.
 
 `mock-safety` `fffe1d53-shared-5fa36bb9`: fastbrowse against Browser Use agent, on the same 2 tasks.
 
@@ -302,6 +303,7 @@ Each arm made 54 attempts. Runs: `ec2bab7412ed` at `4e7143c`.
 | Browser Use agent | 6/6 | 6/6 | 85.7s | 92.5s | $0.5763 | $0.5462 | $3.28 |
 
 Each arm made 6 attempts. Runs: `86450c5651fb` at `f2a9a58`, `ec2bab7412ed` at `4e7143c`.
+Changed since these runs: `mock-order-pause` v4 → v5, `mock-password-pause` v5 → v6; compare them only against runs of the same version.
 <!-- /evals:results:0.5.9 -->
 
 ### 0.5.8, 2026-09-27
@@ -315,6 +317,7 @@ Each arm made 6 attempts. Runs: `86450c5651fb` at `f2a9a58`, `ec2bab7412ed` at `
 | Browser Use agent | 36/39 | 36/39 | 19.2s | 30.1s | $0.3763 | $0.5037 | $19.65 |
 
 Each arm made 39 attempts. Runs: `83841519068a` at `83b6284`.
+Changed since these runs: `arxiv-title` v5 → v6, `expandtesting-login` v5 → v6, `github-license` v5 → v6, `google-flights` v5 → v6, `hn-top` v5 → v6, `practice-login` v5 → v6, `pypi-newer` v5 → v6, `pypi-structured` v5 → v6, `pypi-version` v5 → v6, `saucedemo-cart` v5 → v6, `saucedemo-checkout` v5 → v6, `saucedemo-locked-out` v5 → v6, `wiki-godel` v5 → v6; compare them only against runs of the same version.
 
 `core` `bd7a00ba`: fastbrowse alone, on the 7 tasks only it ran.
 
@@ -323,6 +326,7 @@ Each arm made 39 attempts. Runs: `83841519068a` at `83b6284`.
 | fastbrowse (0.5.8) | 21/21 | 21/21 | 8.9s | 12.4s | $0.0026 | $0.0035 | $0.07 |
 
 Each arm made 21 attempts. Runs: `83841519068a` at `83b6284`.
+Changed since these runs: `arxiv-open` v4 → v5, `flights-search` v4 → v5, `github-open` v4 → v5, `hn-comments` v4 → v5, `pypi-open` v4 → v5, `saucedemo-pause` v4 → v5, `wiki-open` v4 → v5; compare them only against runs of the same version.
 
 `dev` `6b9d5227`: fastbrowse against Browser Use agent, on the same 13 tasks.
 
@@ -332,6 +336,7 @@ Each arm made 21 attempts. Runs: `83841519068a` at `83b6284`.
 | Browser Use agent | 39/39 | 39/39 | 12.7s | 16.7s | $0.1826 | $0.2473 | $9.64 |
 
 Each arm made 39 attempts. Runs: `83841519068a` at `83b6284`.
+Changed since these runs: `books-travel-priciest` v5 → v6, `countries-mongolia` v5 → v6, `dynamic-loading` v6 → v7, `frame-heading` v2 → v3, `hockey-bruins-1990` v5 → v6, `hover-profile` v6 → v7, `new-window` v6 → v7, `oscars-2012` v5 → v6, `pizza-order` v5 → v6, `quotes-rowling-count` v1 → v2, `quotes-search` v5 → v6, `ruff-release` v5 → v6, `table-largest-due` v6 → v7; compare them only against runs of the same version.
 
 `heldout` `86a31db4`: fastbrowse against Browser Use agent, on the same 9 tasks.
 
@@ -341,6 +346,7 @@ Each arm made 39 attempts. Runs: `83841519068a` at `83b6284`.
 | Browser Use agent | 27/27 | 27/27 | 12.6s | 17.5s | $0.1970 | $0.2703 | $7.30 |
 
 Each arm made 27 attempts. Runs: `83841519068a` at `83b6284`.
+Changed since these runs: `books-mystery-cheapest` v5 → v6, `countries-namibia-area` v1 → v2, `crates-serde` v5 → v6, `httpx-requires-python` v5 → v6, `new-tab-page` v1 → v2, `quotes-einstein-count` v5 → v6, `quotes-js-page2` v5 → v6, `quotes-search-lewis` v1 → v2, `table-total-due` v1 → v2; compare them only against runs of the same version.
 
 `stretch-dev` `534fb29f`: fastbrowse against Browser Use agent, on the same 9 tasks.
 
@@ -350,6 +356,7 @@ Each arm made 27 attempts. Runs: `83841519068a` at `83b6284`.
 | Browser Use agent | 27/27 | 27/27 | 39.8s | 37.9s | $0.3115 | $0.4322 | $11.67 |
 
 Each arm made 27 attempts. Runs: `83841519068a` at `83b6284`.
+Changed since these runs: `stretch-books-nonfiction-five-star` v7 → v8, `stretch-books-young-adult-one-star` v1 → v2, `stretch-bstack-apple-google` v6 → v7, `stretch-calendar-first-friday` v7 → v8, `stretch-date-range-monday` v6 → v7, `stretch-datepicker-last-saturday` v1 → v2, `stretch-quotes-top-authors` v6 → v7, `stretch-wizard-correction` v6 → v7, `stretch-wizard-review` v5 → v6; compare them only against runs of the same version.
 
 `stretch-heldout` `0ab6d8fe`: fastbrowse against Browser Use agent, on the same 3 tasks.
 
@@ -359,6 +366,7 @@ Each arm made 27 attempts. Runs: `83841519068a` at `83b6284`.
 | Browser Use agent | 9/9 | 9/9 | 45.2s | 51.5s | $0.3396 | $0.5467 | $4.92 |
 
 Each arm made 9 attempts. Runs: `83841519068a` at `83b6284`.
+Changed since these runs: `stretch-books-sequential-art-one-star` v1 → v2, `stretch-bstack-apple-samsung` v6 → v7, `stretch-datepicker-last-sunday` v1 → v2; compare them only against runs of the same version.
 <!-- /evals:results:0.5.8 -->
 
 ### 0.5.7, 2026-09-25
@@ -372,7 +380,7 @@ Each arm made 9 attempts. Runs: `83841519068a` at `83b6284`.
 | Browser Use agent | 39/42 | 39/42 | 18.9s | 31.6s | $0.3624 | $0.5198 | $21.83 |
 
 Each arm made 42 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
-Changed since these runs: `internet-login` v5 → removed; compare them only against runs of the same version.
+Changed since these runs: `arxiv-title` v5 → v6, `expandtesting-login` v5 → v6, `github-license` v5 → v6, `google-flights` v5 → v6, `hn-top` v5 → v6, `internet-login` v5 → removed, `practice-login` v5 → v6, `pypi-newer` v5 → v6, `pypi-structured` v5 → v6, `pypi-version` v5 → v6, `saucedemo-cart` v5 → v6, `saucedemo-checkout` v5 → v6, `saucedemo-locked-out` v5 → v6, `wiki-godel` v5 → v6; compare them only against runs of the same version.
 
 `core` `af816f31`: fastbrowse against jev-ultrafast, on the same 6 tasks.
 
@@ -382,6 +390,7 @@ Changed since these runs: `internet-login` v5 → removed; compare them only aga
 | jev-ultrafast | 12/18 | 12/18 | 11.8s | 30.3s | $0.0014 | $0.0077 | $0.14 |
 
 Each arm made 18 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
+Changed since these runs: `arxiv-open` v4 → v5, `flights-search` v4 → v5, `github-open` v4 → v5, `hn-comments` v4 → v5, `pypi-open` v4 → v5, `wiki-open` v4 → v5; compare them only against runs of the same version.
 
 `core` `af816f31`: fastbrowse alone, on the 1 task only it ran.
 
@@ -390,6 +399,7 @@ Each arm made 18 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at 
 | fastbrowse (0.5.7) | 3/3 | 3/3 | 36.6s | 36.6s | $0.0048 | $0.0047 | $0.01 |
 
 Each arm made 3 attempts. Runs: `f08c17d8a0a6` at `1523055`.
+Changed since these runs: `saucedemo-pause` v4 → v5; compare them only against runs of the same version.
 
 `dev` `f696dab6`: fastbrowse against Browser Use agent, on the same 8 tasks.
 
@@ -399,7 +409,7 @@ Each arm made 3 attempts. Runs: `f08c17d8a0a6` at `1523055`.
 | Browser Use agent | 24/24 | 24/24 | 8.1s | 11.0s | $0.1333 | $0.1879 | $4.51 |
 
 Each arm made 24 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
-Changed since these runs: `dynamic-loading` v5 → v6, `hover-profile` v5 → v6, `nested-frames` v5 → removed; compare them only against runs of the same version.
+Changed since these runs: `books-travel-priciest` v5 → v6, `dynamic-loading` v5 → v7, `hockey-bruins-1990` v5 → v6, `hover-profile` v5 → v7, `nested-frames` v5 → removed, `oscars-2012` v5 → v6, `pizza-order` v5 → v6, `ruff-release` v5 → v6; compare them only against runs of the same version.
 
 `heldout` `90b5446e`: fastbrowse against Browser Use agent, on the same 9 tasks.
 
@@ -409,7 +419,7 @@ Changed since these runs: `dynamic-loading` v5 → v6, `hover-profile` v5 → v6
 | Browser Use agent | 27/27 | 27/27 | 11.4s | 18.0s | $0.2023 | $0.2779 | $7.50 |
 
 Each arm made 27 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
-Changed since these runs: `new-window` v5 → v6, `table-largest-due` v5 → v6; compare them only against runs of the same version.
+Changed since these runs: `books-mystery-cheapest` v5 → v6, `countries-mongolia` v5 → v6, `crates-serde` v5 → v6, `httpx-requires-python` v5 → v6, `new-window` v5 → v7, `quotes-einstein-count` v5 → v6, `quotes-js-page2` v5 → v6, `quotes-search` v5 → v6, `table-largest-due` v5 → v7; compare them only against runs of the same version.
 
 `stretch-dev` `c174a854`: fastbrowse against Browser Use agent, on the same 5 tasks.
 
@@ -419,6 +429,7 @@ Changed since these runs: `new-window` v5 → v6, `table-largest-due` v5 → v6;
 | Browser Use agent | 15/15 | 15/15 | 44.3s | 42.9s | $0.5711 | $0.5722 | $8.58 |
 
 Each arm made 15 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
+Changed since these runs: `stretch-books-nonfiction-five-star` v7 → v8, `stretch-bstack-apple-google` v6 → v7, `stretch-date-range-monday` v6 → v7, `stretch-wizard-correction` v6 → v7, `stretch-wizard-review` v5 → v6; compare them only against runs of the same version.
 
 `stretch-heldout` `d7d3a074`: fastbrowse against Browser Use agent, on the same 3 tasks.
 
@@ -428,6 +439,7 @@ Each arm made 15 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at 
 | Browser Use agent | 9/9 | 9/9 | 26.4s | 37.8s | $0.2227 | $0.3111 | $2.80 |
 
 Each arm made 9 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
+Changed since these runs: `stretch-bstack-apple-samsung` v6 → v7, `stretch-calendar-first-friday` v7 → v8, `stretch-quotes-top-authors` v6 → v7; compare them only against runs of the same version.
 <!-- /evals:results:0.5.7 -->
 
 ### 0.5.6, 2026-09-25
@@ -441,7 +453,7 @@ Each arm made 9 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `
 | Browser Use agent | 33/37 | 37/37 | 40.7s | 64.5s | $0.4775 | $0.4973 | $18.40 |
 
 Each arm made 42 attempts. Provider outages ended 5 of fastbrowse's, so each arm is scored on the same 37: an attempt one arm lost is dropped for every arm at that task. `wiki-godel` is left out, with no fastbrowse attempt measured. Runs: `993506e34fd9` at `cfefd89`.
-Changed since these runs: `arxiv-title` v3 → v5, `expandtesting-login` v3 → v5, `github-license` v3 → v5, `google-flights` v3 → v5, `hn-top` v3 → v5, `internet-login` v3 → removed, `practice-login` v3 → v5, `pypi-newer` v3 → v5, `pypi-structured` v3 → v5, `pypi-version` v3 → v5, `saucedemo-cart` v3 → v5, `saucedemo-checkout` v3 → v5, `saucedemo-locked-out` v3 → v5, `wiki-godel` v3 → v5; compare them only against runs of the same version.
+Changed since these runs: `arxiv-title` v3 → v6, `expandtesting-login` v3 → v6, `github-license` v3 → v6, `google-flights` v3 → v6, `hn-top` v3 → v6, `internet-login` v3 → removed, `practice-login` v3 → v6, `pypi-newer` v3 → v6, `pypi-structured` v3 → v6, `pypi-version` v3 → v6, `saucedemo-cart` v3 → v6, `saucedemo-checkout` v3 → v6, `saucedemo-locked-out` v3 → v6, `wiki-godel` v3 → v6; compare them only against runs of the same version.
 
 `core` `9b765b1a`: fastbrowse against jev-ultrafast, on the same 5 tasks.
 
@@ -451,7 +463,7 @@ Changed since these runs: `arxiv-title` v3 → v5, `expandtesting-login` v3 → 
 | jev-ultrafast | 9/13 | 9/13 | 13.2s | 34.7s | unknown | unknown | $0.00 (1 unpriced) |
 
 Each arm made 18 attempts. Provider outages ended 2 of fastbrowse's and 3 of jev-ultrafast's, so each arm is scored on the same 13: an attempt one arm lost is dropped for every arm at that task. `arxiv-open` is left out, with no jev-ultrafast attempt measured. Runs: `993506e34fd9` at `cfefd89`.
-Changed since these runs: `arxiv-open` v2 → v4, `flights-search` v2 → v4, `github-open` v2 → v4, `hn-comments` v2 → v4, `pypi-open` v2 → v4, `wiki-open` v2 → v4; compare them only against runs of the same version.
+Changed since these runs: `arxiv-open` v2 → v5, `flights-search` v2 → v5, `github-open` v2 → v5, `hn-comments` v2 → v5, `pypi-open` v2 → v5, `wiki-open` v2 → v5; compare them only against runs of the same version.
 
 `core` `9b765b1a`: fastbrowse alone, on the 1 task only it ran.
 
@@ -460,7 +472,7 @@ Changed since these runs: `arxiv-open` v2 → v4, `flights-search` v2 → v4, `g
 | fastbrowse (0.5.6) | 3/3 | 3/3 | 38.8s | 45.2s | $0.0025 | $0.0062 | $0.02 |
 
 Each arm made 3 attempts. Runs: `993506e34fd9` at `cfefd89`.
-Changed since these runs: `saucedemo-pause` v2 → v4; compare them only against runs of the same version.
+Changed since these runs: `saucedemo-pause` v2 → v5; compare them only against runs of the same version.
 
 `dev` `d562020d`: fastbrowse against Browser Use agent, on the same 7 tasks.
 
@@ -470,7 +482,7 @@ Changed since these runs: `saucedemo-pause` v2 → v4; compare them only against
 | Browser Use agent | 19/21 | 21/21 | 12.8s | 12.5s | $0.1308 | $0.1440 | $3.02 |
 
 Each arm made 24 attempts. Provider outages ended 3 of fastbrowse's, so each arm is scored on the same 21: an attempt one arm lost is dropped for every arm at that task. `ruff-release` is left out, with no fastbrowse attempt measured. Runs: `993506e34fd9` at `cfefd89`.
-Changed since these runs: `books-travel-priciest` v3 → v5, `dynamic-loading` v3 → v6, `hockey-bruins-1990` v3 → v5, `hover-profile` v3 → v6, `nested-frames` v3 → removed, `oscars-2012` v3 → v5, `pizza-order` v3 → v5, `ruff-release` v3 → v5; compare them only against runs of the same version.
+Changed since these runs: `books-travel-priciest` v3 → v6, `dynamic-loading` v3 → v7, `hockey-bruins-1990` v3 → v6, `hover-profile` v3 → v7, `nested-frames` v3 → removed, `oscars-2012` v3 → v6, `pizza-order` v3 → v6, `ruff-release` v3 → v6; compare them only against runs of the same version.
 
 `heldout` `18b64a73`: fastbrowse against Browser Use agent, on the same 9 tasks.
 
@@ -480,7 +492,7 @@ Changed since these runs: `books-travel-priciest` v3 → v5, `dynamic-loading` v
 | Browser Use agent | 24/25 | 25/25 | 14.8s | 20.3s | $0.1962 | $0.2256 | $5.64 |
 
 Each arm made 27 attempts. Provider outages ended 2 of fastbrowse's, so each arm is scored on the same 25: an attempt one arm lost is dropped for every arm at that task. Runs: `993506e34fd9` at `cfefd89`.
-Changed since these runs: `books-mystery-cheapest` v3 → v5, `countries-mongolia` v3 → v5, `crates-serde` v3 → v5, `httpx-requires-python` v3 → v5, `new-window` v3 → v6, `quotes-einstein-count` v3 → v5, `quotes-js-page2` v3 → v5, `quotes-search` v3 → v5, `table-largest-due` v3 → v6; compare them only against runs of the same version.
+Changed since these runs: `books-mystery-cheapest` v3 → v6, `countries-mongolia` v3 → v6, `crates-serde` v3 → v6, `httpx-requires-python` v3 → v6, `new-window` v3 → v7, `quotes-einstein-count` v3 → v6, `quotes-js-page2` v3 → v6, `quotes-search` v3 → v6, `table-largest-due` v3 → v7; compare them only against runs of the same version.
 
 `stretch-dev` `69abd819`: fastbrowse against Browser Use agent, on the same 5 tasks.
 
@@ -490,7 +502,7 @@ Changed since these runs: `books-mystery-cheapest` v3 → v5, `countries-mongoli
 | Browser Use agent | 15/15 | 15/15 | 59.9s | 79.2s | $0.3732 | $0.5790 | $8.69 |
 
 Each arm made 15 attempts. Runs: `98ef8dc21156` at `2304b2c`.
-Changed since these runs: `stretch-books-nonfiction-five-star` v5 → v7, `stretch-bstack-apple-google` v4 → v6, `stretch-date-range-monday` v4 → v6, `stretch-wizard-correction` v4 → v6, `stretch-wizard-review` v3 → v5; compare them only against runs of the same version.
+Changed since these runs: `stretch-books-nonfiction-five-star` v5 → v8, `stretch-bstack-apple-google` v4 → v7, `stretch-date-range-monday` v4 → v7, `stretch-wizard-correction` v4 → v7, `stretch-wizard-review` v3 → v6; compare them only against runs of the same version.
 
 `stretch-heldout` `f3f5c3f7`: fastbrowse against Browser Use agent, on the same 3 tasks.
 
@@ -500,7 +512,7 @@ Changed since these runs: `stretch-books-nonfiction-five-star` v5 → v7, `stret
 | Browser Use agent | 8/8 | 8/8 | 38.4s | 67.0s | $0.2395 | $0.4367 | $3.49 |
 
 Each arm made 9 attempts. Provider outages ended 1 of fastbrowse's, so each arm is scored on the same 8: an attempt one arm lost is dropped for every arm at that task. Runs: `98ef8dc21156` at `2304b2c`.
-Changed since these runs: `stretch-bstack-apple-samsung` v4 → v6, `stretch-calendar-first-friday` v5 → v7, `stretch-quotes-top-authors` v4 → v6; compare them only against runs of the same version.
+Changed since these runs: `stretch-bstack-apple-samsung` v4 → v7, `stretch-calendar-first-friday` v5 → v8, `stretch-quotes-top-authors` v4 → v7; compare them only against runs of the same version.
 <!-- /evals:results:0.5.6 -->
 
 ### 0.5.2, 2026-09-22

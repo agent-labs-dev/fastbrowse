@@ -11,6 +11,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Required native radio groups stop blocking once an option in the same form is selected.
+- Step frames are PNG images of the page before the action, with a fresh secret-visibility check.
+- Eval commands reject nonpositive concurrency and repeat counts before starting a run.
+
+- Eval scores retain slow provider calls and recovered request failures, with full time and cost, for every arm.
+  Task versions include the shared grading rule; historical published results keep their original selection bias.
+
 - Keep HTTP error status in browsing observations and recovery. Failed links are withheld on unchanged
   source pages, and an unfinished run reports the observed session failure rather than a guessed site restriction.
 - Empty reads no longer excuse repeated navigation or form cycles; reads that add evidence still do.
