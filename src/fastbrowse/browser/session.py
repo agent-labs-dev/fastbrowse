@@ -192,6 +192,12 @@ class BrowserSession:
         """OOPIF frame_id -> session_id, keyed by target id per the plan's `frameId/targetId` guidance."""
         self._frame_parents: dict[str, str] = {}
         self._artifacts: list[Artifact] = []
+        self._downloads_captured = 0
+        """Captured downloads by count: a navigation that aborts on one is not a navigation that failed."""
+        self._download_texts: list[tuple[str, str]] = []
+        """A captured download's readable text, oldest first: kept as evidence for a capture, not consumed."""
+        self._download_texts_shown = 0
+        """How many of them an observation has already shown, so each is shown to the run once."""
         self._dialogs: dict[str, Dialog] = {}
         """Pending JS dialog per tab session id; cleared once handled."""
         self._dialog_opened = asyncio.Event()
@@ -227,6 +233,38 @@ class BrowserSession:
     @property
     def artifacts(self) -> tuple[Artifact, ...]:
         return tuple(self._artifacts)
+
+    @property
+    def downloads_captured(self) -> int:
+        return self._downloads_captured
+
+    async def download_settled(self, since: int, *, timeout_seconds: float = 3.0) -> bool:
+        """Whether a download landed since `since`, waiting briefly for the intercept's own task.
+
+        The capture runs off the request-paused event in its own task, so it can complete a moment after the
+        navigation it belongs to aborts. A short bounded wait tells a download abort from a plain failure
+        without racing that task; a download that never came is not this kind of abort.
+        """
+        deadline = asyncio.get_event_loop().time() + timeout_seconds
+        while self._downloads_captured <= since:
+            if asyncio.get_event_loop().time() >= deadline:
+                return False
+            await asyncio.sleep(0.05)
+        return True
+
+    def download_texts(self) -> tuple[tuple[str, str], ...]:
+        """Every readable download captured so far, oldest first.
+
+        Kept rather than consumed: an observation shows each download once, but a capture has to be able to
+        record it as evidence for the answer long after the observation that first surfaced it.
+        """
+        return tuple(self._download_texts)
+
+    def pending_download_texts(self) -> tuple[tuple[str, str], ...]:
+        """Readable downloads the run has not been shown yet, and now marked as shown."""
+        pending = tuple(self._download_texts[self._download_texts_shown :])
+        self._download_texts_shown = len(self._download_texts)
+        return pending
 
     def frame_parent_session(self, session_id: str) -> str | None:
         return self._frame_parents.get(session_id)
@@ -565,22 +603,30 @@ class BrowserSession:
         try:
             headers = {h["name"].lower(): h["value"] for h in event.get("responseHeaders", [])}
             disposition = headers.get("content-disposition", "")
-            if "attachment" in disposition.lower():
-                await self._capture_download(request_id, session_id, event["request"]["url"], disposition)
+            mime = headers.get("content-type", "")
+            if _is_download(mime, disposition):
+                await self._capture_download(request_id, session_id, event["request"]["url"], disposition, mime)
         finally:
             # Never leave a request paused, even if capture above raised. The request/session may
             # already be gone (navigation, tab close), which is fine to swallow here.
             with contextlib.suppress(Exception):
                 await self.client.send.Fetch.continueRequest(params={"requestId": request_id}, session_id=session_id)
 
-    async def _capture_download(self, request_id: str, session_id: str, url: str, disposition: str) -> None:
+    async def _capture_download(
+        self, request_id: str, session_id: str, url: str, disposition: str, mime: str
+    ) -> None:
         body = await self.client.send.Fetch.getResponseBody(params={"requestId": request_id}, session_id=session_id)
         raw = base64.b64decode(body["body"]) if body["base64Encoded"] else body["body"].encode()
         if len(raw) > self._max_download_bytes:
             return  # bounded size: refuse to hold an oversized body in memory as an artifact
         name = _filename_from_disposition(disposition) or url.rsplit("/", 1)[-1] or "download"
-        artifact = await self._artifact_sink.put(ArtifactKind.DOWNLOAD, name, "application/octet-stream", raw)
+        artifact = await self._artifact_sink.put(
+            ArtifactKind.DOWNLOAD, name, _response_mime(mime) or "application/octet-stream", raw
+        )
         self._artifacts.append(artifact)
+        self._downloads_captured += 1
+        if text := _readable_text(mime, raw):
+            self._download_texts.append((name, text))
 
 
 async def _together(*commands: Coroutine[Any, Any, object]) -> None:
@@ -599,4 +645,47 @@ def _filename_from_disposition(disposition: str) -> str | None:
         part = part.strip()
         if part.lower().startswith("filename="):
             return part.split("=", 1)[1].strip('"')
+    return None
+
+
+# Chrome hands these to the download manager rather than rendering them as a document, so a document
+# navigation to one is a download and aborts. A `content-disposition: attachment` (or a save-as filename)
+# is the site saying so explicitly; a bare `text/csv` says it by type. This is a property of the response,
+# not of any one site, so a link whose target is a file is captured the same way everywhere.
+_DOWNLOAD_MIME_TYPES = frozenset(
+    {
+        "text/csv",
+        "application/csv",
+        "application/octet-stream",
+        "application/zip",
+        "application/gzip",
+        "application/x-gzip",
+        "application/x-tar",
+        "application/x-7z-compressed",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }
+)
+
+
+def _response_mime(mime: str) -> str:
+    return mime.split(";", 1)[0].strip().lower()
+
+
+def _is_download(mime: str, disposition: str) -> bool:
+    """Whether this response is a file Chrome downloads rather than a document it renders."""
+    lowered = disposition.lower()
+    if "attachment" in lowered or "filename=" in lowered:
+        return True
+    return _response_mime(mime) in _DOWNLOAD_MIME_TYPES
+
+
+def _readable_text(mime: str, raw: bytes) -> str | None:
+    """The response's text when it is a text file the run should be able to read, else None."""
+    kind = _response_mime(mime)
+    if kind.startswith("text/") or kind in {"application/csv", "application/json"}:
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
     return None
