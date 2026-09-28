@@ -25,7 +25,7 @@ Issues = "https://github.com/agent-labs-dev/fastbrowse/issues"
 browser-use = ["browser-use-sdk==3.11.3"]
 eval-data = ["pyyaml>=6,<7"]
 # The MCP server, `fastbrowse-mcp`.
-mcp = ["mcp>=1.20,<2"]
+mcp = ["mcp>=1.20,<3"]
 
 [project.scripts]
 fastbrowse = "fastbrowse.cli:main"
@@ -43,14 +43,14 @@ exclude = [".sift", ".agents", "package.json", "package-lock.json", "biome.json"
 
 [dependency-groups]
 dev = [
-    "pytest>=8.4,<9",
+    "pytest>=8.4,<10",
     "pytest-asyncio>=1,<2",
     "ruff>=0.14,<1",
     "vale==3.22.0.0",
     "pytest-timeout>=2.3,<3",
-    "ty==0.0.82",          # preview: pinned, and moved with the pre-commit hook
+    "ty==0.0.84",          # preview: pinned, and moved with the pre-commit hook
     "pre-commit>=4.6.2",
-    "actionlint-py==1.7.12.24",
+    "actionlint-py==1.7.12.25",
 ]
 
 [tool.ruff]
