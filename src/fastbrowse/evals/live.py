@@ -372,11 +372,20 @@ async def ultrafast_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path
     return Outcome(None, None, final.url, controls=final.controls), report
 
 
-async def hosted_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | None) -> tuple[Outcome, ArmReport]:
+async def hosted_arm(
+    task: LiveTask,
+    http: httpx.AsyncClient,
+    *,
+    record: Path | None,
+    max_dollars: float | None = None,
+    stop_at_confirmation: bool = False,
+) -> tuple[Outcome, ArmReport]:
     from browser_use_sdk.v3 import BrowserUseError  # an optional extra
 
     try:
-        return await _hosted_run(task, http, record=record)
+        return await _hosted_run(
+            task, http, record=record, max_dollars=max_dollars, stop_at_confirmation=stop_at_confirmation
+        )
     # The SDK's message quotes the response body, which can echo the key: report the status or type alone.
     except BrowserUseError as error:
         failed = Unavailable if error.status_code in RETRYABLE_STATUS else RuntimeError
@@ -479,7 +488,14 @@ def answer_seconds(created_after: float, session: Any, answered: datetime | None
     return min(wall, created_after + max(0.0, (answered - session.created_at).total_seconds()))
 
 
-async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path | None) -> tuple[Outcome, ArmReport]:
+async def _hosted_run(
+    task: LiveTask,
+    http: httpx.AsyncClient,
+    *,
+    record: Path | None,
+    max_dollars: float | None = None,
+    stop_at_confirmation: bool = False,
+) -> tuple[Outcome, ArmReport]:
     from browser_use_sdk.v3 import AsyncBrowserUse, BrowserUseError  # an optional extra
 
     client = AsyncBrowserUse(api_key=load_settings().browser_key())
@@ -489,6 +505,7 @@ async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
         proxy_country_code="us",
         sensitive_data=dict(task.secrets) or None,
         enable_recording=record is not None,
+        max_cost_usd=max_dollars,
     )
     started = time.monotonic()
     finishing = asyncio.ensure_future(run)
@@ -498,7 +515,17 @@ async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
     created_after = time.monotonic() - started
     if run.session_id is not None:
         _watch("browser-use", task, (await client.sessions.get(run.session_id)).live_url)
+    paused_output = None
     try:
+        if stop_at_confirmation and run.session_id is not None:
+            while not finishing.done():
+                await asyncio.wait({finishing}, timeout=2)
+                if not finishing.done():
+                    interim = await client.sessions.get(run.session_id)
+                    if interim.output:
+                        paused_output = interim.output
+                        await client.sessions.stop(run.session_id)
+                        break
         # gather, not await: the SDK raises on output that fails the task's schema, before the session's cost is read.
         await asyncio.gather(finishing, return_exceptions=True)
     except asyncio.CancelledError:
@@ -520,6 +547,8 @@ async def _hosted_run(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
         output = session.output
     else:
         raise error
+    if paused_output is not None:
+        output = paused_output
     if session.status.value == "error" and HOSTED_OUTAGE in str(output or ""):
         # Browser Use's own infrastructure ending the session, not its agent giving up or answering wrong: it
         # appeared in none of 0.5.7's sessions and in 13 of one day's 114. Any other error is scored as its failure.

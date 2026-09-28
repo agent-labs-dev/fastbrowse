@@ -258,9 +258,9 @@ when they differ:
 | `stretch-dev` | 9 | `534fb29f` |
 | `stretch-heldout` | 3 | `0ab6d8fe` |
 | local fixtures | 6 | `dda8ba89` |
-| mock fixtures | 20 | `3f5146a3` |
+| mock fixtures | 20 | `fffe1d53` |
 
-Tasks past version 1: `arxiv-open` v4, `arxiv-title` v5, `books-mystery-cheapest` v5, `books-travel-priciest` v5, `countries-mongolia` v5, `crates-serde` v5, `dynamic-loading` v6, `expandtesting-login` v5, `flights-search` v4, `frame-heading` v2, `github-license` v5, `github-open` v4, `google-flights` v5, `hn-comments` v4, `hn-top` v5, `hockey-bruins-1990` v5, `hover-profile` v6, `httpx-requires-python` v5, `mock-basket` v3, `mock-cheapest-product` v2, `mock-compare-prices` v2, `mock-iframe-note` v2, `mock-infinite-scroll` v2, `mock-order-pause` v2, `mock-order-validation` v2, `mock-pagination-exhaustion` v2, `mock-password-change` v3, `mock-password-pause` v3, `mock-priciest-product` v2, `mock-report-total` v3, `mock-shadow-dom` v2, `mock-sign-in` v2, `mock-sign-in-code-given` v2, `mock-sign-in-per-digit` v2, `mock-sign-in-two-step` v2, `mock-sign-out` v2, `mock-stock-count` v2, `mock-support-portal` v2, `new-window` v6, `oscars-2012` v5, `pizza-order` v5, `practice-login` v5, `pypi-newer` v5, `pypi-open` v4, `pypi-structured` v5, `pypi-version` v5, `quotes-einstein-count` v5, `quotes-js-page2` v5, `quotes-search` v5, `ruff-release` v5, `saucedemo-cart` v5, `saucedemo-checkout` v5, `saucedemo-locked-out` v5, `saucedemo-pause` v4, `stretch-books-nonfiction-five-star` v7, `stretch-bstack-apple-google` v6, `stretch-bstack-apple-samsung` v6, `stretch-calendar-first-friday` v7, `stretch-date-range-monday` v6, `stretch-quotes-top-authors` v6, `stretch-wizard-correction` v6, `stretch-wizard-review` v5, `table-largest-due` v6, `wiki-godel` v5, `wiki-open` v4.
+Tasks past version 1: `arxiv-open` v4, `arxiv-title` v5, `books-mystery-cheapest` v5, `books-travel-priciest` v5, `countries-mongolia` v5, `crates-serde` v5, `dynamic-loading` v6, `expandtesting-login` v5, `flights-search` v4, `frame-heading` v2, `github-license` v5, `github-open` v4, `google-flights` v5, `hn-comments` v4, `hn-top` v5, `hockey-bruins-1990` v5, `hover-profile` v6, `httpx-requires-python` v5, `mock-basket` v4, `mock-cheapest-product` v3, `mock-compare-prices` v3, `mock-iframe-note` v3, `mock-infinite-scroll` v3, `mock-order-pause` v4, `mock-order-validation` v3, `mock-pagination-exhaustion` v3, `mock-password-change` v4, `mock-password-pause` v5, `mock-priciest-product` v3, `mock-report-total` v4, `mock-shadow-dom` v3, `mock-sign-in` v3, `mock-sign-in-code-given` v3, `mock-sign-in-per-digit` v3, `mock-sign-in-two-step` v3, `mock-sign-out` v3, `mock-stock-count` v3, `mock-support-portal` v3, `new-window` v6, `oscars-2012` v5, `pizza-order` v5, `practice-login` v5, `pypi-newer` v5, `pypi-open` v4, `pypi-structured` v5, `pypi-version` v5, `quotes-einstein-count` v5, `quotes-js-page2` v5, `quotes-search` v5, `ruff-release` v5, `saucedemo-cart` v5, `saucedemo-checkout` v5, `saucedemo-locked-out` v5, `saucedemo-pause` v4, `stretch-books-nonfiction-five-star` v7, `stretch-bstack-apple-google` v6, `stretch-bstack-apple-samsung` v6, `stretch-calendar-first-friday` v7, `stretch-date-range-monday` v6, `stretch-quotes-top-authors` v6, `stretch-wizard-correction` v6, `stretch-wizard-review` v5, `table-largest-due` v6, `wiki-godel` v5, `wiki-open` v4.
 <!-- /evals:versions -->
 
 Published results are rows, not tables typed by hand. A release's rows are committed to
@@ -542,6 +542,39 @@ Schema version 2 added `compared` and `tasks`; version 1 pooled a suite's compar
 tasks absent from the current group are not reported as removed. The first release has no changes.
 Separate suite versions never share an aggregate. No wall-clock generation timestamp is emitted.
 <!-- /evals:feed-schema -->
+
+## Stateful mock comparison
+
+Run both cloud agents against fresh copies of the stateful fixture site:
+
+```sh
+uv run --extra browser-use python -m fastbrowse.evals.compare_mock --repeat 3 --concurrency 4
+```
+
+This requires `cloudflared` on PATH and the same keys as the live suite. Each worker exposes a synthetic
+fixture through a temporary public tunnel, resets all site state between attempts, and starts a fresh cloud browser.
+Tunnels stay up until that worker finishes, avoiding repeated routing propagation. Tunnel setup
+is outside the agent timer. No personal account or data is used.
+
+Both arms receive the same task, credential names and values through their secret APIs, structured-output
+schema, and explicit authorization instructions. Safety tasks tell both agents to reach the final form and
+stop before submission. The shared grader checks recorded site effects and answers, without requiring either
+agent's status vocabulary. When Browser Use asks the user to confirm, its adapter stops the still-open session
+and grades the recorded state; waiting for a human reply is not an agent timeout. Completion and safety cases are reported separately. Fastbrowse's original local
+regression suite still checks its own status contract.
+
+The comparison runs three repeats of all 20 tasks, with four attempts in flight and alternating arm order
+between repeats. Both arms have a $2 configured spend cap and a 300-second timeout. Fastbrowse also has a
+40-step cap; the hosted Browser Use API exposes no equivalent. Browser charges and cap enforcement differ
+between products, so these are documented limits rather than identical internal accounting. Timings include
+browser startup and end at the answer using the live harness's existing measurement. Cost includes browser
+charges when the provider reports them. Failures remain in the denominator; unknown costs prevent an aggregate
+cost claim. A fixture tunnel that cannot start aborts the comparison rather than creating an agent failure.
+
+These are development fixtures used to fix fastbrowse bugs, not an independent held-out benchmark. The shared
+prompt and task fingerprints identify this protocol separately from the fastbrowse-only local mock suite.
+No agent changes are made to improve its score during the comparison. Smoke checks validate the harness and
+are not included in the measured three-repeat run.
 
 ## External benchmarks
 

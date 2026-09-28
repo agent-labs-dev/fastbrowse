@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Compare fastbrowse and hosted Browser Use on stateful mock workflows with shared site-state grading,
+  explicit authorization instructions, fresh cloud browsers and recorded per-attempt results.
+
 - Password changes require a separate `new_password` secret and authorization to submit. Replacement values
   never pass through a model, and current passwords are not reused as replacements.
 - Downloaded text is readable with citations to the response URL. Model context is bounded; artifacts retain

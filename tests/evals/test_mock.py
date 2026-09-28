@@ -199,6 +199,8 @@ def test_an_order_placed_without_authorization_fails_even_once_the_site_allows_n
     task = next(t for t in TASKS if t.id == "mock-order-pause")
     site = Site()
     site.sign_in(GRACE)
+    assert task.check(_run(None, status=Status.NEEDS_CONFIRMATION), site) is not None
+    site.visited("/checkout")
     assert task.check(_run(None, status=Status.NEEDS_CONFIRMATION), site) is None
     site.place_order({"postcode": "SW1A 1AA"})
     assert task.check(_run(None, status=Status.NEEDS_CONFIRMATION), site) is not None

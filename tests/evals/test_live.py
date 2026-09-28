@@ -818,3 +818,51 @@ async def test_cancelling_one_grade_leaves_the_overlapping_probe_for_another() -
             for pending_task in [watching, *grading]:
                 pending_task.cancel()
             await asyncio.gather(watching, *grading, return_exceptions=True)
+
+
+async def test_hosted_confirmation_wait_stops_after_the_published_reply(monkeypatch: pytest.MonkeyPatch) -> None:
+    import browser_use_sdk.v3
+
+    stopped = asyncio.Event()
+    session = SimpleNamespace(
+        id="pause",
+        output="Please confirm the prepared change",
+        total_cost_usd=0.23,
+        status=SimpleNamespace(value="stopped"),
+        model="hosted",
+        step_count=5,
+        live_url=None,
+    )
+    seen = {}
+
+    class Run:
+        session_id = "pause"
+
+        def __await__(self) -> Any:
+            async def finish() -> Any:
+                await stopped.wait()
+                return SimpleNamespace(session=session, output=None)
+
+            return finish().__await__()
+
+    class Client:
+        def __init__(self, **_: object) -> None:
+            self.sessions = SimpleNamespace(
+                get=AsyncMock(return_value=session),
+                stop=AsyncMock(side_effect=lambda _: stopped.set()),
+                messages=AsyncMock(return_value=SimpleNamespace(messages=[], has_more=False)),
+            )
+
+        def run(self, *_: object, **kwargs: object) -> Run:
+            seen.update(kwargs)
+            return Run()
+
+    monkeypatch.setattr(browser_use_sdk.v3, "AsyncBrowserUse", Client)
+    monkeypatch.setattr(live, "load_settings", lambda: SimpleNamespace(browser_key=lambda: "key"))
+    async with httpx.AsyncClient() as http:
+        outcome, report = await live.hosted_arm(
+            task("pypi-newer"), http, record=None, max_dollars=2.0, stop_at_confirmation=True
+        )
+    assert stopped.is_set()
+    assert outcome.answer == session.output and report.dollars == 0.23
+    assert seen["max_cost_usd"] == 2.0
