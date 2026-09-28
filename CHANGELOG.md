@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Compare fastbrowse and hosted Browser Use on stateful mock workflows with shared site-state grading,
+  explicit authorization instructions, fresh cloud browsers and recorded per-attempt results.
+
 - Password changes require a separate `new_password` secret and authorization to submit. Replacement values
   never pass through a model, and current passwords are not reused as replacements.
 - Downloaded text is readable with citations to the response URL. Model context is bounded; artifacts retain
@@ -21,6 +24,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   matrix of contract and behaviour cases, each carrying the status, exit code and per-check evidence it must
   produce, and writes one JSON report plus a Markdown roll-up. Tier 0 covers the terminal contract without
   calling a model; the paid tiers are refused unless `--spend` is passed.
+- The CLI assigns a distinct nonzero exit code to each stopped status and documents the mapping in `--help`.
+  JSON, embedding and MCP results report the resource and limit behind a budget stop.
+- `--cloud` overrides local browser defaults from the environment. Secret configuration errors report both
+  missing variables and missing origins, and a login without stored credentials explains the scoped `--secret` syntax.
+
 - Read nested gateway errors, recover from input-size refusals, and redact echoed API keys before shortening errors.
 
 ## [0.5.9] - 2026-09-27

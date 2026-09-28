@@ -53,6 +53,7 @@ from fastbrowse.clients.environment import ConfigurationError, Settings, load_se
 from fastbrowse.models import (
     Authorization,
     BrowserEvent,
+    BudgetStop,
     Limits,
     LocalChrome,
     RunResult,
@@ -131,6 +132,7 @@ class Download(BaseModel):
 
 
 class BrowseResult(BaseModel):
+    budget: BudgetStop | None = None
     status: Status
     """Only `complete` reports verified task completion."""
     answer: str | None
@@ -309,6 +311,7 @@ def _result(result: RunResult, *, live_url: str | None, config: ServerConfig) ->
     )
     return BrowseResult(
         status=result.status,
+        budget=result.budget,
         answer=result.answer,
         data=result.data,
         citations=[Citation(quote=e.quote, url=e.url) for e in result.evidence],

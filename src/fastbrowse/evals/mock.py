@@ -30,7 +30,7 @@ import re
 import struct
 import threading
 import time
-from collections.abc import Generator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -210,6 +210,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _send(self, status: HTTPStatus, body: bytes, type: str = "text/html; charset=utf-8") -> None:
         self.send_response(status)
         self.send_header("Content-Type", type)
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -733,14 +734,26 @@ def _looks_like_postcode(value: str) -> bool:
 
 
 @contextmanager
-def mock_site() -> Generator[tuple[str, Site]]:
-    """Serve the site on a free port, yielding its base URL and the state it accumulated."""
-    site = Site()
-    handler = type("Handler", (_Handler,), {"site": site})
+def mock_server() -> Generator[tuple[str, Callable[[], Site]]]:
+    """Keep an address alive while sequential attempts each receive fresh fixture state."""
+    handler = type("Handler", (_Handler,), {"site": Site()})
     server = ThreadingHTTPServer(("127.0.0.1", free_port()), handler)
+
+    def fresh() -> Site:
+        site = Site()
+        handler.site = site
+        return site
+
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}", site
+        yield f"http://127.0.0.1:{server.server_port}", fresh
     finally:
         server.shutdown()
         server.server_close()
+
+
+@contextmanager
+def mock_site() -> Generator[tuple[str, Site]]:
+    """Serve one fresh site and close its server after the attempt."""
+    with mock_server() as (base, fresh):
+        yield base, fresh()

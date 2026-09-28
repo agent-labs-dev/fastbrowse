@@ -2,6 +2,232 @@
   "schema_version": 2,
   "releases": [
     {
+      "fastbrowse_version": "0.5.9",
+      "date": "2026-09-28",
+      "suite": "mock-completion",
+      "suite_version": "fffe1d53-shared-5fa36bb9",
+      "compared": [
+        "fastbrowse",
+        "browser-use"
+      ],
+      "tasks": 18,
+      "arms": {
+        "fastbrowse": {
+          "passed": 53,
+          "total": 54,
+          "excluded": 0,
+          "priced": 54,
+          "seconds": {
+            "median": 22.81127910000214,
+            "mean": 27.38552396683331
+          },
+          "dollars": {
+            "median": 0.006463454333333334,
+            "mean": 0.00780619286388837
+          }
+        },
+        "browser-use": {
+          "passed": 54,
+          "total": 54,
+          "excluded": 0,
+          "priced": 54,
+          "seconds": {
+            "median": 45.985,
+            "mean": 54.64018518518518
+          },
+          "dollars": {
+            "median": 0.25425583333333335,
+            "mean": 0.3383137899012978
+          }
+        }
+      },
+      "task_versions_changed": [
+        {
+          "task": "mock-basket",
+          "previous": [],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "mock-cheapest-product",
+          "previous": [],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "mock-compare-prices",
+          "previous": [],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "mock-iframe-note",
+          "previous": [],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "mock-infinite-scroll",
+          "previous": [],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "mock-order-validation",
+          "previous": [],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "mock-pagination-exhaustion",
+          "previous": [],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "mock-password-change",
+          "previous": [],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "mock-priciest-product",
+          "previous": [],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "mock-report-total",
+          "previous": [],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "mock-shadow-dom",
+          "previous": [],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "mock-sign-in",
+          "previous": [],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "mock-sign-in-code-given",
+          "previous": [],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "mock-sign-in-per-digit",
+          "previous": [],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "mock-sign-in-two-step",
+          "previous": [],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "mock-sign-out",
+          "previous": [],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "mock-stock-count",
+          "previous": [],
+          "current": [
+            3
+          ]
+        },
+        {
+          "task": "mock-support-portal",
+          "previous": [],
+          "current": [
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "fastbrowse_version": "0.5.9",
+      "date": "2026-09-28",
+      "suite": "mock-safety",
+      "suite_version": "fffe1d53-shared-5fa36bb9",
+      "compared": [
+        "fastbrowse",
+        "browser-use"
+      ],
+      "tasks": 2,
+      "arms": {
+        "fastbrowse": {
+          "passed": 6,
+          "total": 6,
+          "excluded": 0,
+          "priced": 6,
+          "seconds": {
+            "median": 30.41317901149887,
+            "mean": 31.953649457333086
+          },
+          "dollars": {
+            "median": 0.010343622333333333,
+            "mean": 0.010514473
+          }
+        },
+        "browser-use": {
+          "passed": 6,
+          "total": 6,
+          "excluded": 0,
+          "priced": 6,
+          "seconds": {
+            "median": 85.655,
+            "mean": 92.47833333333334
+          },
+          "dollars": {
+            "median": 0.5763421666666667,
+            "mean": 0.5462073333333334
+          }
+        }
+      },
+      "task_versions_changed": [
+        {
+          "task": "mock-order-pause",
+          "previous": [],
+          "current": [
+            4
+          ]
+        },
+        {
+          "task": "mock-password-pause",
+          "previous": [],
+          "current": [
+            5
+          ]
+        }
+      ]
+    },
+    {
       "fastbrowse_version": "0.5.8",
       "date": "2026-09-27",
       "suite": "core",

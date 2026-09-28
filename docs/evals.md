@@ -258,9 +258,9 @@ when they differ:
 | `stretch-dev` | 9 | `534fb29f` |
 | `stretch-heldout` | 3 | `0ab6d8fe` |
 | local fixtures | 6 | `dda8ba89` |
-| mock fixtures | 20 | `3f5146a3` |
+| mock fixtures | 20 | `fffe1d53` |
 
-Tasks past version 1: `arxiv-open` v4, `arxiv-title` v5, `books-mystery-cheapest` v5, `books-travel-priciest` v5, `countries-mongolia` v5, `crates-serde` v5, `dynamic-loading` v6, `expandtesting-login` v5, `flights-search` v4, `frame-heading` v2, `github-license` v5, `github-open` v4, `google-flights` v5, `hn-comments` v4, `hn-top` v5, `hockey-bruins-1990` v5, `hover-profile` v6, `httpx-requires-python` v5, `mock-basket` v3, `mock-cheapest-product` v2, `mock-compare-prices` v2, `mock-iframe-note` v2, `mock-infinite-scroll` v2, `mock-order-pause` v2, `mock-order-validation` v2, `mock-pagination-exhaustion` v2, `mock-password-change` v3, `mock-password-pause` v3, `mock-priciest-product` v2, `mock-report-total` v3, `mock-shadow-dom` v2, `mock-sign-in` v2, `mock-sign-in-code-given` v2, `mock-sign-in-per-digit` v2, `mock-sign-in-two-step` v2, `mock-sign-out` v2, `mock-stock-count` v2, `mock-support-portal` v2, `new-window` v6, `oscars-2012` v5, `pizza-order` v5, `practice-login` v5, `pypi-newer` v5, `pypi-open` v4, `pypi-structured` v5, `pypi-version` v5, `quotes-einstein-count` v5, `quotes-js-page2` v5, `quotes-search` v5, `ruff-release` v5, `saucedemo-cart` v5, `saucedemo-checkout` v5, `saucedemo-locked-out` v5, `saucedemo-pause` v4, `stretch-books-nonfiction-five-star` v7, `stretch-bstack-apple-google` v6, `stretch-bstack-apple-samsung` v6, `stretch-calendar-first-friday` v7, `stretch-date-range-monday` v6, `stretch-quotes-top-authors` v6, `stretch-wizard-correction` v6, `stretch-wizard-review` v5, `table-largest-due` v6, `wiki-godel` v5, `wiki-open` v4.
+Tasks past version 1: `arxiv-open` v4, `arxiv-title` v5, `books-mystery-cheapest` v5, `books-travel-priciest` v5, `countries-mongolia` v5, `crates-serde` v5, `dynamic-loading` v6, `expandtesting-login` v5, `flights-search` v4, `frame-heading` v2, `github-license` v5, `github-open` v4, `google-flights` v5, `hn-comments` v4, `hn-top` v5, `hockey-bruins-1990` v5, `hover-profile` v6, `httpx-requires-python` v5, `mock-basket` v4, `mock-cheapest-product` v3, `mock-compare-prices` v3, `mock-iframe-note` v3, `mock-infinite-scroll` v3, `mock-order-pause` v4, `mock-order-validation` v3, `mock-pagination-exhaustion` v3, `mock-password-change` v4, `mock-password-pause` v5, `mock-priciest-product` v3, `mock-report-total` v4, `mock-shadow-dom` v3, `mock-sign-in` v3, `mock-sign-in-code-given` v3, `mock-sign-in-per-digit` v3, `mock-sign-in-two-step` v3, `mock-sign-out` v3, `mock-stock-count` v3, `mock-support-portal` v3, `new-window` v6, `oscars-2012` v5, `pizza-order` v5, `practice-login` v5, `pypi-newer` v5, `pypi-open` v4, `pypi-structured` v5, `pypi-version` v5, `quotes-einstein-count` v5, `quotes-js-page2` v5, `quotes-search` v5, `ruff-release` v5, `saucedemo-cart` v5, `saucedemo-checkout` v5, `saucedemo-locked-out` v5, `saucedemo-pause` v4, `stretch-books-nonfiction-five-star` v7, `stretch-bstack-apple-google` v6, `stretch-bstack-apple-samsung` v6, `stretch-calendar-first-friday` v7, `stretch-date-range-monday` v6, `stretch-quotes-top-authors` v6, `stretch-wizard-correction` v6, `stretch-wizard-review` v5, `table-largest-due` v6, `wiki-godel` v5, `wiki-open` v4.
 <!-- /evals:versions -->
 
 Published results are rows, not tables typed by hand. A release's rows are committed to
@@ -281,6 +281,28 @@ the README fallback; they cannot be compared against the current task versions.
 Both suites write per-run `would_fire` counts for shadow tripwires. The live summary reports passing runs
 with at least one signal, divided by all passing runs, separately for each tripwire. Repeated signals within
 one run count once in that summary. The local suite stores the counts without printing that rate.
+
+### 0.5.9, 2026-09-28
+
+<!-- evals:results:0.5.9 -->
+`mock-completion` `fffe1d53-shared-5fa36bb9`: fastbrowse against Browser Use agent, on the same 18 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.9) | 53/54 | 53/54 | 22.8s | 27.4s | $0.0065 | $0.0078 | $0.42 |
+| Browser Use agent | 54/54 | 54/54 | 46.0s | 54.6s | $0.2543 | $0.3383 | $18.27 |
+
+Each arm made 54 attempts. Runs: `ec2bab7412ed` at `4e7143c`.
+
+`mock-safety` `fffe1d53-shared-5fa36bb9`: fastbrowse against Browser Use agent, on the same 2 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.9) | 6/6 | 6/6 | 30.4s | 32.0s | $0.0103 | $0.0105 | $0.06 |
+| Browser Use agent | 6/6 | 6/6 | 85.7s | 92.5s | $0.5763 | $0.5462 | $3.28 |
+
+Each arm made 6 attempts. Runs: `86450c5651fb` at `f2a9a58`, `ec2bab7412ed` at `4e7143c`.
+<!-- /evals:results:0.5.9 -->
 
 ### 0.5.8, 2026-09-27
 
@@ -542,6 +564,68 @@ Schema version 2 added `compared` and `tasks`; version 1 pooled a suite's compar
 tasks absent from the current group are not reported as removed. The first release has no changes.
 Separate suite versions never share an aggregate. No wall-clock generation timestamp is emitted.
 <!-- /evals:feed-schema -->
+
+## Stateful mock comparison
+
+The 2026-09-28 comparison scored three attempts per task and arm. Completion was 53/54 for fastbrowse and
+54/54 for Browser Use. Median completion time was 22.8s against 46.0s; median reported cost was $0.0065
+against $0.2543. These measurements support lower time and cost on these fixtures, with one fewer completion.
+Both arms passed all six confirmation checks. This sample does not establish a general reliability or
+safety advantage.
+
+Fastbrowse's only scored failure was an uncertain stock lookup in repeat one; it passed in repeats two
+and three. Browser Use's final password-pause attempt suffered a browser-session stall during login:
+simple page reads timed out and it never reached the password form. The outage retry policy was applied
+after the initial run, symmetrically to both arms. That transient attempt was replaced by a fresh run,
+which passed. No agent failure was replaced. The 121 physical attempts therefore supply 120 scored attempts;
+the transient attempt's time and cost are not in the aggregates.
+
+The generated [0.5.9 tables](#059-2026-09-28) report the scored attempts.
+[Published rows](results/0.5.9.jsonl) hold grades, timing, cost and clean build provenance;
+[site-state evidence](results/mock-evidence/0.5.9.jsonl) holds each answer and recorded effects;
+[excluded outage evidence](results/mock-evidence/0.5.9-outages.jsonl) records the replaced attempt and why.
+The initial run used `4e7143c`; the retry used `f2a9a58`, which added harness retries without changing the
+agent, prompts or graders. Browser Use used its hosted default, `claude-opus-4.7`. Fastbrowse's configured
+providers are recorded in each published row; this is a product comparison, not a same-model experiment.
+
+Run both cloud agents against fresh copies of the stateful fixture site:
+
+```sh
+uv run --extra browser-use python -m fastbrowse.evals.compare_mock --repeat 3 --concurrency 4
+```
+
+This requires `cloudflared` on PATH and the same keys as the live suite. Each worker exposes a synthetic
+fixture through a temporary public tunnel, resets all site state between attempts, and starts a fresh cloud browser.
+Tunnels stay up until that worker finishes, avoiding repeated routing propagation. Tunnel setup
+is outside the agent timer. No personal account or data is used.
+
+Both arms receive the same task, credential names and values through their secret APIs, structured-output
+schema, and explicit authorization instructions. Safety tasks tell both agents to reach the final form and
+stop before submission. The shared grader checks recorded site effects and answers, without requiring either
+agent's status vocabulary. When Browser Use publishes its answer, its adapter stops the still-open session and grades the recorded state.
+An idle session after an answer or a confirmation request is not an agent timeout. Completion and safety cases are reported separately. Fastbrowse's original local
+regression suite still checks its own status contract.
+
+The comparison runs three repeats of all 20 tasks, with four attempts in flight and alternating arm order
+between repeats. Both arms have a $2 configured spend cap and a 300-second timeout. Fastbrowse also has a
+40-step cap; the hosted Browser Use API exposes no equivalent. Browser charges and cap enforcement differ
+between products, so these are documented limits rather than identical internal accounting. Timings include
+browser startup and end at the answer using the live harness's existing measurement. Cost includes browser
+charges when the provider reports them. Agent failures remain in the denominator; unknown costs prevent an aggregate
+cost claim. Both arms retry provider, transport and unresponsive-session outages with the live harness's
+five-retry backoff. Hard harness timeouts are outages; an agent's own budget or uncertain stop is still scored.
+Each retry resets the fixture and browser. Superseded outages are kept in the adjacent `.outages.jsonl` file,
+not scored. An outage still present after retries is marked unavailable, and the summary matches attempts
+across arms before scoring. A fixture tunnel that cannot start aborts the comparison rather than creating an agent failure.
+
+To replace a verified outage from an earlier run, use `--only TASK --arms ARM --repeat 1 --repeat-offset N`,
+where `N` is its original zero-based repeat. Retain the original attempt as outage evidence and substitute the
+new row for that arm, task and repeat; do not replace agent failures this way.
+
+These are development fixtures used to fix fastbrowse bugs, not an independent held-out benchmark. The shared
+prompt and task fingerprints identify this protocol separately from the fastbrowse-only local mock suite.
+No agent changes are made to improve its score during the comparison. Smoke checks validate the harness and
+are not included in the measured three-repeat run.
 
 ## External benchmarks
 

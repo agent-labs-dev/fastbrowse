@@ -234,8 +234,14 @@ class StepResult(Frozen):
     duration_ms: int = Field(ge=0)
 
 
+class BudgetStop(Frozen):
+    resource: Literal["steps", "dollars", "seconds", "jev_calls", "llm_calls"]
+    limit: float
+
+
 class RunResult(Frozen):
     status: Status
+    budget: BudgetStop | None = None
     answer: str | None
     data: JsonValue | None
     evidence: tuple[Evidence, ...]
