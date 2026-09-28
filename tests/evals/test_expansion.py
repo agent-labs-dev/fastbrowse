@@ -202,7 +202,7 @@ async def test_final_observer_reads_local_chrome_after_driver_disconnects() -> N
     from fastbrowse.models import LocalChrome
 
     if find_chrome(None) is None:
-        pytest.skip("Chrome is not installed")  # ty: ignore[too-many-positional-arguments]
+        pytest.skip("Chrome is not installed")
     with fixture_server() as (base, _), local_chrome(LocalChrome()) as browser:
         client = CDPClient(browser.cdp_url)
         await client.start()

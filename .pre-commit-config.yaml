@@ -3,7 +3,7 @@
 # The hook versions match the pinned tools in pyproject.toml; `uv run pre-commit autoupdate` moves both.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.8
+    rev: v0.16.9
     hooks:
       - id: ruff-check
         exclude: ^\.sift/(gate|agents)\.py$
@@ -11,7 +11,7 @@ repos:
       - id: ruff-format
         exclude: ^\.sift/(gate|agents)\.py$
   - repo: https://github.com/astral-sh/ty-pre-commit
-    rev: v0.0.82
+    rev: v0.0.84
     hooks:
       # Checks the whole project, not the staged files: a change in one file moves diagnostics in another.
       - id: ty
