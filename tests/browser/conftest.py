@@ -121,7 +121,7 @@ def main_site(iframe_site: str) -> Iterator[str]:
 @pytest.fixture(scope="session")
 def chrome_connection() -> Iterator[BrowserConnection]:
     if find_chrome(load_settings().chrome) is None:
-        pytest.skip("Chrome is not installed")  # ty: ignore[too-many-positional-arguments]
+        pytest.skip("Chrome is not installed")
     with local_chrome(load_settings().local_chrome()) as connection:
         yield connection
 
