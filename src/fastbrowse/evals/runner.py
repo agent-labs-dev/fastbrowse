@@ -35,7 +35,7 @@ from fastbrowse.evals.mock_tasks import MockTask
 from fastbrowse.evals.status import normalize
 from fastbrowse.evals.tasks import TASKS, LocalTask
 from fastbrowse.evals.versions import load_lock, provenance, suite_version, task_version
-from fastbrowse.models import BrowserConnection, Limits
+from fastbrowse.models import BrowserConnection, Limits, RunResult
 from fastbrowse.safety import ScopedSecrets, origin_of
 from fastbrowse.telemetry import traced, transient_seconds
 
@@ -43,7 +43,7 @@ MOCK_LIMITS = Limits(max_steps=40)
 """A mock task signs in, walks to a page and acts, which is more steps than the local suite's single form needs."""
 
 
-def _row(result: object, *, task_id: str, failure: str | None, seconds: float, lost: float) -> dict[str, object]:
+def _row(result: RunResult, *, task_id: str, failure: str | None, seconds: float, lost: float) -> dict[str, object]:
     """The fields every suite's row carries, so one report can read both."""
     return {
         "correct": failure is None,
@@ -75,7 +75,7 @@ async def _drive(
     settings: Settings,
     secrets: ScopedSecrets | None,
     limits: Limits,
-) -> tuple[object, float, float]:
+) -> tuple[RunResult, float, float]:
     """One run of one task, returning its result and how long it took, wall and transient."""
     config = Config()
     jev, llm = settings.jev(http), settings.llm(http)
@@ -138,8 +138,9 @@ async def run_mock_task(
         )
 
 
-def _tasks(only: list[str]) -> tuple[list[tuple[str, LocalTask | MockTask]], list[str]]:
+def _tasks(only: list[str], suites: list[str]) -> tuple[list[tuple[str, LocalTask | MockTask]], list[str]]:
     chosen: list[tuple[str, LocalTask | MockTask]] = [("local", t) for t in TASKS] + [("mock", t) for t in MOCK_TASKS]
+    chosen = [(suite, task) for suite, task in chosen if suite in suites]
     if only:
         chosen = [(suite, t) for suite, t in chosen if t.id in only]
     missing = sorted(set(only) - {t.id for _, t in chosen})
@@ -148,21 +149,22 @@ def _tasks(only: list[str]) -> tuple[list[tuple[str, LocalTask | MockTask]], lis
 
 async def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--suite", nargs="*", choices=["local", "mock"], default=["local", "mock"])
+    parser.add_argument("--suite", nargs="+", choices=["local", "mock"], default=["local", "mock"])
     parser.add_argument("--only", nargs="*", default=[])
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--out", type=Path, default=Path("artifacts/evals/local.jsonl"))
     args = parser.parse_args(argv)
-    chosen, missing = _tasks(args.only)
+    chosen, missing = _tasks(args.only, args.suite)
     if missing:
         parser.error(f"--only names no task: {', '.join(missing)}")
-    chosen = [(suite, task) for suite, task in chosen if suite in args.suite]
+    if args.repeat < 1:
+        parser.error("--repeat must be positive")
     settings = load_settings()
     lock = load_lock()
-    stamp = {
-        "suite_version": suite_version((t.id for t in TASKS), lock),
-        "run": provenance(providers=settings.providers(), argv=list(argv)),
+    stamps = {
+        name: suite_version((t.id for t in tasks), lock) for name, tasks in (("local", TASKS), ("mock", MOCK_TASKS))
     }
+    run = provenance(providers=settings.providers(), argv=list(argv))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, object]] = []
     with (
@@ -172,7 +174,7 @@ async def main(argv: list[str]) -> int:
         args.out.open("a", encoding="utf-8") as out,
     ):
         async with httpx.AsyncClient(timeout=60) as http:
-            for _ in range(args.repeat):
+            for repeat in range(args.repeat):
                 for suite, task in chosen:
                     sink = DirectorySink(Path(downloads))
                     if suite == "local":
@@ -181,7 +183,12 @@ async def main(argv: list[str]) -> int:
                     else:
                         assert isinstance(task, MockTask)
                         row = await run_mock_task(task, connection, http, sink, settings)
-                    row |= stamp | {"task_version": task_version(task.id, lock)}
+                    row |= {
+                        "run": run,
+                        "suite_version": stamps[suite],
+                        "task_version": task_version(task.id, lock),
+                        "repeat": repeat,
+                    }
                     rows.append(row)
                     out.write(json.dumps(row) + "\n")
                     mark = "PASS" if row["passed"] else "FAIL"

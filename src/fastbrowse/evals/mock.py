@@ -116,7 +116,6 @@ class Site:
         self.carts: dict[str, list[str]] = {}
         self.orders_placed: list[dict[str, str]] = []
         self.password_changes: list[tuple[str, str]] = []
-        self.uploads: dict[str, int] = {}
 
     def record(self, path: str, fields: dict[str, str]) -> None:
         with self._lock:
@@ -174,10 +173,6 @@ class Site:
     def note_code_attempt(self, code: str) -> None:
         with self._lock:
             self.code_attempts.append(code)
-
-    def note_upload(self, filename: str, size: int) -> None:
-        with self._lock:
-            self.uploads[filename] = size
 
 
 def _page(title: str, body: str) -> bytes:
@@ -293,7 +288,6 @@ class _Handler(BaseHTTPRequestHandler):
             "/widgets": self._widgets_post,
             "/widgets/shadow": self._shadow_post,
             "/portal": self._portal_post,
-            "/upload": self._upload_post,
         }.get(path)
         if route is None:
             self._send(HTTPStatus.NOT_FOUND, b"<h1>Not found</h1>")
@@ -728,13 +722,6 @@ class _Handler(BaseHTTPRequestHandler):
         )
         self._send(HTTPStatus.OK, body.encode(), "text/csv")
 
-    def _upload_post(self, fields: dict[str, str]) -> None:
-        length = int(self.headers.get("Content-Length") or 0)
-        raw = self.rfile.read(length)
-        filename, size = _first_part(raw, self.headers.get("Content-Type") or "")
-        self.site.note_upload(filename, size)
-        self._html("Upload received", f"<p>Received {filename} ({size} bytes).</p>")
-
 
 def _looks_like_postcode(value: str) -> bool:
     """The shapes a UK postcode takes: one or two letters, a digit, an optional letter, a space, then three more.
@@ -743,24 +730,6 @@ def _looks_like_postcode(value: str) -> bool:
     would fail a run that filled the form exactly as asked.
     """
     return bool(re.fullmatch(r"[A-Z]{1,2}\d[A-Z\d]? \d[A-Z]{2}", value))
-
-
-def _first_part(body: bytes, content_type: str) -> tuple[str, int]:
-    """The first uploaded file's name and size, from a multipart body. Enough for a fixture, not a framework."""
-    marker = "boundary="
-    if marker not in content_type:
-        return "", 0
-    boundary = content_type.split(marker, 1)[1].strip().strip('"').encode()
-    for chunk in body.split(b"--" + boundary):
-        if b"filename=" not in chunk:
-            continue
-        head, _, rest = chunk.partition(b"\r\n\r\n")
-        name = ""
-        for line in head.split(b"\r\n"):
-            if b"filename=" in line:
-                name = line.split(b"filename=", 1)[1].strip().strip(b'"').decode("utf-8", "replace")
-        return name, max(0, len(rest.rstrip(b"\r\n-")))
-    return "", 0
 
 
 @contextmanager
