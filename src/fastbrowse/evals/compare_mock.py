@@ -130,7 +130,7 @@ async def attempt(
                     http,
                     record=None,
                     max_dollars=MAX_DOLLARS,
-                    stop_at_confirmation=task.expect is Status.NEEDS_CONFIRMATION,
+                    stop_at_answer=True,
                 )
             else:
                 result = await run_task(

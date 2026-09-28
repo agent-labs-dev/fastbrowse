@@ -820,7 +820,7 @@ async def test_cancelling_one_grade_leaves_the_overlapping_probe_for_another() -
             await asyncio.gather(watching, *grading, return_exceptions=True)
 
 
-async def test_hosted_confirmation_wait_stops_after_the_published_reply(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_hosted_idle_session_stops_after_the_published_reply(monkeypatch: pytest.MonkeyPatch) -> None:
     import browser_use_sdk.v3
 
     stopped = asyncio.Event()
@@ -861,7 +861,7 @@ async def test_hosted_confirmation_wait_stops_after_the_published_reply(monkeypa
     monkeypatch.setattr(live, "load_settings", lambda: SimpleNamespace(browser_key=lambda: "key"))
     async with httpx.AsyncClient() as http:
         outcome, report = await live.hosted_arm(
-            task("pypi-newer"), http, record=None, max_dollars=2.0, stop_at_confirmation=True
+            task("pypi-newer"), http, record=None, max_dollars=2.0, stop_at_answer=True
         )
     assert stopped.is_set()
     assert outcome.answer == session.output and report.dollars == 0.23

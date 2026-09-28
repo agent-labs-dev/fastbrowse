@@ -361,3 +361,12 @@ def test_status_rule_is_versioned(monkeypatch: pytest.MonkeyPatch) -> None:
     before = versions.fingerprint(live.SUITES["core"][0])
     monkeypatch.setattr(status, "status_matches", lambda *_: True)
     assert versions.fingerprint(live.SUITES["core"][0]) != before
+
+
+def test_mock_results_do_not_replace_the_live_site_headline(monkeypatch: pytest.MonkeyPatch) -> None:
+    live_row = _row("pypi-version", fastbrowse_version="1.0.0")
+    mock_row = _row("mock-stock-count", fastbrowse_version="1.0.1") | {"suite": "mock-completion"}
+    monkeypatch.setattr(versions, "published", lambda: [("1.0.1", [mock_row]), ("1.0.0", [live_row])])
+    text = versions.render_readme("<!-- evals:headline -->\n<!-- /evals:headline -->")
+    assert "released as 1.0.0" in text
+    assert "mock-completion" not in text

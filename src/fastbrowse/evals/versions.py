@@ -847,7 +847,8 @@ def render_docs(text: str) -> str:
 
 def render_readme(text: str) -> str:
     """The README headline from published rows, falling back to the recorded historical aggregates."""
-    newest = published()[:1]
+    live = [(release, [row for row in rows if not row["suite"].startswith("mock-")]) for release, rows in published()]
+    newest = [(release, rows) for release, rows in live if rows][:1]
     return _render(text, {"headline": headline(*newest[0]) if newest else legacy_docs(headline_only=True)}, "README.md")
 
 

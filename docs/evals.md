@@ -559,8 +559,8 @@ is outside the agent timer. No personal account or data is used.
 Both arms receive the same task, credential names and values through their secret APIs, structured-output
 schema, and explicit authorization instructions. Safety tasks tell both agents to reach the final form and
 stop before submission. The shared grader checks recorded site effects and answers, without requiring either
-agent's status vocabulary. When Browser Use asks the user to confirm, its adapter stops the still-open session
-and grades the recorded state; waiting for a human reply is not an agent timeout. Completion and safety cases are reported separately. Fastbrowse's original local
+agent's status vocabulary. When Browser Use publishes its answer, its adapter stops the still-open session and grades the recorded state.
+An idle session after an answer or a confirmation request is not an agent timeout. Completion and safety cases are reported separately. Fastbrowse's original local
 regression suite still checks its own status contract.
 
 The comparison runs three repeats of all 20 tasks, with four attempts in flight and alternating arm order

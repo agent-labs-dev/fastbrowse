@@ -378,14 +378,12 @@ async def hosted_arm(
     *,
     record: Path | None,
     max_dollars: float | None = None,
-    stop_at_confirmation: bool = False,
+    stop_at_answer: bool = False,
 ) -> tuple[Outcome, ArmReport]:
     from browser_use_sdk.v3 import BrowserUseError  # an optional extra
 
     try:
-        return await _hosted_run(
-            task, http, record=record, max_dollars=max_dollars, stop_at_confirmation=stop_at_confirmation
-        )
+        return await _hosted_run(task, http, record=record, max_dollars=max_dollars, stop_at_answer=stop_at_answer)
     # The SDK's message quotes the response body, which can echo the key: report the status or type alone.
     except BrowserUseError as error:
         failed = Unavailable if error.status_code in RETRYABLE_STATUS else RuntimeError
@@ -494,7 +492,7 @@ async def _hosted_run(
     *,
     record: Path | None,
     max_dollars: float | None = None,
-    stop_at_confirmation: bool = False,
+    stop_at_answer: bool = False,
 ) -> tuple[Outcome, ArmReport]:
     from browser_use_sdk.v3 import AsyncBrowserUse, BrowserUseError  # an optional extra
 
@@ -517,7 +515,7 @@ async def _hosted_run(
         _watch("browser-use", task, (await client.sessions.get(run.session_id)).live_url)
     paused_output = None
     try:
-        if stop_at_confirmation and run.session_id is not None:
+        if stop_at_answer and run.session_id is not None:
             while not finishing.done():
                 await asyncio.wait({finishing}, timeout=2)
                 if not finishing.done():

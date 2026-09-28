@@ -29,6 +29,7 @@ from fastbrowse.browser import session as browser_session
 from fastbrowse.config import Config
 from fastbrowse.models import (
     BrowserConnection,
+    BudgetStop,
     CostBreakdown,
     CostLine,
     LocalChrome,
@@ -378,6 +379,31 @@ async def test_initial_navigation_error_returns_error_result(monkeypatch: pytest
     result = await run_task("Read", start="https://example.test", jev=ScriptedJev({}), llm=no_shortcut)
     assert result.status is Status.ERROR
     assert result.error == "Page.navigate failed (ConnectionError)"
+
+
+async def test_a_teardown_error_replaces_the_budget_with_its_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    CdpTransport(monkeypatch)
+    stopped = RunResult(
+        status=Status.BUDGET_EXCEEDED,
+        budget=BudgetStop(resource="steps", limit=20),
+        answer=None,
+        data=None,
+        evidence=(),
+        steps=(),
+        cost=CostBreakdown(),
+        artifacts=(),
+    )
+    monkeypatch.setattr(Agent, "run", AsyncMock(return_value=stopped))
+    monkeypatch.setattr(CDPClient, "stop", AsyncMock(side_effect=ConnectionError("secret")))
+
+    @contextmanager
+    def chrome(_binary: str | None) -> Generator[BrowserConnection]:
+        yield CONNECTION
+
+    monkeypatch.setattr(chrome_adapter, "local_chrome", chrome)
+    result = await run_task("Read", start="https://example.test", jev=ScriptedJev({}), llm=ScriptedLLM([{"url": None}]))
+    assert result.status is Status.ERROR
+    assert result.budget is None
 
 
 @pytest.mark.parametrize("failure", ["validation", "cancel", "unexpected"])
