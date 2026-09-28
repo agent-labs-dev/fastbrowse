@@ -22,6 +22,7 @@ from urllib.parse import SplitResult, urlsplit
 
 from cdp_use.cdp.input.commands import DispatchMouseEventParameters
 from cdp_use.cdp.page.commands import CaptureScreenshotParameters, GetNavigationHistoryReturns
+from cdp_use.cdp.runtime.commands import EvaluateParameters
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from fastbrowse.browser.session import BrowserSession
@@ -188,6 +189,12 @@ class _FrameText(Frozen):
     inaccessible_frames: int = 0
 
 
+class _DocumentResponse(Frozen):
+    url: str
+    response_status: int | None
+    document_key: str
+
+
 class _Snapshot(_FrameText):
     """snapshot.js output for one frame."""
 
@@ -342,12 +349,14 @@ class CdpPage(Page):
             return self._dialog_observation(dialog)
         history = asyncio.create_task(self._can_go_back())
         snapshot = asyncio.create_task(self._snapshot_all_frames())
+        response = asyncio.create_task(self._document_response())
         try:
-            can_go_back, (frames, inaccessible) = await asyncio.gather(history, snapshot)
+            can_go_back, (frames, inaccessible), document = await asyncio.gather(history, snapshot, response)
         finally:
             history.cancel()
             snapshot.cancel()
-            await asyncio.gather(history, snapshot, return_exceptions=True)
+            response.cancel()
+            await asyncio.gather(history, snapshot, response, return_exceptions=True)
         main = frames.get(_MAIN)
         controls: list[Control] = []
         control_state: dict[str, tuple[str, str, int, list[object] | None]] = {}
@@ -383,6 +392,11 @@ class CdpPage(Page):
             title=title,
             page_key=page_key,
             document_key=main.raw.document_key if main else "",
+            response_status=(
+                document.response_status
+                if main and main.raw.url == document.url and main.raw.document_key == document.document_key
+                else None
+            ),
             captured_at=datetime.now(UTC),
             controls=tuple(kept),
             omitted_controls=omitted,
@@ -1165,13 +1179,26 @@ class CdpPage(Page):
         )
         return raw is not False
 
-    async def response_status(self) -> int | None:
-        raw = await self._evaluate(
-            self._session.active_session_id,
-            "performance.getEntriesByType('navigation')[0]?.responseStatus ?? null",
+    async def _document_response(self) -> _DocumentResponse:
+        # Page scripts can replace timing APIs, so status is read in a world they cannot modify.
+        session_id = self._session.active_session_id
+        tree = await self._session.client.send.Page.getFrameTree(session_id=session_id)
+        world = await self._session.client.send.Page.createIsolatedWorld(
+            params={"frameId": tree["frameTree"]["frame"]["id"], "worldName": "fastbrowse-status"},
+            session_id=session_id,
         )
-        # Chrome reports 0 for a document it did not fetch over HTTP, which says nothing about success.
-        return raw if isinstance(raw, int) and raw > 0 else None
+        raw = await self._evaluate(
+            session_id,
+            "(() => { const navigation = performance.getEntriesByType('navigation')[0]; "
+            "return {url: location.href, document_key: String(performance.timeOrigin), "
+            "response_status: navigation?.name.split('#')[0] === location.href.split('#')[0] "
+            "? navigation.responseStatus || null : null}; })()",
+            context_id=world["executionContextId"],
+        )
+        return _DocumentResponse.model_validate(raw)
+
+    async def response_status(self) -> int | None:
+        return (await self._document_response()).response_status
 
     async def navigate(self, url: str, load_timeout_seconds: float = 15.0, *, back_to: str | None = None) -> None:
         """Setup helper (tests, initial task URL): navigate the active tab and wait until its document is usable.
@@ -1432,10 +1459,11 @@ class CdpPage(Page):
             f"setTimeout(poll, {_SETTLE_POLL_SECONDS * 1000}); }}; poll(); }})"
         )
 
-    async def _evaluate(self, session_id: str, expression: str) -> JsonValue:
-        out = await self._session.client.send.Runtime.evaluate(
-            params={"expression": expression, "returnByValue": True, "awaitPromise": True}, session_id=session_id
-        )
+    async def _evaluate(self, session_id: str, expression: str, *, context_id: int | None = None) -> JsonValue:
+        params: EvaluateParameters = {"expression": expression, "returnByValue": True, "awaitPromise": True}
+        if context_id is not None:
+            params["contextId"] = context_id
+        out = await self._session.client.send.Runtime.evaluate(params=params, session_id=session_id)
         if "exceptionDetails" in out:
             raise BrowserError("Runtime.evaluate failed (JavaScriptError)")
         return out["result"].get("value")

@@ -11,6 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Keep HTTP error status in browsing observations and recovery. Failed links are withheld on unchanged
+  source pages, and an unfinished run reports the observed session failure rather than a guessed site restriction.
+- Empty reads no longer excuse repeated navigation or form cycles; reads that add evidence still do.
+- Retire cancelled CDP waits so their late replies are not reported as duplicate responses.
+
 - A supplied `TYPESAFE_API_KEY` selects direct Jev; otherwise OpenRouter is primary, with Vercel AI Gateway
   supported as a backup or explicit primary. `FASTBROWSE_JEV_SOURCE` overrides automatic selection.
 

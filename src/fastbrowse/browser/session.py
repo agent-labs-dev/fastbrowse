@@ -134,6 +134,12 @@ class _BrowserClient(CDPClient):
             # Join the abandoned reply, as a cancelled caller's cleanup must not run ahead of it.
             reply.cancel()
             await asyncio.gather(reply, return_exceptions=True)
+            # cdp-use warns on cancelled waits and logs reply contents for removed ones; drain late replies.
+            for request_id, pending in tuple(self.pending_requests.items()):
+                if pending.cancelled():
+                    drain = pending.get_loop().create_future()
+                    drain.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+                    self.pending_requests[request_id] = drain
 
     async def _alive(self) -> bool:
         try:

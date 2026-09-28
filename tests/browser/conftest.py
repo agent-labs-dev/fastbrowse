@@ -50,6 +50,15 @@ def _handler_for(directory: Path, iframe_origin: str | None = None) -> type[Base
             pass
 
         def do_GET(self) -> None:
+            if self.path.startswith("/http-error/"):
+                status = int(self.path.rsplit("/", 1)[1])
+                body = b"<html><body>Sorry</body></html>"
+                self.send_response(status)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if self.path.startswith("/report.csv"):
                 body = b"name,total\nReport,139.79\n" + b"item,1\n" * 10000
                 self.send_response(200)

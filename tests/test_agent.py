@@ -1020,7 +1020,9 @@ async def test_going_back_after_reading_a_page_is_progress() -> None:
     await _click(agent, state, results, "httpx")
     agent._settle(state, package)
     state.history.append(
-        HistoryEntry(operation=Operation.READ, target=None, outcome=StepOutcome.EXECUTED, page_changed=False)
+        HistoryEntry(
+            operation=Operation.READ, target=None, outcome=StepOutcome.EXECUTED, page_changed=False, read_progress=True
+        )
     )
     state.history.append(
         HistoryEntry(operation=Operation.BACK, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
@@ -4347,3 +4349,183 @@ async def test_action_detour_keeps_context_even_when_the_information_answer_is_a
     assert progressed
     assert "123456" in state.notes.render(4000)
     assert not state.notes.evidenced("order")
+
+
+@pytest.mark.parametrize("useful_read", [False, True])
+async def test_only_a_useful_read_excuses_repeating_a_navigation_cycle(useful_read: bool) -> None:
+    state = await run_state()
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    front = observation((_button("More"),))
+    failed = observation(()).model_copy(update={"url": "https://example.test/?p=2"})
+    source, destination = state_key(front), state_key(failed)
+    state.reached = {source: 0, destination: 1}
+    state.crossed = {(source, "click More", destination)}
+    click = HistoryEntry(operation=Operation.CLICK, target="More", outcome=StepOutcome.EXECUTED, page_changed=True)
+    state.history = [
+        click,
+        HistoryEntry(
+            operation=Operation.READ,
+            target=None,
+            outcome=StepOutcome.EXECUTED,
+            page_changed=False,
+            read_progress=useful_read,
+        ),
+        HistoryEntry(operation=Operation.BACK, target=None, outcome=StepOutcome.EXECUTED, page_changed=True),
+        click,
+    ]
+    state.left = source
+    assert (agent._settle(state, failed) is None) is useful_read
+
+
+@pytest.mark.parametrize(
+    ("http_status", "status"),
+    [
+        (401, Status.NEEDS_LOGIN),
+        (403, Status.BLOCKED),
+        (404, Status.STUCK),
+        (419, Status.UNAVAILABLE),
+        (429, Status.UNAVAILABLE),
+        (503, Status.UNAVAILABLE),
+    ],
+)
+async def test_http_failure_survives_back_and_bounds_the_final_diagnosis(http_status: int, status: Status) -> None:
+    state = await run_state()
+    front = observation((_button("More"),))
+    failed = observation(()).model_copy(
+        update={
+            "url": "https://example.test/?p=2",
+            "response_status": http_status,
+            "viewport_text": "Sorry",
+        }
+    )
+    llm = ScriptedLLM(
+        [
+            {
+                "diagnosis": "This website never permits pagination",
+                "next_subgoal": "Give up",
+                "give_up": True,
+            }
+        ]
+    )
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"")
+    agent = Agent(page, ScriptedJev({}), llm)
+    agent._note_effect(state, failed)
+    agent._note_effect(state, front)
+    with pytest.raises(_Stop) as stopped:
+        await agent._recover(state, front, "No route to the remaining story")
+    assert stopped.value.status is status
+    assert f"HTTP {http_status}" in str(stopped.value)
+    assert failed.url in str(stopped.value)
+    assert "browser session" in str(stopped.value)
+    assert "never permits" not in str(stopped.value)
+    assert f"HTTP {http_status}" in llm.calls[-1][1][-1].content
+
+
+async def test_failed_pager_is_not_offered_again_from_an_unchanged_source() -> None:
+    state = await run_state()
+    more = Control(
+        id="more",
+        frame_id=None,
+        role="link",
+        label="More",
+        href="/?p=2",
+        next_page=True,
+        operations=frozenset({Operation.CLICK}),
+    )
+    front = observation((more, _button("Search")))
+    failed = observation(()).model_copy(update={"url": "https://example.test/?p=2", "response_status": 419})
+    page = Mock(spec=Page)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
+    page.changed = AsyncMock(return_value=False)
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    await agent._step(state, front, _code_decision(Operation.CLICK, more), gate=False)
+    agent._note_effect(state, failed)
+    available = agent_module._without_failed_links(state, front)
+    assert [c.label for c in available.controls] == ["Search"]
+    assert (
+        more
+        in agent_module._without_failed_links(
+            state, front.model_copy(update={"controls": (more, _button("Signed in"))})
+        ).controls
+    )
+    with pytest.raises(_Stop, match="HTTP 419"):
+        await agent._step(state, front, _code_decision(Operation.CLICK, more), gate=False)
+    assert page.act.await_count == 1
+    agent._note_effect(state, failed.model_copy(update={"response_status": 200}))
+    assert more in agent_module._without_failed_links(state, front).controls
+
+
+async def test_http_error_does_not_close_a_pipelined_list_or_read_the_error_as_records() -> None:
+    agent, state, page, observations, _, llm = await _pipeline_fixture()
+    page.observe.side_effect = [observations[1].model_copy(update={"response_status": 503})]
+    calls_before = len(llm.calls)
+    await agent._pipeline_pages(state, observations[0])
+    assert state.paging_failed and not state.next_page
+    assert not state.notes.evidenced("r1")
+    assert len(llm.calls) == calls_before
+    assert page.navigate.await_count == 1
+    assert agent_module._without_failed_links(state, observations[0]).controls == ()
+
+
+@pytest.mark.parametrize("exhausted", [False, True])
+async def test_http_failure_cannot_override_missing_input(exhausted: bool) -> None:
+    state = await run_state()
+    failed = observation(()).model_copy(update={"response_status": 401})
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"")
+    agent = Agent(
+        page,
+        ScriptedJev({}),
+        ScriptedLLM(
+            [
+                {
+                    "diagnosis": "A delivery address is missing",
+                    "next_subgoal": "Ask",
+                    "give_up": True,
+                    "needs_input": True,
+                }
+            ]
+        ),
+    )
+    agent._note_effect(state, failed)
+    if exhausted:
+        state.recoveries = agent._config.stall.max_recoveries
+    with pytest.raises(_Stop) as stopped:
+        await agent._recover(state, failed, "A delivery address is missing", gives_up_as=Status.NEEDS_INPUT)
+    assert stopped.value.status is Status.NEEDS_INPUT
+
+
+@pytest.mark.parametrize("response_status", [200, None])
+async def test_new_successful_route_retires_an_earlier_http_failure(response_status: int | None) -> None:
+    state = await run_state()
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    source = observation(()).model_copy(update={"response_status": 200})
+    failed = source.model_copy(update={"url": "https://example.test/error", "response_status": 403})
+    alternate = source.model_copy(update={"url": "https://example.test/search", "response_status": response_status})
+    agent._settle(state, source)
+    agent._note_effect(state, failed)
+    agent._note_effect(state, source)
+    agent._settle(state, source)
+    assert state.http_failure is not None
+    agent._note_effect(state, alternate)
+    agent._settle(state, alternate)
+    assert state.http_failure is None
+
+
+@pytest.mark.parametrize("status", [403, 429, 503])
+async def test_http_challenge_gets_a_chance_to_clear_before_recovery(status: int) -> None:
+    state = await run_state()
+    failed = observation(()).model_copy(update={"response_status": status})
+    success = failed.model_copy(update={"response_status": 200, "page_key": "cleared"})
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    agent._observe = AsyncMock(side_effect=[failed, success])
+    agent._outwait = AsyncMock(return_value=True)
+    agent._recover = AsyncMock(side_effect=_Stop(Status.BLOCKED, "premature recovery"))
+    agent._settle = Mock(side_effect=_Stop(Status.COMPLETE, "reached cleared page"))
+    with pytest.raises(_Stop) as stopped:
+        await agent._loop(state, None, None)
+    assert stopped.value.status is Status.COMPLETE
+    agent._outwait.assert_awaited_once_with(failed)
+    agent._recover.assert_not_awaited()
+    assert not state.paging_failed

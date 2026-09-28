@@ -730,3 +730,46 @@ async def test_a_reply_that_lands_during_the_liveness_probe_is_kept(monkeypatch:
         transport.delays["Target.getTargets"] = 0.08
         transport.blocked["Browser.getVersion"] = asyncio.Event()
         await session.client.send_raw("Target.getTargets")
+
+
+@pytest.mark.parametrize("failed", [False, True])
+async def test_cancelled_cdp_reply_is_drained_without_touching_other_requests(
+    caplog: pytest.LogCaptureFixture, failed: bool
+) -> None:
+    client = browser_session._BrowserClient("ws://localhost:9222")
+    sent = asyncio.Event()
+
+    async def send(message: str) -> None:
+        sent.set()
+
+    client.ws = Mock(send=send)
+    waiting = asyncio.get_running_loop().create_future()
+    client.pending_requests[999] = waiting
+    request = asyncio.create_task(client.send_raw("Runtime.evaluate", {"expression": "1"}))
+    await sent.wait()
+    request.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await request
+    drained = asyncio.Event()
+    response = {"id": client.msg_id, "error": {"code": -32000}} if failed else {"id": client.msg_id, "result": {}}
+    delivered = False
+
+    async def recv() -> str:
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return json.dumps(response)
+        drained.set()
+        await asyncio.Future()
+        raise AssertionError("cancelled receiver resumed")
+
+    client.ws.recv = recv
+    handler = asyncio.create_task(client._handle_messages())
+    await asyncio.wait_for(drained.wait(), timeout=1)
+    handler.cancel()
+    await asyncio.gather(handler, return_exceptions=True)
+    assert client.pending_requests == {999: waiting}
+    assert not waiting.done()
+    assert "duplicate response" not in caplog.text
+    assert "unexpected message" not in caplog.text
+    waiting.cancel()
