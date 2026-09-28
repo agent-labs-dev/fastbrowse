@@ -794,17 +794,11 @@
     field_state,
   ]);
 
-  // A client-side route did not receive the original document's HTTP response.
-  const navigation = performance.getEntriesByType('navigation')[0];
-  const response_status = navigation?.name.split('#')[0] === location.href.split('#')[0]
-    ? navigation.responseStatus || null : null;
-
   return {
     url: location.href,
     title: document.title,
     viewport_text,
     document_key: String(performance.timeOrigin),
-    response_status,
     controls: semantics,
     page_key,
     guards,

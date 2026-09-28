@@ -1157,7 +1157,10 @@ class Agent:
         key = state_key(observation)
         first = state.reached.get(key)
         if first is None:
-            if observation.response_status is not None and 200 <= observation.response_status < 400:
+            if state.http_failure is not None and (
+                (observation.response_status is None and observation.url != state.http_failure.url)
+                or (observation.response_status is not None and 200 <= observation.response_status < 400)
+            ):
                 state.http_failure = None
             state.reached[key] = len(state.history)
             if renews:

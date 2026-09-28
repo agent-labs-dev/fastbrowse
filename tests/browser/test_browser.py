@@ -824,3 +824,18 @@ async def test_http_status_is_not_attributed_to_a_client_side_route(
 
 async def _returned_http_error(page: CdpPage) -> bool:
     return (await page.observe()).url.endswith("/http-error/404")
+
+
+async def test_page_javascript_cannot_forge_the_http_status(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "Performance.prototype.getEntriesByType = performance.getEntriesByType = "
+        "() => [{name: location.href, responseStatus: 401}]; "
+        "Object.defineProperty(PerformanceNavigationTiming.prototype, 'responseStatus', {get: () => 401}); true",
+    )
+    assert (await page.observe()).response_status == 200
+    assert await page.response_status() == 200

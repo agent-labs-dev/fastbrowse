@@ -4496,12 +4496,13 @@ async def test_http_failure_cannot_override_missing_input(exhausted: bool) -> No
     assert stopped.value.status is Status.NEEDS_INPUT
 
 
-async def test_new_successful_route_retires_an_earlier_http_failure() -> None:
+@pytest.mark.parametrize("response_status", [200, None])
+async def test_new_successful_route_retires_an_earlier_http_failure(response_status: int | None) -> None:
     state = await run_state()
     agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
     source = observation(()).model_copy(update={"response_status": 200})
     failed = source.model_copy(update={"url": "https://example.test/error", "response_status": 403})
-    alternate = source.model_copy(update={"url": "https://example.test/search"})
+    alternate = source.model_copy(update={"url": "https://example.test/search", "response_status": response_status})
     agent._settle(state, source)
     agent._note_effect(state, failed)
     agent._note_effect(state, source)
