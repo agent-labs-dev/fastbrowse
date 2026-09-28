@@ -4547,6 +4547,13 @@ async def test_step_frame_stays_withheld_when_a_dialog_hides_page_text() -> None
     agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
     agent._redactor.register("password", "hunter2")
 
+    await agent._observe()
     assert await agent._frame() is None
     page.screenshot.assert_not_awaited()
-    page.withhold_frames.assert_called_with(True)
+    assert all(call.args == (True,) for call in page.withhold_frames.call_args_list)
+
+    page.observe.return_value = observation(()).model_copy(update={"viewport_text": "hunter2"})
+    assert await agent._frame() is None
+    page.observe.return_value = observation(())
+    assert await agent._frame() == b"secret pixels"
+    page.withhold_frames.assert_called_with(False)
