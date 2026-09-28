@@ -2997,3 +2997,38 @@ def test_counted_comparison_quotes_remain_in_notes_and_cannot_be_dropped_to_fit(
     assert "Alpha: $10" in rendered and "Beta: $2" in rendered
     with pytest.raises(NotesTooLarge):
         notes.render(len(rendered) - 1, preserve_requirements=True)
+
+
+async def test_tally_field_counts_leaf_list_items_from_their_start_boundary() -> None:
+    page = capture((BlockKind.LIST_ITEM, "Kettle - GBP 34.50"), (BlockKind.LIST_ITEM, "Mug - GBP 8.75"))
+    notes = Notes()
+    outcome = await read(
+        ScriptedLLM(
+            [
+                {
+                    "answered": True,
+                    "claims": [],
+                    "tallies": [
+                        {
+                            "requirement_id": "r",
+                            "complete": True,
+                            "groups": [
+                                {
+                                    "key": None,
+                                    "field": {"span": {"first": "s0", "last": "s1"}, "prefix": "", "suffix": " - GBP "},
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        ),
+        page,
+        "Count products",
+        ["r"],
+        notes,
+        requirements=[Requirement(id="r", text="Count products", kind=RequirementKind.INFORMATION, count_records=True)],
+    )
+    assert not outcome.incomplete
+    assert notes.evidenced("r")
+    assert notes.tallies[0].count == 2

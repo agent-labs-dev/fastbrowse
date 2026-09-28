@@ -50,6 +50,14 @@ def _handler_for(directory: Path, iframe_origin: str | None = None) -> type[Base
             pass
 
         def do_GET(self) -> None:
+            if self.path.startswith("/report.csv"):
+                body = b"name,total\nReport,139.79\n" + b"item,1\n" * 10000
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if self.path == "/download":
                 body = b"fastbrowse fixture attachment bytes for download checksum test"
                 self.send_response(200)

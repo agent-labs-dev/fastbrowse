@@ -30,7 +30,7 @@ from cdp_use.client import CDPClient
 from websockets.exceptions import ConnectionClosed, InvalidMessage, InvalidStatus
 
 from fastbrowse.clients.validation import RETRYABLE_STATUS
-from fastbrowse.models import Artifact, ArtifactKind, ArtifactSink, FrameHandler, Unavailable
+from fastbrowse.models import Artifact, ArtifactKind, ArtifactSink, FrameHandler, Frozen, Unavailable
 from fastbrowse.models import BrowserConnection as BrowserConnectionModel
 from fastbrowse.page import BrowserError, Dialog, Tab
 
@@ -153,6 +153,16 @@ class _TabState:
     opener_id: str | None = None
 
 
+class DownloadText(Frozen):
+    name: str
+    url: str
+    text: str
+
+
+_DOWNLOAD_TEXT_BYTES = 16_384
+_DOWNLOAD_TEXT_TOTAL = 65_536
+
+
 class BrowserSession:
     """Async context manager over one owned tab (plus any popups it opens).
 
@@ -194,7 +204,7 @@ class BrowserSession:
         self._artifacts: list[Artifact] = []
         self._downloads_captured = 0
         """Captured downloads by count: a navigation that aborts on one is not a navigation that failed."""
-        self._download_texts: list[tuple[str, str]] = []
+        self._download_texts: list[DownloadText] = []
         """A captured download's readable text, oldest first: kept as evidence for a capture, not consumed."""
         self._download_texts_shown = 0
         """How many of them an observation has already shown, so each is shown to the run once."""
@@ -252,7 +262,7 @@ class BrowserSession:
             await asyncio.sleep(0.05)
         return True
 
-    def download_texts(self) -> tuple[tuple[str, str], ...]:
+    def download_texts(self) -> tuple[DownloadText, ...]:
         """Every readable download captured so far, oldest first.
 
         Kept rather than consumed: an observation shows each download once, but a capture has to be able to
@@ -260,7 +270,7 @@ class BrowserSession:
         """
         return tuple(self._download_texts)
 
-    def pending_download_texts(self) -> tuple[tuple[str, str], ...]:
+    def pending_download_texts(self) -> tuple[DownloadText, ...]:
         """Readable downloads the run has not been shown yet, and now marked as shown."""
         pending = tuple(self._download_texts[self._download_texts_shown :])
         self._download_texts_shown = len(self._download_texts)
@@ -612,9 +622,7 @@ class BrowserSession:
             with contextlib.suppress(Exception):
                 await self.client.send.Fetch.continueRequest(params={"requestId": request_id}, session_id=session_id)
 
-    async def _capture_download(
-        self, request_id: str, session_id: str, url: str, disposition: str, mime: str
-    ) -> None:
+    async def _capture_download(self, request_id: str, session_id: str, url: str, disposition: str, mime: str) -> None:
         body = await self.client.send.Fetch.getResponseBody(params={"requestId": request_id}, session_id=session_id)
         raw = base64.b64decode(body["body"]) if body["base64Encoded"] else body["body"].encode()
         if len(raw) > self._max_download_bytes:
@@ -626,7 +634,10 @@ class BrowserSession:
         self._artifacts.append(artifact)
         self._downloads_captured += 1
         if text := _readable_text(mime, raw):
-            self._download_texts.append((name, text))
+            self._download_texts.append(DownloadText(name=name, url=url, text=text))
+            while sum(len(item.text) for item in self._download_texts) > _DOWNLOAD_TEXT_TOTAL:
+                self._download_texts.pop(0)
+                self._download_texts_shown = max(0, self._download_texts_shown - 1)
 
 
 async def _together(*commands: Coroutine[Any, Any, object]) -> None:
@@ -684,8 +695,8 @@ def _readable_text(mime: str, raw: bytes) -> str | None:
     """The response's text when it is a text file the run should be able to read, else None."""
     kind = _response_mime(mime)
     if kind.startswith("text/") or kind in {"application/csv", "application/json"}:
-        try:
-            return raw.decode("utf-8")
-        except UnicodeDecodeError:
-            return None
+        text = raw[:_DOWNLOAD_TEXT_BYTES].decode("utf-8", errors="replace")
+        if len(raw) > _DOWNLOAD_TEXT_BYTES:
+            text += f"\n[Download cut: {len(raw) - _DOWNLOAD_TEXT_BYTES} bytes omitted; full file in artifact]"
+        return text
     return None

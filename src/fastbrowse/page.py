@@ -182,6 +182,7 @@ class BlockKind(StrEnum):
 
 class Block(Frozen):
     source_id: str
+    source_url: str | None = None
     kind: BlockKind
     frame_id: str | None
     start: int = Field(ge=0)

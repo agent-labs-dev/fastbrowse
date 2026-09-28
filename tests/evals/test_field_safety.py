@@ -1,12 +1,4 @@
-"""A password field is told apart by its own wording: the one a stored secret belongs in, and the one that asks
-for a new value.
-
-A sign-in "Password" and a change form's "Current password" take the secret the account already has. A "New
-password" or "Confirm password" must not: typing the saved password there sets the password to what it was and
-reports a change the site never made. `sets_new_password` is the branch the field-text path takes to decide
-between the stored secret and a value written from the task, and `changes_credentials` is what tells the guard a
-submitted form is a credential change rather than an ordinary settings button.
-"""
+"""Credential field selection and submission boundaries."""
 
 import pytest
 
@@ -80,3 +72,13 @@ def test_an_order_submit_is_not_a_credential_change() -> None:
 def test_a_new_password_on_another_form_does_not_carry_over() -> None:
     controls = [field("New password", form_id="change"), submit("Place order", form_id="order")]
     assert not changes_credentials(controls, submit("Place order", form_id="order"))
+
+
+def test_current_password_context_does_not_make_it_a_replacement() -> None:
+    target = field("Current password").model_copy(update={"context": "Set new password"})
+    assert not sets_new_password(target)
+
+
+def test_clicking_a_password_field_does_not_commit_the_form() -> None:
+    target = field("New password")
+    assert not changes_credentials([target], target)

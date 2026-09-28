@@ -63,44 +63,24 @@ def irreversible_question(task: str, operation: Operation, control: Control) -> 
     )
 
 
-# A field that takes a NEW secret rather than an existing one: a change, reset, confirmation or sign-up password.
-# The distinction is the field's own wording, which is all the page gives: a sign-in "Password" and a change form's
-# "Current password" hold the stored secret, while a "New password" or "Confirm password" must not.
-_NEW_SECRET = re.compile(
-    r"\b(new|confirm|confirmation|repeat|re-?enter|re-?type|choose|create|set|sign ?up|register)\b",
-    re.IGNORECASE,
-)
-# A submit that commits a credential change, however the button is worded.
-_CHANGE_VERB = re.compile(r"\b(change|reset|update|replace|set)\b", re.IGNORECASE)
+_NEW_SECRET = re.compile(r"\b(new|confirm|confirmation|repeat|re-?enter|re-?type|choose|create)\b", re.IGNORECASE)
+_CHANGE_PASSWORD = re.compile(r"\b(change|reset|update|replace|set)\b.*\bpassword\b", re.IGNORECASE)
 
 
 def sets_new_password(control: Control) -> bool:
-    """Whether this field takes a NEW secret (a change, reset, confirmation or sign-up password).
+    """A form's heading must not turn its current-password field into a replacement field."""
+    return control.sensitive and _NEW_SECRET.search(control.label) is not None
 
-    A password field may take a stored secret or nothing, but only where the secret is one the field already
-    holds: typing the saved password into a "New password" box sets the password to what it was and reports a
-    change the site never made. The field's wording is the only signal the page offers, so it decides here.
-    """
-    if not control.sensitive:
+
+def changes_credentials(controls: Sequence[Control], target: Control, operation: Operation = Operation.CLICK) -> bool:
+    """Recognize password submissions without treating field focus or settings links as commits."""
+    if operation is Operation.CLICK and (target.role != "button" or target.href):
         return False
-    wording = " ".join(part for part in (control.label, control.context) if part)
-    return _NEW_SECRET.search(wording) is not None
-
-
-def changes_credentials(controls: Sequence[Control], target: Control) -> bool:
-    """Whether this control commits a credential change.
-
-    Either it submits a form carrying a new-secret field, or it is itself worded like a change, reset or update
-    of a password. Whether a click commits is otherwise a judgment the guard leaves to Jev, but a password
-    change is one word lists miss ("Change password" sits among settings buttons that commit nothing) and one
-    the same task asks about, so it is recognized here and gated by code rather than by Jev's answer.
-    """
-    if target.form_id is not None:
-        same_form = [c for c in controls if (c.frame_id, c.form_id) == (target.frame_id, target.form_id)]
-        if any(sets_new_password(c) for c in same_form):
-            return True
-    wording = " ".join(part for part in (target.label, target.context) if part).lower()
-    return "password" in wording and _CHANGE_VERB.search(wording) is not None
+    if target.form_id is not None and any(
+        sets_new_password(c) and (c.frame_id, c.form_id) == (target.frame_id, target.form_id) for c in controls
+    ):
+        return True
+    return _CHANGE_PASSWORD.search(target.label) is not None
 
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}

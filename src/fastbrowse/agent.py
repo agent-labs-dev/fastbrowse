@@ -121,10 +121,6 @@ from fastbrowse.verification import (
 )
 
 GENERATE = "generate"
-# The name a generated new-password value is redacted under. It is never a stored secret, so it has no name of
-# its own, but it must not reach the logs or the result either.
-_NEW_SECRET_NAME = "new_password"
-
 # Long enough for a browser-verification page to run its check and hand over, short enough that a page
 # which never moves still ends as needs_login well inside a run's time budget.
 _INTERSTITIAL_SECONDS = 12.0
@@ -1233,6 +1229,7 @@ class Agent:
                         update={
                             "heading_path": tuple(mask(heading) for heading in block.heading_path),
                             "href": None if block.href is None else mask(block.href),
+                            "source_url": None if block.source_url is None else mask(block.source_url),
                         }
                     )
                     for block in capture.blocks
@@ -1397,7 +1394,7 @@ class Agent:
             decision,
             _describe(target),
             irreversible_question(state.task, decision.operation, target),
-            force=changes_credentials(observation.controls, target),
+            force=changes_credentials(observation.controls, target, decision.operation),
         )
 
     async def _gate_question(
@@ -1418,39 +1415,23 @@ class Agent:
         if authorized and not decision.directed and decision.confidence >= thresholds.sensitive_act_from:
             return
         what = f"{decision.operation.value} {label!r}"
-        # A credential change is gated by code rather than left to Jev: the label reads like any other settings
-        # button, so Jev may answer that "Change password" only edits a draft, and the site's own password record
-        # would then be the first to say otherwise. The task itself asked about the change, so asking Jev buys
-        # nothing Jev can see.
-        if force:
-            reason = f"{what} changes or resets an account password and needs confirmation"
-            await self._record_failure(
-                state,
-                observation,
-                decision.operation,
-                self._redactor.redact(reason),
-                target=self._redactor.redact(label),
-                confidence=None if decision.directed else decision.confidence,
-                page_changed=False,
-                decided_by=Decider.JEV,
+        if not force:
+            state.ledger.reserve(CostComponent.JEV)
+            # Only the address goes with the question: the page's own text is what would argue a harmful action
+            # is harmless, and the control's label and form are already in the question.
+            evaluation = await self._jev.evaluate(
+                {"page": {"url": observation.url, "title": observation.title}}, {"irreversible": question}
             )
-            raise _Stop(Status.NEEDS_CONFIRMATION, reason)
-        state.ledger.reserve(CostComponent.JEV)
-        # Only the address goes with the question: the page's own text is what would argue a harmful action
-        # is harmless, and the control's label and form are already in the question.
-        evaluation = await self._jev.evaluate(
-            {"page": {"url": observation.url, "title": observation.title}}, {"irreversible": question}
-        )
-        state.ledger.record(evaluation.cost)
-        answer = evaluation.answers.get("irreversible")
-        trace(
-            "irreversible",
-            target=label,
-            context=decision.target.context if decision.target else None,
-            probability=answer.probability if isinstance(answer, NoulAnswer) else None,
-        )
-        if isinstance(answer, NoulAnswer) and answer.probability <= thresholds.irreversible_above:
-            return
+            state.ledger.record(evaluation.cost)
+            answer = evaluation.answers.get("irreversible")
+            trace(
+                "irreversible",
+                target=label,
+                context=decision.target.context if decision.target else None,
+                probability=answer.probability if isinstance(answer, NoulAnswer) else None,
+            )
+            if isinstance(answer, NoulAnswer) and answer.probability <= thresholds.irreversible_above:
+                return
         # An unsure pick that may commit something is more likely the wrong pick than the step to confirm.
         unsure = authorized or decision.confidence < thresholds.recover_below
         reason = (
@@ -1501,18 +1482,16 @@ class Agent:
     async def _sensitive_text(
         self, state: _RunState, observation: Observation, target: Control, secrets: tuple[str, ...], origin: str
     ) -> str:
-        """A password field takes a stored secret or nothing: a generated value is at best a guess, and a guess
-        that happens to work (a demo site's well-known password) is a pass nobody authorized.
-
-        A field that takes a NEW secret is the exception. The stored secret is the password the account already
-        has, so typing it into a "New password" box sets the password to what it was and reports a change the
-        site never made. The new value is written from the task and registered with the redactor, so it reaches
-        neither the logs nor the result.
-        """
+        """Resolve replacement passwords separately from existing credentials, without model-written values."""
         if sets_new_password(target):
-            value = await self._generate_text(state, observation, target)
-            self._redactor.register(_NEW_SECRET_NAME, value, origin)
-            return value
+            if "new_password" not in secrets:
+                raise _Stop(
+                    Status.NEEDS_INPUT,
+                    "A replacement password requires --secret new_password=ENV_VAR@https://host; "
+                    "set ENV_VAR to the new value instead of putting it in the task.",
+                )
+            return await self._secret("new_password", origin)
+        secrets = tuple(name for name in secrets if name != "new_password")
         match secrets:
             case ():
                 raise _Stop(Status.NEEDS_LOGIN, f"{target.label!r} wants a secret and none is stored")
@@ -1909,6 +1888,12 @@ class Agent:
         following = next_page_control(observation) if observation is not None else None
         began = state.first_url if following is not None or state.pages else None
         question = read_question(state.task, wanted, began_at=None if began is None else self._redactor.redact(began))
+        needs_context = any(r.kind is RequirementKind.ACTION for r in plan.requirements)
+        if needs_context:
+            question += (
+                "\nAlso keep quotes containing values needed for the task's remaining actions, even when they "
+                "do not answer an information requirement. Give these context claims a null requirement_id."
+            )
         notice = next_page_notice(following)
         before = len(state.notes.facts)
         known = {fact.text for fact in state.notes.facts}
@@ -1921,7 +1906,7 @@ class Agent:
             state.notes,
             tokens=self._config.tokens,
             ledger=state.ledger,
-            jev=self._jev,
+            jev=None if needs_context else self._jev,
             requirements=wanted,
             notice=notice,
             continuing=state.continuing,

@@ -373,10 +373,8 @@ class CdpPage(Page):
         title = main.raw.title if main else ""
         url = main.raw.url if main else await self.origin()
         viewport_text = main.raw.viewport_text if main else ""
-        # A file that was downloaded instead of navigated to is on no page, so show its text here: a link to a
-        # report or CSV the task asked about is then read rather than lost to the abort.
-        for download_name, download_text in self._session.pending_download_texts():
-            viewport_text += f"\n\n[Downloaded file: {download_name}]\n{download_text}"
+        for download in self._session.pending_download_texts():
+            viewport_text += f"\n\n[Downloaded file: {download.name} from {download.url}]\n{download.text}"
         if len(viewport_text) > limits.viewport_text_chars:
             omitted_chars = len(viewport_text) - limits.viewport_text_chars
             viewport_text = viewport_text[: limits.viewport_text_chars] + cut_marker(omitted_chars)
@@ -530,26 +528,23 @@ class CdpPage(Page):
                         href=block.href,
                     )
                 )
-        # A file that was downloaded rather than navigated to is on no page, so it is recorded here as a block
-        # of its own: a read after a link to a report or a CSV then evidences the file's contents, which is
-        # what the task asked for, instead of only the page that linked to it.
-        for download_index, (download_name, download_text) in enumerate(self._session.download_texts()):
+        for download_index, download in enumerate(self._session.download_texts()):
             start = offset
-            text_parts.append(download_text)
-            offset += len(download_text)
-            end = offset
-            text_parts.append("\n\n")
-            offset += 2
+            text_parts.append(download.text)
+            offset += len(download.text)
             blocks.append(
                 Block(
-                    source_id=f"download/{download_name}:{download_index}",
+                    source_id=f"download/{download_index}",
+                    source_url=download.url,
                     kind=BlockKind.PARAGRAPH,
                     frame_id=None,
                     start=start,
-                    end=end,
-                    heading_path=(f"Downloaded file: {download_name}",),
+                    end=offset,
+                    heading_path=(f"Downloaded file: {download.name}",),
                 )
             )
+            text_parts.append("\n\n")
+            offset += 2
         text = "".join(text_parts)
         return Capture(
             url=url,

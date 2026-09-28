@@ -221,9 +221,10 @@ def mismatches(tasks: Sequence[Any]) -> list[str]:
 def all_tasks() -> tuple[dict[str, tuple[Any, ...]], tuple[Any, ...]]:
     """The live suites and the local fixtures; imported here so the harness can import this module."""
     from fastbrowse.evals.live import SUITES
+    from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
     from fastbrowse.evals.tasks import TASKS
 
-    return SUITES, TASKS
+    return SUITES, (*TASKS, *MOCK_TASKS)
 
 
 # Published results.
@@ -785,7 +786,10 @@ def feed_schema_docs() -> str:
 def docs_blocks(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) -> dict[str, str]:
     """The generated parts of docs/evals.md, by marker name: a task table per split suite, the versions, and a
     table per published release."""
-    suites, local = all_tasks()
+    from fastbrowse.evals.mock_tasks import TASKS as MOCK
+    from fastbrowse.evals.tasks import TASKS as LOCAL
+
+    suites, _ = all_tasks()
     lock = load_lock()
     blocks = {"protocol": protocol_docs(), "feed-schema": feed_schema_docs(), "legacy": legacy_docs()}
     for name, tasks in suites.items():
@@ -793,7 +797,10 @@ def docs_blocks(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = No
             continue  # the core suite's table says how each task is graded, which is prose; a test checks its ids
         rows = [f"| `{t.id}` | {t.category.value} | {task_version(t.id, lock)} | {_cell(t.task)} |" for t in tasks]
         blocks[f"tasks:{name}"] = "| Task | Category | Version | Asks |\n|---|---|---|---|\n" + "\n".join(rows)
-    named = [(f"`{name}`", tasks) for name, tasks in suites.items()] + [("local fixtures", local)]
+    named = [(f"`{name}`", tasks) for name, tasks in suites.items()] + [
+        ("local fixtures", LOCAL),
+        ("mock fixtures", MOCK),
+    ]
     versions = [f"| {name} | {len(tasks)} | `{suite_version((t.id for t in tasks), lock)}` |" for name, tasks in named]
     changed = sorted((task_id, entry["version"]) for task_id, entry in lock.items() if entry["version"] > 1)
     table = "| Suite | Tasks | Version |\n|---|---|---|\n" + "\n".join(versions)

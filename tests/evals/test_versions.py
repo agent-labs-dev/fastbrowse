@@ -8,12 +8,13 @@ import pytest
 
 from fastbrowse.evals import live, more_tasks, versions
 from fastbrowse.evals.live_tasks import LiveTask
+from fastbrowse.evals.mock_tasks import TASKS as MOCK
 from fastbrowse.evals.tasks import TASKS as LOCAL
 
 ROOT = Path(__file__).parents[2]
 DOCS = (ROOT / "docs" / "evals.md").read_text(encoding="utf-8")
 README = (ROOT / "README.md").read_text(encoding="utf-8")
-ALL = [*(t for suite in live.SUITES.values() for t in suite), *LOCAL]
+ALL = [*(t for suite in live.SUITES.values() for t in suite), *LOCAL, *MOCK]
 
 
 def test_every_task_matches_its_recorded_version() -> None:

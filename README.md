@@ -176,6 +176,10 @@ uv run fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
   --start https://www.amazon.com/ --bitwarden Amazon --profile ~/.fastbrowse/amazon --headed
 ```
 
+To change a password, supply its replacement as an origin-scoped secret named `new_password`, alongside
+the existing `password`. Refer to `new_password` in the task and use `--authorize` to allow submission.
+Without the replacement secret, the run asks for input; it never generates a password or reuses the old one.
+
 ### Models
 
 The LLM defaults to `google/gemini-3.8-flash` at low reasoning effort, with

@@ -21,7 +21,7 @@ from pydantic.fields import FieldInfo
 
 from fastbrowse.batches import evaluate_batches
 from fastbrowse.citations import text_fragment
-from fastbrowse.comparison import NumericComparison
+from fastbrowse.comparison import NumericComparison, QuotedField
 from fastbrowse.config import TokenBudget
 from fastbrowse.jev import (
     MAX_CHOICE_OPTIONS,
@@ -193,7 +193,7 @@ def chunk(capture: Capture, max_chars: int, overlap_blocks: int = _CHUNK_OVERLAP
 def _evidence(capture: Capture, block: Block, start: int, end: int) -> Evidence:
     return Evidence(
         source_id=block.source_id,
-        url=capture.url,
+        url=block.source_url or capture.url,
         frame_id=block.frame_id,
         captured_at=capture.captured_at,
         capture_sha256=capture.sha256,
@@ -310,7 +310,10 @@ def _cited(capture: Capture, part: Chunk, cite: _Cite) -> Evidence | None:
     if cite.first not in positions or cite.last not in positions or positions[cite.first] > positions[cite.last]:
         return None
     run = offered[positions[cite.first] : positions[cite.last] + 1]
-    if any(block.frame_id != run[0].frame_id for block in run):
+    if any(
+        (block.frame_id, block.source_url or capture.url) != (run[0].frame_id, run[0].source_url or capture.url)
+        for block in run
+    ):
         return None
     return _evidence(capture, run[0], max(run[0].start, part.start), min(run[-1].end, part.end))
 
@@ -397,7 +400,7 @@ class _TallyGroup(Frozen):
 
 def _field_groups(capture: Capture, part: Chunk, field: _TallyField) -> tuple[_TallyGroup, ...] | None:
     evidence = _cited(capture, part, field.span)
-    if evidence is None or not field.prefix or not field.suffix:
+    if evidence is None:
         return None
     blocks = [b for b in _offered(capture, part) if b.start < evidence.end and b.end > evidence.start]
     if not blocks or len(blocks) > _MAX_CONTINUING_RECORDS:
@@ -405,14 +408,11 @@ def _field_groups(capture: Capture, part: Chunk, field: _TallyField) -> tuple[_T
     groups: dict[str, list[_Cite]] = {}
     for block in blocks:
         # A paragraph may hold more than one record, and a split record may hide a second matching field.
-        if block.kind is not BlockKind.RECORD or block.start < part.start or block.end > part.end:
+        if block.kind not in _COUNTED_KINDS or block.start < part.start or block.end > part.end:
             return None
         text = capture.text[block.start : block.end]
-        matches = list(re.finditer(re.escape(field.prefix) + r"([^\n]*?)" + re.escape(field.suffix), text))
-        if len(matches) != 1:
-            return None
-        key = matches[0][1].strip()
-        if not key or len(key) > 200 or field.prefix in key:
+        key = QuotedField(prefix=field.prefix, suffix=field.suffix).extract(text)
+        if key is None or len(key) > 200:
             return None
         groups.setdefault(key, []).append(_Cite(first=block.source_id, last=block.source_id))
     return tuple(_TallyGroup(key=key, records=tuple(records)) for key, records in groups.items())
@@ -1093,10 +1093,7 @@ async def read(
         # Earlier continuation quotes have no tally key, so counting only later pages would omit them.
         if notes.has_untallied_records(requirement_id):
             lost[requirement_id] = None
-    # An earlier read's gap does not hold a count open once a later read has counted the whole list: a completed
-    # tally's own records are the evidence, and they already cover what that earlier read missed. A record this
-    # read could not resolve still blocks, since nothing has counted it yet.
-    blocked = ((set(incomplete) - tally_complete) | set(lost)) - ordered
+    blocked = (set(incomplete) | lost.keys()) - ordered
     if records_only:
         blocked.update(requirement_ids)
     for fact in found:

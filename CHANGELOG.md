@@ -11,6 +11,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Password changes require a separate `new_password` secret and authorization to submit. Replacement values
+  never pass through a model, and current passwords are not reused as replacements.
+- Downloaded text is readable with citations to the response URL. Model context is bounded; artifacts retain
+  the full file. Download navigations no longer fail with `ERR_ABORTED`.
+- Counts accept complete leaf list items and fields at record boundaries, while missing page evidence still
+  blocks completion. Reads retain quoted context needed for later actions, including a code read on another page.
+
 ## [0.5.9] - 2026-09-27
 
 - **Jev defaults to OpenRouter using the LLM's existing key.** `OPENROUTER_API_KEY` alone now covers both
