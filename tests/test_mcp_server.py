@@ -37,6 +37,7 @@ from fastbrowse.models import (
     Artifact,
     ArtifactKind,
     BrowserEvent,
+    BudgetStop,
     CostBasis,
     CostBreakdown,
     CostComponent,
@@ -428,3 +429,10 @@ def test_a_secret_may_be_named_for_the_account_it_belongs_to() -> None:
     """The `@` that introduces the origin is the one after the variable, not the one in an email-shaped name."""
     args: argparse.Namespace = parse(["--secret", "user@example.com=LOGIN@https://shop.example"])
     assert args.secret == [("user@example.com", "LOGIN", "https://shop.example")]
+
+
+async def test_budget_stop_details_survive_the_mcp_transport() -> None:
+    run = _result(Status.BUDGET_EXCEEDED).model_copy(update={"budget": BudgetStop(resource="steps", limit=20)})
+    result, _ = await _call(ServerConfig(), Recorder(run), {"task": "Find it", "start": START})
+    assert result.structuredContent is not None
+    assert result.structuredContent["budget"] == {"resource": "steps", "limit": 20}

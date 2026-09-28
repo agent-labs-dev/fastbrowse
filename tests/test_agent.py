@@ -3205,6 +3205,8 @@ async def test_opening_deadline_still_exhausts_the_budget() -> None:
         "Open the page", start="https://example.test", limits=Limits(max_seconds=0.01)
     )
     assert result.status is Status.BUDGET_EXCEEDED
+    assert result.budget is not None
+    assert result.budget.model_dump() == {"resource": "seconds", "limit": 0.01}
 
 
 async def test_notes_overflow_returns_bounded_grounded_partial_evidence(monkeypatch: pytest.MonkeyPatch) -> None:

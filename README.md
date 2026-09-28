@@ -128,6 +128,7 @@ the quotes behind the answer, and cost by component.
 | Flag | Effect |
 |:--|:--|
 | `--start URL` | the page to open first; worked out from the task when omitted |
+| `--cloud` | force cloud Chrome even when `FASTBROWSE_PROFILE` or `FASTBROWSE_HEADED` is set |
 | `--local` | use local Chrome instead of a Browser Use Cloud browser. Cloud is the default: it passes bot checks a fresh Chrome fails, and prints a URL to watch the run live |
 | `--headed` | show the local Chrome window (implies `--local`) |
 | `--profile DIR` | keep the local Chrome profile in `DIR`, so a site signed into there stays signed in (implies `--local`) |
@@ -190,21 +191,26 @@ Override with `FASTBROWSE_LLM_MODEL` (every purpose), `FASTBROWSE_LLM_MODEL_<PUR
 
 ### Results
 
-The exit code is 0 only for `complete`.
+The exit code identifies the run status. Configuration refusals exit 1; invalid command syntax exits 2.
+Programs that only check zero versus nonzero continue to work.
 
-| Status | Meaning |
-|:--|:--|
-| `complete` | every information requirement is backed by a quote, and every action is confirmed on the page |
-| `unverified` | it believes it finished but could not back every claim |
-| `needs_confirmation` | stopped before an irreversible action; re-run with `--authorize` |
-| `needs_login` | a sign-in wall that no `--secret` covers |
-| `blocked` | a bot check (a CAPTCHA) that did not clear; not a sign-in, so no secret passes it |
-| `needs_input` | a required value or file is missing, or an upload exceeds the configured size limit |
-| `stuck` | recovery ran out without reaching a page state the run had not seen |
-| `budget_exceeded` | a step, call, time or dollar limit was reached |
-| `observation_limit` | the page or required evidence cannot fit the configured prompt budget |
-| `unavailable` | a model or browser provider stayed unavailable through every retry; the same run later may pass |
-| `error` | a model or browser failure |
+| Status | Exit | Meaning |
+|:--|--:|:--|
+| `complete` | 0 | every information requirement is backed by a quote, and every action is confirmed on the page |
+| `unverified` | 10 | it believes it finished but could not back every claim |
+| `needs_confirmation` | 3 | stopped before an irreversible action; re-run with `--authorize` |
+| `needs_login` | 4 | a sign-in wall that no `--secret` covers |
+| `blocked` | 6 | a bot check (a CAPTCHA) that did not clear; not a sign-in, so no secret passes it |
+| `needs_input` | 5 | a required value or file is missing, or an upload exceeds the configured size limit |
+| `stuck` | 9 | recovery ran out without reaching a page state the run had not seen |
+| `budget_exceeded` | 7 | a step, call, time or dollar limit was reached |
+| `observation_limit` | 11 | the page or required evidence cannot fit the configured prompt budget |
+| `unavailable` | 8 | a model or browser provider stayed unavailable through every retry; the same run later may pass |
+| `error` | 1 | a model or browser failure |
+
+A `budget_exceeded` JSON result includes `budget.resource` (`steps`, `seconds`, `dollars`, `jev_calls` or
+`llm_calls`) and `budget.limit`. Other results have `budget: null`. The embedding and MCP APIs carry the same
+optional object, so callers can identify the exhausted limit without parsing an error message.
 
 ## How it works
 

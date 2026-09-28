@@ -99,7 +99,7 @@ def _exit_code_for(argv: list[str]) -> int:
 
 
 def status_exit_contract() -> dict[str, Any]:
-    """T0.10: every Status maps to a stable exit code, complete is 0, every other status is 1."""
+    """T0.10: each status has a stable exit code; zero is success and two is reserved for usage."""
     from fastbrowse import cli
 
     original = cli.run_task
@@ -119,7 +119,8 @@ def status_exit_contract() -> dict[str, Any]:
         vars(cli)["run_task"] = original
     every = set(Status)
     complete_zero = codes.get("complete") == [0, 0]
-    others_one = all(codes[status.value] == [1, 1] for status in every if status is not Status.COMPLETE)
+    failures = [codes[status.value][0] for status in every if status is not Status.COMPLETE]
+    distinct_failures = len(set(failures)) == len(failures) and all(code > 0 and code != 2 for code in failures)
     stable = all(first == second for first, second in codes.values())
     return {
         "status": "ok",
@@ -127,7 +128,7 @@ def status_exit_contract() -> dict[str, Any]:
         "codes": codes,
         "total": set(codes) == {status.value for status in every},
         "complete_zero": complete_zero,
-        "others_one": others_one,
+        "distinct_failures": distinct_failures,
         "stable": stable,
     }
 

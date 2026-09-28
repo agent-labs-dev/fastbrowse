@@ -31,7 +31,7 @@ def test_every_status_is_covered_by_the_exit_code_contract() -> None:
     assert payload["total"], "a Status member has no exit code"
     assert set(payload["codes"]) == {status.value for status in Status}
     assert payload["complete_zero"]
-    assert payload["others_one"]
+    assert payload["distinct_failures"]
     assert payload["stable"]
 
 

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from time import monotonic
 
-from fastbrowse.models import CostBreakdown, CostComponent, CostLine, Limits, Status
+from fastbrowse.models import BudgetStop, CostBreakdown, CostComponent, CostLine, Limits, Status
 
 
 def _dollars(amount: float) -> str:
@@ -17,9 +17,10 @@ def _dollars(amount: float) -> str:
 
 
 class BudgetExceeded(RuntimeError):
-    def __init__(self, reason: str) -> None:
+    def __init__(self, reason: str, *, budget: BudgetStop) -> None:
         super().__init__(reason)
         self.status = Status.BUDGET_EXCEEDED
+        self.budget = budget
 
 
 @dataclass(slots=True)
@@ -39,15 +40,24 @@ class Ledger:
         match component:
             case CostComponent.JEV:
                 if self.jev_calls + calls > self.limits.max_jev_calls:
-                    raise BudgetExceeded(f"Jev call limit {self.limits.max_jev_calls} reached")
+                    raise BudgetExceeded(
+                        f"Jev call limit {self.limits.max_jev_calls} reached",
+                        budget=BudgetStop(resource="jev_calls", limit=self.limits.max_jev_calls),
+                    )
             case CostComponent.LLM:
                 if self.llm_calls + calls > self.limits.max_llm_calls:
-                    raise BudgetExceeded(f"LLM call limit {self.limits.max_llm_calls} reached")
+                    raise BudgetExceeded(
+                        f"LLM call limit {self.limits.max_llm_calls} reached",
+                        budget=BudgetStop(resource="llm_calls", limit=self.limits.max_llm_calls),
+                    )
             case CostComponent.BROWSER | CostComponent.PROXY:
                 pass
         self.check(estimate_dollars)
         if self.limits.max_dollars is not None and self.breakdown().known_dollars >= self.limits.max_dollars:
-            raise BudgetExceeded(f"spend limit ${_dollars(self.limits.max_dollars)} reached")
+            raise BudgetExceeded(
+                f"spend limit ${_dollars(self.limits.max_dollars)} reached",
+                budget=BudgetStop(resource="dollars", limit=self.limits.max_dollars),
+            )
         # Failed requests still consume a call, including retries after an input-size rejection.
         if component is CostComponent.JEV:
             self.jev_calls += calls
@@ -57,18 +67,27 @@ class Ledger:
     def check(self, extra_dollars: float = 0.0) -> None:
         limits = self.limits
         if limits.max_seconds is not None and monotonic() - self.started > limits.max_seconds:
-            raise BudgetExceeded(f"time limit {limits.max_seconds}s reached")
+            raise BudgetExceeded(
+                f"time limit {limits.max_seconds}s reached",
+                budget=BudgetStop(resource="seconds", limit=limits.max_seconds),
+            )
         if limits.max_dollars is not None:
             spent = self.breakdown()
             # An unpriced call could have spent anything, so a dollar cap cannot be enforced past it.
             if spent.has_unknown:
                 raise BudgetExceeded(
-                    f"spend limit ${_dollars(limits.max_dollars)} cannot be enforced: a call reported no cost"
+                    f"spend limit ${_dollars(limits.max_dollars)} cannot be enforced: a call reported no cost",
+                    budget=BudgetStop(resource="dollars", limit=limits.max_dollars),
                 )
             if spent.known_dollars + extra_dollars > limits.max_dollars:
-                raise BudgetExceeded(f"spend limit ${_dollars(limits.max_dollars)} reached")
+                raise BudgetExceeded(
+                    f"spend limit ${_dollars(limits.max_dollars)} reached",
+                    budget=BudgetStop(resource="dollars", limit=limits.max_dollars),
+                )
         if self.steps >= limits.max_steps:
-            raise BudgetExceeded(f"step limit {limits.max_steps} reached")
+            raise BudgetExceeded(
+                f"step limit {limits.max_steps} reached", budget=BudgetStop(resource="steps", limit=limits.max_steps)
+            )
 
     def record(self, *lines: CostLine) -> None:
         self.lines.extend(lines)

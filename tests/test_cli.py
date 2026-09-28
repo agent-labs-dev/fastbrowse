@@ -162,3 +162,45 @@ def test_version_prints_the_installed_version_without_a_task(capsys: pytest.Capt
         cli._parse(["--version"])
     assert exited.value.code == 0
     assert capsys.readouterr().out.startswith("fastbrowse 0.")
+
+
+def test_secret_preflight_reports_both_unset_variable_and_missing_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MISSING_PASSWORD", raising=False)
+    with pytest.raises(cli.ConfigurationError) as error:
+        cli._secrets([("password", "MISSING_PASSWORD", None)], None, None)
+    assert "unset variables: MISSING_PASSWORD" in str(error.value)
+    assert "origin" in str(error.value)
+
+
+async def test_explicit_cloud_overrides_environment_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastbrowse.clients.environment import Settings
+
+    monkeypatch.setattr(
+        cli,
+        "load_settings",
+        lambda: Settings(_env_file=None),
+    )
+    monkeypatch.setenv("FASTBROWSE_PROFILE", "/tmp/profile")
+    monkeypatch.setenv("BROWSER_USE_API_KEY", "browser-key")
+    seen = {}
+
+    async def fake(task: str, **kwargs: object) -> RunResult:
+        seen.update(kwargs)
+        return cli._refused("test")
+
+    monkeypatch.setattr(cli, "run_task", fake)
+    await cli.run(cli._parse(["task", "--cloud"]))
+    assert seen["browser_api_key"] == "browser-key"
+    assert seen["chrome"].profile is None
+
+
+async def test_cli_login_and_blocked_have_distinct_exit_codes(monkeypatch: pytest.MonkeyPatch) -> None:
+    codes = []
+    for status in (Status.NEEDS_LOGIN, Status.BLOCKED):
+
+        async def fake(task: str, target: Status = status, **kwargs: object) -> RunResult:
+            return cli._refused("test").model_copy(update={"status": target})
+
+        monkeypatch.setattr(cli, "run_task", fake)
+        codes.append(await cli.run(cli._parse(["task", "--local"])))
+    assert codes == [4, 6]

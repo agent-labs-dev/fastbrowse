@@ -43,6 +43,20 @@ from fastbrowse.models import (
 from fastbrowse.run import run_task
 from fastbrowse.safety import ScopedSecrets, origin_of
 
+EXIT_CODES: dict[Status, int] = {
+    Status.COMPLETE: 0,
+    Status.ERROR: 1,
+    Status.NEEDS_CONFIRMATION: 3,
+    Status.NEEDS_LOGIN: 4,
+    Status.NEEDS_INPUT: 5,
+    Status.BLOCKED: 6,
+    Status.BUDGET_EXCEEDED: 7,
+    Status.UNAVAILABLE: 8,
+    Status.STUCK: 9,
+    Status.UNVERIFIED: 10,
+    Status.OBSERVATION_LIMIT: 11,
+}
+
 
 def _secrets(
     pairs: list[tuple[str, str, str | None]], bitwarden: str | None, start: str | None
@@ -57,16 +71,19 @@ def _secrets(
 
     `--bitwarden` still needs `--start`: the vault item is matched BY origin, so there is nothing to match on.
     """
+    problems = []
+    if missing := options.unset_variables(pairs):
+        problems.append(f"--secret names unset variables: {', '.join(missing)}")
     unscoped = [name for name, _, origin in pairs if origin is None]
     if start is None:
         if unscoped:
-            raise ConfigurationError(
+            problems.append(
                 f"--secret {', '.join(unscoped)} needs an origin: give --start, or NAME=ENV_VAR@https://host"
             )
         if bitwarden is not None:
-            raise ConfigurationError("--bitwarden needs --start: the vault item is matched against its origin")
-    if missing := options.unset_variables(pairs):
-        raise ConfigurationError(f"--secret names unset variables: {', '.join(missing)}")
+            problems.append("--bitwarden needs --start: the vault item is matched against its origin")
+    if problems:
+        raise ConfigurationError("; ".join(problems))
     fallback = origin_of(start) if start is not None else None
     scoped: dict[str, tuple[SecretValue, tuple[str, ...]]] = {}
     for name, variable, origin in pairs:
@@ -90,13 +107,20 @@ def _secrets(
 
 
 def _parse(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="fastbrowse", description="Run one browser task.")
+    parser = argparse.ArgumentParser(
+        prog="fastbrowse",
+        description="Run one browser task.",
+        epilog="Exit codes: 2 usage error; "
+        + "; ".join(f"{code} {status.value}" for status, code in EXIT_CODES.items()),
+    )
     parser.add_argument("--version", action="version", version=f"%(prog)s {version('fastbrowse')}")
     parser.add_argument("task")
     parser.add_argument(
         "--start", default=None, help="URL to open before the task starts; worked out from the task if omitted"
     )
-    parser.add_argument("--local", action="store_true", help="use local Chrome instead of a Browser Use Cloud browser")
+    browser = parser.add_mutually_exclusive_group()
+    browser.add_argument("--cloud", action="store_true", help="use cloud Chrome, overriding local environment defaults")
+    browser.add_argument("--local", action="store_true", help="use local Chrome instead of a Browser Use Cloud browser")
     parser.add_argument("--headed", action="store_true", help="show the local Chrome window (implies --local)")
     parser.add_argument(
         "--profile", type=Path, default=None, help="Chrome profile directory kept between runs (implies --local)"
@@ -175,6 +199,7 @@ def _cdp_url(args: argparse.Namespace, chrome: LocalChrome) -> str | None:
         flag
         for flag, on in (
             ("--local", args.local),
+            ("--cloud", args.cloud),
             ("--headed", chrome.headed),
             ("--profile", chrome.profile is not None),
             ("--cloud-profile", args.cloud_profile is not None),
@@ -208,7 +233,9 @@ async def run(args: argparse.Namespace) -> int:
     # would otherwise hide a secret that could never be typed anywhere.
     secrets = _secrets(args.secret, args.bitwarden, args.start)
     settings = load_settings()
-    chrome = options.chrome(settings, args.headed, args.profile)
+    if args.cloud and (args.headed or args.profile is not None):
+        raise ConfigurationError("--cloud cannot be combined with --headed or --profile")
+    chrome = LocalChrome() if args.cloud else options.chrome(settings, args.headed, args.profile)
     cdp_url = _cdp_url(args, chrome)
     result = await run_task(
         args.task,
@@ -235,7 +262,7 @@ async def run(args: argparse.Namespace) -> int:
             f"  recorded: {', '.join(map(str, result.recordings))}" if result.recordings else "  not recorded",
             file=sys.stderr,
         )
-    return 0 if result.succeeded else 1
+    return EXIT_CODES[result.status]
 
 
 def _refused(error: str) -> RunResult:
