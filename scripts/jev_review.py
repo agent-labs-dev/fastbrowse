@@ -113,7 +113,7 @@ def changes(span: str) -> tuple[str, bool, dict[str, str]]:
 
 async def review(base: str, head: str = "HEAD") -> str:
     settings = Settings()
-    if not (settings.typesafe_api_key or settings.ai_gateway_api_key):
+    if not (settings.openrouter_api_key or settings.typesafe_api_key or settings.ai_gateway_api_key):
         return "### Jev review (advisory)\n\nSkipped: no Jev key is set.\n"
     code_diff, visible, prose = changes(f"{base}...{head}")
     asked = questions(prose, user_visible=visible)

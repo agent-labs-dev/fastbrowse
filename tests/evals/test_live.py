@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import runpy
 import time
 from base64 import urlsafe_b64decode, urlsafe_b64encode
@@ -12,7 +13,9 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from pydantic import SecretStr
 
+from fastbrowse.clients.environment import JevSource, Settings
 from fastbrowse.evals import live, live_tasks, more_tasks
 from fastbrowse.evals.live_tasks import TASKS, LiveTask, Outcome
 from fastbrowse.evals.status import Ending
@@ -265,6 +268,54 @@ def test_the_runner_answers_a_choice_of_one_option_without_asking_jev(monkeypatc
     assert list(sent[0]["questions"]) == ["operation"]
     assert result["answers"]["type_text_target"]["choice"] == "search"
     assert result["answers"]["operation"]["choice"] == "TYPE_TEXT"
+
+
+@pytest.mark.parametrize(
+    ("source", "url", "key"),
+    [
+        (None, "https://openrouter.ai/api/v1/systemone", "or"),
+        (JevSource.TYPESAFE, "https://api.typesafe.ai/v1/systemone", "ts"),
+        (JevSource.GATEWAY, "https://ai-gateway.vercel.sh/v4/ai/evaluation-model", "gw"),
+    ],
+)
+@pytest.mark.parametrize("pinned", [False, True])
+def test_ultrafast_uses_the_selected_jev_route_and_meters_its_cost(
+    monkeypatch: pytest.MonkeyPatch, source: JevSource | None, url: str, key: str, pinned: bool
+) -> None:
+    configured = Settings.model_construct(
+        openrouter_api_key=SecretStr("or"),
+        typesafe_api_key=SecretStr("ts"),
+        ai_gateway_api_key=SecretStr("gw"),
+        jev_source=source,
+        jev_base_url="https://proxy.test/" if pinned else None,
+        jev_model="pinned-jev" if pinned else None,
+    )
+    monkeypatch.setattr(live, "load_settings", lambda: configured)
+    env = live._ultrafast_env("wss://browser.test", "/tmp/ultrafast-test")
+    for name in ("TYPESAFE_API_KEY", "AI_GATEWAY_API_KEY", "FASTBROWSE_JEV_BASE_URL", "FASTBROWSE_JEV_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+        if name in env:
+            monkeypatch.setenv(name, env[name])
+
+    def post(_model: Any, endpoint: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        path = "/v4/ai/evaluation-model" if source is JevSource.GATEWAY else "/v1/systemone"
+        assert endpoint == (f"https://proxy.test{path}" if pinned else url)
+        assert headers["Authorization"] == f"Bearer {key}"
+        if source is JevSource.GATEWAY:
+            assert "model" not in body
+            return {"answers": {}, "usage": {"inputTokens": 100}, "providerMetadata": {"gateway": {"cost": "0.001"}}}
+        assert body["model"] == (
+            "pinned-jev" if pinned else "jev-1.13.0" if source is JevSource.TYPESAFE else "jev-1.13"
+        )
+        return {"answers": {}, "usage": {"input_tokens": 100, "cost": 0.001}}
+
+    monkeypatch.setitem(RUNNER["patch_transport"].__globals__, "_post", post)
+    model, meter = SimpleNamespace(), RUNNER["Meter"]()
+    RUNNER["patch_transport"](model, meter)
+    model.post_json(
+        "https://api.typesafe.ai/v1/systemone", os.environ["TYPESAFE_API_KEY"], {"state": {}, "questions": {}}
+    )
+    assert meter.jev == 0.001 and meter.text == 0 and meter.unmetered == 0
 
 
 @pytest.mark.parametrize("content", ['{"text": "httpx"}\n```', '```json\n{"text": "httpx"}\n```', '{"text": "httpx"}'])

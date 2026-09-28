@@ -2,7 +2,7 @@
 
     uv run python -m fastbrowse.evals.runner [--only TASK_ID ...] [--repeat N] [--out results.jsonl]
 
-Needs Jev and LLM keys; see fastbrowse.clients.environment.
+Needs OPENROUTER_API_KEY for Jev and the LLM; see fastbrowse.clients.environment for optional backups.
 """
 
 import argparse

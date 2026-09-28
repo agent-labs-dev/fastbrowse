@@ -124,14 +124,7 @@ def _field(value: JsonValue, *keys: str) -> JsonValue:
 
 
 def _wrapped_reason(body: JsonValue) -> str | None:
-    """What the provider said, from inside the error a gateway wraps it in.
-
-    A gateway answers a refusal it did not make itself with `{"error": {"message": "typesafe returned status
-    400"}}` and the provider's own reason in a nested error, the AI SDK's serialized `APICallError`. Read without
-    it, a line names only that the provider answered with a status, so a request over an input limit, an option
-    count over the model's and an outage behind the gateway all read the same, and a report of a 503 says nothing
-    about why it happened.
-    """
+    """Read the provider reason inside the gateway's serialized API error."""
     for key in ("message", "error"):
         reason = _field(body, "error", "param", key)
         if isinstance(reason, str) and reason:
@@ -157,7 +150,7 @@ def describe(response: httpx.Response) -> str:
     text += _scrubbed(response, message)[:300] + (f" (via {upstream})" if isinstance(upstream, str) else "")
     reason = _wrapped_reason(body)
     if reason is not None and reason != message:
-        text += _scrubbed(response, f"; the provider said: {reason[:200]}")
+        text += f"; the provider said: {_scrubbed(response, reason)[:200]}"
     return _scrubbed(response, text)
 
 
@@ -183,30 +176,8 @@ its eval row for good. A status still listed once the retries run out ends the r
 the eval harness retries the row too."""
 
 
-INPUT_TOO_LARGE_REASONS = ("max_tokens_exceeded", "request body too large")
-"""What either provider calls a request past an input limit, matched anywhere in the body.
-
-Both refuse the request rather than the provider failing, so both have to reach the caller as an input too large:
-that is the one Jev failure the step's shed path answers by asking the same question again smaller, where anything
-else ends the run. A gateway relays the provider's own wording inside a nested error and which wording arrives
-depends on which ceiling was passed, so a match on one of them left the other reading as a failed request.
-"""
-
-
-def _refused_for_size(response: httpx.Response) -> bool:
-    return any(reason in response.text for reason in INPUT_TOO_LARGE_REASONS)
-
-
 def retryable(response: httpx.Response) -> bool:
-    """Whether a repeat can clear this response: a status that says nothing about the request, or the gateway's own
-    verdict that the error may be retried.
-
-    The status set is hand kept and has twice been too short, and an unlisted status that outlasted a repeat failed
-    its row for good. The AI SDK derives its own flag from the status (408, 409, 429 and every 5xx), so following it
-    covers the statuses this set does not name and changes nothing for the ones it does. A status the gateway marks
-    not retryable says the request itself is at fault, and is left to the caller rather than repeated on the chance
-    it clears.
-    """
+    """Accept retryable HTTP statuses and additional failures the gateway marks transient."""
     if response.status_code in RETRYABLE_STATUS:
         return True
     if response.is_success:
@@ -493,7 +464,9 @@ async def post(
             unaccounted_requests=usage.unaccounted_requests,
             last=last,
         )
-    if response.status_code == 400 and _refused_for_size(response):
+    if response.status_code == 400 and any(
+        reason in response.text for reason in ("max_tokens_exceeded", "request body too large")
+    ):
         raise JevInputTooLarge(f"Jev input too large; {describe(response)}")
     if not response.is_success:
         raise response_error(response, "Jev request failed")
@@ -701,6 +674,20 @@ async def asking_open(
         return Evaluation(model=model, answers=forced, input_tokens=0, cost=estimated_cost(0), requests=0)
     evaluation = await ask(rest)
     return evaluation.model_copy(update={"answers": {**evaluation.answers, **forced}})
+
+
+def reported_cost(value: JsonValue, input_tokens: int, output_tokens: int = 0) -> CostLine:
+    cost = None if value is None else dollars(value)
+    # Providers have reported $0 while tokens flow, so missing or zero charges use list price.
+    if cost is None or (cost == 0 and input_tokens):
+        return estimated_cost(input_tokens, output_tokens)
+    return CostLine(
+        component=CostComponent.JEV,
+        basis=CostBasis.METERED,
+        dollars=cost,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
 
 
 def estimated_cost(input_tokens: int, output_tokens: int = 0) -> CostLine:

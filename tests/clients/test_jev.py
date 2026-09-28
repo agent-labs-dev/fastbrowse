@@ -9,7 +9,7 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 from fastbrowse.clients.failover import FailoverJevClient
-from fastbrowse.clients.typesafe import TypeSafeJevClient
+from fastbrowse.clients.typesafe import OPENROUTER_MODEL, OPENROUTER_URL, TypeSafeJevClient
 from fastbrowse.clients.validation import RETRY_DELAYS_SECONDS, jev_spend
 from fastbrowse.clients.vercel import VercelGatewayJevClient
 from fastbrowse.jev import (
@@ -25,7 +25,7 @@ from fastbrowse.jev import (
     ScoreAnswer,
     ScoreQuestion,
 )
-from fastbrowse.models import CostBasis, CostLine, Limits
+from fastbrowse.models import CostBasis, CostComponent, CostLine, Limits
 from fastbrowse.telemetry import BudgetExceeded, Ledger
 
 
@@ -41,6 +41,59 @@ def choice_answer(**updates: JsonValue) -> dict[str, JsonValue]:
         "confidence": 0.8,
         **updates,
     }
+
+
+@pytest.mark.parametrize(("tokens", "cost"), [(476, 0.00003), (0, 0)])
+async def test_openrouter_uses_systemone_and_records_cost(tokens: int, cost: float) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://openrouter.ai/api/v1/systemone"
+        assert request.headers["authorization"] == "Bearer openrouter-key"
+        assert json.loads(request.content) == {
+            "model": OPENROUTER_MODEL,
+            "state": "blue",
+            "questions": {
+                "q": {"type": "choice", "instructions": "Which colour?", "criteria": {"blue": "Blue", "red": "Red"}}
+            },
+        }
+        return httpx.Response(
+            200,
+            json={
+                "model": "typesafe/jev-1.13-20260917",
+                "id": "gen-dec-test",
+                "provider": "TypeSafe",
+                "answers": {"q": choice_answer()},
+                "usage": {"input_tokens": tokens, "output_tokens": 70, "cost": cost},
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await TypeSafeJevClient(
+            "openrouter-key", http=http, base_url=OPENROUTER_URL, model=OPENROUTER_MODEL
+        ).evaluate("blue", {"q": choice()})
+    assert result.model == "typesafe/jev-1.13-20260917"
+    assert isinstance(result.answers["q"], ChoiceAnswer)
+    assert result.cost.component is CostComponent.JEV
+    assert result.cost.basis is CostBasis.METERED
+    assert result.cost.dollars == pytest.approx(cost)
+    assert result.input_tokens == result.cost.input_tokens == tokens
+    assert result.cost.output_tokens == 70
+
+
+@pytest.mark.parametrize("cost", [-1, True, "NaN", "inf", "not-a-cost"])
+async def test_systemone_rejects_invalid_cost(cost: JsonValue) -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200,
+                json={
+                    "answers": {"q": choice_answer()},
+                    "usage": {"input_tokens": 100, "cost": cost},
+                },
+            )
+        )
+    ) as http:
+        with pytest.raises(JevError, match="Invalid Jev response"):
+            await TypeSafeJevClient("key", http=http, base_url=OPENROUTER_URL).evaluate("blue", {"q": choice()})
 
 
 async def test_direct_encodes_all_question_types_and_estimates_usage() -> None:

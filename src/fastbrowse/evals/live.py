@@ -4,7 +4,7 @@
         [--arms fastbrowse jev-ultrafast browser-use] [--bitwarden] [--repeat N] [--record DIR]
         [--out artifacts/evals/live.jsonl]
 
-Needs BROWSER_USE_API_KEY (every arm), and the Jev and LLM keys in fastbrowse.clients.environment (fastbrowse and
+Needs BROWSER_USE_API_KEY (every arm), and OPENROUTER_API_KEY for Jev and the LLM (fastbrowse and
 jev-ultrafast arms). Each run prints a WATCH line with the URL where its browser can be watched live.
 
 The fastbrowse and jev-ultrafast arms each drive a fresh Browser Use Cloud browser;
@@ -38,7 +38,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, assert_never
 from unittest import mock
 
 import httpx
@@ -48,15 +48,17 @@ import fastbrowse.run
 from fastbrowse.adapters.bitwarden import bitwarden_login
 from fastbrowse.adapters.browser_use_cloud import BrowserUseCloudBrowser
 from fastbrowse.agent import Agent
-from fastbrowse.clients.environment import load_settings
+from fastbrowse.clients.environment import JevSource, load_settings
+from fastbrowse.clients.typesafe import OPENROUTER_MODEL, OPENROUTER_URL, TYPESAFE_URL
 from fastbrowse.clients.validation import RETRYABLE_STATUS, TRANSIENT_TRANSPORT
+from fastbrowse.clients.vercel import GATEWAY_URL
 from fastbrowse.evals.live_tasks import TASKS, Category, LiveTask, Outcome, prompt
 from fastbrowse.evals.more_tasks import DEV, HELDOUT, STRETCH_DEV, STRETCH_HELDOUT
 from fastbrowse.evals.observe import GradedPage as _GradedPage
 from fastbrowse.evals.observe import observe_browser
 from fastbrowse.evals.status import Ending, normalize, status_matches
 from fastbrowse.evals.versions import load_lock, provenance, suite_version, task_version
-from fastbrowse.jev import JEV_DOLLARS_PER_INPUT_TOKEN
+from fastbrowse.jev import JEV_DOLLARS_PER_INPUT_TOKEN, JEV_MODEL
 from fastbrowse.models import Authorization, BrowserEvent, Limits, RunResult, Status, StepEvent, Unavailable
 from fastbrowse.run import run_task
 from fastbrowse.safety import ScopedSecrets, origin_of
@@ -294,7 +296,22 @@ async def prepare_ultrafast() -> None:
 def _ultrafast_env(cdp_ws: str, runtime: str) -> dict[str, str]:
     settings = load_settings()
     env = arm_environment("jev-ultrafast", runtime)
-    # Its text helper is an OpenRouter model; Jev comes from TypeSafe directly or through the gateway.
+    # The isolated runner cannot import Settings, so pass the selected route rather than let it pick another.
+    source, _ = settings.jev_route()
+    match source:
+        case JevSource.OPENROUTER:
+            key_name, key, base_url = "TYPESAFE_API_KEY", settings.openrouter_api_key, OPENROUTER_URL
+            model = OPENROUTER_MODEL
+        case JevSource.TYPESAFE:
+            key_name, key, base_url = "TYPESAFE_API_KEY", settings.typesafe_api_key, TYPESAFE_URL
+            model = JEV_MODEL
+        case JevSource.GATEWAY:
+            key_name, key, base_url = "AI_GATEWAY_API_KEY", settings.ai_gateway_api_key, GATEWAY_URL
+            model = "typesafe-ai/jev"
+        case _:
+            assert_never(source)
+    if key is not None:
+        env[key_name] = key.get_secret_value()
     env |= {
         "TEXT_MODEL_API_KEY": settings.openrouter_key(),
         "TEXT_MODEL_BASE_URL": "https://openrouter.ai/api/v1",
@@ -306,13 +323,9 @@ def _ultrafast_env(cdp_ws: str, runtime: str) -> dict[str, str]:
         "BH_TELEMETRY": "0",
         "BH_UPDATE_CHECK": "0",
         "BH_TAB_MARKER": "0",
+        "FASTBROWSE_JEV_BASE_URL": settings.jev_base_url or base_url,
+        "FASTBROWSE_JEV_MODEL": settings.jev_model or model,
     }
-    for name, key in (
-        ("TYPESAFE_API_KEY", settings.typesafe_api_key),
-        ("AI_GATEWAY_API_KEY", settings.ai_gateway_api_key),
-    ):
-        if key is not None:
-            env[name] = key.get_secret_value()
     return env
 
 

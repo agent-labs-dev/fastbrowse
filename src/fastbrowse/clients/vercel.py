@@ -23,20 +23,18 @@ from fastbrowse.clients.validation import (
     RequestUsage,
     asking_open,
     asking_split,
-    dollars,
     error_detail,
-    estimated_cost,
     json_object,
     object_value,
     parse_answers,
     post,
+    reported_cost,
     response_error,
     token_count,
     wire_questions,
     with_discarded,
 )
 from fastbrowse.jev import Evaluation, Question
-from fastbrowse.models import CostBasis, CostComponent, CostLine
 
 GATEWAY_URL = "https://ai-gateway.vercel.sh"
 
@@ -82,18 +80,7 @@ class VercelGatewayJevClient:
             metadata = object_value(payload.get("providerMetadata", {}))
             confidence = object_value(object_value(metadata.get("typesafe", {})).get("confidence", {}))
             cost_value = object_value(metadata.get("gateway", {})).get("cost")
-            # The gateway meters Jev at $0 while tokens flow: a request is then priced at list, not as free.
-            cost = (
-                estimated_cost(tokens, output_tokens)
-                if cost_value is None or (not dollars(cost_value) and tokens)
-                else CostLine(
-                    component=CostComponent.JEV,
-                    basis=CostBasis.METERED,
-                    dollars=dollars(cost_value),
-                    input_tokens=tokens,
-                    output_tokens=output_tokens,
-                )
-            )
+            cost = reported_cost(cost_value, tokens, output_tokens)
             return Evaluation(
                 requests=sent.requests,
                 model="typesafe-ai/jev",

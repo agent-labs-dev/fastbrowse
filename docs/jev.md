@@ -8,8 +8,9 @@ evals rather than taken from Typesafe.
 
 | | Documented | Where fastbrowse relies on it |
 |:--|:--|:--|
-| Direct API | `POST https://api.typesafe.ai/v1/systemone`, bearer key, body `{model, state, questions}`; response `{model, answers, usage}` ([API](https://docs.typesafe.ai/api), [OpenAPI](https://api.typesafe.ai/openapi.json)) | `clients/typesafe.py`, used when `TYPESAFE_API_KEY` is set, unless `FASTBROWSE_JEV_SOURCE=gateway` |
-| Gateway | Model `typesafe-ai/jev` via `https://ai-gateway.vercel.sh/v4/ai/evaluation-model`, body `{state, questions}` ([Gateway](https://vercel.com/docs/ai-gateway/modalities/evaluation), [transport source](https://github.com/vercel/ai/blob/main/packages/gateway/src/gateway-evaluation-model.ts)) | `clients/vercel.py`, used with `AI_GATEWAY_API_KEY`; `FASTBROWSE_JEV_BASE_URL` retargets either |
+| OpenRouter | `POST https://openrouter.ai/api/v1/systemone`, bearer key, TypeSafe request and response shapes, plus `usage.cost` in dollars, `id` and `provider`; bare model ids map to `typesafe/` ([SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk)) | `clients/typesafe.py` with base URL `https://openrouter.ai/api`; default when `OPENROUTER_API_KEY` is set |
+| Direct API | `POST https://api.typesafe.ai/v1/systemone`, bearer key, body `{model, state, questions}`; response `{model, answers, usage}` ([API](https://docs.typesafe.ai/api), [OpenAPI](https://api.typesafe.ai/openapi.json)) | `clients/typesafe.py`, selected with `FASTBROWSE_JEV_SOURCE=typesafe`, or when OpenRouter has no key and `TYPESAFE_API_KEY` is set |
+| Gateway | Model `typesafe-ai/jev` via `https://ai-gateway.vercel.sh/v4/ai/evaluation-model`, body `{state, questions}` ([Gateway](https://vercel.com/docs/ai-gateway/modalities/evaluation), [transport source](https://github.com/vercel/ai/blob/main/packages/gateway/src/gateway-evaluation-model.ts)) | `clients/vercel.py`, used with `AI_GATEWAY_API_KEY`; backup for OpenRouter and direct TypeSafe. `FASTBROWSE_JEV_BASE_URL` retargets the selected source |
 | Yes/no (Noul) | Direct returns `{type: "noul", noul: P(yes)}`; the gateway returns `probability`. Optional `true`/`false` criteria define the boundary ([Noul](https://docs.typesafe.ai/primitives/noul), [v1 migration](https://docs.typesafe.ai/migrating-to-v1)) | `clients/validation.py` decodes each shape separately; `policy.py` asks one per control to filter a dense page |
 | Choice | The top `choice`, every option's probability, and a `confidence` ([Choice](https://docs.typesafe.ai/primitives/choice)) | `policy.py` (operation and target), `retrieval.py` (field and short-fact reads) |
 | Score | Ordered levels, returning a probability-weighted index ([Score](https://docs.typesafe.ai/primitives/score)) | Modelled in `jev.py`, not yet called |
@@ -23,20 +24,28 @@ evals rather than taken from Typesafe.
 
 ## Provider failover
 
-With both keys set, **ours**: each run starts on `FASTBROWSE_JEV_SOURCE` (direct by default). If a retryable
-HTTP status outlasts that provider's retry budget, the client repeats the evaluation through the other
+Provider selection is **ours**: `OPENROUTER_API_KEY` serves both Jev and the LLM by default.
+`AI_GATEWAY_API_KEY` adds a Vercel AI Gateway backup. Without OpenRouter, direct TypeSafe takes precedence
+over the gateway. `FASTBROWSE_JEV_SOURCE=openrouter`, `typesafe` or `gateway` overrides the first provider.
+OpenRouter and direct TypeSafe use the gateway as backup when keyed; the gateway uses direct TypeSafe
+when keyed, otherwise OpenRouter. A selected source without its key is a configuration error.
+
+If a retryable HTTP status outlasts the first provider's retry budget, the client repeats the evaluation through the backup
 provider and stays there for the rest of the run. A second outage raises; providers never alternate.
 Concurrent evaluations already in flight may finish on the first provider.
 
 Request and authentication errors, malformed answers, transport failures without a final retryable HTTP
-status, and cancellation do not switch providers. With one key, exhausted retries raise an error.
-`FASTBROWSE_JEV_BASE_URL` or a nondefault `FASTBROWSE_JEV_MODEL` disables automatic failover: a backup
+status, and cancellation do not switch providers. Without a configured backup, exhausted retries raise an error.
+`FASTBROWSE_JEV_BASE_URL` or an explicit `FASTBROWSE_JEV_MODEL` disables automatic failover: a backup
 must not bypass a proxy or silently replace a pinned model. Default backups use their own public endpoint,
-key and model (`jev-1.13.0` direct, `typesafe-ai/jev` through the gateway).
+key and model (`jev-1.13` on OpenRouter, `jev-1.13.0` on direct TypeSafe, `typesafe-ai/jev` through the gateway).
+
+OpenRouter's `usage.cost` and the gateway's reported cost are metered dollars. Missing cost, or $0 with
+input tokens, uses Jev's list-price estimate. Direct TypeSafe responses without cost keep that estimate.
 
 The call's time includes both providers. HTTP errors add no charge; unanswered requests that may have been
 billed are estimated from the successful answer's input tokens at Jev's input price, without multiplying
-the backup's own retries or hedges. Both routes reach Typesafe, so an outage there can affect both.
+the backup's own retries or hedges. All three routes reach Typesafe, so an outage there can affect all three.
 
 ## Confidence is not correctness
 
