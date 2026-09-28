@@ -1,7 +1,7 @@
 """Settings from the environment and `.env`, and the default Jev and LLM clients built from them.
 
-Jev: OPENROUTER_API_KEY by default, with AI_GATEWAY_API_KEY (Vercel AI Gateway) as backup when set.
-Without OpenRouter, TYPESAFE_API_KEY (direct) takes precedence over the gateway.
+Jev: TYPESAFE_API_KEY selects direct TypeSafe; otherwise OPENROUTER_API_KEY is primary, with
+AI_GATEWAY_API_KEY (Vercel AI Gateway) as backup when set, or primary when neither other key is set.
 FASTBROWSE_JEV_SOURCE picks openrouter, typesafe or gateway explicitly. OpenRouter and direct use the
 gateway as backup; the gateway uses direct when configured, otherwise OpenRouter.
 FASTBROWSE_JEV_BASE_URL points either at a proxy or another host serving the same API, and
@@ -125,10 +125,10 @@ class Settings(BaseSettings):
         """The Jev provider a run starts on, and the one it fails over to when that one's retries run out."""
         source = self.jev_source
         if source is None:
-            if self.openrouter_api_key:
-                source = JevSource.OPENROUTER
+            if self.typesafe_api_key:
+                source = JevSource.TYPESAFE
             else:
-                source = JevSource.TYPESAFE if self.typesafe_api_key else JevSource.GATEWAY
+                source = JevSource.OPENROUTER if self.openrouter_api_key else JevSource.GATEWAY
         # A proxy may be a routing boundary, and the gateway cannot honour a direct-API model pin.
         if self.jev_base_url or self.jev_model is not None:
             return source, None

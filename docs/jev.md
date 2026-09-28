@@ -8,8 +8,8 @@ evals rather than taken from Typesafe.
 
 | | Documented | Where fastbrowse relies on it |
 |:--|:--|:--|
-| OpenRouter | `POST https://openrouter.ai/api/v1/systemone`, bearer key, TypeSafe request and response shapes, plus `usage.cost` in dollars, `id` and `provider`; bare model ids map to `typesafe/` ([SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk)) | `clients/typesafe.py` with base URL `https://openrouter.ai/api`; default when `OPENROUTER_API_KEY` is set |
-| Direct API | `POST https://api.typesafe.ai/v1/systemone`, bearer key, body `{model, state, questions}`; response `{model, answers, usage}` ([API](https://docs.typesafe.ai/api), [OpenAPI](https://api.typesafe.ai/openapi.json)) | `clients/typesafe.py`, selected with `FASTBROWSE_JEV_SOURCE=typesafe`, or when OpenRouter has no key and `TYPESAFE_API_KEY` is set |
+| OpenRouter | `POST https://openrouter.ai/api/v1/systemone`, bearer key, TypeSafe request and response shapes, plus `usage.cost` in dollars, `id` and `provider`; bare model ids map to `typesafe/` ([SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk)) | `clients/typesafe.py` with base URL `https://openrouter.ai/api`; default when `OPENROUTER_API_KEY` is set and no direct TypeSafe key is supplied |
+| Direct API | `POST https://api.typesafe.ai/v1/systemone`, bearer key, body `{model, state, questions}`; response `{model, answers, usage}` ([API](https://docs.typesafe.ai/api), [OpenAPI](https://api.typesafe.ai/openapi.json)) | `clients/typesafe.py`, selected with `FASTBROWSE_JEV_SOURCE=typesafe`, or when `TYPESAFE_API_KEY` is set and no source override is supplied |
 | Gateway | Model `typesafe-ai/jev` via `https://ai-gateway.vercel.sh/v4/ai/evaluation-model`, body `{state, questions}` ([Gateway](https://vercel.com/docs/ai-gateway/modalities/evaluation), [transport source](https://github.com/vercel/ai/blob/main/packages/gateway/src/gateway-evaluation-model.ts)) | `clients/vercel.py`, used with `AI_GATEWAY_API_KEY`; backup for OpenRouter and direct TypeSafe. `FASTBROWSE_JEV_BASE_URL` retargets the selected source |
 | Yes/no (Noul) | Direct returns `{type: "noul", noul: P(yes)}`; the gateway returns `probability`. Optional `true`/`false` criteria define the boundary ([Noul](https://docs.typesafe.ai/primitives/noul), [v1 migration](https://docs.typesafe.ai/migrating-to-v1)) | `clients/validation.py` decodes each shape separately; `policy.py` asks one per control to filter a dense page |
 | Choice | The top `choice`, every option's probability, and a `confidence` ([Choice](https://docs.typesafe.ai/primitives/choice)) | `policy.py` (operation and target), `retrieval.py` (field and short-fact reads) |
@@ -24,9 +24,9 @@ evals rather than taken from Typesafe.
 
 ## Provider failover
 
-Provider selection is **ours**: `OPENROUTER_API_KEY` serves both Jev and the LLM by default.
-`AI_GATEWAY_API_KEY` adds a Vercel AI Gateway backup. Without OpenRouter, direct TypeSafe takes precedence
-over the gateway. `FASTBROWSE_JEV_SOURCE=openrouter`, `typesafe` or `gateway` overrides the first provider.
+Provider selection is **ours**: a supplied `TYPESAFE_API_KEY` selects direct TypeSafe for Jev.
+Otherwise `OPENROUTER_API_KEY` is primary; it also serves the LLM in either case.
+`AI_GATEWAY_API_KEY` adds a Vercel AI Gateway backup, or serves Jev when neither other key is supplied. `FASTBROWSE_JEV_SOURCE=openrouter`, `typesafe` or `gateway` overrides the first provider.
 OpenRouter and direct TypeSafe use the gateway as backup when keyed; the gateway uses direct TypeSafe
 when keyed, otherwise OpenRouter. A selected source without its key is a configuration error.
 

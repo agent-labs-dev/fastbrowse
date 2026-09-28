@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A supplied `TYPESAFE_API_KEY` selects direct Jev; otherwise OpenRouter is primary, with Vercel AI Gateway
+  supported as a backup or explicit primary. `FASTBROWSE_JEV_SOURCE` overrides automatic selection.
+
 - Compare fastbrowse and hosted Browser Use on stateful mock workflows with shared site-state grading,
   explicit authorization instructions, fresh cloud browsers and recorded per-attempt results.
 

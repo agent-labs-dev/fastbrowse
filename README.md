@@ -16,9 +16,6 @@ Jev chooses each action, an LLM plans and reads, and code owns verification, saf
 
 </div>
 
-> **Warning**  
-> This project is highly experimental and not recommended for production use yet.
-
 ---
 
 ## Why
@@ -81,6 +78,21 @@ Suite `stretch-heldout` `0ab6d8fe`: fastbrowse against Browser Use agent, on the
 Each arm made 9 attempts.
 
 7 tasks graded on fastbrowse alone are in [docs/evals.md](docs/evals.md#results).
+
+### Controlled mock-site comparison
+
+Release 0.5.9, 2026-09-28. Real agents and browsers on controlled fixture sites, separate from live-web results.
+
+| Suite | Agent | Passed | Median cost | Median time |
+|:--|:--|:--|:--|:--|
+| `mock-completion` | fastbrowse | 53/54 | $0.0065 | 22.8s |
+| `mock-completion` | Browser Use agent | 54/54 | $0.2543 | 46.0s |
+| `mock-safety` | fastbrowse | 6/6 | $0.0103 | 30.4s |
+| `mock-safety` | Browser Use agent | 6/6 | $0.5763 | 85.7s |
+
+Confirmation gates are scored separately from task completion. Verified transient attempts are retried
+and excluded from scores; genuine agent failures remain. Full protocol and attempt records are in
+[docs/evals.md](docs/evals.md#stateful-mock-comparison).
 <!-- /evals:headline -->
 
 Compare rows only at matching task versions. See [eval results and workflow](docs/evals.md).
@@ -108,6 +120,10 @@ export OPENROUTER_API_KEY=...   # for Jev and the LLM that plans and reads
 export BROWSER_USE_API_KEY=...  # the cloud browser; or pass --local to use Chrome
 uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
+
+Jev uses direct TypeSafe when `TYPESAFE_API_KEY` is supplied; otherwise OpenRouter is primary.
+Vercel AI Gateway is supported as a backup or an explicit primary. `FASTBROWSE_JEV_SOURCE` overrides
+automatic selection; see [provider routing](docs/jev.md#provider-failover). The LLM uses OpenRouter.
 
 `uvx` runs the published package in an isolated cached environment. `uv tool install fastbrowse` keeps it on your
 PATH, and `uv add fastbrowse` puts it in a project. Service keys can live in a `.env` file in the working directory;
@@ -301,11 +317,8 @@ tab and are acknowledged after delivery, with no fixed frame rate. Only the late
 Handler failures are logged without stopping the run. Live frames and recordings are held back while a
 resolved secret may show on the page, as PNG step frames are. No handler means no live capture.
 
-Jev defaults to OpenRouter using the same `OPENROUTER_API_KEY` as the LLM. If `AI_GATEWAY_API_KEY` is set,
-a retryable HTTP failure that exhausts retries switches the run to the Vercel AI Gateway.
-`FASTBROWSE_JEV_SOURCE=openrouter`, `typesafe` or `gateway` selects the first provider explicitly.
-`FASTBROWSE_JEV_BASE_URL` or an explicit `FASTBROWSE_JEV_MODEL` disables failover.
-See [Jev routing](docs/jev.md#provider-failover) for fallback order and model defaults.
+Jev uses direct TypeSafe when keyed, otherwise OpenRouter, with Vercel AI Gateway also supported.
+See [Jev routing](docs/jev.md#provider-failover) for key precedence, overrides and failover.
 Any other source
 can be passed as `run_task(jev=...)`, implementing async `evaluate(state, questions)`; `run_task(llm=...)`
 accepts an implementation of the `LLMClient.generate(...)` protocol in `fastbrowse.llm`.

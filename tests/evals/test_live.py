@@ -273,7 +273,8 @@ def test_the_runner_answers_a_choice_of_one_option_without_asking_jev(monkeypatc
 @pytest.mark.parametrize(
     ("source", "url", "key"),
     [
-        (None, "https://openrouter.ai/api/v1/systemone", "or"),
+        (None, "https://api.typesafe.ai/v1/systemone", "ts"),
+        (JevSource.OPENROUTER, "https://openrouter.ai/api/v1/systemone", "or"),
         (JevSource.TYPESAFE, "https://api.typesafe.ai/v1/systemone", "ts"),
         (JevSource.GATEWAY, "https://ai-gateway.vercel.sh/v4/ai/evaluation-model", "gw"),
     ],
@@ -305,7 +306,7 @@ def test_ultrafast_uses_the_selected_jev_route_and_meters_its_cost(
             assert "model" not in body
             return {"answers": {}, "usage": {"inputTokens": 100}, "providerMetadata": {"gateway": {"cost": "0.001"}}}
         assert body["model"] == (
-            "pinned-jev" if pinned else "jev-1.13.0" if source is JevSource.TYPESAFE else "jev-1.13"
+            "pinned-jev" if pinned else "jev-1.13.0" if source in (None, JevSource.TYPESAFE) else "jev-1.13"
         )
         return {"answers": {}, "usage": {"input_tokens": 100, "cost": 0.001}}
 
