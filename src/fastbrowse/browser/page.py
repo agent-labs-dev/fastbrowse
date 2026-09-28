@@ -192,6 +192,7 @@ class _Snapshot(_FrameText):
     """snapshot.js output for one frame."""
 
     viewport_text: str
+    response_status: int | None = None
     document_key: str
     controls: tuple[_SnapshotControl, ...]
     page_key: str
@@ -383,6 +384,7 @@ class CdpPage(Page):
             title=title,
             page_key=page_key,
             document_key=main.raw.document_key if main else "",
+            response_status=main.raw.response_status if main else None,
             captured_at=datetime.now(UTC),
             controls=tuple(kept),
             omitted_controls=omitted,

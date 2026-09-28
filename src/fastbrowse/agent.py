@@ -234,6 +234,21 @@ class _Stop(Exception):
         self.error = error
 
 
+class _HttpFailure(Frozen):
+    url: str
+    status: int
+
+    @property
+    def message(self) -> str:
+        return f"HTTP {self.status} at {self.url} in this browser session; the cause is unknown."
+
+    def stop(self) -> _Stop:
+        status = {401: Status.NEEDS_LOGIN, 403: Status.BLOCKED}.get(self.status, Status.STUCK)
+        if self.status in {408, 419, 429} or self.status >= 500:
+            status = Status.UNAVAILABLE
+        return _Stop(status, f"Could not complete the task after {self.message}")
+
+
 class _Unsure(Exception):
     """The next action is authorized but not confidently the right one: a case for recovery, not for the caller."""
 
@@ -281,6 +296,10 @@ class _RunState:
     steps: list[StepResult] = field(default_factory=list[StepResult])
     would_fire: list[Tripwire] = field(default_factory=list[Tripwire])
     history: list[HistoryEntry] = field(default_factory=list[HistoryEntry])
+    http_failure: _HttpFailure | None = None
+    failed_links: dict[tuple[str, str], _HttpFailure] = field(default_factory=dict)
+    pending_link: tuple[str, str] | None = None
+    http_seen: set[tuple[str, str, int]] = field(default_factory=set)
     hint: str | None = None
     directed: tuple[Operation, str | None] | None = None
     """The operation and control id recovery named, taken when Jev is still unsure of the next step."""
@@ -569,6 +588,27 @@ class Agent:
             state.first_url = state.first_url or observation.url
             state.visited[(self._raw_observation or observation).url] = None
             self._note_effect(state, observation)
+            if observation.response_status is not None and observation.response_status >= 400:
+                document = (
+                    observation.url,
+                    observation.document_key or observation.page_key,
+                    observation.response_status,
+                )
+                if document not in state.http_seen:
+                    state.http_seen.add(document)
+                    if observation.response_status in {403, 429, 503} and await self._outwait(
+                        self._raw_observation or observation
+                    ):
+                        continue
+                    state.paging_failed |= state.next_page or state.paged_from is not None
+                    state.next_page = False
+                    await state.await_plan()
+                    await self._recover(
+                        state,
+                        observation,
+                        _HttpFailure(url=observation.url, status=observation.response_status).message,
+                    )
+                    continue
             undone, renews, put_back = self._reversal(state)
             stalled = self._settle(state, observation, renews=renews, put_back=put_back)
             if (stalled := undone or stalled) is not None:
@@ -594,7 +634,7 @@ class Agent:
                 continue
             if await self._reread_if_changed(state, observation):
                 continue
-            if (paging := _paging(state, observation)) is not None:
+            if (paging := _paging(state, _without_failed_links(state, observation))) is not None:
                 if await self._step(state, observation, paging, Decider.LLM, gate=False):
                     await self._recover(state, observation, _read_exhausted(state))
                 continue
@@ -611,7 +651,11 @@ class Agent:
             decision = await self._unless_redrawn(
                 state,
                 decide(
-                    self._jev, _without_missing(observation, state.missing), context, self._config, ledger=state.ledger
+                    self._jev,
+                    _without_missing(_without_failed_links(state, observation), state.missing),
+                    context,
+                    self._config,
+                    ledger=state.ledger,
                 ),
                 observation,
                 None,
@@ -636,7 +680,9 @@ class Agent:
             uncertain = decision.confidence < self._config.thresholds.recover_below
             decided_by = Decider.JEV
             if (uncertain or decision.operation not in _NOT_ACTING) and (
-                directed := _follow_recovery(state, observation, decision, uncertain=uncertain)
+                directed := _follow_recovery(
+                    state, _without_failed_links(state, observation), decision, uncertain=uncertain
+                )
             ) is not None:
                 decision, uncertain, decided_by = directed, False, Decider.LLM
             if await self._read_before_interaction(state, observation, decision, decided_by):
@@ -882,6 +928,10 @@ class Agent:
         prepared_action: Action | None = None,
     ) -> bool:
         """Return whether a duplicate read was skipped, so callers can recover or continue the interaction."""
+        if decision.operation is Operation.CLICK and decision.target is not None:
+            link = _link_key(observation, decision.target)
+            if link is not None and (failure := state.failed_links.get(link)) is not None:
+                raise failure.stop()
         started = time.monotonic()
         state.form_continues = False
         if decision.operation not in {Operation.FILL, Operation.SCROLL}:
@@ -964,6 +1014,14 @@ class Agent:
             if decision.operation is not Operation.SCROLL and attempt.count > _REPEATS_BEFORE_CYCLE:
                 progressed = False
             state.acted_from = observation
+            state.pending_link = (
+                _link_key(observation, decision.target)
+                if changed
+                and act.outcome is StepOutcome.EXECUTED
+                and decision.operation is Operation.CLICK
+                and decision.target is not None
+                else None
+            )
             target = decision.target
             effective = changed
             if act.outcome is StepOutcome.EXECUTED and target is not None and target.role in SETTING_ROLES:
@@ -995,6 +1053,7 @@ class Agent:
                 text=typed,
                 effect=effect_now,
                 setting=setting or None,
+                read_progress=decision.operation is Operation.READ and progressed,
             )
         )
         step = StepResult(
@@ -1098,6 +1157,8 @@ class Agent:
         key = state_key(observation)
         first = state.reached.get(key)
         if first is None:
+            if observation.response_status is not None and 200 <= observation.response_status < 400:
+                state.http_failure = None
             state.reached[key] = len(state.history)
             if renews:
                 state.recoveries = 0
@@ -1112,7 +1173,7 @@ class Agent:
         # Going back to a list after reading one of its pages is how a comparison is done, not a wasted round. A
         # first return by a new move is not a loop yet: Back from a wizard's review to correct a step reached
         # each earlier step again, and the run was stopped as stuck for doing what the task asked.
-        if first is None or key == left or not retraced or any(entry.operation is Operation.READ for entry in cycle):
+        if first is None or key == left or not retraced or any(entry.read_progress for entry in cycle):
             if put_back:
                 # A setting put back to a state its page already held is not progress, however the results
                 # redraw beneath it. Without this a filter toggled on and off reached a page state never seen
@@ -1157,8 +1218,8 @@ class Agent:
         state.settings_held.update((held, (made.document, frozenset(made.values_before.items()))))
         note = None
         for index, earlier in reversed(state.moves):
-            # Recovery spent what came before it, and a read in between makes a return a comparison, as in _settle.
-            if index <= state.recovered_at or any(e.operation is Operation.READ for e in state.history[index:]):
+            # Recovery spent earlier evidence; a useful read makes the return a comparison, as in _settle.
+            if index <= state.recovered_at or any(e.read_progress for e in state.history[index:]):
                 break
             if (returned := reversal(made, earlier)) is not None:
                 actions = ", ".join(_described(entry) for entry in state.history[index - 1 :][-_CYCLE_SHOWN:])
@@ -1172,6 +1233,18 @@ class Agent:
         """Record on the last action what it did, which the next choice and recovery both read."""
         if state.transaction_candidates and state.transaction_candidates[-1].landed_url is None:
             state.transaction_candidates[-1].landed_url = observation.url
+        link, state.pending_link = state.pending_link, None
+        if observation.response_status is not None:
+            if observation.response_status >= 400:
+                state.http_failure = _HttpFailure(url=observation.url, status=observation.response_status)
+                if link is not None:
+                    state.failed_links[link] = state.http_failure
+            elif observation.response_status >= 200:
+                state.failed_links = {
+                    key: failure for key, failure in state.failed_links.items() if failure.url != observation.url
+                }
+                if state.http_failure is not None and state.http_failure.url == observation.url:
+                    state.http_failure = None
         before, state.acted_from = state.acted_from, None
         if before is None or not state.history or state.history[-1].effect is not None:
             return
@@ -2034,6 +2107,7 @@ class Agent:
                 outcome=StepOutcome.EXECUTED,
                 page_changed=False,
                 effect="Read captured pagination records.",
+                read_progress=len(state.notes.facts) > before,
             )
         )
         await self._record_step(
@@ -2072,7 +2146,9 @@ class Agent:
         before_click = len(state.steps)
         try:
             try:
-                while (target := next_page_control(observation)) is not None and state.pages < self._config.max_pages:
+                while (
+                    target := next_page_control(_without_failed_links(state, observation))
+                ) is not None and state.pages < self._config.max_pages:
                     state.ledger.check()
                     # Each queued read still owes a step. Leave room for both the next click and its read.
                     if state.ledger.steps + len(pending) + 2 > state.ledger.limits.max_steps:
@@ -2106,6 +2182,9 @@ class Agent:
                         landed = await self._observe()
                         state.visited[(self._raw_observation or landed).url] = None
                         self._note_effect(state, landed)
+                        if landed.response_status is not None and landed.response_status >= 400:
+                            state.paging_failed = True
+                            break
                         stalled = self._settle(state, landed)
                         state.paged_from = None
                         if stalled or landed.url in seen or origin_of(landed.url) != origin:
@@ -2287,6 +2366,8 @@ class Agent:
         state.recovered_at = len(state.history)
         state.plan_marks.clear()
         if state.recoveries > self._config.stall.max_recoveries:
+            if state.http_failure is not None and gives_up_as is not Status.NEEDS_INPUT:
+                raise state.http_failure.stop()
             raise _Stop(gives_up_as, reason)
         steps = "\n".join(
             f"- {h.operation.value if h.operation else 'open'} {h.target or ''} -> {h.outcome.value}"
@@ -2331,6 +2412,8 @@ class Agent:
                         "a control or to load more. When the notes already answer every open requirement, the next "
                         "subgoal is to finish. Recovery memory records earlier diagnoses and subgoals; "
                         "use the recent steps to judge whether to try another way. "
+                        "HTTP failures describe this browser session, not what the site permits in general. "
+                        "Failed links are withheld on unchanged source pages; use another observed route or stop. "
                         "Dates are relative to the supplied current date.\n\n"
                         f"# Trust\n{UNTRUSTED}"
                     ),
@@ -2338,8 +2421,10 @@ class Agent:
                 Message(
                     role="user",
                     content=(
-                        f"## Controls\n{_controls_text(observation)}\n\n"
-                        f"## Page\n{observation.url}\n{observation.viewport_text}{secrets}\n\n"
+                        f"## Controls\n{_controls_text(_without_failed_links(state, observation))}\n\n"
+                        f"## Page\n{observation.url}\nHTTP status: {observation.response_status}\n"
+                        f"{observation.viewport_text}{secrets}\n\n"
+                        f"## HTTP failure\n{state.http_failure.message if state.http_failure else 'none'}\n\n"
                         "## Notes read so far\n"
                         f"{state.notes.render(self._config.observation.working_notes_chars) or 'none'}\n\n"
                         f"## Recent steps\n{steps}\n\n"
@@ -2360,6 +2445,8 @@ class Agent:
             # Asked of the model rather than carried from the step that raised it: a missing value can surface
             # recoveries later, after an attempt to go on without it has failed for its absence.
             status = Status.NEEDS_INPUT if generation.data.needs_input else Status.STUCK
+            if state.http_failure is not None and status is not Status.NEEDS_INPUT:
+                raise state.http_failure.stop()
             raise _Stop(status, generation.data.diagnosis)
         state.hint = self._redactor.redact(generation.data.next_subgoal)
         diagnosis = self._redactor.redact(generation.data.diagnosis)
@@ -2375,6 +2462,7 @@ class Agent:
             control=generation.data.control,
         )
         chosen, operation = generation.data.control, generation.data.operation
+        observation = _without_failed_links(state, observation)
         if operation is not None and operation in _PAGE_OPERATIONS:
             state.directed = (operation, None)
         elif chosen is not None and operation is not None and 0 <= chosen < len(observation.controls):
@@ -3058,6 +3146,25 @@ def next_page_notice(following: Control | None) -> str:
         f"This page has a next-page control ({following.label!r}): a list on it may continue. A requirement "
         "about the page that control opens is not answered by this page, whatever this page holds: leave it "
         "unanswered until that page is read."
+    )
+
+
+def _link_key(observation: Observation, control: Control) -> tuple[str, str] | None:
+    # Use the observed link, including cross-origin display hrefs, so redirects retain their source attempt.
+    if control.role != "link" or control.href is None:
+        return None
+    return state_key(observation), json.dumps([control.href, control.label, control.context])
+
+
+def _without_failed_links(state: _RunState, observation: Observation) -> Observation:
+    if not state.failed_links:
+        return observation
+    return observation.model_copy(
+        update={
+            "controls": tuple(
+                control for control in observation.controls if _link_key(observation, control) not in state.failed_links
+            )
+        }
     )
 
 

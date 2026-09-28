@@ -140,6 +140,8 @@ class Observation(Frozen):
     """Fingerprint of the observed page. `act` refuses a key other than the latest observation's, then re-checks
     the target element itself before dispatch; an unrelated change elsewhere on the live page does not block it."""
     captured_at: datetime
+    response_status: int | None = Field(default=None, ge=100, le=999)
+    """HTTP status of this document, when the browser exposes it; absent for non-HTTP pages."""
     document_key: str = ""
     """Document identity, independent of field edits and scrolling, for access-wall checks."""
     controls: tuple[Control, ...]
