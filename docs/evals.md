@@ -282,6 +282,28 @@ Both suites write per-run `would_fire` counts for shadow tripwires. The live sum
 with at least one signal, divided by all passing runs, separately for each tripwire. Repeated signals within
 one run count once in that summary. The local suite stores the counts without printing that rate.
 
+### 0.5.9, 2026-09-28
+
+<!-- evals:results:0.5.9 -->
+`mock-completion` `fffe1d53-shared-5fa36bb9`: fastbrowse against Browser Use agent, on the same 18 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.9) | 53/54 | 53/54 | 22.8s | 27.4s | $0.0065 | $0.0078 | $0.42 |
+| Browser Use agent | 54/54 | 54/54 | 46.0s | 54.6s | $0.2543 | $0.3383 | $18.27 |
+
+Each arm made 54 attempts. Runs: `ec2bab7412ed` at `4e7143c`.
+
+`mock-safety` `fffe1d53-shared-5fa36bb9`: fastbrowse against Browser Use agent, on the same 2 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.9) | 6/6 | 6/6 | 30.4s | 32.0s | $0.0103 | $0.0105 | $0.06 |
+| Browser Use agent | 6/6 | 6/6 | 85.7s | 92.5s | $0.5763 | $0.5462 | $3.28 |
+
+Each arm made 6 attempts. Runs: `86450c5651fb` at `f2a9a58`, `ec2bab7412ed` at `4e7143c`.
+<!-- /evals:results:0.5.9 -->
+
 ### 0.5.8, 2026-09-27
 
 <!-- evals:results:0.5.8 -->
@@ -544,6 +566,27 @@ Separate suite versions never share an aggregate. No wall-clock generation times
 <!-- /evals:feed-schema -->
 
 ## Stateful mock comparison
+
+The 2026-09-28 comparison scored three attempts per task and arm. Completion was 53/54 for fastbrowse and
+54/54 for Browser Use. Median completion time was 22.8s against 46.0s; median reported cost was $0.0065
+against $0.2543. These measurements support lower time and cost on these fixtures, with one fewer completion.
+Both arms passed all six confirmation checks. This sample does not establish a general reliability or
+safety advantage.
+
+Fastbrowse's only scored failure was an uncertain stock lookup in repeat one; it passed in repeats two
+and three. Browser Use's final password-pause attempt suffered a browser-session stall during login:
+simple page reads timed out and it never reached the password form. The outage retry policy was applied
+after the initial run, symmetrically to both arms. That transient attempt was replaced by a fresh run,
+which passed. No agent failure was replaced. The 121 physical attempts therefore supply 120 scored attempts;
+the transient attempt's time and cost are not in the aggregates.
+
+The generated [0.5.9 tables](#059-2026-09-28) report the scored attempts.
+[Published rows](results/0.5.9.jsonl) hold grades, timing, cost and clean build provenance;
+[site-state evidence](results/mock-evidence/0.5.9.jsonl) holds each answer and recorded effects;
+[excluded outage evidence](results/mock-evidence/0.5.9-outages.jsonl) records the replaced attempt and why.
+The initial run used `4e7143c`; the retry used `f2a9a58`, which added harness retries without changing the
+agent, prompts or graders. Browser Use used its hosted default, `claude-opus-4.7`. Fastbrowse's configured
+providers are recorded in each published row; this is a product comparison, not a same-model experiment.
 
 Run both cloud agents against fresh copies of the stateful fixture site:
 

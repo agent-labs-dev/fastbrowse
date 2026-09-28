@@ -232,7 +232,7 @@ def all_tasks() -> tuple[dict[str, tuple[Any, ...]], tuple[Any, ...]]:
 _KEPT = ("arm", "task", "repeat", "category", "suite", "suite_version", "task_version", "status",
          "normalized_status", "task_successful", "passed", "correct",
          "seconds", "dollars", "retries", "failure", "model", "text_model", "transient_seconds", "at",
-         "answered", "session_seconds")  # fmt: skip
+         "answered", "session_seconds", "replaces_run_id")  # fmt: skip
 _RUN_KEPT = ("run_id", "run_started", "fastbrowse_version", "git_sha", "git_dirty", "providers", "max_steps",
              "concurrency", "jev_ultrafast", "arms", "python", "argv")  # fmt: skip
 
@@ -440,7 +440,7 @@ def _paired(per_arm: Mapping[str, list[Mapping[str, Any]]]) -> list[Mapping[str,
 
 
 def _pass(row: Mapping[str, Any]) -> tuple[object, int]:
-    return (row.get("run") or {}).get("run_id"), row["repeat"]
+    return row.get("replaces_run_id") or (row.get("run") or {}).get("run_id"), row["repeat"]
 
 
 def results_table(release: str, rows: Sequence[Mapping[str, Any]]) -> str:

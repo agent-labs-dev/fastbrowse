@@ -287,6 +287,17 @@ def test_an_outage_drops_the_same_repeat_from_every_arm() -> None:
     assert [(a.passed, a.total) for a in arms.values()] == [(0, 1), (0, 1)]
 
 
+def test_separate_outage_retry_keeps_original_pair_and_actual_run_provenance() -> None:
+    fast = _row("pypi-version")
+    retry = _row("pypi-version", arm="browser-use")
+    retry["run"] = dict(retry["run"], run_id="retry-run")
+    retry["replaces_run_id"] = "r1"
+    published = versions.slim(retry)
+    arms = versions.summary([("1.0.0", [fast, published])]).releases[0].arms
+    assert [(a.passed, a.total) for a in arms.values()] == [(1, 1), (1, 1)]
+    assert published["run"]["run_id"] == "retry-run"
+
+
 def test_every_comparison_sets_arms_on_the_same_tasks() -> None:
     """Pooled, core set fastbrowse on 21 tasks beside Browser Use on 14 and jev-ultrafast on 6."""
     rows = [
