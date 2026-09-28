@@ -2177,7 +2177,12 @@ async def test_a_step_carries_the_page_it_acted_on_when_frames_are_asked_for(fra
     page = Mock(spec=Page)
     page.observe = AsyncMock(return_value=observation((_button("Done"),)))
     page.screenshot = AsyncMock(return_value=b"png")
-    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
+
+    async def navigate(*_: Any) -> ActResult:
+        page.screenshot.return_value = b"destination"
+        return ActResult(outcome=StepOutcome.EXECUTED, page_changed=True)
+
+    page.act = AsyncMock(side_effect=navigate)
     agent = Agent(page, ScriptedJev({}), ScriptedLLM([]), config=Config(step_frames=frames), on_event=collect)
     state = await run_state()
     state.authorization = Authorization(irreversible_actions=True)
@@ -2185,8 +2190,8 @@ async def test_a_step_carries_the_page_it_acted_on_when_frames_are_asked_for(fra
     assert [event.frame for event in events] == [sent]
 
 
-async def test_a_secret_the_step_itself_put_on_the_page_suppresses_its_frame() -> None:
-    """The page before the action is not evidence about the page after it: the fill may be what revealed it."""
+async def test_a_secret_visible_when_the_step_frame_is_captured_suppresses_it() -> None:
+    """The decision observation can predate a secret becoming visible; frame capture must check the current page."""
     events: list[StepEvent] = []
 
     async def collect(event: StepEvent | BrowserEvent) -> None:
@@ -2194,7 +2199,7 @@ async def test_a_secret_the_step_itself_put_on_the_page_suppresses_its_frame() -
             events.append(event)
 
     save = _button("Save")
-    # The page mirrors what was typed into ordinary text, which only the observation AFTER the step shows.
+    # Page text changed after the decision observation, so only a fresh reading sees the secret.
     mirrored = observation((save,)).model_copy(update={"viewport_text": "signed in as hunter2"})
     page = Mock(spec=Page)
     page.observe = AsyncMock(return_value=mirrored)
@@ -4529,3 +4534,26 @@ async def test_http_challenge_gets_a_chance_to_clear_before_recovery(status: int
     agent._outwait.assert_awaited_once_with(failed)
     agent._recover.assert_not_awaited()
     assert not state.paging_failed
+
+
+async def test_step_frame_stays_withheld_when_a_dialog_hides_page_text() -> None:
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(
+        return_value=observation(()).model_copy(
+            update={"dialog": Dialog(kind="alert", message="Paused"), "viewport_text": ""}
+        )
+    )
+    page.screenshot = AsyncMock(return_value=b"secret pixels")
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    agent._redactor.register("password", "hunter2")
+
+    await agent._observe()
+    assert await agent._frame() is None
+    page.screenshot.assert_not_awaited()
+    assert all(call.args == (True,) for call in page.withhold_frames.call_args_list)
+
+    page.observe.return_value = observation(()).model_copy(update={"viewport_text": "hunter2"})
+    assert await agent._frame() is None
+    page.observe.return_value = observation(())
+    assert await agent._frame() == b"secret pixels"
+    page.withhold_frames.assert_called_with(False)

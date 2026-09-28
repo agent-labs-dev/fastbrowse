@@ -1149,7 +1149,7 @@ class CdpPage(Page):
         are rare (recovery and uncertain completion), so focus moves only when it has to.
         """
         client, session_id = self._session.client, self._session.active_session_id
-        params: CaptureScreenshotParameters = {"format": "jpeg", "quality": 70}
+        params: CaptureScreenshotParameters = {"format": "png"}
         capture = asyncio.ensure_future(client.send.Page.captureScreenshot(params=params, session_id=session_id))
         try:
             done, _ = await asyncio.wait({capture}, timeout=_SCREENSHOT_WAIT_SECONDS)

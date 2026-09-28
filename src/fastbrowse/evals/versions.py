@@ -142,9 +142,12 @@ def fingerprint(task: object) -> str:
     # `rolling` says how to fingerprint the task, not what it asks: its text is hashed under its stable name.
     fields = {f.name: _stable(getattr(task, f.name), seen) for f in dataclasses.fields(task) if f.name != "rolling"}
     if hasattr(task, "expect"):
-        from fastbrowse.evals.live_tasks import prompt
+        from fastbrowse.evals.live import grade
+        from fastbrowse.evals.live_tasks import LiveTask, prompt
         from fastbrowse.evals.status import status_matches
 
+        if isinstance(task, LiveTask):
+            fields["grade_rule"] = _stable(grade, seen)
         fields["status_rule"] = _stable(status_matches, seen)
         fields["prompt"] = _stable(prompt, seen)
     body = json.dumps(fields, sort_keys=True, default=str)
@@ -728,11 +731,11 @@ def protocol_docs() -> str:
         "neither answered nor gave up. A session ending in `error` with any other output is scored as its failure.",
         "An attempt of any arm still running after 15 minutes is stopped as an outage: the slowest finished attempts "
         "took about three minutes.",
-        "A fastbrowse attempt in which any Jev call took over 2 seconds, retries included, is a Jev outage: healthy "
-        "calls take about half a second at any page size, and no worse than 0.93 seconds in 45 measured. This rule "
-        "applies to fastbrowse alone, since no other arm's provider calls are visible to the harness.",
-        "From 0.5.8, a fastbrowse attempt in which any provider request failed and was retried "
-        "(`transient_seconds` above 0) is an outage too, for the same reason.",
+        "From 0.5.10, slow provider calls and recovered request failures stay in the scored attempt, with their "
+        "full wall time and cost. Trace telemetry cannot turn a completed or failed attempt into an outage.",
+        "Earlier releases excluded fastbrowse attempts with Jev calls over 2 seconds or recovered request failures, "
+        "although other arms did not expose those measurements. Published rows retain that historical selection "
+        "bias; the new task versions must not be compared with them as if the grading rules were unchanged.",
         "An attempt an outage ended is waited out and run again, up to five times over about 25 minutes.",
         "A row still unavailable after that is recorded but scores nothing, and neither does the same repeat of "
         "every other arm at that task: each comparison scores its arms on the same attempts at the same tasks.",

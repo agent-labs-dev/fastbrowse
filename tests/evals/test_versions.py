@@ -383,3 +383,15 @@ def test_mock_results_do_not_replace_the_live_site_headline(monkeypatch: pytest.
     assert text.index("released as 1.0.0") < text.index("Controlled mock-site comparison")
     assert "Release 1.0.1" in text
     assert "`mock-completion`" in text
+
+
+def test_live_grading_rule_is_versioned(monkeypatch: pytest.MonkeyPatch) -> None:
+    before = versions.fingerprint(live.SUITES["core"][0])
+    monkeypatch.setattr(live, "grade", lambda *_: (True, None, None), raising=False)
+    assert versions.fingerprint(live.SUITES["core"][0]) != before
+
+
+def test_live_grading_does_not_change_mock_versions(monkeypatch: pytest.MonkeyPatch) -> None:
+    before = [versions.fingerprint(task) for task in MOCK]
+    monkeypatch.setattr(live, "grade", lambda *_: (True, None, None))
+    assert [versions.fingerprint(task) for task in MOCK] == before
