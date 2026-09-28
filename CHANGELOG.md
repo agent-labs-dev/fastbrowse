@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **An audit suite for the terminal, MCP and embed surfaces.** `python -m fastbrowse.audit` runs a tiered
+  matrix of contract and behaviour cases, each carrying the status, exit code and per-check evidence it must
+  produce, and writes one JSON report plus a Markdown roll-up. Tier 0 covers the terminal contract without
+  calling a model; the paid tiers are refused unless `--spend` is passed.
 - Read nested gateway errors, recover from input-size refusals, and redact echoed API keys before shortening errors.
 
 ## [0.5.9] - 2026-09-27
