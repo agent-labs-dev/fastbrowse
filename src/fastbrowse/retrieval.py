@@ -1093,7 +1093,10 @@ async def read(
         # Earlier continuation quotes have no tally key, so counting only later pages would omit them.
         if notes.has_untallied_records(requirement_id):
             lost[requirement_id] = None
-    blocked = (set(incomplete) | lost.keys()) - ordered
+    # An earlier read's gap does not hold a count open once a later read has counted the whole list: a completed
+    # tally's own records are the evidence, and they already cover what that earlier read missed. A record this
+    # read could not resolve still blocks, since nothing has counted it yet.
+    blocked = ((set(incomplete) - tally_complete) | set(lost)) - ordered
     if records_only:
         blocked.update(requirement_ids)
     for fact in found:
