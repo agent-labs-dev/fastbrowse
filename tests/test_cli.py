@@ -204,3 +204,17 @@ async def test_cli_login_and_blocked_have_distinct_exit_codes(monkeypatch: pytes
         monkeypatch.setattr(cli, "run_task", fake)
         codes.append(await cli.run(cli._parse(["task", "--local"])))
     assert codes == [4, 6]
+
+
+async def test_login_advice_is_added_only_to_cli_output(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = cli._refused("Sign-in required").model_copy(update={"status": Status.NEEDS_LOGIN})
+
+    async def fake(task: str, **kwargs: object) -> RunResult:
+        return result
+
+    monkeypatch.setattr(cli, "run_task", fake)
+    assert await cli.run(cli._parse(["task", "--local", "--json"])) == 4
+    assert "--secret NAME=ENV_VAR@https://host" in json.loads(capsys.readouterr().out)["error"]
+    assert result.error == "Sign-in required"

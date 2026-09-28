@@ -252,6 +252,12 @@ async def run(args: argparse.Namespace) -> int:
         on_event=_print_step,
         record=args.record,
     )
+    if result.status is Status.NEEDS_LOGIN:
+        error = (
+            f"{result.error or 'Sign-in credentials required'}. Pass --secret NAME=ENV_VAR@https://host "
+            "with the password in that environment variable; credentials in task text are not used."
+        )
+        result = result.model_copy(update={"error": error})
     if args.json:
         print(result.model_dump_json(indent=2))
     else:

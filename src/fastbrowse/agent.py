@@ -2813,11 +2813,6 @@ class Agent:
         budget: BudgetStop | None = None,
     ) -> RunResult:
         observed = self._raw_observation or self._observed
-        if status is Status.NEEDS_LOGIN:
-            error = (
-                f"{error or 'Sign-in credentials required'}. Pass --secret NAME=ENV_VAR@https://host "
-                "with the password in that environment variable; credentials in task text are not used."
-            )
         return RunResult(
             status=status,
             budget=budget,
