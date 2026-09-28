@@ -62,6 +62,28 @@ def irreversible_question(task: str, operation: Operation, control: Control) -> 
     )
 
 
+# A field that takes a NEW secret rather than an existing one: a change, reset, confirmation or sign-up password.
+# The distinction is the field's own wording, which is all the page gives: a sign-in "Password" and a change form's
+# "Current password" hold the stored secret, while a "New password" or "Confirm password" must not.
+_NEW_SECRET = re.compile(
+    r"\b(new|confirm|confirmation|repeat|re-?enter|re-?type|choose|create|set|sign ?up|register)\b",
+    re.IGNORECASE,
+)
+
+
+def sets_new_password(control: Control) -> bool:
+    """Whether this field takes a NEW secret (a change, reset, confirmation or sign-up password).
+
+    A password field may take a stored secret or nothing, but only where the secret is one the field already
+    holds: typing the saved password into a "New password" box sets the password to what it was and reports a
+    change the site never made. The field's wording is the only signal the page offers, so it decides here.
+    """
+    if not control.sensitive:
+        return False
+    wording = " ".join(part for part in (control.label, control.context) if part)
+    return _NEW_SECRET.search(wording) is not None
+
+
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 # A declared origin whose host starts with this covers that host and everything under it.
 _WILDCARD = "*."

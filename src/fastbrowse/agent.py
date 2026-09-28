@@ -103,6 +103,7 @@ from fastbrowse.safety import (
     origin_of,
     resolve_secret,
     secret_allowed,
+    sets_new_password,
 )
 from fastbrowse.shortcut import Shortcut, accept, accept_start, propose_shortcut, propose_start
 from fastbrowse.telemetry import BudgetExceeded, Ledger, trace
@@ -119,6 +120,9 @@ from fastbrowse.verification import (
 )
 
 GENERATE = "generate"
+# The name a generated new-password value is redacted under. It is never a stored secret, so it has no name of
+# its own, but it must not reach the logs or the result either.
+_NEW_SECRET_NAME = "new_password"
 
 # Long enough for a browser-verification page to run its check and hand over, short enough that a page
 # which never moves still ends as needs_login well inside a run's time budget.
@@ -1472,7 +1476,17 @@ class Agent:
         self, state: _RunState, observation: Observation, target: Control, secrets: tuple[str, ...], origin: str
     ) -> str:
         """A password field takes a stored secret or nothing: a generated value is at best a guess, and a guess
-        that happens to work (a demo site's well-known password) is a pass nobody authorized."""
+        that happens to work (a demo site's well-known password) is a pass nobody authorized.
+
+        A field that takes a NEW secret is the exception. The stored secret is the password the account already
+        has, so typing it into a "New password" box sets the password to what it was and reports a change the
+        site never made. The new value is written from the task and registered with the redactor, so it reaches
+        neither the logs nor the result.
+        """
+        if sets_new_password(target):
+            value = await self._generate_text(state, observation, target)
+            self._redactor.register(_NEW_SECRET_NAME, value, origin)
+            return value
         match secrets:
             case ():
                 raise _Stop(Status.NEEDS_LOGIN, f"{target.label!r} wants a secret and none is stored")
