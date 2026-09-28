@@ -1,0 +1,10 @@
+{
+  "name": "fastbrowse-dev",
+  "private": true,
+  "scripts": {
+    "check:browser": "biome ci src/fastbrowse/browser/capture.js src/fastbrowse/browser/snapshot.js"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.14"
+  }
+}

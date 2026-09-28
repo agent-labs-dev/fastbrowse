@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "confidence": "high",
+      "file": "AGENTS.md",
+      "first_seen": "2026-09-28",
+      "guard": "lens-only: Matching security documentation to frame capture behavior requires tracing the runtime and its observation timing.",
+      "id": "4e731ee008",
+      "lens": "stale-docs",
+      "quote": "  recorded may be the one that put the secret there. Live JPEG frames and recordings show the rendered page\n  without this check.",
+      "reason": "Verified against Agent, BrowserSession and Recorder; seven existing frame tests passed.",
+      "status": "fixed",
+      "updated": "2026-09-28",
+      "what": "Live frame and recording secret suppression is documented as absent.",
+      "why": "Agent._act calls withhold_frames(True) before typing secrets; _reveals updates it from observations. BrowserSession drops withheld live frames and Recorder retains its last clean frame. SECURITY.md and docs/design.md already describe this behavior."
+    }
+  ],
+  "schema_version": 1
+}

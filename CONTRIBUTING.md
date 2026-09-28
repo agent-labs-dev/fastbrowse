@@ -31,7 +31,14 @@ uv run python scripts/changelog.py --check "$(uv version --short)"
 uv run python scripts/no_slop.py
 uv run vale sync && uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs src scripts tests
 uv run pytest -q
+npm ci --ignore-scripts && npm run check:browser
+uv run actionlint
+uv run python .sift/agents.py check
+uv run python .sift/gate.py --base origin/main
 ```
+
+The JavaScript check needs Node.js 22 or newer. Audit evidence commands and tool limits are in the
+[sift project skill](.agents/skills/sift-project/SKILL.md).
 
 Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for anything a user would notice, saying
 what changed and why.

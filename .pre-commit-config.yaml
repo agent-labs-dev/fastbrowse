@@ -6,8 +6,10 @@ repos:
     rev: v0.16.8
     hooks:
       - id: ruff-check
+        exclude: ^\.sift/(gate|agents)\.py$
         args: [--fix]
       - id: ruff-format
+        exclude: ^\.sift/(gate|agents)\.py$
   - repo: https://github.com/astral-sh/ty-pre-commit
     rev: v0.0.82
     hooks:
