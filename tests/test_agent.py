@@ -4287,3 +4287,61 @@ async def test_numeric_pipeline_leaves_room_for_fallback_before_trying_records_o
     assert len(llm.calls) == 4
     assert "every earlier comparison record" in llm.calls[-1][1][-1].content
     assert state.ledger.steps == 7
+
+
+async def test_new_password_uses_named_secret_without_model_generation() -> None:
+    secrets = ScopedSecrets({"password": "old-value", "new_password": "replacement-value"}, "https://shop.test")
+    llm = ScriptedLLM([])
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), llm, secrets=secrets)
+    target = field("New password").model_copy(update={"sensitive": True, "input_type": "password"})
+    state = await run_state()
+    result = await agent._sensitive_text(
+        state, observation((target,)), target, ("password", "new_password"), "https://shop.test"
+    )
+    assert result == "replacement-value"
+    assert not llm.calls
+    assert agent._redactor.redact(result) == "[secret:new_password]"
+
+
+async def test_new_password_without_replacement_never_uses_existing_secret() -> None:
+    agent = Agent(
+        Mock(spec=Page),
+        ScriptedJev({}),
+        ScriptedLLM([]),
+        secrets=ScopedSecrets({"password": "old-value"}, "https://shop.test"),
+    )
+    target = field("Confirm password").model_copy(update={"sensitive": True})
+    with pytest.raises(_Stop) as stopped:
+        await agent._sensitive_text(
+            await run_state(), observation((target,)), target, ("password",), "https://shop.test"
+        )
+    assert stopped.value.status == Status.NEEDS_INPUT
+    assert "--secret new_password=" in str(stopped.value)
+
+
+async def test_action_detour_keeps_context_even_when_the_information_answer_is_absent() -> None:
+    state = await run_state()
+    state.task = "Read the Phone code to sign in, then report the latest order."
+    state.ready_plan = Plan(
+        requirements=(
+            Requirement(id="login", text="Sign in using the Phone code", kind=RequirementKind.ACTION),
+            Requirement(id="order", text="Report latest order", kind=RequirementKind.INFORMATION),
+        ),
+        answer_expected=True,
+    )
+    page = capture((BlockKind.PARAGRAPH, "Phone code: 123456"))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {"text": "Phone code: 123456", "cite": {"first": "s0", "last": "s0"}, "requirement_id": None}
+                ],
+                "answered": False,
+            }
+        ]
+    )
+    agent = Agent(Mock(spec=Page), ScriptedJev({"order": "absent"}), llm)
+    progressed, _ = await agent._read(state, page, observation(()))
+    assert progressed
+    assert "123456" in state.notes.render(4000)
+    assert not state.notes.evidenced("order")

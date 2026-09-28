@@ -98,11 +98,13 @@ from fastbrowse.retrieval import (
 )
 from fastbrowse.safety import (
     Redactor,
+    changes_credentials,
     irreversible_question,
     may_be_irreversible,
     origin_of,
     resolve_secret,
     secret_allowed,
+    sets_new_password,
 )
 from fastbrowse.shortcut import Shortcut, accept, accept_start, propose_shortcut, propose_start
 from fastbrowse.telemetry import BudgetExceeded, Ledger, trace
@@ -119,7 +121,6 @@ from fastbrowse.verification import (
 )
 
 GENERATE = "generate"
-
 # Long enough for a browser-verification page to run its check and hand over, short enough that a page
 # which never moves still ends as needs_login well inside a run's time budget.
 _INTERSTITIAL_SECONDS = 12.0
@@ -1228,6 +1229,7 @@ class Agent:
                         update={
                             "heading_path": tuple(mask(heading) for heading in block.heading_path),
                             "href": None if block.href is None else mask(block.href),
+                            "source_url": None if block.source_url is None else mask(block.source_url),
                         }
                     )
                     for block in capture.blocks
@@ -1392,10 +1394,18 @@ class Agent:
             decision,
             _describe(target),
             irreversible_question(state.task, decision.operation, target),
+            force=changes_credentials(observation.controls, target, decision.operation),
         )
 
     async def _gate_question(
-        self, state: _RunState, observation: Observation, decision: Decision, label: str, question: NoulQuestion
+        self,
+        state: _RunState,
+        observation: Observation,
+        decision: Decision,
+        label: str,
+        question: NoulQuestion,
+        *,
+        force: bool = False,
     ) -> None:
         thresholds = self._config.thresholds
         authorized = state.authorization.irreversible_actions
@@ -1404,23 +1414,24 @@ class Agent:
         # confident READ would otherwise wave recovery's click through unasked.
         if authorized and not decision.directed and decision.confidence >= thresholds.sensitive_act_from:
             return
-        state.ledger.reserve(CostComponent.JEV)
-        # Only the address goes with the question: the page's own text is what would argue a harmful action
-        # is harmless, and the control's label and form are already in the question.
-        evaluation = await self._jev.evaluate(
-            {"page": {"url": observation.url, "title": observation.title}}, {"irreversible": question}
-        )
-        state.ledger.record(evaluation.cost)
-        answer = evaluation.answers.get("irreversible")
-        trace(
-            "irreversible",
-            target=label,
-            context=decision.target.context if decision.target else None,
-            probability=answer.probability if isinstance(answer, NoulAnswer) else None,
-        )
-        if isinstance(answer, NoulAnswer) and answer.probability <= thresholds.irreversible_above:
-            return
         what = f"{decision.operation.value} {label!r}"
+        if not force:
+            state.ledger.reserve(CostComponent.JEV)
+            # Only the address goes with the question: the page's own text is what would argue a harmful action
+            # is harmless, and the control's label and form are already in the question.
+            evaluation = await self._jev.evaluate(
+                {"page": {"url": observation.url, "title": observation.title}}, {"irreversible": question}
+            )
+            state.ledger.record(evaluation.cost)
+            answer = evaluation.answers.get("irreversible")
+            trace(
+                "irreversible",
+                target=label,
+                context=decision.target.context if decision.target else None,
+                probability=answer.probability if isinstance(answer, NoulAnswer) else None,
+            )
+            if isinstance(answer, NoulAnswer) and answer.probability <= thresholds.irreversible_above:
+                return
         # An unsure pick that may commit something is more likely the wrong pick than the step to confirm.
         unsure = authorized or decision.confidence < thresholds.recover_below
         reason = (
@@ -1471,8 +1482,16 @@ class Agent:
     async def _sensitive_text(
         self, state: _RunState, observation: Observation, target: Control, secrets: tuple[str, ...], origin: str
     ) -> str:
-        """A password field takes a stored secret or nothing: a generated value is at best a guess, and a guess
-        that happens to work (a demo site's well-known password) is a pass nobody authorized."""
+        """Resolve replacement passwords separately from existing credentials, without model-written values."""
+        if sets_new_password(target):
+            if "new_password" not in secrets:
+                raise _Stop(
+                    Status.NEEDS_INPUT,
+                    "A replacement password requires --secret new_password=ENV_VAR@https://host; "
+                    "set ENV_VAR to the new value instead of putting it in the task.",
+                )
+            return await self._secret("new_password", origin)
+        secrets = tuple(name for name in secrets if name != "new_password")
         match secrets:
             case ():
                 raise _Stop(Status.NEEDS_LOGIN, f"{target.label!r} wants a secret and none is stored")
@@ -1869,6 +1888,12 @@ class Agent:
         following = next_page_control(observation) if observation is not None else None
         began = state.first_url if following is not None or state.pages else None
         question = read_question(state.task, wanted, began_at=None if began is None else self._redactor.redact(began))
+        needs_context = any(r.kind is RequirementKind.ACTION for r in plan.requirements)
+        if needs_context:
+            question += (
+                "\nAlso keep quotes containing values needed for the task's remaining actions, even when they "
+                "do not answer an information requirement. Give these context claims a null requirement_id."
+            )
         notice = next_page_notice(following)
         before = len(state.notes.facts)
         known = {fact.text for fact in state.notes.facts}
@@ -1881,7 +1906,7 @@ class Agent:
             state.notes,
             tokens=self._config.tokens,
             ledger=state.ledger,
-            jev=self._jev,
+            jev=None if needs_context else self._jev,
             requirements=wanted,
             notice=notice,
             continuing=state.continuing,

@@ -55,11 +55,32 @@ def irreversible_question(task: str, operation: Operation, control: Control) -> 
             + (f"It sits under {control.context!r} on the page.\n" if control.context else "")
             + (f"Enter submits this form: {control.submit_semantics}\n" if operation is Operation.ENTER else "")
             + "Would doing so commit something that cannot be undone, such as placing an order or spending money, "
-            "sending a message, submitting an application, or deleting or publishing data?"
+            "sending a message, submitting an application, changing or resetting an account password or "
+            "credentials, or deleting or publishing data?"
         ),
         true="It commits an irreversible or externally visible change.",
         false="It only navigates, filters, reveals or edits a draft that can still be changed.",
     )
+
+
+_NEW_SECRET = re.compile(r"\b(new|confirm|confirmation|repeat|re-?enter|re-?type|choose|create)\b", re.IGNORECASE)
+_CHANGE_PASSWORD = re.compile(r"\b(change|reset|update|replace|set)\b.*\bpassword\b", re.IGNORECASE)
+
+
+def sets_new_password(control: Control) -> bool:
+    """A form's heading must not turn its current-password field into a replacement field."""
+    return control.sensitive and _NEW_SECRET.search(control.label) is not None
+
+
+def changes_credentials(controls: Sequence[Control], target: Control, operation: Operation = Operation.CLICK) -> bool:
+    """Recognize password submissions without treating field focus or settings links as commits."""
+    if operation is Operation.CLICK and (target.role != "button" or target.href):
+        return False
+    if target.form_id is not None and any(
+        sets_new_password(c) and (c.frame_id, c.form_id) == (target.frame_id, target.form_id) for c in controls
+    ):
+        return True
+    return _CHANGE_PASSWORD.search(target.label) is not None
 
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}

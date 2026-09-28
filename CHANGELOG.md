@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Password changes require a separate `new_password` secret and authorization to submit. Replacement values
+  never pass through a model, and current passwords are not reused as replacements.
+- Downloaded text is readable with citations to the response URL. Model context is bounded; artifacts retain
+  the full file. Download navigations no longer fail with `ERR_ABORTED`.
+- Counts accept complete leaf list items and fields at record boundaries, while missing page evidence still
+  blocks completion. Reads retain quoted context needed for later actions, including a code read on another page.
 - **An audit suite for the terminal, MCP and embed surfaces.** `python -m fastbrowse.audit` runs a tiered
   matrix of contract and behaviour cases, each carrying the status, exit code and per-check evidence it must
   produce, and writes one JSON report plus a Markdown roll-up. Tier 0 covers the terminal contract without

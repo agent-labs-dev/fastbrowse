@@ -235,6 +235,8 @@ each while the site answered the harness and Browser Use's agent reloaded its wa
 _NAVIGATE_RETRY_SECONDS = 1.0
 """Doubled after each failed try."""
 _NET_ERROR = re.compile(r"net::ERR_[A-Z_]+")
+_ABORTED = "net::ERR_ABORTED"
+"""The error a document navigation ends with when its response turned out to be a download, not a page."""
 # The site or the connection to it gave nothing: the-internet.herokuapp.com answered ERR_EMPTY_RESPONSE for
 # a quarter hour of one eval. Not ERR_NAME_NOT_RESOLVED, which a mistyped address also gives.
 _UNREACHABLE = frozenset(
@@ -371,6 +373,8 @@ class CdpPage(Page):
         title = main.raw.title if main else ""
         url = main.raw.url if main else await self.origin()
         viewport_text = main.raw.viewport_text if main else ""
+        for download in self._session.pending_download_texts():
+            viewport_text += f"\n\n[Downloaded file: {download.name} from {download.url}]\n{download.text}"
         if len(viewport_text) > limits.viewport_text_chars:
             omitted_chars = len(viewport_text) - limits.viewport_text_chars
             viewport_text = viewport_text[: limits.viewport_text_chars] + cut_marker(omitted_chars)
@@ -524,6 +528,23 @@ class CdpPage(Page):
                         href=block.href,
                     )
                 )
+        for download_index, download in enumerate(self._session.download_texts()):
+            start = offset
+            text_parts.append(download.text)
+            offset += len(download.text)
+            blocks.append(
+                Block(
+                    source_id=f"download/{download_index}",
+                    source_url=download.url,
+                    kind=BlockKind.PARAGRAPH,
+                    frame_id=None,
+                    start=start,
+                    end=offset,
+                    heading_path=(f"Downloaded file: {download.name}",),
+                )
+            )
+            text_parts.append("\n\n")
+            offset += 2
         text = "".join(text_parts)
         return Capture(
             url=url,
@@ -1174,8 +1195,14 @@ class CdpPage(Page):
         for attempt in range(_NAVIGATE_ATTEMPTS):
             if attempt:
                 await asyncio.sleep(_NAVIGATE_RETRY_SECONDS * 2 ** (attempt - 1))
+            downloads_before = self._session.downloads_captured
             result = await self._session.client.send.Page.navigate(params={"url": url}, session_id=session_id)
             if error := result.get("errorText"):
+                # A link whose target is a file downloads it instead of navigating: Chrome aborts the document
+                # navigation with ERR_ABORTED, but the intercept has already taken the bytes into the artifact
+                # sink and the tab keeps its page. That is the navigation's whole purpose, not a failure.
+                if error == _ABORTED and await self._session.download_settled(downloads_before):
+                    return
                 failure, timed_out = (error if _NET_ERROR.fullmatch(error) else "NavigationError"), False
                 continue
             if await self._ready(session_id, load_timeout_seconds):

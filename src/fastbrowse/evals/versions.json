@@ -124,12 +124,12 @@
     "fingerprint": "d2df821d87579b41"
   },
   "mock-password-change": {
-    "version": 2,
-    "fingerprint": "42655eebcbb0296b"
+    "version": 3,
+    "fingerprint": "f9b76af00bf61b77"
   },
   "mock-password-pause": {
-    "version": 2,
-    "fingerprint": "1cb5e7ed8bd2f50f"
+    "version": 3,
+    "fingerprint": "3783f8ddd53de75d"
   },
   "mock-priciest-product": {
     "version": 2,
