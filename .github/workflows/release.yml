@@ -2,6 +2,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+permissions: {}
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -11,9 +12,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
           python-version: "3.14"
+          enable-cache: false
       # A tag that disagrees with the package version would publish one number under another's name.
       - run: test "v$(uv version --short)" = "$GITHUB_REF_NAME"
       # PyPI cannot take a version back, so only a commit already on main (reviewed, CI-gated) is published;
@@ -51,6 +54,8 @@ jobs:
   # The site shows this release only once it builds again after the version is on PyPI, when its
   # "runs exactly the release below it" is true; site.yml asks it to.
   site:
+    permissions: {contents: read}
     needs: pypi
     uses: ./.github/workflows/site.yml
-    secrets: inherit
+    secrets:
+      SITE_DEPLOY_HOOK: ${{ secrets.SITE_DEPLOY_HOOK }}

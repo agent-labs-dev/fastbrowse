@@ -38,6 +38,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/fastbrowse"]
 
+[tool.hatch.build.targets.sdist]
+exclude = [".sift", ".agents", "package.json", "package-lock.json", "biome.json"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.4,<9",
@@ -47,11 +50,14 @@ dev = [
     "pytest-timeout>=2.3,<3",
     "ty==0.0.82",          # preview: pinned, and moved with the pre-commit hook
     "pre-commit>=4.6.2",
+    "actionlint-py==1.7.12.24",
 ]
 
 [tool.ruff]
 line-length = 120
 target-version = "py313"
+# Keep vendored helpers byte-for-byte identical to upstream.
+extend-exclude = [".sift/gate.py", ".sift/agents.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF", "ASYNC"]

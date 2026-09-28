@@ -13,3 +13,7 @@ dist/
 # --record output
 recordings/
 *.mp4
+
+# Local audit output and JavaScript development tools.
+.sift/runs/
+node_modules/

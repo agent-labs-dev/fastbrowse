@@ -30,6 +30,10 @@ uv run python scripts/changelog.py --check "$(uv version --short)"
 uv run python scripts/no_slop.py
 uv run vale sync && uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs src scripts tests
 uv run pytest -q
+npm ci --ignore-scripts && npm run check:browser
+uv run actionlint
+uv run python .sift/agents.py check
+uv run python .sift/gate.py --base origin/main
 ```
 
 `uv run pre-commit install` runs ruff and ty before each commit; the hook versions and the pinned tools move
@@ -69,32 +73,34 @@ committed rows (`--publish`). The README headline, the results and task tables a
 `docs/evals.md` are generated from the code and those rows, and a test fails when they differ; regenerate them in the
 same PR ([docs/evals.md#versions](docs/evals.md#versions)).
 
+The [sift project skill](.agents/skills/sift-project/SKILL.md) records audit commands, live roots and generated files.
+
 ## Architecture
 
 The run loop is `src/fastbrowse/agent.py`, and everything else is a seam it calls.
 
-- **`run.py`** opens the browser and builds the Jev and LLM clients from `Settings`, then hands control to
+- **[run.py](src/fastbrowse/run.py)** opens the browser and builds the Jev and LLM clients from `Settings`, then hands control to
   the loop. This is the embedding API: `run_task(...)`. The browser is one of three, in this order: one the
   caller hands over (`cdp_url`, neither started nor stopped here), a Browser Use Cloud browser (`browser_api_key`), or
   local Chrome. `start` is optional; without one the first address is proposed from the task.
-- **`page.py` / `browser/`** index the page. `browser/snapshot.js` runs in the page and returns the controls
+- **[page.py](src/fastbrowse/page.py) / [browser/](src/fastbrowse/browser/)** index the page. [browser/snapshot.js](src/fastbrowse/browser/snapshot.js) runs in the page and returns the controls
   with what tells them apart (role, label, the card or row that disambiguates twins, whether a field blocks
-  its form); `browser/capture.js` returns the text as source blocks with stable spans, so a reader can cite them.
-- **`policy.py`** batches operation and target choices, read assessment and applicable wall checks.
-  Large target sets use a further choice inside a group. `jev.py` is the client's shape;
-  `clients/typesafe.py` serves OpenRouter (the default) and direct TypeSafe; `clients/vercel.py` serves the
-  Vercel AI Gateway backup. `clients/environment.py` selects routes; `clients/failover.py` switches after retries.
-- **`retrieval.py`** routes short facts through Jev and other reads through the LLM. A read claim cites source
-  blocks and code copies its quote from them; a count the page does not state rests on its basis facts; `memory.py` holds notes with citation ids, and `citations.py` builds deep links.
-- **`verification.py`** decides whether a run may finish: Jev's done check against the plan's requirements,
+  its form); [browser/capture.js](src/fastbrowse/browser/capture.js) returns the text as source blocks with stable spans, so a reader can cite them.
+- **[policy.py](src/fastbrowse/policy.py)** batches operation and target choices, read assessment and applicable wall checks.
+  Large target sets use a further choice inside a group. [jev.py](src/fastbrowse/jev.py) is the client's shape;
+  [clients/typesafe.py](src/fastbrowse/clients/typesafe.py) serves OpenRouter (the default) and direct TypeSafe; [clients/vercel.py](src/fastbrowse/clients/vercel.py) serves the
+  Vercel AI Gateway backup. [clients/environment.py](src/fastbrowse/clients/environment.py) selects routes; [clients/failover.py](src/fastbrowse/clients/failover.py) switches after retries.
+- **[retrieval.py](src/fastbrowse/retrieval.py)** routes short facts through Jev and other reads through the LLM. A read claim cites source
+  blocks and code copies its quote from them; a count the page does not state rests on its basis facts; [memory.py](src/fastbrowse/memory.py) holds notes with citation ids, and [citations.py](src/fastbrowse/citations.py) builds deep links.
+- **[verification.py](src/fastbrowse/verification.py)** decides whether a run may finish: Jev's done check against the plan's requirements,
   then the LLM verifier for what Jev doubted and for any requirement evidenced on an address the run guessed
   from the task, then the answer's claims checked against the quotes.
-- **`safety.py`** owns secrets and irreversible actions. **`effects.py`** says what an action actually did,
-  which is how a no-op is told from progress. **`telemetry.py`** is the ledger: steps, calls, dollars.
-- **`cli.py`**, **`mcp_server.py`** and **`run_task`** are the three entry points; `options.py` holds the rules
+- **[safety.py](src/fastbrowse/safety.py)** owns secrets and irreversible actions. **[effects.py](src/fastbrowse/effects.py)** says what an action actually did,
+  which is how a no-op is told from progress. **[telemetry.py](src/fastbrowse/telemetry.py)** is the ledger: steps, calls, dollars.
+- **[cli.py](src/fastbrowse/cli.py)**, **[mcp_server.py](src/fastbrowse/mcp_server.py)** and **`run_task`** are the three entry points; [options.py](src/fastbrowse/options.py) holds the rules
   they share, so a flag means the same thing in all of them.
 
-## Invariants
+## Rules and invariants
 
 These are the things a change must not quietly break.
 
