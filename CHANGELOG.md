@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Read nested gateway errors, recover from input-size refusals, and redact echoed API keys before shortening errors.
+
 ## [0.5.9] - 2026-09-27
 
 - **Jev defaults to OpenRouter using the LLM's existing key.** `OPENROUTER_API_KEY` alone now covers both
