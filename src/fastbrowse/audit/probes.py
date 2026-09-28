@@ -24,6 +24,7 @@ from fastbrowse.models import (
     BrowserEvent,
     CostBreakdown,
     Decider,
+    Limits,
     LocalChrome,
     Operation,
     RunResult,
@@ -221,16 +222,22 @@ def repeat_status() -> dict[str, Any]:
         "--local",
         "--json",
     ]
+    budget = float(os.environ["FB_AUDIT_MAX_DOLLARS"])
+    argv += ["--max-dollars", str(budget / 2)]
+    cost = 0.0
     statuses: list[str | None] = []
     for _ in range(2):
         run = _run(argv, timeout=280.0)
         try:
-            statuses.append(json.loads(run.stdout)["status"])
+            result = RunResult.model_validate_json(run.stdout)
+            statuses.append(result.status.value)
+            cost += result.cost.known_dollars
         except (json.JSONDecodeError, KeyError):
             statuses.append(None)
     return {
         "status": "ok",
         "statuses": statuses,
+        "cost_usd": cost,
         "same_status": statuses[0] is not None and statuses[0] == statuses[1],
         "both_recorded": all(item is not None for item in statuses),
     }
@@ -238,26 +245,27 @@ def repeat_status() -> dict[str, Any]:
 
 def structured_output() -> dict[str, Any]:
     """T2.8: a structured-output run validates data against its schema."""
-    from pydantic import BaseModel, ValidationError
+    from pydantic import ValidationError
 
+    from fastbrowse.evals.live_tasks import TASKS
     from fastbrowse.run import run_task
 
-    class City(BaseModel):
-        city: str
-        population: int
+    task = next(task for task in TASKS if task.id == "pypi-structured")
+    assert task.output_schema is not None
 
     result = asyncio.run(
         run_task(
-            "What is the population of Lyon, France, according to Wikipedia?",
-            start="https://en.wikipedia.org/wiki/Lyon",
+            task.task,
+            start=task.start,
             chrome=LocalChrome(),
-            output_schema=City,
+            limits=Limits(max_dollars=float(os.environ["FB_AUDIT_MAX_DOLLARS"])),
+            output_schema=task.output_schema,
         )
     )
     valid = False
     if result.data is not None:
         try:
-            City.model_validate(result.data)
+            task.output_schema.model_validate(result.data)
             valid = True
         except ValidationError:
             valid = False
@@ -278,6 +286,7 @@ def embed_run_task() -> dict[str, Any]:
             "What is the title of the page, and quote it?",
             start="https://example.com/",
             chrome=LocalChrome(),
+            limits=Limits(max_dollars=float(os.environ["FB_AUDIT_MAX_DOLLARS"])),
         )
     )
     return {
@@ -384,7 +393,10 @@ def mcp_http() -> dict[str, Any]:
     transport = httpx.ASGITransport(app=app)
 
     async def go() -> dict[str, Any]:
-        async with httpx.AsyncClient(transport=transport, base_url="http://audit.local") as client:
+        async with (
+            server.session_manager.run(),
+            httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8000") as client,
+        ):
             health = await client.get("/healthz")
             bad = await client.post("/mcp", headers={"Authorization": "Bearer wrong"}, json={})
             good = await client.post("/mcp", headers={"Authorization": "Bearer audit-secret-token"}, json={})
@@ -408,7 +420,20 @@ def mcp_concurrency() -> dict[str, Any]:
     from fastbrowse.mcp_server import ServerConfig, build_server
 
     async def go() -> dict[str, Any]:
-        server = build_server(ServerConfig(max_concurrent=1), runner=_fake_runner(delay=0.2))
+        active = 0
+        peak = 0
+
+        async def counted(task: str, **kwargs: Any) -> RunResult:
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            try:
+                await asyncio.sleep(0.2)
+                return _result()
+            finally:
+                active -= 1
+
+        server = build_server(ServerConfig(max_concurrent=1), runner=counted)
         async with create_connected_server_and_client_session(server) as session:
             first, second = await asyncio.gather(
                 session.call_tool("browse", {"task": "a", "start": "https://example.com/"}),
@@ -419,6 +444,7 @@ def mcp_concurrency() -> dict[str, Any]:
             "first_ok": bool(_tool_payload(first)),
             "second_ok": bool(_tool_payload(second)),
             "both_finished": bool(_tool_payload(first)) and bool(_tool_payload(second)),
+            "peak_concurrent": peak,
         }
 
     return asyncio.run(go())
@@ -446,7 +472,7 @@ def main(argv: list[str]) -> int:
         return 1
     try:
         payload = PROBES[argv[0]]()
-    except BaseException as exc:  # a probe reports, it does not crash the runner
+    except Exception as exc:  # a probe reports, it does not crash the runner
         print(json.dumps({"status": "probe_error", "error": f"{type(exc).__name__}: {exc}"}))
         return 1
     print(json.dumps(payload))

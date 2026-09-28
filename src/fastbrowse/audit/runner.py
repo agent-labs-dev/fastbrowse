@@ -14,6 +14,7 @@ output, plus any file or recording it produced.
 
 import argparse
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -87,6 +88,8 @@ def _dig(data: Any, pointer: str) -> Any:
         if index:
             position = index.rstrip("]")
             if not isinstance(node, Sequence) or isinstance(node, (str, bytes)) or not position.isdigit():
+                return None
+            if int(position) >= len(node):
                 return None
             node = node[int(position)]
     return node
@@ -178,7 +181,7 @@ def _substitute(argv: Sequence[str], mapping: Mapping[str, str]) -> list[str]:
 
 
 def _environment(case: AuditCase) -> dict[str, str]:
-    env = {key: value for key, value in os.environ.items() if key not in _SCRUBBED}
+    env = {key: value for key, value in os.environ.items() if case.spends or key not in _SCRUBBED}
     env["PYTHONPATH"] = str(_SRC) + os.pathsep + env.get("PYTHONPATH", "")
     env["FB_AUDIT_CLI"] = _script("fastbrowse")
     env["FB_AUDIT_MCP"] = _script("fastbrowse-mcp")
@@ -210,6 +213,11 @@ def _observed_status(exit_code: int | None, payload: Any) -> str:
 
 
 def run_case(case: AuditCase, *, workdir: Path, max_dollars: float, spend: bool) -> dict[str, Any]:
+    if case.spends and not spend:
+        raise ValueError("paid cases require spend=True")
+    if not math.isfinite(max_dollars) or max_dollars <= 0:
+        raise ValueError("max_dollars must be finite and positive")
+    budget = min(case.budget_usd, max_dollars)
     scratch = tempfile.mkdtemp(prefix=f"fb-audit-{case.id}-")
     downloads = Path(scratch) / "downloads"
     downloads.mkdir(exist_ok=True)
@@ -231,10 +239,10 @@ def run_case(case: AuditCase, *, workdir: Path, max_dollars: float, spend: bool)
     if case.fixture:
         with fixture_server() as (base_url, record_state):
             mapping["base_url"] = base_url
-            rows = _execute(case, mapping, cwd, downloads, record, evidence_dir)
+            rows = _execute(case, mapping, cwd, budget)
             recorder = record_state()
     else:
-        rows = _execute(case, mapping, cwd, downloads, record, evidence_dir)
+        rows = _execute(case, mapping, cwd, budget)
     duration = round(time.monotonic() - started, 3)
 
     ctx: dict[str, Any] = {
@@ -242,10 +250,10 @@ def run_case(case: AuditCase, *, workdir: Path, max_dollars: float, spend: bool)
         "stdout": rows["stdout"],
         "stderr": rows["stderr"],
         "json": rows["json"],
-        "recorder": recorder,
+        "recorder": {"posts": {"/submit/contact": [], "/submit/login": [], **recorder}},
         "file": {
             "{downloads}": _file_state(str(downloads))["nonempty"],
-            "{record}": _file_state(str(record))["exists"],
+            "{record}": _file_state(str(record))["nonempty"],
         },
     }
 
@@ -276,7 +284,7 @@ def run_case(case: AuditCase, *, workdir: Path, max_dollars: float, spend: bool)
     return {
         "id": case.id,
         "tier": case.tier,
-        "command": " ".join(_substitute(case.argv, mapping)),
+        "command": " ".join(rows["argv"]),
         "exit_code": rows["exit_code"],
         "status": status,
         "duration_s": duration,
@@ -292,15 +300,22 @@ def _execute(
     case: AuditCase,
     mapping: Mapping[str, str],
     cwd: str,
-    downloads: Path,
-    record: Path,
-    evidence_dir: Path,
+    budget: float,
 ) -> dict[str, Any]:
     argv = _substitute(case.argv, mapping)
+    env = _environment(case)
+    if case.spends:
+        env["FB_AUDIT_MAX_DOLLARS"] = str(budget)
+        if case.argv[0] == "{cli}":
+            if "--max-dollars" in argv:
+                index = argv.index("--max-dollars") + 1
+                argv[index] = str(min(float(argv[index]), budget))
+            else:
+                argv += ["--max-dollars", str(budget)]
     try:
         completed = subprocess.run(
             argv,
-            env=_environment(case),
+            env=env,
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -320,7 +335,7 @@ def _execute(
                 payload = json.loads(stripped)
             except json.JSONDecodeError:
                 payload = None
-    return {"exit_code": code, "stdout": stdout, "stderr": stderr, "json": payload}
+    return {"argv": argv, "exit_code": code, "stdout": stdout, "stderr": stderr, "json": payload}
 
 
 def _text(value: bytes | str | None) -> str:
@@ -389,9 +404,8 @@ def main(argv: list[str]) -> int:
     if any(case.spends for case in chosen) and not args.spend:
         spending = sorted({case.id for case in chosen if case.spends})
         parser.error(f"tiers that call paid models need --spend: {', '.join(spending)}")
-    over_budget = sorted({case.id for case in chosen if case.spends and case.budget_usd > args.max_dollars})
-    if over_budget:
-        parser.error(f"a case's declared budget exceeds --max-dollars={args.max_dollars}: {', '.join(over_budget)}")
+    if not math.isfinite(args.max_dollars) or args.max_dollars <= 0:
+        parser.error("--max-dollars must be finite and positive")
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     workdir = args.out.parent
@@ -406,6 +420,7 @@ def main(argv: list[str]) -> int:
             print(f"      failed: {', '.join(failed)}")
 
     args.out.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    args.rollup.parent.mkdir(parents=True, exist_ok=True)
     args.rollup.write_text(_markdown(rows), encoding="utf-8")
     passed = sum(1 for row in rows if all(item["ok"] for item in row["assertions"]))
     print(f"{passed}/{len(rows)} cases passed; wrote {args.out} and {args.rollup}")

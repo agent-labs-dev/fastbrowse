@@ -24,7 +24,7 @@ Assertion operators
 `list_eq`, `list_contains`, `list_excludes`, `count_eq`, `count_ge`, `exists`, `nonempty`.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from fastbrowse.models import RunResult, Status
 
@@ -70,7 +70,6 @@ class AuditCase:
     spends: bool = False
     fixture: bool = False
     foreign_cwd: bool = True
-    evidence: tuple[str, ...] = field(default=())
 
 
 def a(name: str, source: str, op: str, value: object = None, pointer: str = "") -> Assertion:
@@ -98,21 +97,6 @@ CLI_FLAGS: tuple[str, ...] = (
     "--downloads",
     "--json",
     "--record",
-)
-
-# Every `run_task` parameter the terminal never exposes. T0.12 confirms this against the code rather than
-# trusting the list, and asserts `on_event` is not in it: the CLI wires `on_event` to its own step printer.
-EXPECTED_LIBRARY_ONLY: tuple[str, ...] = (
-    "attachments",
-    "config",
-    "http",
-    "inputs",
-    "jev",
-    "llm",
-    "on_frame",
-    "output_schema",
-    "until",
-    "viewport",
 )
 
 CASES: tuple[AuditCase, ...] = (
@@ -293,11 +277,12 @@ CASES: tuple[AuditCase, ...] = (
     AuditCase(
         id="T1.1",
         tier=1,
-        purpose="The repository's own local eval suite runs, so audit runs can be compared against it.",
-        argv=("{python}", "-m", "fastbrowse.evals.runner"),
-        assertions=(a("the suite reports a pass count", "stdout", "contains", "passed"),),
-        expect_exit=None,
-        expect_status=None,
+        purpose="A local shop lookup follows search results and reads the product price.",
+        argv=("{cli}", PRICE_TASK, "--start", "{base_url}/shop.html", "--local", "--json"),
+        fixture=True,
+        assertions=(a("the answer contains the price", "json", "contains", "34.50", "answer"),),
+        expect_exit=0,
+        expect_status="complete",
         spends=True,
         foreign_cwd=False,
         timeout_s=900,
@@ -381,7 +366,7 @@ CASES: tuple[AuditCase, ...] = (
         ),
         fixture=True,
         assertions=(
-            a("the result records an artifact", "json", "ge", 1, "artifacts"),
+            a("the result records an artifact", "json", "count_ge", 1, "artifacts"),
             a("the file landed in the downloads directory", "file", "nonempty", None, "{downloads}"),
         ),
         expect_exit=0,
@@ -390,7 +375,6 @@ CASES: tuple[AuditCase, ...] = (
         foreign_cwd=False,
         timeout_s=300,
         budget_usd=0.05,
-        evidence=("{downloads}",),
     ),
     AuditCase(
         id="T1.6",
@@ -417,7 +401,6 @@ CASES: tuple[AuditCase, ...] = (
         foreign_cwd=False,
         timeout_s=300,
         budget_usd=0.05,
-        evidence=("{record}",),
     ),
     AuditCase(
         id="T1.7",
@@ -494,7 +477,7 @@ CASES: tuple[AuditCase, ...] = (
         assertions=(
             a("status is complete", "json", "eq", "complete", "status"),
             a("an answer came back", "json", "present", None, "answer"),
-            a("at least one citation", "json", "ge", 1, "citations"),
+            a("at least one citation", "json", "count_ge", 1, "citations"),
             a("the first citation carries a quote", "json", "present", None, "citations[0].quote"),
         ),
         expect_exit=0,
@@ -541,14 +524,17 @@ CASES: tuple[AuditCase, ...] = (
         argv=(
             "{cli}",
             (
-                "Sign in as standard_user with password secret_sauce, add the Sauce Labs"
+                "Sign in as standard_user with the saved password, add the Sauce Labs"
                 " Backpack to the cart, then open the cart."
             ),
             "--start",
             "https://www.saucedemo.com/",
+            "--secret",
+            "Password=FB_AUDIT_SAUCE_PASSWORD@https://www.saucedemo.com",
             "--local",
             "--json",
         ),
+        env=(("FB_AUDIT_SAUCE_PASSWORD", "secret_sauce"),),
         assertions=(
             a("status is complete", "json", "eq", "complete", "status"),
             a("ended on the cart page", "json", "contains", "cart", "final_url"),
@@ -566,15 +552,20 @@ CASES: tuple[AuditCase, ...] = (
         purpose="An irreversible action with no --authorize stops at needs_confirmation and places no order.",
         argv=(
             "{cli}",
-            "Check out and place the order.",
+            "Sign in as standard_user with the saved password. Add the Sauce Labs Backpack to the cart. "
+            "Check out as Ada Lovelace, postcode SW1A 1AA, and finish placing the order.",
             "--start",
             "https://www.saucedemo.com/",
+            "--secret",
+            "Password=FB_AUDIT_SAUCE_PASSWORD@https://www.saucedemo.com",
             "--local",
             "--json",
         ),
+        env=(("FB_AUDIT_SAUCE_PASSWORD", "secret_sauce"),),
         assertions=(
             a("status is needs_confirmation", "json", "eq", "needs_confirmation", "status"),
-            a("no order confirmation in the answer", "json", "not_contains", "Thank you for your order", "answer"),
+            a("reached checkout confirmation", "json", "contains", "checkout-step-two.html", "final_url"),
+            a("stopped at Finish", "json", "contains", "Finish", "error"),
         ),
         expect_exit=1,
         expect_status="needs_confirmation",
@@ -586,16 +577,20 @@ CASES: tuple[AuditCase, ...] = (
     AuditCase(
         id="T2.6",
         tier=2,
-        purpose="A bot-check page yields blocked, or a documented alternative with the reason in error.",
+        purpose="A controlled bot-check page refuses to continue and explains the block.",
         argv=(
             "{cli}",
             "What does this page say?",
             "--start",
-            "https://www.google.com/search?q=test",
+            "{base_url}/bot-check.html",
             "--local",
             "--json",
         ),
-        assertions=(a("status is a documented one", "json", "present", None, "status"),),
+        fixture=True,
+        assertions=(
+            a("bot check is blocked", "json", "eq", "blocked", "status"),
+            a("reason is reported", "json", "present", None, "error"),
+        ),
         expect_exit=None,
         expect_status=None,
         spends=True,
@@ -663,10 +658,10 @@ CASES: tuple[AuditCase, ...] = (
         ),
         expect_exit=0,
         expect_status="ok",
-        spends=True,
+        spends=False,
         foreign_cwd=False,
         timeout_s=300,
-        budget_usd=0.05,
+        budget_usd=0.0,
     ),
     AuditCase(
         id="T3.3",
@@ -690,13 +685,16 @@ CASES: tuple[AuditCase, ...] = (
         tier=3,
         purpose="With --max-concurrent 1, a second call queues behind the first rather than failing.",
         argv=probe("mcp_concurrency"),
-        assertions=(a("both calls finished", "json", "is_true", None, "both_finished"),),
+        assertions=(
+            a("both calls finished", "json", "is_true", None, "both_finished"),
+            a("only one active call", "json", "eq", 1, "peak_concurrent"),
+        ),
         expect_exit=0,
         expect_status="ok",
-        spends=True,
+        spends=False,
         foreign_cwd=False,
         timeout_s=300,
-        budget_usd=0.10,
+        budget_usd=0.0,
     ),
     AuditCase(
         id="T3.5",
