@@ -98,6 +98,7 @@ from fastbrowse.retrieval import (
 )
 from fastbrowse.safety import (
     Redactor,
+    changes_credentials,
     irreversible_question,
     may_be_irreversible,
     origin_of,
@@ -1396,10 +1397,18 @@ class Agent:
             decision,
             _describe(target),
             irreversible_question(state.task, decision.operation, target),
+            force=changes_credentials(observation.controls, target),
         )
 
     async def _gate_question(
-        self, state: _RunState, observation: Observation, decision: Decision, label: str, question: NoulQuestion
+        self,
+        state: _RunState,
+        observation: Observation,
+        decision: Decision,
+        label: str,
+        question: NoulQuestion,
+        *,
+        force: bool = False,
     ) -> None:
         thresholds = self._config.thresholds
         authorized = state.authorization.irreversible_actions
@@ -1408,6 +1417,24 @@ class Agent:
         # confident READ would otherwise wave recovery's click through unasked.
         if authorized and not decision.directed and decision.confidence >= thresholds.sensitive_act_from:
             return
+        what = f"{decision.operation.value} {label!r}"
+        # A credential change is gated by code rather than left to Jev: the label reads like any other settings
+        # button, so Jev may answer that "Change password" only edits a draft, and the site's own password record
+        # would then be the first to say otherwise. The task itself asked about the change, so asking Jev buys
+        # nothing Jev can see.
+        if force:
+            reason = f"{what} changes or resets an account password and needs confirmation"
+            await self._record_failure(
+                state,
+                observation,
+                decision.operation,
+                self._redactor.redact(reason),
+                target=self._redactor.redact(label),
+                confidence=None if decision.directed else decision.confidence,
+                page_changed=False,
+                decided_by=Decider.JEV,
+            )
+            raise _Stop(Status.NEEDS_CONFIRMATION, reason)
         state.ledger.reserve(CostComponent.JEV)
         # Only the address goes with the question: the page's own text is what would argue a harmful action
         # is harmless, and the control's label and form are already in the question.
@@ -1424,7 +1451,6 @@ class Agent:
         )
         if isinstance(answer, NoulAnswer) and answer.probability <= thresholds.irreversible_above:
             return
-        what = f"{decision.operation.value} {label!r}"
         # An unsure pick that may commit something is more likely the wrong pick than the step to confirm.
         unsure = authorized or decision.confidence < thresholds.recover_below
         reason = (

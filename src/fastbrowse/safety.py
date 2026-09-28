@@ -55,7 +55,8 @@ def irreversible_question(task: str, operation: Operation, control: Control) -> 
             + (f"It sits under {control.context!r} on the page.\n" if control.context else "")
             + (f"Enter submits this form: {control.submit_semantics}\n" if operation is Operation.ENTER else "")
             + "Would doing so commit something that cannot be undone, such as placing an order or spending money, "
-            "sending a message, submitting an application, or deleting or publishing data?"
+            "sending a message, submitting an application, changing or resetting an account password or "
+            "credentials, or deleting or publishing data?"
         ),
         true="It commits an irreversible or externally visible change.",
         false="It only navigates, filters, reveals or edits a draft that can still be changed.",
@@ -69,6 +70,8 @@ _NEW_SECRET = re.compile(
     r"\b(new|confirm|confirmation|repeat|re-?enter|re-?type|choose|create|set|sign ?up|register)\b",
     re.IGNORECASE,
 )
+# A submit that commits a credential change, however the button is worded.
+_CHANGE_VERB = re.compile(r"\b(change|reset|update|replace|set)\b", re.IGNORECASE)
 
 
 def sets_new_password(control: Control) -> bool:
@@ -82,6 +85,22 @@ def sets_new_password(control: Control) -> bool:
         return False
     wording = " ".join(part for part in (control.label, control.context) if part)
     return _NEW_SECRET.search(wording) is not None
+
+
+def changes_credentials(controls: Sequence[Control], target: Control) -> bool:
+    """Whether this control commits a credential change.
+
+    Either it submits a form carrying a new-secret field, or it is itself worded like a change, reset or update
+    of a password. Whether a click commits is otherwise a judgment the guard leaves to Jev, but a password
+    change is one word lists miss ("Change password" sits among settings buttons that commit nothing) and one
+    the same task asks about, so it is recognized here and gated by code rather than by Jev's answer.
+    """
+    if target.form_id is not None:
+        same_form = [c for c in controls if (c.frame_id, c.form_id) == (target.frame_id, target.form_id)]
+        if any(sets_new_password(c) for c in same_form):
+            return True
+    wording = " ".join(part for part in (target.label, target.context) if part).lower()
+    return "password" in wording and _CHANGE_VERB.search(wording) is not None
 
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
