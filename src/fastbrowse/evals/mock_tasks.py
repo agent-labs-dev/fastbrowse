@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel
 
-from fastbrowse.evals.mock import Site, code_for
+from fastbrowse.evals.mock import ACCOUNTS, Site, code_for
 from fastbrowse.models import Authorization, RunResult, Status
 
 type Check = Callable[[RunResult, Site], str | None]
@@ -177,6 +177,51 @@ def _stock_count(result: RunResult, site: Site) -> str | None:
     return _answer_has(result, "14")
 
 
+KATHERINE = "katherine@example.com"
+KATHERINE_PASSWORD = ACCOUNTS[KATHERINE]
+
+
+def _read_katherine(result: RunResult, site: Site) -> str | None:
+    if problem := _signed_in(site, KATHERINE):
+        return problem
+    if code_for(KATHERINE) not in site.code_attempts:
+        return f"the per-digit code was never submitted (tried: {site.code_attempts})"
+    return _answer_has(result, KATHERINE)
+
+
+def _iframe_note(result: RunResult, site: Site) -> str | None:
+    notes = [fields.get("note") for path, fields in site.posts if path == "/widgets"]
+    if "coffee-restock" not in notes:
+        return f"note 'coffee-restock' was never saved (saved: {notes})"
+    return _status(result, Status.COMPLETE)
+
+
+def _shadow_dom(result: RunResult, site: Site) -> str | None:
+    refs = [fields.get("ref") for path, fields in site.posts if path == "/widgets/shadow"]
+    if "REF-9988" not in refs:
+        return f"shadow reference 'REF-9988' was never confirmed (confirmed: {refs})"
+    return _status(result, Status.COMPLETE)
+
+
+def _feed_total(result: RunResult, site: Site) -> str | None:
+    return _answer_has(result, "60")
+
+
+def _portal_request(result: RunResult, site: Site) -> str | None:
+    topics = [fields.get("topic") for path, fields in site.posts if path == "/portal"]
+    if "billing" not in topics:
+        return f"portal request 'billing' was never sent (sent: {topics})"
+    return _status(result, Status.COMPLETE)
+
+
+def _compare_cheaper(result: RunResult, site: Site) -> str | None:
+    return _answer_has(result, "Clerkenwell Coffee")
+
+
+def _shop_count(result: RunResult, site: Site) -> str | None:
+    return _answer_has(result, "14")
+
+
 def _report_total(result: RunResult, site: Site) -> str | None:
     return _money(result, 139.79)
 
@@ -280,6 +325,53 @@ TASKS: tuple[MockTask, ...] = (
         "/js",
         "How many products does this page say are in stock?",
         _stock_count,
+    ),
+    MockTask(
+        "mock-sign-in-per-digit",
+        "/login",
+        f"Sign in as {KATHERINE} with the saved password. If it asks for a code, the Phone page shows it, typed "
+        "one digit per box. Then tell me your account email.",
+        _read_katherine,
+        secrets={"password": KATHERINE_PASSWORD},
+    ),
+    MockTask(
+        "mock-iframe-note",
+        "/widgets",
+        "Save the note 'coffee-restock' in the note panel iframe.",
+        _iframe_note,
+    ),
+    MockTask(
+        "mock-shadow-dom",
+        "/widgets",
+        "Confirm the reference 'REF-9988' in the shadow root form.",
+        _shadow_dom,
+    ),
+    MockTask(
+        "mock-infinite-scroll",
+        "/feed",
+        "Scroll the feed or load more items until the end of the list is reached, then tell me the total item count.",
+        _feed_total,
+    ),
+    MockTask(
+        "mock-support-portal",
+        "/portal",
+        "Accept the cookie banner, dismiss the modal when it appears, and send a support request with the "
+        "topic 'billing'.",
+        _portal_request,
+        authorization=AUTHORIZED,
+    ),
+    MockTask(
+        "mock-compare-prices",
+        "/compare",
+        "Open the comparison pages from /compare, find which shop sells the Burr Grinder cheaper, and tell "
+        "me its name.",
+        _compare_cheaper,
+    ),
+    MockTask(
+        "mock-pagination-exhaustion",
+        "/shop?page=1",
+        "Browse the shop across all pages and tell me the total number of products listed.",
+        _shop_count,
     ),
     MockTask(
         "mock-report-total",

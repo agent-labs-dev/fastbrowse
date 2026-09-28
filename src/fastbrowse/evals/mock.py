@@ -43,10 +43,14 @@ PASSWORD_KEY = b"fastbrowse-mock-site"
 ACCOUNTS: Mapping[str, str] = {
     "ada@example.com": "correct-horse",
     "grace@example.com": "battery-staple",
+    "katherine@example.com": "hidden-figures",
 }
 
-# The account that asks for a code after the password.
+# The account that asks for a code after the password, in one box.
 NEEDS_CODE = "ada@example.com"
+
+# The account whose code is typed one digit per box, which is what a real authenticator screen asks for.
+NEEDS_PER_DIGIT_CODE = "katherine@example.com"
 
 PRODUCTS: tuple[tuple[str, str, float], ...] = (
     ("kettle", "Blue Kettle", 34.50),
@@ -75,6 +79,20 @@ ORDERS: Mapping[str, tuple[tuple[str, str, float], ...]] = {
 }
 
 PER_PAGE = 6
+
+# The feed appends a batch at a time until every item is shown, the way a load-more list does.
+FEED_TOTAL = 60
+FEED_BATCH = 20
+
+# Two shops, one product: the comparison is which page holds the cheaper price.
+COMPARISON: Mapping[str, tuple[str, float]] = {
+    "a": ("Clerkenwell Coffee", 84.99),
+    "b": ("Bermondsey Beans", 92.50),
+}
+
+
+def _feed_item(n: int) -> str:
+    return f"Feed item {n}"
 
 
 def code_for(email: str) -> str:
@@ -239,6 +257,13 @@ class _Handler(BaseHTTPRequestHandler):
             "/settings/password": self._password_form,
             "/phone": self._phone,
             "/reports": self._reports,
+            "/widgets": self._widgets,
+            "/widgets/note": self._widgets_note,
+            "/feed": self._feed,
+            "/api/feed.json": self._feed_json,
+            "/portal": self._portal,
+            "/compare": self._compare_index,
+            "/login/otp": self._otp_page,
             "/js": self._scripted,
             "/api/products.json": self._products_json,
             "/download/report.csv": self._report,
@@ -246,6 +271,8 @@ class _Handler(BaseHTTPRequestHandler):
         if route is None:
             if path.startswith("/product/"):
                 self._product(path.removeprefix("/product/"))
+            elif path.startswith("/compare/"):
+                self._compare(path.removeprefix("/compare/"))
             else:
                 self._send(HTTPStatus.NOT_FOUND, b"<h1>Not found</h1>")
             return
@@ -262,6 +289,10 @@ class _Handler(BaseHTTPRequestHandler):
             "/cart/remove": self._remove_post,
             "/checkout": self._checkout_post,
             "/settings/password": self._password_post,
+            "/login/otp": self._otp_post,
+            "/widgets": self._widgets_post,
+            "/widgets/shadow": self._shadow_post,
+            "/portal": self._portal_post,
             "/upload": self._upload_post,
         }.get(path)
         if route is None:
@@ -349,6 +380,39 @@ class _Handler(BaseHTTPRequestHandler):
                     "Continue",
                     hidden={"email": email, "next": fields.get("next", "")},
                 ),
+            )
+            return
+        if email == NEEDS_PER_DIGIT_CODE:
+            self._html("Two-step sign-in", self._otp_form(email, fields.get("next", "")))
+            return
+        sid = self.site.sign_in(email)
+        self._redirect(fields.get("next") or "/account", sid)
+
+    def _otp_form(self, email: str, back: str) -> str:
+        """A code typed one digit per box, which is what a real one-time-password screen asks for."""
+        boxes = "".join(
+            f"<input name='d{n}' maxlength='1' size='1' inputmode='numeric' aria-label='Digit {n}'>"
+            for n in range(1, 7)
+        )
+        return _form(
+            "/login/otp",
+            f"<p>Enter the six-digit code for {email}, one digit per box.</p><p>{boxes}</p>",
+            "Continue",
+            hidden={"email": email, "next": back},
+        )
+
+    def _otp_page(self, query: dict[str, str]) -> None:
+        self._html("Two-step sign-in", self._otp_form(query.get("email", ""), query.get("next", "")))
+
+    def _otp_post(self, fields: dict[str, str]) -> None:
+        email = (fields.get("email") or "").strip().lower()
+        code = "".join((fields.get(f"d{n}") or "").strip() for n in range(1, 7))
+        self.site.note_code_attempt(code)
+        if code != code_for(email):
+            self._html(
+                "Two-step sign-in",
+                "<p><strong>That code is not right.</strong></p>" + self._otp_form(email, fields.get("next", "")),
+                HTTPStatus.UNAUTHORIZED,
             )
             return
         sid = self.site.sign_in(email)
@@ -530,11 +594,118 @@ class _Handler(BaseHTTPRequestHandler):
         self._html(
             "Authenticator",
             f"<p>ada@example.com: <strong>{code_for('ada@example.com')}</strong></p>"
-            f"<p>grace@example.com: <strong>{code_for('grace@example.com')}</strong></p>",
+            f"<p>grace@example.com: <strong>{code_for('grace@example.com')}</strong></p>"
+            f"<p>katherine@example.com: <strong>{code_for('katherine@example.com')}</strong></p>",
         )
 
     def _reports(self, _: dict[str, str]) -> None:
         self._html("Reports", "<p>Download the <a href='/download/report.csv'>orders report</a>.</p>")
+
+    def _widgets(self, _: dict[str, str]) -> None:
+        """Two controls outside the main document: one in a frame, one in a shadow root."""
+        self._html(
+            "Widgets",
+            "<p>The note panel and the reference form are not part of this document.</p>"
+            "<iframe id='note-panel' src='/widgets/note' title='Note panel' width='320' height='140'></iframe>"
+            "<div id='shadow-host'></div>"
+            "<script>"
+            "const host = document.getElementById('shadow-host');"
+            "const root = host.attachShadow({mode: 'open'});"
+            "root.innerHTML = \"<form action='/widgets/shadow' method='post'>"
+            "<p><label for='ref'>Reference</label> <input id='ref' name='ref'></p>"
+            "<button type='submit'>Confirm reference</button></form>\";"
+            "</script>",
+        )
+
+    def _widgets_note(self, _: dict[str, str]) -> None:
+        self._html(
+            "Note panel",
+            _form("/widgets", "<p><label for='note'>Note</label> <input id='note' name='note'></p>", "Save note"),
+        )
+
+    def _widgets_post(self, fields: dict[str, str]) -> None:
+        self._html("Note saved", f"<p>Saved {fields.get('note', '')!r}.</p>")
+
+    def _shadow_post(self, fields: dict[str, str]) -> None:
+        self._html("Reference confirmed", f"<p>Reference {fields.get('ref', '')!r} confirmed.</p>")
+
+    def _feed(self, _: dict[str, str]) -> None:
+        """A list that grows a batch at a time on scroll or on the button, with an explicit end state."""
+        first = "".join(f"<li>{_feed_item(n)}</li>" for n in range(1, FEED_BATCH + 1))
+        self._html(
+            "Feed",
+            f"<p>Showing <span id='count'>{FEED_BATCH}</span> of {FEED_TOTAL} items.</p>"
+            f"<ul id='items'>{first}</ul>"
+            "<p id='end'></p>"
+            "<p><button id='more' type='button'>Load more</button></p>"
+            "<script>"
+            f"let shown = {FEED_BATCH}; const total = {FEED_TOTAL};"
+            "async function more() {"
+            "  if (shown >= total) return;"
+            "  const response = await fetch('/api/feed.json?after=' + shown);"
+            "  const batch = await response.json();"
+            "  const list = document.getElementById('items');"
+            "  for (const item of batch.items) {"
+            "    const li = document.createElement('li'); li.textContent = item; list.appendChild(li);"
+            "  }"
+            "  shown = batch.shown;"
+            "  document.getElementById('count').textContent = shown;"
+            "  if (shown >= total) {"
+            "    document.getElementById('end').textContent = 'End of list. ' + total + ' items.';"
+            "    document.getElementById('more').disabled = true;"
+            "  }"
+            "}"
+            "document.getElementById('more').addEventListener('click', more);"
+            "window.addEventListener('scroll', () => {"
+            "  if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 200) more();"
+            "});"
+            "</script>",
+        )
+
+    def _feed_json(self, query: dict[str, str]) -> None:
+        after = int(query.get("after", "0") or 0)
+        shown = min(FEED_TOTAL, after + FEED_BATCH)
+        items = [_feed_item(n) for n in range(after + 1, shown + 1)]
+        self._send(HTTPStatus.OK, json.dumps({"items": items, "shown": shown}).encode(), "application/json")
+
+    def _portal(self, _: dict[str, str]) -> None:
+        """A consent banner on arrival and a modal a beat later, with the form hidden until both are gone."""
+        self._html(
+            "Support portal",
+            "<div id='consent' style='position:fixed;left:0;right:0;bottom:0;background:#111;color:#fff;padding:1rem'>"
+            "This site uses cookies. <button id='accept' type='button'>Accept all</button></div>"
+            "<div id='modal' style='display:none;position:fixed;inset:0;background:rgba(0,0,0,.6)'>"
+            "<div style='margin:20vh auto;width:20rem;background:#fff;padding:1rem'>"
+            "<p>A moment of your time?</p><button id='dismiss' type='button'>Dismiss</button></div></div>"
+            "<form action='/portal' method='post' id='request'>"
+            "<p><label for='topic'>Request</label> <input id='topic' name='topic'></p>"
+            "<button type='submit'>Send request</button></form>"
+            "<script>"
+            "document.getElementById('accept').addEventListener('click', () => "
+            "{ document.getElementById('consent').remove(); });"
+            "setTimeout(() => { document.getElementById('modal').style.display = 'block'; }, 1200);"
+            "document.getElementById('dismiss').addEventListener('click', () => "
+            "{ document.getElementById('modal').remove(); });"
+            "</script>",
+        )
+
+    def _portal_post(self, fields: dict[str, str]) -> None:
+        self._html("Request sent", f"<p>We have your request: {fields.get('topic', '')!r}.</p>")
+
+    def _compare_index(self, _: dict[str, str]) -> None:
+        self._html(
+            "Compare",
+            "<p>Two shops sell the same grinder.</p><ul>"
+            "<li><a href='/compare/a'>Shop A</a></li><li><a href='/compare/b'>Shop B</a></li></ul>",
+        )
+
+    def _compare(self, which: str) -> None:
+        found = COMPARISON.get(which)
+        if found is None:
+            self._send(HTTPStatus.NOT_FOUND, b"<h1>Not found</h1>")
+            return
+        shop, price = found
+        self._html(shop, f"<p>Burr Grinder - GBP {price:.2f}</p>")
 
     def _scripted(self, _: dict[str, str]) -> None:
         self._send(
