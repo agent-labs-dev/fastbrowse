@@ -1409,7 +1409,8 @@ class Agent:
 
     def _reveals(self, observation: Observation) -> bool:
         """Whether a resolved secret shows on the page; live and recorded frames are held back while one does."""
-        revealed = self._redactor.reveals(observation.model_dump_json())
+        # A dialog hides the page text, so its observation cannot prove the pixels contain no secret.
+        revealed = observation.dialog is not None or self._redactor.reveals(observation.model_dump_json())
         self._page.withhold_frames(revealed)
         return revealed
 

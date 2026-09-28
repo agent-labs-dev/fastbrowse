@@ -258,9 +258,9 @@ when they differ:
 | `stretch-dev` | 9 | `669a0ec1` |
 | `stretch-heldout` | 3 | `e427ef75` |
 | local fixtures | 6 | `dda8ba89` |
-| mock fixtures | 20 | `65f487d4` |
+| mock fixtures | 20 | `fffe1d53` |
 
-Tasks past version 1: `arxiv-open` v5, `arxiv-title` v6, `books-mystery-cheapest` v6, `books-travel-priciest` v6, `countries-mongolia` v6, `countries-namibia-area` v2, `crates-serde` v6, `dynamic-loading` v7, `expandtesting-login` v6, `flights-search` v5, `frame-heading` v3, `github-license` v6, `github-open` v5, `google-flights` v6, `hn-comments` v5, `hn-top` v6, `hockey-bruins-1990` v6, `hover-profile` v7, `httpx-requires-python` v6, `mock-basket` v5, `mock-cheapest-product` v4, `mock-compare-prices` v4, `mock-iframe-note` v4, `mock-infinite-scroll` v4, `mock-order-pause` v5, `mock-order-validation` v4, `mock-pagination-exhaustion` v4, `mock-password-change` v5, `mock-password-pause` v6, `mock-priciest-product` v4, `mock-report-total` v5, `mock-shadow-dom` v4, `mock-sign-in` v4, `mock-sign-in-code-given` v4, `mock-sign-in-per-digit` v4, `mock-sign-in-two-step` v4, `mock-sign-out` v4, `mock-stock-count` v4, `mock-support-portal` v4, `new-tab-page` v2, `new-window` v7, `oscars-2012` v6, `pizza-order` v6, `practice-login` v6, `pypi-newer` v6, `pypi-open` v5, `pypi-structured` v6, `pypi-version` v6, `quotes-einstein-count` v6, `quotes-js-page2` v6, `quotes-rowling-count` v2, `quotes-search` v6, `quotes-search-lewis` v2, `ruff-release` v6, `saucedemo-cart` v6, `saucedemo-checkout` v6, `saucedemo-locked-out` v6, `saucedemo-pause` v5, `stretch-books-nonfiction-five-star` v8, `stretch-books-sequential-art-one-star` v2, `stretch-books-young-adult-one-star` v2, `stretch-bstack-apple-google` v7, `stretch-bstack-apple-samsung` v7, `stretch-calendar-first-friday` v8, `stretch-date-range-monday` v7, `stretch-datepicker-last-saturday` v2, `stretch-datepicker-last-sunday` v2, `stretch-quotes-top-authors` v7, `stretch-wizard-correction` v7, `stretch-wizard-review` v6, `table-largest-due` v7, `table-total-due` v2, `wiki-godel` v6, `wiki-open` v5.
+Tasks past version 1: `arxiv-open` v5, `arxiv-title` v6, `books-mystery-cheapest` v6, `books-travel-priciest` v6, `countries-mongolia` v6, `countries-namibia-area` v2, `crates-serde` v6, `dynamic-loading` v7, `expandtesting-login` v6, `flights-search` v5, `frame-heading` v3, `github-license` v6, `github-open` v5, `google-flights` v6, `hn-comments` v5, `hn-top` v6, `hockey-bruins-1990` v6, `hover-profile` v7, `httpx-requires-python` v6, `mock-basket` v4, `mock-cheapest-product` v3, `mock-compare-prices` v3, `mock-iframe-note` v3, `mock-infinite-scroll` v3, `mock-order-pause` v4, `mock-order-validation` v3, `mock-pagination-exhaustion` v3, `mock-password-change` v4, `mock-password-pause` v5, `mock-priciest-product` v3, `mock-report-total` v4, `mock-shadow-dom` v3, `mock-sign-in` v3, `mock-sign-in-code-given` v3, `mock-sign-in-per-digit` v3, `mock-sign-in-two-step` v3, `mock-sign-out` v3, `mock-stock-count` v3, `mock-support-portal` v3, `new-tab-page` v2, `new-window` v7, `oscars-2012` v6, `pizza-order` v6, `practice-login` v6, `pypi-newer` v6, `pypi-open` v5, `pypi-structured` v6, `pypi-version` v6, `quotes-einstein-count` v6, `quotes-js-page2` v6, `quotes-rowling-count` v2, `quotes-search` v6, `quotes-search-lewis` v2, `ruff-release` v6, `saucedemo-cart` v6, `saucedemo-checkout` v6, `saucedemo-locked-out` v6, `saucedemo-pause` v5, `stretch-books-nonfiction-five-star` v8, `stretch-books-sequential-art-one-star` v2, `stretch-books-young-adult-one-star` v2, `stretch-bstack-apple-google` v7, `stretch-bstack-apple-samsung` v7, `stretch-calendar-first-friday` v8, `stretch-date-range-monday` v7, `stretch-datepicker-last-saturday` v2, `stretch-datepicker-last-sunday` v2, `stretch-quotes-top-authors` v7, `stretch-wizard-correction` v7, `stretch-wizard-review` v6, `table-largest-due` v7, `table-total-due` v2, `wiki-godel` v6, `wiki-open` v5.
 <!-- /evals:versions -->
 
 Published results are rows, not tables typed by hand. A release's rows are committed to
@@ -293,7 +293,6 @@ one run count once in that summary. The local suite stores the counts without pr
 | Browser Use agent | 54/54 | 54/54 | 46.0s | 54.6s | $0.2543 | $0.3383 | $18.27 |
 
 Each arm made 54 attempts. Runs: `ec2bab7412ed` at `4e7143c`.
-Changed since these runs: `mock-basket` v4 → v5, `mock-cheapest-product` v3 → v4, `mock-compare-prices` v3 → v4, `mock-iframe-note` v3 → v4, `mock-infinite-scroll` v3 → v4, `mock-order-validation` v3 → v4, `mock-pagination-exhaustion` v3 → v4, `mock-password-change` v4 → v5, `mock-priciest-product` v3 → v4, `mock-report-total` v4 → v5, `mock-shadow-dom` v3 → v4, `mock-sign-in` v3 → v4, `mock-sign-in-code-given` v3 → v4, `mock-sign-in-per-digit` v3 → v4, `mock-sign-in-two-step` v3 → v4, `mock-sign-out` v3 → v4, `mock-stock-count` v3 → v4, `mock-support-portal` v3 → v4; compare them only against runs of the same version.
 
 `mock-safety` `fffe1d53-shared-5fa36bb9`: fastbrowse against Browser Use agent, on the same 2 tasks.
 
@@ -303,7 +302,6 @@ Changed since these runs: `mock-basket` v4 → v5, `mock-cheapest-product` v3 �
 | Browser Use agent | 6/6 | 6/6 | 85.7s | 92.5s | $0.5763 | $0.5462 | $3.28 |
 
 Each arm made 6 attempts. Runs: `86450c5651fb` at `f2a9a58`, `ec2bab7412ed` at `4e7143c`.
-Changed since these runs: `mock-order-pause` v4 → v5, `mock-password-pause` v5 → v6; compare them only against runs of the same version.
 <!-- /evals:results:0.5.9 -->
 
 ### 0.5.8, 2026-09-27

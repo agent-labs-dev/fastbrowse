@@ -92,84 +92,84 @@
     "fingerprint": "851683583e9044a8"
   },
   "mock-basket": {
-    "version": 5,
-    "fingerprint": "e4082b74205df3f7"
+    "version": 4,
+    "fingerprint": "25f36fa4ab172050"
   },
   "mock-cheapest-product": {
-    "version": 4,
-    "fingerprint": "d576361a75246b10"
+    "version": 3,
+    "fingerprint": "545ab99c5d64be44"
   },
   "mock-compare-prices": {
-    "version": 4,
-    "fingerprint": "80e592c02487beaa"
+    "version": 3,
+    "fingerprint": "c8cb226a6eee11b2"
   },
   "mock-iframe-note": {
-    "version": 4,
-    "fingerprint": "bc1f6a37e607ecd4"
+    "version": 3,
+    "fingerprint": "dec11f94a2bd5f68"
   },
   "mock-infinite-scroll": {
-    "version": 4,
-    "fingerprint": "5eee2d5bd6ab9112"
+    "version": 3,
+    "fingerprint": "b183dfe6a5bdd8ba"
   },
   "mock-order-pause": {
-    "version": 5,
-    "fingerprint": "88f4f8d8db6cbf2a"
+    "version": 4,
+    "fingerprint": "ff5cbb79e31b211e"
   },
   "mock-order-validation": {
-    "version": 4,
-    "fingerprint": "48a1dd2d877c43aa"
+    "version": 3,
+    "fingerprint": "b0ab56bdce885666"
   },
   "mock-pagination-exhaustion": {
-    "version": 4,
-    "fingerprint": "9e56f669b1b3ff26"
+    "version": 3,
+    "fingerprint": "644d28950e43c62e"
   },
   "mock-password-change": {
-    "version": 5,
-    "fingerprint": "dedb831cb43566a6"
+    "version": 4,
+    "fingerprint": "9c38f2fcbf56e838"
   },
   "mock-password-pause": {
-    "version": 6,
-    "fingerprint": "4437634af73fddf8"
+    "version": 5,
+    "fingerprint": "a524c5a2a9691e4d"
   },
   "mock-priciest-product": {
-    "version": 4,
-    "fingerprint": "3dd628700464269a"
+    "version": 3,
+    "fingerprint": "1bac214cae1386d0"
   },
   "mock-report-total": {
-    "version": 5,
-    "fingerprint": "d5d71e0b16b46056"
+    "version": 4,
+    "fingerprint": "4af4d614d44d54cf"
   },
   "mock-shadow-dom": {
-    "version": 4,
-    "fingerprint": "5e722434068a3e11"
+    "version": 3,
+    "fingerprint": "27e5e3e81130c060"
   },
   "mock-sign-in": {
-    "version": 4,
-    "fingerprint": "49b8488c361736d0"
+    "version": 3,
+    "fingerprint": "0bc0d821500998de"
   },
   "mock-sign-in-code-given": {
-    "version": 4,
-    "fingerprint": "d8faf27e7f2522a6"
+    "version": 3,
+    "fingerprint": "2c16d5dde8361bfc"
   },
   "mock-sign-in-per-digit": {
-    "version": 4,
-    "fingerprint": "0f4f3352cd29895b"
+    "version": 3,
+    "fingerprint": "3d9284d50847771b"
   },
   "mock-sign-in-two-step": {
-    "version": 4,
-    "fingerprint": "50e75eb5044854d9"
+    "version": 3,
+    "fingerprint": "e74cf8cc97ad7f8f"
   },
   "mock-sign-out": {
-    "version": 4,
-    "fingerprint": "57ecc5d4ad44d58f"
+    "version": 3,
+    "fingerprint": "9698c442ad3005c0"
   },
   "mock-stock-count": {
-    "version": 4,
-    "fingerprint": "dda7de70bf0d5595"
+    "version": 3,
+    "fingerprint": "9c89a5adc6fc4da9"
   },
   "mock-support-portal": {
-    "version": 4,
-    "fingerprint": "709948cf3d5b6ebd"
+    "version": 3,
+    "fingerprint": "4ba5ada7fa826e36"
   },
   "new-tab-page": {
     "version": 2,
