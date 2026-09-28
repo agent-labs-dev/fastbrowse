@@ -216,6 +216,80 @@ async def test_http_failures_and_token_limits(gateway: bool, status: int, body: 
     assert len(str(error.value)) < 600
 
 
+def gateway_error(status: int, reason: str, *, retried: bool) -> dict[str, JsonValue]:
+    """A gateway failure as one arrives: its own wrapper, the provider's reason nested inside, and its routing."""
+    return {
+        "error": {
+            "message": f"typesafe returned status {status}",
+            "type": "AI_APICallError",
+            "param": {"message": reason, "statusCode": status, "isRetryable": retried},
+        },
+        "providerMetadata": {"gateway": {"routing": {"resolvedProvider": "typesafe-ai", "fallbacksAvailable": []}}},
+    }
+
+
+def gateway_answer() -> dict[str, JsonValue]:
+    """A gateway answer, whose confidence rides in provider metadata rather than on the answer itself."""
+    return {
+        "answers": {"q": {"type": "choice", "choice": "blue", "probabilities": {"blue": 1, "red": 0}}},
+        "rounding": {"probabilityDecimals": 2, "scoreDecimals": 2},
+        "usage": {"inputTokens": 389, "outputTokens": 61},
+        "warnings": [],
+        "providerMetadata": {"typesafe": {"confidence": {"q": 1}}, "gateway": {"cost": "0.000016338"}},
+    }
+
+
+@pytest.mark.parametrize("reason", ["max_tokens_exceeded", "request body too large"])
+async def test_a_refusal_over_an_input_limit_is_input_too_large(reason: str) -> None:
+    """Either wording a gateway relays for a request past a limit has to reach the shed path, not a failed run."""
+    body = gateway_error(400, reason, retried=False)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(400, json=body))) as http:
+        with pytest.raises(JevInputTooLarge, match="input too large"):
+            await VercelGatewayJevClient("key", http=http).evaluate("state", {"q": choice()})
+
+
+async def test_a_gateway_failure_names_what_the_provider_said() -> None:
+    """The wrapper repeats the gateway's own status, so the reason worth reading is the one nested inside it."""
+    body = gateway_error(503, "the model is unavailable", retried=True)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(503, json=body))) as http:
+        with pytest.raises(JevRetriesExhausted) as error:
+            await VercelGatewayJevClient("key", http=http).evaluate("state", {"q": choice()})
+    assert "the model is unavailable" in str(error.value)
+    assert "via typesafe-ai" in str(error.value)
+
+
+async def test_a_status_the_gateway_marks_retryable_is_repeated() -> None:
+    """409 is retryable to the AI SDK and is not a status the set names, so the flag alone has to carry it."""
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(409, json=gateway_error(409, "the request conflicts", retried=True))
+        return httpx.Response(200, json=gateway_answer())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await VercelGatewayJevClient("key", http=http).evaluate("state", {"q": choice()})
+    assert calls == 2
+    assert isinstance(result.answers["q"], ChoiceAnswer)
+
+
+async def test_a_status_the_gateway_marks_not_retryable_is_not_repeated() -> None:
+    """A refused request is not repeated on the chance it clears: the gateway says the request is at fault."""
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(409, json=gateway_error(409, "the request conflicts", retried=False))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(JevError):
+            await VercelGatewayJevClient("key", http=http).evaluate("state", {"q": choice()})
+    assert calls == 1
+
+
 @pytest.mark.parametrize("cost", ["0.000016338", 0.000016338, 0, None])
 async def test_gateway_remaps_wire_types_confidence_and_cost(cost: JsonValue) -> None:
     def handler(request: httpx.Request) -> httpx.Response:

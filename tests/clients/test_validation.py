@@ -262,3 +262,14 @@ async def test_a_slow_jev_call_is_traced_for_evals_to_rerun(monkeypatch: pytest.
             await post(http, "https://jev.test/v1", "key", {})
     slow = [e for e in events if isinstance(e, dict) and e["event"] == "request_slow"]
     assert slow == [{"event": "request_slow", "call": "jev", "seconds": 2.5}]
+
+
+def test_nested_gateway_reason_redacts_before_truncating() -> None:
+    key = "gateway-secret-key-that-must-not-leak"
+    response = httpx.Response(
+        400,
+        request=httpx.Request("POST", "https://gateway.test", headers={"Authorization": f"Bearer {key}"}),
+        json={"error": {"message": "provider returned 400", "param": {"message": "x" * 190 + key}}},
+    )
+    assert "gateway-se" not in validation.describe(response)
+    assert "[api key]" in validation.describe(response)

@@ -11,7 +11,6 @@ from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from fastbrowse.clients.validation import (
     LLM_ATTEMPT_SECONDS,
     LLM_HEDGE_SECONDS,
-    RETRYABLE_STATUS,
     RequestUsage,
     body_excerpt,
     describe,
@@ -20,6 +19,7 @@ from fastbrowse.clients.validation import (
     json_object,
     object_value,
     post_with_retry,
+    retryable,
     token_count,
     with_discarded,
 )
@@ -204,7 +204,7 @@ class OpenAICompatibleLLM:
             raise LLMRetriesExhausted(
                 f"LLM transport failed after {usage.history(monotonic() - started)}; last: {usage.failures[-1]}"
             )
-        if response.status_code in RETRYABLE_STATUS:
+        if retryable(response):
             raise LLMRetriesExhausted(
                 f"LLM request failed after {usage.history(monotonic() - started)}; last: {describe(response)}"
             )
