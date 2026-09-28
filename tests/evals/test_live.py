@@ -111,38 +111,33 @@ async def test_ultrafast_passes_only_on_a_correct_outcome_it_called_done(
 
 
 @pytest.mark.parametrize(
-    ("report", "failure"),
+    "telemetry",
     [
-        (
-            {"events": [{"event": "request_slow", "call": "jev", "seconds": 7.25}]},
-            "Jev unavailable: a call took 7.2s",
-        ),
-        ({"transient_seconds": 4.5}, "provider unavailable: 4.5s of failed requests"),
+        {"events": [{"event": "request_slow", "call": "jev", "seconds": 7.25}]},
+        {"transient_seconds": 4.5},
     ],
 )
-async def test_an_attempt_a_provider_slowed_is_an_outage_run_again(
-    monkeypatch: pytest.MonkeyPatch, report: dict[str, Any], failure: str
+@pytest.mark.parametrize(
+    ("status", "answer", "passed"), [("complete", "Attention Is All You Need", True), ("stuck", "wrong answer", False)]
+)
+async def test_recovered_provider_delays_preserve_the_attempt(
+    monkeypatch: pytest.MonkeyPatch, telemetry: dict[str, Any], status: str, answer: str, passed: bool
 ) -> None:
-    """0.5.7 timed runs whose single Jev call took up to 41s, and earlier releases subtracted failed requests from
-    fastbrowse's time alone; a slow provider must never count for or against the agent."""
-
     async def fast_report(*_: Any, **__: Any) -> tuple[Outcome, live.ArmReport]:
-        outcome = Outcome("Attention Is All You Need", None, "https://arxiv.org/abs/1706.03762")
-        return outcome, live.ArmReport(status="complete", dollars=0.001, seconds=12.0, **report)
+        outcome = Outcome(answer, None, "https://arxiv.org/abs/1706.03762")
+        return outcome, live.ArmReport(status=status, dollars=0.001, seconds=12.0, **telemetry)
 
     monkeypatch.setattr(live, "_fast_report", fast_report)
     async with httpx.AsyncClient() as http:
         row = await live.run_arm(
-            "fastbrowse",
-            task("arxiv-title"),
-            "Attention Is All You Need",
-            http,
-            Path(),
-            bitwarden=False,
-            record=None,
+            "fastbrowse", task("arxiv-title"), "Attention Is All You Need", http, Path(), bitwarden=False, record=None
         )
-    assert row.normalized_status == Ending.UNAVAILABLE
-    assert row.failure == failure
+    assert row.normalized_status == (Ending.DONE if passed else Ending.STOPPED)
+    assert row.passed is passed
+    assert row.correct is passed
+    assert row.seconds == 12.0
+    assert row.dollars == 0.001
+    assert (row.failure is None) is passed
 
 
 async def test_an_attempt_of_any_arm_still_running_at_the_cap_is_an_outage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -898,3 +893,13 @@ async def test_hosted_poll_failure_stops_session_before_retry(monkeypatch: pytes
             await live.hosted_arm(task("pypi-newer"), http, record=None, stop_at_answer=True)
     assert cancelled.is_set()
     sessions.stop.assert_awaited_once_with("poll-failure")
+
+
+@pytest.mark.parametrize(("flag", "value"), [("--concurrency", "0"), ("--concurrency", "-1"), ("--repeat", "0")])
+async def test_invalid_run_counts_are_rejected_before_task_selection(
+    flag: str, value: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as error:
+        await live.main([flag, value, "--only", "not-a-task"])
+    assert error.value.code == 2
+    assert f"{flag} must be positive" in capsys.readouterr().err

@@ -133,6 +133,8 @@ class HistoryEntry(Frozen):
     """Entered value, redacted before storage; secrets are represented only by a marker."""
     effect: str | None = None
     """What the action visibly did: the address, controls shown or removed, and values before and after."""
+    read_progress: bool = False
+    """The read added facts or satisfied a requirement, rather than just visiting the content."""
     setting: bool | None = None
     """True for a click that chose an option or ticked a box, a value set and kept in the record as a typed one is;
     unset otherwise, so the actions a model is shown do not each carry it."""
@@ -578,7 +580,12 @@ def _state(observation: Observation, controls: Sequence[Control], context: StepC
         # which month a date picker was on, Jev clicked Next through two years of months looking for next month.
         "date": observation.today,
         "subgoal": context.subgoal,
-        "page": {"url": observation.url, "title": observation.title, "text": observation.viewport_text},
+        "page": {
+            "url": observation.url,
+            "title": observation.title,
+            "text": observation.viewport_text,
+            "response_status": observation.response_status,
+        },
         "requirements": list(context.requirements),
         "unread_requirements": (list(context.unread_requirements) if context.unread_requirements is not None else None),
         "notes": context.notes,

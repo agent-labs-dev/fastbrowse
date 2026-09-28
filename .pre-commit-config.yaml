@@ -1,6 +1,6 @@
 # The checks CI runs, run again before each commit: `uv run pre-commit install` once, then they are automatic.
 # Prose (`scripts/no_slop.py`, Vale) and the tests stay in CI, where they can take their time.
-# The hook versions match the pinned tools in pyproject.toml; `uv run pre-commit autoupdate` moves both.
+# Update hook revisions and pyproject.toml tool pins together, then run `uv lock`; autoupdate only edits this file.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.9

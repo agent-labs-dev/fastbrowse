@@ -625,11 +625,22 @@ def _crashed(
     )
 
 
-def _slow_jev(events: list[object]) -> float:
-    """The slowest Jev call past `JEV_SLOW_SECONDS` in a run's trace, or 0."""
-    return max(
-        (float(e["seconds"]) for e in events if isinstance(e, dict) and e.get("event") == "request_slow"), default=0.0
-    )
+def grade(
+    arm: str, task: LiveTask, truth: object, outcome: Outcome, report: ArmReport
+) -> tuple[bool, str | None, Ending]:
+    try:
+        failure = task.check(outcome, truth)
+    except Exception as exc:
+        # One task's grader must not discard every other run in the suite: gather propagates, and a 114-run
+        # pass is an hour and real money. A grader that raises is that row's failure and nobody else's.
+        failure = f"check raised {type(exc).__name__}: {exc}"
+    # Right and proven are graded apart: a correct answer the agent could not back with quotes is a
+    # different defect from a wrong one, and one pass/fail column hid which the suite was showing.
+    correct = failure is None
+    if failure is None and not status_matches(arm, report.status, task.expect, bool(report.answered)):
+        failure = f"status {report.status}, expected {task.expect.value}"
+    ending = normalize(report.status, hosted=arm == "browser-use", answered=bool(report.answered))
+    return correct, failure, ending
 
 
 async def _site_checked(row: EvalRow, task: LiveTask, http: httpx.AsyncClient) -> EvalRow:
@@ -674,26 +685,7 @@ async def run_arm(
             status=Status.UNAVAILABLE.value if unavailable else None,
             record=record,
         )
-    try:
-        failure = task.check(outcome, truth)
-    except Exception as exc:
-        # One task's grader must not discard every other run in the suite: gather propagates, and a 114-run
-        # pass is an hour and real money. A grader that raises is that row's failure and nobody else's.
-        failure = f"check raised {type(exc).__name__}: {exc}"
-    # Right and proven are graded apart: a correct answer the agent could not back with quotes is a
-    # different defect from a wrong one, and one pass/fail column hid which the suite was showing.
-    correct = failure is None
-    if failure is None and not status_matches(arm, report.status, task.expect, bool(report.answered)):
-        failure = f"status {report.status}, expected {task.expect.value}"
-    ending = normalize(report.status, hosted=arm == "browser-use", answered=bool(report.answered))
-    if slow := _slow_jev(report.events):
-        # Jev answers in under a second; a slower call is its outage, and the attempt is run again, never scored.
-        ending, failure = Ending.UNAVAILABLE, f"Jev unavailable: a call took {slow:.1f}s"
-    elif report.transient_seconds:
-        # Failed requests and their backoff are a provider's outage, not the agent's time. Subtracting them would
-        # credit fastbrowse alone, since no other arm's requests are visible, so the attempt is run again instead.
-        failure = f"provider unavailable: {report.transient_seconds:.1f}s of failed requests"
-        ending = Ending.UNAVAILABLE
+    correct, failure, ending = grade(arm, task, truth, outcome, report)
     return EvalRow.model_validate(
         report.model_dump()
         | {
@@ -984,6 +976,9 @@ async def main(argv: list[str]) -> int:
         "time timed the same as one at a time; compare arms only under the same setting.",
     )
     args = parser.parse_args(argv)
+    for flag, count in (("--concurrency", args.concurrency), ("--repeat", args.repeat)):
+        if count <= 0:
+            parser.error(f"{flag} must be positive")
     if args.record is not None and "browser-use-oss" in args.arms:
         parser.error("browser-use-oss does not support --record")
     tasks = [

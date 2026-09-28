@@ -323,20 +323,22 @@ async def test_cancelled_browser_check_drains_renderer_and_dialog_waits(
             await asyncio.gather(task, return_exceptions=True)
 
 
-async def test_cancelled_observation_drains_history_and_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_cancelled_observation_drains_all_browser_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = CdpTransport(monkeypatch)
     history = transport.blocked["Page.getNavigationHistory"] = asyncio.Event()
     snapshot = transport.blocked["Runtime.evaluate"] = asyncio.Event()
+    response = transport.blocked["Page.getFrameTree"] = asyncio.Event()
     async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
         task = asyncio.create_task(CdpPage(session, Config()).observe())
         try:
             async with asyncio.timeout(2):
                 await history.wait()
                 await snapshot.wait()
+                await response.wait()
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
-            assert {"Page.getNavigationHistory", "Runtime.evaluate"} <= transport.finished
+            assert {"Page.getNavigationHistory", "Runtime.evaluate", "Page.getFrameTree"} <= transport.finished
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)

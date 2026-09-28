@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import inspect
+import json
 import os
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -796,3 +797,73 @@ async def test_download_evidence_is_bounded_and_cites_the_response(page: CdpPage
     assert "omitted" in evidence.quote
     first = capture.blocks[0]
     assert _cited(capture, part, _Cite(first=first.source_id, last=block.source_id)) is None
+
+
+@pytest.mark.parametrize("status", [403, 419, 429, 503, 999])
+async def test_http_error_status_travels_with_the_observed_document(page: CdpPage, main_site: str, status: int) -> None:
+    await page.navigate(f"{main_site}/http-error/{status}")
+    failed = await page.observe()
+    assert failed.response_status == status
+    assert failed.viewport_text == "Sorry"
+    await page.navigate(main_site)
+    assert (await page.observe()).response_status == 200
+
+
+async def test_http_status_is_not_attributed_to_a_client_side_route(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/http-error/404")
+    assert (await page.observe()).response_status == 404
+    await eval_value(browser_session, browser_session.active_session_id, "history.pushState({}, '', '/recovered')")
+    recovered = await page.observe()
+    assert recovered.url.endswith("/recovered")
+    assert recovered.response_status is None
+    await eval_value(browser_session, browser_session.active_session_id, "history.back()")
+    await wait_until(lambda: _returned_http_error(page))
+    assert (await page.observe()).response_status == 404
+
+
+async def _returned_http_error(page: CdpPage) -> bool:
+    return (await page.observe()).url.endswith("/http-error/404")
+
+
+async def test_page_javascript_cannot_forge_the_http_status(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "Performance.prototype.getEntriesByType = performance.getEntriesByType = "
+        "() => [{name: location.href, responseStatus: 401}]; "
+        "Object.defineProperty(PerformanceNavigationTiming.prototype, 'responseStatus', {get: () => 401}); true",
+    )
+    assert (await page.observe()).response_status == 200
+    assert await page.response_status() == 200
+
+
+async def test_required_radios_use_their_form_group_validity(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(main_site)
+    markup = (
+        '<form><label>First<input type="radio" name="choice" required checked></label>'
+        '<label>Second<input type="radio" name="choice" required></label>'
+        '<label>Terms<input type="checkbox" required></label></form>'
+        '<form><label>Other form<input type="radio" name="choice" required></label></form>'
+    )
+    await page._evaluate(browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}")
+    observed = await page.observe()
+    assert not find(observed, "First").blocking
+    assert not find(observed, "Second").blocking
+    assert find(observed, "Terms").blocking
+    assert find(observed, "Other form").blocking
+    await page._evaluate(browser_session.active_session_id, "document.querySelector('input').checked = false")
+    observed = await page.observe()
+    assert find(observed, "First").blocking
+    assert find(observed, "Second").blocking
+
+
+async def test_screenshots_match_the_png_frame_contract(page: CdpPage, main_site: str) -> None:
+    await page.navigate(main_site)
+    assert (await page.screenshot()).startswith(b"\x89PNG\r\n\x1a\n")
