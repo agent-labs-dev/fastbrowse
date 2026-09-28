@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.10] - 2026-09-28
+
 - Required native radio groups stop blocking once an option in the same form is selected.
 - Step frames are PNG images of the page before the action, with a fresh secret-visibility check.
 - Eval commands reject nonpositive concurrency and repeat counts before starting a run.
@@ -751,7 +753,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.9...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.10...HEAD
+[0.5.10]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.10
 [0.5.9]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.9
 [0.5.8]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.8
 [0.5.7]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.7
