@@ -1403,7 +1403,12 @@ class Agent:
         action may be the one that put the secret there. A field a page mirrors into ordinary text would
         otherwise reach the caller as pixels, which is the one thing a frame must never carry.
         """
-        if self._reveals(await self._page.observe()):
+        observation = await self._page.observe()
+        # A dialog hides the page text, so its observation cannot prove the pixels contain no secret.
+        if observation.dialog is not None:
+            self._page.withhold_frames(True)
+            return None
+        if self._reveals(observation):
             return None
         return await self._page.screenshot()
 

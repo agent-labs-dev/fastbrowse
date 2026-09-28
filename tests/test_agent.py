@@ -4534,3 +4534,19 @@ async def test_http_challenge_gets_a_chance_to_clear_before_recovery(status: int
     agent._outwait.assert_awaited_once_with(failed)
     agent._recover.assert_not_awaited()
     assert not state.paging_failed
+
+
+async def test_step_frame_stays_withheld_when_a_dialog_hides_page_text() -> None:
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(
+        return_value=observation(()).model_copy(
+            update={"dialog": Dialog(kind="alert", message="Paused"), "viewport_text": ""}
+        )
+    )
+    page.screenshot = AsyncMock(return_value=b"secret pixels")
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    agent._redactor.register("password", "hunter2")
+
+    assert await agent._frame() is None
+    page.screenshot.assert_not_awaited()
+    page.withhold_frames.assert_called_with(True)

@@ -143,10 +143,11 @@ def fingerprint(task: object) -> str:
     fields = {f.name: _stable(getattr(task, f.name), seen) for f in dataclasses.fields(task) if f.name != "rolling"}
     if hasattr(task, "expect"):
         from fastbrowse.evals.live import grade
-        from fastbrowse.evals.live_tasks import prompt
+        from fastbrowse.evals.live_tasks import LiveTask, prompt
         from fastbrowse.evals.status import status_matches
 
-        fields["grade_rule"] = _stable(grade, seen)
+        if isinstance(task, LiveTask):
+            fields["grade_rule"] = _stable(grade, seen)
         fields["status_rule"] = _stable(status_matches, seen)
         fields["prompt"] = _stable(prompt, seen)
     body = json.dumps(fields, sort_keys=True, default=str)
