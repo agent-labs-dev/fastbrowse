@@ -112,10 +112,10 @@ def status_exit_contract() -> dict[str, Any]:
 
     try:
         for status in Status:
-            setattr(cli, "run_task", fake_for(status))
+            vars(cli)["run_task"] = fake_for(status)
             codes[status.value] = [_exit_code_for(["x", "--local", "--json"]) for _ in range(2)]
     finally:
-        setattr(cli, "run_task", original)
+        vars(cli)["run_task"] = original
     every = set(Status)
     complete_zero = codes.get("complete") == [0, 0]
     others_one = all(codes[status.value] == [1, 1] for status in every if status is not Status.COMPLETE)
@@ -155,7 +155,7 @@ def json_stdout_discipline() -> dict[str, Any]:
             )
         return _result()
 
-    setattr(cli, "run_task", fake)
+    vars(cli)["run_task"] = fake
     try:
         namespace = cli._parse(["x", "--local", "--json"])
         out, err = io.StringIO(), io.StringIO()
@@ -163,7 +163,7 @@ def json_stdout_discipline() -> dict[str, Any]:
             asyncio.run(cli.run(namespace))
         stdout, stderr = out.getvalue(), err.getvalue()
     finally:
-        setattr(cli, "run_task", original)
+        vars(cli)["run_task"] = original
     parsed = False
     try:
         json.loads(stdout)
