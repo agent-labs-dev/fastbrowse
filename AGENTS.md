@@ -114,8 +114,8 @@ These are the things a change must not quietly break.
   since the run read that host before typing there and the site published it; the rest of the address, any
   other host, and every other appearance of the value is blanked or redacted. No model screenshot or PNG step frame is taken while a resolved secret is showing as page text. The step-frame check is made
   against the page as it is when the image is taken, never against an earlier reading of it - the action being
-  recorded may be the one that put the secret there. Live JPEG frames and recordings show the rendered page
-  without this check.
+  recorded may be the one that put the secret there. Live JPEG frames and recordings are held back before
+  secret typing and while observations reveal a resolved secret; recordings keep their last clean frame.
 - **Code owns authorization.** Jev classifies clicks, form-submitting Enter and dialog acceptance; code
   refuses actions classified as irreversible without authorization. Code-selected pagination and authorized,
   confident actions skip classification. The classifier is not a guarantee against missed changes.
