@@ -10,13 +10,16 @@ The browser is the caller's: a Browser Use Cloud browser reached through `cdp_ws
 drives, so both arms pay the same round trips. The caller passes fastbrowse's selected Jev source: OpenRouter
 by default, or TypeSafe directly or the Vercel AI Gateway. OpenRouter uses the TypeSafe protocol and key slot
 at the supplied base URL. This arm keeps its own retry policy without failover.
-Its text helper uses TEXT_MODEL_API_KEY, an OpenRouter key.
+The result also carries every decision, stale failure and provenance; with `record`, per-step controls go to
+a `.evidence.json` beside the video. The text helper uses TEXT_MODEL_API_KEY, an OpenRouter key.
 """
 
 import base64
 import contextlib
+import hashlib
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -64,6 +67,18 @@ def systemone_answer(payload: dict[str, Any]) -> tuple[dict[str, Any], float | N
 
 class Unavailable(RuntimeError):
     """The model provider answered only with overload statuses: the harness runs the task again."""
+
+
+BROWSER_TRANSPORT = "browser_transport"
+
+
+def failure_class(exc: BaseException) -> str | None:
+    """browser-harness's own IPC timeout, found by class since the runner cannot import its private name at load.
+
+    Only that type: a task-budget timeout or any other error is the agent's result, not an infrastructure event."""
+    if any(cls.__name__ == "_IPCResponseTimeout" for cls in type(exc).__mro__):
+        return BROWSER_TRANSPORT
+    return None
 
 
 class Meter:
@@ -204,6 +219,79 @@ def _post(model: Any, url: str, headers: dict[str, str], body: dict[str, Any]) -
     raise Unavailable("Model unavailable")
 
 
+class Trace:
+    """What upstream decided and why it did not act, read off its state without changing what it does."""
+
+    def __init__(self, agent: Any) -> None:
+        self.stale: list[dict[str, Any]] = []
+        self.offered: list[dict[str, Any]] = []
+        self.last_exception: str | None = None
+        self._agent = agent
+        self._command = agent.command
+        agent.command = self.command
+
+    def command(self, name: str, body: dict[str, Any] | None = None) -> Any:
+        state = self._agent.state
+        try:
+            result = self._command(name, body)
+        except Exception as exc:
+            self.last_exception = f"{type(exc).__name__}: {exc}"
+            if type(exc).__name__ == "StalePage":
+                self.stale.append({"decision": len(state["decisions"]), "phase": name, "reason": str(exc)})
+            raise
+        if name == "predict":
+            # Read after upstream's own predict, so the controls are exactly those the choice was made from.
+            page = state["page"]
+            self.offered.append(
+                {
+                    "url": page["url"],
+                    "controls": [
+                        {"id": a["id"], "kind": a["kind"], "label": str(a["label"])[:80]} for a in page["actions"]
+                    ],
+                }
+            )
+        return result
+
+    def decisions(self) -> list[dict[str, Any]]:
+        """Each decision beside the controls offered for it; a stale one has no history entry."""
+        chosen = self._agent.state["decisions"]
+        return [
+            {
+                "operation": d.get("operation"),
+                "target": d.get("target"),
+                "choice": d.get("choice"),
+                "probability": (d.get("probabilities") or {}).get(d.get("choice")),
+                "confidence": d.get("confidence"),
+                "elapsed_ms": d.get("elapsed_ms"),
+                "offered": len(offered["controls"]),
+            }
+            for d, offered in zip(chosen, self.offered, strict=True)
+        ]
+
+
+def _capped(offered: dict[str, Any], limit: int = 100) -> dict[str, Any]:
+    return {**offered, "controls": offered["controls"][:limit], "total": len(offered["controls"])}
+
+
+def provenance() -> dict[str, Any]:
+    """The helper, model and runner this result came from, read from the process rather than the harness's intent."""
+    from importlib import metadata
+
+    try:
+        package = metadata.distribution("jev-ultrafast")
+        origin = json.loads(package.read_text("direct_url.json") or "{}")
+        upstream = {"version": package.version, "commit": (origin.get("vcs_info") or {}).get("commit_id")}
+    except Exception as exc:
+        upstream = {"error": type(exc).__name__}
+    return {
+        "jev_ultrafast": upstream,
+        "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "python": platform.python_version(),
+        "jev_model": os.environ.get("FASTBROWSE_JEV_MODEL"),
+        "text_model": os.environ.get("TEXT_MODEL"),
+    }
+
+
 class Screencast:
     """Chrome's screencast of the agent's tab, frames kept with the browser's timestamps."""
 
@@ -288,9 +376,10 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
     meter = Meter(request.get("jev_dollars_per_input_token", 0.0))
     patch_transport(model, meter)
     started = time.monotonic()
-    status, error, agent, state = "error", None, None, None
+    status, error, agent, state, trace, kind = "error", None, None, None, None, None
     try:
         agent = Agent(request["start"], request["goal"])
+        trace = Trace(agent)
         # jev-ultrafast opens a background tab so as not to take over the user's Chrome. This browser is its
         # own, and a cloud browser neither paints nor screencasts a tab that is not in front.
         agent.browser.call("Page.bringToFront")
@@ -302,7 +391,10 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
                 for state in agent.run():
                     if state["status"] in {"done", "blocked"}:
                         break
-                    if len(state["decisions"]) >= request["max_steps"]:
+                    if (
+                        len(state["history"]) >= request["max_steps"]
+                        or len(state["decisions"]) >= 2 * request["max_steps"]
+                    ):
                         status = "budget_exceeded"
                         break
                 state = agent.snapshot()
@@ -310,7 +402,8 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
                     status = state["status"]
             except Exception as exc:  # the run's failure is its result, recorded rather than raised
                 error = f"{type(exc).__name__}: {exc}"
-                status = "unavailable" if isinstance(exc, Unavailable) else status
+                kind = failure_class(exc)
+                status = "unavailable" if isinstance(exc, Unavailable) or kind else status
             seconds = time.monotonic() - started
             if cast is not None:
                 cast.__exit__()
@@ -319,18 +412,41 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
                     print(f"no video: {problem}", file=sys.stderr)
     except Exception as exc:
         error = error or f"{type(exc).__name__}: {exc}"
+        kind = kind or failure_class(exc)
+        status = "unavailable" if kind and status == "error" else status
         seconds = time.monotonic() - started
     if agent is not None:
         state = agent.state
         # The harness observes this tab after exit and owns the cloud browser cleanup.
     history = state["history"] if state else []
+    decisions = trace.decisions() if trace else []
+    text_helpers = sorted({call.get("model") for call in (state or {}).get("text_calls", []) if call.get("model")})
+    artifact = None
+    if request.get("record") and trace:
+        # Kept beside the video, not in the result line: per-step controls are large and only a diagnosis needs them.
+        artifact = str(Path(request["record"]).with_suffix(".evidence.json"))
+        Path(artifact).parent.mkdir(parents=True, exist_ok=True)
+        Path(artifact).write_text(json.dumps({"offered": trace.offered, "history": history}, default=str))
     return {
         "status": status,
         "error": error,
+        "failure_class": kind,
         "seconds": round(seconds, 2),
         "steps": len(state["decisions"]) if state else 0,
+        "decisions": len(state["decisions"]) if state else 0,
         "actions": len(history),
+        "step_cap": request["max_steps"],
+        "step_cap_unit": "actions",
+        "decision_cap": 2 * request["max_steps"],
         "trace": [f"{h['kind']} {h['action']} -> {'changed' if h['page_changed'] else 'unchanged'}" for h in history],
+        "decision_log": decisions,
+        "stale": trace.stale if trace else [],
+        "last_exception": trace.last_exception if trace else None,
+        "last_offered": _capped(trace.offered[-1]) if trace and trace.offered else None,
+        "final_page_url": state["page"]["url"] if state else None,
+        "artifact": artifact,
+        "text_helpers": text_helpers,
+        "provenance": provenance(),
         "jev_dollars": round(meter.jev, 6),
         "text_dollars": round(meter.text, 6),
         "unmetered_requests": meter.unmetered,

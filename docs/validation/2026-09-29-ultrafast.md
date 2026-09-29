@@ -1,5 +1,9 @@
 # Ten-repeat Ultrafast comparison
 
+Audit status: not approved for benchmark claims. Retained as diagnostic evidence.
+The audit found false Fastbrowse completion after HTTP errors, a browser timeout counted as an Ultrafast
+failure, and missing final-page HTTP evidence. These rows must not supply a competitive headline.
+
 Run `575175e09100`, clean Fastbrowse commit `e7d61d216860254c70be45cdf19e5ae1fead75a8`.
 Browser Use Ultrafast is pinned to 1231850a0bf1a0c0341fe408ef1668dbbfdfac46.
 Six navigation tasks, ten repeats per task and arm, concurrency four, rotating arm order.

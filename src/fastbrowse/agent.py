@@ -379,11 +379,13 @@ class _RunState:
     tally_readers: tuple[TallyReader, ...] = ()
     comparisons: dict[str, NumericComparison] = field(default_factory=dict)
     paging_failed: bool = False
+    started_url: str | None = None
+    """The initial address, retained even when an HTTP failure removes it from completion evidence."""
     first_url: str | None = None
-    visited: dict[str, None] = field(default_factory=dict[str, None])
-    """Every address the run has been on, in order, first the one it began on. The action record starts after that
-    first page, so without this a task's "start at" address was one the checks could not see the run had reached."""
     """The first page the run looked at, which is what a task's "this page" means once the run has moved on."""
+    visited: dict[str, None] = field(default_factory=dict[str, None])
+    """Addresses observed without an HTTP error, in order, including the starting address.
+    An error at an address removes it until a later successful observation."""
     redecided: bool = False
     """A decision was dropped because the page redrew under it, so nothing is watched until an action is taken."""
     missing: set[tuple[str, str | None]] = field(default_factory=set[tuple[str, str | None]])
@@ -531,6 +533,7 @@ class Agent:
                     state = _RunState(
                         task, inputs or {}, tuple(attachments), authorization or Authorization(), ledger, head.planning
                     )
+                    state.started_url = opening
                     state.history.extend(history)
                     state.invented = invented
                     if opening is not None:
@@ -588,7 +591,6 @@ class Agent:
             state.ledger.check()
             observation = await self._observe()
             state.first_url = state.first_url or observation.url
-            state.visited[(self._raw_observation or observation).url] = None
             self._note_effect(state, observation)
             if observation.response_status is not None and observation.response_status >= 400:
                 document = (
@@ -1242,6 +1244,11 @@ class Agent:
         """Record on the last action what it did, which the next choice and recovery both read."""
         if state.transaction_candidates and state.transaction_candidates[-1].landed_url is None:
             state.transaction_candidates[-1].landed_url = observation.url
+        # An error document has the requested address too, but never proves the destination loaded.
+        if observation.response_status is not None and observation.response_status >= 400:
+            state.visited.pop(observation.url, None)
+        else:
+            state.visited[observation.url] = None
         link, state.pending_link = state.pending_link, None
         if observation.response_status is not None:
             if observation.response_status >= 400:
@@ -2189,7 +2196,6 @@ class Agent:
                     capturing = asyncio.create_task(self._capture())
                     try:
                         landed = await self._observe()
-                        state.visited[(self._raw_observation or landed).url] = None
                         self._note_effect(state, landed)
                         if landed.response_status is not None and landed.response_status >= 400:
                             state.paging_failed = True
@@ -2513,6 +2519,8 @@ class Agent:
         observation: indexing unchanged controls again cost 0.35s a run.
         """
         fresh = await self._observe_if_changed(observation)
+        if fresh.response_status is not None and fresh.response_status >= 400:
+            raise _HttpFailure(url=fresh.url, status=fresh.response_status).stop()
         state.ledger.reserve(CostComponent.JEV)
         await state.await_plan()
         draft = draft_answer(state.plan, state.notes) if state.plan.page_answer_expected else None
@@ -2827,7 +2835,7 @@ class Agent:
         parts: list[str] = []
         if RunReport.NAVIGATION_STEPS in reports:
             steps: list[str] = []
-            if start := next(iter(state.visited), None):
+            if start := state.started_url or state.first_url:
                 steps.append(f"Started at: {self._redactor.redact(start)}")
             for entry in state.history:
                 if entry.outcome is not StepOutcome.EXECUTED or not entry.page_changed:

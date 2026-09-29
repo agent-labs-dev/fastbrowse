@@ -18,7 +18,7 @@ from pydantic import SecretStr
 from fastbrowse.clients.environment import JevSource, Settings
 from fastbrowse.clients.validation import RETRYABLE_STATUS, TRANSIENT_TRANSPORT
 from fastbrowse.evals import live, live_tasks, more_tasks
-from fastbrowse.evals.live_tasks import TASKS, LiveTask, Outcome
+from fastbrowse.evals.live_tasks import TASKS, LiveTask, Outcome, PageEvidence, page_defect
 from fastbrowse.evals.status import Ending
 from fastbrowse.models import Unavailable
 from fastbrowse.telemetry import TRACE, trace, traced
@@ -208,7 +208,7 @@ async def test_an_answer_key_that_will_not_come_back_fails_only_its_task(
     async def ultrafast_arm(
         _: LiveTask, __: httpx.AsyncClient, *, record: Path | None
     ) -> tuple[Outcome, live.ArmReport]:
-        outcome = Outcome("Done.", None, "https://pypi.org/project/httpx/")
+        outcome = Outcome("Done.", None, "https://pypi.org/project/httpx/", evidence=_evidence())
         return outcome, live.ArmReport(status="done", dollars=0.001, seconds=3.0)
 
     monkeypatch.setattr(live, "_truth", truth)
@@ -1003,3 +1003,118 @@ def test_ultrafast_classifies_the_same_transport_outages(error: type[httpx.Trans
     model = SimpleNamespace(CLIENT=SimpleNamespace(post=post))
     with pytest.raises(RUNNER["Unavailable"]):
         RUNNER["_post"](model, "https://provider.test", {}, {})
+
+
+def _evidence(status: int | None = 200, title: str | None = "Item", length: int | None = 40) -> PageEvidence:
+    return PageEvidence(status=status, title=title, text="x", text_length=length)
+
+
+@pytest.mark.parametrize(
+    ("evidence", "defect"),
+    [
+        (_evidence(), None),
+        (None, "no final page evidence"),
+        (_evidence(status=None), "final page status not observed"),
+        (_evidence(status=419), "final page is an HTTP 419 document"),
+        (_evidence(title="", length=0), "final page is empty"),
+    ],
+)
+def test_page_defect_needs_a_successful_non_empty_document(evidence: PageEvidence | None, defect: str | None) -> None:
+    assert page_defect(evidence) == defect
+
+
+@pytest.mark.parametrize(("evidence", "passed"), [(_evidence(), True), (_evidence(status=419), False), (None, False)])
+def test_a_navigation_url_alone_does_not_pass(evidence: PageEvidence | None, passed: bool) -> None:
+    wiki = task("wiki-open")
+    url = "https://en.wikipedia.org/wiki/G%C3%B6del%27s_incompleteness_theorems"
+    outcome = Outcome(None, None, url, evidence=evidence)
+    report = live.ArmReport(status="done", dollars=0.0, seconds=1.0)
+    correct, failure, _ = live.grade("jev-ultrafast", wiki, None, outcome, report)
+    assert correct is passed
+    assert (failure is None) is passed
+
+
+def test_an_answer_task_is_not_gated_on_page_evidence() -> None:
+    outcome = Outcome("Attention Is All You Need", None, "https://arxiv.org/abs/1706.03762")
+    report = live.ArmReport(status="complete", dollars=0.0, seconds=1.0)
+    assert live.grade("fastbrowse", task("arxiv-title"), "Attention Is All You Need", outcome, report)[0] is True
+
+
+def test_only_a_browser_transport_timeout_is_classified_as_one() -> None:
+    class _IPCResponseTimeout(TimeoutError):
+        pass
+
+    assert RUNNER["failure_class"](_IPCResponseTimeout("Runtime.evaluate timed out")) == "browser_transport"
+    assert RUNNER["failure_class"](TimeoutError("task budget")) is None
+    assert RUNNER["failure_class"](RuntimeError("anything else")) is None
+
+
+@pytest.mark.parametrize(
+    ("error", "transport"),
+    [
+        ("Runtime.evaluate failed (TimeoutError)", True),
+        ("Page.navigate failed (ConnectionClosedError)", True),
+        ("Runtime.evaluate failed (JavaScriptError)", False),
+        ("task timed out", False),
+    ],
+)
+def test_fastbrowse_transport_errors_are_recognized_by_type_alone(error: str, transport: bool) -> None:
+    assert bool(live.TRANSPORT_ERROR.search(error)) is transport
+
+
+def test_trace_records_stale_choices_and_offered_controls_without_changing_the_run() -> None:
+    class StalePage(ValueError):
+        pass
+
+    page = {"url": "https://arxiv.org/", "actions": [{"id": "a1", "kind": "click", "label": "Search"}]}
+
+    class Agent:
+        def __init__(self) -> None:
+            self.state: dict[str, Any] = {"page": page, "decisions": []}
+
+        def command(self, name: str, body: dict[str, Any] | None = None) -> str:
+            if name == "predict":
+                self.state["decisions"].append({"choice": "a1", "operation": "click", "probabilities": {"a1": 0.9}})
+                return "predicted"
+            raise StalePage("Target is covered")
+
+    agent = Agent()
+    trace = RUNNER["Trace"](agent)
+    assert agent.command("predict") == "predicted"
+    with pytest.raises(StalePage):
+        agent.command("act")
+    assert trace.stale == [{"decision": 1, "phase": "act", "reason": "Target is covered"}]
+    assert trace.last_exception == "StalePage: Target is covered"
+    [decision] = trace.decisions()
+    assert (decision["choice"], decision["probability"], decision["offered"]) == ("a1", 0.9, 1)
+
+
+@pytest.mark.parametrize("arm", ["fastbrowse", "jev-ultrafast"])
+async def test_final_http_outage_preserves_document_evidence_and_retries_either_arm(
+    arm: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def runner(*args: Any, **kwargs: Any) -> tuple[Outcome, live.ArmReport]:
+        return (
+            Outcome(None, None, "https://pypi.org/project/httpx/", evidence=_evidence(503)),
+            live.ArmReport(status="complete" if arm == "fastbrowse" else "done", seconds=1, dollars=0.01),
+        )
+
+    monkeypatch.setitem(live.ARMS, arm, live.ARMS[arm].model_copy(update={"runner": runner}))
+    async with httpx.AsyncClient() as http:
+        row = await live.run_arm(arm, task("pypi-open"), None, http, Path(), bitwarden=False, record=None)
+    assert not row.passed
+    assert row.normalized_status is Ending.UNAVAILABLE
+    assert row.failure_class == "site_http"
+    assert row.final_page is not None and row.final_page.status == 503
+    assert row.model_dump()["final_page"]["status"] == 503
+
+
+async def test_independent_site_probe_cannot_excuse_an_agent_failure() -> None:
+    row = live._crashed(
+        "jev-ultrafast", task("pypi-open"), "wrong choice", at=0, seconds=1, status="error", record=None
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(503))) as http:
+        checked = await live._site_checked(row, task("pypi-open"), http)
+    assert checked.normalized_status == row.normalized_status
+    assert checked.failure == "wrong choice"
+    assert checked.site_probe is not None

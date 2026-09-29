@@ -405,3 +405,11 @@ def test_live_grading_does_not_change_mock_versions(monkeypatch: pytest.MonkeyPa
     before = [versions.fingerprint(task) for task in MOCK]
     monkeypatch.setattr(live, "grade", lambda *_: (True, None, None))
     assert [versions.fingerprint(task) for task in MOCK] == before
+
+
+@pytest.mark.parametrize("document", [None, {"status": 419, "title": "Error", "text_length": 10}])
+def test_publish_rejects_navigation_pass_without_a_successful_document(results: Path, document: object) -> None:
+    row = _row("pypi-open") | {"category": "navigate", "final_page": document}
+    with pytest.raises(ValueError):
+        _publish(results, [row])
+    assert not (results / "results").exists()

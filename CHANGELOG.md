@@ -11,6 +11,14 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.14] - 2026-09-29
+
+- Navigation evals retain the final document status and content, so an error page at the requested URL cannot
+  pass. Browser transport timeouts are retried for both arms, and separate site probes no longer discard
+  completed runs. Ultrafast stale decisions do not consume its action budget.
+- Opening a page must leave the requested destination showing. HTTP error pages no longer count as
+  successful visits, and action effects report the failed response to completion checks.
+
 - Same-named controls can be distinguished by their own visible descriptions when they share an ancestor,
   instead of falling back to position alone.
 - The Ultrafast eval adapter recognizes the same provider outage statuses as fastbrowse, including Cloudflare

@@ -7,7 +7,19 @@ from cdp_use.client import CDPClient
 from pydantic import BaseModel
 
 from fastbrowse.browser import CdpPage
+from fastbrowse.evals.live_tasks import PageEvidence
 from fastbrowse.page import Observation
+
+# Read-only and run before _UNHIDE, so the evidence is the page as the run left it. responseStatus is the document's own
+# navigation response (0 or absent when the browser withholds it), so an error page served at the right address shows.
+_EVIDENCE = """(() => {
+  const nav = performance.getEntriesByType('navigation')[0];
+  const text = (document.body?.innerText || '').trim();
+  return {
+    status: nav?.responseStatus || null, title: document.title || null,
+    text: text.slice(0, 300), text_length: text.length,
+  };
+})()"""
 
 # A modal hides controls from the agent, but the grader still needs the values behind it.
 _UNHIDE = """(() => {
@@ -25,7 +37,17 @@ _RESTORE = """(() => {
 _SNAPSHOT = (Path(__file__).parents[1] / "browser" / "snapshot.js").read_text(encoding="utf-8") + "('snapshot')"
 
 
+def _evidence(raw: object) -> PageEvidence:
+    try:
+        return PageEvidence.model_validate(raw)
+    except ValueError:
+        return PageEvidence()
+
+
 class GradedPage(CdpPage):
+    async def evidence(self) -> PageEvidence:
+        return _evidence(await self._evaluate(self._session.active_session_id, _EVIDENCE))
+
     async def observe_all(self) -> Observation:
         session_id = self._session.active_session_id
         await self._evaluate(session_id, _UNHIDE)
@@ -37,6 +59,7 @@ class GradedPage(CdpPage):
 
 class FinalPage(BaseModel):
     url: str | None = None
+    evidence: PageEvidence | None = None
     controls: tuple[tuple[str, str | None], ...] | None = None
     error: str | None = None
 
@@ -72,13 +95,19 @@ async def observe_browser(cdp_url: str) -> FinalPage:
         if len(choices) != 1:
             return FinalPage(error=f"expected one final tab, found {len(choices)}")
         session = choices[0]
+        seen = await client.send.Runtime.evaluate(
+            params={"expression": _EVIDENCE, "returnByValue": True}, session_id=session
+        )
+        evidence = _evidence(seen["result"].get("value"))
         await client.send.Runtime.evaluate(params={"expression": _UNHIDE}, session_id=session)
         try:
             result = await client.send.Runtime.evaluate(
                 params={"expression": _SNAPSHOT, "returnByValue": True}, session_id=session
             )
             snapshot = _Snapshot.model_validate(result["result"].get("value"))
-            return FinalPage(url=snapshot.url, controls=tuple((c.label, c.value) for c in snapshot.controls))
+            return FinalPage(
+                url=snapshot.url, controls=tuple((c.label, c.value) for c in snapshot.controls), evidence=evidence
+            )
         finally:
             await client.send.Runtime.evaluate(params={"expression": _RESTORE}, session_id=session)
     except Exception as exc:

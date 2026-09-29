@@ -239,7 +239,8 @@ def all_tasks() -> tuple[dict[str, tuple[Any, ...]], tuple[Any, ...]]:
 _KEPT = ("arm", "task", "repeat", "category", "suite", "suite_version", "task_version", "status",
          "normalized_status", "task_successful", "passed", "correct",
          "seconds", "dollars", "retries", "failure", "model", "text_model", "transient_seconds", "at",
-         "answered", "session_seconds", "replaces_run_id")  # fmt: skip
+         "answered", "session_seconds", "replaces_run_id", "final_url", "final_page", "failure_class", "site_probe",
+         "actions", "decisions", "step_cap", "step_cap_unit", "decision_cap", "provenance")  # fmt: skip
 _RUN_KEPT = ("run_id", "run_started", "fastbrowse_version", "git_sha", "git_dirty", "providers", "max_steps",
              "concurrency", "jev_ultrafast", "arms", "python", "argv")  # fmt: skip
 
@@ -276,12 +277,23 @@ def publish(release: str, source: Path) -> Path:
     target = RESULTS / f"{release}.jsonl"
     if target.exists():
         raise ValueError(f"{target} exists: published results are never rewritten; publish under a new release")
+    from fastbrowse.evals.live_tasks import PageEvidence, page_defect
+
     rows = [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines() if line.strip()]
     lock = load_lock()
     problems = []
     for row in rows:
         run = row.get("run") or {}
         where = f"{row.get('arm')} {row.get('task')}"
+        if row.get("category") == "navigate" and row.get("passed"):
+            try:
+                evidence = PageEvidence.model_validate(row.get("final_page"))
+                defect = page_defect(evidence)
+            except ValidationError:
+                defect = "missing or invalid final-page evidence"
+            if defect:
+                problems.append(f"{where}: {defect}")
+
         try:
             _StatisticsRow.model_validate(row)
         except ValidationError as exc:
@@ -696,7 +708,8 @@ def protocol_docs() -> str:
 
     lines = [
         "Every arm receives `Start at {start}. {task}`. CDP runners also receive the declared start URL.",
-        f"fastbrowse, jev-ultrafast and browser-use OSS use a {MAX_STEPS}-step limit. "
+        f"fastbrowse and browser-use OSS use a {MAX_STEPS}-step limit. Ultrafast permits {MAX_STEPS} executed "
+        f"actions and at most {2 * MAX_STEPS} decisions, so stale choices do not consume its action budget. "
         "The hosted API exposes no step limit.",
         "The existing harness has no common dollar or wall-time cap; "
         "cloud browsers expire after their configured lifetime.",
@@ -725,13 +738,17 @@ def protocol_docs() -> str:
         "completion, as fastbrowse is held to its own. Browser Use's `is_task_successful` is kept in the row "
         "(`task_successful`) but decides nothing: it is Browser Use's later judgement of the session, and it failed "
         "correct answers whose sessions showed no sign of failing or giving up.",
-        "An attempt that fails while the task's site answers its start URL with a 5xx, or not at all, is an outage "
-        "too: a site serving errors fails every arm alike. fastbrowse's first page never loading is an outage only "
-        "when that same check finds the site down; otherwise it is fastbrowse's failure.",
-        "Through a run the harness also fetches each task site's start page every 15 seconds. An attempt of any "
-        "arm during which one of those fetches took over 10 seconds, failed, or got a 5xx is an outage, passed or "
-        "not: one day's the-internet.herokuapp.com held requests 30 seconds at a time, and an attempt it held took "
-        "five times as long as the same task between stalls.",
+        "A final browser document reporting HTTP 408, 419, 429 or 5xx is retried for either arm. A separate "
+        "start-page probe is only diagnostic, except that an initial navigation failure is confirmed as an "
+        "outage when the site also fails that probe. Raw status, grade and document evidence remain recorded.",
+        "Navigation tasks require observed final-document HTTP status and nonempty title or text, as well as "
+        "the requested destination and completion status. A matching URL alone cannot pass an HTTP error page.",
+        "Browser IPC or CDP reply timeouts have a separate browser_transport label and one retry. A transport "
+        "exception is not proof of a transient fault; repeated failures remain visible and exclude the paired "
+        "comparison instead of being attributed to the agent.",
+        "The harness fetches each task site's start page every 15 seconds. Slow or failed probes are retained "
+        "as site_probe evidence; they do not change an agent's grade or prove an outage in its browser. Earlier "
+        "protocols excluded overlapping attempts, including passes, which these new runs no longer do.",
         "Tasks run only on sites that stay up. the-internet.herokuapp.com caused 13 of the 17 site failures in a "
         "day's runs, across all six of its tasks, so since 0.5.8 those tasks run on practice.expandtesting.com's "
         "copies of the same pages; its login task, which `expandtesting-login` already was, was dropped, and "

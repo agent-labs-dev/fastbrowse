@@ -4572,7 +4572,7 @@ async def test_raw_image_navigation_reports_use_observed_state_without_page_quot
         }
     )
     assert not _unread(state.plan, state.notes)
-    state.visited["https://example.test/gallery"] = None
+    state.started_url = "https://example.test/gallery"
     state.history.extend(
         [
             HistoryEntry(
@@ -4651,7 +4651,7 @@ async def test_run_reports_redact_secrets_resolved_after_navigation() -> None:
     state.ready_plan = Plan(
         requirements=(), answer_expected=True, run_reports=(RunReport.NAVIGATION_STEPS, RunReport.FINAL_URL)
     )
-    state.visited["https://example.test/?user=ada"] = None
+    state.started_url = "https://example.test/?user=ada"
     state.history.extend(
         [
             HistoryEntry(
@@ -4722,3 +4722,42 @@ async def test_final_frame_failure_preserves_verified_result() -> None:
 
     assert result.status is Status.COMPLETE
     assert result.final_frame is None
+
+
+async def test_http_error_visit_cannot_evidence_navigation_completion() -> None:
+    state = await run_state()
+    front = observation((_button("Discussion"),))
+    failed = front.model_copy(update={"url": "https://example.test/discussion", "response_status": 419})
+    state.visited[front.url] = None
+    state.visited[failed.url] = None
+    state.history.append(
+        HistoryEntry(operation=Operation.CLICK, target="Discussion", outcome=StepOutcome.EXECUTED, page_changed=True)
+    )
+    state.acted_from = front
+    Agent._note_effect(state, failed)
+    assert failed.url not in state.visited
+    assert "HTTP 419" in (state.history[-1].effect or "")
+    Agent._note_effect(state, failed.model_copy(update={"response_status": 200}))
+    assert failed.url in state.visited
+
+
+async def test_finish_refuses_an_http_error_before_asking_models() -> None:
+    state = await run_state()
+    failed = observation(()).model_copy(update={"response_status": 503})
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=failed)
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    with pytest.raises(_Stop) as stopped:
+        await agent._finish(state, failed, None, None)
+    assert stopped.value.status is Status.UNAVAILABLE
+
+
+async def test_navigation_report_keeps_start_after_error_removes_visited_evidence() -> None:
+    state = await run_state()
+    state.started_url = "https://example.test/start"
+    state.visited["https://example.test/end"] = None
+    state.ready_plan = Plan(requirements=(), answer_expected=True, run_reports=(RunReport.NAVIGATION_STEPS,))
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    report = agent._run_report(state, "https://example.test/end")
+    assert "Started at: https://example.test/start" in report
+    assert "Started at: https://example.test/end" not in report
