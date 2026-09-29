@@ -268,7 +268,9 @@ def test_an_outage_scores_no_arm_and_takes_a_matching_attempt_from_each() -> Non
     assert [(a.passed, a.total, a.excluded) for a in arms.arms.values()] == [(1, 1, 2), (1, 1, 2)]
     assert arms.arms["fastbrowse"].seconds.median == 40.0
     note = versions.headline("1.0.0", rows)
-    assert "so each arm is scored on the same 1: an attempt one arm lost is dropped for every arm" in note
+    assert "Each arm is scored on the same 1: an attempt one arm lost is dropped for every arm" in note
+    assert "Unavailable results:" in note
+    assert "Provider outages" not in note
     assert "`hn-top` is left out, with no fastbrowse attempt measured." in note
 
 
