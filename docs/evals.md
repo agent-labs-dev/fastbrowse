@@ -34,6 +34,8 @@ fastbrowse, jev-ultrafast and browser-use OSS use a 50-step limit. The hosted AP
 The existing harness has no common dollar or wall-time cap; cloud browsers expire after their configured lifetime.
 
 Default arms: `fastbrowse`, `jev-ultrafast`, `browser-use`.
+Browser Use Ultrafast is `jev-ultrafast`, the upstream browser-use/jev-ultrafast package. The `browser-use` arm runs the separate hosted Browser Use agent; its results are not Ultrafast results.
+Ultrafast uses the same selected Jev route as fastbrowse, OpenRouter by default, with its upstream text helper, inception/mercury-2.5, and reasoning disabled. No direct TypeSafe key is needed when using OpenRouter.
 
 | Arm | Pin | Tier |
 |---|---|---|
@@ -66,6 +68,18 @@ Jev is priced at list ($0.042 per million input tokens) whenever the gateway met
 
 Use `--suite`, `--only` and `--category` to select tasks, `--bitwarden` for vault credentials, and
 `--record DIR` for videos. Truth comes from the live site's API or a fixed practice-site value.
+
+To compare fastbrowse with Browser Use Ultrafast on all six shared navigation tasks, three times each:
+
+```sh
+uv run python -m fastbrowse.evals.live --suite core --category navigate \
+  --arms fastbrowse jev-ultrafast --repeat 3 --concurrency 2 \
+  --out artifacts/evals/ultrafast.jsonl
+```
+
+This uses `OPENROUTER_API_KEY` for both agents' models and `BROWSER_USE_API_KEY` for fresh cloud browsers.
+Ultrafast's pin is recorded in each result row. The two agents keep their own helper models and policies;
+this compares their configured agents, not the effect of changing only the browsing loop.
 
 | Category | Task | Graded on |
 |---|---|---|
@@ -282,6 +296,25 @@ Both suites write per-run `would_fire` counts for shadow tripwires. The live sum
 with at least one signal, divided by all passing runs, separately for each tripwire. Repeated signals within
 one run count once in that summary. The local suite stores the counts without printing that rate.
 
+### 0.5.13, 2026-09-29
+
+<!-- evals:results:0.5.13 -->
+`core` `c25c7cb5`: fastbrowse against Browser Use Ultrafast, on the same 6 tasks.
+
+| | passed | correct | median time | mean time | median cost | mean cost | total cost |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| fastbrowse (0.5.13) | 17/18 | 17/18 | 7.6s | 17.9s | $0.0027 | $0.0066 | $0.12 |
+| Browser Use Ultrafast | 12/18 | 12/18 | 11.9s | 27.3s | $0.0014 | $0.0075 | $0.14 |
+
+Each arm made 18 attempts. Runs: `341c19510047` at `755da3a`.
+<!-- /evals:results:0.5.13 -->
+
+These are 18 scored attempts per arm. One fastbrowse `hn-comments` attempt was retried as unavailable;
+the row records `retries: 1`, and the earlier attempt's time and cost are excluded under the protocol above.
+Ultrafast exhausted its step budget on all three `arxiv-open` attempts, ending on the home page, and on all
+three `flights-search` attempts, where it omitted the nonstop filter. Fastbrowse got stuck on one
+`flights-search` attempt. No task or agent was tuned during this run.
+
 ### 0.5.9, 2026-09-28
 
 <!-- evals:results:0.5.9 -->
@@ -380,12 +413,12 @@ Changed since these runs: `stretch-books-sequential-art-one-star` v1 → v2, `st
 Each arm made 42 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
 Changed since these runs: `arxiv-title` v5 → v6, `expandtesting-login` v5 → v6, `github-license` v5 → v6, `google-flights` v5 → v6, `hn-top` v5 → v6, `internet-login` v5 → removed, `practice-login` v5 → v6, `pypi-newer` v5 → v6, `pypi-structured` v5 → v6, `pypi-version` v5 → v6, `saucedemo-cart` v5 → v6, `saucedemo-checkout` v5 → v6, `saucedemo-locked-out` v5 → v6, `wiki-godel` v5 → v6; compare them only against runs of the same version.
 
-`core` `af816f31`: fastbrowse against jev-ultrafast, on the same 6 tasks.
+`core` `af816f31`: fastbrowse against Browser Use Ultrafast, on the same 6 tasks.
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
 | fastbrowse (0.5.7) | 17/18 | 17/18 | 9.6s | 11.9s | $0.0026 | $0.0035 | $0.06 |
-| jev-ultrafast | 12/18 | 12/18 | 11.8s | 30.3s | $0.0014 | $0.0077 | $0.14 |
+| Browser Use Ultrafast | 12/18 | 12/18 | 11.8s | 30.3s | $0.0014 | $0.0077 | $0.14 |
 
 Each arm made 18 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
 Changed since these runs: `arxiv-open` v4 → v5, `flights-search` v4 → v5, `github-open` v4 → v5, `hn-comments` v4 → v5, `pypi-open` v4 → v5, `wiki-open` v4 → v5; compare them only against runs of the same version.
@@ -453,14 +486,14 @@ Changed since these runs: `stretch-bstack-apple-samsung` v6 → v7, `stretch-cal
 Each arm made 42 attempts. Provider outages ended 5 of fastbrowse's, so each arm is scored on the same 37: an attempt one arm lost is dropped for every arm at that task. `wiki-godel` is left out, with no fastbrowse attempt measured. Runs: `993506e34fd9` at `cfefd89`.
 Changed since these runs: `arxiv-title` v3 → v6, `expandtesting-login` v3 → v6, `github-license` v3 → v6, `google-flights` v3 → v6, `hn-top` v3 → v6, `internet-login` v3 → removed, `practice-login` v3 → v6, `pypi-newer` v3 → v6, `pypi-structured` v3 → v6, `pypi-version` v3 → v6, `saucedemo-cart` v3 → v6, `saucedemo-checkout` v3 → v6, `saucedemo-locked-out` v3 → v6, `wiki-godel` v3 → v6; compare them only against runs of the same version.
 
-`core` `9b765b1a`: fastbrowse against jev-ultrafast, on the same 5 tasks.
+`core` `9b765b1a`: fastbrowse against Browser Use Ultrafast, on the same 5 tasks.
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
 | fastbrowse (0.5.6) | 13/13 | 13/13 | 32.7s | 40.9s | $0.0031 | $0.0043 | $0.06 |
-| jev-ultrafast | 9/13 | 9/13 | 13.2s | 34.7s | unknown | unknown | $0.00 (1 unpriced) |
+| Browser Use Ultrafast | 9/13 | 9/13 | 13.2s | 34.7s | unknown | unknown | $0.00 (1 unpriced) |
 
-Each arm made 18 attempts. Provider outages ended 2 of fastbrowse's and 3 of jev-ultrafast's, so each arm is scored on the same 13: an attempt one arm lost is dropped for every arm at that task. `arxiv-open` is left out, with no jev-ultrafast attempt measured. Runs: `993506e34fd9` at `cfefd89`.
+Each arm made 18 attempts. Provider outages ended 2 of fastbrowse's and 3 of Browser Use Ultrafast's, so each arm is scored on the same 13: an attempt one arm lost is dropped for every arm at that task. `arxiv-open` is left out, with no Browser Use Ultrafast attempt measured. Runs: `993506e34fd9` at `cfefd89`.
 Changed since these runs: `arxiv-open` v2 → v5, `flights-search` v2 → v5, `github-open` v2 → v5, `hn-comments` v2 → v5, `pypi-open` v2 → v5, `wiki-open` v2 → v5; compare them only against runs of the same version.
 
 `core` `9b765b1a`: fastbrowse alone, on the 1 task only it ran.

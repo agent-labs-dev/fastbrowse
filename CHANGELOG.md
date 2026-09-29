@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Eval reports name Browser Use Ultrafast (`jev-ultrafast`) separately from the hosted Browser Use agent.
+  The eval guide includes the command for their shared navigation comparison through OpenRouter.
+
 ## [0.5.13] - 2026-09-29
 
 - Embedders that enable step frames receive a safe final page PNG in `RunResult.final_frame`, so their

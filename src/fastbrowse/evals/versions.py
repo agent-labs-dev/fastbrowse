@@ -52,7 +52,11 @@ _ADDRESS = re.compile(r" at 0x[0-9a-f]+")
 _OWN = "fastbrowse.evals"
 _CONSTANT = (str, bytes, int, float, bool, tuple, frozenset, dict, re.Pattern, enum.Enum)
 _SKIP = {tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER}
-ARM_LABELS = {"fastbrowse": "fastbrowse", "browser-use": "Browser Use agent", "jev-ultrafast": "jev-ultrafast"}
+ARM_LABELS = {
+    "fastbrowse": "fastbrowse",
+    "browser-use": "Browser Use agent",
+    "jev-ultrafast": "Browser Use Ultrafast",
+}
 
 
 def _tokens(source: str) -> str:
@@ -688,7 +692,7 @@ def _cell(text: str) -> str:
 
 
 def protocol_docs() -> str:
-    from fastbrowse.evals.live import ARMS, MAX_STEPS
+    from fastbrowse.evals.live import ARMS, MAX_STEPS, ULTRAFAST_TEXT_MODEL
 
     lines = [
         "Every arm receives `Start at {start}. {task}`. CDP runners also receive the declared start URL.",
@@ -697,6 +701,11 @@ def protocol_docs() -> str:
         "The existing harness has no common dollar or wall-time cap; "
         "cloud browsers expire after their configured lifetime.",
         "Default arms: " + ", ".join(f"`{name}`" for name, arm in ARMS.items() if arm.default) + ".",
+        "Browser Use Ultrafast is `jev-ultrafast`, the upstream browser-use/jev-ultrafast package. "
+        "The `browser-use` arm runs the separate hosted Browser Use agent; its results are not Ultrafast results.",
+        "Ultrafast uses the same selected Jev route as fastbrowse, OpenRouter by default, "
+        f"with its upstream text helper, {ULTRAFAST_TEXT_MODEL}, and reasoning disabled. "
+        "No direct TypeSafe key is needed when using OpenRouter.",
         "",
         "| Arm | Pin | Tier |",
         "|---|---|---|",

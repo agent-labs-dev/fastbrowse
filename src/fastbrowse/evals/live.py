@@ -1,4 +1,4 @@
-"""Head-to-head on live sites: fastbrowse, jev-ultrafast and the Browser Use agent, same prompts.
+"""Head-to-head on live sites: fastbrowse, Browser Use Ultrafast (arm jev-ultrafast) and the hosted Browser Use agent.
 
     uv run --extra browser-use python -m fastbrowse.evals.live [--only TASK_ID ...] [--category CATEGORY ...]
         [--arms fastbrowse jev-ultrafast browser-use] [--bitwarden] [--repeat N] [--record DIR]
@@ -7,7 +7,7 @@
 Needs BROWSER_USE_API_KEY (every arm), and OPENROUTER_API_KEY for Jev and the LLM (fastbrowse and
 jev-ultrafast arms). Each run prints a WATCH line with the URL where its browser can be watched live.
 
-The fastbrowse and jev-ultrafast arms each drive a fresh Browser Use Cloud browser;
+The fastbrowse and jev-ultrafast (Browser Use Ultrafast) arms each drive a fresh Browser Use Cloud browser;
 the Browser Use agent brings its own.
 jev-ultrafast runs as its published package in an environment of its own (see scripts/ultrafast_arm.py).
 
@@ -963,7 +963,11 @@ async def main(argv: list[str]) -> int:
     parser.add_argument("--category", nargs="*", default=[], choices=[c.value for c in Category])
     parser.add_argument("--bitwarden", action="store_true", help="login credentials from the vault items")
     parser.add_argument(
-        "--arms", nargs="*", default=[name for name, spec in ARMS.items() if spec.default], choices=list(ARMS)
+        "--arms",
+        nargs="*",
+        default=[name for name, spec in ARMS.items() if spec.default],
+        choices=list(ARMS),
+        help="jev-ultrafast is Browser Use Ultrafast; browser-use is the separate hosted Browser Use agent",
     )
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--record", type=Path, metavar="DIR", help="save each run as DIR/<arm>/<task>-<n>.mp4")

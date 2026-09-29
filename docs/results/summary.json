@@ -2,6 +2,91 @@
   "schema_version": 2,
   "releases": [
     {
+      "fastbrowse_version": "0.5.13",
+      "date": "2026-09-29",
+      "suite": "core",
+      "suite_version": "c25c7cb5",
+      "compared": [
+        "fastbrowse",
+        "jev-ultrafast"
+      ],
+      "tasks": 6,
+      "arms": {
+        "fastbrowse": {
+          "passed": 17,
+          "total": 18,
+          "excluded": 0,
+          "priced": 18,
+          "seconds": {
+            "median": 7.6,
+            "mean": 17.894444444444446
+          },
+          "dollars": {
+            "median": 0.0026550000000000002,
+            "mean": 0.006586666666666667
+          }
+        },
+        "jev-ultrafast": {
+          "passed": 12,
+          "total": 18,
+          "excluded": 0,
+          "priced": 18,
+          "seconds": {
+            "median": 11.95,
+            "mean": 27.305555555555554
+          },
+          "dollars": {
+            "median": 0.0013549999999999999,
+            "mean": 0.007522777777777778
+          }
+        }
+      },
+      "task_versions_changed": [
+        {
+          "task": "arxiv-open",
+          "previous": [],
+          "current": [
+            5
+          ]
+        },
+        {
+          "task": "flights-search",
+          "previous": [],
+          "current": [
+            5
+          ]
+        },
+        {
+          "task": "github-open",
+          "previous": [],
+          "current": [
+            5
+          ]
+        },
+        {
+          "task": "hn-comments",
+          "previous": [],
+          "current": [
+            5
+          ]
+        },
+        {
+          "task": "pypi-open",
+          "previous": [],
+          "current": [
+            5
+          ]
+        },
+        {
+          "task": "wiki-open",
+          "previous": [],
+          "current": [
+            5
+          ]
+        }
+      ]
+    },
+    {
       "fastbrowse_version": "0.5.9",
       "date": "2026-09-28",
       "suite": "mock-completion",
