@@ -2825,7 +2825,13 @@ class Agent:
             for entry in state.history:
                 if entry.outcome is not StepOutcome.EXECUTED or not entry.page_changed:
                     continue
-                if entry.operation not in (None, Operation.CLICK, Operation.BACK, Operation.SWITCH_TAB):
+                if entry.operation not in (
+                    None,
+                    Operation.CLICK,
+                    Operation.ENTER,
+                    Operation.BACK,
+                    Operation.SWITCH_TAB,
+                ):
                     continue
                 if entry.operation is None:
                     if entry.note:

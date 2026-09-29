@@ -4582,6 +4582,9 @@ async def test_raw_image_navigation_reports_use_observed_state_without_page_quot
                 operation=Operation.CLICK, target="No change", outcome=StepOutcome.EXECUTED, page_changed=False
             ),
             HistoryEntry(
+                operation=Operation.ENTER, target="Image search", outcome=StepOutcome.EXECUTED, page_changed=True
+            ),
+            HistoryEntry(
                 operation=Operation.CLICK, target="Screen JPEG", outcome=StepOutcome.EXECUTED, page_changed=True
             ),
         ]
@@ -4600,6 +4603,7 @@ async def test_raw_image_navigation_reports_use_observed_state_without_page_quot
     assert result.answer is not None
     assert "Final URL: https://example.test/photo.jpg" in result.answer
     assert "https://example.test/gallery" in result.answer
+    assert 'enter: "Image search"' in result.answer
     assert "Screen JPEG" in result.answer
     assert "Wrong image" not in result.answer and "No change" not in result.answer
     assert not result.citations and not result.evidence
