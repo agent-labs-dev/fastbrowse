@@ -11,6 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.13] - 2026-09-29
+
+- Live browser views receive an explicit final page frame before teardown, so a completed navigation does not
+  leave the preview showing the page from before the answer.
+
 ## [0.5.12] - 2026-09-29
 
 - Requested final URLs and navigation steps come from the browser record, so a run can finish on an image
@@ -762,7 +767,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.12...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.13...HEAD
+[0.5.13]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.13
 [0.5.12]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.12
 [0.5.11]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.11
 [0.5.10]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.10

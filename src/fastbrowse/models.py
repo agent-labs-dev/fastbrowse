@@ -336,6 +336,8 @@ class StepEvent(Frozen):
     frame: bytes | None = None
     """A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not,
     and also when a resolved secret was showing as page text: pixels cannot be masked the way text is."""
+    terminal: bool = False
+    """Whether this is the final safe page frame emitted after the run's last action settled."""
 
 
 class BrowserEvent(Frozen):
