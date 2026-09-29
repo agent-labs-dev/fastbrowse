@@ -398,7 +398,7 @@ class _Comparison:
 
     arms: tuple[str, ...]
     rows: list[Mapping[str, Any]]
-    """Every attempt made, outages included."""
+    """Selected results, including unavailable outcomes. Earlier retries remain in the attempt ledger."""
     scored: list[Mapping[str, Any]]
     """The attempts every figure is taken from: as many per arm at each task."""
     left_out: list[str]
@@ -414,21 +414,21 @@ class _Comparison:
 
     @property
     def note(self) -> str:
-        """How many attempts each arm made and why fewer are scored, so no gap in the counts is left unexplained."""
+        """Selected results and exclusions; earlier retries are separate, and unavailable does not identify a cause."""
         made = {arm: len(attempts) for arm, attempts in _by_arm(self.rows).items()}
         same = len(set(made.values())) == 1
         note = (
-            f"Each arm made {next(iter(made.values()))} attempts."
+            f"Each arm has {next(iter(made.values()))} selected results, excluding earlier retries."
             if same
-            else "Attempts made: " + ", ".join(f"{_label(arm)} {n}" for arm, n in made.items()) + "."
+            else "Selected results, excluding earlier retries: "
+            + ", ".join(f"{_label(arm)} {n}" for arm, n in made.items())
+            + "."
         )
         outages = {arm: len(a) - len(_measured(a)) for arm, a in _by_arm(self.rows).items()}
         if not any(outages.values()):
             return note
-        named = " and ".join(f"{n} of {_label(arm)}'s" for arm, n in outages.items() if n)
-        note += (
-            f" Provider outages ended {named}, so each arm is scored on the same {len(self.scored) // len(self.arms)}"
-        )
+        named = " and ".join(f"{n} for {_label(arm)}" for arm, n in outages.items() if n)
+        note += f" Unavailable results: {named}. Each arm is scored on the same {len(self.scored) // len(self.arms)}"
         note += ": an attempt one arm lost is dropped for every arm at that task." if len(self.arms) > 1 else "."
         for task in self.left_out:
             missing = [
@@ -529,7 +529,7 @@ def headline(release: str, rows: Sequence[Mapping[str, Any]]) -> str:
     tasks = {r["task"] for r in rows}
     lines = [
         f"Measured on {days[-1]} with the build released as {release}: {len(tasks)} tasks, "
-        f"{len(rows)} attempts across all arms, on cloud browsers.",
+        f"{len(rows)} selected results across all arms, on cloud browsers.",
         "",
     ]
     alone = 0

@@ -1,0 +1,463 @@
+[
+  {
+    "attempt_row": 18,
+    "arm": "jev-ultrafast",
+    "task": "flights-search",
+    "repeat": 0,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Stops dialog omits transparent native radio controls"
+  },
+  {
+    "attempt_row": 19,
+    "arm": "jev-ultrafast",
+    "task": "hn-comments",
+    "repeat": 1,
+    "retry": 0,
+    "selected": false,
+    "diagnosis": "Observed HTTP 419 document; origin unknown, bounded site-outage retry"
+  },
+  {
+    "attempt_row": 20,
+    "arm": "jev-ultrafast",
+    "task": "arxiv-open",
+    "repeat": 0,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Covered Search control chosen repeatedly; native executor rejects it"
+  },
+  {
+    "attempt_row": 21,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 1,
+    "retry": 0,
+    "selected": false,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 27,
+    "arm": "jev-ultrafast",
+    "task": "arxiv-open",
+    "repeat": 1,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Covered Search control chosen repeatedly; native executor rejects it"
+  },
+  {
+    "attempt_row": 31,
+    "arm": "jev-ultrafast",
+    "task": "flights-search",
+    "repeat": 1,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Stops dialog omits transparent native radio controls"
+  },
+  {
+    "attempt_row": 33,
+    "arm": "jev-ultrafast",
+    "task": "hn-comments",
+    "repeat": 2,
+    "retry": 0,
+    "selected": false,
+    "diagnosis": "Observed HTTP 419 document; origin unknown, bounded site-outage retry"
+  },
+  {
+    "attempt_row": 40,
+    "arm": "jev-ultrafast",
+    "task": "arxiv-open",
+    "repeat": 2,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Covered Search control chosen repeatedly; native executor rejects it"
+  },
+  {
+    "attempt_row": 41,
+    "arm": "jev-ultrafast",
+    "task": "flights-search",
+    "repeat": 2,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Stops dialog omits transparent native radio controls"
+  },
+  {
+    "attempt_row": 45,
+    "arm": "jev-ultrafast",
+    "task": "hn-comments",
+    "repeat": 3,
+    "retry": 0,
+    "selected": false,
+    "diagnosis": "Observed HTTP 419 document; origin unknown, bounded site-outage retry"
+  },
+  {
+    "attempt_row": 53,
+    "arm": "jev-ultrafast",
+    "task": "flights-search",
+    "repeat": 3,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Stops dialog omits transparent native radio controls"
+  },
+  {
+    "attempt_row": 55,
+    "arm": "jev-ultrafast",
+    "task": "arxiv-open",
+    "repeat": 3,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Covered Search control chosen repeatedly; native executor rejects it"
+  },
+  {
+    "attempt_row": 56,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 4,
+    "retry": 0,
+    "selected": false,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 57,
+    "arm": "jev-ultrafast",
+    "task": "hn-comments",
+    "repeat": 4,
+    "retry": 0,
+    "selected": false,
+    "diagnosis": "Observed HTTP 419 document; origin unknown, bounded site-outage retry"
+  },
+  {
+    "attempt_row": 66,
+    "arm": "jev-ultrafast",
+    "task": "flights-search",
+    "repeat": 4,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Stops dialog omits transparent native radio controls"
+  },
+  {
+    "attempt_row": 67,
+    "arm": "jev-ultrafast",
+    "task": "arxiv-open",
+    "repeat": 4,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Covered Search control chosen repeatedly; native executor rejects it"
+  },
+  {
+    "attempt_row": 68,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 5,
+    "retry": 0,
+    "selected": false,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 76,
+    "arm": "jev-ultrafast",
+    "task": "arxiv-open",
+    "repeat": 5,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Covered Search control chosen repeatedly; native executor rejects it"
+  },
+  {
+    "attempt_row": 82,
+    "arm": "jev-ultrafast",
+    "task": "flights-search",
+    "repeat": 5,
+    "retry": 0,
+    "selected": false,
+    "diagnosis": "Provider returned retryable 504 error inside HTTP 200; adapter rejected that choice before execution and retained the attempt",
+    "cost_limit": "Failed-request charge unknown. Raw row cost/flags retain the adapter output and do not capture this gap; earlier reported components remain available."
+  },
+  {
+    "attempt_row": 90,
+    "arm": "jev-ultrafast",
+    "task": "arxiv-open",
+    "repeat": 6,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Covered Search control chosen repeatedly; native executor rejects it"
+  },
+  {
+    "attempt_row": 91,
+    "arm": "jev-ultrafast",
+    "task": "flights-search",
+    "repeat": 6,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Stops dialog omits transparent native radio controls"
+  },
+  {
+    "attempt_row": 93,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 7,
+    "retry": 0,
+    "selected": false,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 102,
+    "arm": "jev-ultrafast",
+    "task": "arxiv-open",
+    "repeat": 7,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Covered Search control chosen repeatedly; native executor rejects it"
+  },
+  {
+    "attempt_row": 103,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 8,
+    "retry": 0,
+    "selected": false,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 104,
+    "arm": "jev-ultrafast",
+    "task": "hn-comments",
+    "repeat": 8,
+    "retry": 0,
+    "selected": false,
+    "diagnosis": "Observed HTTP 419 document; origin unknown, bounded site-outage retry"
+  },
+  {
+    "attempt_row": 106,
+    "arm": "jev-ultrafast",
+    "task": "flights-search",
+    "repeat": 7,
+    "retry": 0,
+    "selected": false,
+    "diagnosis": "Provider returned retryable 504 error inside HTTP 200; adapter rejected that choice before execution and retained the attempt",
+    "cost_limit": "Failed-request charge unknown. Raw row cost/flags retain the adapter output and do not capture this gap; earlier reported components remain available."
+  },
+  {
+    "attempt_row": 112,
+    "arm": "jev-ultrafast",
+    "task": "arxiv-open",
+    "repeat": 8,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Covered Search control chosen repeatedly; native executor rejects it"
+  },
+  {
+    "attempt_row": 115,
+    "arm": "jev-ultrafast",
+    "task": "flights-search",
+    "repeat": 8,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Stops dialog omits transparent native radio controls"
+  },
+  {
+    "attempt_row": 116,
+    "arm": "jev-ultrafast",
+    "task": "hn-comments",
+    "repeat": 9,
+    "retry": 0,
+    "selected": false,
+    "diagnosis": "Observed HTTP 419 document; origin unknown, bounded site-outage retry"
+  },
+  {
+    "attempt_row": 117,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 9,
+    "retry": 0,
+    "selected": false,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 119,
+    "arm": "jev-ultrafast",
+    "task": "hn-comments",
+    "repeat": 1,
+    "retry": 1,
+    "selected": false,
+    "diagnosis": "Observed HTTP 419 document; origin unknown, bounded site-outage retry"
+  },
+  {
+    "attempt_row": 122,
+    "arm": "jev-ultrafast",
+    "task": "hn-comments",
+    "repeat": 3,
+    "retry": 1,
+    "selected": false,
+    "diagnosis": "Observed HTTP 419 document; origin unknown, bounded site-outage retry"
+  },
+  {
+    "attempt_row": 123,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 4,
+    "retry": 1,
+    "selected": false,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 125,
+    "arm": "jev-ultrafast",
+    "task": "flights-search",
+    "repeat": 9,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Stops dialog omits transparent native radio controls"
+  },
+  {
+    "attempt_row": 126,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 5,
+    "retry": 1,
+    "selected": false,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 127,
+    "arm": "jev-ultrafast",
+    "task": "arxiv-open",
+    "repeat": 9,
+    "retry": 0,
+    "selected": true,
+    "diagnosis": "Covered Search control chosen repeatedly; native executor rejects it"
+  },
+  {
+    "attempt_row": 128,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 7,
+    "retry": 1,
+    "selected": false,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 129,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 8,
+    "retry": 1,
+    "selected": false,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 132,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 9,
+    "retry": 1,
+    "selected": false,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 133,
+    "arm": "jev-ultrafast",
+    "task": "hn-comments",
+    "repeat": 1,
+    "retry": 2,
+    "selected": false,
+    "diagnosis": "Observed HTTP 419 document; origin unknown, bounded site-outage retry"
+  },
+  {
+    "attempt_row": 134,
+    "arm": "jev-ultrafast",
+    "task": "flights-search",
+    "repeat": 5,
+    "retry": 1,
+    "selected": true,
+    "diagnosis": "Stops dialog omits transparent native radio controls"
+  },
+  {
+    "attempt_row": 135,
+    "arm": "jev-ultrafast",
+    "task": "flights-search",
+    "repeat": 7,
+    "retry": 1,
+    "selected": true,
+    "diagnosis": "Stops dialog omits transparent native radio controls"
+  },
+  {
+    "attempt_row": 140,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 8,
+    "retry": 2,
+    "selected": false,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 141,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 9,
+    "retry": 2,
+    "selected": false,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 142,
+    "arm": "jev-ultrafast",
+    "task": "hn-comments",
+    "repeat": 1,
+    "retry": 3,
+    "selected": false,
+    "diagnosis": "Observed HTTP 419 document; origin unknown, bounded site-outage retry"
+  },
+  {
+    "attempt_row": 143,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 8,
+    "retry": 3,
+    "selected": false,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 144,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 9,
+    "retry": 3,
+    "selected": false,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 146,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 8,
+    "retry": 4,
+    "selected": false,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 147,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 9,
+    "retry": 4,
+    "selected": false,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 148,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 8,
+    "retry": 5,
+    "selected": true,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  },
+  {
+    "attempt_row": 149,
+    "arm": "fastbrowse",
+    "task": "hn-comments",
+    "repeat": 9,
+    "retry": 5,
+    "selected": true,
+    "diagnosis": "Fastbrowse code recorded HTTP 419 at HN comments and ended unavailable; observed status retained, origin unknown"
+  }
+]

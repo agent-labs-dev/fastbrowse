@@ -307,25 +307,22 @@ Both suites write per-run `would_fire` counts for shadow tripwires. The live sum
 with at least one signal, divided by all passing runs, separately for each tripwire. Repeated signals within
 one run count once in that summary. The local suite stores the counts without printing that rate.
 
-### 0.5.13, 2026-09-29
+### 0.5.14, 2026-09-29
 
-<!-- evals:results:0.5.13 -->
-`core` `c25c7cb5`: fastbrowse against Browser Use Ultrafast, on the same 6 tasks.
+Ten repeats on six navigation tasks. The [full audit](validation/2026-09-29-final-comparison.md) retains all 149
+physical attempts and explains the two HN pairs excluded from both arms. Fastbrowse had more HN HTTP 419
+attempts; their cause remains unknown. Ultrafast had the lower median scored-run cost.
+
+<!-- evals:results:0.5.14 -->
+`core` `c0785e8b`: fastbrowse against Browser Use Ultrafast, on the same 6 tasks.
 
 | | passed | correct | median time | mean time | median cost | mean cost | total cost |
 |:--|:--|:--|:--|:--|:--|:--|:--|
-| fastbrowse (0.5.13) | 17/18 | 17/18 | 7.6s | 17.9s | $0.0027 | $0.0066 | $0.12 |
-| Browser Use Ultrafast | 12/18 | 12/18 | 11.9s | 27.3s | $0.0014 | $0.0075 | $0.14 |
+| fastbrowse (0.5.14) | 58/58 | 58/58 | 8.3s | 11.2s | $0.0026 | $0.0031 | $0.18 |
+| Browser Use Ultrafast | 38/58 | 38/58 | 12.9s | 37.7s | $0.0014 | $0.0129 | $0.75 |
 
-Each arm made 18 attempts. Runs: `341c19510047` at `755da3a`.
-Changed since these runs: `arxiv-open` v5 → v6, `flights-search` v5 → v6, `github-open` v5 → v6, `hn-comments` v5 → v6, `pypi-open` v5 → v6, `wiki-open` v5 → v6; compare them only against runs of the same version.
-<!-- /evals:results:0.5.13 -->
-
-These are 18 scored attempts per arm. One fastbrowse `hn-comments` attempt was retried as unavailable;
-the row records `retries: 1`, and the earlier attempt's time and cost are excluded under the protocol above.
-Ultrafast exhausted its step budget on all three `arxiv-open` attempts, ending on the home page, and on all
-three `flights-search` attempts, where it omitted the nonstop filter. Fastbrowse got stuck on one
-`flights-search` attempt. No task or agent was tuned during this run.
+Each arm has 60 selected results, excluding earlier retries. Unavailable results: 2 for fastbrowse. Each arm is scored on the same 58: an attempt one arm lost is dropped for every arm at that task. Runs: `986ae7a36a5b` at `9600e58`.
+<!-- /evals:results:0.5.14 -->
 
 ### 0.5.9, 2026-09-28
 
@@ -337,7 +334,7 @@ three `flights-search` attempts, where it omitted the nonstop filter. Fastbrowse
 | fastbrowse (0.5.9) | 53/54 | 53/54 | 22.8s | 27.4s | $0.0065 | $0.0078 | $0.42 |
 | Browser Use agent | 54/54 | 54/54 | 46.0s | 54.6s | $0.2543 | $0.3383 | $18.27 |
 
-Each arm made 54 attempts. Runs: `ec2bab7412ed` at `4e7143c`.
+Each arm has 54 selected results, excluding earlier retries. Runs: `ec2bab7412ed` at `4e7143c`.
 Changed since these runs: `mock-basket` v4 → v5, `mock-cheapest-product` v3 → v4, `mock-compare-prices` v3 → v4, `mock-iframe-note` v3 → v4, `mock-infinite-scroll` v3 → v4, `mock-order-validation` v3 → v4, `mock-pagination-exhaustion` v3 → v4, `mock-password-change` v4 → v5, `mock-priciest-product` v3 → v4, `mock-report-total` v4 → v5, `mock-shadow-dom` v3 → v4, `mock-sign-in` v3 → v4, `mock-sign-in-code-given` v3 → v4, `mock-sign-in-per-digit` v3 → v4, `mock-sign-in-two-step` v3 → v4, `mock-sign-out` v3 → v4, `mock-stock-count` v3 → v4, `mock-support-portal` v3 → v4; compare them only against runs of the same version.
 
 `mock-safety` `fffe1d53-shared-5fa36bb9`: fastbrowse against Browser Use agent, on the same 2 tasks.
@@ -347,7 +344,7 @@ Changed since these runs: `mock-basket` v4 → v5, `mock-cheapest-product` v3 �
 | fastbrowse (0.5.9) | 6/6 | 6/6 | 30.4s | 32.0s | $0.0103 | $0.0105 | $0.06 |
 | Browser Use agent | 6/6 | 6/6 | 85.7s | 92.5s | $0.5763 | $0.5462 | $3.28 |
 
-Each arm made 6 attempts. Runs: `86450c5651fb` at `f2a9a58`, `ec2bab7412ed` at `4e7143c`.
+Each arm has 6 selected results, excluding earlier retries. Runs: `86450c5651fb` at `f2a9a58`, `ec2bab7412ed` at `4e7143c`.
 Changed since these runs: `mock-order-pause` v4 → v5, `mock-password-pause` v5 → v6; compare them only against runs of the same version.
 <!-- /evals:results:0.5.9 -->
 
@@ -361,7 +358,7 @@ Changed since these runs: `mock-order-pause` v4 → v5, `mock-password-pause` v5
 | fastbrowse (0.5.8) | 39/39 | 39/39 | 13.9s | 16.4s | $0.0053 | $0.0063 | $0.25 |
 | Browser Use agent | 36/39 | 36/39 | 19.2s | 30.1s | $0.3763 | $0.5037 | $19.65 |
 
-Each arm made 39 attempts. Runs: `83841519068a` at `83b6284`.
+Each arm has 39 selected results, excluding earlier retries. Runs: `83841519068a` at `83b6284`.
 Changed since these runs: `arxiv-title` v5 → v7, `expandtesting-login` v5 → v7, `github-license` v5 → v7, `google-flights` v5 → v7, `hn-top` v5 → v7, `practice-login` v5 → v7, `pypi-newer` v5 → v7, `pypi-structured` v5 → v7, `pypi-version` v5 → v7, `saucedemo-cart` v5 → v7, `saucedemo-checkout` v5 → v7, `saucedemo-locked-out` v5 → v7, `wiki-godel` v5 → v7; compare them only against runs of the same version.
 
 `core` `bd7a00ba`: fastbrowse alone, on the 7 tasks only it ran.
@@ -370,7 +367,7 @@ Changed since these runs: `arxiv-title` v5 → v7, `expandtesting-login` v5 → 
 |:--|:--|:--|:--|:--|:--|:--|:--|
 | fastbrowse (0.5.8) | 21/21 | 21/21 | 8.9s | 12.4s | $0.0026 | $0.0035 | $0.07 |
 
-Each arm made 21 attempts. Runs: `83841519068a` at `83b6284`.
+Each arm has 21 selected results, excluding earlier retries. Runs: `83841519068a` at `83b6284`.
 Changed since these runs: `arxiv-open` v4 → v9, `flights-search` v4 → v9, `github-open` v4 → v9, `hn-comments` v4 → v9, `pypi-open` v4 → v9, `saucedemo-pause` v4 → v6, `wiki-open` v4 → v9; compare them only against runs of the same version.
 
 `dev` `6b9d5227`: fastbrowse against Browser Use agent, on the same 13 tasks.
@@ -380,7 +377,7 @@ Changed since these runs: `arxiv-open` v4 → v9, `flights-search` v4 → v9, `g
 | fastbrowse (0.5.8) | 39/39 | 39/39 | 9.9s | 12.0s | $0.0038 | $0.0049 | $0.19 |
 | Browser Use agent | 39/39 | 39/39 | 12.7s | 16.7s | $0.1826 | $0.2473 | $9.64 |
 
-Each arm made 39 attempts. Runs: `83841519068a` at `83b6284`.
+Each arm has 39 selected results, excluding earlier retries. Runs: `83841519068a` at `83b6284`.
 Changed since these runs: `books-travel-priciest` v5 → v7, `countries-mongolia` v5 → v7, `dynamic-loading` v6 → v8, `frame-heading` v2 → v4, `hockey-bruins-1990` v5 → v7, `hover-profile` v6 → v8, `new-window` v6 → v8, `oscars-2012` v5 → v7, `pizza-order` v5 → v7, `quotes-rowling-count` v1 → v3, `quotes-search` v5 → v7, `ruff-release` v5 → v7, `table-largest-due` v6 → v8; compare them only against runs of the same version.
 
 `heldout` `86a31db4`: fastbrowse against Browser Use agent, on the same 9 tasks.
@@ -390,7 +387,7 @@ Changed since these runs: `books-travel-priciest` v5 → v7, `countries-mongolia
 | fastbrowse (0.5.8) | 27/27 | 27/27 | 8.7s | 11.1s | $0.0034 | $0.0074 | $0.20 |
 | Browser Use agent | 27/27 | 27/27 | 12.6s | 17.5s | $0.1970 | $0.2703 | $7.30 |
 
-Each arm made 27 attempts. Runs: `83841519068a` at `83b6284`.
+Each arm has 27 selected results, excluding earlier retries. Runs: `83841519068a` at `83b6284`.
 Changed since these runs: `books-mystery-cheapest` v5 → v7, `countries-namibia-area` v1 → v3, `crates-serde` v5 → v7, `httpx-requires-python` v5 → v7, `new-tab-page` v1 → v3, `quotes-einstein-count` v5 → v7, `quotes-js-page2` v5 → v7, `quotes-search-lewis` v1 → v3, `table-total-due` v1 → v3; compare them only against runs of the same version.
 
 `stretch-dev` `534fb29f`: fastbrowse against Browser Use agent, on the same 9 tasks.
@@ -400,7 +397,7 @@ Changed since these runs: `books-mystery-cheapest` v5 → v7, `countries-namibia
 | fastbrowse (0.5.8) | 27/27 | 27/27 | 20.1s | 24.6s | $0.0146 | $0.0150 | $0.41 |
 | Browser Use agent | 27/27 | 27/27 | 39.8s | 37.9s | $0.3115 | $0.4322 | $11.67 |
 
-Each arm made 27 attempts. Runs: `83841519068a` at `83b6284`.
+Each arm has 27 selected results, excluding earlier retries. Runs: `83841519068a` at `83b6284`.
 Changed since these runs: `stretch-books-nonfiction-five-star` v7 → v9, `stretch-books-young-adult-one-star` v1 → v3, `stretch-bstack-apple-google` v6 → v8, `stretch-calendar-first-friday` v7 → v9, `stretch-date-range-monday` v6 → v8, `stretch-datepicker-last-saturday` v1 → v3, `stretch-quotes-top-authors` v6 → v8, `stretch-wizard-correction` v6 → v8, `stretch-wizard-review` v5 → v7; compare them only against runs of the same version.
 
 `stretch-heldout` `0ab6d8fe`: fastbrowse against Browser Use agent, on the same 3 tasks.
@@ -410,7 +407,7 @@ Changed since these runs: `stretch-books-nonfiction-five-star` v7 → v9, `stret
 | fastbrowse (0.5.8) | 9/9 | 9/9 | 15.1s | 14.8s | $0.0116 | $0.0117 | $0.11 |
 | Browser Use agent | 9/9 | 9/9 | 45.2s | 51.5s | $0.3396 | $0.5467 | $4.92 |
 
-Each arm made 9 attempts. Runs: `83841519068a` at `83b6284`.
+Each arm has 9 selected results, excluding earlier retries. Runs: `83841519068a` at `83b6284`.
 Changed since these runs: `stretch-books-sequential-art-one-star` v1 → v3, `stretch-bstack-apple-samsung` v6 → v8, `stretch-datepicker-last-sunday` v1 → v3; compare them only against runs of the same version.
 <!-- /evals:results:0.5.8 -->
 
@@ -424,7 +421,7 @@ Changed since these runs: `stretch-books-sequential-art-one-star` v1 → v3, `st
 | fastbrowse (0.5.7) | 41/42 | 41/42 | 20.4s | 27.3s | $0.0081 | $0.0124 | $0.52 |
 | Browser Use agent | 39/42 | 39/42 | 18.9s | 31.6s | $0.3624 | $0.5198 | $21.83 |
 
-Each arm made 42 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
+Each arm has 42 selected results, excluding earlier retries. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
 Changed since these runs: `arxiv-title` v5 → v7, `expandtesting-login` v5 → v7, `github-license` v5 → v7, `google-flights` v5 → v7, `hn-top` v5 → v7, `internet-login` v5 → removed, `practice-login` v5 → v7, `pypi-newer` v5 → v7, `pypi-structured` v5 → v7, `pypi-version` v5 → v7, `saucedemo-cart` v5 → v7, `saucedemo-checkout` v5 → v7, `saucedemo-locked-out` v5 → v7, `wiki-godel` v5 → v7; compare them only against runs of the same version.
 
 `core` `af816f31`: fastbrowse against Browser Use Ultrafast, on the same 6 tasks.
@@ -434,7 +431,7 @@ Changed since these runs: `arxiv-title` v5 → v7, `expandtesting-login` v5 → 
 | fastbrowse (0.5.7) | 17/18 | 17/18 | 9.6s | 11.9s | $0.0026 | $0.0035 | $0.06 |
 | Browser Use Ultrafast | 12/18 | 12/18 | 11.8s | 30.3s | $0.0014 | $0.0077 | $0.14 |
 
-Each arm made 18 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
+Each arm has 18 selected results, excluding earlier retries. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
 Changed since these runs: `arxiv-open` v4 → v9, `flights-search` v4 → v9, `github-open` v4 → v9, `hn-comments` v4 → v9, `pypi-open` v4 → v9, `wiki-open` v4 → v9; compare them only against runs of the same version.
 
 `core` `af816f31`: fastbrowse alone, on the 1 task only it ran.
@@ -443,7 +440,7 @@ Changed since these runs: `arxiv-open` v4 → v9, `flights-search` v4 → v9, `g
 |:--|:--|:--|:--|:--|:--|:--|:--|
 | fastbrowse (0.5.7) | 3/3 | 3/3 | 36.6s | 36.6s | $0.0048 | $0.0047 | $0.01 |
 
-Each arm made 3 attempts. Runs: `f08c17d8a0a6` at `1523055`.
+Each arm has 3 selected results, excluding earlier retries. Runs: `f08c17d8a0a6` at `1523055`.
 Changed since these runs: `saucedemo-pause` v4 → v6; compare them only against runs of the same version.
 
 `dev` `f696dab6`: fastbrowse against Browser Use agent, on the same 8 tasks.
@@ -453,7 +450,7 @@ Changed since these runs: `saucedemo-pause` v4 → v6; compare them only against
 | fastbrowse (0.5.7) | 24/24 | 24/24 | 18.9s | 17.7s | $0.0058 | $0.0089 | $0.21 |
 | Browser Use agent | 24/24 | 24/24 | 8.1s | 11.0s | $0.1333 | $0.1879 | $4.51 |
 
-Each arm made 24 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
+Each arm has 24 selected results, excluding earlier retries. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
 Changed since these runs: `books-travel-priciest` v5 → v7, `dynamic-loading` v5 → v8, `hockey-bruins-1990` v5 → v7, `hover-profile` v5 → v8, `nested-frames` v5 → removed, `oscars-2012` v5 → v7, `pizza-order` v5 → v7, `ruff-release` v5 → v7; compare them only against runs of the same version.
 
 `heldout` `90b5446e`: fastbrowse against Browser Use agent, on the same 9 tasks.
@@ -463,7 +460,7 @@ Changed since these runs: `books-travel-priciest` v5 → v7, `dynamic-loading` v
 | fastbrowse (0.5.7) | 27/27 | 27/27 | 17.1s | 27.9s | $0.0078 | $0.0196 | $0.53 |
 | Browser Use agent | 27/27 | 27/27 | 11.4s | 18.0s | $0.2023 | $0.2779 | $7.50 |
 
-Each arm made 27 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
+Each arm has 27 selected results, excluding earlier retries. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
 Changed since these runs: `books-mystery-cheapest` v5 → v7, `countries-mongolia` v5 → v7, `crates-serde` v5 → v7, `httpx-requires-python` v5 → v7, `new-window` v5 → v8, `quotes-einstein-count` v5 → v7, `quotes-js-page2` v5 → v7, `quotes-search` v5 → v7, `table-largest-due` v5 → v8; compare them only against runs of the same version.
 
 `stretch-dev` `c174a854`: fastbrowse against Browser Use agent, on the same 5 tasks.
@@ -473,7 +470,7 @@ Changed since these runs: `books-mystery-cheapest` v5 → v7, `countries-mongoli
 | fastbrowse (0.5.7) | 13/15 | 13/15 | 35.7s | 59.7s | $0.0302 | $0.0513 | $0.77 |
 | Browser Use agent | 15/15 | 15/15 | 44.3s | 42.9s | $0.5711 | $0.5722 | $8.58 |
 
-Each arm made 15 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
+Each arm has 15 selected results, excluding earlier retries. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
 Changed since these runs: `stretch-books-nonfiction-five-star` v7 → v9, `stretch-bstack-apple-google` v6 → v8, `stretch-date-range-monday` v6 → v8, `stretch-wizard-correction` v6 → v8, `stretch-wizard-review` v5 → v7; compare them only against runs of the same version.
 
 `stretch-heldout` `d7d3a074`: fastbrowse against Browser Use agent, on the same 3 tasks.
@@ -483,7 +480,7 @@ Changed since these runs: `stretch-books-nonfiction-five-star` v7 → v9, `stret
 | fastbrowse (0.5.7) | 6/9 | 6/9 | 50.0s | 78.8s | $0.0459 | $0.1098 | $0.99 |
 | Browser Use agent | 9/9 | 9/9 | 26.4s | 37.8s | $0.2227 | $0.3111 | $2.80 |
 
-Each arm made 9 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
+Each arm has 9 selected results, excluding earlier retries. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
 Changed since these runs: `stretch-bstack-apple-samsung` v6 → v8, `stretch-calendar-first-friday` v7 → v9, `stretch-quotes-top-authors` v6 → v8; compare them only against runs of the same version.
 <!-- /evals:results:0.5.7 -->
 
@@ -497,7 +494,7 @@ Changed since these runs: `stretch-bstack-apple-samsung` v6 → v8, `stretch-cal
 | fastbrowse (0.5.6) | 36/37 | 36/37 | 22.7s | 34.9s | $0.0041 | $0.0069 | $0.25 |
 | Browser Use agent | 33/37 | 37/37 | 40.7s | 64.5s | $0.4775 | $0.4973 | $18.40 |
 
-Each arm made 42 attempts. Provider outages ended 5 of fastbrowse's, so each arm is scored on the same 37: an attempt one arm lost is dropped for every arm at that task. `wiki-godel` is left out, with no fastbrowse attempt measured. Runs: `993506e34fd9` at `cfefd89`.
+Each arm has 42 selected results, excluding earlier retries. Unavailable results: 5 for fastbrowse. Each arm is scored on the same 37: an attempt one arm lost is dropped for every arm at that task. `wiki-godel` is left out, with no fastbrowse attempt measured. Runs: `993506e34fd9` at `cfefd89`.
 Changed since these runs: `arxiv-title` v3 → v7, `expandtesting-login` v3 → v7, `github-license` v3 → v7, `google-flights` v3 → v7, `hn-top` v3 → v7, `internet-login` v3 → removed, `practice-login` v3 → v7, `pypi-newer` v3 → v7, `pypi-structured` v3 → v7, `pypi-version` v3 → v7, `saucedemo-cart` v3 → v7, `saucedemo-checkout` v3 → v7, `saucedemo-locked-out` v3 → v7, `wiki-godel` v3 → v7; compare them only against runs of the same version.
 
 `core` `9b765b1a`: fastbrowse against Browser Use Ultrafast, on the same 5 tasks.
@@ -507,7 +504,7 @@ Changed since these runs: `arxiv-title` v3 → v7, `expandtesting-login` v3 → 
 | fastbrowse (0.5.6) | 13/13 | 13/13 | 32.7s | 40.9s | $0.0031 | $0.0043 | $0.06 |
 | Browser Use Ultrafast | 9/13 | 9/13 | 13.2s | 34.7s | unknown | unknown | $0.00 (1 unpriced) |
 
-Each arm made 18 attempts. Provider outages ended 2 of fastbrowse's and 3 of Browser Use Ultrafast's, so each arm is scored on the same 13: an attempt one arm lost is dropped for every arm at that task. `arxiv-open` is left out, with no Browser Use Ultrafast attempt measured. Runs: `993506e34fd9` at `cfefd89`.
+Each arm has 18 selected results, excluding earlier retries. Unavailable results: 2 for fastbrowse and 3 for Browser Use Ultrafast. Each arm is scored on the same 13: an attempt one arm lost is dropped for every arm at that task. `arxiv-open` is left out, with no Browser Use Ultrafast attempt measured. Runs: `993506e34fd9` at `cfefd89`.
 Changed since these runs: `arxiv-open` v2 → v9, `flights-search` v2 → v9, `github-open` v2 → v9, `hn-comments` v2 → v9, `pypi-open` v2 → v9, `wiki-open` v2 → v9; compare them only against runs of the same version.
 
 `core` `9b765b1a`: fastbrowse alone, on the 1 task only it ran.
@@ -516,7 +513,7 @@ Changed since these runs: `arxiv-open` v2 → v9, `flights-search` v2 → v9, `g
 |:--|:--|:--|:--|:--|:--|:--|:--|
 | fastbrowse (0.5.6) | 3/3 | 3/3 | 38.8s | 45.2s | $0.0025 | $0.0062 | $0.02 |
 
-Each arm made 3 attempts. Runs: `993506e34fd9` at `cfefd89`.
+Each arm has 3 selected results, excluding earlier retries. Runs: `993506e34fd9` at `cfefd89`.
 Changed since these runs: `saucedemo-pause` v2 → v6; compare them only against runs of the same version.
 
 `dev` `d562020d`: fastbrowse against Browser Use agent, on the same 7 tasks.
@@ -526,7 +523,7 @@ Changed since these runs: `saucedemo-pause` v2 → v6; compare them only against
 | fastbrowse (0.5.6) | 21/21 | 21/21 | 18.2s | 19.8s | $0.0051 | $0.0068 | $0.14 |
 | Browser Use agent | 19/21 | 21/21 | 12.8s | 12.5s | $0.1308 | $0.1440 | $3.02 |
 
-Each arm made 24 attempts. Provider outages ended 3 of fastbrowse's, so each arm is scored on the same 21: an attempt one arm lost is dropped for every arm at that task. `ruff-release` is left out, with no fastbrowse attempt measured. Runs: `993506e34fd9` at `cfefd89`.
+Each arm has 24 selected results, excluding earlier retries. Unavailable results: 3 for fastbrowse. Each arm is scored on the same 21: an attempt one arm lost is dropped for every arm at that task. `ruff-release` is left out, with no fastbrowse attempt measured. Runs: `993506e34fd9` at `cfefd89`.
 Changed since these runs: `books-travel-priciest` v3 → v7, `dynamic-loading` v3 → v8, `hockey-bruins-1990` v3 → v7, `hover-profile` v3 → v8, `nested-frames` v3 → removed, `oscars-2012` v3 → v7, `pizza-order` v3 → v7, `ruff-release` v3 → v7; compare them only against runs of the same version.
 
 `heldout` `18b64a73`: fastbrowse against Browser Use agent, on the same 9 tasks.
@@ -536,7 +533,7 @@ Changed since these runs: `books-travel-priciest` v3 → v7, `dynamic-loading` v
 | fastbrowse (0.5.6) | 25/25 | 25/25 | 19.5s | 29.8s | $0.0072 | $0.0174 | $0.43 |
 | Browser Use agent | 24/25 | 25/25 | 14.8s | 20.3s | $0.1962 | $0.2256 | $5.64 |
 
-Each arm made 27 attempts. Provider outages ended 2 of fastbrowse's, so each arm is scored on the same 25: an attempt one arm lost is dropped for every arm at that task. Runs: `993506e34fd9` at `cfefd89`.
+Each arm has 27 selected results, excluding earlier retries. Unavailable results: 2 for fastbrowse. Each arm is scored on the same 25: an attempt one arm lost is dropped for every arm at that task. Runs: `993506e34fd9` at `cfefd89`.
 Changed since these runs: `books-mystery-cheapest` v3 → v7, `countries-mongolia` v3 → v7, `crates-serde` v3 → v7, `httpx-requires-python` v3 → v7, `new-window` v3 → v8, `quotes-einstein-count` v3 → v7, `quotes-js-page2` v3 → v7, `quotes-search` v3 → v7, `table-largest-due` v3 → v8; compare them only against runs of the same version.
 
 `stretch-dev` `69abd819`: fastbrowse against Browser Use agent, on the same 5 tasks.
@@ -546,7 +543,7 @@ Changed since these runs: `books-mystery-cheapest` v3 → v7, `countries-mongoli
 | fastbrowse (0.5.6) | 12/15 | 12/15 | 57.0s | 78.8s | $0.0271 | $0.0366 | $0.55 |
 | Browser Use agent | 15/15 | 15/15 | 59.9s | 79.2s | $0.3732 | $0.5790 | $8.69 |
 
-Each arm made 15 attempts. Runs: `98ef8dc21156` at `2304b2c`.
+Each arm has 15 selected results, excluding earlier retries. Runs: `98ef8dc21156` at `2304b2c`.
 Changed since these runs: `stretch-books-nonfiction-five-star` v5 → v9, `stretch-bstack-apple-google` v4 → v8, `stretch-date-range-monday` v4 → v8, `stretch-wizard-correction` v4 → v8, `stretch-wizard-review` v3 → v7; compare them only against runs of the same version.
 
 `stretch-heldout` `f3f5c3f7`: fastbrowse against Browser Use agent, on the same 3 tasks.
@@ -556,7 +553,7 @@ Changed since these runs: `stretch-books-nonfiction-five-star` v5 → v9, `stret
 | fastbrowse (0.5.6) | 6/8 | 6/8 | 101.5s | 94.3s | $0.0283 | $0.0990 | $0.79 |
 | Browser Use agent | 8/8 | 8/8 | 38.4s | 67.0s | $0.2395 | $0.4367 | $3.49 |
 
-Each arm made 9 attempts. Provider outages ended 1 of fastbrowse's, so each arm is scored on the same 8: an attempt one arm lost is dropped for every arm at that task. Runs: `98ef8dc21156` at `2304b2c`.
+Each arm has 9 selected results, excluding earlier retries. Unavailable results: 1 for fastbrowse. Each arm is scored on the same 8: an attempt one arm lost is dropped for every arm at that task. Runs: `98ef8dc21156` at `2304b2c`.
 Changed since these runs: `stretch-bstack-apple-samsung` v4 → v8, `stretch-calendar-first-friday` v5 → v9, `stretch-quotes-top-authors` v4 → v8; compare them only against runs of the same version.
 <!-- /evals:results:0.5.6 -->
 
