@@ -5,9 +5,10 @@
   <img src="assets/wordmark.svg" alt="fastbrowse" width="360">
 </picture>
 
-**A browser agent that picks instead of generating.**
+**Browser automation with results you can verify.**
 
-Jev chooses each action, an LLM plans and reads, and code owns verification, safety and secrets.
+Complete workflows, return cited answers or structured data, and check the result before your application acts on it.
+Jev chooses actions from the page; code controls credentials, authorization and spending.
 
 [![pypi](https://img.shields.io/pypi/v/fastbrowse?style=flat-square&color=6366F1)](https://pypi.org/project/fastbrowse/)
 ![python](https://img.shields.io/badge/python-3.13%20%7C%203.14-475569?style=flat-square)
@@ -27,60 +28,24 @@ something that was never on the page. Every claim in an answer cites a verbatim 
 
 13 steps in 20.9s on local Chrome, shown 1.4x faster with pauses cut.
 
-### Against Browser Use
+### Against Browser Use agents
 
-The published 0.5.8 comparisons excluded slow or retried fastbrowse provider calls that other arms did not expose.
-Those results retain that selection bias; see the [evaluation protocol](docs/evals.md#live-head-to-head) for the corrected grading rule.
+The Ultrafast comparison covers six navigation tasks against Browser Use Ultrafast (`jev-ultrafast`).
+Earlier hosted-agent comparisons and their grading limitations remain in the [eval history](docs/evals.md#results).
+Scored-run medians exclude earlier outage attempts. The [full audit](docs/validation/2026-09-29-final-comparison.md)
+includes every retry, first-attempt outcomes, unknown charges and the two HN pairs excluded from both arms.
 
 <!-- evals:headline -->
-Measured on 2026-09-27 with the build released as 0.5.8: 54 tasks, 303 attempts across all arms, on cloud browsers.
+Measured on 2026-09-29 with the build released as 0.5.14: 6 tasks, 120 selected results across all arms, on cloud browsers.
 
-Suite `core` `bd7a00ba`: fastbrowse against Browser Use agent, on the same 13 tasks.
+Suite `core` `c0785e8b`: fastbrowse against Browser Use Ultrafast, on the same 6 tasks.
 
-| | passed | cost per task | median time |
+| | runs passed | cost per scored run | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 39/39 | $0.0053 (median), $0.0063 mean | 13.9s |
-| Browser Use agent | 36/39 | $0.3763 (median), $0.5037 mean | 19.2s |
+| fastbrowse | 58/58 | $0.0026 (median), $0.0031 mean | 8.3s |
+| Browser Use Ultrafast | 38/58 | $0.0014 (median), $0.0129 mean | 12.9s |
 
-Each arm made 39 attempts.
-
-Suite `dev` `6b9d5227`: fastbrowse against Browser Use agent, on the same 13 tasks.
-
-| | passed | cost per task | median time |
-|:--|:--|:--|:--|
-| fastbrowse | 39/39 | $0.0038 (median), $0.0049 mean | 9.9s |
-| Browser Use agent | 39/39 | $0.1826 (median), $0.2473 mean | 12.7s |
-
-Each arm made 39 attempts.
-
-Suite `heldout` `86a31db4`: fastbrowse against Browser Use agent, on the same 9 tasks.
-
-| | passed | cost per task | median time |
-|:--|:--|:--|:--|
-| fastbrowse | 27/27 | $0.0034 (median), $0.0074 mean | 8.7s |
-| Browser Use agent | 27/27 | $0.1970 (median), $0.2703 mean | 12.6s |
-
-Each arm made 27 attempts.
-
-Suite `stretch-dev` `534fb29f`: fastbrowse against Browser Use agent, on the same 9 tasks.
-
-| | passed | cost per task | median time |
-|:--|:--|:--|:--|
-| fastbrowse | 27/27 | $0.0146 (median), $0.0150 mean | 20.1s |
-| Browser Use agent | 27/27 | $0.3115 (median), $0.4322 mean | 39.8s |
-
-Each arm made 27 attempts.
-
-Suite `stretch-heldout` `0ab6d8fe`: fastbrowse against Browser Use agent, on the same 3 tasks.
-
-| | passed | cost per task | median time |
-|:--|:--|:--|:--|
-| fastbrowse | 9/9 | $0.0116 (median), $0.0117 mean | 15.1s |
-| Browser Use agent | 9/9 | $0.3396 (median), $0.5467 mean | 45.2s |
-
-Each arm made 9 attempts.
-
-7 tasks graded on fastbrowse alone are in [docs/evals.md](docs/evals.md#results).
+Each arm has 60 selected results, excluding earlier retries. Unavailable results: 2 for fastbrowse. Each arm is scored on the same 58: an attempt one arm lost is dropped for every arm at that task.
 
 ### Controlled mock-site comparison
 
@@ -102,10 +67,12 @@ Compare rows only at matching task versions. See [eval results and workflow](doc
 
 ### Why fastbrowse, against each kind of agent
 
-- **LLM agents that generate actions** (Browser Use and similar): Jev picks each action from the controls
+- **LLM agents that generate actions** (the hosted Browser Use agent and similar): Jev picks each action from the controls
   that are on the page, so there is no invented selector to retry. Every claim in the answer links to the page text it came from.
-- **Choice-model navigators** ([jev-ultrafast](https://github.com/browser-use/jev-ultrafast)): the same
-  core technique, with page reading, cited answers, scoped secrets and an authorization gate. Navigation tasks compare the page each run ended on.
+- **Choice-model navigators** ([Browser Use Ultrafast](https://github.com/browser-use/jev-ultrafast), the
+  `jev-ultrafast` package and eval arm): both choose actions with Jev. fastbrowse adds cited answers, schema-validated
+  data, scoped credentials and an authorization gate. Navigation tasks compare the page each run ended on.
+  This navigation result does not establish a winner for every workflow.
 - **Scripts:** there are no selectors to maintain. The same agent handles a date picker, a checkout and
   a search box it has never seen.
 
@@ -244,17 +211,19 @@ More in [docs/design.md](docs/design.md).
 
 ## How it compares
 
-| | Browser Use agent | [jev-ultrafast](https://github.com/browser-use/jev-ultrafast) | fastbrowse |
+| | Browser Use agent (hosted) | [Browser Use Ultrafast](https://github.com/browser-use/jev-ultrafast) (`jev-ultrafast`) | fastbrowse |
 |:--|:--|:--|:--|
-| Choosing an action | LLM generates from a screenshot | Jev picks from indexed controls | Jev picks from indexed controls |
+| Choosing an action | hosted model and tools | Jev picks from indexed controls | Jev picks from indexed controls |
 | Returns | an answer | `DONE` or `BLOCKED` | an answer with quotes, or why it stopped |
-| Reads pages | yes | no | yes, every claim cited |
+| Cited answers | answer output; not graded for citations here | no cited-answer result API | answers backed by captured quotes |
 | Signing in | yes | password fields excluded | `--secret` or a Bitwarden vault item; models see names only |
-| Irreversible actions | not gated | not gated | stop unless `--authorize` |
-| Browser | cloud | local Chrome, your profile | cloud by default, or local Chrome with `--local` |
+| Irreversible actions | explicit task instructions in our fixture tests | no authorization parameter in Agent | classifier plus a code-enforced authorization gate |
+| Browser | cloud | Chrome through Browser Harness; cloud in these evals | cloud by default, or local Chrome with `--local` |
 
-jev-ultrafast is Browser Use's navigation agent; fastbrowse
-shares its core techniques. Its column describes `main` as of 2026-09-18.
+Browser Use Ultrafast (`jev-ultrafast`) is Browser Use's navigation agent, separate from its hosted
+LLM agent; fastbrowse shares its core techniques. Its column describes
+[commit 1231850a](https://github.com/browser-use/jev-ultrafast/tree/1231850a0bf1a0c0341fe408ef1668dbbfdfac46),
+the version pinned by the eval runner.
 
 ## Embed it
 

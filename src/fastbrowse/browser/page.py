@@ -445,7 +445,8 @@ class CdpPage(Page):
         )
 
     async def _snapshot_all_frames(self) -> tuple[dict[str, _FrameObservation[_Snapshot]], int]:
-        result = await self._read_frames(_SNAPSHOT_JS, _Snapshot)
+        # A results page that hides its controls behind a loading indicator reads as empty until it clears.
+        result = await self._read_frames(_SNAPSHOT_JS, _Snapshot, wait_loaded=True)
         coverage = {frame.session_id: frame.raw.inaccessible_frames for frame in result.values()}
         return result, self._inaccessible_frames(coverage)
 

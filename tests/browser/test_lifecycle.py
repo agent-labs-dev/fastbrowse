@@ -629,6 +629,37 @@ async def test_a_cloud_profile_starts_the_browser_signed_in_as_that_profile() ->
     assert bodies == [{"timeout": 15, "proxyCountryCode": "us", "profileId": "profile-42"}]
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({}, {"timeout": 15, "proxyCountryCode": "us"}),
+        ({"allow_resizing": False}, {"timeout": 15, "proxyCountryCode": "us"}),
+        ({"allow_resizing": True}, {"timeout": 15, "proxyCountryCode": "us", "allowResizing": True}),
+    ],
+)
+async def test_a_cloud_browser_allows_resizing_only_when_asked(
+    kwargs: dict[str, Any], expected: dict[str, Any]
+) -> None:
+    """The cloud ignores CDP viewport changes unless allowResizing is set, so a matched viewport needs it."""
+    bodies: list[object] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"id": "created", "cdpUrl": "https://cdp.test", "webSocketDebuggerUrl": "ws://cdp.test"},
+        )
+
+    cost: list[CostLine] = []
+    async with (
+        httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http,
+        _browser("key", LocalChrome(), http, cost, **kwargs),
+    ):
+        pass
+    assert bodies == [expected]
+
+
 async def test_a_cloud_profile_without_a_cloud_browser_is_refused() -> None:
     """Local Chrome keeps its profile in a directory; a cloud profile id means nothing to it."""
     cost: list[CostLine] = []

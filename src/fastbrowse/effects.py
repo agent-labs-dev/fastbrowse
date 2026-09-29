@@ -133,6 +133,8 @@ def effect(before: Observation, after: Observation, chosen: Control | None = Non
     navigated = before.url != after.url
     if navigated:
         parts.append(f"went to {_short(after.url)}")
+    if after.response_status is not None and after.response_status >= 400:
+        parts.append(f"HTTP {after.response_status}: destination did not load successfully")
     changes: list[str] = []
     setting = False
     # A picker can open as an overlay with its own copy of the field, so the field the choice fills is a

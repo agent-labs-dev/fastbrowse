@@ -11,6 +11,35 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.14] - 2026-09-29
+
+- Navigation comparisons enable cloud resizing to match Ultrafast's viewport and retain the actual
+  dimensions for both arms.
+  Publishing rejects scored runs with missing or different dimensions. Ultrafast final evidence is read
+  before its browser driver disconnects, so cleanup cannot change the page being graded.
+
+- Completion checks read fresh page state after a bounded loading wait, so asynchronous search results cannot
+  be judged from the earlier page before they arrive.
+
+- Navigation evals retain the final document status and content, so an error page at the requested URL cannot
+  pass. Browser transport timeouts are retried for both arms, and separate site probes no longer discard
+  completed runs. Ultrafast stale decisions do not consume its action budget.
+- Opening a page must leave the requested destination showing. HTTP error pages no longer count as
+  successful visits, and action effects report the failed response to completion checks.
+
+- Same-named controls can be distinguished by their own visible descriptions when they share an ancestor,
+  instead of falling back to position alone.
+- The Ultrafast eval adapter recognizes the same provider outage statuses as fastbrowse, including Cloudflare
+  520-524 responses, explicit provider retry markers and proxy transport failures, so outages are retried
+  instead of counted as agent failures.
+- Live evals retain every outage retry in a separate attempt ledger and keep separate retry recordings.
+  Arm launch order rotates between repeats. Slow completed attempts still count with their full time and cost.
+
+- Eval reports name Browser Use Ultrafast (`jev-ultrafast`) separately from the hosted Browser Use agent.
+  The eval guide includes the command for their shared navigation comparison through OpenRouter.
+- The eval summary retains prior task versions across releases that publish only other suites, so returning
+  tasks report their version changes instead of appearing new.
+
 ## [0.5.13] - 2026-09-29
 
 - Embedders that enable step frames receive a safe final page PNG in `RunResult.final_frame`, so their
@@ -767,7 +796,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.13...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.14...HEAD
+[0.5.14]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.14
 [0.5.13]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.13
 [0.5.12]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.12
 [0.5.11]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.11

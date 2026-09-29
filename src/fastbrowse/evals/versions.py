@@ -25,6 +25,7 @@ import hashlib
 import inspect
 import io
 import json
+import math
 import platform
 import re
 import statistics
@@ -52,7 +53,11 @@ _ADDRESS = re.compile(r" at 0x[0-9a-f]+")
 _OWN = "fastbrowse.evals"
 _CONSTANT = (str, bytes, int, float, bool, tuple, frozenset, dict, re.Pattern, enum.Enum)
 _SKIP = {tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER}
-ARM_LABELS = {"fastbrowse": "fastbrowse", "browser-use": "Browser Use agent", "jev-ultrafast": "jev-ultrafast"}
+ARM_LABELS = {
+    "fastbrowse": "fastbrowse",
+    "browser-use": "Browser Use agent",
+    "jev-ultrafast": "Browser Use Ultrafast",
+}
 
 
 def _tokens(source: str) -> str:
@@ -235,7 +240,8 @@ def all_tasks() -> tuple[dict[str, tuple[Any, ...]], tuple[Any, ...]]:
 _KEPT = ("arm", "task", "repeat", "category", "suite", "suite_version", "task_version", "status",
          "normalized_status", "task_successful", "passed", "correct",
          "seconds", "dollars", "retries", "failure", "model", "text_model", "transient_seconds", "at",
-         "answered", "session_seconds", "replaces_run_id")  # fmt: skip
+         "answered", "session_seconds", "replaces_run_id", "final_url", "final_page", "failure_class", "site_probe",
+         "actions", "decisions", "step_cap", "step_cap_unit", "decision_cap", "provenance")  # fmt: skip
 _RUN_KEPT = ("run_id", "run_started", "fastbrowse_version", "git_sha", "git_dirty", "providers", "max_steps",
              "concurrency", "jev_ultrafast", "arms", "python", "argv")  # fmt: skip
 
@@ -272,12 +278,39 @@ def publish(release: str, source: Path) -> Path:
     target = RESULTS / f"{release}.jsonl"
     if target.exists():
         raise ValueError(f"{target} exists: published results are never rewritten; publish under a new release")
+    from fastbrowse.evals.live_tasks import PageEvidence, page_defect
+    from fastbrowse.evals.observe import VIEWPORT
+
     rows = [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines() if line.strip()]
     lock = load_lock()
     problems = []
     for row in rows:
         run = row.get("run") or {}
         where = f"{row.get('arm')} {row.get('task')}"
+        if row.get("category") == "navigate" and row.get("passed"):
+            try:
+                evidence = PageEvidence.model_validate(row.get("final_page"))
+                defect = page_defect(evidence)
+            except ValidationError:
+                defect = "missing or invalid final-page evidence"
+            if defect:
+                problems.append(f"{where}: {defect}")
+
+        if (
+            row.get("category") == "navigate"
+            and row.get("arm") in {"fastbrowse", "jev-ultrafast"}
+            and row.get("normalized_status") != "unavailable"
+        ):
+            try:
+                page = PageEvidence.model_validate(row.get("final_page"))
+                dimensions = (page.inner_width, page.inner_height, page.device_pixel_ratio)
+            except ValidationError:
+                dimensions = (None, None, None)
+            if dimensions[:2] != (VIEWPORT["width"], VIEWPORT["height"]) or not math.isclose(
+                dimensions[2] or 0, VIEWPORT["deviceScaleFactor"], rel_tol=1e-6
+            ):
+                problems.append(f"{where}: navigation viewport is missing or differs from the comparison setup")
+
         try:
             _StatisticsRow.model_validate(row)
         except ValidationError as exc:
@@ -365,7 +398,7 @@ class _Comparison:
 
     arms: tuple[str, ...]
     rows: list[Mapping[str, Any]]
-    """Every attempt made, outages included."""
+    """Selected results, including unavailable outcomes. Earlier retries remain in the attempt ledger."""
     scored: list[Mapping[str, Any]]
     """The attempts every figure is taken from: as many per arm at each task."""
     left_out: list[str]
@@ -381,21 +414,21 @@ class _Comparison:
 
     @property
     def note(self) -> str:
-        """How many attempts each arm made and why fewer are scored, so no gap in the counts is left unexplained."""
+        """Selected results and exclusions; earlier retries are separate, and unavailable does not identify a cause."""
         made = {arm: len(attempts) for arm, attempts in _by_arm(self.rows).items()}
         same = len(set(made.values())) == 1
         note = (
-            f"Each arm made {next(iter(made.values()))} attempts."
+            f"Each arm has {next(iter(made.values()))} selected results, excluding earlier retries."
             if same
-            else "Attempts made: " + ", ".join(f"{_label(arm)} {n}" for arm, n in made.items()) + "."
+            else "Selected results, excluding earlier retries: "
+            + ", ".join(f"{_label(arm)} {n}" for arm, n in made.items())
+            + "."
         )
         outages = {arm: len(a) - len(_measured(a)) for arm, a in _by_arm(self.rows).items()}
         if not any(outages.values()):
             return note
-        named = " and ".join(f"{n} of {_label(arm)}'s" for arm, n in outages.items() if n)
-        note += (
-            f" Provider outages ended {named}, so each arm is scored on the same {len(self.scored) // len(self.arms)}"
-        )
+        named = " and ".join(f"{n} for {_label(arm)}" for arm, n in outages.items() if n)
+        note += f" Unavailable results: {named}. Each arm is scored on the same {len(self.scored) // len(self.arms)}"
         note += ": an attempt one arm lost is dropped for every arm at that task." if len(self.arms) > 1 else "."
         for task in self.left_out:
             missing = [
@@ -496,7 +529,7 @@ def headline(release: str, rows: Sequence[Mapping[str, Any]]) -> str:
     tasks = {r["task"] for r in rows}
     lines = [
         f"Measured on {days[-1]} with the build released as {release}: {len(tasks)} tasks, "
-        f"{len(rows)} attempts across all arms, on cloud browsers.",
+        f"{len(rows)} selected results across all arms, on cloud browsers.",
         "",
     ]
     alone = 0
@@ -506,7 +539,7 @@ def headline(release: str, rows: Sequence[Mapping[str, Any]]) -> str:
                 alone += len({r["task"] for r in comparison.rows})
                 continue
             lines += [f"Suite `{suite}` `{revision}`: {comparison.title}.", "",
-                      "| | passed | cost per task | median time |", "|:--|:--|:--|:--|"]  # fmt: skip
+                      "| | runs passed | cost per scored run | median time |", "|:--|:--|:--|:--|"]  # fmt: skip
             scored = _by_arm(comparison.scored)
             for arm in comparison.arms:
                 s = _arm_stats(scored.get(arm, []))
@@ -669,7 +702,7 @@ def summary(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) 
                     task_versions_changed=changes,
                 )
             )
-        previous = versions
+        previous.update(versions)
     # Newest release first, and within it the suites in their defined order, core first: a reader of the feed that
     # takes its first entry gets the head-to-head, not whichever suite sorts last by name.
     order = list(all_tasks()[0])
@@ -688,15 +721,27 @@ def _cell(text: str) -> str:
 
 
 def protocol_docs() -> str:
-    from fastbrowse.evals.live import ARMS, MAX_STEPS
+    from fastbrowse.evals.live import ARMS, MAX_STEPS, ULTRAFAST_TEXT_MODEL
 
     lines = [
         "Every arm receives `Start at {start}. {task}`. CDP runners also receive the declared start URL.",
-        f"fastbrowse, jev-ultrafast and browser-use OSS use a {MAX_STEPS}-step limit. "
+        "Both navigation arms enable cloud resizing; Fastbrowse matches pinned Ultrafast's 1120 by 780 "
+        "CSS-pixel viewport at device scale 1. Cloud sessions otherwise ignore CDP resizing. "
+        "Final evidence records actual inner width, inner height and device pixel ratio for both arms, "
+        "before their browser driver disconnects. "
+        "Publication rejects scored navigation rows whose viewport is missing or different. Earlier diagnostic "
+        "batches inherited varying cloud dimensions and are not pooled with these runs.",
+        f"fastbrowse and browser-use OSS use a {MAX_STEPS}-step limit. Ultrafast permits {MAX_STEPS} executed "
+        f"actions and at most {2 * MAX_STEPS} decisions, so stale choices do not consume its action budget. "
         "The hosted API exposes no step limit.",
         "The existing harness has no common dollar or wall-time cap; "
         "cloud browsers expire after their configured lifetime.",
         "Default arms: " + ", ".join(f"`{name}`" for name, arm in ARMS.items() if arm.default) + ".",
+        "Browser Use Ultrafast is `jev-ultrafast`, the upstream browser-use/jev-ultrafast package. "
+        "The `browser-use` arm runs the separate hosted Browser Use agent; its results are not Ultrafast results.",
+        "Ultrafast uses the same selected Jev route as fastbrowse, OpenRouter by default, "
+        f"with its upstream text helper, {ULTRAFAST_TEXT_MODEL}, and reasoning disabled. "
+        "No direct TypeSafe key is needed when using OpenRouter.",
         "",
         "| Arm | Pin | Tier |",
         "|---|---|---|",
@@ -716,13 +761,17 @@ def protocol_docs() -> str:
         "completion, as fastbrowse is held to its own. Browser Use's `is_task_successful` is kept in the row "
         "(`task_successful`) but decides nothing: it is Browser Use's later judgement of the session, and it failed "
         "correct answers whose sessions showed no sign of failing or giving up.",
-        "An attempt that fails while the task's site answers its start URL with a 5xx, or not at all, is an outage "
-        "too: a site serving errors fails every arm alike. fastbrowse's first page never loading is an outage only "
-        "when that same check finds the site down; otherwise it is fastbrowse's failure.",
-        "Through a run the harness also fetches each task site's start page every 15 seconds. An attempt of any "
-        "arm during which one of those fetches took over 10 seconds, failed, or got a 5xx is an outage, passed or "
-        "not: one day's the-internet.herokuapp.com held requests 30 seconds at a time, and an attempt it held took "
-        "five times as long as the same task between stalls.",
+        "A final browser document reporting HTTP 408, 419, 429 or 5xx is retried for either arm. A separate "
+        "start-page probe is only diagnostic, except that an initial navigation failure is confirmed as an "
+        "outage when the site also fails that probe. Raw status, grade and document evidence remain recorded.",
+        "Navigation tasks require observed final-document HTTP status and nonempty title or text, as well as "
+        "the requested destination and completion status. A matching URL alone cannot pass an HTTP error page.",
+        "Browser IPC or CDP reply timeouts have a separate browser_transport label and one retry. A transport "
+        "exception is not proof of a transient fault; repeated failures remain visible and exclude the paired "
+        "comparison instead of being attributed to the agent.",
+        "The harness fetches each task site's start page every 15 seconds. Slow or failed probes are retained "
+        "as site_probe evidence; they do not change an agent's grade or prove an outage in its browser. Earlier "
+        "protocols excluded overlapping attempts, including passes, which these new runs no longer do.",
         "Tasks run only on sites that stay up. the-internet.herokuapp.com caused 13 of the 17 site failures in a "
         "day's runs, across all six of its tasks, so since 0.5.8 those tasks run on practice.expandtesting.com's "
         "copies of the same pages; its login task, which `expandtesting-login` already was, was dropped, and "
@@ -744,7 +793,19 @@ def protocol_docs() -> str:
         "arm could; every published time, those releases' included, is now wall time.",
         "The hosted arm's time ends at its agent's answer, by Browser Use's own clock from the session's creation. "
         "Its API reports the session stopped as much as two minutes later (`session_seconds`), which is not counted.",
-        "Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the row.",
+        "Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated "
+        "into the scored row.",
+        "New runs also write an adjacent `*.attempts.jsonl` ledger, including every outage and selected "
+        "attempt, its trace, "
+        "reported cost, elapsed time, repeat, build and scheduled retry wait. `selected` identifies the "
+        "row retained in the "
+        "main file, including a final unavailable attempt after retries are exhausted. Unknown cost stays unknown.",
+        "Recordings get a fresh filename for every retry. Arm launch order rotates between repeats; "
+        "concurrency is shared.",
+        "Keep this ledger with the scored rows: retry time and spend belong in operational totals, not "
+        "hidden in a score.",
+        "A slow call that eventually returns is still scored; provider errors and timeouts use the "
+        "bounded outage retry rule.",
         "Existing timing includes browser setup. These rows do not claim the planned handoff-only timing protocol.",
         "Jev is priced at list ($0.042 per million input tokens) whenever the gateway meters a request at $0, for "
         "fastbrowse and jev-ultrafast alike.",
@@ -776,7 +837,7 @@ def feed_schema_docs() -> str:
         "`seconds` and `dollars` contain numeric median and mean values; dollars are USD. "
         "Seconds leave out measured outage waits.",
         "`priced` counts attempts with known cost. Both dollar statistics are null if any attempt is unpriced.",
-        "`task_versions_changed` compares observed task versions with the previous published release:",
+        "`task_versions_changed` compares each task with the last published release that included it:",
         "`task`, `previous` and `current` version lists. New tasks have an empty previous list;",
         "tasks absent from the current group are not reported as removed. The first release has no changes.",
         "Separate suite versions never share an aggregate. No wall-clock generation timestamp is emitted.",

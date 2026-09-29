@@ -36,12 +36,15 @@ from fastbrowse.retrieval import (
 from fastbrowse.telemetry import Ledger, trace
 
 _DEFAULT_CONFIG = Config()
-# "Start at https://github.com/astral-sh/ruff." became a requirement to navigate there, and a run whose shortcut
-# opened the release page straight from it was sent back to the repository root it had begun on: the action record
-# starts after the first page, so nothing the checks saw said the run had been there.
+# A failed navigation followed by Back was accepted from the visited address alone.
 _REACHED = (
-    "A requirement only to reach, open or start at an address is satisfied once the visited addresses include it, "
-    "the first of which is where the run began."
+    "When the requested outcome is to open or reach a page, that destination must be showing now. "
+    "An earlier visit followed by Back does not satisfy it. An executed click proves only the interaction, "
+    "not that its destination loaded; an HTTP error is not a successful visit. "
+    "For a search or filter, set fields and executed clicks do not prove the resulting content loaded. "
+    "Require current matching results or an explicit empty-result state, not a pending search or loading view. "
+    "A starting address or an intermediate visit in a longer task may be evidenced by the visited addresses, "
+    "the first of which is where the run began; it does not have to remain open."
 )
 
 
@@ -349,7 +352,8 @@ async def llm_verify(
         "\n\n## Verdict\nDecide from the screenshot, set controls, page text and notes whether the task is finished. "
         "Be strict and name every requirement id that is not visibly satisfied. An action requirement (clicking a "
         "link or button, filling a field, submitting a form, navigating) is satisfied when the steps taken show it "
-        "executed on the control the task meant. The task may paraphrase the control's label; the acted-on control "
+        "executed on the control the task meant and produced the requested outcome. The task may paraphrase "
+        "the control's label; the acted-on control "
         "is its equivalent when the page offered no closer match, which is the match the agent made when it acted. "
         "The steps are the run's own record, and a click that navigated is not visible on the page it left. Be "
         "strict about whether the action happened, not about the task's wording of the label. A requirement that "

@@ -76,7 +76,7 @@ from fastbrowse.safety import Redactor, ScopedSecrets
 from fastbrowse.shortcut import Shortcut
 from fastbrowse.telemetry import BudgetExceeded, Ledger
 from fastbrowse.tripwires import Tripwire
-from fastbrowse.verification import LLMVerdict, _grounding
+from fastbrowse.verification import DoneCheck, DoneVerdict, LLMVerdict, _grounding
 from tests.test_memory import evidence
 from tests.test_policy import FREE, ScriptedJev, context, observation
 from tests.test_retrieval import ScriptedLLM, capture
@@ -824,7 +824,7 @@ async def test_an_exhausted_read_recovers_instead_of_repeating_even_when_jev_is_
     async def finish_when_evidenced(*args: object) -> agent_module.RunResult | None:
         if state.notes.evidenced("r1"):
             return agent._result(state, state.ledger, Status.COMPLETE)
-        return await finish(state, obs, None, None)
+        return await finish(state, None, None)
 
     agent._finish = AsyncMock(side_effect=finish_when_evidenced)
     result = await agent._loop(state, None, None)
@@ -881,9 +881,9 @@ async def test_directed_done_still_requires_verification_after_an_exhausted_read
 
 
 @pytest.mark.parametrize(("lookup", "recovered"), [(True, False), (False, False), (True, True)])
-async def test_a_read_that_answers_a_lookup_finishes_on_the_page_it_read(lookup: bool, recovered: bool) -> None:
-    """A read does not change the page, so observing it again and deciding only arrived at DONE. A plan with
-    something left to do on the site, or a read whose tripwire sent the run to recovery, is decided again."""
+async def test_a_read_that_answers_a_lookup_goes_straight_to_completion_checks(lookup: bool, recovered: bool) -> None:
+    """An answered lookup can enter completion checks without another action choice. A plan with something left
+    to do on the site, or a read whose tripwire sent the run to recovery, is decided again."""
     kinds = (RequirementKind.INFORMATION,) if lookup else (RequirementKind.INFORMATION, RequirementKind.ACTION)
     state = await run_state()
     state.ready_plan = Plan(
@@ -914,26 +914,11 @@ async def test_a_read_that_answers_a_lookup_finishes_on_the_page_it_read(lookup:
     if lookup and not recovered:
         await asyncio.wait_for(agent._loop(state, None, None), timeout=1)
         page.observe.assert_awaited_once()
-        assert agent._finish.await_args is not None and agent._finish.await_args.args[1] is agent._observed
+        agent._finish.assert_awaited_once_with(state, None, None)
     else:
         with pytest.raises(BudgetExceeded):
             await asyncio.wait_for(agent._loop(state, None, None), timeout=1)
         agent._finish.assert_not_awaited()
-
-
-async def test_a_finish_judges_the_last_observation_without_observing_again() -> None:
-    """An unchanged document keeps its observation; one superseded by another observation is judged afresh."""
-    state = await run_state()
-    state.notes.add(_fare("https://example.test/flights/results", "results"))
-    agent, on = await _finishing(state, ScriptedLLM([]), noul=0.5)
-    observe = agent._page.observe
-    assert isinstance(observe, AsyncMock)
-    last = await agent._observe()
-    observe.reset_mock()
-    assert await agent._finish(state, last, None, None) is not None
-    observe.assert_not_awaited()
-    assert await agent._finish(state, on, None, None) is not None
-    observe.assert_awaited_once()
 
 
 def _button(label: str) -> Control:
@@ -1240,11 +1225,11 @@ async def test_a_finish_after_an_interaction_reads_what_it_drew() -> None:
 async def test_a_finish_that_owes_no_answer_neither_reads_nor_waits() -> None:
     """A submit then DONE finishes at once: the redraw watch on a settled page runs to its deadline, and waiting
     on it held every such run for two seconds."""
-    agent, page, state, llm = await _filtered_fares(answer_expected=False)
+    agent, _, state, llm = await _filtered_fares(answer_expected=False)
     finish = agent._finish
     await _finished(agent, state)
     llm.responses = [{"missing": [], "complete": True}]
-    result = await asyncio.wait_for(finish(state, await page.observe(), None, None), timeout=1)
+    result = await asyncio.wait_for(finish(state, None, None), timeout=1)
     assert result is not None and result.status is Status.COMPLETE
     assert LLMPurpose.READ not in [purpose for purpose, _ in llm.calls]
 
@@ -1597,7 +1582,7 @@ async def test_finish_checks_draft_claims_during_completion_and_rewrites_only_fa
 
     agent._jev = Jev({})
     async with asyncio.timeout(1):
-        result = await agent._finish(state, on, None, None)
+        result = await agent._finish(state, None, None)
 
     assert result is not None and result.status is Status.COMPLETE
     assert result.answer and ("$320 nonstop" if not supported else "$320") in result.answer
@@ -1632,7 +1617,7 @@ async def test_finish_joins_both_checks_on_failure_or_cancellation(failure: str)
 
     agent._jev = Jev({})
     async with asyncio.timeout(1):
-        task = asyncio.create_task(agent._finish(state, on, None, None))
+        task = asyncio.create_task(agent._finish(state, None, None))
         if failure == "cancel":
             await asyncio.gather(*(event.wait() for event in started.values()))
             task.cancel()
@@ -1650,7 +1635,7 @@ async def test_parallel_finish_checks_keep_the_jev_call_limit() -> None:
     state.notes.add(_fare(on.url, "fare"))
     state.ledger.limits = Limits(max_jev_calls=1)
     with pytest.raises(BudgetExceeded, match="Jev call limit 1 reached"):
-        await agent._finish(state, on, None, None)
+        await agent._finish(state, None, None)
     assert state.ledger.jev_calls == 1 and state.ledger.lines == [FREE]
 
 
@@ -1673,7 +1658,7 @@ async def test_checked_draft_cannot_bypass_an_unmet_action() -> None:
 
     agent._jev = Jev({})
     agent._recover = AsyncMock()
-    assert await agent._finish(state, on, None, None) is None
+    assert await agent._finish(state, None, None) is None
     agent._recover.assert_awaited_once()
     assert [purpose for purpose, _ in llm.calls] == [LLMPurpose.VERIFY]
 
@@ -1693,14 +1678,14 @@ async def test_a_requirement_read_off_a_guessed_address_reopens_until_the_right_
     llm = ScriptedLLM(
         [{"missing": [], "ungrounded": ["r1"], "complete": True}, recovery, {"missing": [], "complete": True}]
     )
-    agent, on = await _finishing(state, llm, noul=0.5)
+    agent, _ = await _finishing(state, llm, noul=0.5)
 
-    assert await agent._finish(state, on, None, None) is None
+    assert await agent._finish(state, None, None) is None
     assert state.notes.unresolved(state.plan) == state.plan.requirements
     assert f"r1: The cheapest nonstop fare (read off {summary}?from=BRS" in (state.history[-1].effect or "")
 
     state.notes.add(_fare("https://example.test/flights/results?from=BRS", "results"))
-    result = await agent._finish(state, on, None, None)
+    result = await agent._finish(state, None, None)
     assert result is not None and result.status is Status.COMPLETE
 
 
@@ -1735,7 +1720,7 @@ async def test_only_a_run_that_has_not_acted_is_held_to_an_action_jev_holds_undo
     llm = ScriptedLLM([{"missing": [], "complete": True}, {"diagnosis": "", "next_subgoal": "", "give_up": False}])
     agent = Agent(page, ScriptedJev({}, noul=0.99), llm)
 
-    result = await agent._finish(state, on, None, None)
+    result = await agent._finish(state, None, None)
 
     assert (result is not None and result.status is Status.COMPLETE) is complete
     assert llm.calls[0][0] is LLMPurpose.VERIFY
@@ -1776,7 +1761,7 @@ async def test_the_page_a_run_began_on_is_shown_to_the_checks_after_a_shortcut_l
 
     async def finish(state: _RunState, output_schema: object, until: object) -> RunResult:
         state.notes.add(_fare(release, "release").model_copy(update={"requirement_id": "req-2", "text": "0.16.9"}))
-        await agent._finish(state, on, None, None)
+        await agent._finish(state, None, None)
         raise _Stop(Status.STUCK, "checked")
 
     monkeypatch.setattr(agent, "_loop", finish)
@@ -1824,10 +1809,10 @@ async def test_a_confident_finish_resting_on_a_guessed_search_is_still_verified(
     state.invented = {invented} if invented else set()
     state.notes.add(_fare(invented or "https://example.test/flights/summary", "summary"))
     llm = ScriptedLLM([{"missing": [], "complete": True}])
-    agent, on = await _finishing(state, llm, noul=0.99)
+    agent, _ = await _finishing(state, llm, noul=0.99)
     agent._jev = _ConfirmingJev({})
 
-    result = await agent._finish(state, on, None, None)
+    result = await agent._finish(state, None, None)
 
     assert result is not None and result.status is Status.COMPLETE
     assert [purpose for purpose, _ in llm.calls] == ([LLMPurpose.VERIFY] if verified else [])
@@ -3276,9 +3261,9 @@ async def test_a_doubted_lookup_with_every_requirement_cited_finishes_without_th
     state.invented = {url} if guessed else set()
     state.notes.add(_fare(url, "results"))
     llm = ScriptedLLM([{"missing": [], "complete": True}] if guessed else [])
-    agent, on = await _finishing(state, llm, noul=0.5)
+    agent, _ = await _finishing(state, llm, noul=0.5)
 
-    result = await agent._finish(state, on, None, None)
+    result = await agent._finish(state, None, None)
 
     assert result is not None and result.status is Status.COMPLETE
     assert (LLMPurpose.VERIFY in [purpose for purpose, _ in llm.calls]) is guessed
@@ -3296,7 +3281,7 @@ async def test_a_lookup_with_an_explicitly_unmet_requirement_calls_the_verifier(
     )
     assert checked.verdict is agent_module.DoneVerdict.VERIFY and checked.unmet == ("r1",)
 
-    result = await agent._finish(state, on, None, None)
+    result = await agent._finish(state, None, None)
 
     assert [purpose for purpose, _ in llm.calls] == [LLMPurpose.VERIFY]
     assert (result is not None and result.status is Status.COMPLETE) is accepted
@@ -3334,14 +3319,14 @@ async def test_completion_observes_a_redirect_during_verification_or_composition
         return await generate(*args, **kwargs)
 
     monkeypatch.setattr(llm, "generate", redirect)
-    observed = await agent._observe()
+    await agent._observe()
     until = AsyncMock(return_value=accepted)
     agent._recover = AsyncMock()
 
-    result = await agent._finish(state, observed, None, until)
+    result = await agent._finish(state, None, until)
 
     assert [purpose for purpose, _ in llm.calls] == [phase]
-    assert observe.await_count == 2
+    assert observe.await_count == 3
     until.assert_awaited_once_with(changed.url)
     if accepted:
         assert result is not None and result.status is Status.COMPLETE and result.final_url == changed.url
@@ -3398,7 +3383,7 @@ async def test_completion_observes_a_document_that_changed_during_the_read(
     assert current is changed and llm.calls[0][0] is LLMPurpose.READ
     until = AsyncMock(return_value=True)
 
-    result = await agent._finish(state, observed, None, until)
+    result = await agent._finish(state, None, until)
 
     assert observe.await_count == 2
     assert agent._raw_observation == changed
@@ -4572,7 +4557,7 @@ async def test_raw_image_navigation_reports_use_observed_state_without_page_quot
         }
     )
     assert not _unread(state.plan, state.notes)
-    state.visited["https://example.test/gallery"] = None
+    state.started_url = "https://example.test/gallery"
     state.history.extend(
         [
             HistoryEntry(
@@ -4597,7 +4582,7 @@ async def test_raw_image_navigation_reports_use_observed_state_without_page_quot
     llm = ScriptedLLM([])
     agent = Agent(page, _ConfirmingJev({}), llm)
 
-    result = await agent._finish(state, on, None, None)
+    result = await agent._finish(state, None, None)
 
     assert result is not None and result.status is Status.COMPLETE
     assert result.answer is not None
@@ -4632,7 +4617,7 @@ async def test_run_reports_do_not_replace_page_fact_evidence(has_fact: bool) -> 
 
     agent._jev = Jev({})
     agent._recover = AsyncMock()
-    result = await agent._finish(state, on, None, None)
+    result = await agent._finish(state, None, None)
 
     if has_fact:
         assert result is not None and result.status is Status.COMPLETE
@@ -4651,7 +4636,7 @@ async def test_run_reports_redact_secrets_resolved_after_navigation() -> None:
     state.ready_plan = Plan(
         requirements=(), answer_expected=True, run_reports=(RunReport.NAVIGATION_STEPS, RunReport.FINAL_URL)
     )
-    state.visited["https://example.test/?user=ada"] = None
+    state.started_url = "https://example.test/?user=ada"
     state.history.extend(
         [
             HistoryEntry(
@@ -4722,3 +4707,62 @@ async def test_final_frame_failure_preserves_verified_result() -> None:
 
     assert result.status is Status.COMPLETE
     assert result.final_frame is None
+
+
+async def test_http_error_visit_cannot_evidence_navigation_completion() -> None:
+    state = await run_state()
+    front = observation((_button("Discussion"),))
+    failed = front.model_copy(update={"url": "https://example.test/discussion", "response_status": 419})
+    state.visited[front.url] = None
+    state.visited[failed.url] = None
+    state.history.append(
+        HistoryEntry(operation=Operation.CLICK, target="Discussion", outcome=StepOutcome.EXECUTED, page_changed=True)
+    )
+    state.acted_from = front
+    Agent._note_effect(state, failed)
+    assert failed.url not in state.visited
+    assert "HTTP 419" in (state.history[-1].effect or "")
+    Agent._note_effect(state, failed.model_copy(update={"response_status": 200}))
+    assert failed.url in state.visited
+
+
+async def test_finish_refuses_an_http_error_before_asking_models() -> None:
+    state = await run_state()
+    failed = observation(()).model_copy(update={"response_status": 503})
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=failed)
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    with pytest.raises(_Stop) as stopped:
+        await agent._finish(state, None, None)
+    assert stopped.value.status is Status.UNAVAILABLE
+
+
+async def test_finish_checks_current_results_when_the_document_did_not_navigate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = await run_state()
+    earlier = observation(()).model_copy(update={"viewport_text": "Searching for trains"})
+    current = earlier.model_copy(update={"viewport_text": "No trains found"})
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=current)
+    page.document_changed = AsyncMock(return_value=False)
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    agent._observed = agent._raw_observation = earlier
+    checked = AsyncMock(
+        return_value=DoneCheck(verdict=DoneVerdict.REJECT, complete=0, unmet=(), doubted=(), answer=None, cost=FREE)
+    )
+    monkeypatch.setattr(agent_module, "check_done", checked)
+    agent._recover = AsyncMock()
+    assert await agent._finish(state, None, None) is None
+    assert checked.call_args.args[3].viewport_text == "No trains found"
+
+
+async def test_navigation_report_keeps_start_after_error_removes_visited_evidence() -> None:
+    state = await run_state()
+    state.started_url = "https://example.test/start"
+    state.visited["https://example.test/end"] = None
+    state.ready_plan = Plan(requirements=(), answer_expected=True, run_reports=(RunReport.NAVIGATION_STEPS,))
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    report = agent._run_report(state, "https://example.test/end")
+    assert "Started at: https://example.test/start" in report
+    assert "Started at: https://example.test/end" not in report

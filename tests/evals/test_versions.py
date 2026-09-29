@@ -268,7 +268,9 @@ def test_an_outage_scores_no_arm_and_takes_a_matching_attempt_from_each() -> Non
     assert [(a.passed, a.total, a.excluded) for a in arms.arms.values()] == [(1, 1, 2), (1, 1, 2)]
     assert arms.arms["fastbrowse"].seconds.median == 40.0
     note = versions.headline("1.0.0", rows)
-    assert "so each arm is scored on the same 1: an attempt one arm lost is dropped for every arm" in note
+    assert "Each arm is scored on the same 1: an attempt one arm lost is dropped for every arm" in note
+    assert "Unavailable results:" in note
+    assert "Provider outages" not in note
     assert "`hn-top` is left out, with no fastbrowse attempt measured." in note
 
 
@@ -358,6 +360,16 @@ def test_committed_summary_is_generated_from_published_rows() -> None:
     assert (versions.RESULTS / "summary.json").read_text() == versions.render_summary()
 
 
+@pytest.mark.parametrize("current", [1, 2])
+def test_summary_remembers_live_versions_across_mock_only_releases(current: int) -> None:
+    live_row = _row("pypi-version", fastbrowse_version="1.0.0") | {"task_version": 1}
+    mock_row = _row("mock-stock-count", fastbrowse_version="1.0.1") | {"suite": "mock-completion"}
+    latest = live_row | {"task_version": current}
+    report = versions.summary([("1.0.0", [live_row]), ("1.0.1", [mock_row]), ("1.0.2", [latest])])
+    expected = [] if current == 1 else [versions.TaskChange(task="pypi-version", previous=[1], current=[2])]
+    assert report.releases[0].task_versions_changed == expected
+
+
 def test_publish_auto_uses_recorded_release(results: Path) -> None:
     source = results / "rows.jsonl"
     source.write_text(json.dumps(_row("pypi-version")) + "\n")
@@ -395,3 +407,52 @@ def test_live_grading_does_not_change_mock_versions(monkeypatch: pytest.MonkeyPa
     before = [versions.fingerprint(task) for task in MOCK]
     monkeypatch.setattr(live, "grade", lambda *_: (True, None, None))
     assert [versions.fingerprint(task) for task in MOCK] == before
+
+
+@pytest.mark.parametrize("document", [None, {"status": 419, "title": "Error", "text_length": 10}])
+def test_publish_rejects_navigation_pass_without_a_successful_document(results: Path, document: object) -> None:
+    row = _row("pypi-open") | {"category": "navigate", "final_page": document}
+    with pytest.raises(ValueError):
+        _publish(results, [row])
+    assert not (results / "results").exists()
+
+
+@pytest.mark.parametrize("passed", [True, False])
+@pytest.mark.parametrize("width", [None, 1520])
+def test_publish_rejects_navigation_with_missing_or_mismatched_viewport(
+    results: Path, passed: bool, width: int | None
+) -> None:
+    row = _row("pypi-open", passed=passed) | {
+        "category": "navigate",
+        "final_page": {
+            "status": 200,
+            "title": "httpx",
+            "text_length": 40,
+            "inner_width": width,
+            "inner_height": 780,
+            "device_pixel_ratio": 1,
+        },
+    }
+    with pytest.raises(ValueError, match="navigation viewport"):
+        _publish(results, [row])
+    assert not (results / "results").exists()
+
+
+@pytest.mark.parametrize("scale", [1.0000000149011612, 2.0])
+def test_navigation_publication_tolerates_only_viewport_scale_rounding(results: Path, scale: float) -> None:
+    row = _row("pypi-open") | {
+        "category": "navigate",
+        "final_page": {
+            "status": 200,
+            "title": "httpx",
+            "text_length": 40,
+            "inner_width": 1120,
+            "inner_height": 780,
+            "device_pixel_ratio": scale,
+        },
+    }
+    if scale < 1.000001:
+        assert _publish(results, [row]).exists()
+    else:
+        with pytest.raises(ValueError, match="navigation viewport"):
+            _publish(results, [row])
