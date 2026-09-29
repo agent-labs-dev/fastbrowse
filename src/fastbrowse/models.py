@@ -255,6 +255,8 @@ class RunResult(Frozen):
     error: str | None = None
     final_url: str | None = None
     """Where the browser was last observed; what a caller checks when the task was to arrive somewhere."""
+    final_frame: bytes | None = Field(default=None, exclude=True, repr=False)
+    """A safe final PNG when step frames are enabled; kept out of text results."""
     would_fire: tuple[Tripwire, ...] = ()
     """Shadow tripwires retain each occurrence so eval counts do not depend on logging configuration."""
     recordings: tuple[Path, ...] = ()

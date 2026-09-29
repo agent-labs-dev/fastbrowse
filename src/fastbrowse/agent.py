@@ -2811,6 +2811,13 @@ class Agent:
         report = self._run_report(state, result.final_url)
         if report:
             result = result.model_copy(update={"answer": "\n\n".join(part for part in (answer, report) if part)})
+        if self._config.step_frames:
+            # Step frames show the page before an action; an ending navigation needs its own image.
+            try:
+                async with asyncio.timeout(2):
+                    result = result.model_copy(update={"final_frame": await self._frame()})
+            except (BrowserError, TimeoutError):
+                logger.debug("final page frame unavailable")
         return result
 
     def _run_report(self, state: _RunState, final_url: str | None) -> str:
