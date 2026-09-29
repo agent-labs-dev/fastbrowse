@@ -25,6 +25,7 @@ import hashlib
 import inspect
 import io
 import json
+import math
 import platform
 import re
 import statistics
@@ -305,7 +306,9 @@ def publish(release: str, source: Path) -> Path:
                 dimensions = (page.inner_width, page.inner_height, page.device_pixel_ratio)
             except ValidationError:
                 dimensions = (None, None, None)
-            if dimensions != (VIEWPORT["width"], VIEWPORT["height"], VIEWPORT["deviceScaleFactor"]):
+            if dimensions[:2] != (VIEWPORT["width"], VIEWPORT["height"]) or not math.isclose(
+                dimensions[2] or 0, VIEWPORT["deviceScaleFactor"], rel_tol=1e-6
+            ):
                 problems.append(f"{where}: navigation viewport is missing or differs from the comparison setup")
 
         try:
@@ -722,10 +725,11 @@ def protocol_docs() -> str:
 
     lines = [
         "Every arm receives `Start at {start}. {task}`. CDP runners also receive the declared start URL.",
-        "Fastbrowse navigation runs match pinned Ultrafast's 1120 by 780 CSS-pixel viewport at device scale 1. "
+        "Both navigation arms enable cloud resizing; Fastbrowse matches pinned Ultrafast's 1120 by 780 "
+        "CSS-pixel viewport at device scale 1. Cloud sessions otherwise ignore CDP resizing. "
         "Final evidence records actual inner width, inner height and device pixel ratio for both arms. "
         "Publication rejects scored navigation rows whose viewport is missing or different. Earlier diagnostic "
-        "batches used Fastbrowse's cloud default and are not pooled with these runs.",
+        "batches inherited varying cloud dimensions and are not pooled with these runs.",
         f"fastbrowse and browser-use OSS use a {MAX_STEPS}-step limit. Ultrafast permits {MAX_STEPS} executed "
         f"actions and at most {2 * MAX_STEPS} decisions, so stale choices do not consume its action budget. "
         "The hosted API exposes no step limit.",

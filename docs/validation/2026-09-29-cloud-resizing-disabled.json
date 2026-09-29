@@ -1,0 +1,188 @@
+[
+  {
+    "stage": "default",
+    "metrics": {
+      "layoutViewport": {
+        "pageX": 0,
+        "pageY": 0,
+        "clientWidth": 1920,
+        "clientHeight": 760
+      },
+      "visualViewport": {
+        "offsetX": 0,
+        "offsetY": 0,
+        "pageX": 0,
+        "pageY": 0,
+        "clientWidth": 1920,
+        "clientHeight": 760,
+        "scale": 1,
+        "zoom": 1
+      },
+      "contentSize": {
+        "x": 0,
+        "y": 0,
+        "width": 1920,
+        "height": 760
+      },
+      "cssLayoutViewport": {
+        "pageX": 0,
+        "pageY": 0,
+        "clientWidth": 1536,
+        "clientHeight": 608
+      },
+      "cssVisualViewport": {
+        "offsetX": 0,
+        "offsetY": 0,
+        "pageX": 0,
+        "pageY": 0,
+        "clientWidth": 1536,
+        "clientHeight": 608,
+        "scale": 1,
+        "zoom": 1
+      },
+      "cssContentSize": {
+        "x": 0,
+        "y": 0,
+        "width": 1536,
+        "height": 608
+      }
+    },
+    "js": {
+      "innerWidth": 1536,
+      "innerHeight": 608,
+      "devicePixelRatio": 1.25,
+      "screenWidth": 1536,
+      "clientWidth": 1536,
+      "clientHeight": 608,
+      "visualWidth": 1536,
+      "visualHeight": 608,
+      "media1120": false,
+      "media780": false,
+      "resolution1": false
+    }
+  },
+  {
+    "stage": "overridden",
+    "metrics": {
+      "layoutViewport": {
+        "pageX": 0,
+        "pageY": 0,
+        "clientWidth": 1920,
+        "clientHeight": 760
+      },
+      "visualViewport": {
+        "offsetX": 0,
+        "offsetY": 0,
+        "pageX": 0,
+        "pageY": 0,
+        "clientWidth": 1920,
+        "clientHeight": 760,
+        "scale": 1,
+        "zoom": 1
+      },
+      "contentSize": {
+        "x": 0,
+        "y": 0,
+        "width": 1920,
+        "height": 760
+      },
+      "cssLayoutViewport": {
+        "pageX": 0,
+        "pageY": 0,
+        "clientWidth": 1536,
+        "clientHeight": 608
+      },
+      "cssVisualViewport": {
+        "offsetX": 0,
+        "offsetY": 0,
+        "pageX": 0,
+        "pageY": 0,
+        "clientWidth": 1536,
+        "clientHeight": 608,
+        "scale": 1,
+        "zoom": 1
+      },
+      "cssContentSize": {
+        "x": 0,
+        "y": 0,
+        "width": 1536,
+        "height": 608
+      }
+    },
+    "js": {
+      "innerWidth": 1536,
+      "innerHeight": 608,
+      "devicePixelRatio": 1.25,
+      "screenWidth": 1536,
+      "clientWidth": 1536,
+      "clientHeight": 608,
+      "visualWidth": 1536,
+      "visualHeight": 608,
+      "media1120": false,
+      "media780": false,
+      "resolution1": false
+    }
+  },
+  {
+    "stage": "pypi",
+    "metrics": {
+      "layoutViewport": {
+        "pageX": 0,
+        "pageY": 0,
+        "clientWidth": 1901,
+        "clientHeight": 760
+      },
+      "visualViewport": {
+        "offsetX": 0,
+        "offsetY": 0,
+        "pageX": 0,
+        "pageY": 0,
+        "clientWidth": 1901,
+        "clientHeight": 760,
+        "scale": 1,
+        "zoom": 1
+      },
+      "contentSize": {
+        "x": 0,
+        "y": 0,
+        "width": 1901,
+        "height": 21128
+      },
+      "cssLayoutViewport": {
+        "pageX": 0,
+        "pageY": 0,
+        "clientWidth": 1520,
+        "clientHeight": 608
+      },
+      "cssVisualViewport": {
+        "offsetX": 0,
+        "offsetY": 0,
+        "pageX": 0,
+        "pageY": 0,
+        "clientWidth": 1520.800048828125,
+        "clientHeight": 608,
+        "scale": 1,
+        "zoom": 1
+      },
+      "cssContentSize": {
+        "x": 0,
+        "y": 0,
+        "width": 1520,
+        "height": 16902
+      }
+    },
+    "js": {
+      "innerWidth": 1536,
+      "innerHeight": 608,
+      "devicePixelRatio": 1.25,
+      "screenWidth": 1536,
+      "clientWidth": 1521,
+      "clientHeight": 608,
+      "visualWidth": 1520.800048828125,
+      "visualHeight": 608,
+      "media1120": false,
+      "media780": false,
+      "resolution1": false
+    }
+  }
+]

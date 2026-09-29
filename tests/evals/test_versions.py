@@ -434,3 +434,23 @@ def test_publish_rejects_navigation_with_missing_or_mismatched_viewport(
     with pytest.raises(ValueError, match="navigation viewport"):
         _publish(results, [row])
     assert not (results / "results").exists()
+
+
+@pytest.mark.parametrize("scale", [1.0000000149011612, 2.0])
+def test_navigation_publication_tolerates_only_viewport_scale_rounding(results: Path, scale: float) -> None:
+    row = _row("pypi-open") | {
+        "category": "navigate",
+        "final_page": {
+            "status": 200,
+            "title": "httpx",
+            "text_length": 40,
+            "inner_width": 1120,
+            "inner_height": 780,
+            "device_pixel_ratio": scale,
+        },
+    }
+    if scale < 1.000001:
+        assert _publish(results, [row]).exists()
+    else:
+        with pytest.raises(ValueError, match="navigation viewport"):
+            _publish(results, [row])

@@ -56,6 +56,7 @@ async def _browser(
     cdp_url: str | None = None,
     proxy_country: str | None = "us",
     viewport: tuple[int, int] | None = None,
+    allow_resizing: bool = False,
 ) -> AsyncGenerator[BrowserConnection]:
     """The browser a run drives: one it is handed, a cloud browser, or local Chrome."""
     if cdp_url is not None:
@@ -73,7 +74,9 @@ async def _browser(
         async with async_local_chrome(chrome) as connection:
             yield connection
         return
-    remote = BrowserUseCloudBrowser(key, http=http, profile=profile, proxy_country=proxy_country, viewport=viewport)
+    remote = BrowserUseCloudBrowser(
+        key, http=http, profile=profile, proxy_country=proxy_country, viewport=viewport, allow_resizing=allow_resizing
+    )
     try:
         async with remote:
             yield remote.connection
@@ -92,6 +95,7 @@ async def run_task(
     cdp_url: str | None = None,
     proxy_country: str | None = "us",
     viewport: tuple[int, int] | None = None,
+    cloud_allow_resizing: bool = False,
     jev: JevClient | None = None,
     llm: LLMClient | None = None,
     output_schema: type[BaseModel] | None = None,
@@ -120,7 +124,9 @@ async def run_task(
     local Chrome as `chrome` describes (default: from `Settings`, headless with a throwaway profile).
     `cloud_profile` names a profile on that cloud account, so a site someone signed into once in that
     profile is still signed in here; it is the remote counterpart of `LocalChrome.profile`. `proxy_country`
-    and `viewport` shape a cloud browser this run starts, and mean nothing for the other two. `jev` and
+    and `viewport` shape a cloud browser this run starts. `cloud_allow_resizing` opts that browser into
+    CDP viewport changes, which the cloud service otherwise ignores. These options mean nothing for the
+    other two browsers. `jev` and
     `llm` default to clients built from `Settings` (the environment, then `.env`), so an embedder that
     resolves its own credentials, or serves Jev from somewhere else, passes them instead.
 
@@ -155,6 +161,7 @@ async def run_task(
                     cdp_url=cdp_url,
                     proxy_country=proxy_country,
                     viewport=viewport,
+                    allow_resizing=cloud_allow_resizing,
                 ) as connection:
                     if on_event is not None:
                         await on_event(BrowserEvent(live_url=connection.live_url, browser_id=connection.browser_id))

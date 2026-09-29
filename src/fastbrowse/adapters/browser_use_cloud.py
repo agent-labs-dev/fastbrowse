@@ -48,10 +48,13 @@ class BrowserUseCloudBrowser:
         timeout_minutes: int = 15,
         profile: str | None = None,
         viewport: tuple[int, int] | None = None,
+        allow_resizing: bool = False,
     ) -> None:
         self._http = http
         self._headers = {"X-Browser-Use-API-Key": api_key}
         self._body: dict[str, str | int] = {"timeout": timeout_minutes}
+        if allow_resizing:
+            self._body["allowResizing"] = True
         if proxy_country is not None:
             self._body["proxyCountryCode"] = proxy_country
         # A cloud profile is the remote counterpart of `LocalChrome.profile`: the browser starts with the

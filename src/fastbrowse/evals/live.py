@@ -318,6 +318,7 @@ async def fast_arm(
             prompt(task),
             start=task.start,
             browser_api_key=load_settings().browser_key(),
+            cloud_allow_resizing=navigate,
             output_schema=task.output_schema,
             secrets=_secrets(task, bitwarden),
             limits=LIMITS,
@@ -387,7 +388,9 @@ def _ultrafast_env(cdp_ws: str, runtime: str) -> dict[str, str]:
 
 async def ultrafast_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | None) -> tuple[Outcome, ArmReport]:
     started = time.monotonic()
-    cloud = BrowserUseCloudBrowser(load_settings().browser_key(), http=http)
+    cloud = BrowserUseCloudBrowser(
+        load_settings().browser_key(), http=http, allow_resizing=task.category is Category.NAVIGATE
+    )
     async with cloud:
         booted = time.monotonic() - started
         _watch("jev-ultrafast", task, cloud.connection.live_url)
