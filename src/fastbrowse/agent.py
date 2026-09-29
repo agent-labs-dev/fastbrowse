@@ -78,7 +78,7 @@ from fastbrowse.page import (
     SiteUnreachable,
     pager_link,
 )
-from fastbrowse.planner import Plan, Requirement, RequirementKind, make_plan
+from fastbrowse.planner import Plan, Requirement, RequirementKind, RunReport, make_plan
 from fastbrowse.policy import (
     Decision,
     HistoryEntry,
@@ -730,7 +730,7 @@ class Agent:
                 # Notes that evidence every requirement can still describe the page before the last interaction
                 # redrew it, so an answer owed after one is read off what it drew. A plan that only acts has
                 # nothing to read, and finishes without waiting.
-                if _unread(plan, state.notes) or (state.owes_read and plan.answer_expected):
+                if _unread(plan, state.notes) or (state.owes_read and plan.page_answer_expected):
                     reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
                     # A read that ran spends the direction it was sent on, but may leave one of its own: the control
                     # the reader named to show more was cleared right after the read that named it, and Flights
@@ -1928,7 +1928,7 @@ class Agent:
         capture = capture or await self._capture()
         plan = await state.await_plan()
         wanted = [r for r in state.notes.unresolved(plan) if r.kind is RequirementKind.INFORMATION]
-        owed = not wanted and state.owes_read and plan.answer_expected
+        owed = not wanted and state.owes_read and plan.page_answer_expected
         if owed:
             # Every requirement was evidenced off the page before the last interaction redrew it, so they are
             # asked again of what it drew: a reader asked nothing would leave the pre-filter fare answering.
@@ -2515,7 +2515,7 @@ class Agent:
         fresh = await self._observe_if_changed(observation)
         state.ledger.reserve(CostComponent.JEV)
         await state.await_plan()
-        draft = draft_answer(state.plan, state.notes) if state.plan.answer_expected else None
+        draft = draft_answer(state.plan, state.notes) if state.plan.page_answer_expected else None
         checking = asyncio.create_task(
             check_done(
                 self._jev,
@@ -2573,7 +2573,7 @@ class Agent:
                 # Write the answer while the verifier is still deciding. Both read the same finished
                 # notes, and every accepted run wants an answer, so the whole cost of guessing wrong is
                 # one discarded call on the branch that was going back to work anyway.
-                if state.plan.answer_expected and check.answer is None:
+                if state.plan.page_answer_expected and check.answer is None:
                     drafting = asyncio.create_task(
                         compose(
                             self._llm,
@@ -2774,7 +2774,7 @@ class Agent:
         verified = True
         # Writing the answer and filling the caller's schema read the same finished notes and neither
         # needs the other's output, so a task that wants both pays for the slower one rather than both.
-        answering = self._answer(state, prepared) if state.plan.answer_expected else None
+        answering = self._answer(state, prepared) if state.plan.page_answer_expected else None
         extracting = self._extraction(state, output_schema) if output_schema is not None else None
         if answering is not None and extracting is not None:
             first, second = asyncio.create_task(answering), asyncio.create_task(extracting)
@@ -2805,9 +2805,38 @@ class Agent:
             cited.setdefault((item.url, item.quote), item)
         if self._observed is not None:
             await self._observe_if_changed(self._observed)
-        return self._result(
+        result = self._result(
             state, state.ledger, status, answer=answer, data=data, evidence=tuple(cited.values()), citations=citations
         )
+        report = self._run_report(state, result.final_url)
+        if report:
+            result = result.model_copy(update={"answer": "\n\n".join(part for part in (answer, report) if part)})
+        return result
+
+    def _run_report(self, state: _RunState, final_url: str | None) -> str:
+        # A raw image has no page quotes for its address or the clicks that reached it.
+        # These reports copy runtime values; the composer cannot add claims to them.
+        reports = state.plan.run_reports
+        parts: list[str] = []
+        if RunReport.NAVIGATION_STEPS in reports:
+            steps: list[str] = []
+            if start := next(iter(state.visited), None):
+                steps.append(f"Started at: {self._redactor.redact(start)}")
+            for entry in state.history:
+                if entry.outcome is not StepOutcome.EXECUTED or not entry.page_changed:
+                    continue
+                if entry.operation not in (None, Operation.CLICK, Operation.BACK, Operation.SWITCH_TAB):
+                    continue
+                if entry.operation is None:
+                    if entry.note:
+                        steps.append(self._redactor.redact(entry.note))
+                    continue
+                target = json.dumps(self._redactor.redact(entry.target or ""), ensure_ascii=False)
+                steps.append(f"{entry.operation.value}: {target}")
+            parts.append("Recorded navigation steps:\n" + "\n".join(f"- {step}" for step in steps))
+        if RunReport.FINAL_URL in reports and final_url is not None:
+            parts.append(f"Final URL: {final_url}")
+        return "\n\n".join(parts)
 
     def _public_fact(self, fact: Fact) -> StepFact:
         redact = self._redactor.redact
@@ -2932,7 +2961,7 @@ def _unread(plan: Plan, notes: Notes) -> bool:
     # A plan can file a question under an action ("find the quote using the search form"), and a run that
     # owes an answer with nothing read would hand the composer empty notes: one did, and ended complete on "".
     unresolved = any(r.kind is RequirementKind.INFORMATION for r in notes.unresolved(plan))
-    return unresolved or (plan.answer_expected and not notes.facts)
+    return unresolved or (plan.page_answer_expected and not notes.facts)
 
 
 def _lookup(plan: Plan) -> bool:
