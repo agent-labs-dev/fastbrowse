@@ -41,6 +41,8 @@ _REACHED = (
     "When the requested outcome is to open or reach a page, that destination must be showing now. "
     "An earlier visit followed by Back does not satisfy it. An executed click proves only the interaction, "
     "not that its destination loaded; an HTTP error is not a successful visit. "
+    "For a search or filter, set fields and executed clicks do not prove the resulting content loaded. "
+    "Require current matching results or an explicit empty-result state, not a pending search or loading view. "
     "A starting address or an intermediate visit in a longer task may be evidenced by the visited addresses, "
     "the first of which is where the run began; it does not have to remain open."
 )

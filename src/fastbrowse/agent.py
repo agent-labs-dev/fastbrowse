@@ -632,7 +632,7 @@ class Agent:
                     and _answered(state.plan, state.notes)
                     and self._observed is not None
                 ):
-                    result = await self._finish(state, self._observed, output_schema, until)
+                    result = await self._finish(state, output_schema, until)
                     if result is not None:
                         return result
                 continue
@@ -774,7 +774,7 @@ class Agent:
                 await self._recover(state, observation, f"uncertain next step ({decision.confidence:.2f})")
                 continue
             if decision.operation is Operation.DONE:
-                result = await self._finish(state, observation, output_schema, until)
+                result = await self._finish(state, output_schema, until)
                 if result is not None:
                     return result
                 continue
@@ -2509,16 +2509,15 @@ class Agent:
     async def _finish(
         self,
         state: _RunState,
-        observation: Observation,
         output_schema: type[BaseModel] | None,
         until: UntilCheck | None,
     ) -> RunResult | None:
         """Return the final result when DONE holds up; None sends the loop back to work.
 
-        A page can redirect while a model reads or verifies it. Check its URL and document before reusing the
-        observation: indexing unchanged controls again cost 0.35s a run.
+        Search results can arrive or disappear without changing the URL or document. Completion needs a fresh
+        observation after the browser's bounded loading wait, not the state that prompted the DONE choice.
         """
-        fresh = await self._observe_if_changed(observation)
+        fresh = await self._observe()
         if fresh.response_status is not None and fresh.response_status >= 400:
             raise _HttpFailure(url=fresh.url, status=fresh.response_status).stop()
         state.ledger.reserve(CostComponent.JEV)

@@ -13,6 +13,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.5.14] - 2026-09-29
 
+- Completion checks read fresh page state after a bounded loading wait, so asynchronous search results cannot
+  be judged from the earlier page before they arrive.
+
 - Navigation evals retain the final document status and content, so an error page at the requested URL cannot
   pass. Browser transport timeouts are retried for both arms, and separate site probes no longer discard
   completed runs. Ultrafast stale decisions do not consume its action budget.

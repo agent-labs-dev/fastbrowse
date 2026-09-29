@@ -396,3 +396,18 @@ async def test_capture_waits_for_loading_in_the_same_renderer_call(
     capture = await page.capture()
     assert "Ready to read" in capture.text and "Loading" not in capture.text
     assert evaluate.await_count == 1
+
+
+async def test_observe_waits_for_loading_before_reading_controls(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/dispatch.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.body.innerHTML = '<div aria-busy=true>Loading results</div>'; "
+        "setTimeout(() => { const d = document.querySelector('div'); d.removeAttribute('aria-busy'); "
+        "d.innerHTML = '<button>Nonstop result</button>'; }, 150);",
+    )
+    observation = await page.observe()
+    assert [control.label for control in observation.controls] == ["Nonstop result"]
