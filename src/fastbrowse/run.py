@@ -183,8 +183,6 @@ async def run_task(
                             )
                             if recording is not None:
                                 await recording.show_result(task, result)
-                            if on_event is not None and result.steps and (final_frame := await agent._frame()):
-                                await on_event(StepEvent(step=result.steps[-1], frame=final_frame, terminal=True))
             except (BrowserError, Unavailable) as exc:
                 # A cloud browser that cannot be started is an outage, not a failed run.
                 status = Status.UNAVAILABLE if isinstance(exc, Unavailable) else Status.ERROR

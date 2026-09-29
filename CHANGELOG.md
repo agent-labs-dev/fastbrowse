@@ -13,8 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.5.13] - 2026-09-29
 
-- Live browser views receive an explicit final page frame before teardown, so a completed navigation does not
-  leave the preview showing the page from before the answer.
+- Embedders that enable step frames receive a safe final page PNG in `RunResult.final_frame`, so their
+  completed preview can show the destination instead of the page before the last action.
 
 ## [0.5.12] - 2026-09-29
 

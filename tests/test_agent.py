@@ -4679,3 +4679,46 @@ async def test_run_reports_redact_secrets_resolved_after_navigation() -> None:
     assert "[secret:username]" in result.answer
     assert 'open: ""' not in result.answer
     assert result.final_url == "https://example.test/[secret:username].jpg"
+
+
+@pytest.mark.parametrize("frames", [False, True])
+@pytest.mark.parametrize("visible_secret", [False, True])
+async def test_finished_run_carries_current_safe_frame_without_an_extra_step(
+    frames: bool, visible_secret: bool
+) -> None:
+    state = await run_state()
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    page.observe = AsyncMock(
+        return_value=observation(()).model_copy(
+            update={"viewport_text": "hunter2" if visible_secret else "Final image"}
+        )
+    )
+    page.screenshot = AsyncMock(return_value=b"final png")
+    events = AsyncMock()
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]), config=Config(step_frames=frames), on_event=events)
+    agent._redactor.register("password", "hunter2")
+
+    result = await agent._conclude(state, None)
+
+    assert result.status is Status.COMPLETE
+    assert result.final_frame == (b"final png" if frames and not visible_secret else None)
+    assert "final_frame" not in result.model_dump()
+    assert "final png" not in result.model_dump_json()
+    assert "final png" not in repr(result)
+    assert page.screenshot.await_count == int(frames and not visible_secret)
+    assert page.observe.await_count == int(frames)
+    events.assert_not_awaited()
+
+
+async def test_final_frame_failure_preserves_verified_result() -> None:
+    state = await run_state()
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    page.observe = AsyncMock(side_effect=BrowserError("closed"))
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]), config=Config(step_frames=True))
+
+    result = await agent._conclude(state, None)
+
+    assert result.status is Status.COMPLETE
+    assert result.final_frame is None

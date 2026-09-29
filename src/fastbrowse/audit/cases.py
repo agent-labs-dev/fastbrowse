@@ -28,9 +28,9 @@ from dataclasses import dataclass
 
 from fastbrowse.models import RunResult
 
-# Every field the refused `--json` shape must carry. Read from the model rather than written out, so a new
+# Every serialized field the refused `--json` shape must carry. Read from the model rather than written out, so a new
 # RunResult field cannot slip past T0.2 unnoticed.
-_RUN_RESULT_KEYS: tuple[str, ...] = tuple(RunResult.model_fields)
+_RUN_RESULT_KEYS: tuple[str, ...] = tuple(RunResult.model_json_schema(mode="serialization")["properties"])
 
 # The task texts come from the repository's own local eval tasks, so a fixture case asks for the same
 # thing the eval suite grades.

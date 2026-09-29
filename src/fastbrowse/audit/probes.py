@@ -195,7 +195,7 @@ def cli_library_parity() -> dict[str, Any]:
     parameters = set(inspect.signature(run_task).parameters) - {"task"}
     library_only = sorted(parameters - cli_keywords)
     cli_only = sorted(cli_keywords - parameters)
-    fields = set(RunResult.model_fields)
+    fields = set(RunResult.model_json_schema(mode="serialization")["properties"])
     human = set(re.findall(r"result\.([a-z_]+)", source)) & fields
     return {
         "status": "ok",
