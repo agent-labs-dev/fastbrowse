@@ -733,6 +733,34 @@ async def test_twins_keep_their_card_names_past_shared_hidden_and_control_labels
     assert [c.context for c in obs.controls if c.label == "Add to cart"] == ["Brass Kettle", "Copper Pan"]
 
 
+async def test_same_named_siblings_are_told_apart_by_their_own_visible_descriptor(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    """Options that are direct children of one list share every ancestor, and an aria-label hides the text inside
+    them, so two "Springfield" options read as "1 of 2" and "2 of 2" and the run picked one blind."""
+    await page.navigate(f"{main_site}/icons.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        """document.body.innerHTML = '<ul role=listbox>'
+        + '<li role=option aria-label="Springfield"><span>Springfield</span><small>City in Illinois</small></li>'
+        + '<li role=option aria-label="Springfield"><span>Springfield</span><small>State park in Oregon</small></li>'
+        + '</ul>'""",
+    )
+    obs = await observe_until(page, "Springfield")
+    assert [c.context for c in obs.controls if c.label == "Springfield"] == ["City in Illinois", "State park in Oregon"]
+    # Identical descriptors tell nothing apart, so position stays the fallback.
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        """document.body.innerHTML = '<ul role=listbox>'
+        + '<li role=option aria-label="Springfield"><span>Springfield</span></li>'
+        + '<li role=option aria-label="Springfield"><span>Springfield</span></li></ul>'""",
+    )
+    obs = await observe_until(page, "Springfield")
+    assert [c.context for c in obs.controls if c.label == "Springfield"] == ["1 of 2", "2 of 2"]
+
+
 async def test_calendar_twins_are_named_by_the_month_they_show(
     page: CdpPage, browser_session: BrowserSession, main_site: str
 ) -> None:

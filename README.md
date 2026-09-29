@@ -5,9 +5,10 @@
   <img src="assets/wordmark.svg" alt="fastbrowse" width="360">
 </picture>
 
-**A browser agent that picks instead of generating.**
+**Browser automation with results you can verify.**
 
-Jev chooses each action, an LLM plans and reads, and code owns verification, safety and secrets.
+Complete workflows, return cited answers or structured data, and check the result before your application acts on it.
+Jev chooses actions from the page; code controls credentials, authorization and spending.
 
 [![pypi](https://img.shields.io/pypi/v/fastbrowse?style=flat-square&color=6366F1)](https://pypi.org/project/fastbrowse/)
 ![python](https://img.shields.io/badge/python-3.13%20%7C%203.14-475569?style=flat-square)
@@ -67,7 +68,10 @@ Compare rows only at matching task versions. See [eval results and workflow](doc
 - **LLM agents that generate actions** (the hosted Browser Use agent and similar): Jev picks each action from the controls
   that are on the page, so there is no invented selector to retry. Every claim in the answer links to the page text it came from.
 - **Choice-model navigators** ([Browser Use Ultrafast](https://github.com/browser-use/jev-ultrafast), the
-  `jev-ultrafast` package and eval arm): the same core technique, with page reading, cited answers, scoped secrets and an authorization gate. Navigation tasks compare the page each run ended on.
+  `jev-ultrafast` package and eval arm): both choose actions with Jev. fastbrowse adds cited answers, schema-validated
+  data, scoped credentials and an authorization gate. Navigation tasks compare the page each run ended on.
+  Ultrafast had the lower median cost in the latest six-task comparison; fastbrowse completed more attempts.
+  This navigation result does not establish a winner for every workflow.
 - **Scripts:** there are no selectors to maintain. The same agent handles a date picker, a checkout and
   a search box it has never seen.
 

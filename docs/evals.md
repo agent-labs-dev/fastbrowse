@@ -61,7 +61,13 @@ An attempt an outage ended is waited out and run again, up to five times over ab
 A row still unavailable after that is recorded but scores nothing, and neither does the same repeat of every other arm at that task: each comparison scores its arms on the same attempts at the same tasks.
 Time runs from the start of an attempt to the agent's answer, all of it counted. Releases up to 0.5.7 subtracted the failed requests and backoff fastbrowse's client measured inside an attempt, which no other arm could; every published time, those releases' included, is now wall time.
 The hosted arm's time ends at its agent's answer, by Browser Use's own clock from the session's creation. Its API reports the session stopped as much as two minutes later (`session_seconds`), which is not counted.
-Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the row.
+Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated into the scored row.
+New runs also write an adjacent `*.attempts.jsonl` ledger, including every outage and selected attempt, its trace,
+reported cost, elapsed time, repeat, build and scheduled retry wait. `selected` identifies the row retained in the
+main file, including a final unavailable attempt after retries are exhausted. Unknown cost stays unknown.
+Recordings get a fresh filename for every retry. Arm launch order rotates between repeats; concurrency is shared.
+Keep this ledger with the scored rows: retry time and spend belong in operational totals, not hidden in a score.
+A slow call that eventually returns is still scored; provider errors and timeouts use the bounded outage retry rule.
 Existing timing includes browser setup. These rows do not claim the planned handoff-only timing protocol.
 Jev is priced at list ($0.042 per million input tokens) whenever the gateway meters a request at $0, for fastbrowse and jev-ultrafast alike.
 <!-- /evals:protocol -->

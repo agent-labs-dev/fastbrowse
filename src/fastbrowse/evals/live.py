@@ -175,7 +175,7 @@ class ArmReport(BaseModel):
     seconds: float
     """Time to the answer, including browser setup; the hosted arm ends at its agent's `done` (`session_seconds`)."""
     transient_seconds: float = 0.0
-    """Provider outage waits fastbrowse measured inside the run; every published time leaves them out."""
+    """Provider outage waits fastbrowse measured inside the run; included in the full wall time."""
     dollars: float | None
     """None when some of the run's spend could not be priced: a known total would then be only a floor."""
     error: str | None = None
@@ -215,7 +215,7 @@ class EvalRow(ArmReport):
     repeat: int | None = None
     """Which of the invocation's `--repeat` passes this is: every arm's attempt at a task in one pass is paired."""
     retries: int = 0
-    """Runs discarded before this one because a provider stayed unavailable: they say nothing about the agent."""
+    """Earlier outage attempts, retained in the attempt ledger and excluded from agent scores."""
     normalized_status: Ending = Ending.ERROR
     correct: bool
     passed: bool
@@ -1033,17 +1033,19 @@ async def main(argv: list[str]) -> int:
         patches[1],
         tempfile.TemporaryDirectory() as downloads,
         args.out.open("a", encoding="utf-8") as out,
+        args.out.with_suffix(".attempts.jsonl").open("a", encoding="utf-8") as attempts,
     ):
         async with httpx.AsyncClient(timeout=60, event_hooks={"request": [_github_token]}) as http:
             watch = SiteWatch(http, tasks)
             watching = asyncio.create_task(watch.run())
 
-            async def one(arm: str, task: LiveTask, record: Path | None, repeat: int) -> EvalRow:
+            async def one(arm: str, task: LiveTask, repeat: int) -> EvalRow:
                 # An outage is waited out and the row run again; bounded, so a dead provider cannot hold a run forever.
                 for retries in itertools.count():
                     # The answer key is read once the row holds its slot: read while it queued, a live key (the
                     # top story, the newest release) could move on before the run began.
                     async with gate:
+                        record = None if args.record is None else video_path(args.record, arm, task)
                         try:
                             truth = await _truth(task, http)
                         except Exception as exc:
@@ -1051,31 +1053,37 @@ async def main(argv: list[str]) -> int:
                             # the field it is read from) fails this task alone: gather would discard every run.
                             failure = f"truth raised {type(exc).__name__}: {exc}"
                             row = _crashed(arm, task, failure, at=time.time(), seconds=0.0, status=None, record=None)
-                            break
-                        row = await run_arm(
-                            arm, task, truth, http, Path(downloads), bitwarden=args.bitwarden, record=record
-                        )
+                        else:
+                            row = await run_arm(
+                                arm, task, truth, http, Path(downloads), bitwarden=args.bitwarden, record=record
+                            )
                     row = await _site_checked(row, task, http)
                     if row.normalized_status != Ending.UNAVAILABLE and (
                         stalled := await watch.stalled(task, row.at, time.time())
                     ):
                         row = row.model_copy(update={"normalized_status": Ending.UNAVAILABLE, "failure": stalled})
-                    if row.normalized_status != Ending.UNAVAILABLE or retries >= OUTAGE_RETRIES:
+                    row = row.model_copy(
+                        update={
+                            "concurrency": args.concurrency,
+                            "retries": retries,
+                            "repeat": repeat,
+                            "suite": suite_of[task.id],
+                            "suite_version": suite_versions[suite_of[task.id]],
+                            "task_version": task_version(task.id, lock),
+                            "run": run,
+                        }
+                    )
+                    selected = row.normalized_status != Ending.UNAVAILABLE or retries >= OUTAGE_RETRIES
+                    wait = 0 if selected else min(60 * 2**retries, 600)
+                    # Retrying used to erase the outage's trace and spend, hiding the cost of obtaining a score.
+                    attempt = row.model_dump(mode="json", fallback=str)
+                    attempt.update(selected=selected, retry_wait_seconds=wait)
+                    attempts.write(json.dumps(attempt) + "\n")
+                    attempts.flush()
+                    if selected:
                         break
-                    wait = min(60 * 2**retries, 600)
                     print(f"RETRY {arm:13} {task.id:20} in {wait}s: {_cause(row)}", flush=True)
                     await asyncio.sleep(wait)
-                row = row.model_copy(
-                    update={
-                        "concurrency": args.concurrency,
-                        "retries": retries,
-                        "repeat": repeat,
-                        "suite": suite_of[task.id],
-                        "suite_version": suite_versions[suite_of[task.id]],
-                        "task_version": task_version(task.id, lock),
-                        "run": run,
-                    }
-                )
                 # Trace records hold whatever a component logged, so anything JSON cannot hold is written as text.
                 out.write(row.model_dump_json(fallback=str) + "\n")
                 out.flush()
@@ -1088,10 +1096,10 @@ async def main(argv: list[str]) -> int:
                 return row
 
             planned = [
-                (arm, task, None if args.record is None else video_path(args.record, arm, task), repeat)
+                (arm, task, repeat)
                 for repeat in range(args.repeat)
                 for task in tasks
-                for arm in args.arms
+                for arm in args.arms[repeat % len(args.arms) :] + args.arms[: repeat % len(args.arms)]
                 if eligible(arm, task)
             ]
             try:

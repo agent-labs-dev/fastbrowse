@@ -903,3 +903,68 @@ async def test_invalid_run_counts_are_rejected_before_task_selection(
         await live.main([flag, value, "--only", "not-a-task"])
     assert error.value.code == 2
     assert f"{flag} must be positive" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("exhausted", [False, True])
+async def test_outage_retries_retain_attempts_and_distinct_recordings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, exhausted: bool
+) -> None:
+    records: list[Path | None] = []
+
+    async def run(arm: str, task: LiveTask, *_: Any, record: Path | None, **__: Any) -> live.EvalRow:
+        records.append(record)
+        unavailable = exhausted or len(records) == 1
+        return live.EvalRow(
+            arm=arm,
+            task=task.id,
+            category=task.category.value,
+            at=time.time(),
+            seconds=10.0,
+            dollars=0.002,
+            status="unavailable" if unavailable else "done",
+            normalized_status=Ending.UNAVAILABLE if unavailable else Ending.DONE,
+            correct=not unavailable,
+            passed=not unavailable,
+            failure="provider timeout" if unavailable else None,
+            video=str(record),
+        )
+
+    monkeypatch.setattr(live, "OUTAGE_RETRIES", 1)
+    monkeypatch.setattr(live, "run_arm", run)
+    monkeypatch.setattr(live, "prepare_ultrafast", AsyncMock())
+    monkeypatch.setattr(live, "_truth", AsyncMock(return_value=None))
+    monkeypatch.setattr(live, "_site_checked", AsyncMock(side_effect=lambda row, *_: row))
+    monkeypatch.setattr(live.SiteWatch, "run", AsyncMock())
+    monkeypatch.setattr(live.SiteWatch, "stalled", AsyncMock(return_value=None))
+    sleep = AsyncMock()
+    monkeypatch.setattr(live.asyncio, "sleep", sleep)
+    out = tmp_path / "run.jsonl"
+    assert (
+        await live.main(
+            [
+                "--only",
+                "wiki-open",
+                "--arms",
+                "jev-ultrafast",
+                "--out",
+                str(out),
+                "--record",
+                str(tmp_path / "videos"),
+            ]
+        )
+        == 0
+    )
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    ledger = [json.loads(line) for line in out.with_suffix(".attempts.jsonl").read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["retries"] == 1
+    assert len(ledger) == 2
+    assert [row["retries"] for row in ledger] == [0, 1]
+    assert [row["selected"] for row in ledger] == [False, True]
+    assert [row["retry_wait_seconds"] for row in ledger] == [60, 0]
+    assert sum(row["seconds"] for row in ledger) == 20
+    assert sum(row["dollars"] for row in ledger) == pytest.approx(0.004)
+    assert all(row["run"] == rows[0]["run"] for row in ledger)
+    assert all(row["repeat"] == 0 for row in ledger)
+    assert records[0] != records[1]
+    assert rows[0]["passed"] is not exhausted
+    sleep.assert_awaited_once_with(60)

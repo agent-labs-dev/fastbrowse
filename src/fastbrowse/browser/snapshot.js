@@ -625,6 +625,29 @@
       const context = shared ? contextOf(registry.nodes.get(c.id), twins, c.label, false) : nearest[i];
       if (context) c.context = context;
     });
+    // Options that are direct children of one list share every ancestor, and their aria-label hides the text
+    // inside them, so "Springfield" twice read alike even when one says "City in Illinois" and the other
+    // "State park in Oregon". A twin with no context is told apart by what it shows besides its label, when
+    // that differs.
+    // Inline children join into one run in innerText, so each text node is read as a line of its own.
+    const ownOf = (element, label) => {
+      const lines = [];
+      const walker = element.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const line = node.data.replace(/\s+/g, ' ').trim();
+        // A caption a hover rule reveals is not shown, so it cannot tell twins apart.
+        if (!line || line === label || repeated.has(line)) continue;
+        if (!node.parentElement?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
+        lines.push(` ${line} `.split(` ${label} `).join(' '));
+      }
+      return excerpt(firstLine(lines.join('\n')), CONTROL_CONTEXT_CHARS);
+    };
+    const own = group.map(c => (c.context ? '' : ownOf(registry.nodes.get(c.id), c.label)));
+    if (new Set(own.filter(Boolean)).size > 1 || (own.some(Boolean) && group.some(c => c.context))) {
+      group.forEach((c, i) => {
+        if (own[i]) c.context = own[i];
+      });
+    }
     // Twins whose surroundings name none of them, like a row of identical avatars, still differ by position.
     if (group.every(c => !c.context)) {
       twins.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));

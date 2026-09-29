@@ -11,6 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Same-named controls can be distinguished by their own visible descriptions when they share an ancestor,
+  instead of falling back to position alone.
+- Live evals retain every outage retry in a separate attempt ledger and keep separate retry recordings.
+  Arm launch order rotates between repeats. Slow completed attempts still count with their full time and cost.
+
 - Eval reports name Browser Use Ultrafast (`jev-ultrafast`) separately from the hosted Browser Use agent.
   The eval guide includes the command for their shared navigation comparison through OpenRouter.
 - The eval summary retains prior task versions across releases that publish only other suites, so returning
