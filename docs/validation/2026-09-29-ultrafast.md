@@ -8,7 +8,8 @@ Run `575175e09100`, clean Fastbrowse commit `e7d61d216860254c70be45cdf19e5ae1fea
 Browser Use Ultrafast is pinned to 1231850a0bf1a0c0341fe408ef1668dbbfdfac46.
 Six navigation tasks, ten repeats per task and arm, concurrency four, rotating arm order.
 Both arms use OpenRouter. Native helper-model configurations differ; this is a product-configuration comparison.
-Validation after fixes, separate from the immutable published 0.5.13 results.
+This run and the [earlier three-repeat batch](2026-09-29-ultrafast-three.jsonl) used the old protocol.
+Neither batch is included in published benchmark results.
 
 | Arm | Passed | Median time | Median cost | Selected scored cost |
 | --- | --- | --- | --- | --- |

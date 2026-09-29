@@ -30,20 +30,58 @@ something that was never on the page. Every claim in an answer cites a verbatim 
 
 ### Against Browser Use agents
 
-The latest live comparison covers six navigation tasks against Browser Use Ultrafast (`jev-ultrafast`).
+The Ultrafast comparison covers six navigation tasks against Browser Use Ultrafast (`jev-ultrafast`).
 Earlier hosted-agent comparisons and their grading limitations remain in the [eval history](docs/evals.md#results).
 
 <!-- evals:headline -->
-Measured on 2026-09-29 with the build released as 0.5.13: 6 tasks, 36 attempts across all arms, on cloud browsers.
+Measured on 2026-09-27 with the build released as 0.5.8: 54 tasks, 303 attempts across all arms, on cloud browsers.
 
-Suite `core` `c25c7cb5`: fastbrowse against Browser Use Ultrafast, on the same 6 tasks.
+Suite `core` `bd7a00ba`: fastbrowse against Browser Use agent, on the same 13 tasks.
 
-| | passed | cost per task | median time |
+| | runs passed | cost per scored run | median time |
 |:--|:--|:--|:--|
-| fastbrowse | 17/18 | $0.0027 (median), $0.0066 mean | 7.6s |
-| Browser Use Ultrafast | 12/18 | $0.0014 (median), $0.0075 mean | 11.9s |
+| fastbrowse | 39/39 | $0.0053 (median), $0.0063 mean | 13.9s |
+| Browser Use agent | 36/39 | $0.3763 (median), $0.5037 mean | 19.2s |
 
-Each arm made 18 attempts.
+Each arm made 39 attempts.
+
+Suite `dev` `6b9d5227`: fastbrowse against Browser Use agent, on the same 13 tasks.
+
+| | runs passed | cost per scored run | median time |
+|:--|:--|:--|:--|
+| fastbrowse | 39/39 | $0.0038 (median), $0.0049 mean | 9.9s |
+| Browser Use agent | 39/39 | $0.1826 (median), $0.2473 mean | 12.7s |
+
+Each arm made 39 attempts.
+
+Suite `heldout` `86a31db4`: fastbrowse against Browser Use agent, on the same 9 tasks.
+
+| | runs passed | cost per scored run | median time |
+|:--|:--|:--|:--|
+| fastbrowse | 27/27 | $0.0034 (median), $0.0074 mean | 8.7s |
+| Browser Use agent | 27/27 | $0.1970 (median), $0.2703 mean | 12.6s |
+
+Each arm made 27 attempts.
+
+Suite `stretch-dev` `534fb29f`: fastbrowse against Browser Use agent, on the same 9 tasks.
+
+| | runs passed | cost per scored run | median time |
+|:--|:--|:--|:--|
+| fastbrowse | 27/27 | $0.0146 (median), $0.0150 mean | 20.1s |
+| Browser Use agent | 27/27 | $0.3115 (median), $0.4322 mean | 39.8s |
+
+Each arm made 27 attempts.
+
+Suite `stretch-heldout` `0ab6d8fe`: fastbrowse against Browser Use agent, on the same 3 tasks.
+
+| | runs passed | cost per scored run | median time |
+|:--|:--|:--|:--|
+| fastbrowse | 9/9 | $0.0116 (median), $0.0117 mean | 15.1s |
+| Browser Use agent | 9/9 | $0.3396 (median), $0.5467 mean | 45.2s |
+
+Each arm made 9 attempts.
+
+7 tasks graded on fastbrowse alone are in [docs/evals.md](docs/evals.md#results).
 
 ### Controlled mock-site comparison
 
@@ -70,7 +108,6 @@ Compare rows only at matching task versions. See [eval results and workflow](doc
 - **Choice-model navigators** ([Browser Use Ultrafast](https://github.com/browser-use/jev-ultrafast), the
   `jev-ultrafast` package and eval arm): both choose actions with Jev. fastbrowse adds cited answers, schema-validated
   data, scoped credentials and an authorization gate. Navigation tasks compare the page each run ended on.
-  Ultrafast had the lower median cost in the latest six-task comparison; fastbrowse completed more attempts.
   This navigation result does not establish a winner for every workflow.
 - **Scripts:** there are no selectors to maintain. The same agent handles a date picker, a checkout and
   a search box it has never seen.

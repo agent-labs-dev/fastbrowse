@@ -522,7 +522,7 @@ def headline(release: str, rows: Sequence[Mapping[str, Any]]) -> str:
                 alone += len({r["task"] for r in comparison.rows})
                 continue
             lines += [f"Suite `{suite}` `{revision}`: {comparison.title}.", "",
-                      "| | passed | cost per task | median time |", "|:--|:--|:--|:--|"]  # fmt: skip
+                      "| | runs passed | cost per scored run | median time |", "|:--|:--|:--|:--|"]  # fmt: skip
             scored = _by_arm(comparison.scored)
             for arm in comparison.arms:
                 s = _arm_stats(scored.get(arm, []))
