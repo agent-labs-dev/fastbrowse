@@ -602,7 +602,7 @@ Schema version 2 added `compared` and `tasks`; version 1 pooled a suite's compar
 `arms` maps registry names to statistics across the scored attempts, failures included. `total` counts them; `excluded` counts attempts made but not scored, ended by an outage or matched to one.
 `seconds` and `dollars` contain numeric median and mean values; dollars are USD. Seconds leave out measured outage waits.
 `priced` counts attempts with known cost. Both dollar statistics are null if any attempt is unpriced.
-`task_versions_changed` compares observed task versions with the previous published release:
+`task_versions_changed` compares each task with the last published release that included it:
 `task`, `previous` and `current` version lists. New tasks have an empty previous list;
 tasks absent from the current group are not reported as removed. The first release has no changes.
 Separate suite versions never share an aggregate. No wall-clock generation timestamp is emitted.

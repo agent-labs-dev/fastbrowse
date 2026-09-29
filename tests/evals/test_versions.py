@@ -358,6 +358,16 @@ def test_committed_summary_is_generated_from_published_rows() -> None:
     assert (versions.RESULTS / "summary.json").read_text() == versions.render_summary()
 
 
+@pytest.mark.parametrize("current", [1, 2])
+def test_summary_remembers_live_versions_across_mock_only_releases(current: int) -> None:
+    live_row = _row("pypi-version", fastbrowse_version="1.0.0") | {"task_version": 1}
+    mock_row = _row("mock-stock-count", fastbrowse_version="1.0.1") | {"suite": "mock-completion"}
+    latest = live_row | {"task_version": current}
+    report = versions.summary([("1.0.0", [live_row]), ("1.0.1", [mock_row]), ("1.0.2", [latest])])
+    expected = [] if current == 1 else [versions.TaskChange(task="pypi-version", previous=[1], current=[2])]
+    assert report.releases[0].task_versions_changed == expected
+
+
 def test_publish_auto_uses_recorded_release(results: Path) -> None:
     source = results / "rows.jsonl"
     source.write_text(json.dumps(_row("pypi-version")) + "\n")

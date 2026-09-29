@@ -673,7 +673,7 @@ def summary(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) 
                     task_versions_changed=changes,
                 )
             )
-        previous = versions
+        previous.update(versions)
     # Newest release first, and within it the suites in their defined order, core first: a reader of the feed that
     # takes its first entry gets the head-to-head, not whichever suite sorts last by name.
     order = list(all_tasks()[0])
@@ -785,7 +785,7 @@ def feed_schema_docs() -> str:
         "`seconds` and `dollars` contain numeric median and mean values; dollars are USD. "
         "Seconds leave out measured outage waits.",
         "`priced` counts attempts with known cost. Both dollar statistics are null if any attempt is unpriced.",
-        "`task_versions_changed` compares observed task versions with the previous published release:",
+        "`task_versions_changed` compares each task with the last published release that included it:",
         "`task`, `previous` and `current` version lists. New tasks have an empty previous list;",
         "tasks absent from the current group are not reported as removed. The first release has no changes.",
         "Separate suite versions never share an aggregate. No wall-clock generation timestamp is emitted.",

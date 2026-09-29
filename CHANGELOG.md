@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Eval reports name Browser Use Ultrafast (`jev-ultrafast`) separately from the hosted Browser Use agent.
   The eval guide includes the command for their shared navigation comparison through OpenRouter.
+- The eval summary retains prior task versions across releases that publish only other suites, so returning
+  tasks report their version changes instead of appearing new.
 
 ## [0.5.13] - 2026-09-29
 

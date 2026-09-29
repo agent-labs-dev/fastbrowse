@@ -44,42 +44,54 @@
       "task_versions_changed": [
         {
           "task": "arxiv-open",
-          "previous": [],
+          "previous": [
+            4
+          ],
           "current": [
             5
           ]
         },
         {
           "task": "flights-search",
-          "previous": [],
+          "previous": [
+            4
+          ],
           "current": [
             5
           ]
         },
         {
           "task": "github-open",
-          "previous": [],
+          "previous": [
+            4
+          ],
           "current": [
             5
           ]
         },
         {
           "task": "hn-comments",
-          "previous": [],
+          "previous": [
+            4
+          ],
           "current": [
             5
           ]
         },
         {
           "task": "pypi-open",
-          "previous": [],
+          "previous": [
+            4
+          ],
           "current": [
             5
           ]
         },
         {
           "task": "wiki-open",
-          "previous": [],
+          "previous": [
+            4
+          ],
           "current": [
             5
           ]
