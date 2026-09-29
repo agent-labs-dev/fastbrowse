@@ -6,6 +6,9 @@ cart or flight-form check. The hosted Browser Use agent's SDK does not say where
 tasks it is graded on the answer alone (the cart by naming the backpack). Navigation tasks, graded only on the
 page, leave it out.
 
+The [ten-repeat development comparison](validation/2026-09-29-ultrafast.md) records the latest branch validation
+and every outage retry. It is separate from the immutable release figures below.
+
 ## Local fixtures
 
 Use `just evals-local`; see [Workflow](#workflow) for the commands.
