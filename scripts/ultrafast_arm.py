@@ -156,7 +156,7 @@ def _meter(meter: Meter, kind: str, cost: object, tokens: object = None) -> None
         meter.text += float(cost)
 
 
-RETRYABLE = frozenset({408, 429, 500, 502, 503, 504, 529})
+RETRYABLE = frozenset({408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529})
 """fastbrowse's own set (`clients.validation.RETRYABLE_STATUS`): a status that says nothing about the request."""
 
 

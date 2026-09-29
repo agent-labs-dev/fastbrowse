@@ -16,6 +16,7 @@ import pytest
 from pydantic import SecretStr
 
 from fastbrowse.clients.environment import JevSource, Settings
+from fastbrowse.clients.validation import RETRYABLE_STATUS
 from fastbrowse.evals import live, live_tasks, more_tasks
 from fastbrowse.evals.live_tasks import TASKS, LiveTask, Outcome
 from fastbrowse.evals.status import Ending
@@ -968,3 +969,15 @@ async def test_outage_retries_retain_attempts_and_distinct_recordings(
     assert records[0] != records[1]
     assert rows[0]["passed"] is not exhausted
     sleep.assert_awaited_once_with(60)
+
+
+@pytest.mark.parametrize("code", sorted(RETRYABLE_STATUS))
+@pytest.mark.parametrize("in_body", [False, True])
+def test_ultrafast_classifies_the_same_provider_outages(
+    code: int, in_body: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(RUNNER["_post"].__globals__["time"], "sleep", lambda _: None)
+    response = httpx.Response(200 if in_body else code, json={"error": {"code": code}})
+    model = SimpleNamespace(CLIENT=SimpleNamespace(post=lambda *_, **__: response))
+    with pytest.raises(RUNNER["Unavailable"]):
+        RUNNER["_post"](model, "https://openrouter.ai/api/v1/chat/completions", {}, {})
