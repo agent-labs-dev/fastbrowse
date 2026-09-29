@@ -42,6 +42,10 @@ _RESTORE = """(() => {
 })()"""
 _SNAPSHOT = (Path(__file__).parents[1] / "browser" / "snapshot.js").read_text(encoding="utf-8") + "('snapshot')"
 
+FINAL_SCRIPTS = {"evidence": _EVIDENCE, "unhide": _UNHIDE, "snapshot": _SNAPSHOT, "restore": _RESTORE}
+"""The expressions the isolated jev-ultrafast runner evaluates itself, since it cannot import fastbrowse: one set of
+scripts reads both arms' final page, so they cannot drift apart."""
+
 
 def _evidence(raw: object) -> PageEvidence:
     try:

@@ -727,7 +727,8 @@ def protocol_docs() -> str:
         "Every arm receives `Start at {start}. {task}`. CDP runners also receive the declared start URL.",
         "Both navigation arms enable cloud resizing; Fastbrowse matches pinned Ultrafast's 1120 by 780 "
         "CSS-pixel viewport at device scale 1. Cloud sessions otherwise ignore CDP resizing. "
-        "Final evidence records actual inner width, inner height and device pixel ratio for both arms. "
+        "Final evidence records actual inner width, inner height and device pixel ratio for both arms, "
+        "before their browser driver disconnects. "
         "Publication rejects scored navigation rows whose viewport is missing or different. Earlier diagnostic "
         "batches inherited varying cloud dimensions and are not pooled with these runs.",
         f"fastbrowse and browser-use OSS use a {MAX_STEPS}-step limit. Ultrafast permits {MAX_STEPS} executed "

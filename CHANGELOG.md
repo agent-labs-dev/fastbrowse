@@ -15,7 +15,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Navigation comparisons enable cloud resizing to match Ultrafast's viewport and retain the actual
   dimensions for both arms.
-  Publishing rejects scored runs with missing or different dimensions.
+  Publishing rejects scored runs with missing or different dimensions. Ultrafast final evidence is read
+  before its browser driver disconnects, so cleanup cannot change the page being graded.
 
 - Completion checks read fresh page state after a bounded loading wait, so asynchronous search results cannot
   be judged from the earlier page before they arrive.

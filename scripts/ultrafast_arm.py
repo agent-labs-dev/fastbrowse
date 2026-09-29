@@ -370,6 +370,35 @@ class Screencast:
         return None if done.returncode == 0 else done.stderr.strip()[:400]
 
 
+def observe_final(browser: Any, scripts: dict[str, str]) -> dict[str, Any]:
+    """The final page as the run left it, read on the agent's own tab before the daemon restart resets its viewport.
+
+    Evidence is read before the modal controls are unhidden, and they are restored even when the snapshot fails.
+    A failure keeps whatever was read and says so, so the grader never sees a page it did not read.
+    """
+    final: dict[str, Any] = {"url": None, "evidence": None, "controls": None, "error": None}
+
+    def evaluate(name: str) -> Any:
+        result = browser.call("Runtime.evaluate", expression=scripts[name], returnByValue=True)
+        if result.get("exceptionDetails"):
+            raise RuntimeError(f"{name} script threw")
+        return (result.get("result") or {}).get("value")
+
+    try:
+        final["evidence"] = evaluate("evidence")
+        evaluate("unhide")
+        try:
+            snapshot = evaluate("snapshot")
+            final["url"] = snapshot["url"]
+            final["controls"] = [[c["label"], c.get("value")] for c in snapshot["controls"]]
+        finally:
+            evaluate("restore")
+    except Exception as exc:
+        final["error"] = f"final observation failed ({type(exc).__name__})"
+        final["url"] = final["controls"] = None
+    return final
+
+
 def run(request: dict[str, Any]) -> dict[str, Any]:
     from jev_ultrafast import Agent, model
 
@@ -377,6 +406,7 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
     patch_transport(model, meter)
     started = time.monotonic()
     status, error, agent, state, trace, kind = "error", None, None, None, None, None
+    final_page: dict[str, Any] = {"error": "the runner never opened a page"}
     try:
         agent = Agent(request["start"], request["goal"])
         trace = Trace(agent)
@@ -417,7 +447,9 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
         seconds = time.monotonic() - started
     if agent is not None:
         state = agent.state
-        # The harness observes this tab after exit and owns the cloud browser cleanup.
+        # Read here, not by the harness afterwards: main restarts the daemon next, which resets the viewport override.
+        # It follows `seconds`, so observing is not charged to the agent.
+        final_page = observe_final(agent.browser, request["final_scripts"])
     history = state["history"] if state else []
     decisions = trace.decisions() if trace else []
     text_helpers = sorted({call.get("model") for call in (state or {}).get("text_calls", []) if call.get("model")})
@@ -444,6 +476,7 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
         "last_exception": trace.last_exception if trace else None,
         "last_offered": _capped(trace.offered[-1]) if trace and trace.offered else None,
         "final_page_url": state["page"]["url"] if state else None,
+        "final_page": final_page,
         "artifact": artifact,
         "text_helpers": text_helpers,
         "provenance": provenance(),

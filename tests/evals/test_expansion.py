@@ -275,6 +275,11 @@ async def test_subprocess_uses_shared_prompt_and_harness_evidence(arm: str, monk
                 "dollars": 0.03,
                 "final_url": "https://stale.test/",
                 "controls": [["stale", None]],
+                "final_page": {
+                    "url": "https://pypi.org/project/runner",
+                    "controls": [["runner", "kept"]],
+                    "evidence": {"device_pixel_ratio": 1, "inner_width": 1120},
+                },
                 "steps": 2,
                 "actions": 1,
                 "trace": [],
@@ -286,7 +291,7 @@ async def test_subprocess_uses_shared_prompt_and_harness_evidence(arm: str, monk
         ).encode()
 
     async def observed(_: str) -> FinalPage:
-        assert entered
+        assert entered and arm != "jev-ultrafast", "the runner's own final page is graded, never a later reconnect"
         return FinalPage(url="https://pypi.org/project/httpx", controls=(("observed", None),))
 
     monkeypatch.setattr(live, "BrowserUseCloudBrowser", lambda *_, **__: Cloud())
@@ -302,7 +307,112 @@ async def test_subprocess_uses_shared_prompt_and_harness_evidence(arm: str, monk
         runner = live.ultrafast_arm if arm == "jev-ultrafast" else live.oss_arm
         outcome, report = await runner(task, http, record=None)
     assert not entered and report.dollars == 0.03
-    assert outcome.final_url == "https://pypi.org/project/httpx" and outcome.controls == (("observed", None),)
+    if arm == "jev-ultrafast":
+        assert outcome.final_url == "https://pypi.org/project/runner" and outcome.controls == (("runner", "kept"),)
+        assert outcome.evidence and outcome.evidence.device_pixel_ratio == 1
+    else:
+        assert outcome.final_url == "https://pypi.org/project/httpx" and outcome.controls == (("observed", None),)
+
+
+def _ultrafast_runner() -> dict:
+    return runpy.run_path(str(live.ULTRAFAST_RUNNER))
+
+
+class _Tab:
+    """A tab that answers `Runtime.evaluate` from a table and logs each script it was asked to run."""
+
+    def __init__(self, answers: dict[str, object], fail: str | None = None) -> None:
+        self.log: list[str] = []
+        self._by_script = {script: name for name, script in observe.FINAL_SCRIPTS.items()}
+        self._answers, self._fail = answers, fail
+
+    def call(self, method: str, **params: object) -> dict:
+        assert method == "Runtime.evaluate"
+        name = self._by_script[str(params["expression"])]
+        self.log.append(name)
+        if name == self._fail:
+            raise RuntimeError("boom")
+        return {"result": {"value": self._answers.get(name)}}
+
+
+def test_final_observation_reads_evidence_before_unhiding_and_restores() -> None:
+    tab = _Tab(
+        {"evidence": {"device_pixel_ratio": 1}, "snapshot": {"url": "https://x.test/", "controls": [{"label": "a"}]}}
+    )
+    final = _ultrafast_runner()["observe_final"](tab, observe.FINAL_SCRIPTS)
+    assert tab.log == ["evidence", "unhide", "snapshot", "restore"]
+    assert final == {
+        "url": "https://x.test/",
+        "evidence": {"device_pixel_ratio": 1},
+        "controls": [["a", None]],
+        "error": None,
+    }
+
+
+def test_final_observation_restores_hidden_controls_when_the_snapshot_fails() -> None:
+    tab = _Tab({"evidence": {"device_pixel_ratio": 1}}, fail="snapshot")
+    final = _ultrafast_runner()["observe_final"](tab, observe.FINAL_SCRIPTS)
+    assert tab.log == ["evidence", "unhide", "snapshot", "restore"]
+    assert final["error"] and final["controls"] is None and final["url"] is None
+    assert final["evidence"] == {"device_pixel_ratio": 1}
+
+
+def test_runner_observes_the_final_page_before_restarting_the_daemon(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    events: list[str] = []
+
+    class Browser(_Tab):
+        session = "own-tab"
+
+        def call(self, method: str, **params: object) -> dict:
+            if method == "Page.bringToFront":
+                return {}
+            events.append(f"observe:{self._by_script[str(params['expression'])]}")
+            return super().call(method, **params)
+
+    class Agent:
+        def __init__(self, start: str, goal: str) -> None:
+            self.browser = Browser({"evidence": {"device_pixel_ratio": 1}, "snapshot": {"url": start, "controls": []}})
+            self.state = {"status": "done", "history": [], "decisions": [], "page": {"url": start}}
+            self.command = lambda *_: None
+
+        def run(self):
+            events.append("run")
+            yield self.state
+
+        def snapshot(self) -> dict:
+            return self.state
+
+    def restart() -> None:
+        events.append("restart")
+
+    modules = {
+        "jev_ultrafast": SimpleNamespace(Agent=Agent, model=SimpleNamespace(post_json=None)),
+        "browser_harness": SimpleNamespace(),
+        "browser_harness.admin": SimpleNamespace(restart_daemon=restart),
+    }
+    for name, module in modules.items():
+        monkeypatch.setitem(__import__("sys").modules, name, module)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "k")
+    monkeypatch.setattr(
+        "sys.stdin",
+        __import__("io").StringIO(
+            json.dumps(
+                {
+                    "start": "https://x.test/",
+                    "goal": "g",
+                    "max_steps": 3,
+                    "record": None,
+                    "final_scripts": observe.FINAL_SCRIPTS,
+                }
+            )
+        ),
+    )
+    _ultrafast_runner()["main"]()
+    printed = json.loads(capsys.readouterr().out)
+    assert events == ["run", "observe:evidence", "observe:unhide", "observe:snapshot", "observe:restore", "restart"]
+    assert printed["final_page"]["url"] == "https://x.test/" and printed["final_page"]["error"] is None
 
 
 async def test_fast_arm_does_not_substitute_reported_or_start_url(monkeypatch: pytest.MonkeyPatch) -> None:

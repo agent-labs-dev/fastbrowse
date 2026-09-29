@@ -55,8 +55,8 @@ from fastbrowse.clients.validation import RETRYABLE_STATUS, TRANSIENT_TRANSPORT
 from fastbrowse.clients.vercel import GATEWAY_URL
 from fastbrowse.evals.live_tasks import TASKS, Category, LiveTask, Outcome, PageEvidence, page_defect, prompt
 from fastbrowse.evals.more_tasks import DEV, HELDOUT, STRETCH_DEV, STRETCH_HELDOUT
+from fastbrowse.evals.observe import FINAL_SCRIPTS, FinalPage, observe_browser
 from fastbrowse.evals.observe import GradedPage as _GradedPage
-from fastbrowse.evals.observe import observe_browser
 from fastbrowse.evals.status import Ending, normalize, status_matches
 from fastbrowse.evals.versions import load_lock, provenance, suite_version, task_version
 from fastbrowse.jev import JEV_DOLLARS_PER_INPUT_TOKEN, JEV_MODEL
@@ -293,6 +293,8 @@ class _UltrafastReport(BaseModel):
     last_exception: str | None = None
     last_offered: JsonValue = None
     final_page_url: str | None = None
+    final_page: FinalPage = FinalPage(error="the runner sent no final page")
+    """Read inside the runner before its browser daemon restarts, which resets the emulated viewport."""
     artifact: str | None = None
     text_helpers: list[str] = []
     provenance: dict[str, JsonValue] = {}
@@ -401,6 +403,7 @@ async def ultrafast_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path
             "max_steps": MAX_STEPS,
             "record": None if record is None else str(record),
             "jev_dollars_per_input_token": JEV_DOLLARS_PER_INPUT_TOKEN,
+            "final_scripts": FINAL_SCRIPTS,
         }
         with tempfile.TemporaryDirectory(prefix="bh-") as runtime:
             ran = _UltrafastReport.model_validate_json(
@@ -412,7 +415,7 @@ async def ultrafast_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path
                     runtime,
                 )
             )
-        final = await observe_browser(cloud.connection.cdp_url)
+    final = ran.final_page
     browser = sum(line.dollars or 0 for line in cloud.cost)
     dollars = ran.jev_dollars + ran.text_dollars + browser
     report = ArmReport(
