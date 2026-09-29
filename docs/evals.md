@@ -33,10 +33,11 @@ Needs `OPENROUTER_API_KEY` for the LLM and, unless `TYPESAFE_API_KEY` is supplie
 <!-- evals:protocol -->
 Every arm receives `Start at {start}. {task}`. CDP runners also receive the declared start URL.
 
+Fastbrowse navigation runs match pinned Ultrafast's 1120 by 780 CSS-pixel viewport at device scale 1. Final evidence records actual inner width, inner height and device pixel ratio for both arms. Publication rejects scored navigation rows whose viewport is missing or different. Earlier diagnostic batches used Fastbrowse's cloud default and are not pooled with these runs.
+
 fastbrowse and browser-use OSS use a 50-step limit. Ultrafast permits 50 executed actions and at most 100 decisions, so stale choices do not consume its action budget. The hosted API exposes no step limit.
 
 The existing harness has no common dollar or wall-time cap; cloud browsers expire after their configured lifetime.
-
 Default arms: `fastbrowse`, `jev-ultrafast`, `browser-use`.
 Browser Use Ultrafast is `jev-ultrafast`, the upstream browser-use/jev-ultrafast package. The `browser-use` arm runs the separate hosted Browser Use agent; its results are not Ultrafast results.
 Ultrafast uses the same selected Jev route as fastbrowse, OpenRouter by default, with its upstream text helper, inception/mercury-2.5, and reasoning disabled. No direct TypeSafe key is needed when using OpenRouter.
@@ -276,7 +277,7 @@ when they differ:
 <!-- evals:versions -->
 | Suite | Tasks | Version |
 |---|---|---|
-| `core` | 20 | `52fdc50c` |
+| `core` | 20 | `fdb1db40` |
 | `dev` | 13 | `7877c583` |
 | `heldout` | 9 | `0fe24fa0` |
 | `stretch-dev` | 9 | `5fe6b036` |
@@ -284,7 +285,7 @@ when they differ:
 | local fixtures | 6 | `dda8ba89` |
 | mock fixtures | 20 | `65f487d4` |
 
-Tasks past version 1: `arxiv-open` v6, `arxiv-title` v7, `books-mystery-cheapest` v7, `books-travel-priciest` v7, `countries-mongolia` v7, `countries-namibia-area` v3, `crates-serde` v7, `dynamic-loading` v8, `expandtesting-login` v7, `flights-search` v6, `frame-heading` v4, `github-license` v7, `github-open` v6, `google-flights` v7, `hn-comments` v6, `hn-top` v7, `hockey-bruins-1990` v7, `hover-profile` v8, `httpx-requires-python` v7, `mock-basket` v5, `mock-cheapest-product` v4, `mock-compare-prices` v4, `mock-iframe-note` v4, `mock-infinite-scroll` v4, `mock-order-pause` v5, `mock-order-validation` v4, `mock-pagination-exhaustion` v4, `mock-password-change` v5, `mock-password-pause` v6, `mock-priciest-product` v4, `mock-report-total` v5, `mock-shadow-dom` v4, `mock-sign-in` v4, `mock-sign-in-code-given` v4, `mock-sign-in-per-digit` v4, `mock-sign-in-two-step` v4, `mock-sign-out` v4, `mock-stock-count` v4, `mock-support-portal` v4, `new-tab-page` v3, `new-window` v8, `oscars-2012` v7, `pizza-order` v7, `practice-login` v7, `pypi-newer` v7, `pypi-open` v6, `pypi-structured` v7, `pypi-version` v7, `quotes-einstein-count` v7, `quotes-js-page2` v7, `quotes-rowling-count` v3, `quotes-search` v7, `quotes-search-lewis` v3, `ruff-release` v7, `saucedemo-cart` v7, `saucedemo-checkout` v7, `saucedemo-locked-out` v7, `saucedemo-pause` v6, `stretch-books-nonfiction-five-star` v9, `stretch-books-sequential-art-one-star` v3, `stretch-books-young-adult-one-star` v3, `stretch-bstack-apple-google` v8, `stretch-bstack-apple-samsung` v8, `stretch-calendar-first-friday` v9, `stretch-date-range-monday` v8, `stretch-datepicker-last-saturday` v3, `stretch-datepicker-last-sunday` v3, `stretch-quotes-top-authors` v8, `stretch-wizard-correction` v8, `stretch-wizard-review` v7, `table-largest-due` v8, `table-total-due` v3, `wiki-godel` v7, `wiki-open` v6.
+Tasks past version 1: `arxiv-open` v7, `arxiv-title` v7, `books-mystery-cheapest` v7, `books-travel-priciest` v7, `countries-mongolia` v7, `countries-namibia-area` v3, `crates-serde` v7, `dynamic-loading` v8, `expandtesting-login` v7, `flights-search` v7, `frame-heading` v4, `github-license` v7, `github-open` v7, `google-flights` v7, `hn-comments` v7, `hn-top` v7, `hockey-bruins-1990` v7, `hover-profile` v8, `httpx-requires-python` v7, `mock-basket` v5, `mock-cheapest-product` v4, `mock-compare-prices` v4, `mock-iframe-note` v4, `mock-infinite-scroll` v4, `mock-order-pause` v5, `mock-order-validation` v4, `mock-pagination-exhaustion` v4, `mock-password-change` v5, `mock-password-pause` v6, `mock-priciest-product` v4, `mock-report-total` v5, `mock-shadow-dom` v4, `mock-sign-in` v4, `mock-sign-in-code-given` v4, `mock-sign-in-per-digit` v4, `mock-sign-in-two-step` v4, `mock-sign-out` v4, `mock-stock-count` v4, `mock-support-portal` v4, `new-tab-page` v3, `new-window` v8, `oscars-2012` v7, `pizza-order` v7, `practice-login` v7, `pypi-newer` v7, `pypi-open` v7, `pypi-structured` v7, `pypi-version` v7, `quotes-einstein-count` v7, `quotes-js-page2` v7, `quotes-rowling-count` v3, `quotes-search` v7, `quotes-search-lewis` v3, `ruff-release` v7, `saucedemo-cart` v7, `saucedemo-checkout` v7, `saucedemo-locked-out` v7, `saucedemo-pause` v6, `stretch-books-nonfiction-five-star` v9, `stretch-books-sequential-art-one-star` v3, `stretch-books-young-adult-one-star` v3, `stretch-bstack-apple-google` v8, `stretch-bstack-apple-samsung` v8, `stretch-calendar-first-friday` v9, `stretch-date-range-monday` v8, `stretch-datepicker-last-saturday` v3, `stretch-datepicker-last-sunday` v3, `stretch-quotes-top-authors` v8, `stretch-wizard-correction` v8, `stretch-wizard-review` v7, `table-largest-due` v8, `table-total-due` v3, `wiki-godel` v7, `wiki-open` v7.
 <!-- /evals:versions -->
 
 Published results are rows, not tables typed by hand. A release's rows are committed to
@@ -370,7 +371,7 @@ Changed since these runs: `arxiv-title` v5 → v7, `expandtesting-login` v5 → 
 | fastbrowse (0.5.8) | 21/21 | 21/21 | 8.9s | 12.4s | $0.0026 | $0.0035 | $0.07 |
 
 Each arm made 21 attempts. Runs: `83841519068a` at `83b6284`.
-Changed since these runs: `arxiv-open` v4 → v6, `flights-search` v4 → v6, `github-open` v4 → v6, `hn-comments` v4 → v6, `pypi-open` v4 → v6, `saucedemo-pause` v4 → v6, `wiki-open` v4 → v6; compare them only against runs of the same version.
+Changed since these runs: `arxiv-open` v4 → v7, `flights-search` v4 → v7, `github-open` v4 → v7, `hn-comments` v4 → v7, `pypi-open` v4 → v7, `saucedemo-pause` v4 → v6, `wiki-open` v4 → v7; compare them only against runs of the same version.
 
 `dev` `6b9d5227`: fastbrowse against Browser Use agent, on the same 13 tasks.
 
@@ -434,7 +435,7 @@ Changed since these runs: `arxiv-title` v5 → v7, `expandtesting-login` v5 → 
 | Browser Use Ultrafast | 12/18 | 12/18 | 11.8s | 30.3s | $0.0014 | $0.0077 | $0.14 |
 
 Each arm made 18 attempts. Runs: `9caefa930c72` at `e265dd1`, `f08c17d8a0a6` at `1523055`.
-Changed since these runs: `arxiv-open` v4 → v6, `flights-search` v4 → v6, `github-open` v4 → v6, `hn-comments` v4 → v6, `pypi-open` v4 → v6, `wiki-open` v4 → v6; compare them only against runs of the same version.
+Changed since these runs: `arxiv-open` v4 → v7, `flights-search` v4 → v7, `github-open` v4 → v7, `hn-comments` v4 → v7, `pypi-open` v4 → v7, `wiki-open` v4 → v7; compare them only against runs of the same version.
 
 `core` `af816f31`: fastbrowse alone, on the 1 task only it ran.
 
@@ -507,7 +508,7 @@ Changed since these runs: `arxiv-title` v3 → v7, `expandtesting-login` v3 → 
 | Browser Use Ultrafast | 9/13 | 9/13 | 13.2s | 34.7s | unknown | unknown | $0.00 (1 unpriced) |
 
 Each arm made 18 attempts. Provider outages ended 2 of fastbrowse's and 3 of Browser Use Ultrafast's, so each arm is scored on the same 13: an attempt one arm lost is dropped for every arm at that task. `arxiv-open` is left out, with no Browser Use Ultrafast attempt measured. Runs: `993506e34fd9` at `cfefd89`.
-Changed since these runs: `arxiv-open` v2 → v6, `flights-search` v2 → v6, `github-open` v2 → v6, `hn-comments` v2 → v6, `pypi-open` v2 → v6, `wiki-open` v2 → v6; compare them only against runs of the same version.
+Changed since these runs: `arxiv-open` v2 → v7, `flights-search` v2 → v7, `github-open` v2 → v7, `hn-comments` v2 → v7, `pypi-open` v2 → v7, `wiki-open` v2 → v7; compare them only against runs of the same version.
 
 `core` `9b765b1a`: fastbrowse alone, on the 1 task only it ran.
 

@@ -278,6 +278,7 @@ def publish(release: str, source: Path) -> Path:
     if target.exists():
         raise ValueError(f"{target} exists: published results are never rewritten; publish under a new release")
     from fastbrowse.evals.live_tasks import PageEvidence, page_defect
+    from fastbrowse.evals.observe import VIEWPORT
 
     rows = [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines() if line.strip()]
     lock = load_lock()
@@ -293,6 +294,19 @@ def publish(release: str, source: Path) -> Path:
                 defect = "missing or invalid final-page evidence"
             if defect:
                 problems.append(f"{where}: {defect}")
+
+        if (
+            row.get("category") == "navigate"
+            and row.get("arm") in {"fastbrowse", "jev-ultrafast"}
+            and row.get("normalized_status") != "unavailable"
+        ):
+            try:
+                page = PageEvidence.model_validate(row.get("final_page"))
+                dimensions = (page.inner_width, page.inner_height, page.device_pixel_ratio)
+            except ValidationError:
+                dimensions = (None, None, None)
+            if dimensions != (VIEWPORT["width"], VIEWPORT["height"], VIEWPORT["deviceScaleFactor"]):
+                problems.append(f"{where}: navigation viewport is missing or differs from the comparison setup")
 
         try:
             _StatisticsRow.model_validate(row)
@@ -708,6 +722,10 @@ def protocol_docs() -> str:
 
     lines = [
         "Every arm receives `Start at {start}. {task}`. CDP runners also receive the declared start URL.",
+        "Fastbrowse navigation runs match pinned Ultrafast's 1120 by 780 CSS-pixel viewport at device scale 1. "
+        "Final evidence records actual inner width, inner height and device pixel ratio for both arms. "
+        "Publication rejects scored navigation rows whose viewport is missing or different. Earlier diagnostic "
+        "batches used Fastbrowse's cloud default and are not pooled with these runs.",
         f"fastbrowse and browser-use OSS use a {MAX_STEPS}-step limit. Ultrafast permits {MAX_STEPS} executed "
         f"actions and at most {2 * MAX_STEPS} decisions, so stale choices do not consume its action budget. "
         "The hosted API exposes no step limit.",

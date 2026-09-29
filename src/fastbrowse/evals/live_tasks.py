@@ -48,6 +48,11 @@ class PageEvidence(BaseModel):
     text: str | None = None
     """The first characters of the visible text, enough to see an error page; `text_length` is the whole."""
     text_length: int | None = None
+    inner_width: int | None = None
+    inner_height: int | None = None
+    device_pixel_ratio: float | None = None
+    """The CSS viewport the document was laid out in, recorded for every arm: a page that reflows at another width is
+    a different page, so rows whose viewports differ are not comparable."""
 
 
 def page_defect(evidence: PageEvidence | None) -> str | None:

@@ -413,3 +413,24 @@ def test_publish_rejects_navigation_pass_without_a_successful_document(results: 
     with pytest.raises(ValueError):
         _publish(results, [row])
     assert not (results / "results").exists()
+
+
+@pytest.mark.parametrize("passed", [True, False])
+@pytest.mark.parametrize("width", [None, 1520])
+def test_publish_rejects_navigation_with_missing_or_mismatched_viewport(
+    results: Path, passed: bool, width: int | None
+) -> None:
+    row = _row("pypi-open", passed=passed) | {
+        "category": "navigate",
+        "final_page": {
+            "status": 200,
+            "title": "httpx",
+            "text_length": 40,
+            "inner_width": width,
+            "inner_height": 780,
+            "device_pixel_ratio": 1,
+        },
+    }
+    with pytest.raises(ValueError, match="navigation viewport"):
+        _publish(results, [row])
+    assert not (results / "results").exists()

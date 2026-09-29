@@ -3,12 +3,17 @@
 from contextlib import suppress
 from pathlib import Path
 
+from cdp_use.cdp.emulation.commands import SetDeviceMetricsOverrideParameters
 from cdp_use.client import CDPClient
 from pydantic import BaseModel
 
 from fastbrowse.browser import CdpPage
 from fastbrowse.evals.live_tasks import PageEvidence
 from fastbrowse.page import Observation
+
+# The viewport jev-ultrafast's pinned browser.py sets in its constructor (width, height, scale, not mobile).
+# Fastbrowse's navigation runs get the same one, since a cloud browser's default is wider and pages reflow.
+VIEWPORT: SetDeviceMetricsOverrideParameters = {"width": 1120, "height": 780, "deviceScaleFactor": 1, "mobile": False}
 
 # Read-only and run before _UNHIDE, so the evidence is the page as the run left it. responseStatus is the document's own
 # navigation response (0 or absent when the browser withholds it), so an error page served at the right address shows.
@@ -18,6 +23,7 @@ _EVIDENCE = """(() => {
   return {
     status: nav?.responseStatus || null, title: document.title || null,
     text: text.slice(0, 300), text_length: text.length,
+    inner_width: window.innerWidth, inner_height: window.innerHeight, device_pixel_ratio: window.devicePixelRatio,
   };
 })()"""
 
@@ -45,6 +51,16 @@ def _evidence(raw: object) -> PageEvidence:
 
 
 class GradedPage(CdpPage):
+    async def emulate_viewport(self) -> None:
+        """Pin the active tab to `VIEWPORT` before the run navigates; a failure raises rather than run at another size.
+
+        The override belongs to one tab's session, so a popup the run opens later is not covered; its evidence
+        records the size it really had.
+        """
+        await self._session.client.send.Emulation.setDeviceMetricsOverride(
+            params=VIEWPORT, session_id=self._session.active_session_id
+        )
+
     async def evidence(self) -> PageEvidence:
         return _evidence(await self._evaluate(self._session.active_session_id, _EVIDENCE))
 

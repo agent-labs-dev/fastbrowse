@@ -139,6 +139,8 @@ class _Observed:
     controls: tuple[tuple[str, str | None], ...] | None = None
     observe_error: str | None = None
     """Why the page could not be observed after the run; a grader then reports it had no page."""
+    emulate_viewport: bool = False
+    """Give the run the viewport the competing arm's browser has; setup, kept apart from capturing evidence."""
     capture_evidence: bool = False
     evidence: PageEvidence | None = None
     """Status, title and text of the final document, read before the grader's look at the page changes anything."""
@@ -154,6 +156,10 @@ class _ObservedAgent(Agent):
     page itself (what a form ended up holding) rather than anything the agent reported."""
 
     async def run(self, *args: Any, **kwargs: Any) -> RunResult:
+        if _observed.get().emulate_viewport:
+            if not isinstance(self._page, _GradedPage):
+                raise TypeError("viewport emulation needs the harness page")
+            await self._page.emulate_viewport()
         result = await super().run(*args, **kwargs)
         _observed.get().ended = time.monotonic()
         if _observed.get().capture_evidence and isinstance(self._page, _GradedPage):
@@ -304,7 +310,8 @@ async def fast_arm(
     bitwarden: bool,
     record: Path | None,
 ) -> tuple[Outcome, RunResult, _Observed]:
-    seen = _Observed(capture_evidence=task.category is Category.NAVIGATE)
+    navigate = task.category is Category.NAVIGATE
+    seen = _Observed(emulate_viewport=navigate, capture_evidence=navigate)
     token = _observed.set(seen)
     try:
         result = await run_task(

@@ -13,6 +13,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.5.14] - 2026-09-29
 
+- Navigation comparisons match Ultrafast's viewport and retain the actual dimensions for both arms.
+  Publishing rejects scored runs with missing or different dimensions.
+
 - Completion checks read fresh page state after a bounded loading wait, so asynchronous search results cannot
   be judged from the earlier page before they arrive.
 
