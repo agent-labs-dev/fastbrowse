@@ -69,7 +69,7 @@ from fastbrowse.page import (
     Page,
     SiteUnreachable,
 )
-from fastbrowse.planner import Plan, Requirement, RequirementKind
+from fastbrowse.planner import Plan, Requirement, RequirementKind, RunReport
 from fastbrowse.policy import Decision, HistoryEntry, ReadAssessment, build_request, decide
 from fastbrowse.retrieval import TRANSACTION_CONTRADICTED, ComposedAnswer
 from fastbrowse.safety import Redactor, ScopedSecrets
@@ -4559,3 +4559,123 @@ async def test_step_frame_stays_withheld_when_a_dialog_hides_page_text() -> None
     page.observe.return_value = observation(())
     assert await agent._frame() == b"secret pixels"
     page.withhold_frames.assert_called_with(False)
+
+
+async def test_raw_image_navigation_reports_use_observed_state_without_page_quotes() -> None:
+    state = await run_state()
+    state.task = "Open the image and report the final URL and navigation steps."
+    state.ready_plan = Plan.model_validate(
+        {
+            "requirements": [{"id": "open", "text": "Open the image", "kind": "action"}],
+            "answer_expected": True,
+            "run_reports": ["final_url", "navigation_steps"],
+        }
+    )
+    assert not _unread(state.plan, state.notes)
+    state.visited["https://example.test/gallery"] = None
+    state.history.extend(
+        [
+            HistoryEntry(
+                operation=Operation.CLICK, target="Wrong image", outcome=StepOutcome.FAILED, page_changed=False
+            ),
+            HistoryEntry(
+                operation=Operation.CLICK, target="No change", outcome=StepOutcome.EXECUTED, page_changed=False
+            ),
+            HistoryEntry(
+                operation=Operation.ENTER, target="Image search", outcome=StepOutcome.EXECUTED, page_changed=True
+            ),
+            HistoryEntry(
+                operation=Operation.CLICK, target="Screen JPEG", outcome=StepOutcome.EXECUTED, page_changed=True
+            ),
+        ]
+    )
+    on = _at("https://example.test/photo.jpg").model_copy(update={"viewport_text": ""})
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=on)
+    page.screenshot = AsyncMock(return_value=b"")
+    page.artifacts = ()
+    llm = ScriptedLLM([])
+    agent = Agent(page, _ConfirmingJev({}), llm)
+
+    result = await agent._finish(state, on, None, None)
+
+    assert result is not None and result.status is Status.COMPLETE
+    assert result.answer is not None
+    assert "Final URL: https://example.test/photo.jpg" in result.answer
+    assert "https://example.test/gallery" in result.answer
+    assert 'enter: "Image search"' in result.answer
+    assert "Screen JPEG" in result.answer
+    assert "Wrong image" not in result.answer and "No change" not in result.answer
+    assert not result.citations and not result.evidence
+    assert not llm.calls
+
+
+@pytest.mark.parametrize("has_fact", [False, True])
+async def test_run_reports_do_not_replace_page_fact_evidence(has_fact: bool) -> None:
+    state = await run_state()
+    llm = ScriptedLLM([])
+    agent, on = await _finishing(state, llm, noul=0.0)
+    state.ready_plan = state.plan.model_copy(update={"answer_expected": True, "run_reports": (RunReport.FINAL_URL,)})
+    if has_fact:
+        state.notes.add(_fare(on.url, "fare"))
+    questions_seen: list[str] = []
+
+    class Jev(ScriptedJev):
+        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+            questions_seen.extend(questions)
+            return Evaluation(
+                model="test",
+                answers={key: NoulAnswer(probability=0.99 if key == "complete" else 0.0) for key in questions},
+                input_tokens=10,
+                cost=FREE,
+            )
+
+    agent._jev = Jev({})
+    agent._recover = AsyncMock()
+    result = await agent._finish(state, on, None, None)
+
+    if has_fact:
+        assert result is not None and result.status is Status.COMPLETE
+        assert result.answer and "$320" in result.answer and f"Final URL: {on.url}" in result.answer
+        assert len(result.citations) == 1 and len(result.evidence) == 1
+        assert "unsupported_0" in questions_seen
+        agent._recover.assert_not_awaited()
+    else:
+        assert result is None
+        agent._recover.assert_awaited_once()
+    assert not llm.calls
+
+
+async def test_run_reports_redact_secrets_resolved_after_navigation() -> None:
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(), answer_expected=True, run_reports=(RunReport.NAVIGATION_STEPS, RunReport.FINAL_URL)
+    )
+    state.visited["https://example.test/?user=ada"] = None
+    state.history.extend(
+        [
+            HistoryEntry(
+                operation=None,
+                target=None,
+                outcome=StepOutcome.EXECUTED,
+                page_changed=True,
+                note="opened https://example.test/ada directly",
+            ),
+            HistoryEntry(
+                operation=Operation.CLICK, target="ada's picture", outcome=StepOutcome.EXECUTED, page_changed=True
+            ),
+        ]
+    )
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=_at("https://example.test/ada.jpg"))
+    page.artifacts = ()
+    agent = Agent(page, _ConfirmingJev({}), ScriptedLLM([]))
+    await agent._observe()
+    agent._redactor.register("username", "ada")
+
+    result = await agent._conclude(state, None)
+
+    assert result.answer and "ada" not in result.answer
+    assert "[secret:username]" in result.answer
+    assert 'open: ""' not in result.answer
+    assert result.final_url == "https://example.test/[secret:username].jpg"

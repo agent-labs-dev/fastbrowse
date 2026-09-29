@@ -20,6 +20,11 @@ class RequirementKind(StrEnum):
     INFORMATION = "information"
 
 
+class RunReport(StrEnum):
+    FINAL_URL = "final_url"
+    NAVIGATION_STEPS = "navigation_steps"
+
+
 class Requirement(Frozen):
     id: str = Field(min_length=1)
     text: str = Field(min_length=1)
@@ -35,6 +40,14 @@ class Requirement(Frozen):
 class Plan(Frozen):
     requirements: tuple[Requirement, ...]
     answer_expected: bool
+    run_reports: tuple[RunReport, ...] = ()
+    """Requested reports about this run, copied from browser state rather than read from page text."""
+
+    @property
+    def page_answer_expected(self) -> bool:
+        return self.answer_expected and (
+            not self.run_reports or any(r.kind is RequirementKind.INFORMATION for r in self.requirements)
+        )
 
     @model_validator(mode="after")
     def validate_ids(self) -> Self:
@@ -58,9 +71,14 @@ def _instructions() -> Message:
             "before asking for something else is where the work begins, and the "
             "browser may already be there: it is not a requirement of its own. A search the "
             "user asked only to run is such a page: it is one action requirement, to leave the search showing with "
-            "the filters the user named applied, and not a fact to find. Every task has "
-            "at least one requirement. Answering is not a requirement either: say whether the user expects an "
-            "answer.\n\n"
+            "the filters the user named applied, and not a fact to find. Except for a task asking only for a run "
+            "report, every task has at least one requirement. Answering is not a requirement either: say whether "
+            "the user expects an answer. Requests to report this run's final URL or navigation steps belong in "
+            "run_reports, not "
+            "information requirements: code reports the observed address and recorded actions. Keep the requested "
+            "navigation itself as an action requirement when there is no page fact to find. A request only for "
+            "the current URL needs no page requirement. Never classify page facts, image contents, transaction "
+            "outcomes or a site's navigation instructions as run reports.\n\n"
             "Each information requirement must retain the relevant constraints from the task, including dates, "
             "filters and comparison criteria, and adds none the task did not state: a total the user wants "
             "reported is the order's total, not the total once the order is finished. Keep related output fields "
