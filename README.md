@@ -212,11 +212,11 @@ More in [docs/design.md](docs/design.md).
 
 | | Browser Use agent (hosted) | [Browser Use Ultrafast](https://github.com/browser-use/jev-ultrafast) (`jev-ultrafast`) | fastbrowse |
 |:--|:--|:--|:--|
-| Choosing an action | LLM generates from a screenshot | Jev picks from indexed controls | Jev picks from indexed controls |
+| Choosing an action | hosted model and tools | Jev picks from indexed controls | Jev picks from indexed controls |
 | Returns | an answer | `DONE` or `BLOCKED` | an answer with quotes, or why it stopped |
-| Reads pages | yes | no | yes, every claim cited |
+| Cited answers | answer output; not graded for citations here | no cited-answer result API | answers backed by captured quotes |
 | Signing in | yes | password fields excluded | `--secret` or a Bitwarden vault item; models see names only |
-| Irreversible actions | not gated | not gated | stop unless `--authorize` |
+| Irreversible actions | explicit task instructions in our fixture tests | no authorization parameter in Agent | classifier plus a code-enforced authorization gate |
 | Browser | cloud | Chrome through Browser Harness; cloud in these evals | cloud by default, or local Chrome with `--local` |
 
 Browser Use Ultrafast (`jev-ultrafast`) is Browser Use's navigation agent, separate from its hosted

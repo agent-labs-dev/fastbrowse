@@ -1,7 +1,7 @@
 [project]
 name = "fastbrowse"
 version = "0.5.13"
-description = "A browser agent that picks instead of generating: Jev chooses, an LLM reads and plans, code verifies."
+description = "Browser automation with cited answers, structured output and code-controlled credentials and authorization."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE", "NOTICE"]
