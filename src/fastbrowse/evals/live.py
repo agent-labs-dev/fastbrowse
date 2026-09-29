@@ -1045,23 +1045,26 @@ async def main(argv: list[str]) -> int:
                     # The answer key is read once the row holds its slot: read while it queued, a live key (the
                     # top story, the newest release) could move on before the run began.
                     async with gate:
-                        record = None if args.record is None else video_path(args.record, arm, task)
+                        truth_failed = False
                         try:
                             truth = await _truth(task, http)
                         except Exception as exc:
                             # An answer key that will not come back (a 403 from a rate-limited API, a body missing
                             # the field it is read from) fails this task alone: gather would discard every run.
+                            truth_failed = True
                             failure = f"truth raised {type(exc).__name__}: {exc}"
                             row = _crashed(arm, task, failure, at=time.time(), seconds=0.0, status=None, record=None)
                         else:
+                            record = None if args.record is None else video_path(args.record, arm, task)
                             row = await run_arm(
                                 arm, task, truth, http, Path(downloads), bitwarden=args.bitwarden, record=record
                             )
-                    row = await _site_checked(row, task, http)
-                    if row.normalized_status != Ending.UNAVAILABLE and (
-                        stalled := await watch.stalled(task, row.at, time.time())
-                    ):
-                        row = row.model_copy(update={"normalized_status": Ending.UNAVAILABLE, "failure": stalled})
+                    if not truth_failed:
+                        row = await _site_checked(row, task, http)
+                        if row.normalized_status != Ending.UNAVAILABLE and (
+                            stalled := await watch.stalled(task, row.at, time.time())
+                        ):
+                            row = row.model_copy(update={"normalized_status": Ending.UNAVAILABLE, "failure": stalled})
                     row = row.model_copy(
                         update={
                             "concurrency": args.concurrency,
