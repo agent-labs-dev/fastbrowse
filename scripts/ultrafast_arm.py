@@ -168,7 +168,13 @@ def _post(model: Any, url: str, headers: dict[str, str], body: dict[str, Any]) -
     for attempt in range(3):
         try:
             response = model.CLIENT.post(url, json=body, headers=headers)
-        except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError, httpx.DecodingError) as error:
+        except (
+            httpx.TimeoutException,
+            httpx.NetworkError,
+            httpx.RemoteProtocolError,
+            httpx.ProxyError,
+            httpx.DecodingError,
+        ) as error:
             raise Unavailable(f"Model connection failed ({type(error).__name__}); no action executed.") from None
         except httpx.HTTPError:
             raise RuntimeError("Model connection failed; no action executed.") from None
@@ -176,7 +182,17 @@ def _post(model: Any, url: str, headers: dict[str, str], body: dict[str, Any]) -
             time.sleep(0.5 * 2**attempt)
             continue
         if response.is_error:
-            failed = Unavailable if response.status_code in RETRYABLE else RuntimeError
+            transient = response.status_code in RETRYABLE
+            try:
+                error_body = response.json()
+            except ValueError:
+                error_body = None
+            if isinstance(error_body, dict) and isinstance(error := error_body.get("error"), dict):
+                param = error.get("param")
+                transient |= error.get("isRetryable") is True or (
+                    isinstance(param, dict) and param.get("isRetryable") is True
+                )
+            failed = Unavailable if transient else RuntimeError
             raise failed(f"Model provider returned HTTP {response.status_code}; no action executed.")
         payload = response.json()
         # OpenRouter can hold a request open, then send its error in a 200: that body is no answer to act on.

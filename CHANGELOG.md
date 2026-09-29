@@ -14,7 +14,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Same-named controls can be distinguished by their own visible descriptions when they share an ancestor,
   instead of falling back to position alone.
 - The Ultrafast eval adapter recognizes the same provider outage statuses as fastbrowse, including Cloudflare
-  520-524 responses, so those outages are retried instead of counted as agent failures.
+  520-524 responses, explicit provider retry markers and proxy transport failures, so outages are retried
+  instead of counted as agent failures.
 - Live evals retain every outage retry in a separate attempt ledger and keep separate retry recordings.
   Arm launch order rotates between repeats. Slow completed attempts still count with their full time and cost.
 

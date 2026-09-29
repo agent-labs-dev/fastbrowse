@@ -16,7 +16,7 @@ import pytest
 from pydantic import SecretStr
 
 from fastbrowse.clients.environment import JevSource, Settings
-from fastbrowse.clients.validation import RETRYABLE_STATUS
+from fastbrowse.clients.validation import RETRYABLE_STATUS, TRANSIENT_TRANSPORT
 from fastbrowse.evals import live, live_tasks, more_tasks
 from fastbrowse.evals.live_tasks import TASKS, LiveTask, Outcome
 from fastbrowse.evals.status import Ending
@@ -981,3 +981,25 @@ def test_ultrafast_classifies_the_same_provider_outages(
     model = SimpleNamespace(CLIENT=SimpleNamespace(post=lambda *_, **__: response))
     with pytest.raises(RUNNER["Unavailable"]):
         RUNNER["_post"](model, "https://openrouter.ai/api/v1/chat/completions", {}, {})
+
+
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("flag", [True, False, "true", None])
+def test_ultrafast_respects_explicit_provider_transience(nested: bool, flag: object) -> None:
+    marker = {"isRetryable": flag}
+    error = {"param": marker} if nested else marker
+    response = httpx.Response(400, json={"error": error})
+    model = SimpleNamespace(CLIENT=SimpleNamespace(post=lambda *_, **__: response))
+    with pytest.raises(RuntimeError) as caught:
+        RUNNER["_post"](model, "https://provider.test", {}, {})
+    assert isinstance(caught.value, RUNNER["Unavailable"]) is (flag is True)
+
+
+@pytest.mark.parametrize("error", TRANSIENT_TRANSPORT)
+def test_ultrafast_classifies_the_same_transport_outages(error: type[httpx.TransportError]) -> None:
+    def post(*_: Any, **__: Any) -> None:
+        raise error("upstream failure")
+
+    model = SimpleNamespace(CLIENT=SimpleNamespace(post=post))
+    with pytest.raises(RUNNER["Unavailable"]):
+        RUNNER["_post"](model, "https://provider.test", {}, {})
