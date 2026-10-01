@@ -208,6 +208,8 @@ class Capture(Frozen):
 class Action(Frozen):
     operation: Operation
     target_id: str | None = None
+    destination_id: str | None = None
+    """Drop target of a drag: the control the dragged element is released onto."""
     text: str | None = None
     """Value to type or option to select. May hold a resolved secret: never log or persist an Action."""
     secret: bool = False

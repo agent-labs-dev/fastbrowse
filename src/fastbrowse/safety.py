@@ -32,6 +32,7 @@ def may_be_irreversible(operation: Operation, control: Control | None) -> bool:
         # A dialog's accept is asked about where the dialog is handled; the rest change nothing off the page.
         case (
             Operation.HOVER
+            | Operation.DRAG
             | Operation.FILL
             | Operation.SELECT
             | Operation.ESCAPE

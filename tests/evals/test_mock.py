@@ -263,3 +263,30 @@ def test_mock_tasks_have_versions() -> None:
     from fastbrowse.evals import versions
 
     assert all(versions.task_version(task.id) is not None for task in TASKS)
+
+
+def test_the_board_offers_a_draggable_card_and_two_drop_columns(browser: tuple[Browser, Site]) -> None:
+    caller, _ = browser
+    code, body = caller.get("/board")
+    assert code == 200
+    assert "draggable='true'" in body
+    assert "data-column='To Do'" in body and "data-column='Done'" in body
+    assert "Card A" in body
+
+
+def test_a_card_dropped_on_a_column_is_recorded_by_the_site(browser: tuple[Browser, Site]) -> None:
+    caller, site = browser
+    caller.get("/board")
+    caller.post("/board/drop", {"card": "Card A", "column": "Done"})
+    assert site.drops == [{"card": "Card A", "column": "Done"}]
+
+
+def test_the_drag_grader_needs_the_card_on_done_and_a_finished_run() -> None:
+    task = next(t for t in TASKS if t.id == "mock-drag-card")
+    site = Site()
+    assert task.check(_run("I moved the card."), site) is not None, "a run that moved nothing cannot pass"
+    site.record_drop({"card": "Card A", "column": "To Do"})
+    assert task.check(_run("I moved the card."), site) is not None, "the wrong column cannot pass"
+    site.record_drop({"card": "Card A", "column": "Done"})
+    assert task.check(_run("I moved the card."), site) is None
+    assert task.check(_run(None, status=Status.NEEDS_CONFIRMATION), site) is not None

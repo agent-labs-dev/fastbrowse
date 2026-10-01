@@ -66,6 +66,7 @@ class Tripwire(StrEnum):
 class Operation(StrEnum):
     CLICK = "click"
     HOVER = "hover"
+    DRAG = "drag"
     FILL = "fill"
     SELECT = "select"
     ENTER = "enter"
@@ -84,7 +85,15 @@ class Operation(StrEnum):
 SCROLLING = frozenset({Operation.SCROLL, Operation.SCROLL_UP})
 
 TARGETED = frozenset(
-    {Operation.CLICK, Operation.HOVER, Operation.FILL, Operation.SELECT, Operation.ENTER, Operation.UPLOAD}
+    {
+        Operation.CLICK,
+        Operation.HOVER,
+        Operation.DRAG,
+        Operation.FILL,
+        Operation.SELECT,
+        Operation.ENTER,
+        Operation.UPLOAD,
+    }
 )
 """Operations aimed at one observed control, which is hit-tested before input reaches it."""
 

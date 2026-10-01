@@ -103,6 +103,10 @@
     "version": 4,
     "fingerprint": "862f60dae252b26e"
   },
+  "mock-drag-card": {
+    "version": 1,
+    "fingerprint": "9f7e111265e2d417"
+  },
   "mock-iframe-note": {
     "version": 4,
     "fingerprint": "c42fdc358c666a97"

@@ -108,6 +108,10 @@ _HIT_TEST_JS = (
 _HANDOFF_SECONDS = 0.6
 _HANDOFF_QUIET_SECONDS = 0.1
 _TARGET_STABILITY_SECONDS = 1.0
+_DRAG_STEPS = 12
+"""Points the pointer travels through between a drag's press and its release."""
+_DRAG_STEP_SECONDS = 0.01
+"""Pause between a drag's moves, so the renderer reads travel and not one teleport to the target."""
 # A guard resumed inside an animation callback can miss other callbacks in that same frame. Resolve in the
 # next task so a combined frame wait and hit test sees their DOM changes too.
 _PRESENTED_JS = (
@@ -662,6 +666,8 @@ class CdpPage(Page):
                 return await self._select(target, action.text or "", point)
             case Operation.ENTER:
                 return await self._key(target, "Enter", point)
+            case Operation.DRAG:
+                return await self._drag(target, point, action.destination_id)
             case Operation.ESCAPE:
                 return await self._key(None, "Escape", None)
             case Operation.SCROLL | Operation.SCROLL_UP:
@@ -1094,6 +1100,77 @@ class CdpPage(Page):
         for kind in ("mousePressed", "mouseReleased"):
             params: DispatchMouseEventParameters = {"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1}
             await self._input(self._session.client.send.Input.dispatchMouseEvent(params=params, session_id=session_id))
+        return StepOutcome.EXECUTED, None
+
+    async def _drag(
+        self,
+        target: tuple[str, str, int, list[object] | None] | None,
+        point: _Point,
+        destination_id: str | None,
+    ) -> tuple[StepOutcome, str | None]:
+        """Drag the source onto the drop target with real pointer input: press, a path of moves, release.
+
+        The travel is what makes it a drag and not a click at the source. HTML5 drag-and-drop and a page's own
+        pointer handlers both start only after the pointer moves with the button held, and a single jump to the
+        target is read as a teleport rather than a drag. Chrome turns this same held-button path into a native
+        drag when the element is `draggable`, so one implementation drives both kinds of drag.
+        """
+        if target is None:
+            return StepOutcome.FAILED, "drag requires a source"
+        if destination_id is None:
+            return StepOutcome.FAILED, "drag requires a drop target"
+        if point is None:
+            return StepOutcome.STALE, "drag source disconnected"
+        if point == "covered":
+            return StepOutcome.COVERED, None
+        drop = self._last.controls.get(destination_id) if self._last is not None else None
+        if drop is None:
+            return StepOutcome.STALE, "unknown drop target id"
+        _, _, drop_point, _ = await self._before_action(drop, hit_test=False)
+        if drop_point is None or drop_point == "covered":
+            return StepOutcome.STALE, "drop target disconnected"
+        session_id = target[0]
+        start_x, start_y = point
+        end_x, end_y = drop_point
+        await self._move(session_id, (start_x, start_y))
+        await self._input(
+            self._session.client.send.Input.dispatchMouseEvent(
+                params={
+                    "type": "mousePressed",
+                    "x": start_x,
+                    "y": start_y,
+                    "button": "left",
+                    "clickCount": 1,
+                    "buttons": 1,
+                },
+                session_id=session_id,
+            )
+        )
+        # A press with no travel is a click; the drag starts on the first move that clears Chrome's threshold.
+        await asyncio.sleep(_DRAG_STEP_SECONDS)
+        for step in range(1, _DRAG_STEPS + 1):
+            params: DispatchMouseEventParameters = {
+                "type": "mouseMoved",
+                "x": start_x + (end_x - start_x) * step / _DRAG_STEPS,
+                "y": start_y + (end_y - start_y) * step / _DRAG_STEPS,
+                "button": "left",
+                "buttons": 1,
+            }
+            await self._input(self._session.client.send.Input.dispatchMouseEvent(params=params, session_id=session_id))
+            await asyncio.sleep(_DRAG_STEP_SECONDS)
+        await self._input(
+            self._session.client.send.Input.dispatchMouseEvent(
+                params={
+                    "type": "mouseReleased",
+                    "x": end_x,
+                    "y": end_y,
+                    "button": "left",
+                    "clickCount": 1,
+                    "buttons": 0,
+                },
+                session_id=session_id,
+            )
+        )
         return StepOutcome.EXECUTED, None
 
     async def _input(self, send: Coroutine[None, None, object]) -> None:

@@ -281,6 +281,7 @@ def _describe(step: StepResult) -> str:
         case (
             Operation.CLICK
             | Operation.HOVER
+            | Operation.DRAG
             | Operation.FILL
             | Operation.SELECT
             | Operation.ENTER

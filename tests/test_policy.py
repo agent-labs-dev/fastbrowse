@@ -428,3 +428,30 @@ def test_the_choice_is_told_today_for_a_task_relative_to_it() -> None:
     state = build_request(page, (), context(task="Select next month's first Friday"), Config()).state
     assert isinstance(state, dict)
     assert state["date"] == "2026-09-26 (Saturday). In one month: October 2026; in two months: November 2026"
+
+
+def _draggable() -> Control:
+    return Control(
+        id="drag1",
+        frame_id=None,
+        role="generic",
+        label="Card A",
+        operations=frozenset({Operation.CLICK, Operation.DRAG}),
+        offscreen=False,
+    )
+
+
+async def test_a_draggable_control_offers_drag_and_asks_where_it_lands() -> None:
+    source, drop = _draggable(), button(1)
+    jev = ScriptedJev({"operation": "drag", "drag_target": "drag1", "drag_destination": "b1"})
+    decision = await decide(jev, observation((source, drop)), context(task="Move Card A onto Done"), Config())
+    assert decision.operation is Operation.DRAG
+    assert decision.target and decision.target.id == "drag1"
+    assert decision.destination and decision.destination.id == "b1"
+
+
+def test_drag_is_not_offered_when_nothing_is_draggable() -> None:
+    page = observation((button(1),))
+    request = build_request(page, (button(1),), context(), Config())
+    assert "drag_target" not in request.questions
+    assert "drag_destination" not in request.questions

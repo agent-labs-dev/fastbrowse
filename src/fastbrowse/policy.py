@@ -71,6 +71,10 @@ or subgoal names one of those, choose the element whose context matches it."""
 GROUP = """Too many elements to list at once. Choose the group that contains the best target if the next
 operation is the one this question names. A later question picks the element inside the group."""
 
+DESTINATION = f"""{UNTRUSTED}
+Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop
+target, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged."""
+
 RELEVANCE = f"""{UNTRUSTED}
 Could the task's next few actions, or reading what it needs, act on or rely on the element in each question?
 Judge by its label, role, context and href. Site chrome, footers, ads, social links and unrelated navigation
@@ -79,6 +83,7 @@ are not relevant."""
 OPERATION_LABELS: Mapping[Operation, str] = {
     Operation.CLICK: "Click an element, button, link, menu option, autocomplete suggestion or calendar day.",
     Operation.HOVER: "Hover over an element to reveal content the page shows only under the pointer.",
+    Operation.DRAG: "Drag one element and drop it onto another, to move, reorder or file it.",
     Operation.FILL: "Enter or replace text in an editable field.",
     Operation.SELECT: "Select a value in an observed dropdown.",
     Operation.ENTER: "Press Enter in a text field to submit or search for what it already contains.",
@@ -176,6 +181,8 @@ class Decision(Frozen):
     directed: bool = False
     """Recovery's action on this decision's page. Its confidence scores the action Jev chose instead, so it
     says nothing about this one."""
+    destination: Control | None = None
+    """Drop target of a drag: the control the element Jev chose to drag is released onto."""
 
     @property
     def confidence(self) -> float:
@@ -191,6 +198,8 @@ class _Request:
     questions: Mapping[str, Question]
     targets: Mapping[Operation, tuple[Control, ...]]
     groups: Mapping[Operation, tuple[tuple[Control, ...], ...]]
+    destinations: tuple[Control, ...] = ()
+    """Controls a drag may be released onto; the destination question is keyed by their ids."""
 
 
 async def decide(
@@ -389,6 +398,9 @@ def _offered_operations(
             case Operation.CLICK | Operation.HOVER | Operation.FILL | Operation.SELECT | Operation.ENTER:
                 if operation in indexed:
                     available.append(operation)
+            case Operation.DRAG:
+                if operation in indexed:
+                    available.append(operation)
             case Operation.UPLOAD:
                 if context.has_attachments and operation in indexed:
                     available.append(operation)
@@ -484,6 +496,12 @@ def build_request(
                 for i, chunk in enumerate(chunks)
             },
         )
+    drops: tuple[Control, ...] = tuple(control for control in controls if control.label)
+    if Operation.DRAG in offered and len(drops) <= limit:
+        questions["drag_destination"] = ChoiceQuestion(
+            instructions=json.dumps({"rules": DESTINATION, "operation": Operation.DRAG.value}),
+            criteria={control.id: _relevance_element(control) for control in drops},
+        )
     if Operation.SWITCH_TAB in offered:
         questions["switch_tab_target"] = ChoiceQuestion(
             instructions=json.dumps({"rules": TARGET, "operation": Operation.SWITCH_TAB.value}),
@@ -502,7 +520,7 @@ def build_request(
             "The page is a CAPTCHA, a browser verification or a similar bot check.",
             "The page is a sign-in form or an ordinary page.",
         )
-    return _Request(_state(observation, controls, context, compact), questions, targets, groups)
+    return _Request(_state(observation, controls, context, compact), questions, targets, groups, drops)
 
 
 def fits(request: _Request, config: Config) -> bool:
@@ -561,10 +579,21 @@ async def _evaluate(
         target_answer = _choice(evaluation, "switch_tab_target")
         tab_id = target_answer.choice
         target_confidence = target_answer.confidence
+    destination: Control | None = None
+    if operation is Operation.DRAG and "drag_destination" in request.questions:
+        destination_answer = _choice(evaluation, "drag_destination")
+        destination = _control(request.destinations, destination_answer.choice)
+        # A drag is only as certain as the weaker of its two ends.
+        target_confidence = (
+            destination_answer.confidence
+            if target_confidence is None
+            else min(target_confidence, destination_answer.confidence)
+        )
     return Decision(
         operation=operation,
         target=target,
         tab_id=tab_id,
+        destination=destination,
         operation_confidence=operation_answer.confidence,
         target_confidence=target_confidence,
         login_required=_noul_probability(evaluation, "login_required"),

@@ -1432,6 +1432,15 @@ class Agent:
                 if gate:
                     await self._gate_irreversible(state, observation, decision)
                 return Action(operation=decision.operation, target_id=target.id if target else None)
+            case Operation.DRAG:
+                destination = decision.destination
+                if destination is None:
+                    raise _Stop(Status.NEEDS_INPUT, "the page offers no drop target for the drag")
+                return Action(
+                    operation=Operation.DRAG,
+                    target_id=_require(target).id,
+                    destination_id=destination.id,
+                )
             case Operation.FILL:
                 text = await self._text(state, observation, _require(target))
                 return Action(
