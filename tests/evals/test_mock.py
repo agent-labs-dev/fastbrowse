@@ -5,6 +5,7 @@ changed a password without checking the current one, would pass a run that did n
 is tested here too, over real HTTP.
 """
 
+import hashlib
 import urllib.error
 import urllib.request as request
 from collections.abc import Iterator
@@ -14,7 +15,7 @@ from urllib.parse import urlencode
 import pytest
 
 from fastbrowse.evals.mock import ACCOUNTS, ORDERS, PRODUCTS, Site, code_for, mock_site
-from fastbrowse.evals.mock_tasks import ADA, GRACE, TASKS, MockTask
+from fastbrowse.evals.mock_tasks import ADA, GRACE, HELD_BACK, TASKS, MockTask
 from fastbrowse.models import RunResult, Status
 
 ADA_PASSWORD = ACCOUNTS[ADA]
@@ -48,6 +49,27 @@ class Browser:
 
     def sign_in(self, email: str, password: str) -> tuple[int, str]:
         return self.post("/login", {"email": email, "password": password})
+
+    def upload(self, path: str, field: str, name: str, content: bytes) -> tuple[int, str]:
+        """A multipart post, which is the shape a browser sends when a form carries a file."""
+        boundary = "----fastbrowse-test-boundary"
+        body = (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{field}"; filename="{name}"\r\n'
+            f"Content-Type: application/octet-stream\r\n\r\n".encode()
+            + content
+            + f"\r\n--{boundary}--\r\n".encode()
+        )
+        post = request.Request(
+            self.base + path,
+            data=body,
+            method="POST",
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        try:
+            with self.opener.open(post) as response:
+                return response.status, response.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as error:
+            return error.code, error.read().decode("utf-8", "replace")
 
 
 @pytest.fixture
@@ -263,3 +285,141 @@ def test_mock_tasks_have_versions() -> None:
     from fastbrowse.evals import versions
 
     assert all(versions.task_version(task.id) is not None for task in TASKS)
+
+
+def test_the_upload_page_offers_a_file_input(browser: tuple[Browser, Site]) -> None:
+    caller, _ = browser
+    _, body = caller.get("/upload")
+    assert "type='file'" in body
+    assert "multipart/form-data" in body, "a file input outside a multipart form sends a name and no bytes"
+
+
+def test_an_attached_file_reaches_the_server_with_its_bytes(browser: tuple[Browser, Site]) -> None:
+    caller, site = browser
+    code, body = caller.upload("/upload", "doc", "stocktake.txt", b"stock take: 14 items on the shelf\n")
+    assert code == 200
+    assert "stocktake.txt" in body
+    [received] = site.uploads
+    assert received["name"] == "stocktake.txt"
+    assert received["sha256"] == hashlib.sha256(b"stock take: 14 items on the shelf\n").hexdigest()
+
+
+def test_a_submission_without_an_attachment_is_refused(browser: tuple[Browser, Site]) -> None:
+    caller, site = browser
+    code, _ = caller.post("/upload", {})
+    assert code == 400
+    assert site.uploads == []
+
+
+def test_the_news_page_links_the_story_in_a_second_tab(browser: tuple[Browser, Site]) -> None:
+    caller, site = browser
+    _, body = caller.get("/news")
+    assert "target='_blank'" in body
+    assert "/news/extra" in body
+    _, story = caller.get("/news/extra")
+    assert "Monday" in story
+    assert "/news/extra" in site.paths
+
+
+def test_the_booking_form_takes_a_date(browser: tuple[Browser, Site]) -> None:
+    caller, site = browser
+    _, body = caller.get("/booking")
+    assert "type='date'" in body
+    code, _ = caller.post("/booking", {"when": "2027-03-04"})
+    assert code == 200
+    assert [fields.get("when") for path, fields in site.posts if path == "/booking"] == ["2027-03-04"]
+
+
+def test_a_filled_trap_field_is_refused_and_an_empty_one_is_accepted(browser: tuple[Browser, Site]) -> None:
+    caller, _ = browser
+    code, _ = caller.post("/gate", {"email": ADA, "website": "http://spam.example"})
+    assert code == 403
+    code, body = caller.post("/gate", {"email": ADA})
+    assert code == 200
+    assert "newsletter list" in body
+
+
+def test_the_export_page_is_behind_the_sign_in(browser: tuple[Browser, Site]) -> None:
+    caller, _ = browser
+    _, body = caller.get("/account/export")
+    assert "Sign in" in body
+
+
+def test_the_invoice_export_is_served_as_csv(browser: tuple[Browser, Site]) -> None:
+    caller, _ = browser
+    code, body = caller.get("/download/invoices.csv")
+    assert code == 200
+    assert body.splitlines()[0] == "invoice,amount"
+
+
+def test_the_upload_grader_reads_the_bytes_the_site_received() -> None:
+    from fastbrowse.evals.mock_tasks import UPLOAD_BODY, UPLOAD_NAME
+
+    task = next(t for t in HELD_BACK if t.id == "mock-upload-document")
+    site = Site()
+    assert task.check(_run(None), site) is not None, "no file received cannot pass"
+    site.record_upload("doc", UPLOAD_NAME, b"a different document")
+    assert task.check(_run(None), site) is not None, "the wrong bytes cannot pass"
+    site.uploads.clear()
+    site.record_upload("doc", UPLOAD_NAME, UPLOAD_BODY)
+    assert task.check(_run(None), site) is None
+
+
+def test_the_new_tab_grader_needs_the_second_page_opened() -> None:
+    task = next(t for t in TASKS if t.id == "mock-new-tab-story")
+    site = Site()
+    assert task.check(_run("It reopens on Monday."), site) is not None
+    site.visited("/news/extra")
+    assert task.check(_run("It reopens on Monday."), site) is None
+    assert task.check(_run("It reopens on Tuesday."), site) is not None
+
+
+def test_the_booking_grader_reads_the_date_the_site_received() -> None:
+    task = next(t for t in TASKS if t.id == "mock-book-table")
+    site = Site()
+    assert task.check(_run(None), site) is not None
+    site.record("/booking", {"when": "2027-03-04"})
+    assert task.check(_run(None), site) is None
+
+
+def test_the_gate_grader_rejects_a_filled_trap_field() -> None:
+    task = next(t for t in TASKS if t.id == "mock-newsletter-gate")
+    site = Site()
+    assert task.check(_run(None), site) is not None, "nothing submitted cannot pass"
+    site.record("/gate", {"email": ADA})
+    assert task.check(_run(None), site) is None
+    site.posts.clear()
+    site.record("/gate", {"email": ADA, "website": "http://spam.example"})
+    assert task.check(_run(None), site) is not None, "a filled trap field cannot pass"
+    site.posts.clear()
+    site.record("/gate", {"email": "someone-else@example.com"})
+    assert task.check(_run(None), site) is not None, "the wrong address cannot pass"
+
+
+def test_the_invoice_total_is_graded_from_a_signed_in_run() -> None:
+    task = next(t for t in TASKS if t.id == "mock-invoice-export")
+    site = Site()
+    assert task.check(_run("The invoices total GBP 175.00."), site) is not None, "a signed-out run cannot pass"
+    site.sign_in(GRACE)
+    assert task.check(_run("The invoices total GBP 175.00."), site) is None
+    assert task.check(_run("The invoices total GBP 157.00."), site) is not None
+
+
+def test_a_grader_accepts_the_same_fact_worded_differently() -> None:
+    # A curly dash or a different case is phrasing, not a wrong answer.
+    task = next(t for t in TASKS if t.id == "mock-priciest-product")
+    assert task.check(_run("The Drum Roaster, at GBP 210."), Site()) is None
+    assert task.check(_run("The drum roaster \u2014 210.00."), Site()) is None
+    assert task.check(_run("The Drum Roaster, at GBP 21."), Site()) is not None
+
+
+def test_a_row_carries_the_step_budget_it_ran_under() -> None:
+    from fastbrowse.evals.runner import HEADROOM, _row
+    from fastbrowse.models import CostBreakdown
+
+    result = RunResult.model_construct(
+        status=Status.COMPLETE, answer=None, data=None, cost=CostBreakdown(lines=()), steps=()
+    )
+    row = _row(result, task_id="x", failure=None, seconds=1.0, lost=0.0, limit=40)
+    assert row["step_limit"] == 40
+    assert 0 < HEADROOM < 1, "a headroom of the whole budget or none of it warns nobody"

@@ -63,6 +63,17 @@ help; the suites show it does not hurt elsewhere.
 The agent must work on any site, so a rule written for one site, such as matching a label only Google uses,
 will not be merged. Fix the general cause in the prompt, the choice or the check that failed.
 
+The local and mock fixture suites drive a real browser, Jev and the LLM, so they run on a schedule and on demand
+in `.github/workflows/evals.yml` rather than on every pull request. Run them yourself before a change to browsing
+behaviour or to the fixtures:
+
+```sh
+just evals-local --suite local mock --repeat 3
+```
+
+A published comparison figure has its own rule: it may only come from committed rows (`--publish`) at the task
+versions they ran, with every physical attempt and its spend retained. See [docs/evals.md](docs/evals.md).
+
 ## Pull requests
 
 - Keep one change per PR. The title is a conventional commit (`fix:`, `feat:`, `docs:`, `perf:`, `chore:`)

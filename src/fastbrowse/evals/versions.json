@@ -1,322 +1,338 @@
 {
   "arxiv-open": {
-    "version": 9,
-    "fingerprint": "a131701dc432663c"
+    "fingerprint": "a131701dc432663c",
+    "version": 9
   },
   "arxiv-title": {
-    "version": 7,
-    "fingerprint": "f7600f020d792b84"
+    "fingerprint": "f7600f020d792b84",
+    "version": 7
   },
   "books-mystery-cheapest": {
-    "version": 7,
-    "fingerprint": "915c2d8954051ca2"
+    "fingerprint": "915c2d8954051ca2",
+    "version": 7
   },
   "books-travel-priciest": {
-    "version": 7,
-    "fingerprint": "7346e375b230ed70"
+    "fingerprint": "7346e375b230ed70",
+    "version": 7
   },
   "confirm-dialog": {
-    "version": 1,
-    "fingerprint": "2dbcd11d1ba132cd"
+    "fingerprint": "2dbcd11d1ba132cd",
+    "version": 1
   },
   "contact-form": {
-    "version": 1,
-    "fingerprint": "0e4218622251291f"
+    "fingerprint": "0e4218622251291f",
+    "version": 1
   },
   "contact-needs-confirmation": {
-    "version": 1,
-    "fingerprint": "2783fba8fe7d90d9"
+    "fingerprint": "2783fba8fe7d90d9",
+    "version": 1
   },
   "countries-mongolia": {
-    "version": 7,
-    "fingerprint": "163d4fdbb56932e6"
+    "fingerprint": "163d4fdbb56932e6",
+    "version": 7
   },
   "countries-namibia-area": {
-    "version": 3,
-    "fingerprint": "9e71d0ebbdb5b8a9"
+    "fingerprint": "9e71d0ebbdb5b8a9",
+    "version": 3
   },
   "crates-serde": {
-    "version": 7,
-    "fingerprint": "9a0f2cf19cbb7ce4"
+    "fingerprint": "9a0f2cf19cbb7ce4",
+    "version": 7
   },
   "dynamic-loading": {
-    "version": 8,
-    "fingerprint": "7cd731724fe362dd"
+    "fingerprint": "7cd731724fe362dd",
+    "version": 8
   },
   "expandtesting-login": {
-    "version": 7,
-    "fingerprint": "414d61a40ffac29f"
+    "fingerprint": "414d61a40ffac29f",
+    "version": 7
   },
   "flights-search": {
-    "version": 9,
-    "fingerprint": "c6d39f65709fe56a"
+    "fingerprint": "c6d39f65709fe56a",
+    "version": 9
   },
   "frame-heading": {
-    "version": 4,
-    "fingerprint": "8bdeabb8809e521c"
+    "fingerprint": "8bdeabb8809e521c",
+    "version": 4
   },
   "github-license": {
-    "version": 7,
-    "fingerprint": "af2133290d01960d"
+    "fingerprint": "af2133290d01960d",
+    "version": 7
   },
   "github-open": {
-    "version": 9,
-    "fingerprint": "eaab86b26f889379"
+    "fingerprint": "eaab86b26f889379",
+    "version": 9
   },
   "google-flights": {
-    "version": 7,
-    "fingerprint": "c7e94e8328f84822"
+    "fingerprint": "c7e94e8328f84822",
+    "version": 7
   },
   "hn-comments": {
-    "version": 9,
-    "fingerprint": "2d000b7dcacd1b64"
+    "fingerprint": "2d000b7dcacd1b64",
+    "version": 9
   },
   "hn-top": {
-    "version": 7,
-    "fingerprint": "22d226397996fdfe"
+    "fingerprint": "22d226397996fdfe",
+    "version": 7
   },
   "hockey-bruins-1990": {
-    "version": 7,
-    "fingerprint": "cbcaaadaf64d8a3c"
+    "fingerprint": "cbcaaadaf64d8a3c",
+    "version": 7
   },
   "hover-profile": {
-    "version": 8,
-    "fingerprint": "0601b9cd9c2d307a"
+    "fingerprint": "0601b9cd9c2d307a",
+    "version": 8
   },
   "httpx-requires-python": {
-    "version": 7,
-    "fingerprint": "43dd0b1d19f6905f"
+    "fingerprint": "43dd0b1d19f6905f",
+    "version": 7
   },
   "login-wall": {
-    "version": 1,
-    "fingerprint": "851683583e9044a8"
+    "fingerprint": "851683583e9044a8",
+    "version": 1
   },
   "mock-basket": {
-    "version": 5,
-    "fingerprint": "04b021c172049616"
+    "fingerprint": "9e680aa4879188e7",
+    "version": 6
+  },
+  "mock-book-table": {
+    "fingerprint": "1b43cb7724451dbc",
+    "version": 2
   },
   "mock-cheapest-product": {
-    "version": 4,
-    "fingerprint": "a28dfab474973809"
+    "fingerprint": "87d02a3f9aaae488",
+    "version": 5
   },
   "mock-compare-prices": {
-    "version": 4,
-    "fingerprint": "862f60dae252b26e"
+    "fingerprint": "65b30d9b47fe8787",
+    "version": 5
   },
   "mock-iframe-note": {
-    "version": 4,
-    "fingerprint": "c42fdc358c666a97"
+    "fingerprint": "3c914358b8c070fd",
+    "version": 5
   },
   "mock-infinite-scroll": {
-    "version": 4,
-    "fingerprint": "04087c10375ad3f2"
+    "fingerprint": "5fe4b8451de56ebf",
+    "version": 5
+  },
+  "mock-invoice-export": {
+    "fingerprint": "830ba1f72eb5f8e4",
+    "version": 1
+  },
+  "mock-new-tab-story": {
+    "fingerprint": "4296df1ade5ae8fa",
+    "version": 1
+  },
+  "mock-newsletter-gate": {
+    "fingerprint": "11f1fe706bcdc311",
+    "version": 2
   },
   "mock-order-pause": {
-    "version": 5,
-    "fingerprint": "9b6e5e7eb4aa165f"
+    "fingerprint": "998961b22074113f",
+    "version": 6
   },
   "mock-order-validation": {
-    "version": 4,
-    "fingerprint": "f6c556231fbfd4cb"
+    "fingerprint": "aa67498388dbfe5f",
+    "version": 5
   },
   "mock-pagination-exhaustion": {
-    "version": 4,
-    "fingerprint": "768e0f6a5bf73ad6"
+    "fingerprint": "1d86550da11c2195",
+    "version": 5
   },
   "mock-password-change": {
-    "version": 5,
-    "fingerprint": "6fc9c39546396f9c"
+    "fingerprint": "68bb6290c0caf14b",
+    "version": 6
   },
   "mock-password-pause": {
-    "version": 6,
-    "fingerprint": "7dcd9d23346c9e0b"
+    "fingerprint": "1e74914c5a7c3ca4",
+    "version": 7
   },
   "mock-priciest-product": {
-    "version": 4,
-    "fingerprint": "0a2cd3407ca93d7a"
+    "fingerprint": "3f2a53c296aa01f9",
+    "version": 5
   },
   "mock-report-total": {
-    "version": 5,
-    "fingerprint": "dfaeb38afc088562"
+    "fingerprint": "8ea316a8220b796b",
+    "version": 6
   },
   "mock-shadow-dom": {
-    "version": 4,
-    "fingerprint": "610d7b99085d933d"
+    "fingerprint": "e5affc58f26f7841",
+    "version": 5
   },
   "mock-sign-in": {
-    "version": 4,
-    "fingerprint": "9c7b6bd28f82d5d3"
+    "fingerprint": "56cc7281e08a73f1",
+    "version": 5
   },
   "mock-sign-in-code-given": {
-    "version": 4,
-    "fingerprint": "d2e96c1e3ac507a8"
+    "fingerprint": "22ce81d29fb9fd99",
+    "version": 5
   },
   "mock-sign-in-per-digit": {
-    "version": 4,
-    "fingerprint": "10ddaf6d6e4bc3ab"
+    "fingerprint": "d5a57de46f9d3405",
+    "version": 5
   },
   "mock-sign-in-two-step": {
-    "version": 4,
-    "fingerprint": "26cbb1a78c6ca62f"
+    "fingerprint": "5d4c860036993fe7",
+    "version": 5
   },
   "mock-sign-out": {
-    "version": 4,
-    "fingerprint": "56c417575eb057cc"
+    "fingerprint": "ce63f4bfe981454a",
+    "version": 5
   },
   "mock-stock-count": {
-    "version": 4,
-    "fingerprint": "87d226ef9541a71c"
+    "fingerprint": "48ba4f4af3c609b5",
+    "version": 5
   },
   "mock-support-portal": {
-    "version": 4,
-    "fingerprint": "745206d16398a62a"
+    "fingerprint": "ab1e2ffe0f149b0f",
+    "version": 5
   },
   "new-tab-page": {
-    "version": 3,
-    "fingerprint": "a722b9e069c3635c"
+    "fingerprint": "a722b9e069c3635c",
+    "version": 3
   },
   "new-window": {
-    "version": 8,
-    "fingerprint": "684ce012462d2eb1"
+    "fingerprint": "684ce012462d2eb1",
+    "version": 8
   },
   "oscars-2012": {
-    "version": 7,
-    "fingerprint": "34089d28cd723bca"
+    "fingerprint": "34089d28cd723bca",
+    "version": 7
   },
   "pizza-order": {
-    "version": 7,
-    "fingerprint": "ac0970e11f50dfc5"
+    "fingerprint": "ac0970e11f50dfc5",
+    "version": 7
   },
   "practice-login": {
-    "version": 7,
-    "fingerprint": "51cbc63f2994be69"
+    "fingerprint": "51cbc63f2994be69",
+    "version": 7
   },
   "pypi-newer": {
-    "version": 7,
-    "fingerprint": "428a55863b39c9bf"
+    "fingerprint": "428a55863b39c9bf",
+    "version": 7
   },
   "pypi-open": {
-    "version": 9,
-    "fingerprint": "85188f1a21157e8b"
+    "fingerprint": "85188f1a21157e8b",
+    "version": 9
   },
   "pypi-structured": {
-    "version": 7,
-    "fingerprint": "6f2e9d6fdc17c9ef"
+    "fingerprint": "6f2e9d6fdc17c9ef",
+    "version": 7
   },
   "pypi-version": {
-    "version": 7,
-    "fingerprint": "f082b3865ac6c497"
+    "fingerprint": "f082b3865ac6c497",
+    "version": 7
   },
   "quotes-einstein-count": {
-    "version": 7,
-    "fingerprint": "ad2d7a24c3174568"
+    "fingerprint": "ad2d7a24c3174568",
+    "version": 7
   },
   "quotes-js-page2": {
-    "version": 7,
-    "fingerprint": "8bfbd4c04f7f3058"
+    "fingerprint": "8bfbd4c04f7f3058",
+    "version": 7
   },
   "quotes-rowling-count": {
-    "version": 3,
-    "fingerprint": "7018897e7b8edfc2"
+    "fingerprint": "7018897e7b8edfc2",
+    "version": 3
   },
   "quotes-search": {
-    "version": 7,
-    "fingerprint": "541e7f078f3cd8b0"
+    "fingerprint": "541e7f078f3cd8b0",
+    "version": 7
   },
   "quotes-search-lewis": {
-    "version": 3,
-    "fingerprint": "167a9ac22a4d2b5e"
+    "fingerprint": "167a9ac22a4d2b5e",
+    "version": 3
   },
   "ruff-release": {
-    "version": 7,
-    "fingerprint": "7e78f195989e9563"
+    "fingerprint": "7e78f195989e9563",
+    "version": 7
   },
   "saucedemo-cart": {
-    "version": 7,
-    "fingerprint": "9b04bd5e40bdc5fb"
+    "fingerprint": "9b04bd5e40bdc5fb",
+    "version": 7
   },
   "saucedemo-checkout": {
-    "version": 7,
-    "fingerprint": "12cfe299aa40fd83"
+    "fingerprint": "12cfe299aa40fd83",
+    "version": 7
   },
   "saucedemo-locked-out": {
-    "version": 7,
-    "fingerprint": "2d66bcc0aeee7744"
+    "fingerprint": "2d66bcc0aeee7744",
+    "version": 7
   },
   "saucedemo-pause": {
-    "version": 6,
-    "fingerprint": "78f548abb2f6b359"
+    "fingerprint": "78f548abb2f6b359",
+    "version": 6
   },
   "search-price": {
-    "version": 1,
-    "fingerprint": "6446d6939ba93247"
+    "fingerprint": "6446d6939ba93247",
+    "version": 1
   },
   "stretch-books-nonfiction-five-star": {
-    "version": 9,
-    "fingerprint": "1fb42fae24121a93"
+    "fingerprint": "1fb42fae24121a93",
+    "version": 9
   },
   "stretch-books-sequential-art-one-star": {
-    "version": 3,
-    "fingerprint": "33a5efb78a02cf46"
+    "fingerprint": "33a5efb78a02cf46",
+    "version": 3
   },
   "stretch-books-young-adult-one-star": {
-    "version": 3,
-    "fingerprint": "229527ffedbeb4ed"
+    "fingerprint": "229527ffedbeb4ed",
+    "version": 3
   },
   "stretch-bstack-apple-google": {
-    "version": 8,
-    "fingerprint": "cd7a6d69941f0acd"
+    "fingerprint": "cd7a6d69941f0acd",
+    "version": 8
   },
   "stretch-bstack-apple-samsung": {
-    "version": 8,
-    "fingerprint": "f4f090b26286cfe4"
+    "fingerprint": "f4f090b26286cfe4",
+    "version": 8
   },
   "stretch-calendar-first-friday": {
-    "version": 9,
-    "fingerprint": "a19f2c321120f96c"
+    "fingerprint": "a19f2c321120f96c",
+    "version": 9
   },
   "stretch-date-range-monday": {
-    "version": 8,
-    "fingerprint": "8e95c92bf66332fc"
+    "fingerprint": "8e95c92bf66332fc",
+    "version": 8
   },
   "stretch-datepicker-last-saturday": {
-    "version": 3,
-    "fingerprint": "fb98974ee75f2c0d"
+    "fingerprint": "fb98974ee75f2c0d",
+    "version": 3
   },
   "stretch-datepicker-last-sunday": {
-    "version": 3,
-    "fingerprint": "7b8df76175c2e6a3"
+    "fingerprint": "7b8df76175c2e6a3",
+    "version": 3
   },
   "stretch-quotes-top-authors": {
-    "version": 8,
-    "fingerprint": "03de37005dd92ef9"
+    "fingerprint": "03de37005dd92ef9",
+    "version": 8
   },
   "stretch-wizard-correction": {
-    "version": 8,
-    "fingerprint": "2dc76be2b1f49207"
+    "fingerprint": "2dc76be2b1f49207",
+    "version": 8
   },
   "stretch-wizard-review": {
-    "version": 7,
-    "fingerprint": "3cb69f4cca7a0a8f"
+    "fingerprint": "3cb69f4cca7a0a8f",
+    "version": 7
   },
   "table-extract": {
-    "version": 1,
-    "fingerprint": "695205cb80b45f0a"
+    "fingerprint": "695205cb80b45f0a",
+    "version": 1
   },
   "table-largest-due": {
-    "version": 8,
-    "fingerprint": "6fb9021727b5cd63"
+    "fingerprint": "6fb9021727b5cd63",
+    "version": 8
   },
   "table-total-due": {
-    "version": 3,
-    "fingerprint": "3f72b4886300e4d3"
+    "fingerprint": "3f72b4886300e4d3",
+    "version": 3
   },
   "wiki-godel": {
-    "version": 7,
-    "fingerprint": "523371efdc8b624d"
+    "fingerprint": "523371efdc8b624d",
+    "version": 7
   },
   "wiki-open": {
-    "version": 9,
-    "fingerprint": "f030aaed28518af6"
+    "fingerprint": "f030aaed28518af6",
+    "version": 9
   }
 }

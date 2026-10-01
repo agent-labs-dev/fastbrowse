@@ -1,0 +1,55 @@
+name: Evals
+
+# The fixture suites drive a real Chrome, Jev and the LLM. They are the only check on whether the agent still
+# browses well, and the only gate that catches a regression in a task, a grader or the mock site, so they run on
+# a schedule and on demand, and the job fails when a task regresses.
+#
+# `pull_request` is deliberately absent: a pull request must never be handed the model key. `workflow_dispatch`
+# needs write access to trigger, so it is a maintainer checking their own branch.
+on:
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: Runs per task
+        default: "3"
+      target:
+        description: Required pass rate per task
+        default: "1.0"
+  schedule:
+    - cron: "0 3 * * *"
+
+permissions: {}
+
+jobs:
+  fixtures:
+    # Without the key there is nothing to run, and a fork or a mirror should not fail a schedule it cannot serve.
+    if: github.repository == 'agent-labs-dev/fastbrowse'
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    # A full mock repeat is minutes, not hours, but a stuck cloud browser must not hold a runner for a day.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with: {python-version: "3.13"}
+      - run: uv sync --locked --all-extras
+      - name: Run the fixture eval suites
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          uv run python -m fastbrowse.evals.runner \
+            --suite local mock \
+            --repeat "${{ inputs.repeat || '3' }}" \
+            --out artifacts/evals/nightly.jsonl
+      - name: Check the stability budget
+        if: always()
+        run: |
+          uv run python scripts/eval_stability.py artifacts/evals/nightly.jsonl \
+            --target "${{ inputs.target || '1.0' }}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
+        if: always()
+        with:
+          name: eval-rows
+          path: artifacts/evals/nightly.jsonl
+          if-no-files-found: warn

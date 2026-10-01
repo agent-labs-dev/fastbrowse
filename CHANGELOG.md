@@ -11,6 +11,23 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- The fixture eval suites (local and mock) run on a schedule and on demand in `.github/workflows/evals.yml`, and
+  the job fails on any regression, so a change to browsing behaviour that breaks a task no longer waits for
+  someone to run the suite by hand. The job reports a per-task pass rate over its repeats and refuses a run
+  where any task is below the target.
+
+- The stateful mock suite grows from 20 tasks to 24: a story opened in a second tab, a native date input, a
+  newsletter form with a hidden field a careful run leaves alone, and an export downloaded from behind a
+  sign-in. A run may now carry attachments, the way a caller supplies a file. A twenty-fifth task, a document
+  attached to a form and submitted, is written and unit-tested but held out of the gate: an authorized run
+  attaches the file and then cannot submit the form (#195).
+
+- Answer grading folds case and typographic punctuation before it matches, so a run that words a right answer
+  differently is not failed for its phrasing, and the runner warns when a task uses more than 60% of its step
+  budget.
+
+- `docs/evals.md` states how to read a published number, including the caveats that have to travel with one.
+
 ## [0.5.14] - 2026-09-29
 
 - Navigation comparisons enable cloud resizing to match Ultrafast's viewport and retain the actual

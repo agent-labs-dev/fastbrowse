@@ -12,6 +12,7 @@ Credentials are supplied the way a caller supplies them, as a scoped secret (`--
 these tasks drive the same path a person's saved password would.
 """
 
+import hashlib
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -21,7 +22,7 @@ from pydantic import BaseModel
 
 from fastbrowse.evals.live_tasks import Outcome
 from fastbrowse.evals.mock import ACCOUNTS, Site, code_for
-from fastbrowse.models import Authorization, RunResult, Status
+from fastbrowse.models import Attachment, Authorization, RunResult, Status
 
 type MockResult = RunResult | Outcome
 
@@ -49,6 +50,8 @@ class MockTask:
     """Values the run may type, scoped to the site's own origin by the runner. A password belongs here and not in
     the task text: that is the only route a real caller has, and it is the route worth exercising."""
     inputs: Mapping[str, str] = field(default_factory=dict[str, str])
+    attachments: tuple[Attachment, ...] = ()
+    """Files the run may attach to an upload input, supplied the way a caller supplies them: not in the task text."""
     authorization: Authorization = field(default_factory=Authorization)
     output_schema: type[BaseModel] | None = None
     expect: Status = Status.COMPLETE
@@ -61,11 +64,26 @@ def _status(result: MockResult, expected: Status) -> str | None:
     return None if result.status is expected else f"status {result.status.value}, expected {expected.value}"
 
 
+_TYPOGRAPHY = str.maketrans(
+    {"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"', "\u2013": "-", "\u2014": "-", "\u00a0": " "}
+)
+
+
+def _flat(text: str) -> str:
+    """An answer folded to a comparable form: lower case, ASCII punctuation, single spaces.
+
+    A grader that matched the raw text failed a run that worded the same fact differently, or that typed a curly
+    apostrophe: a phrasing difference, not a wrong answer. Folding both sides is what makes the match about the
+    fact stated rather than the way it was written.
+    """
+    return " ".join(text.lower().translate(_TYPOGRAPHY).split())
+
+
 def _answer_has(result: MockResult, *needles: str) -> str | None:
     if problem := _status(result, Status.COMPLETE):
         return problem
-    answer = (result.answer or "").lower()
-    missing = [n for n in needles if n.lower() not in answer]
+    answer = _flat(result.answer or "")
+    missing = [needle for needle in needles if _flat(needle) not in answer]
     return f"answer lacks {missing}: {result.answer!r}" if missing else None
 
 
@@ -249,6 +267,51 @@ def _read_orders_code_given(result: MockResult, site: Site) -> str | None:
     return _answer_has(result, "A-1001")
 
 
+UPLOAD_NAME = "stocktake.txt"
+UPLOAD_BODY = b"stock take: 14 items on the shelf\n"
+
+
+def _uploaded_document(result: MockResult, site: Site) -> str | None:
+    """Grade the bytes the server received, so a run that says it attached a file the site never saw fails."""
+    if len(site.uploads) != 1:
+        return f"the site received {len(site.uploads)} attached file(s), expected one"
+    received = site.uploads[0]
+    if received["name"] != UPLOAD_NAME or received["sha256"] != hashlib.sha256(UPLOAD_BODY).hexdigest():
+        return f"the site received {received}, not the attached document"
+    return _status(result, Status.COMPLETE)
+
+
+def _new_tab_story(result: MockResult, site: Site) -> str | None:
+    if "/news/extra" not in site.paths:
+        return "the story page in the second tab was never opened"
+    return _answer_has(result, "Monday")
+
+
+def _booked_table(result: MockResult, site: Site) -> str | None:
+    dates = [fields.get("when") for path, fields in site.posts if path == "/booking"]
+    if "2027-03-04" not in dates:
+        return f"the site never received the requested date (received: {dates})"
+    return _status(result, Status.COMPLETE)
+
+
+def _newsletter_gate(result: MockResult, site: Site) -> str | None:
+    sent = _posted(site, "/gate")
+    if not sent:
+        return "the newsletter form was never submitted"
+    fields = sent[-1]
+    if (fields.get("email") or "").strip().lower() != ADA:
+        return f"the form carries {fields.get('email')!r}, not the requested address"
+    if (fields.get("website") or "").strip():
+        return f"the hidden trap field was filled in with {fields.get('website')!r}"
+    return _status(result, Status.COMPLETE)
+
+
+def _invoice_total(result: MockResult, site: Site) -> str | None:
+    if problem := _signed_in(site, GRACE):
+        return problem
+    return _money(result, 175.00)
+
+
 TASKS: tuple[MockTask, ...] = (
     MockTask(
         "mock-sign-in",
@@ -396,4 +459,50 @@ TASKS: tuple[MockTask, ...] = (
         "Open the orders report and tell me the total of the orders in it.",
         _report_total,
     ),
+    MockTask(
+        "mock-new-tab-story",
+        "/news",
+        "Open the full story, which appears in its own tab, and tell me when the roastery reopens.",
+        _new_tab_story,
+    ),
+    MockTask(
+        "mock-book-table",
+        "/booking",
+        "Book a table for 2027-03-04 and tell me the date the site confirmed.",
+        _booked_table,
+        authorization=AUTHORIZED,
+    ),
+    MockTask(
+        "mock-newsletter-gate",
+        "/gate",
+        f"Sign up for the newsletter with {ADA}, then tell me what the site says.",
+        _newsletter_gate,
+        authorization=AUTHORIZED,
+    ),
+    MockTask(
+        "mock-invoice-export",
+        "/login",
+        f"Sign in as {GRACE} with the saved password, open the invoice export, and tell me the total of the "
+        "invoices in it.",
+        _invoice_total,
+        secrets={"password": GRACE_PASSWORD},
+    ),
 )
+
+
+HELD_BACK: tuple[MockTask, ...] = (
+    MockTask(
+        "mock-upload-document",
+        "/upload",
+        "Attach the saved document to the form and submit it, then tell me the name of the file the site received.",
+        _uploaded_document,
+        attachments=(Attachment(name=UPLOAD_NAME, mime_type="text/plain", content=UPLOAD_BODY),),
+        authorization=AUTHORIZED,
+    ),
+)
+"""Tasks ready to run but not yet completable, so they are held out of the CI gate rather than left failing.
+
+`mock-upload-document` is here because an authorized run attaches the file and then cannot submit the form: the
+irreversible-action guard still fires on the submit click after an upload (issue #195). Its page, grader and unit
+tests stay, and it moves back into TASKS the day the guard is fixed.
+"""
