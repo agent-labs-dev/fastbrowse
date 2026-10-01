@@ -3,6 +3,7 @@ import json
 import pytest
 
 from fastbrowse import cli
+from fastbrowse.clients.environment import Settings
 from fastbrowse.models import CostBreakdown, RunResult, Status
 
 
@@ -64,6 +65,9 @@ def test_a_credential_without_a_start_page_is_refused_rather_than_dropped(
 
 def test_cdp_url_hands_run_task_the_url_and_no_cloud_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """The browser is the caller's: `run_task` gets the URL, and nothing starts a second one."""
+    # A checkout's `.env` may set FASTBROWSE_PROFILE or FASTBROWSE_HEADED, which the guard would read as a
+    # conflict with --cdp-url. Pin settings to the config-file-free defaults so only this test's flags count.
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None))
     seen = {}
 
     async def fake_run_task(task: str, **kwargs: object) -> RunResult:
@@ -146,6 +150,8 @@ def test_cdp_url_counts_a_profile_from_the_environment(
 
 
 def test_cdp_url_requires_a_websocket_url(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    # Same ambient-config isolation as above: the scheme check must be reached with no profile in play.
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None))
     monkeypatch.setattr(
         "sys.argv",
         ["fastbrowse", "t", "--start", "https://example.com", "--json", "--cdp-url", "https://browser.test/devtools"],
@@ -173,8 +179,6 @@ def test_secret_preflight_reports_both_unset_variable_and_missing_origin(monkeyp
 
 
 async def test_explicit_cloud_overrides_environment_profile(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fastbrowse.clients.environment import Settings
-
     monkeypatch.setattr(
         cli,
         "load_settings",

@@ -1126,7 +1126,9 @@ class CdpPage(Page):
         drop = self._last.controls.get(destination_id) if self._last is not None else None
         if drop is None:
             return StepOutcome.STALE, "unknown drop target id"
-        _, _, drop_point, _ = await self._before_action(drop, hit_test=False)
+        # The drop target is hit-tested exactly as the source is: its point is only computed when the live guard
+        # still matches the observed one, so a target that moved or was covered since the observation is stale.
+        _, _, drop_point, _ = await self._before_action(drop, hit_test=True)
         if drop_point is None or drop_point == "covered":
             return StepOutcome.STALE, "drop target disconnected"
         session_id = target[0]

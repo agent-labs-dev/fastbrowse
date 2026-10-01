@@ -250,6 +250,10 @@
       if (e.type === 'number') return 'spinbutton';
       if (['text', 'email', 'url', 'tel', 'password', ...DATE_TYPES].includes(e.type)) return 'textbox';
     }
+    // A bare draggable element or a declared drop target has no ARIA role of its own, yet it is a real
+    // element to act on. Name it generic rather than null so the control walk does not drop it before the
+    // drag it offers can be seen.
+    if (e.getAttribute('draggable') === 'true' || e.hasAttribute('ondrop')) return 'generic';
     return null;
   };
 
