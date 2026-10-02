@@ -3434,6 +3434,9 @@ def _follow_recovery(
     if not uncertain or directed is None:
         return None
     operation, control_id = directed
+    # Recovery names one control and a drag needs two, so the drop target has to be one Jev chose for a drag.
+    if operation is Operation.DRAG and decision.operation is not Operation.DRAG:
+        return None
     if control_id is None:
         return decision.model_copy(update={"operation": operation, "target": None, "directed": True})
     target = next((c for c in observation.controls if c.id == control_id and operation in c.operations), None)

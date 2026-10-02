@@ -1140,6 +1140,9 @@ class CdpPage(Page):
             return StepOutcome.STALE, "unknown drop target id"
         if drop[0] != target[0]:
             return StepOutcome.FAILED, "drag across browser frame sessions is not supported"
+        # Both ends at one point is a press and release with no travel, which Chrome delivers as a click.
+        if drop == target:
+            return StepOutcome.FAILED, "drag source and drop target are the same control"
         # The drop target is hit-tested exactly as the source is: its point is only computed when the live guard
         # still matches the observed one, so a target that moved or was covered since the observation is stale.
         _, _, drop_point, _ = await self._before_action(drop, hit_test=True)
@@ -1172,29 +1175,39 @@ class CdpPage(Page):
         # A press with no travel is a click; the drag starts on the first move that clears Chrome's threshold.
         await asyncio.sleep(_DRAG_STEP_SECONDS)
         for step in range(1, _DRAG_STEPS + 1):
-            params: DispatchMouseEventParameters = {
-                "type": "mouseMoved",
-                "x": start_x + (end_x - start_x) * step / _DRAG_STEPS,
-                "y": start_y + (end_y - start_y) * step / _DRAG_STEPS,
-                "button": "left",
-                "buttons": 1,
-            }
-            await self._input(self._session.client.send.Input.dispatchMouseEvent(params=params, session_id=session_id))
-            await asyncio.sleep(_DRAG_STEP_SECONDS)
-        await self._input(
-            self._session.client.send.Input.dispatchMouseEvent(
-                params={
-                    "type": "mouseReleased",
-                    "x": end_x,
-                    "y": end_y,
-                    "button": "left",
-                    "clickCount": 1,
-                    "buttons": 0,
-                },
-                session_id=session_id,
+            await self._drag_move(
+                session_id,
+                start_x + (end_x - start_x) * step / _DRAG_STEPS,
+                start_y + (end_y - start_y) * step / _DRAG_STEPS,
             )
-        )
+            await asyncio.sleep(_DRAG_STEP_SECONDS)
+            # A drag handler can move or repurpose the destination once the gesture starts, and again as the
+            # pointer arrives. Only the drop that was checked is made: otherwise the card is carried back and
+            # let go where it was picked up, because a release anywhere else is a drop nobody checked.
+            if step in (1, _DRAG_STEPS):
+                _, _, landed, _ = await self._before_action(drop, hit_test=True, scroll=False)
+                if landed != drop_point:
+                    await self._drag_move(session_id, start_x, start_y)
+                    await self._key(None, "Escape", None)
+                    await self._release(session_id, start_x, start_y)
+                    return StepOutcome.STALE, "drop target changed during the drag"
+        await self._release(session_id, end_x, end_y)
         return StepOutcome.EXECUTED, None
+
+    async def _drag_move(self, session_id: str, x: float, y: float) -> None:
+        params: DispatchMouseEventParameters = {"type": "mouseMoved", "x": x, "y": y, "button": "left", "buttons": 1}
+        await self._input(self._session.client.send.Input.dispatchMouseEvent(params=params, session_id=session_id))
+
+    async def _release(self, session_id: str, x: float, y: float) -> None:
+        params: DispatchMouseEventParameters = {
+            "type": "mouseReleased",
+            "x": x,
+            "y": y,
+            "button": "left",
+            "clickCount": 1,
+            "buttons": 0,
+        }
+        await self._input(self._session.client.send.Input.dispatchMouseEvent(params=params, session_id=session_id))
 
     async def _input(self, send: Coroutine[None, None, object]) -> None:
         """Dispatch an input event without waiting on a handler that a JavaScript dialog is blocking.

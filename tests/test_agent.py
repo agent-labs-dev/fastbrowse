@@ -560,6 +560,17 @@ async def test_a_stale_drag_cannot_inherit_authorization_from_only_its_source() 
     assert len(questions) == 1 and "Done" in questions[0] and "Trash" not in questions[0]
 
 
+async def test_a_drag_named_by_recovery_is_not_built_from_a_choice_with_no_drop_target() -> None:
+    source, destination = _draggable(), _button("Done")
+    page = observation((source, destination))
+    jev = ScriptedJev({"operation": "click", "click_target": destination.id})
+    decision = await decide(jev, page, context(), Config())
+    state = await run_state()
+    state.directed = (Operation.DRAG, source.id)
+
+    assert _follow_recovery(state, page, decision, uncertain=True) is None
+
+
 async def test_a_named_action_is_not_taken_over_a_confident_choice_or_on_a_control_that_went() -> None:
     button = Control(id="search", frame_id=None, role="button", label="Search", operations=frozenset({Operation.CLICK}))
     jev = ScriptedJev({"operation": "click", "click_target": "search"})

@@ -15,8 +15,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   offers both ends. A drag is checked like a click before it is made: one that would commit something that
   cannot be undone stops for confirmation unless the run is authorized, and a drop that changes nothing sends
   the run to recovery instead of being repeated. Both ends are rechecked the moment before
-  pressing, and a drag whose target changed is decided again from the new page instead of being retried. A drag
-  between a page and a frame hosted separately from it is refused.
+  pressing, and a drag whose target changed is decided again from the new page instead of being retried. A drop
+  target that changes while the card is in the air is not dropped on: the card is carried back and let go where
+  it was picked up. A drag between a page and a frame hosted separately from it is refused, as is a drag onto
+  its own source.
 
 - The fixture eval suites (local and mock) run on a schedule and on demand in `.github/workflows/evals.yml`, and
   the job fails on any regression, so a change to browsing behaviour that breaks a task no longer waits for

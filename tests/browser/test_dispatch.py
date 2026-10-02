@@ -520,6 +520,53 @@ async def test_a_drag_revalidates_its_endpoints_after_scrolling_and_pointer_entr
         assert await eval_value(browser_session, browser_session.active_session_id, "drop.textContent") == "Card A"
 
 
+@pytest.mark.parametrize("change", ["renamed", "moved"])
+async def test_a_destination_changed_by_the_drag_itself_is_not_dropped_on(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, change: str
+) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        """document.body.innerHTML = `
+          <div id=home style="position:fixed;left:0;top:0;width:160px;height:120px">
+            <div id=source draggable=true
+              style="position:absolute;left:20px;top:20px;width:100px;height:80px">Card A</div></div>
+          <button id=drop style="position:fixed;left:220px;top:20px;width:100px;height:80px">Done</button>`;
+        window.drops = [];
+        document.addEventListener('dragover', e => e.preventDefault());
+        document.addEventListener('drop', e => { e.preventDefault(); window.drops.push(e.target.id); });
+        source.ondragstart = e => { e.dataTransfer.setData('text/plain', 'Card A'); """
+        + {"renamed": "drop.textContent = 'Trash';", "moved": "drop.style.top = '300px';"}[change]
+        + " }; true",
+    )
+    obs = await page.observe()
+    source, destination = find(obs, "Card A"), find(obs, "Done")
+    result = await page.act(Action(operation=Operation.DRAG, target_id=source.id, destination_id=destination.id), obs)
+
+    assert result.outcome is StepOutcome.STALE
+    assert result.detail == "drop target changed during the drag"
+    assert "drop" not in await eval_value(browser_session, browser_session.active_session_id, "window.drops")
+
+
+async def test_a_drag_onto_its_own_source_is_refused_before_pressing(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.body.innerHTML = '<button id=source draggable=true>Card A</button>'; "
+        "window.clicks = 0; source.onclick = () => window.clicks++; true",
+    )
+    obs = await page.observe()
+    source = find(obs, "Card A")
+    result = await page.act(Action(operation=Operation.DRAG, target_id=source.id, destination_id=source.id), obs)
+
+    assert result.outcome is StepOutcome.FAILED
+    assert await eval_value(browser_session, browser_session.active_session_id, "window.clicks") == 0
+
+
 async def test_a_drag_across_frame_sessions_is_refused_before_pressing(
     page: CdpPage, browser_session: BrowserSession, main_site: str
 ) -> None:
