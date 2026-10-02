@@ -4717,6 +4717,8 @@ async def test_screenshot_report_says_whether_the_final_frame_was_captured(visib
     result = await agent._conclude(state, None)
 
     assert result.final_frame == (None if visible_secret else b"final png")
+    # A screenshot the task asked for and did not get is not a finished task.
+    assert result.status is (Status.UNVERIFIED if visible_secret else Status.COMPLETE)
     assert result.answer == (
         "A screenshot of the final page could not be captured."
         if visible_secret

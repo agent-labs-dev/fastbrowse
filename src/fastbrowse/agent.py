@@ -2825,6 +2825,10 @@ class Agent:
             except (BrowserError, TimeoutError):
                 logger.debug("final page frame unavailable")
             result = result.model_copy(update={"final_frame": frame})
+        if frame is None and RunReport.SCREENSHOT in state.plan.run_reports and result.status is Status.COMPLETE:
+            # The image is what the caller asked for. A secret on screen, a dialog or a timeout can withhold it,
+            # and a run that cannot hand it over has not done the task, whatever else it verified.
+            result = result.model_copy(update={"status": Status.UNVERIFIED})
         report = self._run_report(state, result.final_url, captured=frame is not None)
         if report:
             result = result.model_copy(update={"answer": "\n\n".join(part for part in (answer, report) if part)})

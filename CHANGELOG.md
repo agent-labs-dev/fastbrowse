@@ -17,7 +17,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   browser state, not a requirement the page must evidence. The title is not page text a reader can quote, and
   fastbrowse has no screenshot action, so such runs used to end `stuck` with completion rejected. The answer
   now carries `Page title: ...`, and a requested screenshot is returned as `final_frame` even without step
-  frames, with the answer saying whether it was captured.
+  frames, with the answer saying whether it was captured. A run that could not take the screenshot it was asked
+  for ends `unverified`, not `complete`. The CLI prints where it saved the image, and the MCP result carries it
+  as `screenshot`, in the downloads directory or a temporary one.
 
 ## [0.5.14] - 2026-09-29
 
