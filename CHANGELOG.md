@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.15] - 2026-10-02
+
 - A request to report the final page's title or to capture a screenshot is now a run report filled in from
   browser state, not a requirement the page must evidence. The title is not page text a reader can quote, and
   fastbrowse has no screenshot action, so such runs used to end `stuck` with completion rejected. The answer
@@ -802,7 +804,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.14...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.15...HEAD
+[0.5.15]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.15
 [0.5.14]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.14
 [0.5.13]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.13
 [0.5.12]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.12
