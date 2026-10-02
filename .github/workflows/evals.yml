@@ -35,6 +35,9 @@ jobs:
         with: {python-version: "3.13"}
       - run: uv sync --locked --all-extras
       - name: Run the fixture eval suites
+        # The runner exits non-zero on any failed attempt. The stability check below is the verdict, so a
+        # dispatch with a target under 100% is judged against that target; it fails on missing rows too.
+        continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |

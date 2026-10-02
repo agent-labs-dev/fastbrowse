@@ -867,6 +867,10 @@ class _Handler(BaseHTTPRequestHandler):
         self._html("Exports", "<p>Download the <a href='/download/invoices.csv'>invoice export</a>.</p>")
 
     def _invoices(self, _: dict[str, str]) -> None:
+        # The export page is behind the sign-in, and so is the file: a run that lost its session, or went
+        # straight to this address, must not be handed the download the task grades.
+        if self._protected() is None:
+            return
         body = "invoice,amount\nINV-01,120.00\nINV-02,45.50\nINV-03,9.50\n"
         self._send(HTTPStatus.OK, body.encode(), "text/csv")
 

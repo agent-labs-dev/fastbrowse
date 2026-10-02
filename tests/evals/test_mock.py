@@ -345,8 +345,11 @@ def test_the_export_page_is_behind_the_sign_in(browser: tuple[Browser, Site]) ->
     assert "Sign in" in body
 
 
-def test_the_invoice_export_is_served_as_csv(browser: tuple[Browser, Site]) -> None:
+def test_the_invoice_export_is_served_as_csv_only_to_a_signed_in_caller(browser: tuple[Browser, Site]) -> None:
     caller, _ = browser
+    _, body = caller.get("/download/invoices.csv")
+    assert "Sign in" in body
+    caller.sign_in(GRACE, GRACE_PASSWORD)
     code, body = caller.get("/download/invoices.csv")
     assert code == 200
     assert body.splitlines()[0] == "invoice,amount"
