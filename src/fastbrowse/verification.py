@@ -162,7 +162,7 @@ async def check_done(
         "complete": NoulQuestion(
             instructions=(
                 f"{UNTRUSTED}\nDoes the page or the notes visibly confirm completion of the task in state? "
-                "Requested run_reports are copied from the observed address and action record after completion; "
+                "Requested run_reports are copied from browser state and the action record after completion; "
                 "they do not need page quotes or a written answer yet. "
                 "Be strict: a matching link, a filled but unsubmitted form, or a partial result is not done. "
                 "For comparisons, require the requested constraints and ordering or a comparison of all matching "
@@ -219,7 +219,7 @@ async def check_done(
                 "when a task asks to perform actions and report a fact, the answer need only report that fact, "
                 "not recap each action. "
                 "Completion of the actions is checked separately. Requested run_reports are appended by code from "
-                "the observed address and action record, so their absence from this page-fact draft is not an omission."
+                "browser state and the action record, so their absence from this page-fact draft is not an omission."
             ),
             true="Yes, it needs rewriting before it answers the task.",
             false="No, it answers the task as written.",
@@ -381,7 +381,7 @@ async def llm_verify(
                 f"## Task\n{task}\n\n## Current date\n{observation.today}\n\n"
                 f"## Requirements\n{requirements}\n\n"
                 f"## Run reports\n{[report.value for report in plan.run_reports]}\n"
-                "These reports are copied from the observed address and action record after completion; "
+                "These reports are copied from browser state and the action record after completion; "
                 "they do not need page quotes or a written answer yet.\n\n"
                 f"## Steps taken\n{steps}\n\n"
                 f"## Set controls\n{json.dumps(_controls(stateful))}\n\n{_grounding(notes, plan, invented)}"
