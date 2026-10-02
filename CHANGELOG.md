@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.16] - 2026-10-02
+
 - Drag and drop. A run can drag one control onto another, such as a card onto a board column, when the page
   offers both ends. A drag is checked like a click before it is made: one that would commit something that
   cannot be undone stops for confirmation unless the run is authorized, and a drop that changes nothing sends
@@ -845,7 +847,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.15...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.16...HEAD
+[0.5.16]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.16
 [0.5.15]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.15
 [0.5.14]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.14
 [0.5.13]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.13
