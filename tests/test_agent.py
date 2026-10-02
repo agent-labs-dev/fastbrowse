@@ -958,6 +958,9 @@ async def test_recovery_naming_a_refused_commit_lets_an_authorized_run_make_it(n
     await agent._recover(state, obs, "unsure click 'Submit document'")
     if confirmed:
         await agent._gate_irreversible(state, obs, decision)
+        # It covered that one retry: the same label asked about again is judged afresh.
+        with pytest.raises(_Unsure):
+            await agent._gate_irreversible(state, obs, decision)
     else:
         with pytest.raises(_Unsure):
             await agent._gate_irreversible(state, obs, decision)

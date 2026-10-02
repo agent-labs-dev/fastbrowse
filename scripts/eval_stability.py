@@ -1,11 +1,14 @@
 """A fixture eval run's per-task pass rate, which is the suite's stability budget.
 
-    uv run python scripts/eval_stability.py artifacts/evals/nightly.jsonl [--target 1.0]
+    uv run python scripts/eval_stability.py artifacts/evals/nightly.jsonl [--target 1.0] [--suite local mock --repeat 3]
 
 A suite that passes once is not a suite that passes. One task that passes three times in five moves a published
 figure on its own, and the run it happens to be in decides whether anyone sees it. This reads the rows a run
 wrote, prints each task's rate over its repeats, and exits non-zero when any task is below the target, so a flaky
 task fails the job rather than quietly feeding a headline number.
+
+Given the suites and the repeat count the run was asked for, it also refuses rows that do not cover them: a runner
+that died part way leaves only the tasks it reached, and those can all have passed.
 """
 
 import argparse
@@ -32,10 +35,27 @@ def rates(rows: Sequence[dict[str, object]]) -> list[tuple[str, str, int, int]]:
     return [(suite, task, passed[(suite, task)], seen[(suite, task)]) for suite, task in sorted(seen)]
 
 
+def uncovered(measured: Sequence[tuple[str, str, int, int]], suites: Sequence[str], repeat: int) -> list[str]:
+    """Tasks of `suites` with fewer than `repeat` recorded runs, each as `suite task runs/repeat`."""
+    from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
+    from fastbrowse.evals.tasks import TASKS
+
+    expected = {"local": TASKS, "mock": MOCK_TASKS}
+    runs = {(suite, task): count for suite, task, _, count in measured}
+    return [
+        f"{suite} {task.id} {runs.get((suite, task.id), 0)}/{repeat}"
+        for suite in suites
+        for task in expected[suite]
+        if runs.get((suite, task.id), 0) < repeat
+    ]
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="check a fixture eval run against a per-task pass target")
     parser.add_argument("rows", type=Path, help="the JSONL file the runner wrote")
     parser.add_argument("--target", type=float, default=1.0, help="the pass rate every task must reach")
+    parser.add_argument("--suite", nargs="+", choices=["local", "mock"], default=[], help="suites the run covers")
+    parser.add_argument("--repeat", type=int, default=1, help="runs each task of those suites must have")
     args = parser.parse_args(argv)
     if not args.rows.exists():
         parser.error(f"{args.rows} does not exist")
@@ -52,7 +72,10 @@ def main(argv: list[str]) -> int:
     print(f"{summary} over {len(recorded)} runs")
     if below:
         print("below target: " + ", ".join(task for _, task, _, _ in below))
-    return 1 if below else 0
+    missing = uncovered(measured, args.suite, args.repeat)
+    if missing:
+        print("incomplete run: " + ", ".join(missing))
+    return 1 if below or missing else 0
 
 
 if __name__ == "__main__":
