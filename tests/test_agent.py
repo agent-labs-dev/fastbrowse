@@ -925,6 +925,44 @@ async def test_directed_done_still_requires_verification_after_an_exhausted_read
     page.act.assert_not_called()
 
 
+async def test_recovery_cannot_direct_a_finish_while_information_is_unread() -> None:
+    """The done check refuses a finish with an information requirement unevidenced, so a recovery that says to
+    finish anyway stops the run instead of spending every remaining recovery on the same refusal."""
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(
+            Requirement(id="r1", text="Find the main heading", kind=RequirementKind.INFORMATION),
+            Requirement(id="r2", text="Find the paragraph text", kind=RequirementKind.INFORMATION),
+        ),
+        answer_expected=True,
+    )
+    obs = observation(())
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"png")
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "This domain is for use in examples.")))
+    page.artifacts = ()
+    claim: JsonValue = {"text": "For use in examples", "cite": {"first": "s0", "last": "s0"}, "requirement_id": "r2"}
+    recovery: JsonValue = {
+        "diagnosis": "The page has no heading",
+        "next_subgoal": "Report that there is no heading and finish",
+        "give_up": False,
+        "control": None,
+        "operation": "done",
+    }
+    llm = ScriptedLLM([{"claims": [claim], "answered": False}, recovery])
+    agent = Agent(page, ScriptedJev({"operation": "read", "r1": "absent", "r2": "synthesis"}, noul=0.0), llm)
+    await agent._read(state, await page.capture(), obs)
+    state.read_here = True
+    with pytest.raises(_Stop) as stopped:
+        await agent._recover(state, obs, "repeated a failing action")
+    assert stopped.value.status is Status.STUCK
+    assert stopped.value.error == "The page has no heading"
+    assert state.directed is None
+    # What the run did read is what a stuck result hands back.
+    partial = agent._partial_result(state.notes, state, state.ledger, Status.STUCK, stopped.value.error)
+    assert partial.answer is not None and "This domain is for use in examples." in partial.answer
+
+
 @pytest.mark.parametrize(("lookup", "recovered"), [(True, False), (False, False), (True, True)])
 async def test_a_read_that_answers_a_lookup_goes_straight_to_completion_checks(lookup: bool, recovered: bool) -> None:
     """An answered lookup can enter completion checks without another action choice. A plan with something left

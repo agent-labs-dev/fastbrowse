@@ -262,7 +262,8 @@ async def run(args: argparse.Namespace) -> int:
         print(result.model_dump_json(indent=2))
     else:
         print(f"{result.status.value} (${result.cost.known_dollars:.4f}, {len(result.steps)} steps)")
-        print(result.answer or result.error or "")
+        # A run that stopped short can carry both: why it stopped, and what it had read by then.
+        print("\n\n".join(part for part in (result.error, result.answer) if part))
     if result.final_frame is not None:
         print(f"  screenshot: {options.keep_screenshot(result.final_frame, args.downloads)}", file=sys.stderr)
     if args.record is not None:
