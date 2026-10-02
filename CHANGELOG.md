@@ -18,9 +18,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - An authorized run can submit a form after attaching a file. Unsure whether the submit was the commit the
   task meant, it asked recovery, and was then refused the same click again whatever recovery said, until it
-  ended `stuck` with nothing sent. When recovery, shown the page and the task, names the very control that was
-  refused, the run now makes that click. A credential change is still never let through this way, and a run
-  without authorization still stops for confirmation.
+  ended `stuck` with nothing sent. When recovery, shown the page and the task, names the same control that was
+  refused, the run may now make that click once. A credential change is still never let through this way, and
+  a run without authorization still stops for confirmation.
 
 - The stateful mock suite grows from 20 tasks to 25: a story opened in a second tab, a native date input, a
   newsletter form with a hidden field a careful run leaves alone, an export downloaded from behind a sign-in,
