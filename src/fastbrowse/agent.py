@@ -157,6 +157,10 @@ type Signature = tuple[Operation, str | None, str]
 """One action on one target, from one page state: the key both the cycle count and the no-op memory are kept by."""
 
 
+type _Commit = tuple[Operation, str | None, str, str]
+"""An operation, the id and description of the control it acts on, and the address of the page."""
+
+
 class _FieldText(Frozen):
     missing: bool = Field(
         description=(
@@ -305,12 +309,11 @@ class _RunState:
     hint: str | None = None
     directed: tuple[Operation, str | None] | None = None
     """The operation and control id recovery named, taken when Jev is still unsure of the next step."""
-    unsure_commit: tuple[Operation, str, str] | None = None
-    """The operation, control and page an authorized run was last refused as unsure it is the commit the task
-    means."""
-    confirmed_commit: tuple[Operation, str, str] | None = None
+    unsure_commit: _Commit | None = None
+    """The commit an authorized run was last refused as unsure it is the one the task means."""
+    confirmed_commit: _Commit | None = None
     """That refused commit once recovery, shown the page and the task, named it as the next step. It covers the
-    one retry, on that page: a later control with the same label is asked about afresh."""
+    next action only, on that control and page: anything later is asked about afresh."""
     unchanged: int = 0
     written: dict[str, set[str]] = field(default_factory=dict[str, set[str]])
     """Controls a fill or select has written, by document, so only a field's first new value counts as progress by
@@ -1509,6 +1512,10 @@ class Agent:
     ) -> None:
         thresholds = self._config.thresholds
         authorized = state.authorization.irreversible_actions
+        commit: _Commit = (decision.operation, decision.target.id if decision.target else None, label, observation.url)
+        # Spent by whatever is gated next, and only good for the action straight after the recovery that gave it.
+        confirmed, state.confirmed_commit = state.confirmed_commit, None
+        fresh = state.recovered_at == len(state.history)
         # Authorized and confident proceeds whatever Jev would say about the action, so it is not asked. Only Jev's
         # own confidence counts: a directed action carries the score of the action Jev chose instead, and a
         # confident READ would otherwise wave recovery's click through unasked.
@@ -1518,9 +1525,7 @@ class Agent:
         # second opinion the refusal asked for. Without it an authorized run attached a file, was unsure of
         # "Submit document" at 0.76 to 0.85, and was refused the same click after every recovery until stuck.
         # A credential change is never waved through this way.
-        commit = (decision.operation, label, observation.url)
-        if authorized and not force and state.confirmed_commit == commit:
-            state.confirmed_commit = None
+        if authorized and not force and fresh and confirmed == commit:
             return
         what = f"{decision.operation.value} {label!r}"
         if not force:
@@ -2506,7 +2511,8 @@ class Agent:
             state.directed = (operation, None)
         elif chosen is not None and operation is not None and 0 <= chosen < len(observation.controls):
             state.directed = (operation, observation.controls[chosen].id)
-            if state.unsure_commit == (operation, _describe(observation.controls[chosen]), observation.url):
+            named = observation.controls[chosen]
+            if state.unsure_commit == (operation, named.id, _describe(named), observation.url):
                 state.confirmed_commit = state.unsure_commit
         state.unsure_commit = None
         await self._record_step(
