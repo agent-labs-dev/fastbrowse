@@ -535,6 +535,31 @@ async def test_a_harmless_or_authorized_drag_dispatches_both_endpoints(authorize
         assert source.label in question and destination.label in question
 
 
+async def test_a_stale_drag_cannot_inherit_authorization_from_only_its_source() -> None:
+    source = _draggable().model_copy(update={"retarget_key": "source-guard"})
+    destination = _button("Done")
+    before = observation((source, destination)).model_copy(update={"document_key": "document"})
+    renamed = destination.model_copy(update={"label": "Trash"})
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=before.model_copy(update={"controls": (source, renamed)}))
+    page.act = AsyncMock(
+        side_effect=[
+            ActResult(outcome=StepOutcome.STALE, page_changed=False, detail="drop target disconnected"),
+            ActResult(outcome=StepOutcome.EXECUTED, page_changed=True),
+        ]
+    )
+    jev = ScriptedJev({"operation": "drag", "drag_target": source.id, "drag_destination": destination.id}, noul=0.0)
+    decision = await decide(jev, before, context(), Config())
+    state = await run_state()
+
+    await Agent(page, jev, ScriptedLLM([]))._step(state, before, decision)
+
+    page.act.assert_awaited_once()
+    assert state.steps[-1].outcome is StepOutcome.STALE
+    questions = [request["irreversible"].instructions for request in jev.requests if "irreversible" in request]
+    assert len(questions) == 1 and "Done" in questions[0] and "Trash" not in questions[0]
+
+
 async def test_a_named_action_is_not_taken_over_a_confident_choice_or_on_a_control_that_went() -> None:
     button = Control(id="search", frame_id=None, role="button", label="Search", operations=frozenset({Operation.CLICK}))
     jev = ScriptedJev({"operation": "click", "click_target": "search"})

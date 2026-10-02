@@ -57,13 +57,13 @@ _SELECT_TEXT_JS = (
 )
 
 _HIT_TEST_JS = (
-    "(id => { const e = window.__fastbrowse?.nodes.get(id); "
+    "((id, scroll = true) => { const e = window.__fastbrowse?.nodes.get(id); "
     "if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled=\"true\"],[inert]') || "
     "!window.__fastbrowse.visible(e)) return null; "
     # Scrolling only when the control is not already in full view: a page scroll closes open menus and
     # popups, so centring an option that was already visible dismissed its menu before the click landed.
     "const w = e.ownerDocument.defaultView, v = e.getBoundingClientRect(); "
-    "if (v.top < 0 || v.left < 0 || v.bottom > w.innerHeight || v.right > w.innerWidth) "
+    "if (scroll && (v.top < 0 || v.left < 0 || v.bottom > w.innerHeight || v.right > w.innerWidth)) "
     "e.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'}); "
     # A control's centre can be covered while its edges remain clickable. Bound the search on wrapped
     # controls, and check each point through its frames so a parent overlay still prevents dispatch.
@@ -1068,6 +1068,23 @@ class CdpPage(Page):
         *,
         prepare_fill: bool = False,
     ) -> tuple[StepOutcome, str | None]:
+        outcome, detail, point = await self._stable_point(target, point, prepare_fill=prepare_fill)
+        if outcome is not StepOutcome.EXECUTED:
+            return outcome, detail
+        x, y = point
+        for kind in ("mousePressed", "mouseReleased"):
+            params: DispatchMouseEventParameters = {"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1}
+            await self._input(self._session.client.send.Input.dispatchMouseEvent(params=params, session_id=target[0]))
+        return StepOutcome.EXECUTED, None
+
+    async def _stable_point(
+        self,
+        target: tuple[str, str, int, list[object] | None],
+        point: tuple[float, float],
+        *,
+        prepare_fill: bool = False,
+        scroll: bool = True,
+    ) -> tuple[StepOutcome, str | None, tuple[float, float]]:
         # Pointer entry can move, cover or repurpose a widget. Press only after the same guarded target
         # stays under the pointer across rendered frames; a moving target never earns a speculative click.
         session_id = target[0]
@@ -1075,32 +1092,27 @@ class CdpPage(Page):
         while True:
             await self._move(session_id, point)
             check = asyncio.create_task(
-                self._before_action(target, hit_test=True, prepare_fill=prepare_fill, after_move=True)
+                self._before_action(target, hit_test=True, prepare_fill=prepare_fill, after_move=True, scroll=scroll)
             )
             dialog = asyncio.create_task(self._session.wait_for_dialog())
             try:
                 await asyncio.wait({check, dialog}, return_when=asyncio.FIRST_COMPLETED)
                 if self._session.pending_dialog() is not None:
-                    return StepOutcome.FAILED, "pointer movement opened a dialog before press"
+                    return StepOutcome.FAILED, "pointer movement opened a dialog before press", point
                 _, guard, fresh, _ = check.result()
             finally:
                 check.cancel()
                 dialog.cancel()
                 await asyncio.gather(check, dialog, return_exceptions=True)
             if guard != target[3] or fresh is None:
-                return StepOutcome.STALE, "control changed before pointer press"
+                return StepOutcome.STALE, "control changed before pointer press", point
             if fresh == "covered":
-                return StepOutcome.COVERED, None
+                return StepOutcome.COVERED, None, point
             if fresh == point:
-                break
+                return StepOutcome.EXECUTED, None, point
             if time.monotonic() >= deadline:
-                return StepOutcome.STALE, "target did not stop moving before pointer press"
+                return StepOutcome.STALE, "target did not stop moving before pointer press", point
             point = fresh
-        x, y = point
-        for kind in ("mousePressed", "mouseReleased"):
-            params: DispatchMouseEventParameters = {"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1}
-            await self._input(self._session.client.send.Input.dispatchMouseEvent(params=params, session_id=session_id))
-        return StepOutcome.EXECUTED, None
 
     async def _drag(
         self,
@@ -1126,15 +1138,24 @@ class CdpPage(Page):
         drop = self._last.controls.get(destination_id) if self._last is not None else None
         if drop is None:
             return StepOutcome.STALE, "unknown drop target id"
+        if drop[0] != target[0]:
+            return StepOutcome.FAILED, "drag across browser frame sessions is not supported"
         # The drop target is hit-tested exactly as the source is: its point is only computed when the live guard
         # still matches the observed one, so a target that moved or was covered since the observation is stale.
         _, _, drop_point, _ = await self._before_action(drop, hit_test=True)
         if drop_point is None or drop_point == "covered":
             return StepOutcome.STALE, "drop target disconnected"
+        # Finding the destination can scroll the source away. Scrolling back would invalidate the drop point.
+        outcome, detail, point = await self._stable_point(target, point, scroll=False)
+        if outcome is not StepOutcome.EXECUTED:
+            return outcome, detail
+        # Pointer entry on the source can repurpose the destination after its first guard check.
+        _, _, drop_point, _ = await self._before_action(drop, hit_test=True, scroll=False)
+        if drop_point is None or drop_point == "covered":
+            return StepOutcome.STALE, "drop target changed before pointer press"
         session_id = target[0]
         start_x, start_y = point
         end_x, end_y = drop_point
-        await self._move(session_id, (start_x, start_y))
         await self._input(
             self._session.client.send.Input.dispatchMouseEvent(
                 params={
@@ -1419,6 +1440,7 @@ class CdpPage(Page):
         hit_test: bool,
         prepare_fill: bool = False,
         after_move: bool = False,
+        scroll: bool = True,
     ) -> tuple[str, list[object] | None, _Point, bool]:
         if target is None:
             return await self._fingerprint(), None, None, False
@@ -1440,7 +1462,7 @@ class CdpPage(Page):
                 f"const fingerprint = {_FINGERPRINT_JS if same_session and not after_move else "''"}; "
                 f"const guard = r?.guard ? r.guard(r.nodes.get({local_id})) : null; "
                 f"const point = {json.dumps(hit_test)} && JSON.stringify(guard) === "
-                f"JSON.stringify({json.dumps(guard)}) ? ({_HIT_TEST_JS})({local_id}) : null; "
+                f"JSON.stringify({json.dumps(guard)}) ? ({_HIT_TEST_JS})({local_id}, {json.dumps(scroll)}) : null; "
                 + (
                     f"if (Array.isArray(point)) {{ const e = r.nodes.get({local_id}); "
                     "const rect = e.getBoundingClientRect(); "

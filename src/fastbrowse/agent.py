@@ -1129,6 +1129,9 @@ class Agent:
         the only one retaining its guard and semantics in the same document can inherit that decision. A new
         document at the same address, or a changed form, has not passed the original authorization gate.
         """
+        # A drag's authorization covers both ends; a source twin cannot authorize a changed destination.
+        if action.operation is Operation.DRAG:
+            return None
         fresh = await self._observe()
         if (
             not observation.document_key

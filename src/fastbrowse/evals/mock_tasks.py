@@ -245,8 +245,8 @@ def _report_total(result: MockResult, site: Site) -> str | None:
 
 def _drag_card(result: MockResult, site: Site) -> str | None:
     columns = [fields.get("column") for fields in site.drops if fields.get("card") == "Card A"]
-    if "Done" not in columns:
-        return f"Card A was never dropped on the Done column (drops: {site.drops})"
+    if not columns or columns[-1] != "Done":
+        return f"Card A is not in the Done column (drops: {site.drops})"
     return _status(result, Status.COMPLETE)
 
 

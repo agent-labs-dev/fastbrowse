@@ -290,3 +290,12 @@ def test_the_drag_grader_needs_the_card_on_done_and_a_finished_run() -> None:
     site.record_drop({"card": "Card A", "column": "Done"})
     assert task.check(_run("I moved the card."), site) is None
     assert task.check(_run(None, status=Status.NEEDS_CONFIRMATION), site) is not None
+
+
+def test_the_drag_grader_rejects_a_card_moved_back_out_of_done() -> None:
+    task = next(t for t in TASKS if t.id == "mock-drag-card")
+    site = Site()
+    site.record_drop({"card": "Card A", "column": "Done"})
+    site.record_drop({"card": "Card A", "column": "To Do"})
+    site.record_drop({"card": "Card B", "column": "Done"})
+    assert task.check(_run("Card A is in To Do."), site) is not None

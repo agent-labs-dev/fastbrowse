@@ -14,7 +14,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Drag and drop. A run can drag one control onto another, such as a card onto a board column, when the page
   offers both ends. A drag is checked like a click before it is made: one that would commit something that
   cannot be undone stops for confirmation unless the run is authorized, and a drop that changes nothing sends
-  the run to recovery instead of being repeated.
+  the run to recovery instead of being repeated. Both ends are rechecked the moment before
+  pressing, and a drag whose target changed is decided again from the new page instead of being retried. A drag
+  between a page and a frame hosted separately from it is refused.
 
 - A run asked for something the page does not have, such as the heading of a page with none, now stops after
   one recovery instead of spending all of them. Recovery used to answer "report that it is absent and finish",
