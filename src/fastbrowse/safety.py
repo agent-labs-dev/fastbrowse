@@ -14,7 +14,7 @@ from fastbrowse.page import Control
 
 
 def may_be_irreversible(operation: Operation, control: Control | None) -> bool:
-    """Whether Jev is asked before this dispatches: every click and every Enter.
+    """Whether Jev is asked before this dispatches: every click, drag and Enter.
 
     Whether a click commits is a judgment about the page, so Jev makes it rather than a word list. A list of
     committing labels is never complete ("Place your order", "Yes, I'm sure"), and a link commits as easily
@@ -23,7 +23,7 @@ def may_be_irreversible(operation: Operation, control: Control | None) -> bool:
     if control is None:
         return False
     match operation:
-        case Operation.CLICK:
+        case Operation.CLICK | Operation.DRAG:
             return True
         # Not only a form's Enter: a chat, comment or DM box sends on Enter through its own script, with no
         # form for the page to describe.
@@ -48,12 +48,20 @@ def may_be_irreversible(operation: Operation, control: Control | None) -> bool:
             return False
 
 
-def irreversible_question(task: str, operation: Operation, control: Control) -> NoulQuestion:
+def irreversible_question(
+    task: str, operation: Operation, control: Control, destination: Control | None = None
+) -> NoulQuestion:
     return NoulQuestion(
         instructions=(
             f"{UNTRUSTED}\nThe agent is about to {operation.value} the element labelled {control.label!r} while "
             f"doing this task: {task}\n"
             + (f"It sits under {control.context!r} on the page.\n" if control.context else "")
+            + (
+                f"Drop it onto the element labelled {destination.label!r}.\n"
+                + (f"The drop target sits under {destination.context!r} on the page.\n" if destination.context else "")
+                if destination is not None
+                else ""
+            )
             + (f"Enter submits this form: {control.submit_semantics}\n" if operation is Operation.ENTER else "")
             + "Would doing so commit something that cannot be undone, such as placing an order or spending money, "
             "sending a message, submitting an application, changing or resetting an account password or "

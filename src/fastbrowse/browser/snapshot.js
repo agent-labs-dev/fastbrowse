@@ -226,7 +226,7 @@
   // they carry no destination, only a click handler, so they need naming here to be walked at all.
   const SELECTOR =
     'a[href],a[data-handler][data-event="click"],a[onclick],a[role="button"],' +
-    'button,input,textarea,select,summary,label,[contenteditable="true"],' +
+    'button,input,textarea,select,summary,label,[contenteditable="true"],[draggable="true"],[ondrop],' +
     ARIA_ROLES.map(role => `[role="${role}"]`).join(',');
   // Types whose value is a calendar date, not free text: the field writer must produce the type's ISO shape
   // and the native value setter, not typed keystrokes, is what a picker widget actually commits.
@@ -250,6 +250,10 @@
       if (e.type === 'number') return 'spinbutton';
       if (['text', 'email', 'url', 'tel', 'password', ...DATE_TYPES].includes(e.type)) return 'textbox';
     }
+    // A bare draggable element or a declared drop target has no ARIA role of its own, yet it is a real
+    // element to act on. Name it generic rather than null so the control walk does not drop it before the
+    // drag it offers can be seen.
+    if (e.getAttribute('draggable') === 'true' || e.hasAttribute('ondrop')) return 'generic';
     return null;
   };
 
@@ -427,6 +431,9 @@
       // reveal() is null for <li>, <progress> and <meter>, whose numeric `value`s are not field contents.
       base.value = reveal(source) ?? (e.isContentEditable || rname === 'combobox' ? e.innerText.trim() : null);
       base.operations = editable ? ['fill', 'click', 'enter'] : ['click'];
+      // Only an element that names itself draggable is offered as a drag source: `draggable` reports true for
+      // every <a> and <img> by default, which would offer the whole page as draggable.
+      if (e.getAttribute('draggable') === 'true') base.operations.push('drag');
     }
     controls.push(base);
   }

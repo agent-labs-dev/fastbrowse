@@ -71,6 +71,10 @@ or subgoal names one of those, choose the element whose context matches it."""
 GROUP = """Too many elements to list at once. Choose the group that contains the best target if the next
 operation is the one this question names. A later question picks the element inside the group."""
 
+DESTINATION = f"""{UNTRUSTED}
+Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop
+target, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged."""
+
 RELEVANCE = f"""{UNTRUSTED}
 Could the task's next few actions, or reading what it needs, act on or rely on the element in each question?
 Judge by its label, role, context and href. Site chrome, footers, ads, social links and unrelated navigation
@@ -79,6 +83,7 @@ are not relevant."""
 OPERATION_LABELS: Mapping[Operation, str] = {
     Operation.CLICK: "Click an element, button, link, menu option, autocomplete suggestion or calendar day.",
     Operation.HOVER: "Hover over an element to reveal content the page shows only under the pointer.",
+    Operation.DRAG: "Drag one element and drop it onto another, to move, reorder or file it.",
     Operation.FILL: "Enter or replace text in an editable field.",
     Operation.SELECT: "Select a value in an observed dropdown.",
     Operation.ENTER: "Press Enter in a text field to submit or search for what it already contains.",
@@ -176,6 +181,8 @@ class Decision(Frozen):
     directed: bool = False
     """Recovery's action on this decision's page. Its confidence scores the action Jev chose instead, so it
     says nothing about this one."""
+    destination: Control | None = None
+    """Drop target of a drag: the control the element Jev chose to drag is released onto."""
 
     @property
     def confidence(self) -> float:
@@ -191,6 +198,9 @@ class _Request:
     questions: Mapping[str, Question]
     targets: Mapping[Operation, tuple[Control, ...]]
     groups: Mapping[Operation, tuple[tuple[Control, ...], ...]]
+    destinations: tuple[Control, ...] = ()
+    """Controls a drag may be released onto; the destination question is keyed by their ids."""
+    destination_groups: tuple[tuple[Control, ...], ...] = ()
 
 
 async def decide(
@@ -389,6 +399,9 @@ def _offered_operations(
             case Operation.CLICK | Operation.HOVER | Operation.FILL | Operation.SELECT | Operation.ENTER:
                 if operation in indexed:
                     available.append(operation)
+            case Operation.DRAG:
+                if operation in indexed:
+                    available.append(operation)
             case Operation.UPLOAD:
                 if context.has_attachments and operation in indexed:
                     available.append(operation)
@@ -465,6 +478,7 @@ def build_request(
     targets: dict[Operation, tuple[Control, ...]] = {}
     groups: dict[Operation, tuple[tuple[Control, ...], ...]] = {}
     limit = config.observation.max_choice_options
+    size = min(config.observation.group_size, limit)
     for operation in offered:
         if operation not in TARGETED:
             continue
@@ -474,16 +488,19 @@ def build_request(
             targets[operation] = candidates
             questions[head] = _target_question(operation, candidates, compact)
             continue
-        size = config.observation.group_size
         chunks = tuple(candidates[i : i + size] for i in range(0, len(candidates), size))
         groups[operation] = chunks
-        questions[f"{operation.value}_group"] = ChoiceQuestion(
-            instructions=json.dumps({"rules": [TARGET, GROUP], "operation": operation.value}),
-            criteria={
-                str(i): " | ".join(_shortened(c.label) if compact else c.label for c in chunk)
-                for i, chunk in enumerate(chunks)
-            },
-        )
+        questions[f"{operation.value}_group"] = _group_question(operation, chunks, compact)
+    drops: tuple[Control, ...] = tuple(control for control in controls if control.label)
+    drop_groups: tuple[tuple[Control, ...], ...] = ()
+    if Operation.DRAG in offered:
+        if len(drops) <= limit:
+            questions["drag_destination"] = _destination_question(drops)
+        else:
+            drop_groups = tuple(drops[i : i + size] for i in range(0, len(drops), size))
+            questions["drag_destination_group"] = _group_question(
+                Operation.DRAG, drop_groups, compact, rules=DESTINATION
+            )
     if Operation.SWITCH_TAB in offered:
         questions["switch_tab_target"] = ChoiceQuestion(
             instructions=json.dumps({"rules": TARGET, "operation": Operation.SWITCH_TAB.value}),
@@ -502,7 +519,7 @@ def build_request(
             "The page is a CAPTCHA, a browser verification or a similar bot check.",
             "The page is a sign-in form or an ordinary page.",
         )
-    return _Request(_state(observation, controls, context, compact), questions, targets, groups)
+    return _Request(_state(observation, controls, context, compact), questions, targets, groups, drops, drop_groups)
 
 
 def fits(request: _Request, config: Config) -> bool:
@@ -524,13 +541,21 @@ async def _evaluate(
     *,
     compact: bool = False,
 ) -> Decision:
-    if ledger is not None:
-        ledger.reserve(CostComponent.JEV)
-    evaluation = await jev.evaluate(request.state, request.questions)
-    if ledger is not None:
-        ledger.record(evaluation.cost)
-    cost = [evaluation.cost]
-    tokens = evaluation.input_tokens
+    cost: list[CostLine] = []
+    tokens = 0
+
+    async def ask(questions: Mapping[str, Question]) -> Evaluation:
+        nonlocal tokens
+        if ledger is not None:
+            ledger.reserve(CostComponent.JEV)
+        answered = await jev.evaluate(request.state, questions)
+        if ledger is not None:
+            ledger.record(answered.cost)
+        cost.append(answered.cost)
+        tokens += answered.input_tokens
+        return answered
+
+    evaluation = await ask(request.questions)
     operation_answer = _choice(evaluation, "operation")
     operation = Operation(operation_answer.choice)
     target: Control | None = None
@@ -543,16 +568,7 @@ async def _evaluate(
     elif operation in request.groups:
         group_answer = _choice(evaluation, f"{operation.value}_group")
         group = request.groups[operation][int(group_answer.choice)]
-        if ledger is not None:
-            ledger.reserve(CostComponent.JEV)
-        inner = await jev.evaluate(
-            request.state,
-            {f"{operation.value}_target": _target_question(operation, group, compact)},
-        )
-        if ledger is not None:
-            ledger.record(inner.cost)
-        cost.append(inner.cost)
-        tokens += inner.input_tokens
+        inner = await ask({f"{operation.value}_target": _target_question(operation, group, compact)})
         target_answer = _choice(inner, f"{operation.value}_target")
         target = _control(group, target_answer.choice)
         # The element was only ever chosen from inside the group, so a doubtful group is a doubtful target.
@@ -561,10 +577,28 @@ async def _evaluate(
         target_answer = _choice(evaluation, "switch_tab_target")
         tab_id = target_answer.choice
         target_confidence = target_answer.confidence
+    destination: Control | None = None
+    if operation is Operation.DRAG:
+        if request.destination_groups:
+            group_answer = _choice(evaluation, "drag_destination_group")
+            group = request.destination_groups[int(group_answer.choice)]
+            inner = await ask({"drag_destination": _destination_question(group)})
+            destination_answer = _choice(inner, "drag_destination")
+            destination = _control(group, destination_answer.choice)
+            destination_confidence = group_answer.confidence * destination_answer.confidence
+        else:
+            destination_answer = _choice(evaluation, "drag_destination")
+            destination = _control(request.destinations, destination_answer.choice)
+            destination_confidence = destination_answer.confidence
+        # A drag is only as certain as the weaker of its two ends.
+        target_confidence = (
+            destination_confidence if target_confidence is None else min(target_confidence, destination_confidence)
+        )
     return Decision(
         operation=operation,
         target=target,
         tab_id=tab_id,
+        destination=destination,
         operation_confidence=operation_answer.confidence,
         target_confidence=target_confidence,
         login_required=_noul_probability(evaluation, "login_required"),
@@ -662,6 +696,25 @@ def _element(control: Control, *, compact: bool = False) -> dict[str, JsonValue]
     if control.blocking:
         element["blocking"] = True
     return element
+
+
+def _group_question(
+    operation: Operation, groups: Sequence[Sequence[Control]], compact: bool, *, rules: str = TARGET
+) -> ChoiceQuestion:
+    return ChoiceQuestion(
+        instructions=json.dumps({"rules": [rules, GROUP], "operation": operation.value}),
+        criteria={
+            str(i): " | ".join(_shortened(c.label) if compact else c.label for c in group)
+            for i, group in enumerate(groups)
+        },
+    )
+
+
+def _destination_question(candidates: Sequence[Control]) -> ChoiceQuestion:
+    return ChoiceQuestion(
+        instructions=json.dumps({"rules": DESTINATION, "operation": Operation.DRAG.value}),
+        criteria={control.id: _relevance_element(control) for control in candidates},
+    )
 
 
 def _target_question(operation: Operation, candidates: Sequence[Control], compact: bool) -> ChoiceQuestion:

@@ -261,6 +261,13 @@ def _report_total(result: MockResult, site: Site) -> str | None:
     return _money(result, 139.79)
 
 
+def _drag_card(result: MockResult, site: Site) -> str | None:
+    columns = [fields.get("column") for fields in site.drops if fields.get("card") == "Card A"]
+    if not columns or columns[-1] != "Done":
+        return f"Card A is not in the Done column (drops: {site.drops})"
+    return _status(result, Status.COMPLETE)
+
+
 def _read_orders_code_given(result: MockResult, site: Site) -> str | None:
     if problem := _signed_in(site, ADA):
         return problem
@@ -458,6 +465,12 @@ TASKS: tuple[MockTask, ...] = (
         "/reports",
         "Open the orders report and tell me the total of the orders in it.",
         _report_total,
+    ),
+    MockTask(
+        "mock-drag-card",
+        "/board",
+        "Drag the card named 'Card A' from the To Do column into the Done column, then tell me which column it is in.",
+        _drag_card,
     ),
     MockTask(
         "mock-new-tab-story",

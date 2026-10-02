@@ -442,6 +442,154 @@ async def test_pointer_entry_dialog_does_not_block_a_fresh_hit_test(
     assert await eval_value(browser_session, browser_session.active_session_id, "presses") == []
 
 
+@pytest.mark.parametrize("destination_change", ["none", "covered", "renamed"])
+async def test_a_drag_hit_tests_the_destination_before_pressing(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, destination_change: str
+) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        """document.body.innerHTML = `
+          <div id=source draggable=true style="position:fixed;left:20px;top:20px;width:100px;height:80px">Card A</div>
+          <button id=drop style="position:fixed;left:220px;top:20px;width:100px;height:80px">Done</button>`;
+        window.presses = 0;
+        source.onpointerdown = () => window.presses++;
+        source.ondragstart = e => e.dataTransfer.setData('text/plain', 'Card A');
+        drop.ondragover = e => e.preventDefault();
+        drop.ondrop = e => { e.preventDefault(); drop.textContent = e.dataTransfer.getData('text/plain'); };
+        true""",
+    )
+    obs = await page.observe()
+    source, destination = find(obs, "Card A"), find(obs, "Done")
+    if destination_change != "none":
+        await eval_value(
+            browser_session,
+            browser_session.active_session_id,
+            "document.body.insertAdjacentHTML('beforeend', "
+            "'<div style=\"position:fixed;inset:0 auto auto 200px;width:160px;height:120px;z-index:10\"></div>'); true"
+            if destination_change == "covered"
+            else "drop.textContent = 'Trash'; true",
+        )
+
+    result = await page.act(Action(operation=Operation.DRAG, target_id=source.id, destination_id=destination.id), obs)
+    assert result.outcome is (StepOutcome.EXECUTED if destination_change == "none" else StepOutcome.STALE)
+    assert await eval_value(browser_session, browser_session.active_session_id, "window.presses") == (
+        1 if destination_change == "none" else 0
+    )
+    if destination_change == "none":
+        assert result.page_changed
+        assert await eval_value(browser_session, browser_session.active_session_id, "drop.textContent") == "Card A"
+
+
+@pytest.mark.parametrize("change", ["scroll", "move", "replace", "destination"])
+async def test_a_drag_revalidates_its_endpoints_after_scrolling_and_pointer_entry(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, change: str
+) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        """document.body.innerHTML = `
+          <div id=source draggable=true
+            style="position:absolute;left:20px;top:20px;width:100px;height:80px">Card A</div>
+          <button id=drop style="position:absolute;left:220px;top:20px;width:100px;height:80px">Done</button>`;
+        window.presses = [];
+        document.addEventListener('pointerdown', e => window.presses.push(e.target.id));
+        source.ondragstart = e => e.dataTransfer.setData('text/plain', 'Card A');
+        drop.ondragover = e => e.preventDefault();
+        drop.ondrop = e => { e.preventDefault(); drop.textContent = e.dataTransfer.getData('text/plain'); };
+        """
+        + {
+            "scroll": "drop.style.top = '2000px';",
+            "move": "source.onpointerenter = () => { source.style.top = '200px'; };",
+            "replace": "source.onpointerenter = () => { source.replaceWith(source.cloneNode(true)); };",
+            "destination": "source.onpointerenter = () => { drop.textContent = 'Trash'; };",
+        }[change],
+    )
+    obs = await page.observe()
+    result = await page.act(
+        Action(operation=Operation.DRAG, target_id=find(obs, "Card A").id, destination_id=find(obs, "Done").id), obs
+    )
+
+    assert result.outcome is (StepOutcome.EXECUTED if change == "move" else StepOutcome.STALE)
+    assert await eval_value(browser_session, browser_session.active_session_id, "window.presses") == (
+        ["source"] if change == "move" else []
+    )
+    if change == "move":
+        assert await eval_value(browser_session, browser_session.active_session_id, "drop.textContent") == "Card A"
+
+
+@pytest.mark.parametrize("change", ["renamed", "moved"])
+async def test_a_destination_changed_by_the_drag_itself_is_not_dropped_on(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, change: str
+) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        """document.body.innerHTML = `
+          <div id=home style="position:fixed;left:0;top:0;width:160px;height:120px">
+            <div id=source draggable=true
+              style="position:absolute;left:20px;top:20px;width:100px;height:80px">Card A</div></div>
+          <button id=drop style="position:fixed;left:220px;top:20px;width:100px;height:80px">Done</button>`;
+        window.drops = [];
+        document.addEventListener('dragover', e => e.preventDefault());
+        document.addEventListener('drop', e => { e.preventDefault(); window.drops.push(e.target.id); });
+        source.ondragstart = e => { e.dataTransfer.setData('text/plain', 'Card A'); """
+        + {"renamed": "drop.textContent = 'Trash';", "moved": "drop.style.top = '300px';"}[change]
+        + " }; true",
+    )
+    obs = await page.observe()
+    source, destination = find(obs, "Card A"), find(obs, "Done")
+    result = await page.act(Action(operation=Operation.DRAG, target_id=source.id, destination_id=destination.id), obs)
+
+    assert result.outcome is StepOutcome.STALE
+    assert result.detail == "drop target changed during the drag"
+    assert "drop" not in await eval_value(browser_session, browser_session.active_session_id, "window.drops")
+
+
+async def test_a_drag_onto_its_own_source_is_refused_before_pressing(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.body.innerHTML = '<button id=source draggable=true>Card A</button>'; "
+        "window.clicks = 0; source.onclick = () => window.clicks++; true",
+    )
+    obs = await page.observe()
+    source = find(obs, "Card A")
+    result = await page.act(Action(operation=Operation.DRAG, target_id=source.id, destination_id=source.id), obs)
+
+    assert result.outcome is StepOutcome.FAILED
+    assert await eval_value(browser_session, browser_session.active_session_id, "window.clicks") == 0
+
+
+async def test_a_drag_across_frame_sessions_is_refused_before_pressing(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(main_site)
+    await observe_until(page, "Frame button")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.body.insertAdjacentHTML('afterbegin', '<div draggable=true id=source>Card A</div>'); "
+        "window.presses = 0; document.addEventListener('pointerdown', () => window.presses++);",
+    )
+    obs = await page.observe()
+    destination = find(obs, "Frame button")
+    assert destination.frame_id in browser_session.frame_sessions()
+    result = await page.act(
+        Action(operation=Operation.DRAG, target_id=find(obs, "Card A").id, destination_id=destination.id), obs
+    )
+
+    assert result.outcome is StepOutcome.FAILED
+    assert result.detail == "drag across browser frame sessions is not supported"
+    assert await eval_value(browser_session, browser_session.active_session_id, "window.presses") == 0
+
+
 async def test_an_unstable_target_expires_without_a_press(page: CdpPage, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(page_module, "_TARGET_STABILITY_SECONDS", 0)
     monkeypatch.setattr(page, "_move", AsyncMock())

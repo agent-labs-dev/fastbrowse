@@ -428,3 +428,58 @@ def test_the_choice_is_told_today_for_a_task_relative_to_it() -> None:
     state = build_request(page, (), context(task="Select next month's first Friday"), Config()).state
     assert isinstance(state, dict)
     assert state["date"] == "2026-09-26 (Saturday). In one month: October 2026; in two months: November 2026"
+
+
+def _draggable() -> Control:
+    return Control(
+        id="drag1",
+        frame_id=None,
+        role="generic",
+        label="Card A",
+        operations=frozenset({Operation.CLICK, Operation.DRAG}),
+        offscreen=False,
+    )
+
+
+async def test_a_draggable_control_offers_drag_and_asks_where_it_lands() -> None:
+    source, drop = _draggable(), button(1)
+    jev = ScriptedJev({"operation": "drag", "drag_target": "drag1", "drag_destination": "b1"})
+    decision = await decide(jev, observation((source, drop)), context(task="Move Card A onto Done"), Config())
+    assert decision.operation is Operation.DRAG
+    assert decision.target and decision.target.id == "drag1"
+    assert decision.destination and decision.destination.id == "b1"
+
+
+@pytest.mark.parametrize("limit", [10, 240])
+async def test_too_many_drag_destinations_go_group_then_element(limit: int) -> None:
+    config = Config(observation=ObservationLimits(max_choice_options=limit))
+    controls = (
+        _draggable().model_copy(update={"selected": True}),
+        *(button(i).model_copy(update={"selected": True}) for i in range(limit)),
+    )
+    size = min(config.observation.group_size, limit)
+    jev = ScriptedJev(
+        {
+            "operation": "drag",
+            "drag_target": "drag1",
+            "drag_destination_group": str(limit // size),
+            "drag_destination": f"b{limit - 1}",
+        }
+    )
+    decision = await decide(jev, observation(controls), context(task="Move Card A onto Done"), config)
+
+    assert decision.destination == controls[-1]
+    assert decision.target == controls[0]
+    assert decision.target_confidence == pytest.approx(0.9 * 0.9)
+    assert len(decision.cost) == 2 and decision.input_tokens == 20
+    for request in jev.requests:
+        for question in request.values():
+            if isinstance(question, ChoiceQuestion):
+                assert len(question.criteria) <= limit
+
+
+def test_drag_is_not_offered_when_nothing_is_draggable() -> None:
+    page = observation((button(1),))
+    request = build_request(page, (button(1),), context(), Config())
+    assert "drag_target" not in request.questions
+    assert "drag_destination" not in request.questions

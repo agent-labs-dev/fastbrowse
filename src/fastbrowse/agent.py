@@ -143,7 +143,7 @@ _CYCLE_SHOWN = 4
 _REVERSAL_WINDOW = 6
 _RECOVERY_RECORDS = 4
 _RECOVERY_CHARS = 240
-_IDLE_CHECKED = frozenset({Operation.CLICK, Operation.ENTER})
+_IDLE_CHECKED = frozenset({Operation.CLICK, Operation.ENTER, Operation.DRAG})
 """Operations not taken twice from a page state where they changed nothing. A hover can reveal content through CSS
 alone, which leaves the DOM as it was, so it is not judged by the DOM."""
 
@@ -153,8 +153,8 @@ type _Prepared = ComposedAnswer | asyncio.Task[Generation[ComposedAnswer]] | Non
 """An answer whose claims passed, or a composer in flight."""
 
 type ReadKey = tuple[str, str, tuple[str, ...]]
-type Signature = tuple[Operation, str | None, str]
-"""One action on one target, from one page state: the key both the cycle count and the no-op memory are kept by."""
+type Signature = tuple[Operation, str | None, str | None, str]
+"""One action on its targets, from one page state: the key both the cycle count and the no-op memory are kept by."""
 
 
 type _Commit = tuple[Operation, str | None, str, str]
@@ -993,7 +993,9 @@ class Agent:
             if act.outcome is StepOutcome.EXECUTED and state.authorization.irreversible_actions:
                 question = None
                 if decision.target is not None and may_be_irreversible(decision.operation, decision.target):
-                    question = irreversible_question(state.task, decision.operation, decision.target)
+                    question = irreversible_question(
+                        state.task, decision.operation, decision.target, decision.destination
+                    )
                 elif decision.operation is Operation.DIALOG and action.accept_dialog:
                     question = _dialog_question(state.task, observation.dialog)
                 if question is not None:
@@ -1136,6 +1138,9 @@ class Agent:
         the only one retaining its guard and semantics in the same document can inherit that decision. A new
         document at the same address, or a changed form, has not passed the original authorization gate.
         """
+        # A drag's authorization covers both ends; a source twin cannot authorize a changed destination.
+        if action.operation is Operation.DRAG:
+            return None
         fresh = await self._observe()
         if (
             not observation.document_key
@@ -1438,6 +1443,16 @@ class Agent:
                 if gate:
                     await self._gate_irreversible(state, observation, decision)
                 return Action(operation=decision.operation, target_id=target.id if target else None)
+            case Operation.DRAG:
+                destination = decision.destination
+                if destination is None:
+                    raise _Stop(Status.NEEDS_INPUT, "the page offers no drop target for the drag")
+                await self._gate_irreversible(state, observation, decision)
+                return Action(
+                    operation=Operation.DRAG,
+                    target_id=_require(target).id,
+                    destination_id=destination.id,
+                )
             case Operation.FILL:
                 text = await self._text(state, observation, _require(target))
                 return Action(
@@ -1491,13 +1506,17 @@ class Agent:
         target = decision.target
         if target is None or not may_be_irreversible(decision.operation, target):
             return
+        label = _describe(target)
+        if decision.destination is not None:
+            label += f" onto {_describe(decision.destination)}"
         await self._gate_question(
             state,
             observation,
             decision,
-            _describe(target),
-            irreversible_question(state.task, decision.operation, target),
-            force=changes_credentials(observation.controls, target, decision.operation),
+            label,
+            irreversible_question(state.task, decision.operation, target, decision.destination),
+            force=decision.operation in {Operation.CLICK, Operation.ENTER}
+            and changes_credentials(observation.controls, target, decision.operation),
         )
 
     async def _gate_question(
@@ -3246,7 +3265,8 @@ def _controls_text(observation: Observation) -> str:
 
 def _signature(decision: Decision, observation: Observation) -> Signature:
     label = _describe(decision.target) if decision.target else decision.tab_id
-    return decision.operation, label, state_key(observation)
+    destination = _describe(decision.destination) if decision.destination else None
+    return decision.operation, label, destination, state_key(observation)
 
 
 def read_question(task: str, wanted: Sequence[Requirement], *, began_at: str | None = None) -> str:
@@ -3414,6 +3434,9 @@ def _follow_recovery(
     if not uncertain or directed is None:
         return None
     operation, control_id = directed
+    # Recovery names one control and a drag needs two, so the drop target has to be one Jev chose for a drag.
+    if operation is Operation.DRAG and decision.operation is not Operation.DRAG:
+        return None
     if control_id is None:
         return decision.model_copy(update={"operation": operation, "target": None, "directed": True})
     target = next((c for c in observation.controls if c.id == control_id and operation in c.operations), None)

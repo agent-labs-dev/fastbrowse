@@ -120,6 +120,8 @@ class Site:
         self.carts: dict[str, list[str]] = {}
         self.orders_placed: list[dict[str, str]] = []
         self.password_changes: list[tuple[str, str]] = []
+        self.drops: list[dict[str, str]] = []
+        """Cards dropped on a column, each recorded the way a page's own drag posts its result."""
         self.uploads: list[dict[str, str]] = []
 
     def record(self, path: str, fields: dict[str, str]) -> None:
@@ -190,6 +192,10 @@ class Site:
     def note_code_attempt(self, code: str) -> None:
         with self._lock:
             self.code_attempts.append(code)
+
+    def record_drop(self, fields: dict[str, str]) -> None:
+        with self._lock:
+            self.drops.append(fields)
 
 
 def _page(title: str, body: str) -> bytes:
@@ -313,6 +319,7 @@ class _Handler(BaseHTTPRequestHandler):
             "/js": self._scripted,
             "/api/products.json": self._products_json,
             "/download/report.csv": self._report,
+            "/board": self._board,
             "/upload": self._upload_page,
             "/news": self._news,
             "/news/extra": self._news_extra,
@@ -349,6 +356,7 @@ class _Handler(BaseHTTPRequestHandler):
             "/widgets": self._widgets_post,
             "/widgets/shadow": self._shadow_post,
             "/portal": self._portal_post,
+            "/board/drop": self._board_drop,
             "/booking": self._booking_post,
             "/gate": self._gate_post,
         }.get(path)
@@ -785,6 +793,48 @@ class _Handler(BaseHTTPRequestHandler):
             f"{ref},{name},{total:.2f}\n" for ref, name, total in ORDERS["ada@example.com"]
         )
         self._send(HTTPStatus.OK, body.encode(), "text/csv")
+
+    def _board(self, _: dict[str, str]) -> None:
+        """A card `draggable="true"` and two columns carrying `ondrop`, the shapes the snapshot offers as a
+        drag source and a drop target. Dropping posts the card and its column, so the site, not the run's own
+        report, says where the card went.
+
+        The status line says in words which column holds the card, as a board's "moved" notice does. Without it
+        the column is only structure, a heading somewhere above the card, with no sentence a claim can quote:
+        half the runs made the drop and then ended unverified or stuck on where the card was."""
+        body = (
+            "<p>Drag the card into the column it belongs in.</p>"
+            "<p id='status' role='status'>Card A is in To Do.</p>"
+            "<div class='board'>"
+            "<div class='column' aria-label='To Do' data-column='To Do' ondragover='allow(event)' ondrop='drop(event)'>"
+            "<h2>To Do</h2>"
+            "<div class='card' aria-label='Card A' draggable='true' "
+            "data-card='Card A' ondragstart='drag(event)'>Card A</div>"
+            "</div>"
+            "<div class='column' aria-label='Done' data-column='Done' ondragover='allow(event)' ondrop='drop(event)'>"
+            "<h2>Done</h2>"
+            "</div>"
+            "</div>"
+            "<script>"
+            "function allow(ev){ ev.preventDefault(); }"
+            "function drag(ev){ ev.dataTransfer.setData('text/plain', ev.target.dataset.card); }"
+            "function drop(ev){ ev.preventDefault();"
+            " const card = ev.dataTransfer.getData('text/plain');"
+            " const column = ev.currentTarget;"
+            " const moved = document.querySelector('[data-card=\"' + card + '\"]');"
+            " if (moved) { column.appendChild(moved);"
+            " moved.setAttribute('aria-label', card + ' (' + column.dataset.column + ')');"
+            " document.getElementById('status').textContent = card + ' is in ' + column.dataset.column + '.'; }"
+            " const body = 'card=' + encodeURIComponent(card) + '&column=' + encodeURIComponent(column.dataset.column);"
+            " fetch('/board/drop', {method: 'POST',"
+            " headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: body}); }"
+            "</script>"
+        )
+        self._html("Board", body)
+
+    def _board_drop(self, fields: dict[str, str]) -> None:
+        self.site.record_drop(fields)
+        self._send(HTTPStatus.OK, b"dropped")
 
     def _upload_page(self, _: dict[str, str]) -> None:
         self._html(

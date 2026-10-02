@@ -107,6 +107,10 @@
     "fingerprint": "65b30d9b47fe8787",
     "version": 5
   },
+  "mock-drag-card": {
+    "version": 5,
+    "fingerprint": "473e5c76eaa1bb94"
+  },
   "mock-iframe-note": {
     "fingerprint": "3c914358b8c070fd",
     "version": 5

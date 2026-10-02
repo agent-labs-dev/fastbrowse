@@ -78,7 +78,7 @@ from fastbrowse.telemetry import BudgetExceeded, Ledger
 from fastbrowse.tripwires import Tripwire
 from fastbrowse.verification import DoneCheck, DoneVerdict, LLMVerdict, _grounding
 from tests.test_memory import evidence
-from tests.test_policy import FREE, ScriptedJev, context, observation
+from tests.test_policy import FREE, ScriptedJev, _draggable, context, observation
 from tests.test_retrieval import ScriptedLLM, capture
 
 
@@ -488,6 +488,87 @@ async def test_an_unsure_pick_that_may_commit_something_recovers_rather_than_ask
     on_event.assert_awaited_once_with(StepEvent(step=step))
     assert "hunter2" not in step.model_dump_json()
     page.act.assert_not_called()
+
+
+async def test_an_irreversible_drag_needs_confirmation_before_dispatch() -> None:
+    source = _draggable().model_copy(update={"context": "Team backlog"})
+    destination = _button("Trash").model_copy(update={"context": "Shared workspace"})
+    obs = observation((source, destination))
+    jev = ScriptedJev({"operation": "drag", "drag_target": source.id, "drag_destination": destination.id}, noul=0.9)
+    decision = await decide(jev, obs, context(), Config())
+    page = Mock(spec=Page)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
+    agent = Agent(page, jev, ScriptedLLM([]))
+    state = await run_state()
+
+    with pytest.raises(_Stop) as stopped:
+        await agent._step(state, obs, decision)
+    assert stopped.value.status is Status.NEEDS_CONFIRMATION
+    page.act.assert_not_called()
+    question = jev.requests[-1]["irreversible"].instructions
+    assert all(text in question for text in ("Card A", "Team backlog", "Trash", "Shared workspace"))
+    assert state.steps[-1].outcome is StepOutcome.FAILED
+
+
+@pytest.mark.parametrize("authorized", [False, True])
+async def test_a_harmless_or_authorized_drag_dispatches_both_endpoints(authorized: bool) -> None:
+    source, destination = _draggable(), _button("Done")
+    obs = observation((source, destination))
+    jev = ScriptedJev(
+        {"operation": "drag", "drag_target": source.id, "drag_destination": destination.id},
+        noul=0.9 if authorized else 0.0,
+    )
+    decision = await decide(jev, obs, context(), Config())
+    page = Mock(spec=Page)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
+    agent = Agent(page, jev, ScriptedLLM([]))
+    state = await run_state()
+    state.authorization = Authorization(irreversible_actions=authorized)
+
+    await agent._step(state, obs, decision)
+    page.act.assert_awaited_once_with(
+        Action(operation=Operation.DRAG, target_id=source.id, destination_id=destination.id), obs
+    )
+    assert any("irreversible" in request for request in jev.requests) is not authorized
+    if authorized:
+        question = state.transaction_candidates[0].question.instructions
+        assert source.label in question and destination.label in question
+
+
+async def test_a_stale_drag_cannot_inherit_authorization_from_only_its_source() -> None:
+    source = _draggable().model_copy(update={"retarget_key": "source-guard"})
+    destination = _button("Done")
+    before = observation((source, destination)).model_copy(update={"document_key": "document"})
+    renamed = destination.model_copy(update={"label": "Trash"})
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=before.model_copy(update={"controls": (source, renamed)}))
+    page.act = AsyncMock(
+        side_effect=[
+            ActResult(outcome=StepOutcome.STALE, page_changed=False, detail="drop target disconnected"),
+            ActResult(outcome=StepOutcome.EXECUTED, page_changed=True),
+        ]
+    )
+    jev = ScriptedJev({"operation": "drag", "drag_target": source.id, "drag_destination": destination.id}, noul=0.0)
+    decision = await decide(jev, before, context(), Config())
+    state = await run_state()
+
+    await Agent(page, jev, ScriptedLLM([]))._step(state, before, decision)
+
+    page.act.assert_awaited_once()
+    assert state.steps[-1].outcome is StepOutcome.STALE
+    questions = [request["irreversible"].instructions for request in jev.requests if "irreversible" in request]
+    assert len(questions) == 1 and "Done" in questions[0] and "Trash" not in questions[0]
+
+
+async def test_a_drag_named_by_recovery_is_not_built_from_a_choice_with_no_drop_target() -> None:
+    source, destination = _draggable(), _button("Done")
+    page = observation((source, destination))
+    jev = ScriptedJev({"operation": "click", "click_target": destination.id})
+    decision = await decide(jev, page, context(), Config())
+    state = await run_state()
+    state.directed = (Operation.DRAG, source.id)
+
+    assert _follow_recovery(state, page, decision, uncertain=True) is None
 
 
 async def test_a_named_action_is_not_taken_over_a_confident_choice_or_on_a_control_that_went() -> None:
@@ -2217,6 +2298,31 @@ async def test_a_click_that_changed_nothing_is_not_taken_again_from_the_same_pag
     with pytest.raises(_Stop, match="recovering"):
         await agent._loop(state, None, None)
     agent._recover.assert_awaited_once_with(state, form, "click Search already did nothing here")
+    page.act.assert_awaited_once()
+
+
+async def test_a_drag_that_changed_nothing_recovers_before_retrying_the_same_destination() -> None:
+    source, destination = _draggable(), _button("Done")
+    other = destination.model_copy(update={"id": "other", "context": "Other board"})
+    obs = observation((source, destination, other))
+    page = Mock(spec=Page)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=False))
+    page.observe = AsyncMock(return_value=obs)
+    state = await run_state()
+    state.authorization = Authorization(irreversible_actions=True)
+    jev = ScriptedJev({"operation": "drag", "drag_target": source.id, "drag_destination": destination.id}, noul=0.0)
+    agent = Agent(page, jev, ScriptedLLM([]))
+    decision = await decide(jev, obs, context(), Config())
+
+    await agent._step(state, obs, decision)
+    assert state.attempts[agent_module._signature(decision, obs)].idle
+    elsewhere = decision.model_copy(update={"destination": other})
+    assert agent_module._signature(elsewhere, obs) not in state.attempts
+    agent._recover = AsyncMock(side_effect=_Stop(Status.STUCK, "recovering"))
+    with pytest.raises(_Stop, match="recovering"):
+        await agent._loop(state, None, None)
+    agent._recover.assert_awaited_once()
+    assert "already did nothing here" in agent._recover.call_args.args[2]
     page.act.assert_awaited_once()
 
 

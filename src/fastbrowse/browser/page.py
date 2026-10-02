@@ -57,13 +57,13 @@ _SELECT_TEXT_JS = (
 )
 
 _HIT_TEST_JS = (
-    "(id => { const e = window.__fastbrowse?.nodes.get(id); "
+    "((id, scroll = true) => { const e = window.__fastbrowse?.nodes.get(id); "
     "if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled=\"true\"],[inert]') || "
     "!window.__fastbrowse.visible(e)) return null; "
     # Scrolling only when the control is not already in full view: a page scroll closes open menus and
     # popups, so centring an option that was already visible dismissed its menu before the click landed.
     "const w = e.ownerDocument.defaultView, v = e.getBoundingClientRect(); "
-    "if (v.top < 0 || v.left < 0 || v.bottom > w.innerHeight || v.right > w.innerWidth) "
+    "if (scroll && (v.top < 0 || v.left < 0 || v.bottom > w.innerHeight || v.right > w.innerWidth)) "
     "e.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'}); "
     # A control's centre can be covered while its edges remain clickable. Bound the search on wrapped
     # controls, and check each point through its frames so a parent overlay still prevents dispatch.
@@ -108,6 +108,10 @@ _HIT_TEST_JS = (
 _HANDOFF_SECONDS = 0.6
 _HANDOFF_QUIET_SECONDS = 0.1
 _TARGET_STABILITY_SECONDS = 1.0
+_DRAG_STEPS = 12
+"""Points the pointer travels through between a drag's press and its release."""
+_DRAG_STEP_SECONDS = 0.01
+"""Pause between a drag's moves, so the renderer reads travel and not one teleport to the target."""
 # A guard resumed inside an animation callback can miss other callbacks in that same frame. Resolve in the
 # next task so a combined frame wait and hit test sees their DOM changes too.
 _PRESENTED_JS = (
@@ -662,6 +666,8 @@ class CdpPage(Page):
                 return await self._select(target, action.text or "", point)
             case Operation.ENTER:
                 return await self._key(target, "Enter", point)
+            case Operation.DRAG:
+                return await self._drag(target, point, action.destination_id)
             case Operation.ESCAPE:
                 return await self._key(None, "Escape", None)
             case Operation.SCROLL | Operation.SCROLL_UP:
@@ -1062,6 +1068,23 @@ class CdpPage(Page):
         *,
         prepare_fill: bool = False,
     ) -> tuple[StepOutcome, str | None]:
+        outcome, detail, point = await self._stable_point(target, point, prepare_fill=prepare_fill)
+        if outcome is not StepOutcome.EXECUTED:
+            return outcome, detail
+        x, y = point
+        for kind in ("mousePressed", "mouseReleased"):
+            params: DispatchMouseEventParameters = {"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1}
+            await self._input(self._session.client.send.Input.dispatchMouseEvent(params=params, session_id=target[0]))
+        return StepOutcome.EXECUTED, None
+
+    async def _stable_point(
+        self,
+        target: tuple[str, str, int, list[object] | None],
+        point: tuple[float, float],
+        *,
+        prepare_fill: bool = False,
+        scroll: bool = True,
+    ) -> tuple[StepOutcome, str | None, tuple[float, float]]:
         # Pointer entry can move, cover or repurpose a widget. Press only after the same guarded target
         # stays under the pointer across rendered frames; a moving target never earns a speculative click.
         session_id = target[0]
@@ -1069,32 +1092,122 @@ class CdpPage(Page):
         while True:
             await self._move(session_id, point)
             check = asyncio.create_task(
-                self._before_action(target, hit_test=True, prepare_fill=prepare_fill, after_move=True)
+                self._before_action(target, hit_test=True, prepare_fill=prepare_fill, after_move=True, scroll=scroll)
             )
             dialog = asyncio.create_task(self._session.wait_for_dialog())
             try:
                 await asyncio.wait({check, dialog}, return_when=asyncio.FIRST_COMPLETED)
                 if self._session.pending_dialog() is not None:
-                    return StepOutcome.FAILED, "pointer movement opened a dialog before press"
+                    return StepOutcome.FAILED, "pointer movement opened a dialog before press", point
                 _, guard, fresh, _ = check.result()
             finally:
                 check.cancel()
                 dialog.cancel()
                 await asyncio.gather(check, dialog, return_exceptions=True)
             if guard != target[3] or fresh is None:
-                return StepOutcome.STALE, "control changed before pointer press"
+                return StepOutcome.STALE, "control changed before pointer press", point
             if fresh == "covered":
-                return StepOutcome.COVERED, None
+                return StepOutcome.COVERED, None, point
             if fresh == point:
-                break
+                return StepOutcome.EXECUTED, None, point
             if time.monotonic() >= deadline:
-                return StepOutcome.STALE, "target did not stop moving before pointer press"
+                return StepOutcome.STALE, "target did not stop moving before pointer press", point
             point = fresh
-        x, y = point
-        for kind in ("mousePressed", "mouseReleased"):
-            params: DispatchMouseEventParameters = {"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1}
-            await self._input(self._session.client.send.Input.dispatchMouseEvent(params=params, session_id=session_id))
+
+    async def _drag(
+        self,
+        target: tuple[str, str, int, list[object] | None] | None,
+        point: _Point,
+        destination_id: str | None,
+    ) -> tuple[StepOutcome, str | None]:
+        """Drag the source onto the drop target with real pointer input: press, a path of moves, release.
+
+        The travel is what makes it a drag and not a click at the source. HTML5 drag-and-drop and a page's own
+        pointer handlers both start only after the pointer moves with the button held, and a single jump to the
+        target is read as a teleport rather than a drag. Chrome turns this same held-button path into a native
+        drag when the element is `draggable`, so one implementation drives both kinds of drag.
+        """
+        if target is None:
+            return StepOutcome.FAILED, "drag requires a source"
+        if destination_id is None:
+            return StepOutcome.FAILED, "drag requires a drop target"
+        if point is None:
+            return StepOutcome.STALE, "drag source disconnected"
+        if point == "covered":
+            return StepOutcome.COVERED, None
+        drop = self._last.controls.get(destination_id) if self._last is not None else None
+        if drop is None:
+            return StepOutcome.STALE, "unknown drop target id"
+        if drop[0] != target[0]:
+            return StepOutcome.FAILED, "drag across browser frame sessions is not supported"
+        # Both ends at one point is a press and release with no travel, which Chrome delivers as a click.
+        if drop == target:
+            return StepOutcome.FAILED, "drag source and drop target are the same control"
+        # The drop target is hit-tested exactly as the source is: its point is only computed when the live guard
+        # still matches the observed one, so a target that moved or was covered since the observation is stale.
+        _, _, drop_point, _ = await self._before_action(drop, hit_test=True)
+        if drop_point is None or drop_point == "covered":
+            return StepOutcome.STALE, "drop target disconnected"
+        # Finding the destination can scroll the source away. Scrolling back would invalidate the drop point.
+        outcome, detail, point = await self._stable_point(target, point, scroll=False)
+        if outcome is not StepOutcome.EXECUTED:
+            return outcome, detail
+        # Pointer entry on the source can repurpose the destination after its first guard check.
+        _, _, drop_point, _ = await self._before_action(drop, hit_test=True, scroll=False)
+        if drop_point is None or drop_point == "covered":
+            return StepOutcome.STALE, "drop target changed before pointer press"
+        session_id = target[0]
+        start_x, start_y = point
+        end_x, end_y = drop_point
+        await self._input(
+            self._session.client.send.Input.dispatchMouseEvent(
+                params={
+                    "type": "mousePressed",
+                    "x": start_x,
+                    "y": start_y,
+                    "button": "left",
+                    "clickCount": 1,
+                    "buttons": 1,
+                },
+                session_id=session_id,
+            )
+        )
+        # A press with no travel is a click; the drag starts on the first move that clears Chrome's threshold.
+        await asyncio.sleep(_DRAG_STEP_SECONDS)
+        for step in range(1, _DRAG_STEPS + 1):
+            await self._drag_move(
+                session_id,
+                start_x + (end_x - start_x) * step / _DRAG_STEPS,
+                start_y + (end_y - start_y) * step / _DRAG_STEPS,
+            )
+            await asyncio.sleep(_DRAG_STEP_SECONDS)
+            # A drag handler can move or repurpose the destination once the gesture starts, and again as the
+            # pointer arrives. Only the drop that was checked is made: otherwise the card is carried back and
+            # let go where it was picked up, because a release anywhere else is a drop nobody checked.
+            if step in (1, _DRAG_STEPS):
+                _, _, landed, _ = await self._before_action(drop, hit_test=True, scroll=False)
+                if landed != drop_point:
+                    await self._drag_move(session_id, start_x, start_y)
+                    await self._key(None, "Escape", None)
+                    await self._release(session_id, start_x, start_y)
+                    return StepOutcome.STALE, "drop target changed during the drag"
+        await self._release(session_id, end_x, end_y)
         return StepOutcome.EXECUTED, None
+
+    async def _drag_move(self, session_id: str, x: float, y: float) -> None:
+        params: DispatchMouseEventParameters = {"type": "mouseMoved", "x": x, "y": y, "button": "left", "buttons": 1}
+        await self._input(self._session.client.send.Input.dispatchMouseEvent(params=params, session_id=session_id))
+
+    async def _release(self, session_id: str, x: float, y: float) -> None:
+        params: DispatchMouseEventParameters = {
+            "type": "mouseReleased",
+            "x": x,
+            "y": y,
+            "button": "left",
+            "clickCount": 1,
+            "buttons": 0,
+        }
+        await self._input(self._session.client.send.Input.dispatchMouseEvent(params=params, session_id=session_id))
 
     async def _input(self, send: Coroutine[None, None, object]) -> None:
         """Dispatch an input event without waiting on a handler that a JavaScript dialog is blocking.
@@ -1340,6 +1453,7 @@ class CdpPage(Page):
         hit_test: bool,
         prepare_fill: bool = False,
         after_move: bool = False,
+        scroll: bool = True,
     ) -> tuple[str, list[object] | None, _Point, bool]:
         if target is None:
             return await self._fingerprint(), None, None, False
@@ -1361,7 +1475,7 @@ class CdpPage(Page):
                 f"const fingerprint = {_FINGERPRINT_JS if same_session and not after_move else "''"}; "
                 f"const guard = r?.guard ? r.guard(r.nodes.get({local_id})) : null; "
                 f"const point = {json.dumps(hit_test)} && JSON.stringify(guard) === "
-                f"JSON.stringify({json.dumps(guard)}) ? ({_HIT_TEST_JS})({local_id}) : null; "
+                f"JSON.stringify({json.dumps(guard)}) ? ({_HIT_TEST_JS})({local_id}, {json.dumps(scroll)}) : null; "
                 + (
                     f"if (Array.isArray(point)) {{ const e = r.nodes.get({local_id}); "
                     "const rect = e.getBoundingClientRect(); "
