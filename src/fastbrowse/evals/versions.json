@@ -187,6 +187,10 @@
     "fingerprint": "ab1e2ffe0f149b0f",
     "version": 5
   },
+  "mock-upload-document": {
+    "version": 1,
+    "fingerprint": "665f5e5f980ee352"
+  },
   "new-tab-page": {
     "fingerprint": "a722b9e069c3635c",
     "version": 3

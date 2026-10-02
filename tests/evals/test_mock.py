@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 import pytest
 
 from fastbrowse.evals.mock import ACCOUNTS, ORDERS, PRODUCTS, Site, code_for, mock_site
-from fastbrowse.evals.mock_tasks import ADA, GRACE, HELD_BACK, TASKS, MockTask
+from fastbrowse.evals.mock_tasks import ADA, GRACE, TASKS, MockTask
 from fastbrowse.models import RunResult, Status
 
 ADA_PASSWORD = ACCOUNTS[ADA]
@@ -358,7 +358,7 @@ def test_the_invoice_export_is_served_as_csv_only_to_a_signed_in_caller(browser:
 def test_the_upload_grader_reads_the_bytes_the_site_received() -> None:
     from fastbrowse.evals.mock_tasks import UPLOAD_BODY, UPLOAD_NAME
 
-    task = next(t for t in HELD_BACK if t.id == "mock-upload-document")
+    task = next(t for t in TASKS if t.id == "mock-upload-document")
     site = Site()
     assert task.check(_run(None), site) is not None, "no file received cannot pass"
     site.record_upload("doc", UPLOAD_NAME, b"a different document")

@@ -487,10 +487,6 @@ TASKS: tuple[MockTask, ...] = (
         _invoice_total,
         secrets={"password": GRACE_PASSWORD},
     ),
-)
-
-
-HELD_BACK: tuple[MockTask, ...] = (
     MockTask(
         "mock-upload-document",
         "/upload",
@@ -500,9 +496,3 @@ HELD_BACK: tuple[MockTask, ...] = (
         authorization=AUTHORIZED,
     ),
 )
-"""Tasks ready to run but not yet completable, so they are held out of the CI gate rather than left failing.
-
-`mock-upload-document` is here because an authorized run attaches the file and then cannot submit the form: the
-irreversible-action guard still fires on the submit click after an upload (issue #195). Its page, grader and unit
-tests stay, and it moves back into TASKS the day the guard is fixed.
-"""

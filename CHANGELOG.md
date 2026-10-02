@@ -16,11 +16,16 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   someone to run the suite by hand. The job reports a per-task pass rate over its repeats and refuses a run
   where any task is below the target.
 
-- The stateful mock suite grows from 20 tasks to 24: a story opened in a second tab, a native date input, a
-  newsletter form with a hidden field a careful run leaves alone, and an export downloaded from behind a
-  sign-in. A run may now carry attachments, the way a caller supplies a file. A twenty-fifth task, a document
-  attached to a form and submitted, is written and unit-tested but held out of the gate: an authorized run
-  attaches the file and then cannot submit the form (#195).
+- An authorized run can submit a form after attaching a file. Unsure whether the submit was the commit the
+  task meant, it asked recovery, and was then refused the same click again whatever recovery said, until it
+  ended `stuck` with nothing sent. When recovery, shown the page and the task, names the very control that was
+  refused, the run now makes that click. A credential change is still never let through this way, and a run
+  without authorization still stops for confirmation.
+
+- The stateful mock suite grows from 20 tasks to 25: a story opened in a second tab, a native date input, a
+  newsletter form with a hidden field a careful run leaves alone, an export downloaded from behind a sign-in,
+  and a document attached to a form and submitted. A run may now carry attachments, the way a caller supplies
+  a file.
 
 - Answer grading folds case and typographic punctuation before it matches, so a run that words a right answer
   differently is not failed for its phrasing, and the runner warns when a task uses more than 60% of its step
