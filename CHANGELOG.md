@@ -33,6 +33,14 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - `docs/evals.md` states how to read a published number, including the caveats that have to travel with one.
 
+- A run asked for something the page does not have, such as the heading of a page with none, now stops after
+  one recovery instead of spending all of them. Recovery used to answer "report that it is absent and finish",
+  the completion check refuses any finish while requested information is unread, and the two repeated until the
+  run ended `stuck`. A recovery that can only direct such a finish now ends the run with its diagnosis as the
+  error.
+- A `stuck` run returns what it did read. Its answer carries the cited facts gathered before it stopped, marked
+  as partial, with their evidence and citations, so a caller no longer has to browse again for them.
+
 ## [0.5.15] - 2026-10-02
 
 - A request to report the final page's title or to capture a screenshot is now a run report filled in from
