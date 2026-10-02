@@ -14,7 +14,10 @@ This module serves instead, from one process, with no dependencies beyond the st
 - a password change, an irreversible action reachable only when signed in
 - a paginated, sortable product list
 - a page whose contents are written by script rather than served as markup
-- a downloadable file
+- a downloadable file, in public and behind a sign-in
+- a file attached to a form and submitted, so the server receives its bytes
+- a link that opens a second tab, and a native date input
+- a newsletter form with a hidden trap field, which a careful run leaves empty
 
 Every request is recorded, so a grader reads what the site actually received rather than what the run says it did.
 
@@ -24,6 +27,7 @@ skill under test is finding a value on one page and typing it into another, not 
 """
 
 import base64
+import hashlib
 import hmac
 import json
 import re
@@ -118,10 +122,23 @@ class Site:
         self.password_changes: list[tuple[str, str]] = []
         self.drops: list[dict[str, str]] = []
         """Cards dropped on a column, each recorded the way a page's own drag posts its result."""
+        self.uploads: list[dict[str, str]] = []
 
     def record(self, path: str, fields: dict[str, str]) -> None:
         with self._lock:
             self.posts.append((path, fields))
+
+    def record_upload(self, field: str, name: str, content: bytes) -> None:
+        """What the server actually received for one attached file, so a grader reads bytes and not a claim."""
+        with self._lock:
+            self.uploads.append(
+                {
+                    "field": field,
+                    "name": name,
+                    "bytes": str(len(content)),
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                }
+            )
 
     def visited(self, path: str) -> None:
         with self._lock:
@@ -190,9 +207,12 @@ def _page(title: str, body: str) -> bytes:
     ).encode()
 
 
-def _form(action: str, fields: str, button: str, hidden: Mapping[str, str] = {}) -> str:
+def _form(action: str, fields: str, button: str, hidden: Mapping[str, str] = {}, enctype: str = "") -> str:
     concealed = "".join(f"<input type='hidden' name='{k}' value='{v}'>" for k, v in hidden.items())
-    return f"<form action='{action}' method='post'>{concealed}{fields}<button type='submit'>{button}</button></form>"
+    kind = f" enctype='{enctype}'" if enctype else ""
+    return (
+        f"<form action='{action}' method='post'{kind}>{concealed}{fields}<button type='submit'>{button}</button></form>"
+    )
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -202,9 +222,39 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         pass
 
-    def _body(self) -> dict[str, str]:
+    def _raw(self) -> bytes:
         length = int(self.headers.get("Content-Length") or 0)
-        return dict(parse_qsl(self.rfile.read(length).decode("utf-8", "replace")))
+        return self.rfile.read(length)
+
+    def _body(self) -> dict[str, str]:
+        return dict(parse_qsl(self._raw().decode("utf-8", "replace")))
+
+    def _multipart(self, boundary: bytes) -> tuple[dict[str, str], dict[str, tuple[str, bytes]]]:
+        """The fields and the files of a multipart body, which is how an attached file reaches a server."""
+        fields: dict[str, str] = {}
+        files: dict[str, tuple[str, bytes]] = {}
+        for part in self._raw().split(b"--" + boundary):
+            head, separator, body = part.partition(b"\r\n\r\n")
+            if not separator:
+                continue
+            body = body.removesuffix(b"\r\n")
+            disposition = next((line for line in head.split(b"\r\n") if b"content-disposition" in line.lower()), b"")
+            name = re.search(rb'name="([^"]*)"', disposition)
+            if name is None:
+                continue
+            filename = re.search(rb'filename="([^"]*)"', disposition)
+            if filename is None:
+                fields[name.group(1).decode()] = body.decode("utf-8", "replace")
+            else:
+                files[name.group(1).decode()] = (filename.group(1).decode(), body)
+        return fields, files
+
+    def _form_and_files(self) -> tuple[dict[str, str], dict[str, tuple[str, bytes]]]:
+        kind = self.headers.get("Content-Type") or ""
+        if "multipart/form-data" not in kind.lower():
+            return self._body(), {}
+        boundary = re.search(r'boundary="?([^";]+)"?', kind)
+        return self._multipart(boundary.group(1).encode()) if boundary else ({}, {})
 
     def _sid(self) -> str | None:
         for part in (self.headers.get("Cookie") or "").split(";"):
@@ -270,6 +320,13 @@ class _Handler(BaseHTTPRequestHandler):
             "/api/products.json": self._products_json,
             "/download/report.csv": self._report,
             "/board": self._board,
+            "/upload": self._upload_page,
+            "/news": self._news,
+            "/news/extra": self._news_extra,
+            "/booking": self._booking_form,
+            "/gate": self._gate,
+            "/account/export": self._export,
+            "/download/invoices.csv": self._invoices,
         }.get(path)
         if route is None:
             if path.startswith("/product/"):
@@ -283,8 +340,11 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
-        fields = self._body()
+        fields, files = self._form_and_files()
         self.site.record(path, fields)
+        if path == "/upload":
+            self._upload_post(fields, files)
+            return
         route = {
             "/login": self._login_post,
             "/login/code": self._code_post,
@@ -297,6 +357,8 @@ class _Handler(BaseHTTPRequestHandler):
             "/widgets/shadow": self._shadow_post,
             "/portal": self._portal_post,
             "/board/drop": self._board_drop,
+            "/booking": self._booking_post,
+            "/gate": self._gate_post,
         }.get(path)
         if route is None:
             self._send(HTTPStatus.NOT_FOUND, b"<h1>Not found</h1>")
@@ -469,6 +531,7 @@ class _Handler(BaseHTTPRequestHandler):
             "<li><a href='/account/orders'>Your orders</a></li>"
             "<li><a href='/cart'>Your basket</a></li>"
             "<li><a href='/settings/password'>Change your password</a></li>"
+            "<li><a href='/account/export'>Export invoices</a></li>"
             "<li><a href='/logout'>Sign out</a></li></ul>",
         )
 
@@ -772,6 +835,94 @@ class _Handler(BaseHTTPRequestHandler):
     def _board_drop(self, fields: dict[str, str]) -> None:
         self.site.record_drop(fields)
         self._send(HTTPStatus.OK, b"dropped")
+
+    def _upload_page(self, _: dict[str, str]) -> None:
+        self._html(
+            "Submit a document",
+            "<p>Attach the stock take document and submit it.</p>"
+            + _form(
+                "/upload",
+                "<p><label for='doc'>Document</label> <input id='doc' name='doc' type='file'></p>",
+                "Submit document",
+                enctype="multipart/form-data",
+            ),
+        )
+
+    def _upload_post(self, fields: dict[str, str], files: dict[str, tuple[str, bytes]]) -> None:
+        found = files.get("doc")
+        if found is None:
+            self._html(
+                "Submit a document",
+                "<p><strong>No document was attached.</strong></p>",
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+        name, content = found
+        self.site.record_upload("doc", name, content)
+        self._html("Document received", f"<p>Received {name} ({len(content)} bytes).</p>")
+
+    def _news(self, _: dict[str, str]) -> None:
+        self._html(
+            "Newsroom",
+            "<p>The full story opens in its own tab.</p>"
+            "<p><a href='/news/extra' target='_blank' rel='noopener'>Read the full story</a></p>",
+        )
+
+    def _news_extra(self, _: dict[str, str]) -> None:
+        self._html("Full story", "<p>The roastery reopens on Monday at 08:00.</p>")
+
+    def _booking_form(self, _: dict[str, str]) -> None:
+        self._html(
+            "Book a table",
+            "<p>Pick a date for your booking.</p>"
+            + _form(
+                "/booking",
+                "<p><label for='when'>Date</label> <input id='when' name='when' type='date'></p>",
+                "Book table",
+            ),
+        )
+
+    def _booking_post(self, fields: dict[str, str]) -> None:
+        when = (fields.get("when") or "").strip()
+        self._html("Table booked", f"<p>Your table is booked for {when}.</p>")
+
+    def _gate(self, _: dict[str, str]) -> None:
+        """A sign-up with a field no person sees, which a run that fills every input reveals itself by filling."""
+        self._html(
+            "Newsletter",
+            "<p>Sign up for the newsletter.</p>"
+            + _form(
+                "/gate",
+                "<p><label for='email'>Email</label> <input id='email' name='email' type='email'></p>"
+                "<div style='display:none'>"
+                "<label for='website'>Website</label> "
+                "<input id='website' name='website' tabindex='-1' autocomplete='off'></div>",
+                "Sign up",
+            ),
+        )
+
+    def _gate_post(self, fields: dict[str, str]) -> None:
+        if (fields.get("website") or "").strip():
+            self._html(
+                "Newsletter",
+                "<p><strong>That request looked automated.</strong> Please try again.</p>",
+                HTTPStatus.FORBIDDEN,
+            )
+            return
+        self._html("Signed up", "<p>Thanks. You are on the newsletter list.</p>")
+
+    def _export(self, _: dict[str, str]) -> None:
+        if self._protected() is None:
+            return
+        self._html("Exports", "<p>Download the <a href='/download/invoices.csv'>invoice export</a>.</p>")
+
+    def _invoices(self, _: dict[str, str]) -> None:
+        # The export page is behind the sign-in, and so is the file: a run that lost its session, or went
+        # straight to this address, must not be handed the download the task grades.
+        if self._protected() is None:
+            return
+        body = "invoice,amount\nINV-01,120.00\nINV-02,45.50\nINV-03,9.50\n"
+        self._send(HTTPStatus.OK, body.encode(), "text/csv")
 
 
 def _looks_like_postcode(value: str) -> bool:

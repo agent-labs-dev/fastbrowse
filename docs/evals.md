@@ -252,6 +252,23 @@ Date truth is computed when the attempt runs, and form and date tasks are graded
 | `stretch-books-sequential-art-one-star` | lookup | 3 | Across every page of the Sequential Art category, how many books are rated one star, and which of them is the most expensive, at what price? |
 <!-- /evals:tasks:stretch-heldout -->
 
+## How to read these numbers
+
+A published figure carries its caveats with it. Read a table above with these in mind:
+
+- The `jev-ultrafast` arm runs as its published package, but its runner is patched twice here: it lifts Jev's
+  chosen option above the gateway's rounded near-ties, which upstream would reject outright, and it drops a code
+  fence its text helper wraps around JSON. It is a modified competitor, not a raw one.
+- Each arm is held to its own completion semantics, fastbrowse to its own status and the hosted Browser Use agent
+  to its own `done`. That is fairer than forcing one arm's vocabulary on the other, and it is not a like-for-like
+  judgement of the same thing.
+- On answer tasks the hosted Browser Use agent is graded on its answer alone, because its SDK does not report
+  where its browser ended. Navigation tasks, graded on the page, leave it out of the comparison.
+- The 2026-09-29 ultrafast run is [diagnostic evidence](validation/2026-09-29-ultrafast.md), not a source for a
+  competitive claim; the [fairness audit](validation/2026-09-29-fairness.md) records what it corrected.
+- A figure from a dirty tree, another build, or a superseded task version is not comparable with the current one,
+  and each generated table names the task versions changed since its runs.
+
 ## Versions
 
 A score means something only next to the build and tasks that produced it, so every result row records both:
@@ -283,9 +300,9 @@ when they differ:
 | `stretch-dev` | 9 | `5fe6b036` |
 | `stretch-heldout` | 3 | `f1ffdfb8` |
 | local fixtures | 6 | `dda8ba89` |
-| mock fixtures | 21 | `5cbb2ac9` |
+| mock fixtures | 26 | `183c936a` |
 
-Tasks past version 1: `arxiv-open` v9, `arxiv-title` v7, `books-mystery-cheapest` v7, `books-travel-priciest` v7, `countries-mongolia` v7, `countries-namibia-area` v3, `crates-serde` v7, `dynamic-loading` v8, `expandtesting-login` v7, `flights-search` v9, `frame-heading` v4, `github-license` v7, `github-open` v9, `google-flights` v7, `hn-comments` v9, `hn-top` v7, `hockey-bruins-1990` v7, `hover-profile` v8, `httpx-requires-python` v7, `mock-basket` v5, `mock-cheapest-product` v4, `mock-compare-prices` v4, `mock-drag-card` v4, `mock-iframe-note` v4, `mock-infinite-scroll` v4, `mock-order-pause` v5, `mock-order-validation` v4, `mock-pagination-exhaustion` v4, `mock-password-change` v5, `mock-password-pause` v6, `mock-priciest-product` v4, `mock-report-total` v5, `mock-shadow-dom` v4, `mock-sign-in` v4, `mock-sign-in-code-given` v4, `mock-sign-in-per-digit` v4, `mock-sign-in-two-step` v4, `mock-sign-out` v4, `mock-stock-count` v4, `mock-support-portal` v4, `new-tab-page` v3, `new-window` v8, `oscars-2012` v7, `pizza-order` v7, `practice-login` v7, `pypi-newer` v7, `pypi-open` v9, `pypi-structured` v7, `pypi-version` v7, `quotes-einstein-count` v7, `quotes-js-page2` v7, `quotes-rowling-count` v3, `quotes-search` v7, `quotes-search-lewis` v3, `ruff-release` v7, `saucedemo-cart` v7, `saucedemo-checkout` v7, `saucedemo-locked-out` v7, `saucedemo-pause` v6, `stretch-books-nonfiction-five-star` v9, `stretch-books-sequential-art-one-star` v3, `stretch-books-young-adult-one-star` v3, `stretch-bstack-apple-google` v8, `stretch-bstack-apple-samsung` v8, `stretch-calendar-first-friday` v9, `stretch-date-range-monday` v8, `stretch-datepicker-last-saturday` v3, `stretch-datepicker-last-sunday` v3, `stretch-quotes-top-authors` v8, `stretch-wizard-correction` v8, `stretch-wizard-review` v7, `table-largest-due` v8, `table-total-due` v3, `wiki-godel` v7, `wiki-open` v9.
+Tasks past version 1: `arxiv-open` v9, `arxiv-title` v7, `books-mystery-cheapest` v7, `books-travel-priciest` v7, `countries-mongolia` v7, `countries-namibia-area` v3, `crates-serde` v7, `dynamic-loading` v8, `expandtesting-login` v7, `flights-search` v9, `frame-heading` v4, `github-license` v7, `github-open` v9, `google-flights` v7, `hn-comments` v9, `hn-top` v7, `hockey-bruins-1990` v7, `hover-profile` v8, `httpx-requires-python` v7, `mock-basket` v6, `mock-book-table` v2, `mock-cheapest-product` v5, `mock-compare-prices` v5, `mock-drag-card` v5, `mock-iframe-note` v5, `mock-infinite-scroll` v5, `mock-newsletter-gate` v2, `mock-order-pause` v6, `mock-order-validation` v5, `mock-pagination-exhaustion` v5, `mock-password-change` v6, `mock-password-pause` v7, `mock-priciest-product` v5, `mock-report-total` v6, `mock-shadow-dom` v5, `mock-sign-in` v5, `mock-sign-in-code-given` v5, `mock-sign-in-per-digit` v5, `mock-sign-in-two-step` v5, `mock-sign-out` v5, `mock-stock-count` v5, `mock-support-portal` v5, `new-tab-page` v3, `new-window` v8, `oscars-2012` v7, `pizza-order` v7, `practice-login` v7, `pypi-newer` v7, `pypi-open` v9, `pypi-structured` v7, `pypi-version` v7, `quotes-einstein-count` v7, `quotes-js-page2` v7, `quotes-rowling-count` v3, `quotes-search` v7, `quotes-search-lewis` v3, `ruff-release` v7, `saucedemo-cart` v7, `saucedemo-checkout` v7, `saucedemo-locked-out` v7, `saucedemo-pause` v6, `stretch-books-nonfiction-five-star` v9, `stretch-books-sequential-art-one-star` v3, `stretch-books-young-adult-one-star` v3, `stretch-bstack-apple-google` v8, `stretch-bstack-apple-samsung` v8, `stretch-calendar-first-friday` v9, `stretch-date-range-monday` v8, `stretch-datepicker-last-saturday` v3, `stretch-datepicker-last-sunday` v3, `stretch-quotes-top-authors` v8, `stretch-wizard-correction` v8, `stretch-wizard-review` v7, `table-largest-due` v8, `table-total-due` v3, `wiki-godel` v7, `wiki-open` v9.
 <!-- /evals:versions -->
 
 Published results are rows, not tables typed by hand. A release's rows are committed to
@@ -335,7 +352,7 @@ Each arm has 60 selected results, excluding earlier retries. Unavailable results
 | Browser Use agent | 54/54 | 54/54 | 46.0s | 54.6s | $0.2543 | $0.3383 | $18.27 |
 
 Each arm has 54 selected results, excluding earlier retries. Runs: `ec2bab7412ed` at `4e7143c`.
-Changed since these runs: `mock-basket` v4 → v5, `mock-cheapest-product` v3 → v4, `mock-compare-prices` v3 → v4, `mock-iframe-note` v3 → v4, `mock-infinite-scroll` v3 → v4, `mock-order-validation` v3 → v4, `mock-pagination-exhaustion` v3 → v4, `mock-password-change` v4 → v5, `mock-priciest-product` v3 → v4, `mock-report-total` v4 → v5, `mock-shadow-dom` v3 → v4, `mock-sign-in` v3 → v4, `mock-sign-in-code-given` v3 → v4, `mock-sign-in-per-digit` v3 → v4, `mock-sign-in-two-step` v3 → v4, `mock-sign-out` v3 → v4, `mock-stock-count` v3 → v4, `mock-support-portal` v3 → v4; compare them only against runs of the same version.
+Changed since these runs: `mock-basket` v4 → v6, `mock-cheapest-product` v3 → v5, `mock-compare-prices` v3 → v5, `mock-iframe-note` v3 → v5, `mock-infinite-scroll` v3 → v5, `mock-order-validation` v3 → v5, `mock-pagination-exhaustion` v3 → v5, `mock-password-change` v4 → v6, `mock-priciest-product` v3 → v5, `mock-report-total` v4 → v6, `mock-shadow-dom` v3 → v5, `mock-sign-in` v3 → v5, `mock-sign-in-code-given` v3 → v5, `mock-sign-in-per-digit` v3 → v5, `mock-sign-in-two-step` v3 → v5, `mock-sign-out` v3 → v5, `mock-stock-count` v3 → v5, `mock-support-portal` v3 → v5; compare them only against runs of the same version.
 
 `mock-safety` `fffe1d53-shared-5fa36bb9`: fastbrowse against Browser Use agent, on the same 2 tasks.
 
@@ -345,7 +362,7 @@ Changed since these runs: `mock-basket` v4 → v5, `mock-cheapest-product` v3 �
 | Browser Use agent | 6/6 | 6/6 | 85.7s | 92.5s | $0.5763 | $0.5462 | $3.28 |
 
 Each arm has 6 selected results, excluding earlier retries. Runs: `86450c5651fb` at `f2a9a58`, `ec2bab7412ed` at `4e7143c`.
-Changed since these runs: `mock-order-pause` v4 → v5, `mock-password-pause` v5 → v6; compare them only against runs of the same version.
+Changed since these runs: `mock-order-pause` v4 → v6, `mock-password-pause` v5 → v7; compare them only against runs of the same version.
 <!-- /evals:results:0.5.9 -->
 
 ### 0.5.8, 2026-09-27
@@ -585,9 +602,14 @@ The run commands use paid APIs and need a separate approved run budget.
 | Publish a release's recorded rows and regenerate outputs | `just evals-publish artifacts/evals/live.jsonl` |
 | Regenerate docs and the site feed | `just evals-docs` |
 | Bump changed task versions and regenerate | `just evals-docs --bump TASK_ID` |
+| Run the fixture suites as CI does | `just evals-local --suite local mock --repeat 3` |
 
 Publishing reads the release from the rows with `--publish auto`; mixed releases fail. Explicit
 `--publish RELEASE ROWS` still works. No aggregate, suite hash or release number needs editing by hand.
+
+`.github/workflows/evals.yml` runs that fixture recipe on a nightly schedule and on demand, then checks each
+task's pass rate over the repeats with `scripts/eval_stability.py`, which fails the job when any task is below the
+target. The job needs `OPENROUTER_API_KEY` in the repository's secrets.
 
 ## Site results feed
 
@@ -618,6 +640,17 @@ Schema version 2 added `compared` and `tasks`; version 1 pooled a suite's compar
 tasks absent from the current group are not reported as removed. The first release has no changes.
 Separate suite versions never share an aggregate. No wall-clock generation timestamp is emitted.
 <!-- /evals:feed-schema -->
+
+## The stateful mock suite
+
+Twenty-five tasks run against a stateful site served locally, each with a site of its own, so one task's session,
+basket or order can never decide another's grade. Nothing is graded from the run's own claim: a check reads the
+site for which account signed in, what was posted, whether an order was placed, whether a password changed and,
+on the newest tasks, the bytes the server received for an attached file. The suite covers a sign-in with a second
+step and a code read on one page and typed into another, a basket, a rejected field corrected, an irreversible
+action gated, a frame, a shadow root, infinite scroll, a cookie banner and a modal, comparison across pages,
+pagination, a report read from a downloaded file, a document attached to a form, a link that opens a second tab,
+a native date input, a newsletter form with a hidden trap field, and an export downloaded from behind a sign-in.
 
 ## Stateful mock comparison
 

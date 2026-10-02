@@ -24,7 +24,8 @@ from fastbrowse.clients.validation import TRANSIENT_TRANSPORT
 from fastbrowse.evals.live import OUTAGE_RETRIES, ArmReport, hosted_arm
 from fastbrowse.evals.live_tasks import Category, LiveTask, Outcome, prompt
 from fastbrowse.evals.mock import Site, mock_server
-from fastbrowse.evals.mock_tasks import TASKS, MockTask
+from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
+from fastbrowse.evals.mock_tasks import MockTask
 from fastbrowse.evals.versions import fingerprint, load_lock, provenance, suite_version, task_version
 from fastbrowse.models import Limits, Status, Unavailable
 from fastbrowse.run import run_task
@@ -35,6 +36,10 @@ ARMS: tuple[Arm, ...] = ("fastbrowse", "browser-use")
 MAX_DOLLARS = 2.0
 MAX_SECONDS = 300
 MAX_STEPS = 40
+
+TASKS = tuple(task for task in MOCK_TASKS if not task.attachments)
+"""The mock tasks every arm can be given. A hosted arm takes a task and an address and has no way to be handed
+a file, so a task that attaches one would fail there for the harness's reason, not the agent's."""
 
 
 def comparison_task(task: MockTask, base: str) -> LiveTask:

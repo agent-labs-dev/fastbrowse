@@ -19,6 +19,7 @@ import tempfile
 import time
 from collections import Counter
 from pathlib import Path
+from typing import cast
 
 import httpx
 
@@ -35,15 +36,24 @@ from fastbrowse.evals.mock_tasks import MockTask
 from fastbrowse.evals.status import normalize
 from fastbrowse.evals.tasks import TASKS, LocalTask
 from fastbrowse.evals.versions import load_lock, provenance, suite_version, task_version
-from fastbrowse.models import BrowserConnection, Limits, RunResult
+from fastbrowse.models import Attachment, BrowserConnection, Limits, RunResult
 from fastbrowse.safety import ScopedSecrets, origin_of
 from fastbrowse.telemetry import traced, transient_seconds
 
 MOCK_LIMITS = Limits(max_steps=40)
 """A mock task signs in, walks to a page and acts, which is more steps than the local suite's single form needs."""
 
+LOCAL_LIMITS = Limits(max_steps=25)
+"""A local fixture is one page and one form, so it needs far fewer steps than a mock task does."""
 
-def _row(result: RunResult, *, task_id: str, failure: str | None, seconds: float, lost: float) -> dict[str, object]:
+HEADROOM = 0.6
+"""The share of a step budget a task may use before the runner says so. A task at this share is one bad run from
+its cap, and reaching the cap fails a run that was doing the right thing slowly."""
+
+
+def _row(
+    result: RunResult, *, task_id: str, failure: str | None, seconds: float, lost: float, limit: int
+) -> dict[str, object]:
     """The fields every suite's row carries, so one report can read both."""
     return {
         "correct": failure is None,
@@ -59,6 +69,7 @@ def _row(result: RunResult, *, task_id: str, failure: str | None, seconds: float
         "unknown_cost": result.cost.has_unknown,
         "seconds_by_call": result.cost.seconds_by_call(),
         "steps": len(result.steps),
+        "step_limit": limit,
         "answer": result.answer,
         "data": result.data,
         "error": result.error,
@@ -75,6 +86,7 @@ async def _drive(
     settings: Settings,
     secrets: ScopedSecrets | None,
     limits: Limits,
+    attachments: tuple[Attachment, ...] = (),
 ) -> tuple[RunResult, float, float]:
     """One run of one task, returning its result and how long it took, wall and transient."""
     config = Config()
@@ -87,6 +99,7 @@ async def _drive(
                 task.task,
                 start=start,
                 inputs=task.inputs,
+                attachments=attachments,
                 output_schema=task.output_schema,
                 limits=limits,
                 authorization=task.authorization,
@@ -106,11 +119,11 @@ async def run_task(
 ) -> dict[str, object]:
     recorder.clear()
     result, seconds, lost = await _drive(
-        task, base_url + task.start, connection, http, sink, settings, None, Limits(max_steps=25)
+        task, base_url + task.start, connection, http, sink, settings, None, LOCAL_LIMITS
     )
     failure = task.check(result, recorder.snapshot())
     return {"arm": "fastbrowse", "category": "fixture", "suite": "local"} | _row(
-        result, task_id=task.id, failure=failure, seconds=seconds, lost=lost
+        result, task_id=task.id, failure=failure, seconds=seconds, lost=lost, limit=LOCAL_LIMITS.max_steps
     )
 
 
@@ -125,7 +138,15 @@ async def run_mock_task(
     with mock_site() as (base_url, site):
         secrets = ScopedSecrets(task.secrets, origin_of(base_url)) if task.secrets else None
         result, seconds, lost = await _drive(
-            task, base_url + task.start, connection, http, sink, settings, secrets, MOCK_LIMITS
+            task,
+            base_url + task.start,
+            connection,
+            http,
+            sink,
+            settings,
+            secrets,
+            MOCK_LIMITS,
+            task.attachments,
         )
         failure = task.check(result, site)
         extra = {
@@ -134,7 +155,8 @@ async def run_mock_task(
             "orders_placed": len(site.orders_placed),
         }
         return {"arm": "fastbrowse", "category": "mock", "suite": "mock", "expected_status": task.expect.value} | (
-            _row(result, task_id=task.id, failure=failure, seconds=seconds, lost=lost) | extra
+            _row(result, task_id=task.id, failure=failure, seconds=seconds, lost=lost, limit=MOCK_LIMITS.max_steps)
+            | extra
         )
 
 
@@ -196,6 +218,13 @@ async def main(argv: list[str]) -> int:
                         f"{mark} {suite:5} {task.id:26} {row['status']:20} {row['seconds']:>6}s ${row['dollars']:<8}",
                         row["failure"] or "",
                     )
+                    used = cast("int", row["steps"])
+                    budget = cast("int", row["step_limit"])
+                    if used > HEADROOM * budget:
+                        print(
+                            f"WARN  {suite:5} {task.id:26} {used} of {budget} steps used "
+                            f"({used / budget:.0%} of the budget)"
+                        )
     passed = sum(bool(r["passed"]) for r in rows)
     print(f"{passed}/{len(rows)} passed")
     return 0 if passed == len(rows) else 1

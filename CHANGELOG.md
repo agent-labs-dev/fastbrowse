@@ -18,6 +18,28 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   pressing, and a drag whose target changed is decided again from the new page instead of being retried. A drag
   between a page and a frame hosted separately from it is refused.
 
+- The fixture eval suites (local and mock) run on a schedule and on demand in `.github/workflows/evals.yml`, and
+  the job fails on any regression, so a change to browsing behaviour that breaks a task no longer waits for
+  someone to run the suite by hand. The job reports a per-task pass rate over its repeats and refuses a run
+  where any task is below the target.
+
+- An authorized run can submit a form after attaching a file. Unsure whether the submit was the commit the
+  task meant, it asked recovery, and was then refused the same click again whatever recovery said, until it
+  ended `stuck` with nothing sent. When recovery, shown the page and the task, names the same control that was
+  refused, the run may now make that click once. A credential change is still never let through this way, and
+  a run without authorization still stops for confirmation.
+
+- The stateful mock suite grows from 20 tasks to 26: a story opened in a second tab, a native date input, a
+  newsletter form with a hidden field a careful run leaves alone, an export downloaded from behind a sign-in,
+  a document attached to a form and submitted, and a card dragged from one board column to another. A run may now carry attachments, the way a caller supplies
+  a file.
+
+- Answer grading folds case and typographic punctuation before it matches, so a run that words a right answer
+  differently is not failed for its phrasing, and the runner warns when a task uses more than 60% of its step
+  budget.
+
+- `docs/evals.md` states how to read a published number, including the caveats that have to travel with one.
+
 - A run asked for something the page does not have, such as the heading of a page with none, now stops after
   one recovery instead of spending all of them. Recovery used to answer "report that it is absent and finish",
   the completion check refuses any finish while requested information is unread, and the two repeated until the
