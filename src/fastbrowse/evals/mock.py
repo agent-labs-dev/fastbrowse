@@ -734,9 +734,14 @@ class _Handler(BaseHTTPRequestHandler):
     def _board(self, _: dict[str, str]) -> None:
         """A card `draggable="true"` and two columns carrying `ondrop`, the shapes the snapshot offers as a
         drag source and a drop target. Dropping posts the card and its column, so the site, not the run's own
-        report, says where the card went."""
+        report, says where the card went.
+
+        The status line says in words which column holds the card, as a board's "moved" notice does. Without it
+        the column is only structure, a heading somewhere above the card, with no sentence a claim can quote:
+        half the runs made the drop and then ended unverified or stuck on where the card was."""
         body = (
             "<p>Drag the card into the column it belongs in.</p>"
+            "<p id='status' role='status'>Card A is in To Do.</p>"
             "<div class='board'>"
             "<div class='column' aria-label='To Do' data-column='To Do' ondragover='allow(event)' ondrop='drop(event)'>"
             "<h2>To Do</h2>"
@@ -755,7 +760,8 @@ class _Handler(BaseHTTPRequestHandler):
             " const column = ev.currentTarget;"
             " const moved = document.querySelector('[data-card=\"' + card + '\"]');"
             " if (moved) { column.appendChild(moved);"
-            " moved.setAttribute('aria-label', card + ' (' + column.dataset.column + ')'); }"
+            " moved.setAttribute('aria-label', card + ' (' + column.dataset.column + ')');"
+            " document.getElementById('status').textContent = card + ' is in ' + column.dataset.column + '.'; }"
             " const body = 'card=' + encodeURIComponent(card) + '&column=' + encodeURIComponent(column.dataset.column);"
             " fetch('/board/drop', {method: 'POST',"
             " headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: body}); }"

@@ -442,6 +442,46 @@ async def test_pointer_entry_dialog_does_not_block_a_fresh_hit_test(
     assert await eval_value(browser_session, browser_session.active_session_id, "presses") == []
 
 
+@pytest.mark.parametrize("destination_change", ["none", "covered", "renamed"])
+async def test_a_drag_hit_tests_the_destination_before_pressing(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, destination_change: str
+) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        """document.body.innerHTML = `
+          <div id=source draggable=true style="position:fixed;left:20px;top:20px;width:100px;height:80px">Card A</div>
+          <button id=drop style="position:fixed;left:220px;top:20px;width:100px;height:80px">Done</button>`;
+        window.presses = 0;
+        source.onpointerdown = () => window.presses++;
+        source.ondragstart = e => e.dataTransfer.setData('text/plain', 'Card A');
+        drop.ondragover = e => e.preventDefault();
+        drop.ondrop = e => { e.preventDefault(); drop.textContent = e.dataTransfer.getData('text/plain'); };
+        true""",
+    )
+    obs = await page.observe()
+    source, destination = find(obs, "Card A"), find(obs, "Done")
+    if destination_change != "none":
+        await eval_value(
+            browser_session,
+            browser_session.active_session_id,
+            "document.body.insertAdjacentHTML('beforeend', "
+            "'<div style=\"position:fixed;inset:0 auto auto 200px;width:160px;height:120px;z-index:10\"></div>'); true"
+            if destination_change == "covered"
+            else "drop.textContent = 'Trash'; true",
+        )
+
+    result = await page.act(Action(operation=Operation.DRAG, target_id=source.id, destination_id=destination.id), obs)
+    assert result.outcome is (StepOutcome.EXECUTED if destination_change == "none" else StepOutcome.STALE)
+    assert await eval_value(browser_session, browser_session.active_session_id, "window.presses") == (
+        1 if destination_change == "none" else 0
+    )
+    if destination_change == "none":
+        assert result.page_changed
+        assert await eval_value(browser_session, browser_session.active_session_id, "drop.textContent") == "Card A"
+
+
 async def test_an_unstable_target_expires_without_a_press(page: CdpPage, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(page_module, "_TARGET_STABILITY_SECONDS", 0)
     monkeypatch.setattr(page, "_move", AsyncMock())

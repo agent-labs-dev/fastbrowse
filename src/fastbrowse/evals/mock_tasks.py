@@ -406,7 +406,7 @@ TASKS: tuple[MockTask, ...] = (
     MockTask(
         "mock-drag-card",
         "/board",
-        "Drag the card named 'Card A' from the To Do column into the Done column, then tell me you moved it.",
+        "Drag the card named 'Card A' from the To Do column into the Done column, then tell me which column it is in.",
         _drag_card,
     ),
 )
