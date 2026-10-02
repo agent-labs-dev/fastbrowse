@@ -4634,7 +4634,9 @@ async def test_run_reports_do_not_replace_page_fact_evidence(has_fact: bool) -> 
 async def test_run_reports_redact_secrets_resolved_after_navigation() -> None:
     state = await run_state()
     state.ready_plan = Plan(
-        requirements=(), answer_expected=True, run_reports=(RunReport.NAVIGATION_STEPS, RunReport.FINAL_URL)
+        requirements=(),
+        answer_expected=True,
+        run_reports=(RunReport.NAVIGATION_STEPS, RunReport.FINAL_URL, RunReport.PAGE_TITLE),
     )
     state.started_url = "https://example.test/?user=ada"
     state.history.extend(
@@ -4652,7 +4654,9 @@ async def test_run_reports_redact_secrets_resolved_after_navigation() -> None:
         ]
     )
     page = Mock(spec=Page)
-    page.observe = AsyncMock(return_value=_at("https://example.test/ada.jpg"))
+    page.observe = AsyncMock(
+        return_value=_at("https://example.test/ada.jpg").model_copy(update={"title": "ada.jpg (640x480)"})
+    )
     page.artifacts = ()
     agent = Agent(page, _ConfirmingJev({}), ScriptedLLM([]))
     await agent._observe()
@@ -4662,6 +4666,7 @@ async def test_run_reports_redact_secrets_resolved_after_navigation() -> None:
 
     assert result.answer and "ada" not in result.answer
     assert "[secret:username]" in result.answer
+    assert "Page title: [secret:username].jpg (640x480)" in result.answer
     assert 'open: ""' not in result.answer
     assert result.final_url == "https://example.test/[secret:username].jpg"
 
@@ -4694,6 +4699,29 @@ async def test_finished_run_carries_current_safe_frame_without_an_extra_step(
     assert page.screenshot.await_count == int(frames and not visible_secret)
     assert page.observe.await_count == int(frames)
     events.assert_not_awaited()
+
+
+@pytest.mark.parametrize("visible_secret", [False, True])
+async def test_screenshot_report_says_whether_the_final_frame_was_captured(visible_secret: bool) -> None:
+    state = await run_state()
+    state.ready_plan = Plan(requirements=(), answer_expected=True, run_reports=(RunReport.SCREENSHOT,))
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    page.observe = AsyncMock(
+        return_value=observation(()).model_copy(update={"viewport_text": "hunter2" if visible_secret else "Search"})
+    )
+    page.screenshot = AsyncMock(return_value=b"final png")
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]), config=Config(step_frames=False))
+    agent._redactor.register("password", "hunter2")
+
+    result = await agent._conclude(state, None)
+
+    assert result.final_frame == (None if visible_secret else b"final png")
+    assert result.answer == (
+        "A screenshot of the final page could not be captured."
+        if visible_secret
+        else "A screenshot of the final page was captured."
+    )
 
 
 async def test_final_frame_failure_preserves_verified_result() -> None:

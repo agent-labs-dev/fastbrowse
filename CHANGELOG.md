@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A request to report the final page's title or to capture a screenshot is now a run report filled in from
+  browser state, not a requirement the page must evidence. The title is not page text a reader can quote, and
+  fastbrowse has no screenshot action, so such runs used to end `stuck` with completion rejected. The answer
+  now carries `Page title: ...`, and a requested screenshot is returned as `final_frame` even without step
+  frames, with the answer saying whether it was captured.
+
 ## [0.5.14] - 2026-09-29
 
 - Navigation comparisons enable cloud resizing to match Ultrafast's viewport and retain the actual
