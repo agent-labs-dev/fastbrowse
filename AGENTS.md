@@ -74,6 +74,11 @@ committed rows (`--publish`). The README headline, the results and task tables a
 `docs/evals.md` are generated from the code and those rows, and a test fails when they differ; regenerate them in the
 same PR ([docs/evals.md#versions](docs/evals.md#versions)).
 
+A published comparison has one route: rows committed with `--publish` at the task versions they ran, every
+physical attempt kept, and retries and their spend recorded with them. Never type a number into prose.
+`.github/workflows/evals.yml` runs the fixture suites on a schedule and on demand; a release that publishes a
+comparison needs that job green and, for a head-to-head figure, the comparison re-run on the same build.
+
 The [sift project skill](.agents/skills/sift-project/SKILL.md) records audit commands, live roots and generated files.
 
 ## Architecture
@@ -151,6 +156,10 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
 1. Add the entry under the new version's heading in `CHANGELOG.md` (Keep a Changelog, prose bullets).
 2. `uv version <x.y.z>`, then open a `chore: <x.y.z>` PR. CI fails if the version has no entry.
 3. After it merges, `git tag v<x.y.z> && git push origin v<x.y.z>`.
+
+A release that publishes or changes a comparison figure also needs the fixture suites green on the release build
+(`.github/workflows/evals.yml` fails on any regression) and, for a head-to-head figure, the comparison re-run on
+that same build.
 
 The tag builds, creates the GitHub release with **the changelog entry as its notes**, publishes to PyPI by
 trusted publishing, and then asks fastbrowse.ai to rebuild, since its changelog page reads this file at build

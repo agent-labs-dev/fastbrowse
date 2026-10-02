@@ -968,6 +968,42 @@ async def _click(agent: Agent, state: _RunState, on: Observation, label: str) ->
     await agent._step(state, on, decision)
 
 
+@pytest.mark.parametrize(("named", "confirmed"), [(0, True), (1, False)])
+async def test_recovery_naming_a_refused_commit_lets_an_authorized_run_make_it(named: int, confirmed: bool) -> None:
+    """An authorized run unsure of a commit asks recovery. Recovery naming that same control is the second opinion
+    the refusal asked for; naming another control confirms nothing."""
+    obs = observation((_button("Submit document"), _button("Cancel")))
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"png")
+    page.artifacts = ()
+    recovery: JsonValue = {
+        "diagnosis": "the file is attached",
+        "next_subgoal": "Submit the form",
+        "give_up": False,
+        "control": named,
+        "operation": "click",
+    }
+    # The scripted pick scores 0.9, which this bar leaves short of confident enough to commit unasked.
+    config = Config(thresholds=Thresholds(sensitive_act_from=0.95))
+    agent = Agent(page, ScriptedJev({}, noul=0.9), ScriptedLLM([recovery]), config=config)
+    state = await run_state()
+    state.authorization = Authorization(irreversible_actions=True)
+    decision = await decide(
+        ScriptedJev({"operation": "click", "click_target": "submit document"}), obs, context(), Config()
+    )
+    with pytest.raises(_Unsure):
+        await agent._gate_irreversible(state, obs, decision)
+    await agent._recover(state, obs, "unsure click 'Submit document'")
+    if confirmed:
+        await agent._gate_irreversible(state, obs, decision)
+        # It covered that one retry: the same label asked about again is judged afresh.
+        with pytest.raises(_Unsure):
+            await agent._gate_irreversible(state, obs, decision)
+    else:
+        with pytest.raises(_Unsure):
+            await agent._gate_irreversible(state, obs, decision)
+
+
 async def test_a_change_that_leads_back_to_an_earlier_state_is_not_progress() -> None:
     # A date picker (open), the form it closes to, and the picker opened again because the form will not submit.
     picker = observation((_button("Done"), _button("Friday")))
