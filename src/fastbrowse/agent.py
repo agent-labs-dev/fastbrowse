@@ -541,6 +541,9 @@ class Agent:
                         state.visited[opening] = None
                     return await self._loop(state, output_schema, until)
             except _Stop as stop:
+                if stop.status is Status.STUCK and state is not None and state.notes.evidence:
+                    # What was read is still cited evidence; a caller told only "stuck" has to browse again for it.
+                    return self._partial_result(state.notes, state, ledger, stop.status, stop.error)
                 return self._result(state, ledger, stop.status, error=stop.error)
             except TimeoutError:
                 if not deadline.expired():
@@ -557,18 +560,12 @@ class Agent:
             except BudgetExceeded as error:
                 return self._result(state, ledger, Status.BUDGET_EXCEEDED, error=str(error), budget=error.budget)
             except NotesTooLarge as error:
-                notes = state.notes if state else Notes()
-                partial = partial_answer(notes, self._config.observation.working_notes_chars)
-                cited = notes.expand_evidence_ids(key for claim in partial.claims for key in claim.evidence_ids)
-                answer, citations = self._public_answer(partial)
-                return self._result(
+                return self._partial_result(
+                    state.notes if state else Notes(),
                     state,
                     ledger,
                     Status.OBSERVATION_LIMIT,
-                    answer=answer,
-                    citations=citations,
-                    evidence=tuple(item for key, item in notes.evidence.items() if key in cited),
-                    error=self._redactor.redact(str(error)),
+                    self._redactor.redact(str(error)),
                 )
             except ObservationTooLarge as error:
                 return self._result(state, ledger, Status.OBSERVATION_LIMIT, error=str(error))
@@ -2465,8 +2462,17 @@ class Agent:
             if state.http_failure is not None and status is not Status.NEEDS_INPUT:
                 raise state.http_failure.stop()
             raise _Stop(status, generation.data.diagnosis)
-        state.hint = self._redactor.redact(generation.data.next_subgoal)
         diagnosis = self._redactor.redact(generation.data.diagnosis)
+        # An unread page is still read before a finish is judged, so only a page already read is exhausted.
+        exhausted = generation.data.operation is Operation.DONE and state.ready_plan is not None and state.read_here
+        if exhausted and _unread(state.ready_plan, state.notes):
+            # The done check refuses any finish with information nobody has read, so this subgoal cannot succeed.
+            # Asked for the heading of a page that has none, a run was told to finish on every recovery it had,
+            # and each one was refused.
+            if state.http_failure is not None and gives_up_as is not Status.NEEDS_INPUT:
+                raise state.http_failure.stop()
+            raise _Stop(gives_up_as, diagnosis)
+        state.hint = self._redactor.redact(generation.data.next_subgoal)
         state.recovery_log.append(
             f"- Reason: {_recovery_text(reason)}. Diagnosis: {_recovery_text(diagnosis)}. "
             f"Subgoal: {_recovery_text(state.hint)}."
@@ -2962,6 +2968,23 @@ class Agent:
             has_attachments=bool(state.attachments),
             secrets=secrets,
             unread_requirements=unread,
+        )
+
+    def _partial_result(
+        self, notes: Notes, state: _RunState | None, ledger: Ledger, status: Status, error: str | None
+    ) -> RunResult:
+        """A run that could not finish still returns the claims it read, each with its evidence."""
+        partial = partial_answer(notes, self._config.observation.working_notes_chars)
+        cited = notes.expand_evidence_ids(key for claim in partial.claims for key in claim.evidence_ids)
+        answer, citations = self._public_answer(partial)
+        return self._result(
+            state,
+            ledger,
+            status,
+            answer=answer,
+            citations=citations,
+            evidence=tuple(item for key, item in notes.evidence.items() if key in cited),
+            error=error,
         )
 
     def _result(
