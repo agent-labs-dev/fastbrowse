@@ -23,6 +23,8 @@ class RequirementKind(StrEnum):
 class RunReport(StrEnum):
     FINAL_URL = "final_url"
     NAVIGATION_STEPS = "navigation_steps"
+    PAGE_TITLE = "page_title"
+    SCREENSHOT = "screenshot"
 
 
 class Requirement(Frozen):
@@ -73,12 +75,13 @@ def _instructions() -> Message:
             "user asked only to run is such a page: it is one action requirement, to leave the search showing with "
             "the filters the user named applied, and not a fact to find. Except for a task asking only for a run "
             "report, every task has at least one requirement. Answering is not a requirement either: say whether "
-            "the user expects an answer. Requests to report this run's final URL or navigation steps belong in "
-            "run_reports, not "
-            "information requirements: code reports the observed address and recorded actions. Keep the requested "
-            "navigation itself as an action requirement when there is no page fact to find. A request only for "
-            "the current URL needs no page requirement. Never classify page facts, image contents, transaction "
-            "outcomes or a site's navigation instructions as run reports.\n\n"
+            "the user expects an answer. Requests to report this run's final URL, navigation steps or final page "
+            "title, or to capture a screenshot of the page, belong in run_reports, not requirements: code reports "
+            "the observed address, title and recorded actions and captures the final page itself, so a screenshot "
+            "is never a requirement to confirm. Keep the requested navigation itself as an action requirement "
+            "when there is no page fact to find. A request only for the current URL, title or a screenshot needs "
+            "no page requirement. Never classify page facts, image contents, transaction outcomes or a site's "
+            "navigation instructions as run reports.\n\n"
             "Each information requirement must retain the relevant constraints from the task, including dates, "
             "filters and comparison criteria, and adds none the task did not state: a total the user wants "
             "reported is the order's total, not the total once the order is finished. Keep related output fields "

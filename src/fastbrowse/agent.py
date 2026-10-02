@@ -2815,19 +2815,26 @@ class Agent:
         result = self._result(
             state, state.ledger, status, answer=answer, data=data, evidence=tuple(cited.values()), citations=citations
         )
-        report = self._run_report(state, result.final_url)
-        if report:
-            result = result.model_copy(update={"answer": "\n\n".join(part for part in (answer, report) if part)})
-        if self._config.step_frames:
-            # Step frames show the page before an action; an ending navigation needs its own image.
+        frame: bytes | None = None
+        if self._config.step_frames or RunReport.SCREENSHOT in state.plan.run_reports:
+            # Step frames show the page before an action; an ending navigation needs its own image. A requested
+            # screenshot is this same image, taken before the report so the report says whether it exists.
             try:
                 async with asyncio.timeout(2):
-                    result = result.model_copy(update={"final_frame": await self._frame()})
+                    frame = await self._frame()
             except (BrowserError, TimeoutError):
                 logger.debug("final page frame unavailable")
+            result = result.model_copy(update={"final_frame": frame})
+        if frame is None and RunReport.SCREENSHOT in state.plan.run_reports and result.status is Status.COMPLETE:
+            # The image is what the caller asked for. A secret on screen, a dialog or a timeout can withhold it,
+            # and a run that cannot hand it over has not done the task, whatever else it verified.
+            result = result.model_copy(update={"status": Status.UNVERIFIED})
+        report = self._run_report(state, result.final_url, captured=frame is not None)
+        if report:
+            result = result.model_copy(update={"answer": "\n\n".join(part for part in (answer, report) if part)})
         return result
 
-    def _run_report(self, state: _RunState, final_url: str | None) -> str:
+    def _run_report(self, state: _RunState, final_url: str | None, *, captured: bool = False) -> str:
         # A raw image has no page quotes for its address or the clicks that reached it.
         # These reports copy runtime values; the composer cannot add claims to them.
         reports = state.plan.run_reports
@@ -2856,6 +2863,16 @@ class Agent:
             parts.append("Recorded navigation steps:\n" + "\n".join(f"- {step}" for step in steps))
         if RunReport.FINAL_URL in reports and final_url is not None:
             parts.append(f"Final URL: {final_url}")
+        observed = self._raw_observation or self._observed
+        # The title is not viewport text, so no reader could ever quote it.
+        if RunReport.PAGE_TITLE in reports and observed is not None:
+            parts.append(f"Page title: {self._redactor.redact(observed.title)}")
+        if RunReport.SCREENSHOT in reports:
+            parts.append(
+                "A screenshot of the final page was captured."
+                if captured
+                else "A screenshot of the final page could not be captured."
+            )
         return "\n\n".join(parts)
 
     def _public_fact(self, fact: Fact) -> StepFact:

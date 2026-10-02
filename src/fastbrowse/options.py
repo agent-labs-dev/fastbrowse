@@ -6,7 +6,9 @@ unset `FASTBROWSE_HEADED` long after the CLI stopped, and nothing would fail.
 """
 
 import argparse
+import hashlib
 import os
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -103,3 +105,18 @@ def merged_secrets(values: Mapping[str, SecretValue], vault: Mapping[str, Secret
 def step_label(step: StepResult) -> str:
     """One step as a line: what was done, and to what."""
     return f"{step.operation.value} {step.target or ''}".strip()
+
+
+def keep_screenshot(frame: bytes, directory: Path | None) -> Path:
+    """Write a run's final-page image where its caller can open it, and return the path.
+
+    The image travels only in `RunResult.final_frame`, which JSON leaves out, so a CLI or MCP caller that asked for a
+    screenshot was told one was captured and never received it. Without a downloads directory it goes to a fresh
+    temporary one, since the run's own scratch space is deleted when the run ends.
+    """
+    root = directory.resolve() if directory is not None else Path(tempfile.mkdtemp(prefix="fastbrowse-"))
+    # Content-addressed like downloads, so a second run never overwrites the first one's image.
+    path = root / "screenshots" / hashlib.sha256(frame).hexdigest()[:16] / "screenshot.png"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(frame)
+    return path

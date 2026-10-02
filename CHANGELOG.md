@@ -28,6 +28,16 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - `docs/evals.md` states how to read a published number, including the caveats that have to travel with one.
 
+## [0.5.15] - 2026-10-02
+
+- A request to report the final page's title or to capture a screenshot is now a run report filled in from
+  browser state, not a requirement the page must evidence. The title is not page text a reader can quote, and
+  fastbrowse has no screenshot action, so such runs used to end `stuck` with completion rejected. The answer
+  now carries `Page title: ...`, and a requested screenshot is returned as `final_frame` even without step
+  frames, with the answer saying whether it was captured. A run that could not take the screenshot it was asked
+  for ends `unverified`, not `complete`. The CLI prints where it saved the image, and the MCP result carries it
+  as `screenshot`, in the downloads directory or a temporary one.
+
 ## [0.5.14] - 2026-09-29
 
 - Navigation comparisons enable cloud resizing to match Ultrafast's viewport and retain the actual
@@ -813,7 +823,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.14...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.15...HEAD
+[0.5.15]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.15
 [0.5.14]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.14
 [0.5.13]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.13
 [0.5.12]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.12

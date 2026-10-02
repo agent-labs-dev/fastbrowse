@@ -149,6 +149,8 @@ class BrowseResult(BaseModel):
     cost_complete: bool
     """False when some component reported no price, so `dollars` understates the run."""
     downloads: list[Download]
+    screenshot: Download | None = None
+    """The page the run ended on, when the task asked for a screenshot."""
 
 
 def next_step(status: Status, *, allow_authorize: bool) -> str | None:
@@ -323,7 +325,13 @@ def _result(result: RunResult, *, live_url: str | None, config: ServerConfig) ->
         dollars=round(result.cost.known_dollars, 6),
         cost_complete=not result.cost.has_unknown,
         downloads=downloads,
+        screenshot=_screenshot(result.final_frame, config.downloads) if result.final_frame is not None else None,
     )
+
+
+def _screenshot(frame: bytes, directory: Path | None) -> Download:
+    path = options.keep_screenshot(frame, directory)
+    return Download(name=path.name, mime_type="image/png", size_bytes=len(frame), uri=path.as_uri())
 
 
 def build_server(
@@ -424,7 +432,8 @@ def build_server(
                 if not deadline.expired():
                     raise
                 raise ToolError(f"the run overran max_seconds={limits.max_seconds} and was abandoned") from None
-        return _result(result, live_url=live_url, config=config)
+        # Off the event loop: the result may write the run's screenshot to disk.
+        return await asyncio.to_thread(_result, result, live_url=live_url, config=config)
 
     # A client shows one or the other, so they cannot be allowed to drift apart.
     title = "Browse the web"

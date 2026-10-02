@@ -263,6 +263,8 @@ async def run(args: argparse.Namespace) -> int:
     else:
         print(f"{result.status.value} (${result.cost.known_dollars:.4f}, {len(result.steps)} steps)")
         print(result.answer or result.error or "")
+    if result.final_frame is not None:
+        print(f"  screenshot: {options.keep_screenshot(result.final_frame, args.downloads)}", file=sys.stderr)
     if args.record is not None:
         print(
             f"  recorded: {', '.join(map(str, result.recordings))}" if result.recordings else "  not recorded",

@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -177,6 +178,18 @@ async def test_downloads_are_not_listed_when_the_server_keeps_none() -> None:
     result, _ = await _call(ServerConfig(), Recorder(), {"task": "t", "start": START})
     assert result.structuredContent is not None
     assert result.structuredContent["downloads"] == []
+
+
+async def test_a_captured_screenshot_reaches_the_caller_as_a_file(tmp_path: Path) -> None:
+    """`final_frame` is left out of JSON, so without this the answer said "captured" and the image was lost."""
+    recorder = Recorder(_result().model_copy(update={"final_frame": b"final png"}))
+    result, _ = await _call(ServerConfig(downloads=tmp_path), recorder, {"task": "t", "start": START})
+    assert result.structuredContent is not None
+    screenshot = result.structuredContent["screenshot"]
+    assert screenshot["mime_type"] == "image/png"
+    path = Path(urlsplit(screenshot["uri"]).path)
+    assert path.is_relative_to(tmp_path)
+    assert await asyncio.to_thread(path.read_bytes) == b"final png"
 
 
 async def test_authorize_is_refused_unless_the_operator_allowed_it() -> None:
