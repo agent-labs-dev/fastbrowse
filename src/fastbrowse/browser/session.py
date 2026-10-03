@@ -509,11 +509,12 @@ class BrowserSession:
                 self._popups[info["targetId"]] = (opener_id, asyncio.get_running_loop().create_future())
                 self._spawn(self._adopt_popup(info["targetId"], opener_id))
             # An attached window is not owned, so neither are its popups: they stay open with it. An Electron
-            # app's main process opens windows with no opener; those count as the active window's.
+            # app's main process opens windows with no opener, which count as the active window's. A browser
+            # opens one too for every tab its user opens, so they are adopted only when a target was matched.
             elif (
                 self._connection.attach
                 and info["targetId"] not in self._tabs
-                and (opener_id in self._tabs or not opener_id)
+                and (opener_id in self._tabs or (not opener_id and self._connection.target_match is not None))
             ):
                 opener = opener_id or self._active_target_id
                 self._popups[info["targetId"]] = (opener, asyncio.get_running_loop().create_future())

@@ -829,7 +829,11 @@ async def test_attach_existing_tab_and_non_destructive_teardown(monkeypatch: pyt
     assert "Target.closeTarget" not in transport.calls
 
 
-async def test_attach_adopts_its_popups_and_windows_without_opener_only(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(("target_match", "adopted"), [(None, ("popup",)), ("App", ("popup", "window"))])
+async def test_attach_adopts_its_popups_and_windows_without_opener_only_when_matched(
+    monkeypatch: pytest.MonkeyPatch, target_match: str | None, adopted: tuple[str, ...]
+) -> None:
+    """A window with no opener is an Electron app's, or a tab its user opened by hand in a browser."""
     transport = CdpTransport(monkeypatch)
     transport.results["Target.getTargets"] = [
         {"targetInfos": [{"targetId": "app", "type": "page", "url": "app://main", "title": "App"}]}
@@ -838,17 +842,17 @@ async def test_attach_adopts_its_popups_and_windows_without_opener_only(monkeypa
         {"targetInfo": {"url": "app://popup", "title": "Popup"}},
         {"targetInfo": {"url": "app://window", "title": "Window"}},
     ]
-    conn = BrowserConnection(cdp_url="ws://localhost:9222", remote=False, attach=True)
+    conn = BrowserConnection(cdp_url="ws://localhost:9222", remote=False, attach=True, target_match=target_match)
     async with BrowserSession(conn, RecordingArtifactSink()) as session:
         for target_id, opener in (("popup", "app"), ("window", None), ("elsewhere", "unrelated")):
             info: dict[str, Any] = {"targetId": target_id, "type": "page", "url": "", "title": ""}
             if opener is not None:
                 info["openerId"] = opener
             session._on_target_created(cast(Any, {"targetInfo": info}), None)
-        assert session.popups() == ("popup", "window")
-        assert session._popups["window"][0] == "app"
+        assert session.popups() == adopted
+        assert all(session._popups[target_id][0] == "app" for target_id in adopted)
         await asyncio.gather(*session._background)
-        assert {tab.id for tab in session.tabs()} == {"app", "popup", "window"}
+        assert {tab.id for tab in session.tabs()} == {"app", *adopted}
         assert not session._owned
     assert "Target.closeTarget" not in transport.calls
 

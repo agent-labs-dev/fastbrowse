@@ -199,7 +199,9 @@ async def run_task(
     `--remote-debugging-port`, its URL read from `http://127.0.0.1:<port>/json/version`. With `attach` (implied by
     `target_match`) the run drives a window already open instead of opening a tab: the first page whose title or
     URL contains `target_match`, or else the first page. It leaves that window open, and with no `start` it begins
-    on whatever the window shows. Otherwise `browser_api_key` runs on a Browser Use Cloud browser, and with neither,
+    on whatever the window shows. New windows that no page opened, as an Electron app's main process opens them,
+    join the run only with `target_match`; without it they could be tabs a person opened in the same browser.
+    Otherwise `browser_api_key` runs on a Browser Use Cloud browser, and with neither,
     local Chrome as `chrome` describes (default: from `Settings`, headless with a throwaway profile).
     `cloud_profile` names a profile on that cloud account, so a site someone signed into once in that
     profile is still signed in here; it is the remote counterpart of `LocalChrome.profile`. `proxy_country`
