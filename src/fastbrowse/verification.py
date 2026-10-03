@@ -468,7 +468,9 @@ async def check_claims(
     )
     if len(kept) == len(composed.claims):
         return composed
-    if not kept:
+    # An action-only task needs no answer: the done check judged its completion, so a restatement of the action
+    # that its confirmation quote cannot carry (the name and topic a form was sent with) is dropped, not fatal.
+    if not kept and any(r.kind is RequirementKind.INFORMATION for r in composed.requirements):
         return None
     # A claim can be doubted for proving too little (a title cited as "the most expensive" without the prices it
     # beat), and the omission check then passed the price alone as the whole answer. A requirement the answer

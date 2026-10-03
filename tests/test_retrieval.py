@@ -1032,6 +1032,32 @@ async def test_action_only_completion_never_sends_empty_claim_check(answer: str,
     jev.evaluate.assert_not_called()
 
 
+@pytest.mark.parametrize("kind", [RequirementKind.ACTION, RequirementKind.INFORMATION])
+async def test_a_doubted_restatement_of_an_action_leaves_no_answer_rather_than_failing(kind: RequirementKind) -> None:
+    from fastbrowse.jev import Evaluation, NoulAnswer
+    from fastbrowse.models import CostBasis, CostComponent, CostLine
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import check_claims
+
+    class Jev:
+        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
+            answers = {key: NoulAnswer(probability=0.9 if key == "unsupported_0" else 0.05) for key in questions}
+            free = CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0)
+            return Evaluation(model="test", answers=answers, input_tokens=1, cost=free)
+
+    requirement = Requirement(id="r1", text="Send support a message as Ada", kind=kind)
+    page = capture(
+        (BlockKind.PARAGRAPH, "Thanks, we received it."),
+    )
+    notes = Notes((Fact(reader=FactReader.LLM, text="received", evidence=block_evidence(page, "s0")),))
+    claim = Claim(text="A message from Ada about the damaged kettle was received.", evidence_ids=tuple(notes.evidence))
+    held = await check_claims(Jev(), assemble_answer((claim,), notes, (requirement,)), notes, Thresholds())
+    if kind is RequirementKind.ACTION:
+        assert held is not None and held.answer == ""
+    else:
+        assert held is None
+
+
 @pytest.mark.parametrize("omitted_after", [0.1, 0.9])
 async def test_a_doubted_claim_is_dropped_only_if_the_rest_still_answers(omitted_after: float) -> None:
     from fastbrowse.jev import Evaluation, NoulAnswer
