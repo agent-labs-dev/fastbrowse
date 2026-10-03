@@ -520,9 +520,19 @@ async def test_a_drag_revalidates_its_endpoints_after_scrolling_and_pointer_entr
         assert await eval_value(browser_session, browser_session.active_session_id, "drop.textContent") == "Card A"
 
 
-@pytest.mark.parametrize("change", ["renamed", "moved"])
-async def test_a_destination_changed_by_the_drag_itself_is_not_dropped_on(
-    page: CdpPage, browser_session: BrowserSession, main_site: str, change: str
+@pytest.mark.parametrize(
+    "change,dropped",
+    [
+        # Another control under the pointer: the native drag is cancelled, so not even the source sees a drop.
+        ("drop.textContent = 'Trash';", []),
+        # The same control somewhere else: the release follows it, after the dragover that lets it take the drop.
+        ("drop.style.top = '300px';", ["drop"]),
+        ("drop.ondragover = () => { drop.style.transform = 'translateY(2px)'; };", ["drop"]),
+    ],
+    ids=["renamed", "moved", "nudged"],
+)
+async def test_a_destination_changed_by_the_drag_itself_is_dropped_on_only_if_it_is_the_same_control(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, change: str, dropped: list[str]
 ) -> None:
     await page.navigate(main_site)
     await eval_value(
@@ -537,16 +547,15 @@ async def test_a_destination_changed_by_the_drag_itself_is_not_dropped_on(
         document.addEventListener('dragover', e => e.preventDefault());
         document.addEventListener('drop', e => { e.preventDefault(); window.drops.push(e.target.id); });
         source.ondragstart = e => { e.dataTransfer.setData('text/plain', 'Card A'); """
-        + {"renamed": "drop.textContent = 'Trash';", "moved": "drop.style.top = '300px';"}[change]
+        + change
         + " }; true",
     )
     obs = await page.observe()
     source, destination = find(obs, "Card A"), find(obs, "Done")
     result = await page.act(Action(operation=Operation.DRAG, target_id=source.id, destination_id=destination.id), obs)
 
-    assert result.outcome is StepOutcome.STALE
-    assert result.detail == "drop target changed during the drag"
-    assert "drop" not in await eval_value(browser_session, browser_session.active_session_id, "window.drops")
+    assert result.outcome is (StepOutcome.EXECUTED if dropped else StepOutcome.STALE)
+    assert await eval_value(browser_session, browser_session.active_session_id, "window.drops") == dropped
 
 
 async def test_a_drag_onto_its_own_source_is_refused_before_pressing(
