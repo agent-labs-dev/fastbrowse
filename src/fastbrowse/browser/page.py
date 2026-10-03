@@ -1174,6 +1174,8 @@ class CdpPage(Page):
         )
         # A press with no travel is a click; the drag starts on the first move that clears Chrome's threshold.
         await asyncio.sleep(_DRAG_STEP_SECONDS)
+        # A drag handler can repurpose or cover the destination once the gesture starts, and again as the pointer
+        # arrives, so the drop is made only on the control that was checked; any other change cancels the drag.
         for step in range(1, _DRAG_STEPS + 1):
             await self._drag_move(
                 session_id,
@@ -1181,18 +1183,42 @@ class CdpPage(Page):
                 start_y + (end_y - start_y) * step / _DRAG_STEPS,
             )
             await asyncio.sleep(_DRAG_STEP_SECONDS)
-            # A drag handler can move or repurpose the destination once the gesture starts, and again as the
-            # pointer arrives. Only the drop that was checked is made: otherwise the card is carried back and
-            # let go where it was picked up, because a release anywhere else is a drop nobody checked.
-            if step in (1, _DRAG_STEPS):
+            if step == 1:
                 _, _, landed, _ = await self._before_action(drop, hit_test=True, scroll=False)
-                if landed != drop_point:
-                    await self._drag_move(session_id, start_x, start_y)
-                    await self._key(None, "Escape", None)
-                    await self._release(session_id, start_x, start_y)
+                if not isinstance(landed, tuple):
+                    await self._cancel_drag(session_id, (start_x, start_y))
                     return StepOutcome.STALE, "drop target changed during the drag"
-        await self._release(session_id, end_x, end_y)
-        return StepOutcome.EXECUTED, None
+        # Hover styling can shift the destination's point (a border, a nudge, a placeholder above it). The release
+        # follows the control, but only to a point the hit test confirms with the pointer already resting on it.
+        at = drop_point
+        for _ in range(2):
+            # Chrome drops on the target its last dragover reached, not on what lies under the pointer now, and
+            # takes a newly entered target only after the dragover a further move sends. Two moves at rest bring
+            # Chrome's target up to date before the hit test, or a control that slid back under the pointer
+            # since the last move would pass the check while the drop went to the one hovered before it.
+            for _ in range(2):
+                await self._drag_move(session_id, *at)
+                await asyncio.sleep(_DRAG_STEP_SECONDS)
+            _, _, landed, _ = await self._before_action(drop, hit_test=True, scroll=False)
+            if not isinstance(landed, tuple):
+                break
+            if landed == at:
+                await self._release(session_id, *at)
+                return StepOutcome.EXECUTED, None
+            at = landed
+        await self._cancel_drag(session_id, (start_x, start_y))
+        return StepOutcome.STALE, "drop target changed during the drag"
+
+    async def _cancel_drag(self, session_id: str, start: tuple[float, float]) -> None:
+        """Abandon a drag in progress without dropping it anywhere.
+
+        Chrome cancels a native drag outright, so no drop event fires; a page's own pointer drag has no such
+        cancel, and Escape before letting go where the card was picked up is the convention those libraries honour.
+        """
+        await self._drag_move(session_id, *start)
+        await self._input(self._session.client.send.Input.cancelDragging(session_id=session_id))
+        await self._key(None, "Escape", None)
+        await self._release(session_id, *start)
 
     async def _drag_move(self, session_id: str, x: float, y: float) -> None:
         params: DispatchMouseEventParameters = {"type": "mouseMoved", "x": x, "y": y, "button": "left", "buttons": 1}

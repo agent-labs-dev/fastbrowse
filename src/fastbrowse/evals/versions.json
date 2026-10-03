@@ -180,8 +180,8 @@
     "version": 5
   },
   "mock-sign-out": {
-    "fingerprint": "ce63f4bfe981454a",
-    "version": 5
+    "version": 6,
+    "fingerprint": "ce63f4bfe981454a"
   },
   "mock-stock-count": {
     "fingerprint": "48ba4f4af3c609b5",

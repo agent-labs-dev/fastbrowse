@@ -11,6 +11,22 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- The mock site's sign-out page now says "You are signed out." instead of sending the browser to the home page,
+  as real sites do. Without that statement a run had no evidence that the sign-out worked, so `mock-sign-out`
+  often ended unverified even when it had signed out correctly.
+
+- A run that only had to act, such as sending a form, is no longer marked unverified because its answer restated
+  what it typed. When the run read the confirmation ("Thanks, we received it.") and its answer also named the
+  sender and topic, the claim check found the quote did not show those details and failed the whole run, though
+  the completion check had already confirmed the submit. Those claims are now dropped instead, as for any doubted
+  claim, and a task with nothing to report still finishes.
+
+- A drag whose drop target shifts under the pointer, such as a column that nudges or moves when a card hovers over
+  it, now drops on that same control at its new place instead of being cancelled. A drag whose target turns into a
+  different control is cancelled outright, so not even the card's own list receives a drop, where before letting
+  go at the start could still drop the card there. A page that runs its own pointer dragging rather than the
+  browser's has no such cancel; for those, Escape and letting go where the card was picked up remain the fallback.
+
 ## [0.5.16] - 2026-10-02
 
 - Drag and drop. A run can drag one control onto another, such as a card onto a board column, when the page
