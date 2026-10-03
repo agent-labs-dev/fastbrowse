@@ -528,8 +528,16 @@ async def test_a_drag_revalidates_its_endpoints_after_scrolling_and_pointer_entr
         # The same control somewhere else: the release follows it, after the dragover that lets it take the drop.
         ("drop.style.top = '300px';", ["drop"]),
         ("drop.ondragover = () => { drop.style.transform = 'translateY(2px)'; };", ["drop"]),
+        # Away and back with no move in between: Chrome still targets the control it last hovered.
+        (
+            "drop.style.left = '600px'; document.body.insertAdjacentHTML('beforeend', "
+            "'<div id=decoy style=\"position:fixed;left:220px;top:20px;width:100px;height:80px\"></div>'); "
+            "decoy.ondragover = e => { if (e.clientX >= 270) { drop.style.left = '220px'; "
+            "decoy.style.left = '600px'; } };",
+            ["drop"],
+        ),
     ],
-    ids=["renamed", "moved", "nudged"],
+    ids=["renamed", "moved", "nudged", "returned"],
 )
 async def test_a_destination_changed_by_the_drag_itself_is_dropped_on_only_if_it_is_the_same_control(
     page: CdpPage, browser_session: BrowserSession, main_site: str, change: str, dropped: list[str]

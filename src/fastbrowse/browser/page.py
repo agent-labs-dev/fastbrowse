@@ -1192,6 +1192,13 @@ class CdpPage(Page):
         # follows the control, but only to a point the hit test confirms with the pointer already resting on it.
         at = drop_point
         for _ in range(2):
+            # Chrome drops on the target its last dragover reached, not on what lies under the pointer now, and
+            # takes a newly entered target only after the dragover a further move sends. Two moves at rest bring
+            # Chrome's target up to date before the hit test, or a control that slid back under the pointer
+            # since the last move would pass the check while the drop went to the one hovered before it.
+            for _ in range(2):
+                await self._drag_move(session_id, *at)
+                await asyncio.sleep(_DRAG_STEP_SECONDS)
             _, _, landed, _ = await self._before_action(drop, hit_test=True, scroll=False)
             if not isinstance(landed, tuple):
                 break
@@ -1199,11 +1206,6 @@ class CdpPage(Page):
                 await self._release(session_id, *at)
                 return StepOutcome.EXECUTED, None
             at = landed
-            # Chrome enters a new drop target on one move and accepts the drop only after the dragover the next
-            # move sends; released after the first, the drag ends with no drop and nothing reports it.
-            for _ in range(2):
-                await self._drag_move(session_id, *at)
-                await asyncio.sleep(_DRAG_STEP_SECONDS)
         await self._cancel_drag(session_id, (start_x, start_y))
         return StepOutcome.STALE, "drop target changed during the drag"
 
