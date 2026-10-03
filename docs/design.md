@@ -85,6 +85,18 @@ Verified with `cdp-use==1.4.5` against local headless Chrome and a Browser Use c
 
 The cloud browser ignores `Browser.setDownloadBehavior(deny)`, so bytes come from response interception, never from the remote filesystem. Host-path `DOM.setFileInputFiles` is only valid for a browser on the same machine.
 
+### Attached windows
+
+A session normally opens its own tab and closes only the tabs it owns. With `BrowserConnection.attach` it opens
+none: it takes the first page target whose title or URL contains `target_match` (or the first page, skipping
+`devtools://` windows), and owns nothing, so `closeTarget` is never sent. That page loaded before the session's
+new-document scripts were registered, so they are also evaluated once in it; otherwise freshness tracking would
+start only at its next navigation. Turning target discovery on replays `targetCreated` for every window already
+open, so an attached session turns it on only after recording those, and none of them joins the run. Popups of a
+tracked window join without being owned. Windows with no
+opener join only when `target_match` is set: an Electron main process opens its windows that way, and so does a
+browser for each tab a person opens by hand.
+
 Before a pointer press, the browser waits for a stable target and rechecks its guard and hit-test. A
 replacement control must match the original semantics and receiving document; ambiguous matches are
 refused. Focus and the receiving field are checked before typing. Settling waits for an interactive

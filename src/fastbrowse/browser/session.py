@@ -194,6 +194,8 @@ class BrowserSession:
         self._client: CDPClient | None = None
         self._tabs: dict[str, _TabState] = {}
         self._owned: set[str] = set()
+        self._open_before: set[str] = set()
+        """Targets already open when an attached session began, which never join the run."""
         self._popups: dict[str, tuple[str, asyncio.Future[bool]]] = {}
         """Popup target id -> (opener target id, whether it was adopted), in the order they opened."""
         self._active_target_id = ""
@@ -325,12 +327,18 @@ class BrowserSession:
         try:
             await self._client.start()
             self._register_events()
-            # Discovery has to be on only before the tab can open a popup, which it cannot do while it is still
-            # being created, so the two are sent at once rather than paying a cloud round trip for each.
-            await _together(
-                self.client.send.Target.setDiscoverTargets(params={"discover": True}),
-                self._open_owned_tab("about:blank"),
-            )
+            if self._connection.attach:
+                # Turning discovery on replays targetCreated for every window already open, so it waits until
+                # those are known and can be told apart from windows opened during the run.
+                await self._attach_existing_tab(self._connection.target_match)
+                await self.client.send.Target.setDiscoverTargets(params={"discover": True})
+            else:
+                # Discovery has to be on only before the tab can open a popup, which it cannot do while it is still
+                # being created, so the two are sent at once rather than paying a cloud round trip for each.
+                await _together(
+                    self.client.send.Target.setDiscoverTargets(params={"discover": True}),
+                    self._open_owned_tab("about:blank"),
+                )
         except BaseException:
             with contextlib.suppress(Exception):
                 await self._close()
@@ -372,6 +380,43 @@ class BrowserSession:
             raise ValueError(f"Unknown tab {target_id}")
         self._set_active_target(target_id)
         await self.client.send.Target.activateTarget(params={"targetId": target_id})
+
+    async def _attach_existing_tab(self, target_match: str | None) -> str:
+        targets = (await self.client.send.Target.getTargets())["targetInfos"]
+        self._open_before = {t["targetId"] for t in targets}
+        # An Electron app or a browser with DevTools open lists the DevTools window as a page too.
+        pages = [t for t in targets if t["type"] == "page" and not t["url"].startswith("devtools://")]
+        if target_match is not None:
+            pages = [t for t in pages if target_match in t["url"] or target_match in t["title"]]
+        if not pages:
+            seen = [f"{t['title']!r} ({t['url']})" for t in targets if t["type"] == "page"]
+            wanted = "no page" if target_match is None else f"no page matching {target_match!r}"
+            raise BrowserError(f"{wanted} to attach to; pages: {seen}")
+        target = pages[0]
+        target_id = target["targetId"]
+        attach = await self.client.send.Target.attachToTarget(params={"targetId": target_id, "flatten": True})
+        session_id = attach["sessionId"]
+        await _together(
+            self.client.send.Target.activateTarget(params={"targetId": target_id}),
+            self._prepare_session(session_id),
+        )
+        await self._run_document_scripts(session_id)
+        self._tabs[target_id] = _TabState(
+            target_id=target_id, session_id=session_id, url=target["url"], title=target["title"]
+        )
+        self._set_active_target(target_id)
+        return target_id
+
+    async def _run_document_scripts(self, session_id: str) -> None:
+        # A window that was already open loaded its document before the new-document scripts were registered, so
+        # without this its freshness tracking and banner refusal would start only at its next navigation.
+        await asyncio.gather(
+            *(
+                self.client.send.Runtime.evaluate(params={"expression": source}, session_id=session_id)
+                for source in self._new_document_scripts
+            ),
+            return_exceptions=True,
+        )
 
     async def _open_owned_tab(self, url: str) -> str:
         # Every browser a session drives was started for it (a cloud browser, or a Chrome launched with its own
@@ -461,10 +506,23 @@ class BrowserSession:
     def _on_target_created(self, event: TargetCreatedEvent, session_id: str | None) -> None:
         info = event["targetInfo"]
         opener_id = info.get("openerId")
-        if not self._closing and info["type"] == "page" and opener_id in self._owned:
-            self._owned.add(info["targetId"])
-            self._popups[info["targetId"]] = (opener_id, asyncio.get_running_loop().create_future())
-            self._spawn(self._adopt_popup(info["targetId"], opener_id))
+        if not self._closing and info["type"] == "page":
+            if opener_id in self._owned:
+                self._owned.add(info["targetId"])
+                self._popups[info["targetId"]] = (opener_id, asyncio.get_running_loop().create_future())
+                self._spawn(self._adopt_popup(info["targetId"], opener_id))
+            # An attached window is not owned, so neither are its popups: they stay open with it. An Electron
+            # app's main process opens windows with no opener, which count as the active window's. A browser
+            # opens one too for every tab its user opens, so they are adopted only when a target was matched.
+            elif (
+                self._connection.attach
+                and info["targetId"] not in self._tabs
+                and info["targetId"] not in self._open_before
+                and (opener_id in self._tabs or (not opener_id and self._connection.target_match is not None))
+            ):
+                opener = opener_id or self._active_target_id
+                self._popups[info["targetId"]] = (opener, asyncio.get_running_loop().create_future())
+                self._spawn(self._adopt_popup(info["targetId"], opener))
 
     async def _adopt_popup(self, target_id: str, opener_id: str) -> None:
         try:
@@ -474,6 +532,8 @@ class BrowserSession:
                 self.client.send.Target.activateTarget(params={"targetId": target_id}),
                 self._prepare_session(session_id),
             )
+            if self._connection.attach:
+                await self._run_document_scripts(session_id)
             self._tabs[target_id] = _TabState(target_id=target_id, session_id=session_id, opener_id=opener_id)
             # The popup may already have navigated to its final URL before this coroutine got scheduled
             # (targetCreated -> targetInfoChanged can both fire while we're still awaiting attachToTarget
