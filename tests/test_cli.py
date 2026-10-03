@@ -286,7 +286,7 @@ def test_cannot_combine_cdp_url_and_cdp_port(
     with pytest.raises(SystemExit):
         cli.main()
     result = json.loads(capsys.readouterr().out)
-    assert result["status"] == "error" and "cannot combine --cdp-url and --cdp-port" in result["error"]
+    assert result["status"] == "error" and "--cdp-url and --cdp-port both name" in result["error"]
 
 
 def test_attach_requires_cdp(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -298,11 +298,11 @@ def test_attach_requires_cdp(monkeypatch: pytest.MonkeyPatch, capsys: pytest.Cap
     with pytest.raises(SystemExit):
         cli.main()
     result = json.loads(capsys.readouterr().out)
-    assert result["status"] == "error" and "--attach and --target-match require" in result["error"]
+    assert result["status"] == "error" and "--attach and --target-match need" in result["error"]
 
 
-@pytest.mark.parametrize("bad_port", ["0", "-5"])
-def test_cdp_port_must_be_positive(
+@pytest.mark.parametrize("bad_port", ["0", "-5", "65536"])
+def test_cdp_port_must_be_a_port(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], bad_port: str
 ) -> None:
     monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None))
@@ -313,4 +313,4 @@ def test_cdp_port_must_be_positive(
     with pytest.raises(SystemExit):
         cli.main()
     result = json.loads(capsys.readouterr().out)
-    assert result["status"] == "error" and "--cdp-port must be greater than zero" in result["error"]
+    assert result["status"] == "error" and "--cdp-port expects a port from 1 to 65535" in result["error"]

@@ -204,29 +204,23 @@ def _limits(args: argparse.Namespace) -> Limits:
         raise ConfigurationError(f"{bad or 'a limit'} must be greater than zero") from None
 
 
-def _cdp(args: argparse.Namespace, chrome: LocalChrome) -> tuple[str | None, int | None, bool, str | None]:
-    """A browser the operator already runs, or None for one fastbrowse starts.
+def _cdp(args: argparse.Namespace, chrome: LocalChrome) -> tuple[str | None, int | None]:
+    """A browser the operator already runs, by URL or by port, or neither for one fastbrowse starts.
 
     Attaching replaces every flag that shapes a started browser, so combining them is refused the way
     `--cloud-profile` on local Chrome is: as a configuration error, before any browser work. `--headed` and
     `--profile` count from FASTBROWSE_HEADED / FASTBROWSE_PROFILE too, which `chrome` already reflects.
     """
     if args.cdp_url is not None and args.cdp_port is not None:
-        raise ConfigurationError("cannot combine --cdp-url and --cdp-port; specify only one")
-
-    has_cdp = args.cdp_url is not None or args.cdp_port is not None
-    attach = args.attach or (args.target_match is not None)
-
-    if not has_cdp and (args.attach or args.target_match is not None):
-        raise ConfigurationError("--attach and --target-match require --cdp-url or --cdp-port")
-
-    if not has_cdp:
-        return None, None, False, None
-
-    cdp_flag = "--cdp-url" if args.cdp_url is not None else "--cdp-port"
+        raise ConfigurationError("--cdp-url and --cdp-port both name a browser to attach to; pass one")
+    if args.cdp_url is None and args.cdp_port is None:
+        if args.attach or args.target_match is not None:
+            raise ConfigurationError("--attach and --target-match need --cdp-url or --cdp-port")
+        return None, None
+    flag = "--cdp-url" if args.cdp_url is not None else "--cdp-port"
     conflicts = [
-        flag
-        for flag, on in (
+        conflict
+        for conflict, on in (
             ("--local", args.local),
             ("--cloud", args.cloud),
             ("--headed", chrome.headed),
@@ -237,12 +231,12 @@ def _cdp(args: argparse.Namespace, chrome: LocalChrome) -> tuple[str | None, int
         if on
     ]
     if conflicts:
-        raise ConfigurationError(f"{cdp_flag} attaches to a browser already running; drop {', '.join(conflicts)}")
+        raise ConfigurationError(f"{flag} attaches to a browser already running; drop {', '.join(conflicts)}")
     if args.cdp_url is not None and not args.cdp_url.startswith(("ws://", "wss://")):
         raise ConfigurationError(f"--cdp-url expects a ws:// or wss:// URL, got {args.cdp_url!r}")
-    if args.cdp_port is not None and args.cdp_port <= 0:
-        raise ConfigurationError(f"--cdp-port must be greater than zero, got {args.cdp_port}")
-    return args.cdp_url, args.cdp_port, attach, args.target_match
+    if args.cdp_port is not None and not 0 < args.cdp_port < 65536:
+        raise ConfigurationError(f"--cdp-port expects a port from 1 to 65535, got {args.cdp_port}")
+    return args.cdp_url, args.cdp_port
 
 
 def _cloud(args: argparse.Namespace, chrome: LocalChrome) -> bool:
@@ -267,18 +261,19 @@ async def run(args: argparse.Namespace) -> int:
     if args.cloud and (args.headed or args.profile is not None):
         raise ConfigurationError("--cloud cannot be combined with --headed or --profile")
     chrome = LocalChrome() if args.cloud else options.chrome(settings, args.headed, args.profile)
-    cdp_url, cdp_port, attach, target_match = _cdp(args, chrome)
-    is_attached = cdp_url is not None or cdp_port is not None
+    cdp_url, cdp_port = _cdp(args, chrome)
     result = await run_task(
         args.task,
         start=args.start,
-        browser_api_key=None if is_attached else options.browser_key(settings, _cloud(args, chrome)),
+        browser_api_key=None
+        if cdp_url is not None or cdp_port is not None
+        else options.browser_key(settings, _cloud(args, chrome)),
         chrome=chrome,
         cloud_profile=args.cloud_profile,
         cdp_url=cdp_url,
         cdp_port=cdp_port,
-        attach=attach,
-        target_match=target_match,
+        attach=args.attach,
+        target_match=args.target_match,
         proxy_country="us" if args.proxy_country is None else args.proxy_country,
         secrets=secrets,
         limits=limits,

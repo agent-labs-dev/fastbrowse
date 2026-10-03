@@ -380,21 +380,16 @@ class BrowserSession:
         await self.client.send.Target.activateTarget(params={"targetId": target_id})
 
     async def _attach_existing_tab(self, target_match: str | None) -> str:
-        targets_result = await self.client.send.Target.getTargets()
-        target_infos = targets_result.get("targetInfos", [])
-        pages = [t for t in target_infos if t.get("type") == "page"]
-        if target_match:
-            matched = [t for t in pages if target_match in t.get("url", "") or target_match in t.get("title", "")]
-            if not matched:
-                available = [f"{t.get('title')!r} ({t.get('url')})" for t in pages]
-                raise BrowserError(f"no page target matching {target_match!r}; available targets: {available}")
-            target = matched[0]
-        else:
-            if not pages:
-                available_types = [t.get("type") for t in target_infos]
-                raise BrowserError(f"no page targets available to attach to; targets: {available_types}")
-            target = pages[0]
-
+        targets = (await self.client.send.Target.getTargets())["targetInfos"]
+        # An Electron app or a browser with DevTools open lists the DevTools window as a page too.
+        pages = [t for t in targets if t["type"] == "page" and not t["url"].startswith("devtools://")]
+        if target_match is not None:
+            pages = [t for t in pages if target_match in t["url"] or target_match in t["title"]]
+        if not pages:
+            seen = [f"{t['title']!r} ({t['url']})" for t in targets if t["type"] == "page"]
+            wanted = "no page" if target_match is None else f"no page matching {target_match!r}"
+            raise BrowserError(f"{wanted} to attach to; pages: {seen}")
+        target = pages[0]
         target_id = target["targetId"]
         attach = await self.client.send.Target.attachToTarget(params={"targetId": target_id, "flatten": True})
         session_id = attach["sessionId"]
@@ -402,17 +397,23 @@ class BrowserSession:
             self.client.send.Target.activateTarget(params={"targetId": target_id}),
             self._prepare_session(session_id),
         )
-        for source in self._new_document_scripts:
-            with contextlib.suppress(Exception):
-                await self.client.send.Runtime.evaluate(params={"expression": source}, session_id=session_id)
+        await self._run_document_scripts(session_id)
         self._tabs[target_id] = _TabState(
-            target_id=target_id,
-            session_id=session_id,
-            url=target.get("url", ""),
-            title=target.get("title", ""),
+            target_id=target_id, session_id=session_id, url=target["url"], title=target["title"]
         )
         self._set_active_target(target_id)
         return target_id
+
+    async def _run_document_scripts(self, session_id: str) -> None:
+        # A window that was already open loaded its document before the new-document scripts were registered, so
+        # without this its freshness tracking and banner refusal would start only at its next navigation.
+        await asyncio.gather(
+            *(
+                self.client.send.Runtime.evaluate(params={"expression": source}, session_id=session_id)
+                for source in self._new_document_scripts
+            ),
+            return_exceptions=True,
+        )
 
     async def _open_owned_tab(self, url: str) -> str:
         # Every browser a session drives was started for it (a cloud browser, or a Chrome launched with its own
@@ -507,7 +508,13 @@ class BrowserSession:
                 self._owned.add(info["targetId"])
                 self._popups[info["targetId"]] = (opener_id, asyncio.get_running_loop().create_future())
                 self._spawn(self._adopt_popup(info["targetId"], opener_id))
-            elif self._connection.attach and info["targetId"] not in self._tabs:
+            # An attached window is not owned, so neither are its popups: they stay open with it. An Electron
+            # app's main process opens windows with no opener; those count as the active window's.
+            elif (
+                self._connection.attach
+                and info["targetId"] not in self._tabs
+                and (opener_id in self._tabs or not opener_id)
+            ):
                 opener = opener_id or self._active_target_id
                 self._popups[info["targetId"]] = (opener, asyncio.get_running_loop().create_future())
                 self._spawn(self._adopt_popup(info["targetId"], opener))
@@ -521,9 +528,7 @@ class BrowserSession:
                 self._prepare_session(session_id),
             )
             if self._connection.attach:
-                for source in self._new_document_scripts:
-                    with contextlib.suppress(Exception):
-                        await self.client.send.Runtime.evaluate(params={"expression": source}, session_id=session_id)
+                await self._run_document_scripts(session_id)
             self._tabs[target_id] = _TabState(target_id=target_id, session_id=session_id, opener_id=opener_id)
             # The popup may already have navigated to its final URL before this coroutine got scheduled
             # (targetCreated -> targetInfoChanged can both fire while we're still awaiting attachToTarget

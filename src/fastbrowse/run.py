@@ -6,9 +6,6 @@ an embedder gets the parts that are easy to forget: the cloud browser's own cost
 downloads kept when a directory is given, and owned tabs closed on every path out.
 """
 
-import hashlib
-import json
-import urllib.request
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
@@ -28,8 +25,6 @@ from fastbrowse.config import Config
 from fastbrowse.jev import JevClient
 from fastbrowse.llm import LLMClient
 from fastbrowse.models import (
-    Artifact,
-    ArtifactKind,
     ArtifactSink,
     Attachment,
     Authorization,
@@ -51,36 +46,20 @@ from fastbrowse.models import (
 from fastbrowse.page import BrowserError
 
 
-class _NullArtifactSink:
-    """Fallback in-memory sink when no storage directory or custom sink is supplied."""
-
-    async def put(self, kind: ArtifactKind, name: str, mime_type: str, content: bytes) -> Artifact:
-        digest = hashlib.sha256(content).hexdigest()
-        return Artifact(
-            kind=kind,
-            name=name,
-            mime_type=mime_type,
-            size_bytes=len(content),
-            sha256=digest,
-            uri=f"memory://{name}",
-        )
-
-
-def resolve_cdp_port(port: int, host: str = "127.0.0.1", *, timeout: float = 2.0) -> str:
-    """Resolve the WebSocket debugger URL from a DevTools HTTP endpoint (e.g. http://127.0.0.1:<port>/json/version)."""
+async def resolve_cdp_port(port: int, host: str = "127.0.0.1", *, http: httpx.AsyncClient | None = None) -> str:
+    """The websocket URL of the browser serving DevTools on `port`, read from its `/json/version` endpoint."""
     endpoint = f"http://{host}:{port}/json/version"
     try:
-        req = urllib.request.Request(endpoint, headers={"User-Agent": "fastbrowse"})
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            data = json.loads(response.read().decode("utf-8"))
-            ws_url = data.get("webSocketDebuggerUrl")
-            if not ws_url:
-                raise BrowserError(f"no webSocketDebuggerUrl found at {endpoint}")
-            return str(ws_url)
-    except Exception as exc:
-        if isinstance(exc, BrowserError):
-            raise
-        raise BrowserError(f"failed to connect to CDP port {port} at {endpoint}: {exc}") from exc
+        async with httpx.AsyncClient(timeout=5) if http is None else _borrowed(http) as client:
+            response = await client.get(endpoint)
+            response.raise_for_status()
+            version = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise BrowserError(f"no DevTools endpoint at {endpoint} ({type(exc).__name__})") from None
+    ws_url = version.get("webSocketDebuggerUrl") if isinstance(version, dict) else None
+    if not isinstance(ws_url, str) or not ws_url:
+        raise BrowserError(f"{endpoint} named no webSocketDebuggerUrl")
+    return ws_url
 
 
 @asynccontextmanager
@@ -93,30 +72,33 @@ async def connect_cdp(
     attach: bool = True,
     config: Config | None = None,
     artifact_sink: ArtifactSink | None = None,
+    downloads: Path | None = None,
 ) -> AsyncGenerator[CdpPage]:
-    """Connect to a running browser or Electron app via CDP and yield an active CdpPage.
+    """A page on a browser or Electron app that is already running, for driving it without the agent.
 
-    Accepts either `port` (which queries http://<host>:<port>/json/version for the debugger URL)
-    or an explicit `cdp_url` (ws:// or wss://).
+    Pass `port` to look the websocket URL up from `http://<host>:<port>/json/version`, or `cdp_url` directly.
+    By default the page is an existing window (the first whose title or URL contains `target_match`, if given),
+    and it is left open on exit. Downloads go to `artifact_sink`, else to `downloads`, else to a scratch
+    directory removed on exit.
     """
-    if port is None and cdp_url is None:
-        raise BrowserError("either port or cdp_url must be provided to connect_cdp")
     if port is not None and cdp_url is not None:
-        raise BrowserError("cannot specify both port and cdp_url")
-
-    resolved_url = cdp_url if cdp_url is not None else resolve_cdp_port(port, host=host)
+        raise BrowserError("port and cdp_url both name a browser to attach to; pass one")
+    if cdp_url is None:
+        if port is None:
+            raise BrowserError("connect_cdp needs a port or a cdp_url")
+        cdp_url = await resolve_cdp_port(port, host)
     connection = BrowserConnection(
-        cdp_url=resolved_url,
+        cdp_url=cdp_url,
         live_url=None,
         remote=True,
-        attach=attach,
+        attach=attach or target_match is not None,
         target_match=target_match,
     )
-    cfg = config or Config()
-    sink = artifact_sink or _NullArtifactSink()
-    session = BrowserSession(connection, sink, refuse_cookie_banners=cfg.refuse_cookie_banners)
-    async with session:
-        yield CdpPage(session, cfg)
+    config = config or Config()
+    with TemporaryDirectory() as scratch:
+        sink = artifact_sink or DirectorySink(downloads or Path(scratch))
+        async with BrowserSession(connection, sink, refuse_cookie_banners=config.refuse_cookie_banners) as session:
+            yield CdpPage(session, config)
 
 
 @asynccontextmanager
@@ -137,18 +119,19 @@ async def _browser(
 ) -> AsyncGenerator[BrowserConnection]:
     """The browser a run drives: one it is handed, a cloud browser, or local Chrome."""
     if cdp_url is not None and cdp_port is not None:
-        raise BrowserError("cannot specify both cdp_url and cdp_port")
+        raise BrowserError("cdp_url and cdp_port both name a browser to attach to; pass one")
     if cdp_url is not None or cdp_port is not None:
         if key is not None:
             raise BrowserError("cdp_url/cdp_port is a browser to attach to; a cloud key would start a second one")
         if profile is not None:
             raise BrowserError("cloud_profile belongs to a browser fastbrowse starts, not to one it is handed")
-        resolved_url = cdp_url if cdp_url is not None else resolve_cdp_port(cdp_port)
-        # Nothing to start and nothing to stop: the caller's browser outlives the run.
-        # In attach mode, fastbrowse drives an existing window and never closes it.
-        # Otherwise, the session opens its own tab and closes only that.
+        if cdp_url is None:
+            assert cdp_port is not None
+            cdp_url = await resolve_cdp_port(cdp_port, http=http)
+        # Nothing to start and nothing to stop: the caller's browser outlives the run. The session either opens
+        # its own tab and closes only that, or, attaching, drives a window already open and leaves it open.
         yield BrowserConnection(
-            cdp_url=resolved_url,
+            cdp_url=cdp_url,
             live_url=None,
             remote=True,
             attach=attach or (target_match is not None),
@@ -212,7 +195,11 @@ async def run_task(
     The browser is one of three. `cdp_url` attaches to a browser that is already running, wherever it is
     (a container, a VM, a machine the caller owns), and the run neither starts nor stops it: it opens a tab
     and closes the tabs it owns. Cookies and task changes can persist. `cdp_url` and `browser_api_key` cannot
-    be combined. Otherwise `browser_api_key` runs on a Browser Use Cloud browser, and with neither,
+    be combined. `cdp_port` is the same as `cdp_url`, for a browser or Electron app started with
+    `--remote-debugging-port`, its URL read from `http://127.0.0.1:<port>/json/version`. With `attach` (implied by
+    `target_match`) the run drives a window already open instead of opening a tab: the first page whose title or
+    URL contains `target_match`, or else the first page. It leaves that window open, and with no `start` it begins
+    on whatever the window shows. Otherwise `browser_api_key` runs on a Browser Use Cloud browser, and with neither,
     local Chrome as `chrome` describes (default: from `Settings`, headless with a throwaway profile).
     `cloud_profile` names a profile on that cloud account, so a site someone signed into once in that
     profile is still signed in here; it is the remote counterpart of `LocalChrome.profile`. `proxy_country`

@@ -338,10 +338,6 @@ class CdpPage(Page):
         self._back_to: dict[str, str] = {}
 
     @property
-    def session(self) -> BrowserSession:
-        return self._session
-
-    @property
     def artifacts(self) -> tuple[Artifact, ...]:
         return self._session.artifacts
 

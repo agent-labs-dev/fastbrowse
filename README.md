@@ -81,8 +81,10 @@ Compare rows only at matching task versions. See [eval results and workflow](doc
 Needs [uv](https://docs.astral.sh/uv/); uv fetches Python itself (3.13 or newer). Runs use a
 [Browser Use Cloud](https://cloud.browser-use.com) browser (`BROWSER_USE_API_KEY`) by default: it passes bot checks
 a fresh local Chrome fails. Local Chrome is fully supported with `--local`. A browser already running anywhere,
-from a container to a hosted browser with a CDP endpoint, is driven in place with `--cdp-url ws://…`: the run
-opens one tab and leaves the browser as it was found.
+from a container to a hosted browser with a CDP endpoint, is driven in place with `--cdp-url ws://…` or `--cdp-port 9222`: the run
+opens one tab and leaves the browser as it was found. `--attach` drives a window that is already open instead,
+such as an Electron app started with `--remote-debugging-port`, and `--target-match TEXT` picks the window by
+title or URL. An attached window stays open after the run.
 
 ```sh
 export OPENROUTER_API_KEY=...   # for Jev and the LLM that plans and reads
@@ -260,7 +262,9 @@ asyncio.run(main())
 
 `run_task(cdp_url=...)` drives a browser that is already running, wherever it is, instead of starting one:
 the run opens its own tab and closes the tabs it owns. It leaves the browser and pre-existing tabs open;
-cookies and other changes made by the task can persist. Pass `browser_api_key=` to start a cloud browser;
+cookies and other changes made by the task can persist. `cdp_port=` finds the same browser from its DevTools
+port, and `attach=True` drives a window already open rather than a new tab. `connect_cdp()` yields that attached
+`CdpPage` for a script of your own. Pass `browser_api_key=` to start a cloud browser;
 with neither argument, it runs local Chrome. Passing both is an error.
 
 `RunResult.citations` is a tuple of `Citation` objects, also importable from `fastbrowse`. Each has `id`
