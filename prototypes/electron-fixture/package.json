@@ -1,0 +1,1 @@
+{ "name": "fb-electron-fixture", "version": "0.0.0", "main": "main.js", "private": true, "devDependencies": { "electron": "44.5.1" } }

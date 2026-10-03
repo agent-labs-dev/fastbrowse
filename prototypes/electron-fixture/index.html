@@ -1,0 +1,24 @@
+<!doctype html><html><head><title>Todo Desk</title>
+<style>body{font-family:sans-serif;padding:20px} .hidden{display:none} #menu{border:1px solid #888;padding:8px}</style></head>
+<body>
+<h1>Todo Desk</h1>
+<nav><button id="tab-todos">Todos</button><button id="tab-about">About</button>
+<button id="more" aria-haspopup="menu">More…</button>
+<div id="menu" role="menu" class="hidden"><button role="menuitem" id="settings">Open settings window</button><button role="menuitem" id="clear">Clear all</button></div></nav>
+<section id="todos">
+  <form id="add"><label>New todo <input id="new" required></label><button>Add</button></form>
+  <ul id="list"></ul>
+  <button id="save">Save to disk</button> <span id="status" role="status"></span>
+</section>
+<section id="about" class="hidden"><p>Todo Desk 1.0, build 4821.</p></section>
+<script>
+const items = [];
+const render = () => { list.innerHTML = items.map((t,i)=>`<li><label><input type=checkbox data-i=${i}> ${t}</label></li>`).join(''); };
+add.onsubmit = e => { e.preventDefault(); items.push(document.getElementById('new').value); document.getElementById('new').value=''; render(); };
+document.getElementById('tab-todos').onclick = () => { todos.classList.remove('hidden'); about.classList.add('hidden'); };
+document.getElementById('tab-about').onclick = () => { about.classList.remove('hidden'); todos.classList.add('hidden'); };
+more.onclick = () => menu.classList.toggle('hidden');
+settings.onclick = () => window.api.openSettings();
+clear.onclick = () => { if (confirm('Clear all todos?')) { items.length = 0; render(); } };
+save.onclick = async () => { const n = await window.api.save(items); document.getElementById("status").textContent = `Saved ${n} items`; };
+</script></body></html>
