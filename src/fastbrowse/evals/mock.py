@@ -519,7 +519,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _logout(self, _: dict[str, str]) -> None:
         self.site.sign_out(self._sid())
-        self._redirect("/")
+        # A real site confirms the sign-out; without it the agent has no evidence that the task finished.
+        self._html("Signed out", "<p>You are signed out.</p><p><a href='/'>Back to the shop</a></p>")
 
     def _account(self, _: dict[str, str]) -> None:
         email = self._protected()

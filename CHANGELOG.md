@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- The mock site's sign-out page now says "You are signed out." instead of sending the browser to the home page,
+  as real sites do. Without that statement a run had no evidence that the sign-out worked, so `mock-sign-out`
+  often ended unverified even when it had signed out correctly.
+
 ## [0.5.16] - 2026-10-02
 
 - Drag and drop. A run can drag one control onto another, such as a card onto a board column, when the page
