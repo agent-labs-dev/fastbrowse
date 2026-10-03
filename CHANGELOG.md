@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.17] - 2026-10-03
+
 - The mock site's sign-out page now says "You are signed out." instead of sending the browser to the home page,
   as real sites do. Without that statement a run had no evidence that the sign-out worked, so `mock-sign-out`
   often ended unverified even when it had signed out correctly.
@@ -863,7 +865,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.16...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.17...HEAD
+[0.5.17]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.17
 [0.5.16]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.16
 [0.5.15]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.15
 [0.5.14]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.14
