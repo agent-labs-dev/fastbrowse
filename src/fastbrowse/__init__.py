@@ -6,6 +6,6 @@ in the sense that the tests cover it.
 """
 
 from fastbrowse.models import Citation, RunResult
-from fastbrowse.run import run_task
+from fastbrowse.run import connect_cdp, resolve_cdp_port, run_task
 
-__all__ = ["Citation", "RunResult", "run_task"]
+__all__ = ["Citation", "RunResult", "connect_cdp", "resolve_cdp_port", "run_task"]

@@ -6,6 +6,9 @@ an embedder gets the parts that are easy to forget: the cloud browser's own cost
 downloads kept when a directory is given, and owned tabs closed on every path out.
 """
 
+import hashlib
+import json
+import urllib.request
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
@@ -25,6 +28,9 @@ from fastbrowse.config import Config
 from fastbrowse.jev import JevClient
 from fastbrowse.llm import LLMClient
 from fastbrowse.models import (
+    Artifact,
+    ArtifactKind,
+    ArtifactSink,
     Attachment,
     Authorization,
     BrowserConnection,
@@ -45,6 +51,74 @@ from fastbrowse.models import (
 from fastbrowse.page import BrowserError
 
 
+class _NullArtifactSink:
+    """Fallback in-memory sink when no storage directory or custom sink is supplied."""
+
+    async def put(self, kind: ArtifactKind, name: str, mime_type: str, content: bytes) -> Artifact:
+        digest = hashlib.sha256(content).hexdigest()
+        return Artifact(
+            kind=kind,
+            name=name,
+            mime_type=mime_type,
+            size_bytes=len(content),
+            sha256=digest,
+            uri=f"memory://{name}",
+        )
+
+
+def resolve_cdp_port(port: int, host: str = "127.0.0.1", *, timeout: float = 2.0) -> str:
+    """Resolve the WebSocket debugger URL from a DevTools HTTP endpoint (e.g. http://127.0.0.1:<port>/json/version)."""
+    endpoint = f"http://{host}:{port}/json/version"
+    try:
+        req = urllib.request.Request(endpoint, headers={"User-Agent": "fastbrowse"})
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            ws_url = data.get("webSocketDebuggerUrl")
+            if not ws_url:
+                raise BrowserError(f"no webSocketDebuggerUrl found at {endpoint}")
+            return str(ws_url)
+    except Exception as exc:
+        if isinstance(exc, BrowserError):
+            raise
+        raise BrowserError(f"failed to connect to CDP port {port} at {endpoint}: {exc}") from exc
+
+
+@asynccontextmanager
+async def connect_cdp(
+    port: int | None = None,
+    *,
+    cdp_url: str | None = None,
+    host: str = "127.0.0.1",
+    target_match: str | None = None,
+    attach: bool = True,
+    config: Config | None = None,
+    artifact_sink: ArtifactSink | None = None,
+) -> AsyncGenerator[CdpPage]:
+    """Connect to a running browser or Electron app via CDP and yield an active CdpPage.
+
+    Accepts either `port` (which queries http://<host>:<port>/json/version for the debugger URL)
+    or an explicit `cdp_url` (ws:// or wss://).
+    """
+    if port is None and cdp_url is None:
+        raise BrowserError("either port or cdp_url must be provided to connect_cdp")
+    if port is not None and cdp_url is not None:
+        raise BrowserError("cannot specify both port and cdp_url")
+
+    resolved_url = cdp_url if cdp_url is not None else resolve_cdp_port(port, host=host)
+    connection = BrowserConnection(
+        cdp_url=resolved_url,
+        live_url=None,
+        remote=True,
+        attach=attach,
+        target_match=target_match,
+    )
+    cfg = config or Config()
+    sink = artifact_sink or _NullArtifactSink()
+    session = BrowserSession(connection, sink, refuse_cookie_banners=cfg.refuse_cookie_banners)
+    async with session:
+        yield CdpPage(session, cfg)
+
+
 @asynccontextmanager
 async def _browser(
     key: str | None,
@@ -54,20 +128,35 @@ async def _browser(
     *,
     profile: str | None = None,
     cdp_url: str | None = None,
+    cdp_port: int | None = None,
+    attach: bool = False,
+    target_match: str | None = None,
     proxy_country: str | None = "us",
     viewport: tuple[int, int] | None = None,
     allow_resizing: bool = False,
 ) -> AsyncGenerator[BrowserConnection]:
     """The browser a run drives: one it is handed, a cloud browser, or local Chrome."""
-    if cdp_url is not None:
+    if cdp_url is not None and cdp_port is not None:
+        raise BrowserError("cannot specify both cdp_url and cdp_port")
+    if cdp_url is not None or cdp_port is not None:
         if key is not None:
-            raise BrowserError("cdp_url is a browser to attach to; a cloud key would start a second one")
+            raise BrowserError("cdp_url/cdp_port is a browser to attach to; a cloud key would start a second one")
         if profile is not None:
             raise BrowserError("cloud_profile belongs to a browser fastbrowse starts, not to one it is handed")
-        # Nothing to start and nothing to stop: the caller's browser outlives the run. The session opens its
-        # own tab and closes only that, so a browser handed over is left exactly as it was found.
-        yield BrowserConnection(cdp_url=cdp_url, live_url=None, remote=True)
+        resolved_url = cdp_url if cdp_url is not None else resolve_cdp_port(cdp_port)
+        # Nothing to start and nothing to stop: the caller's browser outlives the run.
+        # In attach mode, fastbrowse drives an existing window and never closes it.
+        # Otherwise, the session opens its own tab and closes only that.
+        yield BrowserConnection(
+            cdp_url=resolved_url,
+            live_url=None,
+            remote=True,
+            attach=attach or (target_match is not None),
+            target_match=target_match,
+        )
         return
+    if attach or target_match is not None:
+        raise BrowserError("attach and target_match require cdp_url or cdp_port")
     if key is None:
         if profile is not None:
             raise BrowserError("cloud_profile names a Browser Use Cloud profile, which needs a cloud browser")
@@ -93,6 +182,9 @@ async def run_task(
     chrome: LocalChrome | None = None,
     cloud_profile: str | None = None,
     cdp_url: str | None = None,
+    cdp_port: int | None = None,
+    attach: bool = False,
+    target_match: str | None = None,
     proxy_country: str | None = "us",
     viewport: tuple[int, int] | None = None,
     cloud_allow_resizing: bool = False,
@@ -159,6 +251,9 @@ async def run_task(
                     browser_cost,
                     profile=cloud_profile,
                     cdp_url=cdp_url,
+                    cdp_port=cdp_port,
+                    attach=attach,
+                    target_match=target_match,
                     proxy_country=proxy_country,
                     viewport=viewport,
                     allow_resizing=cloud_allow_resizing,
@@ -177,10 +272,9 @@ async def run_task(
                             result = await agent.run(
                                 task,
                                 start=start,
-                                # With no page named, the first address is worked out from the task. That
-                                # holds for an attached browser too: the run opens its own tab rather than
-                                # taking over one already open, so there is no page it is "already on".
-                                choose_start=start is None,
+                                # With no page named, the first address is worked out from the task,
+                                # unless attaching to an existing window where the page is preserved.
+                                choose_start=start is None and not connection.attach,
                                 output_schema=output_schema,
                                 inputs=inputs,
                                 attachments=attachments,

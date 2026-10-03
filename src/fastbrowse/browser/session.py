@@ -325,12 +325,18 @@ class BrowserSession:
         try:
             await self._client.start()
             self._register_events()
-            # Discovery has to be on only before the tab can open a popup, which it cannot do while it is still
-            # being created, so the two are sent at once rather than paying a cloud round trip for each.
-            await _together(
-                self.client.send.Target.setDiscoverTargets(params={"discover": True}),
-                self._open_owned_tab("about:blank"),
-            )
+            if self._connection.attach:
+                await _together(
+                    self.client.send.Target.setDiscoverTargets(params={"discover": True}),
+                    self._attach_existing_tab(self._connection.target_match),
+                )
+            else:
+                # Discovery has to be on only before the tab can open a popup, which it cannot do while it is still
+                # being created, so the two are sent at once rather than paying a cloud round trip for each.
+                await _together(
+                    self.client.send.Target.setDiscoverTargets(params={"discover": True}),
+                    self._open_owned_tab("about:blank"),
+                )
         except BaseException:
             with contextlib.suppress(Exception):
                 await self._close()
@@ -372,6 +378,41 @@ class BrowserSession:
             raise ValueError(f"Unknown tab {target_id}")
         self._set_active_target(target_id)
         await self.client.send.Target.activateTarget(params={"targetId": target_id})
+
+    async def _attach_existing_tab(self, target_match: str | None) -> str:
+        targets_result = await self.client.send.Target.getTargets()
+        target_infos = targets_result.get("targetInfos", [])
+        pages = [t for t in target_infos if t.get("type") == "page"]
+        if target_match:
+            matched = [t for t in pages if target_match in t.get("url", "") or target_match in t.get("title", "")]
+            if not matched:
+                available = [f"{t.get('title')!r} ({t.get('url')})" for t in pages]
+                raise BrowserError(f"no page target matching {target_match!r}; available targets: {available}")
+            target = matched[0]
+        else:
+            if not pages:
+                available_types = [t.get("type") for t in target_infos]
+                raise BrowserError(f"no page targets available to attach to; targets: {available_types}")
+            target = pages[0]
+
+        target_id = target["targetId"]
+        attach = await self.client.send.Target.attachToTarget(params={"targetId": target_id, "flatten": True})
+        session_id = attach["sessionId"]
+        await _together(
+            self.client.send.Target.activateTarget(params={"targetId": target_id}),
+            self._prepare_session(session_id),
+        )
+        for source in self._new_document_scripts:
+            with contextlib.suppress(Exception):
+                await self.client.send.Runtime.evaluate(params={"expression": source}, session_id=session_id)
+        self._tabs[target_id] = _TabState(
+            target_id=target_id,
+            session_id=session_id,
+            url=target.get("url", ""),
+            title=target.get("title", ""),
+        )
+        self._set_active_target(target_id)
+        return target_id
 
     async def _open_owned_tab(self, url: str) -> str:
         # Every browser a session drives was started for it (a cloud browser, or a Chrome launched with its own
@@ -461,10 +502,15 @@ class BrowserSession:
     def _on_target_created(self, event: TargetCreatedEvent, session_id: str | None) -> None:
         info = event["targetInfo"]
         opener_id = info.get("openerId")
-        if not self._closing and info["type"] == "page" and opener_id in self._owned:
-            self._owned.add(info["targetId"])
-            self._popups[info["targetId"]] = (opener_id, asyncio.get_running_loop().create_future())
-            self._spawn(self._adopt_popup(info["targetId"], opener_id))
+        if not self._closing and info["type"] == "page":
+            if opener_id in self._owned:
+                self._owned.add(info["targetId"])
+                self._popups[info["targetId"]] = (opener_id, asyncio.get_running_loop().create_future())
+                self._spawn(self._adopt_popup(info["targetId"], opener_id))
+            elif self._connection.attach and info["targetId"] not in self._tabs:
+                opener = opener_id or self._active_target_id
+                self._popups[info["targetId"]] = (opener, asyncio.get_running_loop().create_future())
+                self._spawn(self._adopt_popup(info["targetId"], opener))
 
     async def _adopt_popup(self, target_id: str, opener_id: str) -> None:
         try:
@@ -474,6 +520,10 @@ class BrowserSession:
                 self.client.send.Target.activateTarget(params={"targetId": target_id}),
                 self._prepare_session(session_id),
             )
+            if self._connection.attach:
+                for source in self._new_document_scripts:
+                    with contextlib.suppress(Exception):
+                        await self.client.send.Runtime.evaluate(params={"expression": source}, session_id=session_id)
             self._tabs[target_id] = _TabState(target_id=target_id, session_id=session_id, opener_id=opener_id)
             # The popup may already have navigated to its final URL before this coroutine got scheduled
             # (targetCreated -> targetInfoChanged can both fire while we're still awaiting attachToTarget

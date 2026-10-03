@@ -222,3 +222,95 @@ async def test_login_advice_is_added_only_to_cli_output(
     assert await cli.run(cli._parse(["task", "--local", "--json"])) == 4
     assert "--secret NAME=ENV_VAR@https://host" in json.loads(capsys.readouterr().out)["error"]
     assert result.error == "Sign-in required"
+
+
+def test_cdp_port_hands_run_task_the_port_and_no_cloud_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None))
+    seen = {}
+
+    async def fake_run_task(task: str, **kwargs: object) -> RunResult:
+        seen.update(kwargs)
+        return RunResult(
+            status=Status.COMPLETE,
+            answer="ok",
+            data=None,
+            evidence=(),
+            steps=(),
+            cost=CostBreakdown(lines=()),
+            artifacts=(),
+            error=None,
+        )
+
+    monkeypatch.setattr(cli, "run_task", fake_run_task)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "fastbrowse",
+            "t",
+            "--start",
+            "https://example.com",
+            "--cdp-port",
+            "9222",
+            "--attach",
+            "--target-match",
+            "app",
+        ],
+    )
+    with pytest.raises(SystemExit) as exit_:
+        cli.main()
+    assert exit_.value.code == 0
+    assert seen["cdp_port"] == 9222
+    assert seen["attach"] is True
+    assert seen["target_match"] == "app"
+    assert seen["browser_api_key"] is None
+
+
+def test_cannot_combine_cdp_url_and_cdp_port(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "fastbrowse",
+            "t",
+            "--start",
+            "https://example.com",
+            "--json",
+            "--cdp-url",
+            "ws://browser.test/devtools",
+            "--cdp-port",
+            "9222",
+        ],
+    )
+    with pytest.raises(SystemExit):
+        cli.main()
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "error" and "cannot combine --cdp-url and --cdp-port" in result["error"]
+
+
+def test_attach_requires_cdp(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None))
+    monkeypatch.setattr(
+        "sys.argv",
+        ["fastbrowse", "t", "--start", "https://example.com", "--json", "--attach"],
+    )
+    with pytest.raises(SystemExit):
+        cli.main()
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "error" and "--attach and --target-match require" in result["error"]
+
+
+@pytest.mark.parametrize("bad_port", ["0", "-5"])
+def test_cdp_port_must_be_positive(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], bad_port: str
+) -> None:
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None))
+    monkeypatch.setattr(
+        "sys.argv",
+        ["fastbrowse", "t", "--start", "https://example.com", "--json", "--cdp-port", bad_port],
+    )
+    with pytest.raises(SystemExit):
+        cli.main()
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "error" and "--cdp-port must be greater than zero" in result["error"]

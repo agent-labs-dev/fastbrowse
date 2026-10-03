@@ -804,3 +804,82 @@ async def test_cancelled_cdp_reply_is_drained_without_touching_other_requests(
     assert "duplicate response" not in caplog.text
     assert "unexpected message" not in caplog.text
     waiting.cancel()
+
+
+async def test_attach_existing_tab_and_non_destructive_teardown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In attach mode, Fastbrowse connects to an existing page target and does not close it on exit."""
+    transport = CdpTransport(monkeypatch)
+    transport.results["Target.getTargets"] = [
+        {
+            "targetInfos": [
+                {"targetId": "target_tab_1", "type": "page", "url": "http://example.com/app", "title": "My App"}
+            ]
+        }
+    ]
+    conn = BrowserConnection(cdp_url="ws://localhost:9222", remote=False, attach=True)
+    async with BrowserSession(conn, RecordingArtifactSink()) as session:
+        assert session.active_target_id == "target_tab_1"
+        assert session.tabs()
+        # Verify evaluate was called on attach for init scripts
+        assert "Runtime.evaluate" in transport.calls
+        assert len(session._owned) == 0, "attached target must not be in _owned"
+
+    # On exit, Target.closeTarget must NOT have been called for unowned targets
+    assert "Target.closeTarget" not in transport.calls
+
+
+async def test_attach_target_matching_by_title_or_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = CdpTransport(monkeypatch)
+    transport.results["Target.getTargets"] = [
+        {
+            "targetInfos": [
+                {"targetId": "tab_1", "type": "page", "url": "http://example.com/blank", "title": "Blank Page"},
+                {"targetId": "tab_2", "type": "page", "url": "http://example.com/editor", "title": "Main Editor"},
+            ]
+        }
+    ]
+    conn = BrowserConnection(cdp_url="ws://localhost:9222", remote=False, attach=True, target_match="Editor")
+    async with BrowserSession(conn, RecordingArtifactSink()) as session:
+        assert session.active_target_id == "tab_2"
+
+    # If no match is found, raises BrowserError
+    transport.results["Target.getTargets"] = [
+        {
+            "targetInfos": [
+                {"targetId": "tab_1", "type": "page", "url": "http://example.com/blank", "title": "Blank Page"}
+            ]
+        }
+    ]
+    conn_bad = BrowserConnection(
+        cdp_url="ws://localhost:9222", remote=False, attach=True, target_match="nonexistent_window"
+    )
+    with pytest.raises(browser_session.BrowserError) as exc_info:
+        async with BrowserSession(conn_bad, RecordingArtifactSink()):
+            pass
+    assert "no page target matching 'nonexistent_window'" in str(exc_info.value)
+
+
+async def test_connect_cdp_and_resolve_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+    import urllib.request
+    from unittest.mock import MagicMock
+
+    from fastbrowse.run import connect_cdp, resolve_cdp_port
+
+    # Test resolve_cdp_port
+    fake_response = io.BytesIO(b'{"webSocketDebuggerUrl": "ws://127.0.0.1:9333/devtools/browser/abc"}')
+    fake_response.status = 200
+    monkeypatch.setattr(urllib.request, "urlopen", MagicMock(return_value=fake_response))
+
+    url = resolve_cdp_port(9333)
+    assert url == "ws://127.0.0.1:9333/devtools/browser/abc"
+
+    # Test connect_cdp
+    transport = CdpTransport(monkeypatch)
+    transport.results["Target.getTargets"] = [
+        {"targetInfos": [{"targetId": "app_win", "type": "page", "url": "app://main", "title": "App Window"}]}
+    ]
+
+    async with connect_cdp(cdp_url="ws://127.0.0.1:9333/devtools/browser/abc") as page:
+        assert page.session.active_target_id == "app_win"
+        assert page.session.tabs()[0].id == "app_win"
