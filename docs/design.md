@@ -91,7 +91,9 @@ A session normally opens its own tab and closes only the tabs it owns. With `Bro
 none: it takes the first page target whose title or URL contains `target_match` (or the first page, skipping
 `devtools://` windows), and owns nothing, so `closeTarget` is never sent. That page loaded before the session's
 new-document scripts were registered, so they are also evaluated once in it; otherwise freshness tracking would
-start only at its next navigation. Popups of a tracked window join the run without being owned. Windows with no
+start only at its next navigation. Turning target discovery on replays `targetCreated` for every window already
+open, so an attached session turns it on only after recording those, and none of them joins the run. Popups of a
+tracked window join without being owned. Windows with no
 opener join only when `target_match` is set: an Electron main process opens its windows that way, and so does a
 browser for each tab a person opens by hand.
 

@@ -174,13 +174,14 @@ Without the replacement secret, the run asks for input; it never generates a pas
 
 ### Open windows and Electron apps
 
-An Electron app is Chromium underneath, so a run can drive it once the app exposes a DevTools port. Start the app
-with `--remote-debugging-port`, then attach to its window by title or URL:
+An Electron app is Chromium underneath, so a run can drive it once the app exposes a DevTools port. Quit the app,
+start it again with `--remote-debugging-port` (an app that is already running ignores the flag), then attach to
+its window by title or URL. VS Code titles each window after the folder it has open:
 
 ```sh
-open -a "Visual Studio Code" --args --remote-debugging-port=9222    # macOS; elsewhere, pass the flag to the binary
+open -a "Visual Studio Code" --args --remote-debugging-port=9222 ~/code/my-project   # elsewhere, pass the flag to the binary
 uv run fastbrowse "Open the Extensions view and report how many extensions are installed." \
-  --cdp-port 9222 --target-match "Visual Studio Code"
+  --cdp-port 9222 --target-match my-project
 ```
 
 The same works for a Chrome you started with `--remote-debugging-port`. With `--attach`, the run takes over an
@@ -299,7 +300,7 @@ from fastbrowse import connect_cdp
 
 
 async def main() -> None:
-    async with connect_cdp(9222, target_match="Visual Studio Code") as page:
+    async with connect_cdp(9222, target_match="my-project") as page:
         print(await page.observe())
 ```
 

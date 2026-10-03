@@ -194,6 +194,8 @@ class BrowserSession:
         self._client: CDPClient | None = None
         self._tabs: dict[str, _TabState] = {}
         self._owned: set[str] = set()
+        self._open_before: set[str] = set()
+        """Targets already open when an attached session began, which never join the run."""
         self._popups: dict[str, tuple[str, asyncio.Future[bool]]] = {}
         """Popup target id -> (opener target id, whether it was adopted), in the order they opened."""
         self._active_target_id = ""
@@ -326,10 +328,10 @@ class BrowserSession:
             await self._client.start()
             self._register_events()
             if self._connection.attach:
-                await _together(
-                    self.client.send.Target.setDiscoverTargets(params={"discover": True}),
-                    self._attach_existing_tab(self._connection.target_match),
-                )
+                # Turning discovery on replays targetCreated for every window already open, so it waits until
+                # those are known and can be told apart from windows opened during the run.
+                await self._attach_existing_tab(self._connection.target_match)
+                await self.client.send.Target.setDiscoverTargets(params={"discover": True})
             else:
                 # Discovery has to be on only before the tab can open a popup, which it cannot do while it is still
                 # being created, so the two are sent at once rather than paying a cloud round trip for each.
@@ -381,6 +383,7 @@ class BrowserSession:
 
     async def _attach_existing_tab(self, target_match: str | None) -> str:
         targets = (await self.client.send.Target.getTargets())["targetInfos"]
+        self._open_before = {t["targetId"] for t in targets}
         # An Electron app or a browser with DevTools open lists the DevTools window as a page too.
         pages = [t for t in targets if t["type"] == "page" and not t["url"].startswith("devtools://")]
         if target_match is not None:
@@ -514,6 +517,7 @@ class BrowserSession:
             elif (
                 self._connection.attach
                 and info["targetId"] not in self._tabs
+                and info["targetId"] not in self._open_before
                 and (opener_id in self._tabs or (not opener_id and self._connection.target_match is not None))
             ):
                 opener = opener_id or self._active_target_id

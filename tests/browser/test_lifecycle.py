@@ -822,6 +822,8 @@ async def test_attach_existing_tab_and_non_destructive_teardown(monkeypatch: pyt
         assert session.active_target_id == "target_tab_1"
         assert [tab.id for tab in session.tabs()] == ["target_tab_1"]
         assert "Target.createTarget" not in transport.calls
+        # Discovery replays every open window as created, so it may start only once they are known.
+        assert transport.calls.index("Target.getTargets") < transport.calls.index("Target.setDiscoverTargets")
         # The window's document loaded before the session, so its scripts run in it now as well as on navigation.
         assert "Runtime.evaluate" in transport.calls
         assert not session._owned
@@ -836,7 +838,12 @@ async def test_attach_adopts_its_popups_and_windows_without_opener_only_when_mat
     """A window with no opener is an Electron app's, or a tab its user opened by hand in a browser."""
     transport = CdpTransport(monkeypatch)
     transport.results["Target.getTargets"] = [
-        {"targetInfos": [{"targetId": "app", "type": "page", "url": "app://main", "title": "App"}]}
+        {
+            "targetInfos": [
+                {"targetId": "app", "type": "page", "url": "app://main", "title": "App"},
+                {"targetId": "other", "type": "page", "url": "app://other", "title": "Other"},
+            ]
+        }
     ]
     transport.results["Target.getTargetInfo"] = [
         {"targetInfo": {"url": "app://popup", "title": "Popup"}},
@@ -844,7 +851,8 @@ async def test_attach_adopts_its_popups_and_windows_without_opener_only_when_mat
     ]
     conn = BrowserConnection(cdp_url="ws://localhost:9222", remote=False, attach=True, target_match=target_match)
     async with BrowserSession(conn, RecordingArtifactSink()) as session:
-        for target_id, opener in (("popup", "app"), ("window", None), ("elsewhere", "unrelated")):
+        # Discovery replays "other", which was open before the session and has no opener either.
+        for target_id, opener in (("other", None), ("popup", "app"), ("window", None), ("elsewhere", "unrelated")):
             info: dict[str, Any] = {"targetId": target_id, "type": "page", "url": "", "title": ""}
             if opener is not None:
                 info["openerId"] = opener
