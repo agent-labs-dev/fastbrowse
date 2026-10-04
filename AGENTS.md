@@ -21,7 +21,7 @@ uv run fastbrowse "..." --start https://example.com/
 uv run fastbrowse-mcp         # the MCP server, stdio
 ```
 
-The gate, which CI runs in this order on Python 3.13 and 3.14:
+The gate, which CI runs in this order on Python 3.13 and 3.14 (the browser and sift checks on 3.13):
 
 ```sh
 uv run ruff check . && uv run ruff format --check .
@@ -47,39 +47,14 @@ uv run pytest -k "next_page" -q
 uv run pytest tests/browser -q          # needs Chrome; skips without it
 ```
 
-## Evals, which are the real gate on behaviour
-
-Unit tests cannot tell you whether the agent still browses well. The suites can.
-
-```sh
-uv run python -m fastbrowse.evals.runner                      # local fixtures, headless Chrome, ~$0.005 a task
-uv run --extra browser-use python -m fastbrowse.evals.live    # live head-to-head, three arms
-uv run --extra browser-use python -m fastbrowse.evals.live --arms fastbrowse --suite heldout --repeat 3
-```
-
-`--suite` picks the set: `core` (the published suite), `dev`, `heldout`. **Agent changes are iterated against
-`dev` only.** `heldout` is run before and after a round of changes and never debugged, so its score says
-whether a round improved the agent or only its dev score. A change made to fix a named held-out task spends
-that set's value; say so in the PR when it happens.
-
-Both suites use `OPENROUTER_API_KEY` for the LLM and, unless `TYPESAFE_API_KEY` is supplied, Jev.
-`AI_GATEWAY_API_KEY` adds a Jev backup.
-The live suite also needs `BROWSER_USE_API_KEY`. Upstream outages look
-exactly like regressions, so re-read a red run before believing it.
-
-Every result row records its build (`run`: version, commit, dirty tree, models) and the `task_version` it ran;
-compare rows only at equal task versions. Changing what a task asks or how it grades means
-`python -m fastbrowse.evals.versions --bump TASK_ID --docs`, and a test fails until you do. Results are published as
-committed rows (`--publish`). The README headline, the results and task tables and the suite versions in
-`docs/evals.md` are generated from the code and those rows, and a test fails when they differ; regenerate them in the
-same PR ([docs/evals.md#versions](docs/evals.md#versions)).
-
-A published comparison has one route: rows committed with `--publish` at the task versions they ran, every
-physical attempt kept, and retries and their spend recorded with them. Never type a number into prose.
-`.github/workflows/evals.yml` runs the fixture suites on a schedule and on demand; a release that publishes a
-comparison needs that job green and, for a head-to-head figure, the comparison re-run on the same build.
-
 The [sift project skill](.agents/skills/sift-project/SKILL.md) records audit commands, live roots and generated files.
+
+## Evals
+
+Unit tests cannot tell you whether the agent still browses well; the suites can. **Agent changes are iterated
+against `dev` only**, and `heldout` is run before and after a round and never debugged. The commands, keys,
+task versions and publishing rules are in [docs/agents/evals.md](docs/agents/evals.md); read it before changing
+agent behaviour or a task.
 
 ## Architecture
 
@@ -112,7 +87,7 @@ These are the things a change must not quietly break.
 
 - **Only `Status.COMPLETE` is success.** Anything the loop cannot prove is reported as what it is
   (`unverified`, `needs_confirmation`, `needs_login`, `blocked`, `needs_input`, `stuck`, `budget_exceeded`,
-  `observation_limit`, `error`),
+  `observation_limit`, `unavailable`, `error`),
   never rounded up. The CLI exits 0 only for `complete`.
 - **A claim cites a quote.** An answer's facts are spans code cut from a capture, not text a model wrote; a
   derived count or winner cites the facts it was concluded from.
