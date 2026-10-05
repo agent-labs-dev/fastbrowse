@@ -594,4 +594,7 @@ async def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(main(sys.argv[1:])))
+    # A grader imports the canonical module, so executing its main avoids a second, incompatible Grade model.
+    from fastbrowse.evals import corpus as corpus_module
+
+    raise SystemExit(asyncio.run(corpus_module.main(sys.argv[1:])))
