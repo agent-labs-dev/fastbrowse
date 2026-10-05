@@ -11,6 +11,14 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- The LLM can use Vercel AI Gateway when no OpenRouter key is configured. The CLI, MCP server and fixture
+  evals share that routing, and scheduled evals check their credentials before starting a task.
+- External eval corpora can run pinned tasks with reproducible selection, attempt records and independent
+  grades. Ungraded attempts retain an unknown pass state instead of contributing to a benchmark score.
+- Fixture evals leave a page's scripted cookie banner to the agent. The browser layer's own consent refusal
+  had removed the mock support portal's banner before the agent could accept it, so that task's requirement
+  could not be satisfied.
+
 ## [0.5.17] - 2026-10-03
 
 - The mock site's sign-out page now says "You are signed out." instead of sending the browser to the home page,

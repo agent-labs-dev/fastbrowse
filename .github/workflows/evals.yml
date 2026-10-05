@@ -28,31 +28,46 @@ jobs:
     permissions: {contents: read}
     # A full mock repeat is minutes, not hours, but a stuck cloud browser must not hold a runner for a day.
     timeout-minutes: 90
+    env:
+      EVAL_REPEAT: ${{ inputs.repeat || '3' }}
+      EVAL_TARGET: ${{ inputs.target || '1.0' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with: {python-version: "3.13"}
       - run: uv sync --locked --all-extras
+      - name: Check the model credentials
+        # A missing provider fails before the first task, with its setting named and no empty score report.
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+        run: uv run python scripts/eval_stability.py --check-providers
       - name: Run the fixture eval suites
+        id: fixtures
         # The runner exits non-zero on any failed attempt. The stability check below is the verdict, so a
         # dispatch with a target under 100% is judged against that target. It also requires every task of both
         # suites at the full repeat count, so a runner that died part way cannot pass on the rows it left.
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
         run: |
           uv run python -m fastbrowse.evals.runner \
             --suite local mock \
-            --repeat "${{ inputs.repeat || '3' }}" \
+            --repeat "$EVAL_REPEAT" \
             --out artifacts/evals/nightly.jsonl
       - name: Check the stability budget
-        if: always()
+        # A credential check that failed leaves no rows, and a stability error would then read as a task failure;
+        # this step stays out of a run that never started.
+        if: always() && steps.fixtures.outcome != 'skipped'
         run: |
           uv run python scripts/eval_stability.py artifacts/evals/nightly.jsonl \
-            --target "${{ inputs.target || '1.0' }}" \
+            --target "$EVAL_TARGET" \
             --suite local mock \
-            --repeat "${{ inputs.repeat || '3' }}"
+            --repeat "$EVAL_REPEAT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
         if: always()
         with:

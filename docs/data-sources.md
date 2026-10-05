@@ -40,6 +40,64 @@ fastbrowse. A digest mismatch stops loading, including when the bad bytes came f
   Upstream lines in patches retain their original licences. Fetching the archive does not relicense them;
   preserve the notices and consult upstream attribution before running or redistributing a site.
 
+## Running a corpus
+
+`fastbrowse.evals.corpus` executes a pinned corpus. It fetches through the loaders above, so the bytes are checked
+the same way there, and it never runs upstream code. Selection uses a seed and a per-stratum count, and the drawn
+tasks are hashed with their source pin into one corpus digest, so a run names exactly what it drew.
+
+```sh
+uv run --extra eval-data python -m fastbrowse.evals.corpus windtunnel \
+  --site-urls sites.json --per-stratum 1 --out artifacts/evals/windtunnel
+```
+
+The default writes `corpus.json` and `preflight.jsonl` and calls no agent. Preflight is an HTTP load check of each
+start address. It says whether a page answers, and nothing about whether a task is feasible, needs a login or meets
+a bot check; those still need a person or a browser. Preflight exits nonzero when any start address is unreachable.
+
+Prerequisites: the gated Online-Mind2Web file needs `HF_TOKEN` and the verified `--sha256` the loader insists on,
+and WindTunnel needs `--site-urls` mapping each site id to a running local address.
+
+`--execute` adds `attempts.jsonl` and `summary.json`, runs the agent, and grades each attempt. Each attempt keeps
+two things apart:
+
+- `completion` is what the agent reported about its own run, normalised from its status.
+- `graded` and `grade` record an independent judgement, named by a grader and its version.
+
+An attempt with no grader is written ungraded, with `passed: null`. That means the pass state is unknown, not
+false, and it is not a benchmark score. A pass needs the grader's pass and the agent's own completion. A grader
+that raises leaves its attempt ungraded and records why. The command exits 0 only when every expected attempt ran
+and passed; an ungraded, failed or missing attempt is nonzero.
+
+WindTunnel answer predicates are scored natively from the pinned predicate, and an ungraded attempt names the
+predicate when it cannot be scored. An action predicate needs a live state probe, so without a trusted evaluator it
+stays ungraded rather than counted as a failure. Online-Mind2Web rows carry no predicate, so they are graded only
+by a trusted evaluator.
+
+A trusted evaluator is a command the caller deliberately installed and selected:
+
+```sh
+uv run --extra eval-data python -m fastbrowse.evals.corpus online-mind2web \
+  --sha256 <digest> --out artifacts/evals/om2w --execute \
+  --grader-code my_grader.py --grader-sha256 <sha256 of my_grader.py> \
+  --grader-command uv run python my_grader.py
+```
+
+`--grader-command` takes the rest of the command line as one argument vector, so give it last. Its stdin receives
+one JSON request (the pinned task and the observed attempt) and its stdout must be one `Grade`. `--grader-code`
+names the file whose sha256 pins the command; pass the evaluator file, not its launcher, and that digest is
+re-checked on every call, so an edited evaluator is refused. `--grader-sha256` requires the pinned digest up front.
+`--grader-timeout` bounds one call. The command inherits an allowlisted environment, so provider keys and remote
+credentials never reach it.
+
+The digest pins the evaluator file. Its interpreter, imported modules and data files must be pinned by
+the evaluator's own environment.
+
+Each paid attempt keeps its trace under `downloads/<task digest prefix>/repeat-<n>/`, including the full
+`run-result.json` from `run_task`; the attempt row records that path as `run_artifact`. An `attempt.json` marker
+identifies a run interrupted before it returned a result. The command requires a fresh output directory. A run interrupted
+partway still writes `summary.json` for the attempts that finished, and exits nonzero.
+
 ## Authored fixtures
 
 The static HTML in `src/fastbrowse/evals/fixtures/` and the synthetic test data in `tests/evals/` are authored

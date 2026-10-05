@@ -52,12 +52,15 @@ SOURCES = {
 }
 
 
+type Stratum = Literal["easy", "medium", "hard", "answer", "act-short", "act-long", "transaction"]
+
+
 class ExternalTask(BaseModel):
     source: Literal["online-mind2web", "windtunnel"]
     id: str
     start: str
     task: str
-    stratum: Literal["easy", "medium", "hard", "answer", "act-short", "act-long", "transaction"]
+    stratum: Stratum
     site: str | None = None
     metadata: dict[str, JsonValue] = {}
 
@@ -195,6 +198,23 @@ def _unique(tasks: list[ExternalTask]) -> list[ExternalTask]:
     return tasks
 
 
+async def load_tasks(
+    source: Source,
+    http: httpx.AsyncClient,
+    *,
+    cache: Path | None = None,
+    token: str | None = None,
+    site_urls: Mapping[str, str] | None = None,
+) -> list[ExternalTask]:
+    """Fetch the pinned bytes, verify them, and parse that source's tasks. Nothing here runs upstream code."""
+    body = await fetch(source, http, cache=cache, token=token)
+    if source.id == "windtunnel":
+        if site_urls is None:
+            raise ValueError("windtunnel requires site URLs: its tasks name sites, not addresses")
+        return windtunnel(body, site_urls, revision=source.revision)
+    return online_mind2web(body)
+
+
 def sample(tasks: Sequence[ExternalTask], *, per_stratum: int, seed: int) -> list[ExternalTask]:
     """Equal allocation in stable seeded order; reject undersized strata rather than silently changing the draw."""
     if per_stratum < 1:
@@ -255,15 +275,12 @@ async def main(argv: list[str]) -> int:
         if source.id != "online-mind2web":
             parser.error("--sha256 is only for the gated Online-Mind2Web pin")
         source = Source.model_validate(source.model_dump() | {"sha256": args.sha256})
+    if source.id == "windtunnel" and args.site_urls is None:
+        parser.error("windtunnel requires --site-urls")
     try:
+        sites = None if args.site_urls is None else json.loads(args.site_urls.read_text())
         async with httpx.AsyncClient(timeout=30) as http:
-            body = await fetch(source, http, cache=args.cache, token=os.environ.get("HF_TOKEN"))
-            if source.id == "windtunnel":
-                if args.site_urls is None:
-                    parser.error("windtunnel requires --site-urls")
-                tasks = windtunnel(body, json.loads(args.site_urls.read_text()))
-            else:
-                tasks = online_mind2web(body)
+            tasks = await load_tasks(source, http, cache=args.cache, token=os.environ.get("HF_TOKEN"), site_urls=sites)
             if args.per_stratum is not None:
                 tasks = sample(tasks, per_stratum=args.per_stratum, seed=args.seed)
             rows = []

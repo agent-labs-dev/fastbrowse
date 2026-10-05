@@ -93,7 +93,8 @@ uvx fastbrowse "What is the title of the top story right now?" --start https://n
 
 Jev uses direct TypeSafe when `TYPESAFE_API_KEY` is supplied; otherwise OpenRouter is primary.
 Vercel AI Gateway is supported as a backup or an explicit primary. `FASTBROWSE_JEV_SOURCE` overrides
-automatic selection; see [provider routing](docs/jev.md#provider-failover). The LLM uses OpenRouter.
+automatic selection; see [provider routing](docs/jev.md#provider-failover). The LLM uses OpenRouter when
+`OPENROUTER_API_KEY` is set, otherwise the Vercel AI Gateway's OpenAI-compatible chat completions.
 
 `uvx` runs the published package in an isolated cached environment. `uv tool install fastbrowse` keeps it on your
 PATH, and `uv add fastbrowse` puts it in a project. Service keys can live in a `.env` file in the working directory;

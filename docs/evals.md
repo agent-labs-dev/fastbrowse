@@ -733,9 +733,11 @@ an undersized stratum fails. The seed and source pin are recorded on each output
 
 WindTunnel needs a JSON mapping from site ids to the local URLs of already booted upstream capsules. The loader
 expands task parameters, resolves start paths, keeps the predicates and step budgets as metadata, and excludes
-calibration tasks. Booting capsules and adapting their graders remain separate work.
+calibration tasks. Capsules must be booted separately. The corpus runner records independently graded attempts
+with the protocol described in [data-sources.md](data-sources.md).
 
 Add `--precheck` for HTTP reachability, with redirects, status codes and transport errors recorded per task. It
 uses no model or browser API. Tests inject recorded synthetic HTTP responses, so they run without network access.
 This check does not establish browser feasibility, login requirements, CAPTCHA status or access through a cloud
-proxy; those pre-screen steps and all agent/judge runs still need approval and, where applicable, people.
+proxy; those pre-screen steps still need a browser and, where applicable, people. Use
+`python -m fastbrowse.evals.corpus` for execution, with explicit grading configuration and a fresh output directory.

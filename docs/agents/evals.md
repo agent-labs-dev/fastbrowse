@@ -13,9 +13,16 @@ uv run --extra browser-use python -m fastbrowse.evals.live --arms fastbrowse --s
 round of changes and never debugged, so its score says whether a round improved the agent or only its dev
 score. A change made to fix a named held-out task spends that set's value; say so in the PR when it happens.
 
-All suites use `OPENROUTER_API_KEY` for the LLM and, unless `TYPESAFE_API_KEY` is supplied, Jev.
-`AI_GATEWAY_API_KEY` adds a Jev backup. The live suite also needs `BROWSER_USE_API_KEY`. Upstream outages look
+The fastbrowse arm uses `OPENROUTER_API_KEY` for the LLM when set, otherwise `AI_GATEWAY_API_KEY`.
+Jev uses direct TypeSafe when keyed, otherwise OpenRouter or the gateway. The other live arms require
+OpenRouter, and the live suite also needs `BROWSER_USE_API_KEY`. Upstream outages look
 exactly like regressions, so re-read a red run before believing it.
+
+The scheduled fixture job forwards `OPENROUTER_API_KEY`, `TYPESAFE_API_KEY` and `AI_GATEWAY_API_KEY`, then checks
+them with `--check-providers` before it runs a task. A gateway key alone covers both Jev and the LLM.
+Missing credentials fail that check without producing a task score.
+
+The OpenRouter latency benchmark in `fastbrowse.evals.latency` still requires `OPENROUTER_API_KEY`.
 
 Every result row records its build (`run`: version, commit, dirty tree, models) and the `task_version` it ran;
 compare rows only at equal task versions. Changing what a task asks or how it grades means
