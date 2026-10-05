@@ -13,6 +13,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.5.19] - 2026-10-05
 
+- Every release requires a successful Evals run on its exact commit. A release with no published comparison
+  once skipped the fixture gate and could ship agent code the Evals suites had not passed.
+
 - The LLM can use Vercel AI Gateway when no OpenRouter key is configured. The CLI, MCP server and fixture
   evals share that routing, and scheduled evals check their credentials before starting a task.
 - External eval corpora can run pinned tasks with reproducible selection, attempt records and independent

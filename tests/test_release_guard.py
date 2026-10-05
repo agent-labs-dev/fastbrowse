@@ -1,6 +1,7 @@
-"""The release guard: a published comparison needs a green Evals run and the same code it measured."""
+"""The release guard: every release needs a green Evals run, and a comparison the same code it measured."""
 
 import importlib.util
+import io
 import json
 import subprocess
 from pathlib import Path
@@ -49,9 +50,71 @@ def _commit(path: Path, message: str) -> None:
     subprocess.run(["git", "commit", "-q", "-m", message], cwd=path, check=True, capture_output=True)
 
 
-def test_a_release_without_a_comparison_is_not_guarded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(release_guard, "_evals_green", lambda *_: pytest.fail("no query for a release with none"))
+def test_a_release_without_a_comparison_still_needs_a_green_eval_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(release_guard, "_evals_green", lambda *_: False)
+    issues = release_guard.problems("0.5.19", "b" * 40, "org/repo", "token", root=tmp_path)
+    assert any("no successful" in issue for issue in issues), issues
+
+
+def test_a_release_without_a_comparison_passes_with_a_green_eval_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(release_guard, "_evals_green", lambda *_: True)
     assert release_guard.problems("0.5.19", "b" * 40, "org/repo", "token", root=tmp_path) == []
+
+
+def test_a_release_without_a_comparison_still_queries_the_release_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple] = []
+    monkeypatch.setattr(release_guard, "_evals_green", lambda *args: calls.append(args) or True)
+    release_guard.problems("0.5.19", "b" * 40, "org/repo", "token", root=tmp_path)
+    assert calls == [("org/repo", "b" * 40, "token")]
+
+
+@pytest.mark.parametrize("head", ["HEAD", "main", "0123456789abcdef", "-n1", ""])
+def test_a_malformed_release_build_is_refused_without_a_query(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, head: str
+) -> None:
+    """A ref name, an option or an abbreviation must fail closed rather than query the wrong build."""
+    monkeypatch.setattr(release_guard, "_evals_green", lambda *_: pytest.fail("queried a malformed release build"))
+    issues = release_guard.problems("0.5.19", head, "org/repo", "token", root=tmp_path)
+    assert any("full 40-hex" in issue for issue in issues), issues
+
+
+def test_cli_requires_a_release_commit_even_without_a_comparison(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+    assert release_guard.main(["9.9.9", "--token", "token"]) == 1
+    assert "no release commit" in capsys.readouterr().out
+
+
+def test_cli_requires_a_token_even_without_a_comparison(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    assert release_guard.main(["9.9.9", "--head", "b" * 40]) == 1
+    assert "no GitHub token" in capsys.readouterr().out
+
+
+def test_a_query_error_fails_closed_even_without_a_comparison(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def _boom(*_args: object) -> bool:
+        raise RuntimeError("cannot read evals.yml runs from GitHub: connection reset")
+
+    monkeypatch.setattr(release_guard, "_evals_green", _boom)
+    assert release_guard.main(["9.9.9", "--head", "b" * 40, "--token", "token"]) == 1
+    assert "cannot read" in capsys.readouterr().out
+
+
+def test_evals_green_fails_closed_on_a_malformed_query_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(release_guard.urllib.request, "urlopen", lambda *_args, **_kwargs: io.StringIO("[]"))
+    with pytest.raises(RuntimeError):
+        release_guard._evals_green("org/repo", "b" * 40, "token")
 
 
 def test_a_comparison_needs_a_green_eval_run_on_the_release_build(
@@ -166,3 +229,32 @@ def test_a_source_file_moved_into_docs_is_still_a_code_change(tmp_path: Path, mo
     monkeypatch.setattr(release_guard, "_evals_green", lambda *_: True)
     issues = release_guard.problems("0.5.19", head, "org/repo", "token", root=repo)
     assert any("different executable code" in issue for issue in issues), issues
+
+
+@pytest.mark.parametrize(
+    "change,green",
+    [
+        ({}, True),
+        ({"head_sha": "a" * 40}, False),
+        ({"head_branch": "feature"}, False),
+        ({"status": "in_progress"}, False),
+        ({"conclusion": "failure"}, False),
+        ({"conclusion": "cancelled"}, False),
+        ({"conclusion": "skipped"}, False),
+    ],
+)
+def test_evals_green_checks_the_returned_run_not_only_the_count(
+    monkeypatch: pytest.MonkeyPatch, change: dict, green: bool
+) -> None:
+    run = {"head_sha": "b" * 40, "head_branch": "main", "status": "completed", "conclusion": "success"} | change
+    body = json.dumps({"total_count": 1, "workflow_runs": [run]})
+    monkeypatch.setattr(release_guard.urllib.request, "urlopen", lambda *_args, **_kwargs: io.StringIO(body))
+    assert release_guard._evals_green("org/repo", "b" * 40, "token") is green
+
+
+def test_evals_green_refuses_a_positive_count_without_a_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        release_guard.urllib.request, "urlopen", lambda *_args, **_kwargs: io.StringIO('{"total_count": 1}')
+    )
+    with pytest.raises(RuntimeError, match="unexpected response shape"):
+        release_guard._evals_green("org/repo", "b" * 40, "token")

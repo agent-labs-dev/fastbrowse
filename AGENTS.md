@@ -145,11 +145,13 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
 
 1. Add the entry under the new version's heading in `CHANGELOG.md` (Keep a Changelog, prose bullets).
 2. `uv version <x.y.z>`, then open a `chore: <x.y.z>` PR. CI fails if the version has no entry.
-3. After it merges, `git tag v<x.y.z> && git push origin v<x.y.z>`.
+3. After it merges, `gh workflow run evals.yml --ref main -f repeat=3`. Wait for a successful Evals run on the
+   exact commit that will be tagged.
+4. `git tag v<x.y.z> <tested-sha> && git push origin v<x.y.z>`.
 
-A release that publishes or changes a comparison figure also needs the fixture suites green on the release build
-(`.github/workflows/evals.yml` fails on any regression) and, for a head-to-head figure, the comparison re-run on
-that same build.
+Every release needs the fixture suites green on its exact commit on `main`; `.github/workflows/evals.yml`
+fails on any failed attempt or incomplete repeat coverage. A release that publishes a head-to-head figure also
+needs the comparison re-run on that same build.
 
 The tag builds, creates the GitHub release with **the changelog entry as its notes**, publishes to PyPI by
 trusted publishing, and then asks fastbrowse.ai to rebuild, since its changelog page reads this file at build

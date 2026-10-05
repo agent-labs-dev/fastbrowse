@@ -1,9 +1,10 @@
-"""Refuse a release that publishes a comparison without the check it needs.
+"""Refuse a release without the Evals run it needs.
 
-A release that commits `docs/results/<version>.jsonl` claims a measured comparison. The repository's rule is
-that such a release needs the Evals workflow green on the release build, and the comparison measured on a build
-in that release's history. This runs before the tag creates the GitHub release or PyPI publishes the wheel, so a
-comparison cannot be shipped on code nobody ran.
+Every release needs the Evals workflow green on its exact commit on the default branch. A release that commits
+`docs/results/<version>.jsonl` claims a measured comparison and needs more: the measured build must be in its
+history and run byte-identical executable code. This runs before the tag creates the GitHub release or PyPI
+publishes the wheel, so agent code cannot ship on a red fixture gate and a comparison cannot be shipped on code
+nobody ran.
 
 The comparison's evidence commit may follow the clean build it measures, but only documentation may: the
 measured commit must be an ancestor of the tag and every tracked file that runs, builds or measures the evals
@@ -92,6 +93,9 @@ def code_differences(root: Path, measured: str, head: str) -> list[str]:
 
 
 def _evals_green(repository: str, sha: str, token: str, branch: str = DEFAULT_BRANCH) -> bool:
+    # The query names an exact commit, so a ref name or abbreviation would ask about a build the release is not.
+    if not _HEX40.fullmatch(sha):
+        raise RuntimeError(f"cannot read {WORKFLOW} runs from GitHub: {sha!r} is not a full 40-hex commit sha")
     # The workflow runs on the default branch, so a green dispatch on a tag or a feature branch does not count.
     query = urllib.parse.urlencode({"head_sha": sha, "status": "success", "branch": branch, "per_page": 1})
     request = urllib.request.Request(
@@ -107,7 +111,16 @@ def _evals_green(repository: str, sha: str, token: str, branch: str = DEFAULT_BR
             payload = json.load(response)
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         raise RuntimeError(f"cannot read {WORKFLOW} runs from GitHub: {exc}") from exc
-    return int(payload.get("total_count") or 0) > 0
+    if not isinstance(payload, dict) or not isinstance(payload.get("workflow_runs"), list):
+        raise RuntimeError(f"cannot read {WORKFLOW} runs from GitHub: unexpected response shape")
+    return any(
+        isinstance(run, dict)
+        and run.get("head_sha") == sha
+        and run.get("head_branch") == branch
+        and run.get("status") == "completed"
+        and run.get("conclusion") == "success"
+        for run in payload["workflow_runs"]
+    )
 
 
 def _publication_problems(version: str, root: Path = ROOT) -> list[str]:
@@ -140,11 +153,18 @@ publication_problems = _publication_problems
 
 
 def problems(version: str, head: str, repository: str, token: str, root: Path = ROOT) -> list[str]:
-    """Every reason this release may not publish its comparison; empty when it may or publishes none."""
+    """Every reason this release may not be published; empty when it may."""
+    issues: list[str] = []
+    # Every release, not only one that publishes a comparison, needs the Evals workflow green on its exact
+    # commit; a release with no results file once skipped this and could ship agent code the fixture gate had
+    # not passed. A malformed build fails closed rather than querying a commit that is not a full sha.
+    if not _HEX40.fullmatch(head):
+        return [f"release build {head!r} is not a full 40-hex commit sha"]
+    if not _evals_green(repository, head, token):
+        issues.append(f"no successful {WORKFLOW} run on the release build {head[:12]}")
     rows = comparison_rows(version, root)
     if rows is None:
-        return []
-    issues: list[str] = []
+        return issues
     runs = [(row.get("run") or {}) for row in rows]
     dirty = sorted({str(run.get("git_sha")) for run in runs if run.get("git_dirty") is not False})
     if dirty:
@@ -152,8 +172,6 @@ def problems(version: str, head: str, repository: str, token: str, root: Path = 
     measured = sorted({str(run.get("git_sha")) for run in runs if run.get("git_sha")})
     if not measured:
         issues.append("comparison rows name no measured build")
-    if not _evals_green(repository, head, token):
-        issues.append(f"no successful {WORKFLOW} run on the release build {head[:12]}")
     for sha in measured:
         # A ref name, an option or an abbreviation would pass `merge-base` and an empty diff, claiming a measured
         # build that was never pinned. Only a full commit sha can name the build and be compared.
@@ -174,7 +192,7 @@ def problems(version: str, head: str, repository: str, token: str, root: Path = 
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="check a release that publishes a comparison")
+    parser = argparse.ArgumentParser(description="check that a release may be published")
     parser.add_argument("version", nargs="?", help="the release version, e.g. 0.5.19")
     parser.add_argument(
         "--head", default=os.environ.get("GITHUB_SHA"), help="the release commit; defaults to GITHUB_SHA"
@@ -184,9 +202,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.version:
         parser.error("a version is required")
-    if comparison_rows(args.version) is None:
-        print(f"PASS {args.version} publishes no comparison")
-        return 0
+    # The green Evals run is required for every release, so the commit and token are needed even with no results.
     if not args.head:
         print("no release commit: run from the release workflow or pass --head")
         return 1
@@ -200,9 +216,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if issues:
         print("\n".join(issues))
-        print(f"REFUSED the release of {args.version} with a published comparison")
+        print(f"REFUSED the release of {args.version}")
         return 1
-    print(f"PASS {args.version} publishes a comparison on code in its history")
+    if comparison_rows(args.version) is None:
+        print(f"PASS {args.version} has a successful {WORKFLOW} run on the release build")
+        return 0
+    print(f"PASS {args.version} has a successful {WORKFLOW} run on code in its history")
     return 0
 
 

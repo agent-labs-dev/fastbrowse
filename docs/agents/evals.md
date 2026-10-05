@@ -61,11 +61,12 @@ uv run python -m fastbrowse.evals.publication --rows artifacts/evals/nightly.jso
 `.github/workflows/ci.yml` runs the gate over the `docs/results` files a pull request adds or changes, against
 the rows at the base branch, so a published row cannot be hand-edited past `--publish`; a new results file with
 no attempt ledger fails there. The release workflow runs `scripts/release_guard.py` before the GitHub release
-and PyPI: a release that commits a comparison needs the Evals workflow green on the release build and its
-measured build to be an ancestor that runs the same `src/`, tests, lockfiles, browser code and workflows. A
-README, docs or changelog commit may follow the measurement; any code or config change may not. The Evals
-workflow itself is the protocol the green run attests: a dispatch under three repeats fails before it spends and
-the fixture target is fixed at 100%.
+and PyPI, so every release needs a successful Evals run on its exact commit on `main`. A release that publishes
+a comparison needs more: its measured build must be an ancestor that runs byte-identical executable code, the
+same `src/`, tests, lockfiles, browser code and workflows, though a README, docs or changelog commit may follow
+the measurement. Any code or config change may not. The Evals workflow itself is the protocol the green run
+attests: a dispatch under three repeats fails before it spends and the fixture target is fixed at 100%, so a
+red fixture gate refuses a release even when it publishes no comparison.
 
 
 ## Matched external corpus
