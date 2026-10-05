@@ -19,6 +19,7 @@ The GitHub queries are read-only and need no repository secret.
 import argparse
 import json
 import os
+import re
 import subprocess
 import urllib.error
 import urllib.parse
@@ -36,6 +37,7 @@ DEFAULT_BRANCH = "main"
 # package manifests - has to be identical, because a later change can invalidate what the measured build showed.
 _EVIDENCE_FILES = {"README.md", "CHANGELOG.md", "AGENTS.md", "CONTRIBUTING.md", "CLAUDE.md"}
 _EVIDENCE_PREFIXES = ("docs/", ".agents/")
+_HEX40 = re.compile(r"^[0-9a-f]{40}$")
 
 
 def comparison_rows(version: str, root: Path = ROOT) -> list[dict[str, Any]] | None:
@@ -50,9 +52,23 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=False)
 
 
+def _resolve_commit(root: Path, sha: str) -> str | None:
+    """The commit a full 40-hex sha names, or None when it is not a commit this checkout holds.
+
+    `--end-of-options` stops a sha that starts with `-` from being read as a git option, and `^{commit}` peels a
+    tag or refuses a tree or blob, so only a commit is ever compared against the release.
+    """
+    if not _HEX40.fullmatch(sha):
+        return None
+    done = _git(root, "rev-parse", "--verify", "--end-of-options", f"{sha}^{{commit}}")
+    return done.stdout.strip() if done.returncode == 0 else None
+
+
 def in_release(root: Path, sha: str, head: str) -> bool:
     """Whether `sha` is `head` or an ancestor, so a build the tag contains can have measured the comparison."""
-    return _git(root, "merge-base", "--is-ancestor", sha, head).returncode == 0
+    if _resolve_commit(root, sha) != sha:
+        return False
+    return _git(root, "merge-base", "--is-ancestor", "--end-of-options", sha, head).returncode == 0
 
 
 def _evidence_only(path: str) -> bool:
@@ -69,7 +85,7 @@ def code_differences(root: Path, measured: str, head: str) -> list[str]:
     is off: a source file moved into `docs/` would otherwise be reported only by its new evidence path, hiding
     that executable code left its old one.
     """
-    done = _git(root, "diff", "--no-renames", "--name-only", measured, head)
+    done = _git(root, "diff", "--no-renames", "--name-only", "--end-of-options", measured, head)
     if done.returncode != 0:
         return [f"<cannot compare {measured[:12]} with {head[:12]}: {done.stderr.strip()}>"]
     return [line.strip() for line in done.stdout.splitlines() if line.strip() and not _evidence_only(line.strip())]
@@ -139,6 +155,11 @@ def problems(version: str, head: str, repository: str, token: str, root: Path = 
     if not _evals_green(repository, head, token):
         issues.append(f"no successful {WORKFLOW} run on the release build {head[:12]}")
     for sha in measured:
+        # A ref name, an option or an abbreviation would pass `merge-base` and an empty diff, claiming a measured
+        # build that was never pinned. Only a full commit sha can name the build and be compared.
+        if not _HEX40.fullmatch(sha):
+            issues.append(f"measured build {sha!r} is not a full 40-hex commit sha")
+            continue
         if not in_release(root, sha, head):
             issues.append(f"measured build {sha[:12]} is not in the release's history")
             continue

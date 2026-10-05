@@ -58,6 +58,7 @@ REGRESSION_COST_FLOOR_DOLLARS = 0.001
 
 _LEDGER_SUFFIX = ".attempts.jsonl"
 _HEX64 = re.compile(r"^[a-f0-9]{64}$")
+_HEX40 = re.compile(r"^[0-9a-f]{40}$")
 _LIVE_SUITES = ("core", "dev", "heldout", "stretch-dev", "stretch-heldout")
 
 
@@ -279,8 +280,13 @@ def _provenance(row: Mapping[str, Any], *, release: str | None, require_clean: b
     if not isinstance(run.get("run_started"), str) or not run["run_started"]:
         problems.append(_finding(REFUSE, "provenance", f"{where}: no run date"))
     if require_clean:
-        if not isinstance(run.get("git_sha"), str) or not run["git_sha"]:
+        sha = run.get("git_sha")
+        if not isinstance(sha, str) or not sha:
             problems.append(_finding(REFUSE, "build", f"{where}: not from a committed tree"))
+        elif not _HEX40.fullmatch(sha):
+            # A ref name, an option or an abbreviation is not a build: only a full commit sha can be diffed
+            # against the release and resolved to the tree the measurement ran.
+            problems.append(_finding(REFUSE, "build", f"{where}: git_sha {sha!r} is not a full 40-hex commit"))
         elif run.get("git_dirty") is not False:
             problems.append(_finding(REFUSE, "build", f"{where}: not from a clean tree"))
     if release is not None and run.get("fastbrowse_version") != release:

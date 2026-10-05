@@ -73,6 +73,23 @@ def test_a_measured_build_must_be_in_the_release_history(tmp_path: Path, monkeyp
     assert any("not in the release's history" in issue for issue in issues)
 
 
+@pytest.mark.parametrize("sha", ["HEAD", "main", "0123456789abcdef", "-n1"])
+def test_a_measured_build_must_be_a_full_commit_sha(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sha: str) -> None:
+    """A ref name, an option or an abbreviation is refused before git is asked to resolve it."""
+    repo, head = _measured_repo(tmp_path)
+    _root(repo, "0.5.19", [_row(sha=sha)])
+    monkeypatch.setattr(release_guard, "_evals_green", lambda *_: True)
+    issues = release_guard.problems("0.5.19", head, "org/repo", "token", root=repo)
+    assert any("full 40-hex" in issue for issue in issues), issues
+
+
+def test_in_release_rejects_a_ref_name_and_an_option(tmp_path: Path) -> None:
+    repo, head = _measured_repo(tmp_path)
+    assert release_guard.in_release(repo, "HEAD", head) is False
+    assert release_guard.in_release(repo, "-n1", head) is False
+    assert release_guard.in_release(repo, head, head) is True
+
+
 def test_a_dirty_comparison_build_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path, "0.5.19", [_row(dirty=True)])
     monkeypatch.setattr(release_guard, "_evals_green", lambda *_: True)

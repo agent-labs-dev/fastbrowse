@@ -43,7 +43,7 @@ def row(**overrides: Any) -> dict[str, Any]:
             "run_id": "run-1",
             "run_started": "2026-10-05T10:00:00+00:00",
             "fastbrowse_version": RELEASE,
-            "git_sha": "0123456789abcdef",
+            "git_sha": "0" * 40,
             "git_dirty": False,
             "providers": "openrouter",
             "max_steps": 50,
@@ -310,6 +310,14 @@ def test_integrity_refuses_the_rule_it_breaks(mutate: Any, check: str) -> None:
     source = mutate(row())
     report = publication.gate([source], release=RELEASE, ledger=[selected(source)], require_ledger=True)
     assert check in [finding.check for finding in report.blocking]
+
+
+@pytest.mark.parametrize("sha", ["HEAD", "main", "0123456789abcdef", "-n1"])
+def test_a_non_commit_sha_is_refused(sha: str) -> None:
+    """A ref name, an option or an abbreviation is not a build the release can be diffed against."""
+    source = row(run=row()["run"] | {"git_sha": sha})
+    report = publication.gate([source], release=RELEASE, ledger=[selected(source)], **TINY)
+    assert any(finding.check == "build" and "40-hex" in finding.detail for finding in report.blocking)
 
 
 def test_a_total_is_not_fabricated_when_cost_is_unknown() -> None:

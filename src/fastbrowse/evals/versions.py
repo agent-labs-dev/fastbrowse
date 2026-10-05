@@ -190,14 +190,15 @@ def provenance(**extra: object) -> dict[str, object]:
     """Who ran: the build, its commit, the interpreter, and a run id shared by every row of one invocation.
 
     `git_dirty` is None outside a checkout (an installed wheel) and True when tracked files had uncommitted
-    changes, so a score from an unreviewed tree is marked as one.
+    changes or untracked, non-ignored files were present, so a score from an unreviewed tree is marked as one.
+    Ignored paths (an `artifacts/` directory) do not dirty a build; an untracked executable does.
     """
     try:
         build = version("fastbrowse")
     except PackageNotFoundError:
         build = None
     sha = _git("rev-parse", "HEAD")
-    status = None if sha is None else _git("status", "--porcelain", "--untracked-files=no")
+    status = None if sha is None else _git("status", "--porcelain")
     return {
         "run_id": uuid.uuid4().hex[:12],
         "run_started": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -275,14 +276,15 @@ def publish(release: str, source: Path) -> Path:
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", release):
         raise ValueError("release must be a numeric x.y.z version")
     target = RESULTS / f"{release}.jsonl"
-    if target.exists():
+    if target.exists() or ledger_path(target).exists():
         raise ValueError(f"{target} exists: published results are never rewritten; publish under a new release")
     rows = read(source)
     ledger_file = ledger_path(source)
+    ledger = read(ledger_file) if ledger_file.exists() else None
     report = gate(
         rows,
         release=release,
-        ledger=read(ledger_file) if ledger_file.exists() else None,
+        ledger=ledger,
         baselines_=[row for _, published_rows in published() for row in published_rows],
         require_ledger=True,
     )
@@ -295,7 +297,22 @@ def publish(release: str, source: Path) -> Path:
         raise ValueError("docs/evals.md has no Results section")
     RESULTS.mkdir(parents=True, exist_ok=True)
     ordered = sorted((slim(r) for r in rows), key=lambda r: (r["arm"], r["task"], r["run"]["run_started"] or ""))
-    target.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in ordered), encoding="utf-8")
+    assert ledger is not None
+    bundle = (
+        (ledger_path(target), "".join(json.dumps(row, sort_keys=True) + "\n" for row in ledger)),
+        (target, "".join(json.dumps(row, sort_keys=True) + "\n" for row in ordered)),
+    )
+    created: list[Path] = []
+    try:
+        for path, text in bundle:
+            with path.open("x", encoding="utf-8") as output:
+                created.append(path)
+                output.write(text)
+    except BaseException:
+        # A disk error must not leave a half-publication that prevents a clean retry of the same release.
+        for path in created:
+            path.unlink()
+        raise
     return target
 
 
@@ -305,7 +322,11 @@ def _release_key(release: str) -> tuple[int, ...]:
 
 def published() -> list[tuple[str, list[dict[str, Any]]]]:
     """Every published release with its rows, newest first."""
-    files = sorted(RESULTS.glob("*.jsonl"), key=lambda f: _release_key(f.stem), reverse=True)
+    files = sorted(
+        (file for file in RESULTS.glob("*.jsonl") if not file.name.endswith(".attempts.jsonl")),
+        key=lambda file: _release_key(file.stem),
+        reverse=True,
+    )
     return [(f.stem, [json.loads(line) for line in f.read_text(encoding="utf-8").splitlines() if line]) for f in files]
 
 

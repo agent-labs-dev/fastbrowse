@@ -2,6 +2,7 @@ import contextlib
 import dataclasses
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +80,35 @@ def test_only_rejects_an_id_the_selection_does_not_hold() -> None:
         live.asyncio.run(live.main(["--only", "no-such-task"]))
 
 
+def test_provenance_counts_untracked_non_ignored_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A build with an untracked executable is not clean; an ignored artifact does not dirty it."""
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "agent.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (repo / ".gitignore").write_text("artifacts/\n", encoding="utf-8")
+
+    def run(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+    run("init", "-q", "-b", "main")
+    run("config", "user.email", "test@example.com")
+    run("config", "user.name", "Test")
+    run("add", "-A")
+    run("commit", "-q", "-m", "measured build")
+
+    def git_in_repo(*args: str) -> str | None:
+        done = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, timeout=10, check=False)
+        return done.stdout.strip() if done.returncode == 0 else None
+
+    monkeypatch.setattr(versions, "_git", git_in_repo)
+    assert versions.provenance()["git_dirty"] is False
+    (repo / "artifacts").mkdir()
+    (repo / "artifacts" / "nightly.jsonl").write_text("{}\n", encoding="utf-8")
+    assert versions.provenance()["git_dirty"] is False, "an ignored artifact is not a dirty build"
+    (repo / "src" / "sneaky.py").write_text("print('x')\n", encoding="utf-8")
+    assert versions.provenance()["git_dirty"] is True, "an untracked source file is a dirty build"
+
+
 def _row(task: str, *, arm: str = "fastbrowse", passed: bool = True, **run: Any) -> dict[str, Any]:
     return {
         "arm": arm,
@@ -101,7 +131,7 @@ def _row(task: str, *, arm: str = "fastbrowse", passed: bool = True, **run: Any)
             "run_id": "r1",
             "run_started": "2026-09-25T10:00:00+00:00",
             "fastbrowse_version": "9.9.9",
-            "git_sha": "0123456789",
+            "git_sha": "0123456789abcdef" + "0" * 24,
             "git_dirty": False,
             "providers": "openrouter",
             "max_steps": 50,
@@ -518,3 +548,45 @@ def test_navigation_publication_tolerates_only_viewport_scale_rounding(results: 
     else:
         with pytest.raises(ValueError, match="navigation viewport"):
             _publish(results, [row])
+
+
+def test_publication_keeps_the_attempt_ledger_out_of_score_aggregates(results: Path) -> None:
+    rows = _repeats("pypi-version")
+    with _publishing(rows):
+        source = _write(results, rows, "rows.jsonl")
+        attempts = [_attempt(row) | {"trace": ["a public page quote"]} for row in rows]
+        source.with_suffix(".attempts.jsonl").write_text("".join(json.dumps(row) + "\n" for row in attempts))
+        target = versions.publish("9.9.9", source)
+    ledger = target.with_suffix(".attempts.jsonl")
+    assert ledger.exists()
+    assert [json.loads(line) for line in ledger.read_text().splitlines()] == attempts
+    assert [release for release, _ in versions.published()] == ["9.9.9"]
+    assert json.loads(versions.render_summary())["releases"][0]["fastbrowse_version"] == "9.9.9"
+
+
+def test_publication_never_overwrites_an_existing_attempt_ledger(results: Path) -> None:
+    folder = results / "results"
+    folder.mkdir()
+    ledger = folder / "9.9.9.attempts.jsonl"
+    ledger.write_text("retained evidence\n")
+    with pytest.raises(ValueError, match="never rewritten"):
+        _publish(results, _repeats("pypi-version"))
+    assert ledger.read_text() == "retained evidence\n"
+    assert not (folder / "9.9.9.jsonl").exists()
+
+
+def test_a_failed_publication_write_removes_only_its_own_files(results: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    original = Path.open
+
+    def fail_scored(path: Path, *args: Any, **kwargs: Any):
+        if path.name == "9.9.9.jsonl" and args == ("x",):
+            raise OSError("disk full")
+        return original(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", fail_scored)
+        with pytest.raises(OSError, match="disk full"):
+            _publish(results, _repeats("pypi-version"))
+    assert not (results / "results" / "9.9.9.attempts.jsonl").exists()
+    assert not (results / "results" / "9.9.9.jsonl").exists()
+    assert _publish(results, _repeats("pypi-version")).exists()
