@@ -25,7 +25,8 @@ Six tasks against small sites in `src/fastbrowse/evals/fixtures/`, served locall
 | `login-wall` | a sign-in wall with no credentials stops at `NEEDS_LOGIN` and submits nothing |
 | `confirm-dialog` | an irreversible delete behind a `confirm()` dialog |
 
-Needs `OPENROUTER_API_KEY` for the LLM and, unless `TYPESAFE_API_KEY` is supplied, Jev; `AI_GATEWAY_API_KEY` adds a Jev backup for fastbrowse
+Needs `OPENROUTER_API_KEY` or `AI_GATEWAY_API_KEY` for the LLM. Jev uses the configured route, with
+`TYPESAFE_API_KEY` selecting direct TypeSafe and the gateway providing a backup when keyed
 (see `fastbrowse.clients.environment`).
 
 ## Live head-to-head
