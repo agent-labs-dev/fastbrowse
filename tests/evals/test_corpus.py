@@ -259,6 +259,8 @@ def test_build_grader_defaults_to_native_predicates_and_pins_a_command(tmp_path:
         corpus_module._build_grader(_args(grader_command=["python", "grader.py"]))
     script = tmp_path / "grader.py"
     script.write_text("print('{}')\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="requires --grader-sha256"):
+        corpus_module._build_grader(_args(grader_command=["python", str(script)], grader_code=script))
     # A digest that does not match the code is refused before a task is fetched.
     with pytest.raises(ValueError, match="does not match"):
         corpus_module._build_grader(
@@ -352,8 +354,34 @@ async def test_cli_keeps_finished_attempts_in_the_ledger_on_interrupt(
     monkeypatch.setattr(corpus_module.httpx, "AsyncClient", lambda **kwargs: _FakeClient())
     out = tmp_path / "run"
     code = await corpus_module.main(
-        ["online-mind2web", "--sha256", "b" * 64, "--out", str(out), "--execute", "--seed", "7"]
+        [
+            "online-mind2web",
+            "--sha256",
+            "b" * 64,
+            "--out",
+            str(out),
+            "--execute",
+            "--seed",
+            "7",
+            "--cdp-url",
+            "wss://user:cdp-secret@browser.test?token=query-secret",
+            "--grader-command",
+            "grader",
+            "--token",
+            "grader-secret",
+        ]
     )
     assert code == 1
     assert len((out / "attempts.jsonl").read_text(encoding="utf-8").strip().splitlines()) == 1
     assert json.loads((out / "summary.json").read_text(encoding="utf-8"))["attempts"] == 1
+    for name in ("corpus.json", "attempts.jsonl"):
+        content = (out / name).read_text(encoding="utf-8")
+        assert all(secret not in content for secret in ("cdp-secret", "query-secret", "grader-secret"))
+
+
+def test_recorded_arguments_redact_inline_cdp_credentials() -> None:
+    assert corpus_module._recorded_argv(["--seed", "7", "--cdp-url=wss://browser.test?token=secret"]) == [
+        "--seed",
+        "7",
+        "--cdp-url=[redacted]",
+    ]

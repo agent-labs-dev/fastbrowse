@@ -443,6 +443,8 @@ def _build_grader(args: argparse.Namespace) -> Grader:
         return predicate_grader()
     if args.grader_code is None:
         raise ValueError("--grader-command requires --grader-code to identify the evaluator")
+    if args.grader_sha256 is None:
+        raise ValueError("--grader-command requires --grader-sha256 for the reviewed evaluator")
     return predicate_grader(
         args.grader_command,
         digest=args.grader_sha256,
@@ -458,8 +460,26 @@ def _exit_code(attempts: Sequence[Attempt], *, expected: int) -> int:
     return 0 if attempts and all(attempt.passed is True for attempt in attempts) else 1
 
 
+def _recorded_argv(argv: Sequence[str]) -> list[str]:
+    """CDP addresses and evaluator arguments can carry credentials, so neither belongs in retained artifacts."""
+    recorded: list[str] = []
+    arguments = iter(argv)
+    for argument in arguments:
+        if argument == "--cdp-url":
+            recorded.extend((argument, "[redacted]"))
+            next(arguments, None)
+        elif argument.startswith("--cdp-url="):
+            recorded.append("--cdp-url=[redacted]")
+        elif argument == "--grader-command" or argument.startswith("--grader-command="):
+            recorded.extend(("--grader-command", "[redacted]"))
+            break
+        else:
+            recorded.append(argument)
+    return recorded
+
+
 async def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("source", choices=list(SOURCES))
     parser.add_argument("--cache", type=Path)
     parser.add_argument("--sha256", help="verified digest for the pinned gated Online-Mind2Web file")
@@ -501,7 +521,7 @@ async def main(argv: list[str]) -> int:
         grader = _build_grader(args)
     except ValueError as exc:
         parser.error(str(exc))
-    run = TypeAdapter(dict[str, JsonValue]).validate_python(provenance(source=source.id, argv=list(argv)))
+    run = TypeAdapter(dict[str, JsonValue]).validate_python(provenance(source=source.id, argv=_recorded_argv(argv)))
     if args.out.exists():
         parser.error(f"refusing to overwrite existing output directory: {args.out}")
     async with httpx.AsyncClient(timeout=60) as http:
