@@ -18,6 +18,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Fixture evals leave a page's scripted cookie banner to the agent. The browser layer's own consent refusal
   had removed the mock support portal's banner before the agent could accept it, so that task's requirement
   could not be satisfied.
+
+## [0.5.18] - 2026-10-05
+
 - A run can now take over a window that is already open, in Chrome or in an Electron app such as VS Code or Slack.
   `--attach` (or `attach=True` in `run_task`) skips opening a tab and drives an existing page, and `--target-match
   TEXT` picks the first page whose title or URL contains TEXT. The window stays open after the run, and with no
@@ -880,7 +883,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.17...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.18...HEAD
+[0.5.18]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.18
 [0.5.17]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.17
 [0.5.16]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.16
 [0.5.15]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.15
