@@ -25,7 +25,7 @@ Issues = "https://github.com/agent-labs-dev/fastbrowse/issues"
 browser-use = ["browser-use-sdk==3.11.3"]
 eval-data = ["pyyaml>=6,<7"]
 # The MCP server, `fastbrowse-mcp`.
-mcp = ["mcp>=1.20,<2"]
+mcp = ["mcp>=1.20,<3"]
 
 [project.scripts]
 fastbrowse = "fastbrowse.cli:main"
