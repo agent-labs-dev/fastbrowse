@@ -11,6 +11,7 @@ completion and independent grade are separate fields.
 | Without authorization, trusted state grader | 4 | 2 | 3 | 1 | 1 |
 | With authorization, trusted state grader | 4 | 2 | 4 | 2 | 0 |
 | Without a state grader | 4 | 2 | 3 | 1 | 1 |
+| Committed build, with authorization and state grader | 4 | 2 | 4 | 2 | 0 |
 
 A native answer predicate checks read tasks. The trusted state grader invokes the pinned capsule's
 observer and tests its appointment state. The authorized run passed the booking's state predicate and
@@ -25,8 +26,20 @@ The raw result survived. The first record reconstructs that interruption from it
 result artifacts; it is explicitly ungraded and contributes no score. The CLI now delegates to its
 canonical module, and a subprocess regression checks that a native grade reaches the durable ledger.
 
+The final check uses clean commit `a751dff5aa602515e86cae8ef4c3a1dac6dea2ff`. It independently verifies
+the booking and answer task, and retains the two failed tasks. All 17 physical attempts remain visible.
+
 These are integration diagnostics from working builds, including dirty trees while the CLI fix was
 under test. They are not release results. Admin credentials and an explicit answer-format dev evaluation
 are prerequisites for a broader corpus claim. Online-Mind2Web remains unavailable without authorized
 gated dataset access and a verified source digest. Neither missing access nor ungraded attempts is a
 benchmark pass.
+
+
+Real CLI negative checks reject missing source digests, incorrect grader pins, missing grader code,
+code supplied without a command and existing output directories. Unreachable starts exit nonzero.
+A provenance check planted CDP and grader-command credentials and confirmed their redaction from the
+artifacts. The ungraded transaction retains a null pass state and fails the CLI gate.
+
+The pinned Online-Mind2Web resolve URL returned HTTP 401 with `GatedRepo` without authentication.
+No access terms were accepted and no source digest was invented.
