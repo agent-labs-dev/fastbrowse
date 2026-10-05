@@ -11,6 +11,14 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A run can now take over a window that is already open, in Chrome or in an Electron app such as VS Code or Slack.
+  `--attach` (or `attach=True` in `run_task`) skips opening a tab and drives an existing page, and `--target-match
+  TEXT` picks the first page whose title or URL contains TEXT. The window stays open after the run, and with no
+  `--start` the run begins on whatever the window already shows. `--cdp-port PORT` finds the browser from its
+  DevTools port, which is how an Electron app started with `--remote-debugging-port` is reached. `connect_cdp()`
+  hands a script the same attached page, without the agent. Windows an Electron app opens on its own join the run
+  only with `--target-match`, because in a browser such a window is as likely a tab someone opened by hand.
+
 ## [0.5.17] - 2026-10-03
 
 - The mock site's sign-out page now says "You are signed out." instead of sending the browser to the home page,

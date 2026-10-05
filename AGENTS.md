@@ -62,7 +62,8 @@ The run loop is `src/fastbrowse/agent.py`, and everything else is a seam it call
 
 - **[run.py](src/fastbrowse/run.py)** opens the browser and builds the Jev and LLM clients from `Settings`, then hands control to
   the loop. This is the embedding API: `run_task(...)`. The browser is one of three, in this order: one the
-  caller hands over (`cdp_url`, neither started nor stopped here), a Browser Use Cloud browser (`browser_api_key`), or
+  caller hands over (`cdp_url` or `cdp_port`, neither started nor stopped here; `attach` drives a window already
+  open instead of a new tab, and `connect_cdp` yields that page without the agent), a Browser Use Cloud browser (`browser_api_key`), or
   local Chrome. `start` is optional; without one the first address is proposed from the task.
 - **[page.py](src/fastbrowse/page.py) / [browser/](src/fastbrowse/browser/)** index the page. [browser/snapshot.js](src/fastbrowse/browser/snapshot.js) runs in the page and returns the controls
   with what tells them apart (role, label, the card or row that disambiguates twins, whether a field blocks
