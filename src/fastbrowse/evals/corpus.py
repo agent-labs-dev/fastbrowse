@@ -1,6 +1,6 @@
 """Execute a pinned external corpus: selection, preflight, attempts and independent grades.
 
-Nothing upstream is executed: the loaders parse pinned bytes and the only code run is fastbrowse's own agent.
+The loaders parse pinned bytes as data. External evaluator code runs only through a trusted, hash-pinned grader.
 Completion and grading stay apart, so an attempt with no grader is ungraded with `passed: null`, never a failure.
 
     uv run --extra eval-data python -m fastbrowse.evals.corpus windtunnel --site-urls sites.json --out run/
