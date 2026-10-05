@@ -25,7 +25,6 @@ import hashlib
 import inspect
 import io
 import json
-import math
 import platform
 import re
 import statistics
@@ -41,7 +40,7 @@ from pathlib import Path
 from types import CodeType
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, ValidationError
+from pydantic import BaseModel
 
 LOCK = Path(__file__).with_name("versions.json")
 ROOT = Path(__file__).parents[3]
@@ -255,20 +254,20 @@ def slim(row: Mapping[str, Any]) -> dict[str, Any]:
     return kept
 
 
-class _StatisticsRow(BaseModel):
-    model_config = ConfigDict(strict=True)
-
-    arm: str = Field(min_length=1)
-    passed: bool
-    correct: bool
-    seconds: FiniteFloat = Field(ge=0)
-    dollars: FiniteFloat | None = Field(ge=0)
-
-
 def publish(release: str, source: Path) -> Path:
-    """Commit `source`'s rows as `release`'s published results; refuse rows that cannot be traced or compared."""
+    """Commit `source`'s rows as `release`'s published results; refuse rows the publication gate blocks.
+
+    The gate reads the attempt ledger beside `source`, so retries and their spend are published with the score.
+    Each live task needs three distinct measured repeats, and each fastbrowse task is compared at the task version
+    it ran against the newest published release that ran the same protocol and model route with three attempts.
+    """
+    from fastbrowse.evals.publication import gate, ledger_path
+
+    def read(file: Path) -> list[dict[str, Any]]:
+        return [json.loads(line) for line in file.read_text(encoding="utf-8").splitlines() if line.strip()]
+
     if release == "auto":
-        rows = [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines() if line.strip()]
+        rows = read(source)
         releases = {(row.get("run") or {}).get("fastbrowse_version") for row in rows}
         if len(releases) != 1 or None in releases:
             raise ValueError("rows must identify one fastbrowse release")
@@ -278,59 +277,17 @@ def publish(release: str, source: Path) -> Path:
     target = RESULTS / f"{release}.jsonl"
     if target.exists():
         raise ValueError(f"{target} exists: published results are never rewritten; publish under a new release")
-    from fastbrowse.evals.live_tasks import PageEvidence, page_defect
-    from fastbrowse.evals.observe import VIEWPORT
-
-    rows = [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines() if line.strip()]
-    lock = load_lock()
-    problems = []
-    for row in rows:
-        run = row.get("run") or {}
-        where = f"{row.get('arm')} {row.get('task')}"
-        if row.get("category") == "navigate" and row.get("passed"):
-            try:
-                evidence = PageEvidence.model_validate(row.get("final_page"))
-                defect = page_defect(evidence)
-            except ValidationError:
-                defect = "missing or invalid final-page evidence"
-            if defect:
-                problems.append(f"{where}: {defect}")
-
-        if (
-            row.get("category") == "navigate"
-            and row.get("arm") in {"fastbrowse", "jev-ultrafast"}
-            and row.get("normalized_status") != "unavailable"
-        ):
-            try:
-                page = PageEvidence.model_validate(row.get("final_page"))
-                dimensions = (page.inner_width, page.inner_height, page.device_pixel_ratio)
-            except ValidationError:
-                dimensions = (None, None, None)
-            if dimensions[:2] != (VIEWPORT["width"], VIEWPORT["height"]) or not math.isclose(
-                dimensions[2] or 0, VIEWPORT["deviceScaleFactor"], rel_tol=1e-6
-            ):
-                problems.append(f"{where}: navigation viewport is missing or differs from the comparison setup")
-
-        try:
-            _StatisticsRow.model_validate(row)
-        except ValidationError as exc:
-            problems.append(f"{where}: {exc.error_count()} invalid fields ({exc.errors()[0]['loc']})")
-            continue
-        if not run.get("git_sha") or run.get("git_dirty") is not False:
-            problems.append(f"{where}: not from a clean, committed tree")
-        elif run.get("fastbrowse_version") != release:
-            problems.append(f"{where}: ran fastbrowse {run.get('fastbrowse_version')}, not {release}")
-        if not run.get("run_started") or not run.get("run_id"):
-            problems.append(f"{where}: missing run date or id")
-        if not row.get("suite") or not row.get("suite_version"):
-            problems.append(f"{where}: missing suite or suite version")
-        current = task_version(str(row.get("task")), lock)
-        if current is None:
-            problems.append(f"{where}: no task by that id is in versions.json")
-        elif row.get("task_version") != current:
-            problems.append(f"{where}: task version {row.get('task_version')} is not the current one")
-    if not rows or problems:
-        raise ValueError("\n".join(problems) or f"{source} has no rows")
+    rows = read(source)
+    ledger_file = ledger_path(source)
+    report = gate(
+        rows,
+        release=release,
+        ledger=read(ledger_file) if ledger_file.exists() else None,
+        baselines_=[row for _, published_rows in published() for row in published_rows],
+        require_ledger=True,
+    )
+    if report.blocking:
+        raise ValueError("\n".join(f"{finding.check}: {finding.detail}" for finding in report.blocking))
     # The results file is never rewritten, so every page it regenerates must be checked before it exists.
     if "<!-- evals:headline -->" not in README.read_text(encoding="utf-8"):
         raise ValueError("README.md has no <!-- evals:headline --> block")
@@ -800,6 +757,14 @@ def protocol_docs() -> str:
         "reported cost, elapsed time, repeat, build and scheduled retry wait. `selected` identifies the "
         "row retained in the "
         "main file, including a final unavailable attempt after retries are exhausted. Unknown cost stays unknown.",
+        "A published comparison is matched and bounded: fastbrowse is compared only with fastbrowse at the "
+        "same suite, task and task version, and only against the newest published release that ran them at the "
+        "same protocol and model route with at least three measured attempts. Every live task needs three "
+        "distinct measured repeats before any baseline; fewer is a diagnostic and is refused even for a new, "
+        "bumped or re-routed task with no baseline. A per-task pass rate may not decline, duplicate repeats do "
+        "not count, and a median wall time or cost that rises past both 20% and 1 second, or both 20% and "
+        "$0.001, blocks. Once the candidate has its three repeats, a missing baseline, a matching baseline "
+        "under three attempts, and a baseline at another protocol or route are reported and never block.",
         "Recordings get a fresh filename for every retry. Arm launch order rotates between repeats; "
         "concurrency is shared.",
         "Keep this ledger with the scored rows: retry time and spend belong in operational totals, not "

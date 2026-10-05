@@ -10,11 +10,10 @@ on:
   workflow_dispatch:
     inputs:
       repeat:
-        description: Runs per task
+        # At least 3: fewer is a diagnostic, not the run a published comparison rests on, so the job refuses it
+        # before spending. The pass target is fixed at 100% for the same reason and cannot be lowered.
+        description: Runs per task (at least 3)
         default: "3"
-      target:
-        description: Required pass rate per task
-        default: "1.0"
   schedule:
     - cron: "0 3 * * *"
 
@@ -30,13 +29,20 @@ jobs:
     timeout-minutes: 90
     env:
       EVAL_REPEAT: ${{ inputs.repeat || '3' }}
-      EVAL_TARGET: ${{ inputs.target || '1.0' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with: {python-version: "3.13"}
       - run: uv sync --locked --all-extras
+      - name: Require the full comparison protocol
+        # A quick dispatch cannot be the green run a published comparison points at: fewer than three repeats is
+        # not a rate. This fails before the credential check and before any paid call the runner would make.
+        run: |
+          case "$EVAL_REPEAT" in
+            ''|*[!0-9]*) echo "repeat must be an integer, got '$EVAL_REPEAT'"; exit 1 ;;
+          esac
+          test "$EVAL_REPEAT" -ge 3 || { echo "repeat must be at least 3, got $EVAL_REPEAT"; exit 1; }
       - name: Check the model credentials
         # A missing provider fails before the first task, with its setting named and no empty score report.
         env:
@@ -46,9 +52,9 @@ jobs:
         run: uv run python scripts/eval_stability.py --check-providers
       - name: Run the fixture eval suites
         id: fixtures
-        # The runner exits non-zero on any failed attempt. The stability check below is the verdict, so a
-        # dispatch with a target under 100% is judged against that target. It also requires every task of both
-        # suites at the full repeat count, so a runner that died part way cannot pass on the rows it left.
+        # The runner exits non-zero on any failed attempt. The stability check below is the verdict at a fixed
+        # 100% target, and it requires every task of both suites at the full repeat count, so a runner that died
+        # part way cannot pass on the rows it left.
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -65,9 +71,19 @@ jobs:
         if: always() && steps.fixtures.outcome != 'skipped'
         run: |
           uv run python scripts/eval_stability.py artifacts/evals/nightly.jsonl \
-            --target "$EVAL_TARGET" \
+            --target 1.0 \
             --suite local mock \
             --repeat "$EVAL_REPEAT"
+      - name: Check the publication gate
+        # Deterministic integrity (build, task and suite versions, dataset pins, cost honesty) and the
+        # task-version matched regression against the published baselines. The fixture runner keeps no
+        # retries, so its ledger is not required here; a published comparison goes through the same gate
+        # with --require-ledger, enforced by `versions --publish`.
+        if: always() && steps.fixtures.outcome != 'skipped'
+        run: |
+          uv run python -m fastbrowse.evals.publication \
+            --rows artifacts/evals/nightly.jsonl \
+            --baseline docs/results
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
         if: always()
         with:

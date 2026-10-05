@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.19] - 2026-10-05
+
 - The LLM can use Vercel AI Gateway when no OpenRouter key is configured. The CLI, MCP server and fixture
   evals share that routing, and scheduled evals check their credentials before starting a task.
 - External eval corpora can run pinned tasks with reproducible selection, attempt records and independent
@@ -18,6 +20,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Fixture evals leave a page's scripted cookie banner to the agent. The browser layer's own consent refusal
   had removed the mock support portal's banner before the agent could accept it, so that task's requirement
   could not be satisfied.
+- Published eval comparisons require a clean build, complete task coverage, at least three measured repeats
+  and a ledger retaining every attempt and its spend. CI refuses missing evidence and matched correctness,
+  latency or cost regressions. A release needs successful fixture evals and measurements from the same code.
+- External corpus comparisons reset each site before every attempt and report completion separately from
+  independent correctness. WindTunnel tasks marked excluded by upstream are left out, and authenticated
+  fixtures use named credentials scoped to their site.
 
 ## [0.5.18] - 2026-10-05
 
@@ -883,7 +891,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.18...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.19...HEAD
+[0.5.19]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.19
 [0.5.18]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.18
 [0.5.17]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.17
 [0.5.16]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.16

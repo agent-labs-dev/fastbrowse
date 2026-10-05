@@ -89,28 +89,32 @@ def test_mind2web_sampling_is_stratified_seeded_and_order_independent() -> None:
     assert len({tuple(t.id for t in datasets.sample(tasks, per_stratum=1, seed=seed)) for seed in range(10)}) > 1
 
 
-def _archive() -> bytes:
+def _task(**overrides: object) -> dict[str, object]:
+    task: dict[str, object] = {
+        "id": "authored-task",
+        "tier": "act-short",
+        "start_path": "/catalog",
+        "prompt": "Find {params.kind}.",
+        "params": {"kind": "a book"},
+        "predicate": {"type": "answer", "contains": ["book"]},
+    }
+    task.update(overrides)
+    return task
+
+
+def _tar(sites: dict[str, list[dict[str, object]]]) -> bytes:
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w:gz") as archive:
-        for site in ["example", "calibration-example"]:
-            data = json.dumps(
-                {
-                    "tasks": [
-                        {
-                            "id": "authored-task",
-                            "tier": "act-short",
-                            "start_path": "/catalog",
-                            "prompt": "Find {params.kind}.",
-                            "params": {"kind": "a book"},
-                            "predicate": {"type": "answer", "contains": ["book"]},
-                        }
-                    ]
-                }
-            ).encode()
+        for site, tasks in sites.items():
+            data = json.dumps({"tasks": tasks}).encode()
             info = tarfile.TarInfo(f"WindTunnel-{datasets.WINDTUNNEL_REVISION}/tasks/{site}.yaml")
             info.size = len(data)
             archive.addfile(info, io.BytesIO(data))
     return stream.getvalue()
+
+
+def _archive() -> bytes:
+    return _tar({"example": [_task()], "calibration-example": [_task()]})
 
 
 def test_windtunnel_loads_templates_without_executing_or_extracting_upstream() -> None:
@@ -123,6 +127,23 @@ def test_windtunnel_loads_templates_without_executing_or_extracting_upstream() -
         datasets.windtunnel(_archive(), {})
     with pytest.raises(ValueError, match="no benchmark tasks"):
         datasets.windtunnel(_archive(), {"example": "http://localhost:3000"}, revision="b" * 40)
+
+
+def test_windtunnel_drops_upstream_excluded_tasks_and_keeps_auth_as_a_bool() -> None:
+    archive = _tar(
+        {
+            "example": [
+                _task(id="kept-public"),
+                _task(id="kept-auth", auth=True),
+                _task(id="dropped-api-only", excluded="api-only-data"),
+            ]
+        }
+    )
+    rows = datasets.windtunnel(archive, {"example": "http://localhost:3000"})
+    by_id = {row.id: row for row in rows}
+    assert set(by_id) == {"kept-public", "kept-auth"}
+    assert by_id["kept-auth"].metadata["auth"] is True
+    assert "auth" not in by_id["kept-public"].metadata
 
 
 @pytest.mark.parametrize("ending", [200, 403, 404, 503, "timeout"])

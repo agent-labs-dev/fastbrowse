@@ -1,3 +1,4 @@
+import contextlib
 import dataclasses
 import json
 import re
@@ -84,7 +85,7 @@ def _row(task: str, *, arm: str = "fastbrowse", passed: bool = True, **run: Any)
         "task": task,
         "category": "lookup",
         "suite": "core",
-        "suite_version": "abcd1234",
+        "suite_version": versions.suite_version(t.id for t in live.SUITES["core"]),
         "task_version": versions.task_version(task),
         "status": "complete",
         "passed": passed,
@@ -102,9 +103,38 @@ def _row(task: str, *, arm: str = "fastbrowse", passed: bool = True, **run: Any)
             "fastbrowse_version": "9.9.9",
             "git_sha": "0123456789",
             "git_dirty": False,
+            "providers": "openrouter",
+            "max_steps": 50,
+            "concurrency": 2,
+            "arms": {
+                "fastbrowse": {"pin": "run.fastbrowse_version + run.git_sha", "tier": "A"},
+                "browser-use": {"pin": "browser-use-sdk==3.11.3", "tier": "hosted"},
+            },
             "argv": ["--suite", "core"],
         }
         | run,
+    }
+
+
+def _repeats(task: str, *, count: int = 3, **kwargs: Any) -> list[dict[str, Any]]:
+    """`count` distinct attempts of one task, so a published comparison clears the three-repeat rule."""
+    return [_row(task, **kwargs) | {"repeat": index} for index in range(count)]
+
+
+def _attempt(row: dict[str, Any]) -> dict[str, Any]:
+    """The one selected attempt `_row` reports, as the ledger beside it would record it."""
+    return {
+        "selected": True,
+        "retry_wait_seconds": 0,
+        "arm": row["arm"],
+        "task": row["task"],
+        "repeat": row["repeat"],
+        "retries": row["retries"],
+        "status": row["status"],
+        "normalized_status": row.get("normalized_status"),
+        "seconds": row["seconds"],
+        "dollars": row["dollars"],
+        "run": row["run"],
     }
 
 
@@ -114,10 +144,37 @@ def results(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def _publish(results: Path, rows: list[dict[str, Any]]) -> Path:
-    source = results / "rows.jsonl"
+@contextlib.contextmanager
+def _publishing(rows: list[dict[str, Any]]):
+    """Narrow the build's `core` suite to the fixture tasks `rows` carry, at their canonical version.
+
+    A published live suite is now held to every task this build defines. These unit fixtures are one or two
+    shapes, not a live suite, so the build they publish under defines `core` as exactly their tasks. The
+    production gate is not relaxed: it still refuses a candidate that omits a task the build it is handed
+    defines, which the focused coverage tests exercise against the real suites.
+    """
+    fixture = tuple(task for task in live.SUITES["core"] if task.id in {str(item["task"]) for item in rows})
+    version = versions.suite_version(task.id for task in fixture)
+    for item in rows:
+        if item.get("suite") == "core":
+            item["suite_version"] = version
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(live, "SUITES", {**live.SUITES, "core": fixture})
+        yield
+
+
+def _write(results: Path, rows: list[dict[str, Any]], name: str) -> Path:
+    source = results / name
     source.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
-    return versions.publish("9.9.9", source)
+    source.with_suffix(".attempts.jsonl").write_text(
+        "".join(json.dumps(_attempt(r)) + "\n" for r in rows), encoding="utf-8"
+    )
+    return source
+
+
+def _publish(results: Path, rows: list[dict[str, Any]]) -> Path:
+    with _publishing(rows):
+        return versions.publish("9.9.9", _write(results, rows, "rows.jsonl"))
 
 
 def test_publishing_refuses_rows_that_cannot_be_traced_or_compared(results: Path) -> None:
@@ -138,8 +195,8 @@ def test_publishing_refuses_rows_that_cannot_be_traced_or_compared(results: Path
 
 
 def test_published_rows_are_slim_immutable_and_generate_the_tables(results: Path) -> None:
-    rival = [_row("pypi-version", arm="browser-use"), _row("hn-top", arm="browser-use")]
-    published = _publish(results, [_row("pypi-version"), _row("hn-top", passed=False), *rival])
+    rival = [*_repeats("pypi-version", arm="browser-use"), *_repeats("hn-top", arm="browser-use")]
+    published = _publish(results, [*_repeats("pypi-version"), *_repeats("hn-top", passed=False), *rival])
     assert "trace" not in published.read_text(encoding="utf-8")
     # The model and invocation are provenance: a hosted arm's score means nothing without the model behind it.
     kept = json.loads(published.read_text(encoding="utf-8").splitlines()[0])
@@ -149,10 +206,10 @@ def test_published_rows_are_slim_immutable_and_generate_the_tables(results: Path
     with pytest.raises(ValueError, match="never rewritten"):
         _publish(results, [_row("pypi-version")])
     table = versions.docs_blocks()["results:9.9.9"]
-    assert "| fastbrowse (9.9.9) | 1/2 | 1/2 | 10.0s | 10.0s | $0.0100 | $0.0100 | $0.02 |" in table
+    assert "| fastbrowse (9.9.9) | 3/6 | 3/6 | 10.0s | 10.0s | $0.0100 | $0.0100 | $0.06 |" in table
     assert "`r1` at `0123456`" in table
     readme = "x\n<!-- evals:headline -->\nstale\n<!-- /evals:headline -->\n"
-    assert "| fastbrowse | 1/2 | $0.0100 (median), $0.0100 mean | 10.0s |" in versions.render_readme(readme)
+    assert "| fastbrowse | 3/6 | $0.0100 (median), $0.0100 mean | 10.0s |" in versions.render_readme(readme)
     with pytest.raises(ValueError, match="no <!-- evals:headline -->"):
         versions.render_readme("no markers")
 
@@ -162,28 +219,32 @@ def test_a_first_publication_writes_its_own_section_or_nothing(results: Path, mo
     bare.write_text("no markers\n", encoding="utf-8")
     monkeypatch.setattr(versions, "README", bare)
     with pytest.raises(ValueError, match="evals:headline"):
-        _publish(results, [_row("pypi-version")])
+        _publish(results, _repeats("pypi-version"))
     assert not (results / "results").exists()
     monkeypatch.undo()
     monkeypatch.setattr(versions, "RESULTS", results / "results")
-    _publish(results, [_row("pypi-version")])
+    _publish(results, _repeats("pypi-version"))
     docs = versions.render_docs(DOCS)
     assert docs.index("### 9.9.9, 2026-09-25") < docs.index("### 0.5.2")
-    assert "| fastbrowse (9.9.9) | 1/1 |" in docs
+    assert "| fastbrowse (9.9.9) | 3/3 |" in docs
     assert versions.render_docs(docs) == docs
+
+
+def _source(results: Path, rows: list[dict[str, Any]], name: str) -> Path:
+    return _write(results, rows, name)
 
 
 def test_release_sections_stay_newest_first_however_they_are_added(results: Path) -> None:
     for release in ("9.10.0", "9.9.9"):
-        source = results / f"{release}.rows"
-        source.write_text(json.dumps(_row("pypi-version", fastbrowse_version=release)) + "\n", encoding="utf-8")
-        versions.publish(release, source)
+        rows = _repeats("pypi-version", fastbrowse_version=release)
+        with _publishing(rows):
+            versions.publish(release, _source(results, rows, f"{release}.rows"))
     docs = versions.render_docs(DOCS)
     assert docs.index("### 9.10.0,") < docs.index("### 9.9.9,") < docs.index("### 0.5.2,")
 
 
 def test_a_published_table_names_tasks_changed_since(results: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _publish(results, [_row("pypi-version")])
+    _publish(results, _repeats("pypi-version"))
     lock = versions.load_lock()
     previous = lock["pypi-version"]["version"]
     monkeypatch.setattr(
@@ -339,7 +400,7 @@ def test_markdown_keeps_suite_versions_separate_and_unpriced_cost_unknown() -> N
         rival | {"suite_version": "other"},
     ]
     for text in (versions.results_table("9.9.9", rows), versions.headline("9.9.9", rows)):
-        assert "abcd1234" in text and "other" in text
+        assert versions.suite_version(t.id for t in live.SUITES["core"]) in text and "other" in text
         assert "10.0s" in text and "20.0s" in text and "15.0s" not in text
         assert "unknown" in text
     mixed = versions._arm_stats([row, row | {"dollars": None}])
@@ -371,11 +432,12 @@ def test_summary_remembers_live_versions_across_mock_only_releases(current: int)
 
 
 def test_publish_auto_uses_recorded_release(results: Path) -> None:
-    source = results / "rows.jsonl"
-    source.write_text(json.dumps(_row("pypi-version")) + "\n")
-    assert versions.publish("auto", source).name == "9.9.9.jsonl"
-    with pytest.raises(ValueError, match="numeric"):
-        versions.publish("../escape", source)
+    rows = _repeats("pypi-version")
+    with _publishing(rows):
+        source = _source(results, rows, "rows.jsonl")
+        assert versions.publish("auto", source).name == "9.9.9.jsonl"
+        with pytest.raises(ValueError, match="numeric"):
+            versions.publish("../escape", source)
 
 
 def test_status_rule_is_versioned(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -452,7 +514,7 @@ def test_navigation_publication_tolerates_only_viewport_scale_rounding(results: 
         },
     }
     if scale < 1.000001:
-        assert _publish(results, [row]).exists()
+        assert _publish(results, [row | {"repeat": index} for index in range(3)]).exists()
     else:
         with pytest.raises(ValueError, match="navigation viewport"):
             _publish(results, [row])

@@ -14,7 +14,7 @@ import tempfile
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -146,6 +146,8 @@ class _WindTask(BaseModel):
     params: dict[str, JsonValue] = {}
     predicate: dict[str, JsonValue]
     max_steps: dict[str, int] = {}
+    excluded: str | None = None
+    auth: bool | None = None
 
 
 class _WindFile(BaseModel):
@@ -170,10 +172,24 @@ def windtunnel(body: bytes, site_urls: Mapping[str, str], *, revision: str = WIN
             stream = archive.extractfile(member)
             assert stream is not None
             for row in _WindFile.model_validate(yaml.safe_load(stream)).tasks:
+                # Upstream marks a task it does not score (`excluded: api-only-data`) and keeps the mark out of
+                # every run; drawing one would hand every arm a task the benchmark never measures.
+                if row.excluded:
+                    continue
                 prompt = re.sub(r"\{params\.([^}]+)\}", lambda m, row=row: str(row.params[m[1]]), row.prompt)
                 start = urljoin(base.rstrip("/") + "/", row.start_path.lstrip("/"))
                 if urlparse(start).netloc != urlparse(base).netloc:
                     raise ValueError(f"{row.id}: start_path leaves its site")
+                metadata: dict[str, JsonValue] = {
+                    "predicate": row.predicate,
+                    "params": row.params,
+                    "max_steps": cast(JsonValue, row.max_steps),
+                }
+                # Upstream marks a task whose journey signs in. Keeping that as a bool lets the comparison
+                # driver supply the fixture credentials the task YAML already publishes, instead of stopping
+                # at a login wall it was never told to cross. The credentials themselves are not copied here.
+                if row.auth is not None:
+                    metadata["auth"] = row.auth
                 tasks.append(
                     ExternalTask(
                         source="windtunnel",
@@ -182,7 +198,7 @@ def windtunnel(body: bytes, site_urls: Mapping[str, str], *, revision: str = WIN
                         task=prompt,
                         stratum=row.tier,
                         site=site,
-                        metadata={"predicate": row.predicate, "params": row.params, "max_steps": row.max_steps},
+                        metadata=metadata,
                     )
                 )
     if not tasks:
