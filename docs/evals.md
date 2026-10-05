@@ -10,6 +10,9 @@ The [fairness audit](validation/2026-09-29-fairness.md) explains the corrected p
 diagnoses. The [earlier comparison](validation/2026-09-29-ultrafast.md) is diagnostic evidence only, not a
 source for benchmark claims.
 
+The [hosted and corpus fixture validation](validation/2026-10-05-local-e2e.md) retains three full
+fixture campaigns, their build provenance and every failure.
+
 ## Local fixtures
 
 Use `just evals-local`; see [Workflow](#workflow) for the commands.
