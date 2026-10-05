@@ -285,6 +285,10 @@ class BrowserConnection(Frozen):
     out of band (a user pressing cancel, a subscription ending) cannot do so without this."""
     remote: bool
     """True when the browser runs on another host: tabs must be foregrounded and files move as bytes."""
+    attach: bool = False
+    """True when attaching to an existing window (e.g. Electron or external Chrome) without creating a tab."""
+    target_match: str | None = None
+    """URL or title substring to match when attaching to an existing target."""
 
 
 class LocalChrome(Frozen):

@@ -81,8 +81,9 @@ Compare rows only at matching task versions. See [eval results and workflow](doc
 Needs [uv](https://docs.astral.sh/uv/); uv fetches Python itself (3.13 or newer). Runs use a
 [Browser Use Cloud](https://cloud.browser-use.com) browser (`BROWSER_USE_API_KEY`) by default: it passes bot checks
 a fresh local Chrome fails. Local Chrome is fully supported with `--local`. A browser already running anywhere,
-from a container to a hosted browser with a CDP endpoint, is driven in place with `--cdp-url ws://…`: the run
-opens one tab and leaves the browser as it was found.
+from a container to a hosted browser with a CDP endpoint, is driven in place with `--cdp-url ws://…` or
+`--cdp-port 9222`: the run opens one tab and leaves the browser as it was found. To drive a window that is
+already open, such as an Electron app, see [Open windows and Electron apps](#open-windows-and-electron-apps).
 
 ```sh
 export OPENROUTER_API_KEY=...   # for Jev and the LLM that plans and reads
@@ -120,6 +121,10 @@ the quotes behind the answer, and cost by component.
 | `--headed` | show the local Chrome window (implies `--local`) |
 | `--profile DIR` | keep the local Chrome profile in `DIR`, so a site signed into there stays signed in (implies `--local`) |
 | `--cloud-profile ID` | run on a Browser Use Cloud profile, signed in as whoever set it up |
+| `--cdp-url URL` | drive a browser already running at this `ws://` or `wss://` DevTools URL instead of starting one |
+| `--cdp-port PORT` | the same, for a browser or Electron app listening on `127.0.0.1:PORT`; the URL is read from its `/json/version` |
+| `--attach` | with `--cdp-url` or `--cdp-port`, drive a window already open instead of opening a tab, and leave it open after the run |
+| `--target-match TEXT` | attach to the first window whose title or URL contains `TEXT` (implies `--attach`) |
 | `--proxy-country CC` | browse from that country (Browser Use's codes: `uk`, `de`, ...; default `us`), so a shop shows its local delivery and prices |
 | `--authorize` | allow submit, pay, delete and send; without it the run stops at `needs_confirmation` first |
 | `--secret NAME=ENV_VAR[@ORIGIN]` | let the agent type `$ENV_VAR` on the declared origin, or the `--start` origin if omitted; models only see `NAME`. An explicit origin needs no `--start` |
@@ -167,6 +172,28 @@ uv run fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
 To change a password, supply its replacement as an origin-scoped secret named `new_password`, alongside
 the existing `password`. Refer to `new_password` in the task and use `--authorize` to allow submission.
 Without the replacement secret, the run asks for input; it never generates a password or reuses the old one.
+
+### Open windows and Electron apps
+
+An Electron app is Chromium underneath, so a run can drive it once the app exposes a DevTools port. Quit the app,
+start it again with `--remote-debugging-port` (an app that is already running ignores the flag), then attach to
+its window by title or URL. VS Code titles each window after the folder it has open:
+
+```sh
+open -a "Visual Studio Code" --args --remote-debugging-port=9222 ~/code/my-project   # elsewhere, pass the flag to the binary
+uv run fastbrowse "Open the Extensions view and report how many extensions are installed." \
+  --cdp-port 9222 --target-match my-project
+```
+
+The same works for a Chrome you started with `--remote-debugging-port`. With `--attach`, the run takes over an
+existing window instead of opening a tab of its own. Without `--start` it begins on whatever the window shows,
+and the window stays open when the run ends. `--target-match` picks the first window whose title or URL contains
+the text; `--attach` alone takes the first window, skipping DevTools. Popups the window opens join the run.
+Windows that nothing opened, as an Electron app's main process opens them, join only with `--target-match`,
+because in a browser such a window could equally be a tab you opened yourself.
+
+A DevTools port gives any program on the machine full control of the app, including its signed-in sessions.
+Close the app, or restart it without the flag, when you are done.
 
 ### Models
 
@@ -261,8 +288,24 @@ asyncio.run(main())
 
 `run_task(cdp_url=...)` drives a browser that is already running, wherever it is, instead of starting one:
 the run opens its own tab and closes the tabs it owns. It leaves the browser and pre-existing tabs open;
-cookies and other changes made by the task can persist. Pass `browser_api_key=` to start a cloud browser;
+cookies and other changes made by the task can persist. `cdp_port=` finds the same browser from its DevTools
+port on `127.0.0.1`. `attach=True` and `target_match=` drive a window already open and leave it open, as
+`--attach` and `--target-match` do. Pass `browser_api_key=` to start a cloud browser;
 with neither argument, it runs local Chrome. Passing both is an error.
+
+`connect_cdp()` hands a script of your own the attached page, without the agent. Downloads go to `downloads=`, or
+to a scratch directory removed on exit:
+
+```python
+from fastbrowse import connect_cdp
+
+
+async def main() -> None:
+    async with connect_cdp(9222, target_match="my-project") as page:
+        print(await page.observe())
+```
+
+`resolve_cdp_port(port)` returns the `ws://` URL behind a DevTools port, for a caller that passes `cdp_url=`.
 
 `RunResult.citations` is a tuple of `Citation` objects, also importable from `fastbrowse`. Each has `id`
 (the number in the answer), `text` (the Notes fact), `requirement_id` (or `None`), `url`, `quote` and

@@ -12,7 +12,7 @@ import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
 
 import httpx
@@ -39,7 +39,7 @@ from fastbrowse.models import (
     Unavailable,
 )
 from fastbrowse.page import BrowserError, NavigationTimeout, SiteUnreachable
-from fastbrowse.run import _browser, run_task
+from fastbrowse.run import _browser, connect_cdp, resolve_cdp_port, run_task
 from tests.browser.conftest import RecordingArtifactSink
 from tests.test_policy import ScriptedJev
 from tests.test_retrieval import ScriptedLLM
@@ -804,3 +804,100 @@ async def test_cancelled_cdp_reply_is_drained_without_touching_other_requests(
     assert "duplicate response" not in caplog.text
     assert "unexpected message" not in caplog.text
     waiting.cancel()
+
+
+async def test_attach_existing_tab_and_non_destructive_teardown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An attached window is driven where it is and left open on exit."""
+    transport = CdpTransport(monkeypatch)
+    transport.results["Target.getTargets"] = [
+        {
+            "targetInfos": [
+                {"targetId": "devtools", "type": "page", "url": "devtools://devtools/bundled/x.html", "title": "x"},
+                {"targetId": "target_tab_1", "type": "page", "url": "http://example.com/app", "title": "My App"},
+            ]
+        }
+    ]
+    conn = BrowserConnection(cdp_url="ws://localhost:9222", remote=False, attach=True)
+    async with BrowserSession(conn, RecordingArtifactSink()) as session:
+        assert session.active_target_id == "target_tab_1"
+        assert [tab.id for tab in session.tabs()] == ["target_tab_1"]
+        assert "Target.createTarget" not in transport.calls
+        # Discovery replays every open window as created, so it may start only once they are known.
+        assert transport.calls.index("Target.getTargets") < transport.calls.index("Target.setDiscoverTargets")
+        # The window's document loaded before the session, so its scripts run in it now as well as on navigation.
+        assert "Runtime.evaluate" in transport.calls
+        assert not session._owned
+
+    assert "Target.closeTarget" not in transport.calls
+
+
+@pytest.mark.parametrize(("target_match", "adopted"), [(None, ("popup",)), ("App", ("popup", "window"))])
+async def test_attach_adopts_its_popups_and_windows_without_opener_only_when_matched(
+    monkeypatch: pytest.MonkeyPatch, target_match: str | None, adopted: tuple[str, ...]
+) -> None:
+    """A window with no opener is an Electron app's, or a tab its user opened by hand in a browser."""
+    transport = CdpTransport(monkeypatch)
+    transport.results["Target.getTargets"] = [
+        {
+            "targetInfos": [
+                {"targetId": "app", "type": "page", "url": "app://main", "title": "App"},
+                {"targetId": "other", "type": "page", "url": "app://other", "title": "Other"},
+            ]
+        }
+    ]
+    transport.results["Target.getTargetInfo"] = [
+        {"targetInfo": {"url": "app://popup", "title": "Popup"}},
+        {"targetInfo": {"url": "app://window", "title": "Window"}},
+    ]
+    conn = BrowserConnection(cdp_url="ws://localhost:9222", remote=False, attach=True, target_match=target_match)
+    async with BrowserSession(conn, RecordingArtifactSink()) as session:
+        # Discovery replays "other", which was open before the session and has no opener either.
+        for target_id, opener in (("other", None), ("popup", "app"), ("window", None), ("elsewhere", "unrelated")):
+            info: dict[str, Any] = {"targetId": target_id, "type": "page", "url": "", "title": ""}
+            if opener is not None:
+                info["openerId"] = opener
+            session._on_target_created(cast(Any, {"targetInfo": info}), None)
+        assert session.popups() == adopted
+        assert all(session._popups[target_id][0] == "app" for target_id in adopted)
+        await asyncio.gather(*session._background)
+        assert {tab.id for tab in session.tabs()} == {"app", *adopted}
+        assert not session._owned
+    assert "Target.closeTarget" not in transport.calls
+
+
+async def test_attach_target_matching_by_title_or_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = CdpTransport(monkeypatch)
+    pages = [
+        {"targetId": "tab_1", "type": "page", "url": "http://example.com/blank", "title": "Blank Page"},
+        {"targetId": "tab_2", "type": "page", "url": "http://example.com/editor", "title": "Main Editor"},
+    ]
+    transport.results["Target.getTargets"] = [{"targetInfos": pages}, {"targetInfos": pages}]
+    conn = BrowserConnection(cdp_url="ws://localhost:9222", remote=False, attach=True, target_match="Editor")
+    async with BrowserSession(conn, RecordingArtifactSink()) as session:
+        assert session.active_target_id == "tab_2"
+
+    missing = conn.model_copy(update={"target_match": "nonexistent_window"})
+    with pytest.raises(browser_session.BrowserError, match="no page matching 'nonexistent_window'"):
+        async with BrowserSession(missing, RecordingArtifactSink()):
+            pass
+
+
+async def test_connect_cdp_reads_the_port_and_attaches(monkeypatch: pytest.MonkeyPatch) -> None:
+    def version(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://127.0.0.1:9333/json/version"
+        return httpx.Response(200, json={"webSocketDebuggerUrl": "ws://127.0.0.1:9333/devtools/browser/abc"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(version)) as http:
+        assert await resolve_cdp_port(9333, http=http) == "ws://127.0.0.1:9333/devtools/browser/abc"
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={}))) as http:
+        with pytest.raises(browser_session.BrowserError, match="named no webSocketDebuggerUrl"):
+            await resolve_cdp_port(9333, http=http)
+
+    transport = CdpTransport(monkeypatch)
+    transport.results["Target.getTargets"] = [
+        {"targetInfos": [{"targetId": "app_win", "type": "page", "url": "app://main", "title": "App Window"}]}
+    ]
+    async with connect_cdp(cdp_url="ws://127.0.0.1:9333/devtools/browser/abc") as page:
+        assert [tab.id for tab in page._session.tabs()] == ["app_win"]
+    assert "Target.closeTarget" not in transport.calls

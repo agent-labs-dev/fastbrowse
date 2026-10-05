@@ -25,6 +25,7 @@ from fastbrowse.config import Config
 from fastbrowse.jev import JevClient
 from fastbrowse.llm import LLMClient
 from fastbrowse.models import (
+    ArtifactSink,
     Attachment,
     Authorization,
     BrowserConnection,
@@ -45,6 +46,61 @@ from fastbrowse.models import (
 from fastbrowse.page import BrowserError
 
 
+async def resolve_cdp_port(port: int, host: str = "127.0.0.1", *, http: httpx.AsyncClient | None = None) -> str:
+    """The websocket URL of the browser serving DevTools on `port`, read from its `/json/version` endpoint."""
+    endpoint = f"http://{host}:{port}/json/version"
+    try:
+        async with httpx.AsyncClient(timeout=5) if http is None else _borrowed(http) as client:
+            response = await client.get(endpoint)
+            response.raise_for_status()
+            version = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise BrowserError(f"no DevTools endpoint at {endpoint} ({type(exc).__name__})") from None
+    ws_url = version.get("webSocketDebuggerUrl") if isinstance(version, dict) else None
+    if not isinstance(ws_url, str) or not ws_url:
+        raise BrowserError(f"{endpoint} named no webSocketDebuggerUrl")
+    return ws_url
+
+
+@asynccontextmanager
+async def connect_cdp(
+    port: int | None = None,
+    *,
+    cdp_url: str | None = None,
+    host: str = "127.0.0.1",
+    target_match: str | None = None,
+    attach: bool = True,
+    config: Config | None = None,
+    artifact_sink: ArtifactSink | None = None,
+    downloads: Path | None = None,
+) -> AsyncGenerator[CdpPage]:
+    """A page on a browser or Electron app that is already running, for driving it without the agent.
+
+    Pass `port` to look the websocket URL up from `http://<host>:<port>/json/version`, or `cdp_url` directly.
+    By default the page is an existing window (the first whose title or URL contains `target_match`, if given),
+    and it is left open on exit. Downloads go to `artifact_sink`, else to `downloads`, else to a scratch
+    directory removed on exit.
+    """
+    if port is not None and cdp_url is not None:
+        raise BrowserError("port and cdp_url both name a browser to attach to; pass one")
+    if cdp_url is None:
+        if port is None:
+            raise BrowserError("connect_cdp needs a port or a cdp_url")
+        cdp_url = await resolve_cdp_port(port, host)
+    connection = BrowserConnection(
+        cdp_url=cdp_url,
+        live_url=None,
+        remote=True,
+        attach=attach or target_match is not None,
+        target_match=target_match,
+    )
+    config = config or Config()
+    with TemporaryDirectory() as scratch:
+        sink = artifact_sink or DirectorySink(downloads or Path(scratch))
+        async with BrowserSession(connection, sink, refuse_cookie_banners=config.refuse_cookie_banners) as session:
+            yield CdpPage(session, config)
+
+
 @asynccontextmanager
 async def _browser(
     key: str | None,
@@ -54,20 +110,36 @@ async def _browser(
     *,
     profile: str | None = None,
     cdp_url: str | None = None,
+    cdp_port: int | None = None,
+    attach: bool = False,
+    target_match: str | None = None,
     proxy_country: str | None = "us",
     viewport: tuple[int, int] | None = None,
     allow_resizing: bool = False,
 ) -> AsyncGenerator[BrowserConnection]:
     """The browser a run drives: one it is handed, a cloud browser, or local Chrome."""
-    if cdp_url is not None:
+    if cdp_url is not None and cdp_port is not None:
+        raise BrowserError("cdp_url and cdp_port both name a browser to attach to; pass one")
+    if cdp_url is not None or cdp_port is not None:
         if key is not None:
-            raise BrowserError("cdp_url is a browser to attach to; a cloud key would start a second one")
+            raise BrowserError("cdp_url/cdp_port is a browser to attach to; a cloud key would start a second one")
         if profile is not None:
             raise BrowserError("cloud_profile belongs to a browser fastbrowse starts, not to one it is handed")
-        # Nothing to start and nothing to stop: the caller's browser outlives the run. The session opens its
-        # own tab and closes only that, so a browser handed over is left exactly as it was found.
-        yield BrowserConnection(cdp_url=cdp_url, live_url=None, remote=True)
+        if cdp_url is None:
+            assert cdp_port is not None
+            cdp_url = await resolve_cdp_port(cdp_port, http=http)
+        # Nothing to start and nothing to stop: the caller's browser outlives the run. The session either opens
+        # its own tab and closes only that, or, attaching, drives a window already open and leaves it open.
+        yield BrowserConnection(
+            cdp_url=cdp_url,
+            live_url=None,
+            remote=True,
+            attach=attach or (target_match is not None),
+            target_match=target_match,
+        )
         return
+    if attach or target_match is not None:
+        raise BrowserError("attach and target_match require cdp_url or cdp_port")
     if key is None:
         if profile is not None:
             raise BrowserError("cloud_profile names a Browser Use Cloud profile, which needs a cloud browser")
@@ -93,6 +165,9 @@ async def run_task(
     chrome: LocalChrome | None = None,
     cloud_profile: str | None = None,
     cdp_url: str | None = None,
+    cdp_port: int | None = None,
+    attach: bool = False,
+    target_match: str | None = None,
     proxy_country: str | None = "us",
     viewport: tuple[int, int] | None = None,
     cloud_allow_resizing: bool = False,
@@ -120,7 +195,13 @@ async def run_task(
     The browser is one of three. `cdp_url` attaches to a browser that is already running, wherever it is
     (a container, a VM, a machine the caller owns), and the run neither starts nor stops it: it opens a tab
     and closes the tabs it owns. Cookies and task changes can persist. `cdp_url` and `browser_api_key` cannot
-    be combined. Otherwise `browser_api_key` runs on a Browser Use Cloud browser, and with neither,
+    be combined. `cdp_port` is the same as `cdp_url`, for a browser or Electron app started with
+    `--remote-debugging-port`, its URL read from `http://127.0.0.1:<port>/json/version`. With `attach` (implied by
+    `target_match`) the run drives a window already open instead of opening a tab: the first page whose title or
+    URL contains `target_match`, or else the first page. It leaves that window open, and with no `start` it begins
+    on whatever the window shows. New windows that no page opened, as an Electron app's main process opens them,
+    join the run only with `target_match`; without it they could be tabs a person opened in the same browser.
+    Otherwise `browser_api_key` runs on a Browser Use Cloud browser, and with neither,
     local Chrome as `chrome` describes (default: from `Settings`, headless with a throwaway profile).
     `cloud_profile` names a profile on that cloud account, so a site someone signed into once in that
     profile is still signed in here; it is the remote counterpart of `LocalChrome.profile`. `proxy_country`
@@ -159,6 +240,9 @@ async def run_task(
                     browser_cost,
                     profile=cloud_profile,
                     cdp_url=cdp_url,
+                    cdp_port=cdp_port,
+                    attach=attach,
+                    target_match=target_match,
                     proxy_country=proxy_country,
                     viewport=viewport,
                     allow_resizing=cloud_allow_resizing,
@@ -177,10 +261,9 @@ async def run_task(
                             result = await agent.run(
                                 task,
                                 start=start,
-                                # With no page named, the first address is worked out from the task. That
-                                # holds for an attached browser too: the run opens its own tab rather than
-                                # taking over one already open, so there is no page it is "already on".
-                                choose_start=start is None,
+                                # With no page named, the first address is worked out from the task,
+                                # unless attaching to an existing window where the page is preserved.
+                                choose_start=start is None and not connection.attach,
                                 output_schema=output_schema,
                                 inputs=inputs,
                                 attachments=attachments,
