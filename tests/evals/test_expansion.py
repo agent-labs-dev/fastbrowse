@@ -475,7 +475,11 @@ async def test_local_rows_keep_unknown_cost_and_raw_time(monkeypatch: pytest.Mon
         async def __aexit__(self, *_: object) -> None:
             await session.__aexit__()
 
-    monkeypatch.setattr(runner, "BrowserSession", lambda *_: Session())
+    def browser_session(*_: object, refuse_cookie_banners: bool) -> Session:
+        assert not refuse_cookie_banners
+        return Session()
+
+    monkeypatch.setattr(runner, "BrowserSession", browser_session)
     monkeypatch.setattr(runner, "CdpPage", lambda *_: None)
     monkeypatch.setattr(runner, "Agent", lambda *_, **__: SimpleNamespace(run=AsyncMock(return_value=result)))
     ticks = iter([10.0, 15.0])
