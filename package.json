@@ -5,6 +5,6 @@
     "check:browser": "biome ci src/fastbrowse/browser/capture.js src/fastbrowse/browser/snapshot.js"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.14"
+    "@biomejs/biome": "2.5.15"
   }
 }
