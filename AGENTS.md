@@ -125,6 +125,20 @@ a tracked text file (write a hyphen, a comma, or two sentences); Vale owns wordi
 comments and docstrings, and rejects weasel words, cliches and marketing verbs. This applies to commit
 messages and PR descriptions in spirit, and to everything in the repository by check.
 
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in GitHub Issues on `agent-labs-dev/fastbrowse`, worked through `gh`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default roles, each label named after its role: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one glossary and one ADR directory at the repo root, created on first use. See `docs/agents/domain.md`.
+
 ## Releasing
 
 Versions are patch-by-patch unless the maintainer says otherwise, and every one needs a changelog entry:
