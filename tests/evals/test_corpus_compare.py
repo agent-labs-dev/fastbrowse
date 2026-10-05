@@ -481,20 +481,117 @@ def test_the_headline_refuses_without_fair_repeats_and_pairs_only_equal_denomina
     assert one_sided.headline.startswith("INSUFFICIENT PAIRED DATA")
     assert one_sided.paired_tasks == ()
 
-    # Both arms graded, but one repeat short of the three-repeat floor.
+    # Both arms graded, but one repeat short of the three-repeat floor: the task is not paired at all.
     two = report(pairs(repeats=2, arms_graded={"fastbrowse": (0, 1), "browser-use": (0, 1)}))
     assert two.headline.startswith("INSUFFICIENT PAIRED DATA")
-    assert two.paired_tasks == ((task.digest, 0), (task.digest, 1))
+    assert two.paired_tasks == ()
+    assert two.paired["fastbrowse"].graded == two.paired["browser-use"].graded == 0
+    # Every raw attempt survives the exclusion, so the under-repeated task is still in the report.
+    assert len(two.attempts) == 4
 
-    # The second arm's repeat 2 is ungraded, so that repeat drops from both arms and the denominators stay equal.
+    # The second arm's repeat 2 is ungraded, so only repeats 0 and 1 pair: again below the floor, so excluded.
     missing = report(pairs(repeats=3, arms_graded={"fastbrowse": (0, 1, 2), "browser-use": (0, 1)}))
-    assert missing.paired["fastbrowse"].graded == missing.paired["browser-use"].graded == 2
+    assert missing.paired_tasks == ()
+    assert missing.paired["fastbrowse"].graded == missing.paired["browser-use"].graded == 0
+    assert len(missing.attempts) == 5
 
     # Every requested arm graded at every repeat: a fair headline over three repeats.
     full = report(pairs(repeats=3, arms_graded={"fastbrowse": (0, 1, 2), "browser-use": (0, 1, 2)}))
     assert full.headline.startswith("paired on 3 task-repeats across 1 tasks")
     assert full.paired["fastbrowse"].graded == full.paired["browser-use"].graded == 3
     assert full.paired["fastbrowse"].correct == 3 and full.paired["browser-use"].correct == 3
+
+
+def _report(
+    corpus: Corpus,
+    arms: tuple[str, ...],
+    attempts: list[cc.ArmAttempt],
+    *,
+    repeats: int,
+    specs: dict[str, ArmSpec],
+    truncated: bool = False,
+    interrupted: bool = False,
+) -> cc.ComparisonReport:
+    return cc.build_report(
+        corpus,
+        arms=arms,
+        attempts=attempts,
+        skipped=[],
+        truncated=truncated,
+        interrupted=interrupted,
+        repeats=repeats,
+        sites={},
+        remote=False,
+        setup_seconds=None,
+        preflight_seconds=0.0,
+        prepare_seconds={},
+        grader={},
+        reset={},
+        specs=specs,
+    )
+
+
+def test_scattered_partial_repeats_do_not_add_up_to_a_headline(tmp_path: Path) -> None:
+    """Two tasks with two paired repeats each at different indices must not share a three-repeat headline."""
+    log = tmp_path / "reset.log"
+    reset = _reset(tmp_path, log)
+    corpus = _corpus([_answer_task("a-1"), _state_task(probe=False, task_id="s-1")])
+    first, second = corpus.tasks
+    arms = ("fastbrowse", "browser-use")
+    specs = {arm: _spec(_arm_runner(arm, log)) for arm in arms}
+    # Task one pairs at repeats 1 and 2; task two pairs at repeats 0 and 1. The union is {0, 1, 2} but neither
+    # task has three graded repeats of its own, so the per-task floor must refuse both.
+    attempts = [
+        _arm_attempt(reset, ref, arm=arm, repeat=repeat)
+        for ref, repeats in ((first, (1, 2)), (second, (0, 1)))
+        for repeat in repeats
+        for arm in arms
+    ]
+    report = _report(corpus, arms, attempts, repeats=3, specs=specs)
+    assert report.paired_tasks == ()
+    assert report.headline.startswith("INSUFFICIENT PAIRED DATA")
+    assert report.paired["fastbrowse"].graded == report.paired["browser-use"].graded == 0
+    assert len(report.attempts) == 8
+
+
+def test_an_inadequate_task_is_excluded_from_totals_but_kept_in_diagnostics(tmp_path: Path) -> None:
+    """One adequate task headlines while a two-repeat task stays out of every total and every raw row stays."""
+    log = tmp_path / "reset.log"
+    reset = _reset(tmp_path, log)
+    corpus = _corpus([_answer_task("a-1"), _state_task(probe=False, task_id="s-1")])
+    adequate, inadequate = corpus.tasks
+    arms = ("fastbrowse", "browser-use")
+    specs = {arm: _spec(_arm_runner(arm, log)) for arm in arms}
+    attempts = [
+        _arm_attempt(reset, ref, arm=arm, repeat=repeat)
+        for ref, repeats in ((adequate, (0, 1, 2)), (inadequate, (0, 1)))
+        for repeat in repeats
+        for arm in arms
+    ]
+    report = _report(corpus, arms, attempts, repeats=3, specs=specs)
+    assert {digest for digest, _ in report.paired_tasks} == {adequate.digest}
+    assert len(report.paired_tasks) == 3
+    assert report.paired["fastbrowse"].graded == report.paired["browser-use"].graded == 3
+    assert report.headline.startswith("paired on 3 task-repeats across 1 tasks")
+    # All ten physical rows are retained, including the four the inadequate task produced.
+    assert len(report.attempts) == 10
+    assert inadequate.digest in {record.task_digest for record in report.attempts}
+
+
+@pytest.mark.parametrize("stop", ["truncated", "interrupted"])
+def test_a_stopped_draw_cannot_headline_its_completed_subset(tmp_path: Path, stop: str) -> None:
+    log = tmp_path / "reset.log"
+    reset = _reset(tmp_path, log)
+    corpus = _corpus([_answer_task()])
+    arms = ("fastbrowse", "browser-use")
+    specs = {arm: _spec(_arm_runner(arm, log)) for arm in arms}
+    attempts = [_arm_attempt(reset, corpus.tasks[0], arm=arm, repeat=repeat) for repeat in range(3) for arm in arms]
+    report = _report(
+        corpus, arms, attempts, repeats=3, specs=specs, truncated=stop == "truncated", interrupted=stop == "interrupted"
+    )
+    assert len(report.paired_tasks) == 3
+    assert len(report.attempts) == 6
+    assert report.headline.startswith("INSUFFICIENT PAIRED DATA")
 
 
 def _record(reset: cc.ResetSpec) -> cc.ResetRecord:
@@ -920,6 +1017,55 @@ async def test_main_dedupes_repeated_arms_so_an_arm_runs_once(monkeypatch: pytes
         ]
     )
     assert calls["n"] == 1
+
+
+@pytest.mark.parametrize(("repeats", "cap", "expected"), [(2, None, 1), (3, 5, 1), (3, None, 0)])
+async def test_main_requires_an_unstopped_draw_with_three_paired_repeats(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, repeats: int, cap: int | None, expected: int
+) -> None:
+    sites = _write_sites(tmp_path, {"tailwind-nextjs-blog": "http://127.0.0.1:34871"})
+
+    async def runner(task: object, http: object, downloads: Path, **kwargs: object) -> tuple[Outcome, ArmReport]:
+        return Outcome("hello world", None, None), ArmReport(status="complete", seconds=0.1, dollars=0.0)
+
+    async def fake_load(source: object, http: object, **kwargs: object) -> list[ExternalTask]:
+        return [_answer_task("a-1"), _answer_task("a-2").model_copy(update={"task": "What does the heading say?"})]
+
+    async def fake_preflight(corpus: Corpus, http: object) -> list[Preflight]:
+        return _reachable(corpus)
+
+    monkeypatch.setattr(cc, "ARMS", {"fastbrowse": _spec(runner)})
+    monkeypatch.setattr(cc, "load_tasks", fake_load)
+    monkeypatch.setattr(cc, "preflight", fake_preflight)
+    monkeypatch.setattr(cc.httpx, "AsyncClient", lambda **kwargs: _FakeClient())
+    reset_args, _ = _reset_args(tmp_path)
+    out = tmp_path / "run"
+    code = await cc.main(
+        [
+            "windtunnel",
+            "--site-urls",
+            str(sites),
+            "--arms",
+            "fastbrowse",
+            "--repeat",
+            str(repeats),
+            "--per-stratum",
+            "2",
+            "--out",
+            str(out),
+            "--execute",
+            "--seed",
+            "7",
+            *reset_args,
+            *(["--max-attempts", str(cap)] if cap is not None else []),
+        ]
+    )
+    assert code == expected
+    report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+    assert report["truncated"] is (cap is not None)
+    assert len(report["paired_tasks"]) == (0 if repeats < 3 else 3 if cap is not None else 6)
+    assert len(report["attempts"]) == (cap if cap is not None else repeats * 2)
+    assert report["headline"].startswith("paired on" if expected == 0 else "INSUFFICIENT PAIRED DATA")
 
 
 def test_artifacts_are_exclusive(tmp_path: Path) -> None:

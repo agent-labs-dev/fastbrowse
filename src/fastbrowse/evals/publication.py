@@ -609,7 +609,7 @@ def _moves(
                 REGRESS,
                 "speed",
                 f"{where}: median {candidate_seconds:.1f}s against {release} {base_seconds:.1f}s; "
-                f"over {int((REGRESSION_FACTOR - 1) * 100)}% and more than {REGRESSION_SPEED_FLOOR_SECONDS:.0f}s",
+                f"over {round((REGRESSION_FACTOR - 1) * 100)}% and more than {REGRESSION_SPEED_FLOOR_SECONDS:.0f}s",
             )
         )
     base_prices = _prices(measured_base)
@@ -623,7 +623,7 @@ def _moves(
                     REGRESS,
                     "cost",
                     f"{where}: median ${candidate_cost:.4f} against {release} ${base_cost:.4f}; "
-                    f"over {int((REGRESSION_FACTOR - 1) * 100)}% and more than ${REGRESSION_COST_FLOOR_DOLLARS}",
+                    f"over {round((REGRESSION_FACTOR - 1) * 100)}% and more than ${REGRESSION_COST_FLOOR_DOLLARS}",
                 )
             )
     return findings

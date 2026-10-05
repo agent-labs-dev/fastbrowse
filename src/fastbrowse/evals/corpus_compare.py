@@ -787,10 +787,13 @@ def paired_tasks(
     """The `(task digest, repeat)` units every requested arm graded, so no arm is compared on a different denominator.
 
     A task where any requested arm is ineligible, ungraded or missing at a repeat is left out entirely: an arm-to-arm
-    figure over different task sets is not a comparison."""
+    figure over different task sets is not a comparison. Scattered repeats across tasks cannot supply a task's
+    three-repeat floor; excluded attempts remain in the report."""
     shared: list[tuple[str, int]] = []
     for ref in corpus.tasks:
-        for repeat in range(repeats):
+        graded_repeats = [
+            repeat
+            for repeat in range(repeats)
             if all(
                 any(
                     item.attempt.graded
@@ -800,8 +803,10 @@ def paired_tasks(
                     for item in attempts
                 )
                 for arm in arms
-            ):
-                shared.append((ref.digest, repeat))
+            )
+        ]
+        if len(graded_repeats) >= MIN_HEADLINE_REPEATS:
+            shared.extend((ref.digest, repeat) for repeat in graded_repeats)
     return tuple(shared)
 
 
@@ -823,12 +828,11 @@ def paired_totals(
 
 
 def headline_for(arms: Sequence[str], shared: Sequence[tuple[str, int]], paired: dict[str, PairedArm]) -> str:
-    """A comparison sentence only over adequate paired data, or an explicit refusal to state one."""
-    repeats = {repeat for _, repeat in shared}
-    if len(repeats) < MIN_HEADLINE_REPEATS:
+    """A comparison sentence over the per-task adequate pairs, or an explicit refusal to state one."""
+    if not shared:
         return (
-            "INSUFFICIENT PAIRED DATA: fewer than "
-            f"{MIN_HEADLINE_REPEATS} repeated passes have a graded attempt from every requested arm, so no "
+            "INSUFFICIENT PAIRED DATA: no task has at least "
+            f"{MIN_HEADLINE_REPEATS} repeated passes graded by every requested arm, so no "
             "arm-to-arm comparison is reported."
         )
     tasks = len({digest for digest, _ in shared})
@@ -914,7 +918,11 @@ def build_report(
         paired=paired,
         truncated=truncated,
         interrupted=interrupted,
-        headline=headline_for(arms, shared, paired),
+        headline=(
+            "INSUFFICIENT PAIRED DATA: the draw stopped before completion, so no arm-to-arm comparison is reported."
+            if truncated or interrupted
+            else headline_for(arms, shared, paired)
+        ),
         note=note,
     )
 
@@ -1213,7 +1221,7 @@ async def main(argv: list[str]) -> int:
                 print(f"skipped {len(skipped_rows)} task-arm pairs the arm cannot be judged on", flush=True)
             print(f"HEADLINE {report.headline}", flush=True)
             print(report.note, flush=True)
-    return 0 if not interrupted and _run_cleanly(attempts) else 1
+    return 0 if not interrupted and not truncated and _run_cleanly(attempts) and bool(report.paired_tasks) else 1
 
 
 if __name__ == "__main__":

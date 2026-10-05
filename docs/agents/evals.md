@@ -94,3 +94,7 @@ claim. A reset or grader error remains ungraded, and every physical attempt, ret
 the ledger. Report only task-repeat pairs that all named arms can grade, with at least three repeats per task;
 never choose the best repeat or compare totals with different task sets. Keep the external report separate
 from the canonical live-suite feed and disclose endpoint adapters and excluded tasks with it.
+
+A stopped draw cannot supply a comparison headline. Truncated runs, interrupted runs and runs without a task
+that has three paired repeats exit non-zero. One- and two-repeat runs retain diagnostic rows but cannot pass
+the comparison gate.
