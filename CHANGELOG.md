@@ -30,6 +30,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   fixtures use named credentials scoped to their site.
 - External comparison figures require three paired repeats for each included task. Scattered partial repeats
   cannot combine into a score, and stopped draws retain diagnostics without a comparison headline.
+- Structured extraction reads scalar values from every page the run quoted, not only the one it ended on. A
+  sorted listing's later page holds the pricier products, so a price quoted on an earlier page had no candidate
+  and the data came back empty while the answer was right. A quote the final page corrected is not offered as a
+  current value, and a candidate pool wider than Jev's option ceiling is grouped rather than dropped.
 
 ## [0.5.18] - 2026-10-05
 
