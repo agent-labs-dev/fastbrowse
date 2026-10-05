@@ -40,6 +40,9 @@ comparison needs that job green and, for a head-to-head figure, the comparison r
 checks refuse a row that is not from a clean committed build at the release, a current task version and a
 current suite version, that has no attempt ledger reconciling every physical attempt and retry, that claims a
 number where cost is unknown, that repeats one `(arm, task, repeat)` key, or whose dataset pin does not match.
+An interrupted live run retains each in-flight attempt as an unselected row before closing its ledger. Its
+cost stays unknown unless the arm already returned its report; queued slots and truth-only preflight do not
+claim a paid attempt. Interrupted comparisons cannot supply a published figure.
 The regression check compares fastbrowse against fastbrowse only, per suite, task and task version, and only
 against the latest published release that ran them at the same protocol and model route, so a comparison never
 crosses arms, task versions, protocols or routes silently. Every live task needs three distinct measured

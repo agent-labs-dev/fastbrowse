@@ -23,6 +23,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Published eval comparisons require a clean build, complete task coverage, at least three measured repeats
   and a ledger retaining every attempt and its spend. CI refuses missing evidence and matched correctness,
   latency or cost regressions. A release needs successful fixture evals and measurements from the same code.
+- Interrupted live comparisons retain in-flight attempts and wait for active browsers to stop before closing
+  the ledger. Spend that cannot be recovered stays unknown instead of disappearing from the report.
 - External corpus comparisons reset each site before every attempt and report completion separately from
   independent correctness. WindTunnel tasks marked excluded by upstream are left out, and authenticated
   fixtures use named credentials scoped to their site.

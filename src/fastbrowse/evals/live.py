@@ -1133,6 +1133,25 @@ async def main(argv: list[str]) -> int:
             watching = asyncio.create_task(watch.run())
 
             async def one(arm: str, task: LiveTask, repeat: int) -> EvalRow:
+                def stamped(row: EvalRow) -> EvalRow:
+                    return row.model_copy(
+                        update={
+                            "concurrency": args.concurrency,
+                            "retries": retries,
+                            "repeat": repeat,
+                            "suite": suite_of[task.id],
+                            "suite_version": suite_versions[suite_of[task.id]],
+                            "task_version": task_version(task.id, lock),
+                            "run": run,
+                        }
+                    )
+
+                def keep(row: EvalRow, *, selected: bool, wait: int) -> None:
+                    attempt = row.model_dump(mode="json", fallback=str)
+                    attempt.update(selected=selected, retry_wait_seconds=wait)
+                    attempts.write(json.dumps(attempt) + "\n")
+                    attempts.flush()
+
                 # An outage is waited out and the row run again; bounded, so a dead provider cannot hold a run forever.
                 for retries in itertools.count():
                     # The answer key is read once the row holds its slot: read while it queued, a live key (the
@@ -1149,32 +1168,47 @@ async def main(argv: list[str]) -> int:
                             row = _crashed(arm, task, failure, at=time.time(), seconds=0.0, status=None, record=None)
                         else:
                             record = None if args.record is None else video_path(args.record, arm, task)
-                            row = await run_arm(
-                                arm, task, truth, http, Path(downloads), bitwarden=args.bitwarden, record=record
-                            )
+                            began, began_at = time.monotonic(), time.time()
+                            try:
+                                row = await run_arm(
+                                    arm, task, truth, http, Path(downloads), bitwarden=args.bitwarden, record=record
+                                )
+                            except (asyncio.CancelledError, KeyboardInterrupt) as exc:
+                                # An interrupted attempt must not vanish from the ledger: its row is durable before
+                                # the cancellation propagates, with unknown spend rather than a false zero. A slot
+                                # still queued, or a truth-only preflight, wrote nothing because nothing ran.
+                                keep(
+                                    stamped(
+                                        _crashed(
+                                            arm,
+                                            task,
+                                            f"interrupted: {type(exc).__name__}",
+                                            at=began_at,
+                                            seconds=time.monotonic() - began,
+                                            status=None,
+                                            record=record,
+                                        )
+                                    ),
+                                    selected=False,
+                                    wait=0,
+                                )
+                                raise
                     if not truth_failed:
-                        row = await _site_checked(row, task, http)
-                        if stalled := await watch.stalled(task, row.at, time.time()):
-                            row = row.model_copy(update={"site_probe": stalled})
-                    row = row.model_copy(
-                        update={
-                            "concurrency": args.concurrency,
-                            "retries": retries,
-                            "repeat": repeat,
-                            "suite": suite_of[task.id],
-                            "suite_version": suite_versions[suite_of[task.id]],
-                            "task_version": task_version(task.id, lock),
-                            "run": run,
-                        }
-                    )
+                        try:
+                            row = await _site_checked(row, task, http)
+                            if stalled := await watch.stalled(task, row.at, time.time()):
+                                row = row.model_copy(update={"site_probe": stalled})
+                        except (asyncio.CancelledError, KeyboardInterrupt):
+                            # The run finished, so its known price and report survive the interruption instead of
+                            # being replaced with an interrupted row's unknown spend.
+                            keep(stamped(row), selected=False, wait=0)
+                            raise
+                    row = stamped(row)
                     limit = TRANSPORT_RETRIES if row.failure_class == BROWSER_TRANSPORT else OUTAGE_RETRIES
                     selected = row.normalized_status != Ending.UNAVAILABLE or retries >= limit
                     wait = 0 if selected else min(60 * 2**retries, 600)
                     # Retrying used to erase the outage's trace and spend, hiding the cost of obtaining a score.
-                    attempt = row.model_dump(mode="json", fallback=str)
-                    attempt.update(selected=selected, retry_wait_seconds=wait)
-                    attempts.write(json.dumps(attempt) + "\n")
-                    attempts.flush()
+                    keep(row, selected=selected, wait=wait)
                     if selected:
                         break
                     print(f"RETRY {arm:13} {task.id:20} in {wait}s: {_cause(row)}", flush=True)
@@ -1197,8 +1231,16 @@ async def main(argv: list[str]) -> int:
                 for arm in args.arms[repeat % len(args.arms) :] + args.arms[: repeat % len(args.arms)]
                 if eligible(arm, task)
             ]
+            pending = [asyncio.create_task(one(*plan)) for plan in planned]
             try:
-                rows = list(await asyncio.gather(*(one(*plan) for plan in planned)))
+                rows = list(await asyncio.gather(*pending))
+            except BaseException:
+                # A failed row or an interrupted run must not close the ledger under the attempts still spending:
+                # cancel the siblings, keep the in-flight rows their own handling wrote, then raise what stopped it.
+                for running in pending:
+                    running.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                raise
             finally:
                 watching.cancel()
     summarize(rows, args.arms)

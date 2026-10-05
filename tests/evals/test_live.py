@@ -971,6 +971,217 @@ async def test_outage_retries_retain_attempts_and_distinct_recordings(
     sleep.assert_awaited_once_with(60)
 
 
+def _live_fakes(monkeypatch: pytest.MonkeyPatch, run: Any, *, truth: Any = None) -> None:
+    """The seams `main` calls around a run: no provider, no browser, no answer key, no site probe."""
+    monkeypatch.setattr(live, "run_arm", run)
+    monkeypatch.setattr(live, "prepare_ultrafast", AsyncMock())
+    monkeypatch.setattr(live, "_truth", truth if truth is not None else AsyncMock(return_value=None))
+    monkeypatch.setattr(live, "_site_checked", AsyncMock(side_effect=lambda row, *_: row))
+    monkeypatch.setattr(live.SiteWatch, "run", AsyncMock())
+    monkeypatch.setattr(live.SiteWatch, "stalled", AsyncMock(return_value=None))
+
+
+def _ledger(out: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in out.with_suffix(".attempts.jsonl").read_text().splitlines()]
+
+
+async def test_a_cancelled_in_flight_attempt_is_persisted_with_its_cost_unknown(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A cancelled run already paid for the attempt: the ledger keeps how long it ran and that its cost is unknown,
+    so a suite stopped mid-flight cannot read as a cheap one that never spent."""
+    started = asyncio.Event()
+    wall_time = [1000.0]
+    monkeypatch.setattr(live.time, "time", lambda: wall_time[0])
+
+    async def run(arm: str, task: LiveTask, *_: Any, record: Path | None, **__: Any) -> None:
+        await asyncio.sleep(0.2)
+        wall_time[0] = 1020.0
+        started.set()
+        await asyncio.Event().wait()
+
+    _live_fakes(monkeypatch, run)
+    out = tmp_path / "run.jsonl"
+    runner = asyncio.create_task(live.main(["--only", "wiki-open", "--arms", "jev-ultrafast", "--out", str(out)]))
+    await started.wait()
+    runner.cancel()
+    await asyncio.gather(runner, return_exceptions=True)
+    [attempt] = _ledger(out)
+    assert attempt["task"] == "wiki-open"
+    assert attempt["dollars"] is None
+    assert attempt["seconds"] > 0
+    assert attempt["at"] == 1000.0
+    assert attempt["selected"] is False
+    assert attempt["repeat"] == 0
+    assert attempt["retries"] == 0
+    assert attempt["run"]["run_id"]
+
+
+async def test_cancelling_the_site_probe_keeps_the_finished_report_price(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    probing = asyncio.Event()
+    report = live.EvalRow(
+        arm="jev-ultrafast",
+        task="wiki-open",
+        category="navigate",
+        at=time.time(),
+        seconds=10.0,
+        dollars=0.002,
+        status="done",
+        normalized_status=Ending.DONE,
+        correct=True,
+        passed=True,
+        failure=None,
+    )
+
+    async def probe(row: live.EvalRow, *_: Any) -> None:
+        probing.set()
+        await asyncio.Event().wait()
+
+    _live_fakes(monkeypatch, AsyncMock(return_value=report))
+    monkeypatch.setattr(live, "_site_checked", probe)
+    out = tmp_path / "run.jsonl"
+    runner = asyncio.create_task(live.main(["--only", "wiki-open", "--arms", "jev-ultrafast", "--out", str(out)]))
+    await probing.wait()
+    runner.cancel()
+    await asyncio.gather(runner, return_exceptions=True)
+    [attempt] = _ledger(out)
+    assert attempt["dollars"] == 0.002
+    assert attempt["seconds"] == 10.0
+    assert attempt["selected"] is False
+    assert out.read_text() == ""
+
+
+async def test_a_cancelled_queued_attempt_writes_no_ledger_row(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A run still waiting for its slot never started a browser, so cancelling it leaves no attempt to keep: only
+    the one in flight is billed."""
+    started = asyncio.Event()
+
+    async def run(arm: str, task: LiveTask, *_: Any, record: Path | None, **__: Any) -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    _live_fakes(monkeypatch, run)
+    out = tmp_path / "run.jsonl"
+    first = next(t.id for t in TASKS if t.id in {"wiki-open", "pypi-open"})
+    runner = asyncio.create_task(
+        live.main(
+            ["--only", "wiki-open", "pypi-open", "--arms", "jev-ultrafast", "--concurrency", "1", "--out", str(out)]
+        )
+    )
+    await started.wait()
+    runner.cancel()
+    await asyncio.gather(runner, return_exceptions=True)
+    assert [attempt["task"] for attempt in _ledger(out)] == [first]
+
+
+async def test_a_cancelled_truth_fetch_writes_no_ledger_row(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The answer key is read before the run and bills nobody, so cancelling while it is in flight has no attempt
+    to keep either."""
+    started = asyncio.Event()
+
+    async def truth(_: LiveTask, __: httpx.AsyncClient) -> object:
+        started.set()
+        await asyncio.Event().wait()
+
+    async def run(*_: Any, **__: Any) -> None:
+        raise AssertionError("no paid attempt may start before the answer key is read")
+
+    _live_fakes(monkeypatch, run, truth=truth)
+    out = tmp_path / "run.jsonl"
+    runner = asyncio.create_task(live.main(["--only", "wiki-open", "--arms", "jev-ultrafast", "--out", str(out)]))
+    await started.wait()
+    runner.cancel()
+    await asyncio.gather(runner, return_exceptions=True)
+    assert _ledger(out) == []
+
+
+async def test_cancelling_during_a_retry_wait_keeps_one_attempt_row(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An outage attempt is written before its wait begins, so cancelling the wait must not append it a second
+    time: a duplicate would double the row's cost and its retry count."""
+    waiting = asyncio.Event()
+
+    async def run(arm: str, task: LiveTask, *_: Any, record: Path | None, **__: Any) -> live.EvalRow:
+        return live.EvalRow(
+            arm=arm,
+            task=task.id,
+            category=task.category.value,
+            at=time.time(),
+            seconds=1.0,
+            dollars=None,
+            status=Ending.UNAVAILABLE.value,
+            normalized_status=Ending.UNAVAILABLE,
+            correct=False,
+            passed=False,
+            failure="provider timeout",
+            error="Unavailable: provider timeout",
+        )
+
+    async def hang(_: float) -> None:
+        waiting.set()
+        await asyncio.Event().wait()
+
+    _live_fakes(monkeypatch, run)
+    monkeypatch.setattr(live, "OUTAGE_RETRIES", 1)
+    monkeypatch.setattr(live.asyncio, "sleep", hang)
+    out = tmp_path / "run.jsonl"
+    runner = asyncio.create_task(live.main(["--only", "wiki-open", "--arms", "jev-ultrafast", "--out", str(out)]))
+    await waiting.wait()
+    runner.cancel()
+    await asyncio.gather(runner, return_exceptions=True)
+    [attempt] = _ledger(out)
+    assert attempt["selected"] is False
+    assert attempt["retry_wait_seconds"] == 60
+    assert attempt["status"] == Ending.UNAVAILABLE.value
+
+
+async def test_a_sibling_exception_cancels_and_awaits_the_in_flight_attempt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """One run raising must not close the ledger under a sibling still on a paid browser: the sibling is
+    cancelled and awaited, and its attempt lands before the file does."""
+    started = asyncio.Event()
+    in_flight: list[asyncio.Task[Any]] = []
+
+    async def run(arm: str, task: LiveTask, *_: Any, record: Path | None, **__: Any) -> None:
+        if task.id == "wiki-open":
+            current = asyncio.current_task()
+            assert current is not None
+            in_flight.append(current)
+            await asyncio.sleep(0.2)
+            started.set()
+            await asyncio.Event().wait()
+            return
+        await started.wait()
+        raise RuntimeError("sibling exploded")
+
+    _live_fakes(monkeypatch, run)
+    out = tmp_path / "run.jsonl"
+    runner = asyncio.create_task(
+        live.main(
+            ["--only", "wiki-open", "pypi-open", "--arms", "jev-ultrafast", "--concurrency", "2", "--out", str(out)]
+        )
+    )
+    try:
+        with pytest.raises(RuntimeError, match="sibling exploded"):
+            await runner
+        [attempt] = _ledger(out)
+        assert attempt["task"] == "wiki-open"
+        assert attempt["dollars"] is None
+        assert attempt["selected"] is False
+        assert in_flight and in_flight[0].done()
+    finally:
+        if not runner.done():
+            runner.cancel()
+        await asyncio.gather(runner, return_exceptions=True)
+        for sibling in in_flight:
+            sibling.cancel()
+        await asyncio.gather(*in_flight, return_exceptions=True)
+
+
 @pytest.mark.parametrize("code", sorted(RETRYABLE_STATUS))
 @pytest.mark.parametrize("in_body", [False, True])
 def test_ultrafast_classifies_the_same_provider_outages(
