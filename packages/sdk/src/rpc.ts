@@ -3,7 +3,7 @@
 import type { Readable, Writable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 
-import { FastbrowseError, RpcError } from './errors.ts';
+import { FastbrowseError, messageOf, RpcError } from './errors.ts';
 
 type Id = number | string;
 type Params = Record<string, unknown>;
@@ -117,10 +117,7 @@ export class Connection {
     try {
       this.#send({ id, result: (await handler(params)) ?? null });
     } catch (error) {
-      this.#send({
-        id,
-        error: { code: INTERNAL_ERROR, message: error instanceof Error ? error.message : String(error) },
-      });
+      this.#send({ id, error: { code: INTERNAL_ERROR, message: messageOf(error) } });
     }
   }
 }

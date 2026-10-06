@@ -1,7 +1,7 @@
 // What a caller passes to `run`, and the `run` request it becomes. Options are camelCase, and the wire keeps the
 // Python models' snake_case names.
 
-import type { Authorization, BrowserEvent, Limits, LocalChrome, RunParams, StepEvent } from './protocol.ts';
+import type { Authorization, BrowserEvent, Limits, LocalChrome, RunParams, SecretRef, StepEvent } from './protocol.ts';
 
 type Camel<Name extends string> = Name extends `${infer Head}_${infer Tail}`
   ? `${Head}${Capitalize<Camel<Tail>>}`
@@ -37,6 +37,20 @@ export interface Attachment {
   content: Uint8Array;
 }
 
+/** The secrets a run may type. The server and the models see the refs, and the values stay with `resolve`. */
+export interface Secrets {
+  refs: SecretRef[];
+  /**
+   * The value of the secret `name`, about to be typed on `origin`, or nothing when there is none. Called each
+   * time a value is typed and never for an origin the ref does not cover, so a one-time code is computed
+   * when it is needed. If it throws, the run ends with status `error`, and what it threw is left out of the
+   * result.
+   */
+  resolve: (name: string, origin: string) => MaybePromise<string | null | undefined>;
+}
+
+type MaybePromise<Value> = Value | Promise<Value>;
+
 export interface RunOptions extends BrowserOptions {
   /** The address to start on. Without one, the first address is proposed from the task. */
   start?: string;
@@ -49,8 +63,16 @@ export interface RunOptions extends BrowserOptions {
   downloads?: string;
   /** Where to write a video of the run. The server needs ffmpeg for it. */
   record?: string;
-  /** Called with the browser event and then each step event, in the order the run produced them. */
+  secrets?: Secrets;
+  /** Called with the address the run ended on. Anything but true keeps the run from `complete`. */
+  until?: (url: string) => MaybePromise<boolean>;
+  /**
+   * Called with the browser event and then each step event, in the order the run produced them. Like any
+   * callback here, one that throws or rejects ends the run with status `error`.
+   */
   onEvent?: (event: StepEvent | BrowserEvent) => void;
+  /** Called with JPEG frames of the active tab while the run goes on. Without it the page is never filmed. */
+  onFrame?: (frame: Uint8Array) => void;
   /**
    * Stops the run when it aborts. `run` then rejects with `AbortError`, after the run's browser has closed.
    * A signal that has already aborted starts no run.
@@ -107,6 +129,10 @@ export function runParams(runId: string, task: string, defaults: Partial<RunPara
       authorization: options.authorization && snakeKeys<Authorization>(options.authorization),
       downloads: options.downloads,
       record: options.record,
+      secrets: options.secrets?.refs,
+      // The wire carries whether a callback is held, and the callback stays here.
+      frames: options.onFrame && true,
+      until: options.until && true,
     }),
     run_id: runId,
     task,

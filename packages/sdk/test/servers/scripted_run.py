@@ -9,6 +9,7 @@ import json
 import os
 import signal
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -19,8 +20,10 @@ from fastbrowse.models import (
     CostBreakdown,
     Decider,
     EventHandler,
+    FrameHandler,
     Operation,
     RunResult,
+    SecretResolver,
     Status,
     StepEvent,
     StepOutcome,
@@ -100,6 +103,28 @@ async def until_cancelled(task: str, *, inputs: dict[str, str] | None, on_event:
         # A real browser takes a moment to close, and the server has to wait for it.
         await asyncio.sleep(0.05)
         await asyncio.to_thread(Path(inputs["closed"]).write_text, "closed")
+
+
+async def types_secrets(task: str, *, inputs: dict[str, str] | None, secrets: SecretResolver, **_: Any) -> RunResult:
+    """Asks for the secret named in `inputs`, twice on the origin given there, and answers with what it was told."""
+    name, origin = (inputs or {})["name"], (inputs or {})["origin"]
+    return _result(data=[await secrets.resolve(name, origin), await secrets.resolve(name, origin)])
+
+
+async def ends_on_an_order(task: str, *, until: Callable[[str], Awaitable[bool]] | None, **_: Any) -> RunResult:
+    """Ends on an order page, complete only when the caller's check of that address passes."""
+    passed = until is None or await until("https://shop.example/orders/17")
+    return _result(Status.COMPLETE if passed else Status.UNVERIFIED)
+
+
+async def two_frames(task: str, *, on_frame: FrameHandler | None, on_event: EventHandler, **_: Any) -> RunResult:
+    """Sends every byte value as one frame and a short second one, then answers with how many frames it sent."""
+    if on_frame is None:
+        return _result(data=0)
+    await on_frame(bytes(range(256)))
+    await on_frame(b"\xff\xd8 second")
+    await on_event(_step(0))
+    return _result(data=2)
 
 
 def _listening(transport: serve.StdioTransport) -> serve.StdioTransport:
