@@ -1,0 +1,8 @@
+<!doctype html>
+<title>Token</title>
+<h1>Token</h1>
+<form onsubmit="event.preventDefault(); fetch('/saved', {method: 'POST', body: document.getElementById('token').value}).then(() => { document.getElementById('state').textContent = 'Saved'; })">
+  <input id="token" type="password" placeholder="Token">
+  <button>Save</button>
+</form>
+<p id="state">Not saved</p>

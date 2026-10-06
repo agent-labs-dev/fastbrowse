@@ -1,0 +1,36 @@
+{
+  "name": "fastbrowse",
+  "version": "0.5.19",
+  "description": "Browser automation with cited answers, structured output and code-controlled credentials and authorization.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agent-labs-dev/fastbrowse.git",
+    "directory": "packages/sdk"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test \"test/*.test.ts\""
+  },
+  "optionalDependencies": {
+    "@fastbrowse/darwin-arm64": "0.5.19",
+    "@fastbrowse/darwin-x64": "0.5.19",
+    "@fastbrowse/linux-arm64": "0.5.19",
+    "@fastbrowse/linux-x64": "0.5.19",
+    "@fastbrowse/win32-x64": "0.5.19"
+  }
+}

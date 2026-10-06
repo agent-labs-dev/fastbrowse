@@ -12,7 +12,6 @@ import contextlib
 import logging
 from collections.abc import Coroutine
 from dataclasses import dataclass
-from pathlib import Path
 from types import TracebackType
 from typing import Any, Self, cast
 
@@ -30,6 +29,7 @@ from cdp_use.client import CDPClient
 from websockets.exceptions import ConnectionClosed, InvalidMessage, InvalidStatus
 
 from fastbrowse.clients.validation import RETRYABLE_STATUS
+from fastbrowse.datafiles import data_file
 from fastbrowse.models import Artifact, ArtifactKind, ArtifactSink, FrameHandler, Frozen, Unavailable
 from fastbrowse.models import BrowserConnection as BrowserConnectionModel
 from fastbrowse.page import BrowserError, Dialog, Tab
@@ -68,8 +68,8 @@ DOWNLOAD_PATTERNS: tuple[RequestPattern, ...] = (
     {"urlPattern": "*", "resourceType": "Document", "requestStage": "Response"},
 )
 _ENABLE_DOMAINS = ("Page", "Runtime", "DOM")
-_TRACK_DOCUMENT_JS = Path(__file__).with_name("snapshot.js").read_text(encoding="utf-8") + "('fingerprint')"
-_REFUSE_COOKIES_JS = (Path(__file__).parent / "autoconsent" / "autoconsent.standalone.js").read_text(encoding="utf-8")
+_TRACK_DOCUMENT_JS = data_file("browser", "snapshot.js").read_text(encoding="utf-8") + "('fingerprint')"
+_REFUSE_COOKIES_JS = data_file("browser", "autoconsent", "autoconsent.standalone.js").read_text(encoding="utf-8")
 """DuckDuckGo's autoconsent (MPL-2.0, unmodified): refuses consent banners on known platforms and hides them
 before they paint, so neither the agent's steps nor a recording are spent on one."""
 

@@ -16,7 +16,6 @@ import time
 from collections.abc import Coroutine
 from contextlib import suppress
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Literal, assert_never
 from urllib.parse import SplitResult, urlsplit
 
@@ -27,6 +26,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from fastbrowse.browser.session import BrowserSession
 from fastbrowse.config import Config
+from fastbrowse.datafiles import data_file
 from fastbrowse.models import TARGETED, Artifact, Attachment, Frozen, Operation, StepOutcome
 from fastbrowse.page import (
     Action,
@@ -46,9 +46,9 @@ from fastbrowse.page import (
     pager_link,
 )
 
-_PAGE_JS = (Path(__file__).with_name("snapshot.js")).read_text(encoding="utf-8")
+_PAGE_JS = data_file("browser", "snapshot.js").read_text(encoding="utf-8")
 _SNAPSHOT_JS = _PAGE_JS + "('snapshot')"
-_CAPTURE_JS = (Path(__file__).with_name("capture.js")).read_text(encoding="utf-8")
+_CAPTURE_JS = data_file("browser", "capture.js").read_text(encoding="utf-8")
 _FINGERPRINT_JS = _PAGE_JS + "('fingerprint').fingerprint"
 _SELECT_TEXT_JS = (
     "if (typeof e.select === 'function') e.select(); else { const range = e.ownerDocument.createRange(); "

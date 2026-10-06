@@ -45,6 +45,8 @@ jobs:
       # Prose is part of the product surface: ASCII punctuation everywhere, and Vale's wording rules on prose.
       # A release publishes its changelog entry, so the entry has to exist before the tag does.
       - run: uv run python scripts/changelog.py --check "$(uv version --short)"
+      # One tag publishes PyPI and npm, so the SDK's manifest has to carry the version `pyproject.toml` does.
+      - run: uv run python scripts/npm_versions.py
       - run: uv run python scripts/no_slop.py
       - run: uv run vale sync
       - run: uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs src scripts tests
@@ -80,15 +82,76 @@ jobs:
         continue-on-error: true
         run: uvx zizmor==1.30.1 --offline .github/workflows
 
+  sdk:
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with: {python-version: "3.13"}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: {node-version: "22"}
+      # The SDK's tests start `fastbrowse serve --stdio` from this environment, so they meet the real server.
+      - run: uv sync --locked
+      - run: npm ci --ignore-scripts
+      # The SDK's types are written from the Python models and committed. A model changed without them fails here.
+      - run: npm run generate:sdk
+      - run: git diff --exit-code -- packages/sdk/src/protocol.ts
+      - run: npm run check:sdk
+      # The package says it runs on Node 20, and its tests need a newer Node to run TypeScript. The files built
+      # above are started here on that floor: one `initialize` against the server, then close.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: {node-version: "20", package-manager-cache: false}
+      - run: node packages/sdk/test/node_floor.mjs .venv/bin/fastbrowse
+
+  # Five builds on five runners cost more than the rest of CI together, so a pull request pays for them only
+  # when it touches what is frozen, what freezes it, what packs it for npm, or the SDK that the install smoke
+  # packs and starts it with. The eval and audit packages are not in the executable.
+  # Every push to `main` builds, so a change the filter misjudged is still caught before a release.
+  changes:
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    outputs:
+      binaries: ${{ steps.frozen.outputs.binaries }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # A pull request is checked out as its merge into the base, whose first parent is the base.
+        with: {fetch-depth: 2, persist-credentials: false}
+      - id: frozen
+        env: {EVENT: "${{ github.event_name }}"}
+        run: |
+          if [ "$EVENT" != pull_request ] || ! git diff --quiet HEAD^1 HEAD -- \
+            src/fastbrowse ':!src/fastbrowse/evals' ':!src/fastbrowse/audit' pyproject.toml uv.lock packaging \
+            scripts/smoke_binary.py .github/workflows/binaries.yml .github/workflows/ci.yml \
+            scripts/npm_platform_package.py scripts/smoke_npm_install.py \
+            packages/sdk/package.json packages/sdk/tsconfig.json packages/sdk/tsconfig.build.json packages/sdk/src
+          then echo "binaries=true" >> "$GITHUB_OUTPUT"
+          else echo "binaries=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  binaries:
+    needs: changes
+    if: needs.changes.outputs.binaries == 'true'
+    permissions: {contents: read}
+    uses: ./.github/workflows/binaries.yml
+
   # `check` is the required status check, so its name must not move when the matrix gains a version.
-  # It passes only when the Python matrix, secret scan and sift checks pass.
+  # It passes only when the Python matrix, secret scan, sift and SDK checks pass, and the binaries either
+  # passed or were left unbuilt by a change that could not alter them.
   check:
     runs-on: ubuntu-latest
-    needs: [gate, sift, secrets]
+    needs: [gate, sift, sdk, secrets, changes, binaries]
     if: always()
     steps:
       - env:
           GATE_RESULT: ${{ needs.gate.result }}
           SIFT_RESULT: ${{ needs.sift.result }}
+          SDK_RESULT: ${{ needs.sdk.result }}
           SECRETS_RESULT: ${{ needs.secrets.result }}
-        run: test "$GATE_RESULT" = success && test "$SIFT_RESULT" = success && test "$SECRETS_RESULT" = success
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          BINARIES_RESULT: ${{ needs.binaries.result }}
+        run: |
+          test "$GATE_RESULT" = success && test "$SIFT_RESULT" = success && test "$SDK_RESULT" = success && test "$SECRETS_RESULT" = success
+          test "$CHANGES_RESULT" = success
+          test "$BINARIES_RESULT" = success || test "$BINARIES_RESULT" = skipped

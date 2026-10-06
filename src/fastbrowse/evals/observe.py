@@ -1,13 +1,13 @@
 """Final page evidence read by the harness before the browser is released."""
 
 from contextlib import suppress
-from pathlib import Path
 
 from cdp_use.cdp.emulation.commands import SetDeviceMetricsOverrideParameters
 from cdp_use.client import CDPClient
 from pydantic import BaseModel
 
 from fastbrowse.browser import CdpPage
+from fastbrowse.datafiles import data_file
 from fastbrowse.evals.live_tasks import PageEvidence
 from fastbrowse.page import Observation
 
@@ -40,7 +40,7 @@ _RESTORE = """(() => {
   }
   delete window.__fastbrowseHidden;
 })()"""
-_SNAPSHOT = (Path(__file__).parents[1] / "browser" / "snapshot.js").read_text(encoding="utf-8") + "('snapshot')"
+_SNAPSHOT = data_file("browser", "snapshot.js").read_text(encoding="utf-8") + "('snapshot')"
 
 FINAL_SCRIPTS = {"evidence": _EVIDENCE, "unhide": _UNHIDE, "snapshot": _SNAPSHOT, "restore": _RESTORE}
 """The expressions the isolated jev-ultrafast runner evaluates itself, since it cannot import fastbrowse: one set of
