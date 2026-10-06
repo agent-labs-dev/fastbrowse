@@ -5,6 +5,9 @@
 Two cases, and it stays at two. They exist to catch what only freezing breaks: a data file that was not
 collected, an import PyInstaller did not see. Everything else is the test suite's to find, on the checkout.
 
+The handshake case also asks the executable for `--version` and holds it to the version `initialize` reports.
+That is no third case: it is how the one executable is shown to run as the CLI as well as the server.
+
 The run needs no model and no key. Its models are the scripted ones in `fastbrowse.scripted`, and the page is
 served from this process, so the one thing it needs from the machine is Chrome.
 
