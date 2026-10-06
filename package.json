@@ -6,9 +6,11 @@
   ],
   "scripts": {
     "check:browser": "biome ci src/fastbrowse/browser/capture.js src/fastbrowse/browser/snapshot.js",
+    "generate:sdk": "node packages/sdk/scripts/generate-types.ts",
     "check:sdk": "biome ci packages/sdk && npm run typecheck --workspace fastbrowse && npm test --workspace fastbrowse"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.15"
+    "@biomejs/biome": "2.5.15",
+    "json-schema-to-typescript": "16.0.0"
   }
 }

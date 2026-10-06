@@ -1,9 +1,20 @@
 import { type ChildProcess, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import type { Writable } from 'node:stream';
 
 import { resolveBinary } from './binary.ts';
-import { FastbrowseError } from './errors.ts';
+import { FastbrowseError, ProcessExitedError } from './errors.ts';
+import type {
+  BrowserEvent,
+  InitializeParams,
+  InitializeResult,
+  RunEvent,
+  RunParams,
+  RunResult,
+  StepEvent,
+} from './protocol.ts';
 import { Connection } from './rpc.ts';
+import { type BrowserOptions, browserParams, type RunOptions, runParams } from './run.ts';
 
 /** The wire format this SDK speaks. It is the server's `PROTOCOL_VERSION`, and the handshake compares the two. */
 const PROTOCOL_VERSION = 1;
@@ -11,7 +22,8 @@ const PROTOCOL_VERSION = 1;
 // A run that is cancelled by `shutdown` closes its browser before the process exits, and Chrome takes its time.
 const DEFAULT_GRACE_PERIOD_MS = 10_000;
 
-export interface StartOptions {
+/** How to start the fastbrowse process, and the browser every run uses unless that run says otherwise. */
+export interface StartOptions extends BrowserOptions {
   /** The fastbrowse executable to run. Without it, the `FASTBROWSE_BINARY` environment variable names one. */
   binaryPath?: string;
   /** Environment variables for the fastbrowse process, on top of the ones this process has. */
@@ -32,11 +44,19 @@ export class Fastbrowse {
   /** The version of the fastbrowse binary this instance drives. */
   readonly fastbrowseVersion: string;
   readonly #server: Server;
+  readonly #browser: Partial<RunParams>;
+  /** Who hears the events of each run that is waiting on its reply, by run id. */
+  readonly #listeners = new Map<string, (event: StepEvent | BrowserEvent) => void>();
   #closed: Promise<void> | undefined;
 
-  private constructor(server: Server, fastbrowseVersion: string) {
+  private constructor(server: Server, fastbrowseVersion: string, browser: Partial<RunParams>) {
     this.#server = server;
     this.fastbrowseVersion = fastbrowseVersion;
+    this.#browser = browser;
+    server.connection.onNotification('run/event', params => {
+      const { run_id: runId, event } = params as unknown as RunEvent;
+      this.#listeners.get(runId)?.(event);
+    });
   }
 
   /** Start a fastbrowse process and check that it speaks this SDK's protocol version. */
@@ -45,20 +65,39 @@ export class Fastbrowse {
     const binary = resolveBinary(options.binaryPath, env);
     const server = new Server(binary, env, options.stderr ?? 'inherit');
     try {
-      const reply = (await server.connection.request('initialize', { protocol_version: PROTOCOL_VERSION })) as {
-        protocol_version: number;
-        fastbrowse_version: string;
-      };
+      const hello: InitializeParams = { protocol_version: PROTOCOL_VERSION };
+      const reply = (await server.connection.request('initialize', hello)) as InitializeResult;
       if (reply.protocol_version !== PROTOCOL_VERSION) {
         throw new FastbrowseError(
           `this SDK speaks protocol version ${PROTOCOL_VERSION}, and fastbrowse ${reply.fastbrowse_version} at ` +
             `${binary} speaks protocol version ${reply.protocol_version}: install matching versions of the two`,
         );
       }
-      return new Fastbrowse(server, reply.fastbrowse_version);
+      return new Fastbrowse(server, reply.fastbrowse_version, browserParams(options));
     } catch (error) {
       await server.kill();
       throw error;
+    }
+  }
+
+  /**
+   * Run a task and resolve with its result, whatever status it ended in: a run that needs a login or got stuck
+   * is read from `status`, and is not an exception.
+   *
+   * Rejects with `RpcError` when the server refuses the request, which it does before a browser opens: for a
+   * bad option, for a missing key, and with the busy code while another run on this instance is active. Rejects
+   * with `ProcessExitedError` when the fastbrowse process is gone.
+   */
+  async run(task: string, options: RunOptions = {}): Promise<RunResult> {
+    // The server names the run in every event it sends, which is how a run refused as busy hears nothing of
+    // the one that is active.
+    const runId = randomUUID();
+    if (options.onEvent) this.#listeners.set(runId, options.onEvent);
+    try {
+      const params = runParams(runId, task, this.#browser, options);
+      return (await this.#server.connection.request('run', params)) as RunResult;
+    } finally {
+      this.#listeners.delete(runId);
     }
   }
 
@@ -104,8 +143,7 @@ class Server {
         resolve();
       });
       child.once('close', (code, signal) => {
-        const how = signal ? `was killed by ${signal}` : `exited with code ${code}`;
-        this.connection.end(new FastbrowseError(`the fastbrowse process ${how}`));
+        this.connection.end(new ProcessExitedError(code, signal));
         resolve();
       });
     });

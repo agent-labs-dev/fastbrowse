@@ -40,6 +40,10 @@ uv run python .sift/gate.py --base origin/main
 The JavaScript check needs Node.js 22 or newer. Audit evidence commands and tool limits are in the
 [sift project skill](.agents/skills/sift-project/SKILL.md).
 
+The JavaScript SDK's types in `packages/sdk/src/protocol.ts` are generated from the models in
+`src/fastbrowse/protocol.py` and the models those use. After changing one, run `npm run generate:sdk` and commit
+the result. CI fails when the committed file differs from what the models produce.
+
 Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for anything a user would notice, saying
 what changed and why.
 

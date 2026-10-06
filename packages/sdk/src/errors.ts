@@ -6,6 +6,20 @@ export class FastbrowseError extends Error {
   }
 }
 
+/** The fastbrowse process is gone, so what was waiting on it, or is asked of it later, has no answer. */
+export class ProcessExitedError extends FastbrowseError {
+  /** The code the process exited with, or null when a signal ended it. */
+  readonly exitCode: number | null;
+  /** The signal that ended the process, or null when it exited by itself. */
+  readonly signal: NodeJS.Signals | null;
+
+  constructor(exitCode: number | null, signal: NodeJS.Signals | null) {
+    super(`the fastbrowse process ${signal ? `was killed by ${signal}` : `exited with code ${exitCode}`}`);
+    this.exitCode = exitCode;
+    this.signal = signal;
+  }
+}
+
 /** The server's error reply to a request. `code` is one of the protocol's error codes. */
 export class RpcError extends FastbrowseError {
   readonly code: number;
