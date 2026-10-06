@@ -39,7 +39,7 @@ build-backend = "hatchling.build"
 packages = ["src/fastbrowse"]
 
 [tool.hatch.build.targets.sdist]
-exclude = [".sift", ".agents", "package.json", "package-lock.json", "biome.json"]
+exclude = [".sift", ".agents", "package.json", "package-lock.json", "biome.json", "packages"]
 
 [dependency-groups]
 dev = [

@@ -70,16 +70,32 @@ jobs:
         continue-on-error: true
         run: uvx zizmor==1.30.1 --offline .github/workflows
 
+  sdk:
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with: {python-version: "3.13"}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: {node-version: "22"}
+      # The SDK's tests start `fastbrowse serve --stdio` from this environment, so they meet the real server.
+      - run: uv sync --locked
+      - run: npm ci --ignore-scripts
+      - run: npm run check:sdk
+
   # `check` is the required status check, so its name must not move when the matrix gains a version.
-  # It passes only when the Python matrix, secret scan and sift checks pass.
+  # It passes only when the Python matrix, secret scan, sift and SDK checks pass.
   check:
     runs-on: ubuntu-latest
-    needs: [gate, sift, secrets]
+    needs: [gate, sift, sdk, secrets]
     if: always()
     steps:
       - env:
           GATE_RESULT: ${{ needs.gate.result }}
           SIFT_RESULT: ${{ needs.sift.result }}
+          SDK_RESULT: ${{ needs.sdk.result }}
           SECRETS_RESULT: ${{ needs.secrets.result }}
-        run: test "$GATE_RESULT" = success && test "$SIFT_RESULT" = success && test "$SECRETS_RESULT" = success
+        run: test "$GATE_RESULT" = success && test "$SIFT_RESULT" = success && test "$SDK_RESULT" = success && test "$SECRETS_RESULT" = success
 
