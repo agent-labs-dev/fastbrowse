@@ -6,11 +6,13 @@ name, so a constraint the caller wrote is never dropped in silence.
 """
 
 import keyword
+import operator
 import re
 from collections.abc import Callable, Mapping
 from typing import Annotated, Any, Literal
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -23,12 +25,36 @@ from pydantic import (
 
 DRAFT = "https://json-schema.org/draft/2020-12/schema"
 
+# How a value stands to each bound. In this draft `exclusiveMinimum` holds the bound and is no flag on `minimum`.
+# Zod writes the two inclusive ones for every `z.int()`, so refusing them would refuse a plain integer.
+_BOUNDS: dict[str, Callable[[Any, Any], bool]] = {
+    "minimum": operator.ge,
+    "maximum": operator.le,
+    "exclusiveMinimum": operator.gt,
+    "exclusiveMaximum": operator.lt,
+}
 _ANYWHERE = frozenset(
-    {"type", "properties", "required", "additionalProperties", "items", "enum", "const", "description", "anyOf", "$ref"}
+    {
+        "type",
+        "properties",
+        "required",
+        "additionalProperties",
+        "items",
+        "enum",
+        "const",
+        "anyOf",
+        "$ref",
+        "description",
+        "title",
+        "default",
+        *_BOUNDS,
+    }
 )
 # `$defs` is read from the root alone, because `#/$defs/name` is the one form of `$ref` followed.
 _ROOT = _ANYWHERE | {"$schema", "$defs"}
-_NOTES = frozenset({"description", "$schema", "$defs"})
+# `title` and `default` are annotations in JSON Schema: no validator holds a value to either, so taking them
+# drops nothing the caller wrote. Zod writes them for `.meta({ title })` and `.default()`.
+_NOTES = frozenset({"description", "title", "default", "$schema", "$defs"})
 """Keywords that say nothing about the value, and so may sit beside any other."""
 _OBJECT = ("properties", "required", "additionalProperties")
 _REFERENCE = re.compile(r"#/\$defs/(.+)")
@@ -130,6 +156,16 @@ def _one_of(allowed: list[Any]) -> Callable[[Any], Any]:
     return check
 
 
+def _within(bounds: dict[str, Any]) -> Callable[[Any], Any]:
+    def check(value: Any) -> Any:
+        for key, bound in bounds.items():
+            if not _BOUNDS[key](value, bound):
+                raise ValueError(f"outside {key} {bound!r}")
+        return value
+
+    return check
+
+
 def _usable(name: str) -> bool:
     """Whether a property name can be the field's own name."""
     return (
@@ -189,9 +225,9 @@ class _Conversion:
                 raise UnsupportedSchema(key, _pointer(path, key), "this keyword is not supported")
         if path == "#" and schema.get("$schema", DRAFT) != DRAFT:
             raise UnsupportedSchema("$schema", "#/$schema", f"only {DRAFT} is supported")
-        description = schema.get("description")
-        if description is not None and not isinstance(description, str):
-            raise UnsupportedSchema("description", _pointer(path, "description"), "has to be a string")
+        for note in ("description", "title"):
+            if not isinstance(schema.get(note, ""), str):
+                raise UnsupportedSchema(note, _pointer(path, note), "has to be a string")
         for alone in ("$ref", "anyOf", "enum", "const"):
             if alone in schema:
                 self._alone(schema, path, alone)
@@ -207,6 +243,13 @@ class _Conversion:
                 raise UnsupportedSchema(key, _pointer(path, key), 'needs "type": "object" beside it')
         if "items" in schema and "array" not in types:
             raise UnsupportedSchema("items", _pointer(path, "items"), 'needs "type": "array" beside it')
+        for key in _BOUNDS:
+            if key not in schema:
+                continue
+            if not {"integer", "number"} & set(types):
+                raise UnsupportedSchema(key, _pointer(path, key), 'needs "type": "integer" or "number" beside it')
+            if not _has_type(schema[key], "number"):
+                raise UnsupportedSchema(key, _pointer(path, key), "has to be a number")
         if not types:
             return Any
         annotation: Any = self._typed(types[0], schema, path, name)
@@ -233,7 +276,13 @@ class _Conversion:
 
     def _typed(self, type_name: str, schema: Mapping[str, Any], path: str, name: str) -> Any:
         if type_name in _SCALARS:
-            return _SCALARS[type_name]
+            scalar: Any = _SCALARS[type_name]
+            bounds = {key: schema[key] for key in _BOUNDS if key in schema}
+            if bounds and type_name in ("integer", "number"):
+                # A validator and not the field's own bound, which would be written into the schema the models
+                # are asked to fill, and a provider's structured output may refuse a schema that has one.
+                return Annotated[scalar, AfterValidator(_within(bounds))]
+            return scalar
         if type_name == "object":
             return self._object(schema, path, name)
         if "items" not in schema:
@@ -250,6 +299,9 @@ class _Conversion:
             # A required name with no schema could be anything, and a run has no way to fill it.
             raise UnsupportedSchema("required", _pointer(path, "required"), "has to be a list of names in properties")
         additional = schema.get("additionalProperties", True)
+        if additional == {}:
+            # The empty schema takes any value, which is what `true` says. It is how Zod writes a loose object.
+            additional = True
         if not isinstance(additional, bool):
             raise UnsupportedSchema(
                 "additionalProperties", _pointer(path, "additionalProperties"), "has to be true or false"

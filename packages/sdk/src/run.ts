@@ -1,6 +1,7 @@
 // What a caller passes to `run`, and the `run` request it becomes. Options are camelCase, and the wire keeps the
 // Python models' snake_case names.
 
+import { type OutputSchema, wireSchema } from './output.ts';
 import type { Authorization, BrowserEvent, Limits, LocalChrome, RunParams, SecretRef, StepEvent } from './protocol.ts';
 
 type Camel<Name extends string> = Name extends `${infer Head}_${infer Tail}`
@@ -59,6 +60,11 @@ export interface RunOptions extends BrowserOptions {
   attachments?: Attachment[];
   limits?: CamelKeys<Limits>;
   authorization?: CamelKeys<Authorization>;
+  /**
+   * The shape of the data to read: a Zod, ArkType or other Standard Schema that can write itself as JSON
+   * Schema, or a JSON Schema object. The first also validates what comes back, and types `output`.
+   */
+  output?: OutputSchema;
   /** A directory that keeps the files the run downloads. */
   downloads?: string;
   /** Where to write a video of the run. The server needs ffmpeg for it. */
@@ -127,6 +133,7 @@ export function runParams(runId: string, task: string, defaults: Partial<RunPara
       })),
       limits: options.limits && snakeKeys<Limits>(options.limits),
       authorization: options.authorization && snakeKeys<Authorization>(options.authorization),
+      output_schema: options.output && wireSchema(options.output),
       downloads: options.downloads,
       record: options.record,
       secrets: options.secrets?.refs,

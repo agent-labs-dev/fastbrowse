@@ -132,6 +132,18 @@ SKU = {"sku": {"type": "string"}}
         ({"anyOf": [{"type": "string"}, {"type": "null"}]}, ["kettle", None], [3.5]),
         ({"anyOf": [{"type": "null"}, {"type": "array", "items": {"type": "string"}}]}, [["a"], None], [[1], "a"]),
         ({"type": "string", "description": "What the item is called"}, ["kettle"], [3]),
+        ({"type": "string", "title": "Name"}, ["kettle"], [3]),
+        ({"type": "string", "default": "kettle"}, ["mug"], [3]),
+        (
+            {"type": "object", "properties": SKU, "additionalProperties": {}},
+            [{"sku": "kettle", "price": 30}],
+            [{"sku": 3}],
+        ),
+        ({"type": "integer", "minimum": 0}, [0, 7], [-1, 0.5, "0"]),
+        ({"type": "integer", "maximum": 9007199254740991}, [9007199254740991], [9007199254740992]),
+        ({"type": "number", "exclusiveMinimum": 0}, [0.5, 1], [0, -2]),
+        ({"type": "number", "exclusiveMaximum": 1.5, "minimum": 1}, [1, 1.25], [1.5, 0.5]),
+        ({"type": ["integer", "null"], "minimum": 0}, [3, None], [-3]),
         ({}, ["kettle", 3, None, [1], {"a": 1}], []),
     ],
     ids=_case,
@@ -139,6 +151,39 @@ SKU = {"sku": {"type": "string"}}
 def test_each_supported_keyword_is_enforced(schema: dict[str, Any], matching: list[Any], mismatched: list[Any]) -> None:
     assert [value for value in matching if not _accepts(schema, value)] == []
     assert [value for value in mismatched if _accepts(schema, value)] == []
+
+
+def test_what_zod_writes_for_a_typical_schema_is_taken() -> None:
+    # `z.object({...}).meta({title})` through `~standard.jsonSchema.input`, as Zod 4.6 writes it. `z.int()` is
+    # where the bounds come from, `.default()` the default.
+    model = output_model(
+        {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "The product name"},
+                "count": {"type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991},
+                "rating": {"type": ["number", "null"]},
+                "size": {"type": "string", "enum": ["small", "large"]},
+                "currency": {"default": "EUR", "type": "string"},
+                "seller": {"$ref": "#/$defs/Seller"},
+            },
+            "required": ["name", "count", "rating", "size", "seller"],
+            "title": "Product",
+            "$defs": {"Seller": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
+        }
+    )
+    product = {"name": "Kettle", "count": 2, "rating": None, "size": "small", "seller": {"name": "Ada"}}
+
+    assert _dumped(model, product) == product
+    with pytest.raises(ValidationError):
+        model.model_validate(product | {"count": 2**53})
+
+
+def test_a_bound_is_not_part_of_the_schema_a_model_is_shown() -> None:
+    model = output_model(_holding({"type": "integer", "minimum": 0}))
+
+    assert model.model_json_schema()["properties"]["value"] == {"title": "Value", "type": "integer"}
 
 
 def test_a_description_reaches_the_field_a_run_reads_it_from() -> None:
@@ -194,10 +239,13 @@ def test_definitions_are_followed_through_ref() -> None:
         ({"type": "string", "minLength": 1}, "minLength", "/minLength"),
         ({"type": "string", "pattern": "^A-"}, "pattern", "/pattern"),
         ({"type": "string", "format": "date"}, "format", "/format"),
-        ({"type": "integer", "minimum": 0}, "minimum", "/minimum"),
         ({"type": "number", "multipleOf": 0.5}, "multipleOf", "/multipleOf"),
-        ({"type": "string", "default": "kettle"}, "default", "/default"),
-        ({"type": "string", "title": "Name"}, "title", "/title"),
+        ({"type": "string", "minimum": 0}, "minimum", "/minimum"),
+        ({"minimum": 0}, "minimum", "/minimum"),
+        ({"type": "integer", "minimum": "0"}, "minimum", "/minimum"),
+        ({"type": "integer", "maximum": True}, "maximum", "/maximum"),
+        ({"enum": [1, 2], "maximum": 1}, "maximum", "/maximum"),
+        ({"type": "string", "title": 3}, "title", "/title"),
         ({"type": "array", "items": {"type": "string"}, "minItems": 1}, "minItems", "/minItems"),
         ({"type": "array", "items": {"type": "string", "maxLength": 3}}, "maxLength", "/items/maxLength"),
         ({"type": "array", "prefixItems": [{"type": "string"}]}, "prefixItems", "/prefixItems"),

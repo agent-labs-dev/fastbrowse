@@ -6,6 +6,7 @@ import { abortable } from './abort.ts';
 import { Callbacks } from './callbacks.ts';
 import { resolveBinary } from './binary.ts';
 import { FastbrowseError, ProcessExitedError } from './errors.ts';
+import { type OutputSchema, type TypedRunResult, withOutput } from './output.ts';
 import type { InitializeParams, InitializeResult, RunCancelParams, RunParams, RunResult } from './protocol.ts';
 import { Connection } from './rpc.ts';
 import { type BrowserOptions, browserParams, type RunOptions, runParams } from './run.ts';
@@ -81,8 +82,15 @@ export class Fastbrowse {
    * bad option, for a missing key, and with the busy code while another run on this instance is active. Rejects
    * with `ProcessExitedError` when the fastbrowse process is gone. Rejects with `AbortError` when `signal`
    * stopped the run.
+   *
+   * With `output`, the result's `output` is the data as that schema validated it. A schema that cannot be sent
+   * rejects before anything is, a keyword the server cannot enforce rejects with its `unsupported_schema` code,
+   * and data the schema refuses rejects with `OutputValidationError`, which carries the result.
    */
-  async run(task: string, options: RunOptions = {}): Promise<RunResult> {
+  async run<Schema extends OutputSchema>(
+    task: string,
+    options: RunOptions & { output?: Schema } = {},
+  ): Promise<TypedRunResult<Schema>> {
     // The server names the run in every event it sends, which is how a run refused as busy hears nothing of
     // the one that is active.
     const runId = randomUUID();
@@ -91,9 +99,10 @@ export class Fastbrowse {
     // The reply says only that the request was read, and a process that has gone rejects the run itself.
     const cancel = () =>
       void connection.request('run/cancel', { run_id: runId } satisfies RunCancelParams).catch(() => {});
-    return this.#callbacks.during(runId, options, cancel, () =>
+    const result = await this.#callbacks.during(runId, options, cancel, () =>
       abortable(options.signal, () => connection.request('run', params) as Promise<RunResult>, cancel),
     );
+    return withOutput(result, options.output);
   }
 
   /**
