@@ -297,6 +297,9 @@ export interface RunParams {
   attachments?: RunAttachment[];
   limits?: Limits | null;
   authorization?: Authorization | null;
+  output_schema?: {
+    [k: string]: unknown;
+  } | null;
   secrets?: SecretRef[];
   downloads?: string | null;
   record?: string | null;
