@@ -26,7 +26,16 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from fastbrowse import options
 from fastbrowse.adapters.local_chrome import find_chrome
 from fastbrowse.clients.environment import ConfigurationError, Settings, load_settings
-from fastbrowse.models import Attachment, BrowserEvent, LocalChrome, RunResult, SecretRef, StepEvent
+from fastbrowse.models import (
+    Attachment,
+    BrowserEvent,
+    CostBreakdown,
+    LocalChrome,
+    RunResult,
+    SecretRef,
+    Status,
+    StepEvent,
+)
 from fastbrowse.output_schema import UnsupportedSchema, output_model
 from fastbrowse.protocol import (
     PROTOCOL_VERSION,
@@ -43,7 +52,9 @@ from fastbrowse.protocol import (
     Response,
     RunCancelParams,
     RunEvent,
+    RunFrame,
     RunParams,
+    RunUntilParams,
     SecretsResolveParams,
     ServerMethod,
     ServerRequest,
@@ -187,6 +198,27 @@ class ClientSecrets:
 
 
 _SECRET_VALUE: TypeAdapter[str | None] = TypeAdapter(str | None)
+_UNTIL_ANSWER: TypeAdapter[bool] = TypeAdapter(bool)
+
+
+def _ended_by_client(failure: ClientError) -> RunResult:
+    """The result of a run that stopped because the client failed one of its callbacks.
+
+    The run was under way, so this is a result and not an error reply. `run_task` lets a callback's exception
+    through with nothing attached, and has closed the browser by the time it arrives here, so what the run
+    did before then is in the events already sent and not in this. The text is the method and the client's
+    own message, and no part of a reply that could not be used.
+    """
+    return RunResult(
+        status=Status.ERROR,
+        answer=None,
+        data=None,
+        evidence=(),
+        steps=(),
+        cost=CostBreakdown(lines=()),
+        artifacts=(),
+        error=str(failure),
+    )
 
 
 @dataclass(frozen=True)
@@ -330,9 +362,13 @@ class Server:
             await self._notify(ServerMethod.RUN_EVENT, RunEvent(run_id=params.run_id, event=event))
 
         try:
-            return await self._runner(params.task, **await self._arguments(params), on_event=on_event)
+            return await self._runner(
+                params.task, **await self._arguments(params), **self._callbacks(params), on_event=on_event
+            )
         except ConfigurationError as exc:
             raise Refused(ErrorCode.CONFIGURATION, str(exc)) from None
+        except ClientError as exc:
+            return _ended_by_client(exc)
         except asyncio.CancelledError:
             # The runner has unwound by now, and that is what closed its browser.
             raise Refused(ErrorCode.CANCELLED, f"run {params.run_id!r} was cancelled") from None
@@ -418,6 +454,19 @@ class Server:
             return await self._request(ServerMethod.SECRETS_RESOLVE, asked, _SECRET_VALUE)
 
         return ClientSecrets(params.secrets, ask) if params.secrets else None
+
+    def _callbacks(self, params: RunParams) -> dict[str, Any]:
+        """The callbacks a run gets only when its client holds the other end of them."""
+
+        async def on_frame(frame: bytes) -> None:
+            await self._notify(ServerMethod.RUN_FRAME, RunFrame(run_id=params.run_id, frame=frame))
+
+        async def until(url: str) -> bool:
+            asked = RunUntilParams(run_id=params.run_id, url=url)
+            return await self._request(ServerMethod.RUN_UNTIL, asked, _UNTIL_ANSWER)
+
+        # A run with no frame handler starts no screencast, so a client that reads no frames pays for none.
+        return {"on_frame": on_frame if params.frames else None, "until": until if params.until else None}
 
     async def _notify(self, method: ServerMethod, params: BaseModel) -> None:
         await self._write(Notification(method=method, params=params))
