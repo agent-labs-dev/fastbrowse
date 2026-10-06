@@ -13,6 +13,15 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.5.19] - 2026-10-05
 
+- Form controls retain their input name and autocomplete purpose after validation changes their labels.
+  Recovery corrections are bound to the observed field and reuse only supplied, non-secret values.
+- Tasks inspecting access restrictions can read a sign-in wall or HTTP access denial as evidence. Protected
+  retrieval still requires login, and bot challenges still block the run.
+- Record counts use quoted child records instead of a scalar group total. Covered clicks report the visible
+  obstruction, and requested transactions have their outcome read before another interaction.
+- External capsule endpoints preserve cookie security attributes while mapping their declared hostnames.
+  Strict state supplements use independently sampled sequences and leave missing evidence ungraded.
+
 - Every release requires a successful Evals run on its exact commit. A release with no published comparison
   once skipped the fixture gate and could ship agent code the Evals suites had not passed.
 

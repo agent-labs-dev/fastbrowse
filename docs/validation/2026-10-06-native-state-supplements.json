@@ -1,0 +1,149 @@
+{
+  "supplements": [
+    {
+      "id": "strict-booking-then-cancel",
+      "task_id": "ea-7",
+      "version": "1",
+      "source": "windtunnel",
+      "revision": "5ca8644e23826ebb30108e7bad240b61043bfe67",
+      "dataset_sha256": "9254737b8062a4a7140ec2a91f3b111abe648bd6d649b2775d2e68ad1f054d82",
+      "site": "easyappointments",
+      "task_sha256": "2f578335dfbb21b4cd61b7a3f26fdd788c04b90e8fd72d98aea866e51adfca11",
+      "upstream_sha256": "0d58e802bf1c8be9c7342f23ce792b3835cd0427301e0f0333d71ebb95906a4b",
+      "purpose": "The upstream predicate accepts any end state with two customers, which an uncancelled or double booking also reaches. This supplement requires the sequence: the appointment existed for the named customer, then ended with that customer present and no appointment left.",
+      "witnesses": [
+        {
+          "label": "before",
+          "source": "runner",
+          "note": "Last sample before the attempt: the pinned capsule's baseline, one customer and no appointments.",
+          "checks": [
+            {
+              "kind": "equals",
+              "path": "database.customers",
+              "value": 1
+            },
+            {
+              "kind": "equals",
+              "path": "database.appointments",
+              "value": 0
+            }
+          ],
+          "observe": [
+            {
+              "kind": "probe",
+              "name": "database",
+              "probe": "database"
+            },
+            {
+              "kind": "probe",
+              "name": "appointments",
+              "probe": "appointments"
+            }
+          ]
+        },
+        {
+          "label": "during",
+          "source": "runner",
+          "note": "First sample during the attempt that shows the booking. A sampler can miss it, which leaves the attempt ungraded.",
+          "checks": [
+            {
+              "kind": "records",
+              "path": "appointments.appointments",
+              "match": {
+                "service": {
+                  "name": "Consultation"
+                },
+                "customer": {
+                  "email": "casey.reed@example.com"
+                }
+              },
+              "minimum": 1,
+              "maximum": 1,
+              "casefold": true
+            }
+          ],
+          "observe": [
+            {
+              "kind": "probe",
+              "name": "database",
+              "probe": "database"
+            },
+            {
+              "kind": "probe",
+              "name": "appointments",
+              "probe": "appointments"
+            }
+          ]
+        },
+        {
+          "label": "after",
+          "source": "grade",
+          "observe": [
+            {
+              "kind": "probe",
+              "name": "database",
+              "probe": "database"
+            },
+            {
+              "kind": "probe",
+              "name": "appointments",
+              "probe": "appointments"
+            },
+            {
+              "kind": "http",
+              "name": "customers",
+              "path": "/index.php/api/v1/customers",
+              "query": {
+                "length": "100"
+              }
+            }
+          ],
+          "checks": [
+            {
+              "kind": "equals",
+              "path": "database.customers",
+              "value": 2
+            },
+            {
+              "kind": "equals",
+              "path": "database.appointments",
+              "value": 0
+            },
+            {
+              "kind": "equals",
+              "path": "appointments.count",
+              "value": 0
+            },
+            {
+              "kind": "records",
+              "path": "customers",
+              "match": {
+                "firstName": "Casey",
+                "lastName": "Reed",
+                "email": "casey.reed@example.com"
+              },
+              "minimum": 1,
+              "maximum": 1,
+              "casefold": true
+            },
+            {
+              "kind": "records",
+              "path": "appointments.appointments",
+              "match": {
+                "customer": {
+                  "email": "casey.reed@example.com"
+                }
+              },
+              "minimum": 0,
+              "maximum": 0,
+              "casefold": true
+            }
+          ]
+        }
+      ],
+      "unwitnessed": [
+        "the cancellation reason \"schedule conflict\": the capsule does not store it and no action audit is available, so the end state cannot show it"
+      ]
+    }
+  ]
+}

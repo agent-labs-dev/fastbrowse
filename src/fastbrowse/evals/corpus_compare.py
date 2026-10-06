@@ -20,6 +20,7 @@ grader pins, before the first token is spent.
 
 import argparse
 import asyncio
+import contextlib
 import ipaddress
 import json
 import math
@@ -45,6 +46,8 @@ from fastbrowse.evals.datasets import SOURCES, load_tasks
 from fastbrowse.evals.external_grade import DEFAULT_TIMEOUT
 from fastbrowse.evals.live import ARMS, NAVIGATION_FAILED, STUCK_SECONDS, ArmReport, ArmSpec, _down
 from fastbrowse.evals.live_tasks import Category, LiveTask, Outcome
+from fastbrowse.evals.native_state import attached
+from fastbrowse.evals.state_watch import ObserverSpec, StateWatcher, build_observer
 from fastbrowse.evals.status import Ending, normalize
 from fastbrowse.evals.versions import provenance
 from fastbrowse.models import Status, Unavailable
@@ -429,6 +432,7 @@ async def run_arm_attempt(
     reset: ResetSpec,
     run_id: str,
     authorize: bool,
+    observer: ObserverSpec | None = None,
     on_attempt: Callable[[ArmAttempt], None] | None = None,
 ) -> ArmAttempt:
     """Reset, then one arm attempt, then one grade, with every ending recorded.
@@ -438,11 +442,22 @@ async def run_arm_attempt(
     is complete even though its status is not fastbrowse's. A runner that outlives the live suite's stuck bound is
     stopped as an outage, and an interrupt during the arm or the grade writes its own unknown-cost row before the
     cancellation is re-raised, so no in-flight spend is dropped.
+
+    With an `observer`, the capsule is read once after the reset and periodically while the arm runs, and the
+    sampler is stopped and joined before grading. Its samples reach the grader only through `native_state.attached`
+    for that one call, never through the outcome, and are retained with every error beside the attempt artifact.
     """
     await asyncio.to_thread(downloads.mkdir, parents=True, exist_ok=True)
     payload = json.dumps({"site": ref.site, "run_id": run_id, "task": ref.id, "repeat": repeat, "retry": retry})
+    reset_began = time.monotonic()
     reset_record = await run_reset(reset, site=ref.site or "", run_id=run_id, payload=payload.encode("utf-8"))
-    started = time.monotonic()
+    reset_seconds = time.monotonic() - reset_began
+    # The arm's clock starts at its runner and stops when the runner does: the reset, the observer's first read
+    # and the grade are the harness's work, so they are kept apart in the artifact and never counted as arm latency.
+    entered = time.monotonic()
+    started: float | None = None
+    ended: float | None = None
+    graded_seconds = 0.0
     outcome: Outcome | None = None
     report: ArmReport | None = None
     error: str | None = None
@@ -452,6 +467,7 @@ async def run_arm_attempt(
     ending = Ending.ERROR
     interrupted = False
     cancelled: BaseException | None = None
+    watcher = None if observer is None else StateWatcher(observer, ref)
     if not reset_record.ok:
         # The capsule was not reset, so the arm is not started: a stale state would measure the previous attempt.
         error = f"reset failed: {reset_record.error}"
@@ -460,9 +476,15 @@ async def run_arm_attempt(
         task = live_task(ref, authorize=authorize)
         try:
             async with asyncio.timeout(STUCK_SECONDS) as cap:
-                outcome, report = await spec.runner(
-                    task, http, downloads, bitwarden=False, record=None, started=started
-                )
+                async with watcher or contextlib.nullcontext():
+                    started = time.monotonic()
+                    try:
+                        outcome, report = await spec.runner(
+                            task, http, downloads, bitwarden=False, record=None, started=started
+                        )
+                    finally:
+                        # Before the watcher's exit joins its sampler, so that wait is not the arm's time.
+                        ended = time.monotonic()
         except (asyncio.CancelledError, KeyboardInterrupt) as exc:  # the row is written below, then re-raised
             cancelled = exc
             interrupted = True
@@ -485,14 +507,17 @@ async def run_arm_attempt(
             if ending is Ending.UNAVAILABLE:
                 grade_error = f"outage: {report.status} ({report.failure_class or 'provider unavailable'})"
             else:
+                grade_began = time.monotonic()
                 try:
-                    grade = await grader(ref, outcome)
+                    with attached(None if watcher is None else watcher.trusted()):
+                        grade = await grader(ref, outcome)
                 except (asyncio.CancelledError, KeyboardInterrupt) as exc:
                     cancelled = exc
                     interrupted = True
                     error = grade_error = "interrupted"
                 except Exception as exc:
                     grade_error = f"grader raised {type(exc).__name__}: {exc}"
+                graded_seconds = time.monotonic() - grade_began
         if not interrupted and grade is None and ending is not Ending.UNAVAILABLE:
             try:
                 down = await _down(task, http)
@@ -516,7 +541,9 @@ async def run_arm_attempt(
         ending = Ending.ERROR
         raw_status = None
         grade_error = error
-    seconds = round(time.monotonic() - started, 2)
+    # An arm that never started (reset failed, or the observer's first read was interrupted) ran for no time.
+    seconds = 0.0 if started is None else round((time.monotonic() if ended is None else ended) - started, 2)
+    observer_seconds = 0.0 if started is None else started - entered
     if interrupted:
         # The attempt may have spent before it was stopped, and an interrupted grade cannot price it.
         dollars: float | None = None
@@ -538,9 +565,13 @@ async def run_arm_attempt(
         # A None price is itself the unknown: the known total would only be a floor, so it is not reported as one.
         unknown_cost = report.dollars is None or bool(report.unknown_cost)
     model = None if report is None else (report.model or report.text_model)
+    observations = None
+    if watcher is not None and reset_record.ok:
+        observations = _write_text(downloads / "observations.json", json.dumps(watcher.record(), indent=2) + "\n")
     artifact = _write_artifact(
         downloads,
         {
+            "observations": None if observations is None else str(observations),
             "arm": arm,
             "pin": spec.pin,
             "tier": spec.tier,
@@ -548,6 +579,11 @@ async def run_arm_attempt(
             "retry": retry,
             "reset": reset_record.model_dump(mode="json"),
             "error": error,
+            "overhead_seconds": {
+                "reset": round(reset_seconds, 2),
+                "observer_before": round(observer_seconds, 2),
+                "grade": round(graded_seconds, 2),
+            },
             "outcome": None
             if outcome is None
             else {
@@ -634,6 +670,7 @@ async def run_comparison(
     retries: int = DEFAULT_RETRIES,
     authorize: bool = False,
     max_attempts: int | None = None,
+    observer: ObserverSpec | None = None,
     on_attempt: Callable[[ArmAttempt], None] | None = None,
     on_skip: Callable[[SkipRecord], None] | None = None,
 ) -> ComparisonResult:
@@ -677,6 +714,7 @@ async def run_comparison(
                 reset=reset,
                 run_id=run_id,
                 authorize=authorize,
+                observer=observer,
                 on_attempt=on_attempt,
             )
             attempts.append(attempt)
@@ -1012,15 +1050,16 @@ def _is_probe(ref: TaskRef) -> bool:
 
 
 def _recorded_argv(argv: Sequence[str]) -> list[str]:
-    """The canonical argv redaction, plus `--reset-command`, whose single quoted argument can carry a credential."""
+    """The canonical argv redaction, plus `--reset-command` and `--observer-command`, whose single argument can carry
+    a credential or the path of a credential file."""
     redacted: list[str] = []
     arguments = iter(argv)
     for argument in arguments:
-        if argument == "--reset-command":
+        if argument in ("--reset-command", "--observer-command"):
             redacted.extend((argument, "[redacted]"))
             next(arguments, None)
-        elif argument.startswith("--reset-command="):
-            redacted.append("--reset-command=[redacted]")
+        elif argument.startswith(("--reset-command=", "--observer-command=")):
+            redacted.append(f"{argument.partition('=')[0]}=[redacted]")
         else:
             redacted.append(argument)
     return corpus_module._recorded_argv(redacted)
@@ -1066,6 +1105,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--reset-sha256", help="required sha256 of --reset-code")
     parser.add_argument("--reset-env", type=Path, help="JSON object of extra reset environment variables")
     parser.add_argument("--reset-timeout", type=float)
+    parser.add_argument("--observer-command", help="state observer as a JSON argument vector; needs --grader-command")
+    parser.add_argument("--observer-code", type=Path, help="the observer program's file, whose sha256 pins it")
+    parser.add_argument("--observer-sha256", help="required sha256 of --observer-code")
+    parser.add_argument("--observer-interval", type=float, help="seconds between during samples (default 0.5)")
+    parser.add_argument("--observer-timeout", type=float, help="seconds one observer invocation may run")
     parser.add_argument(
         "--grader-command",
         nargs=argparse.REMAINDER,
@@ -1108,6 +1152,15 @@ async def main(argv: list[str]) -> int:
         if args.grader_command is None and (args.grader_code or args.grader_sha256 or args.grader_timeout):
             raise ValueError("--grader-code, --grader-sha256 and --grader-timeout need --grader-command")
         grader = _build_grader(args)
+        observer = build_observer(
+            args.observer_command,
+            code=args.observer_code,
+            sha256=args.observer_sha256,
+            interval=args.observer_interval,
+            timeout=args.observer_timeout,
+        )
+        if observer is not None and args.grader_command is None:
+            raise ValueError("--observer-command needs --grader-command, the only consumer of its samples")
         source = _source(args)
     except ValueError as exc:
         parser.error(str(exc))
@@ -1130,6 +1183,7 @@ async def main(argv: list[str]) -> int:
         "code": None if args.grader_code is None else str(args.grader_code),
         "sha256": args.grader_sha256,
     }
+    run["observer"] = None if observer is None else observer.pin()
     reset_pin: dict[str, JsonValue] = (
         {
             "command": jsonable(_redacted_command(reset.command)),
@@ -1217,6 +1271,7 @@ async def main(argv: list[str]) -> int:
                     retries=args.retries,
                     authorize=args.authorize,
                     max_attempts=args.max_attempts,
+                    observer=observer,
                     on_attempt=write,
                     on_skip=skipped_rows.append,
                 )

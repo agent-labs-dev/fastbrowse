@@ -3320,3 +3320,42 @@ async def test_tally_field_counts_leaf_list_items_from_their_start_boundary() ->
     assert not outcome.incomplete
     assert notes.evidenced("r")
     assert notes.tallies[0].count == 2
+
+
+async def test_record_count_ignores_group_totals_and_counts_matching_children() -> None:
+    page = capture(
+        (BlockKind.HEADING, "Available packages: 2"),
+        (BlockKind.LIST_ITEM, "Oak - available"),
+        (BlockKind.LIST_ITEM, "Elm - available"),
+        (BlockKind.HEADING, "Archived packages: 2"),
+        (BlockKind.LIST_ITEM, "Pine - archived"),
+        (BlockKind.LIST_ITEM, "Birch - archived"),
+    )
+    jev = _ReadJev({"r": _choice("c0")})
+    llm = ScriptedLLM(
+        [
+            {
+                "answered": True,
+                "claims": [],
+                "tallies": [
+                    {
+                        "requirement_id": "r",
+                        "complete": True,
+                        "groups": [
+                            {
+                                "key": None,
+                                "records": [{"first": f"s{i}", "last": f"s{i}"} for i in (1, 2, 4, 5)],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+    )
+    notes = Notes()
+    requirement = Requirement(id="r", text="Count every package", kind=RequirementKind.INFORMATION, count_records=True)
+    outcome = await read(llm, page, requirement.text, ["r"], notes, jev=jev, requirements=(requirement,))
+    assert not outcome.incomplete
+    assert notes.evidenced("r")
+    assert sum(tally.count for tally in notes.tallies) == 4
+    assert len(llm.calls) == 1

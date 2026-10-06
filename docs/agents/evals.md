@@ -99,3 +99,54 @@ from the canonical live-suite feed and disclose endpoint adapters and excluded t
 A stopped draw cannot supply a comparison headline. Truncated runs, interrupted runs and runs without a task
 that has three paired repeats exit non-zero. One- and two-repeat runs retain diagnostic rows but cannot pass
 the comparison gate.
+
+### Endpoint adapter and strict state supplements
+
+`fastbrowse.evals.endpoint_adapter` forwards one capsule to a public origin for hosted browsers:
+`python -m fastbrowse.evals.endpoint_adapter SITE PORT --upstream-map up.json --public-map public.json`. It
+validates both URL maps, forwards every method, and rewrites only the capsule's exact origin (plain and
+JSON-escaped, with its `localhost` spelling) in text bodies, `Location` and similar headers. A cookie keeps every
+attribute, `Secure` and `SameSite` included. Only a `Domain` naming the upstream host (any case, port stripped)
+becomes the configured public host, and an unrelated domain stays. The public map is required, is re-read per
+request, and fails closed: an unreadable map, or one without a valid origin for the site, is a 502 before anything
+is forwarded, and the command refuses to start on it. The cookie domain never comes from a request header. Report
+the adapter with the run, as an endpoint limit.
+
+`fastbrowse.evals.native_state` is a declarative contract for judging an attempt from observed site state, never
+from its answer text. A supplement file lists ordered witnesses (`before`, `during`, `after`), each naming the
+observers that read it and the checks over the reading: `equals`, `minimum`, `maximum` (finite numbers), or
+`records` (a count of records containing a partial record). A supplement is pinned to the dataset revision and
+digest, the site, the SHA-256 of the task text and the SHA-256 of the upstream predicate, and is reported under its
+own `strict-supplement` label beside the whole, untouched upstream grade; a pass needs both. `before` and `during`
+are read only by a trusted observer the harness runs beside the attempt, delivered under the top-level request key
+`native_observations` (never inside `outcome`, which the agent produced) as periodic samples
+`{sequence, at, phase, data}` with the observer's code digest. `before` is the last sample before the attempt and
+`during` the first sample whose checks hold, so a state the sampler missed is ungraded, never a pass. `after` is
+read by the grader at grade time. A required witness that is absent leaves the attempt ungraded, and a contradicted
+one fails it. A supplement that lists `unwitnessed` requirements never passes: it is reported limited and ungraded.
+
+`scripts/native_grader.py` applies it behind the `external_grade` bridge, wrapping the upstream grader command
+(`--upstream`, with required `--upstream-code` and `--upstream-code-sha256`) and accepting samples only from the
+observer whose digest is `--observer-sha256`. Probe observers use an `--observe-arg` command template; HTTP
+observers use `--base-urls` and `--auth-file`. The one supplement shipped,
+`docs/validation/2026-10-06-native-state-supplements.json`, strengthens the upstream booking-then-cancel task, whose
+upstream check (two customers) is also met by an uncancelled or doubled booking. The capsule does not store the
+cancellation reason and no action audit exists, so that task is limited and ungraded even when the sequence holds.
+`fastbrowse.evals.corpus_compare` runs the observer as a watcher around each physical attempt. Options, which must
+precede `--grader-command` because that option takes the rest of the line: `--observer-command` (a JSON argument
+vector, never a shell string), `--observer-code` and `--observer-sha256` (the pinned file, which the command must
+run), `--observer-interval` (default 0.5 seconds, 0.1 to 60) and `--observer-timeout` (default 10, at most 120).
+They are validated before any arm is prepared, need `--grader-command`, and record only the program, code,
+digest and bounds in the run protocol; the argument vector is redacted from the recorded argv. After the reset
+the observer is invoked with `{"task": TaskRef, "phase": "before"}`, then with `"during"` every interval while the
+arm runs, and prints a mapping of observer name to reading. Its code digest is rechecked before every invocation,
+its environment is the grader's allowlist, and a timeout or cancellation kills its process group. The sampler is
+stopped and joined before grading. The samples reach the grader command only as the top-level
+`native_observations` key, through a context variable set for that one grade; nothing on the outcome can set it.
+An observer that fails, times out or prints anything but a JSON object records an error and no sample, so a
+required `before` or `during` witness leaves the attempt ungraded. Samples and errors are kept in
+`observations.json` beside `arm-report.json`, capped at 600 samples per attempt. Use
+`scripts/native_grader.py --sample-phase request` as the observer: it reads the matching runner witness with the
+same probe and HTTP readers, never calls the upstream grader, and prints `{}` for a task with no supplement. A
+trusted observer may read a credential from an `--auth-file` path the caller installed; no key is in the
+environment or the recorded run.

@@ -342,6 +342,8 @@
       e.ownerDocument.location.origin,
       e.ownerDocument.defaultView.performance.timeOrigin,
       submitSemantics(e),
+      source.getAttribute('name'),
+      source.getAttribute('autocomplete'),
       identity(source),
     ];
   };
@@ -386,6 +388,8 @@
       distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
       sensitive: secret(source),
       input_type: source.type || null,
+      input_name: source.getAttribute('name') || null,
+      autocomplete: source.getAttribute('autocomplete') || null,
       frame_origin: e.ownerDocument.location.origin,
       frame_path: framePath(e.ownerDocument),
       form_id: fieldScope(source),

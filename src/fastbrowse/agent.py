@@ -190,6 +190,8 @@ class _FormText(Frozen):
 
 _FIELD_RULES = (
     "Infer its meaning from the task, current value, page context and recent actions. "
+    "A validation message may replace the displayed label. Use input_type, input_name and autocomplete "
+    "to distinguish the field from nearby fields; an email address and phone number are not interchangeable. "
     "Use the field's displayed format for dates, except in a field whose input_type is date, datetime-local, month, "
     "week or time, which takes ISO 8601 (2026-09-25, 2026-09-25T14:30, 2026-09, 2026-W39, 14:30). "
     "A day named relative to today (tomorrow, the next Friday) is the first matching entry of page.next_days, "
@@ -226,6 +228,11 @@ class _Recovery(Frozen):
         description="Operation on the control or page; scroll goes down and scroll_up goes up.",
     )
     give_up: bool = Field(description="True only when the task cannot progress without the user.")
+    text: str | None = Field(
+        default=None,
+        description="For a fill correction only: the exact non-secret value supplied by the task or notes "
+        "for the chosen observed field. Null for other operations, secrets, or an uncertain value.",
+    )
     needs_input: bool = Field(
         default=False,
         description="With give_up: true when what the user must supply is a value the task never gave, such as a "
@@ -279,6 +286,7 @@ class _TransactionCandidate:
     from_url: str
     landed_url: str | None = None
     committing: bool | None = None
+    outcome_read: bool = False
 
 
 @dataclass(slots=True)
@@ -598,7 +606,10 @@ class Agent:
             observation = await self._observe()
             state.first_url = state.first_url or observation.url
             self._note_effect(state, observation)
-            if observation.response_status is not None and observation.response_status >= 400:
+            inspect_wall = observation.response_status in {401, 403} and _access_inspection(await state.await_plan())
+            if inspect_wall:
+                state.http_failure = None
+            if observation.response_status is not None and observation.response_status >= 400 and not inspect_wall:
                 document = (
                     observation.url,
                     observation.document_key or observation.page_key,
@@ -686,7 +697,11 @@ class Agent:
                     raise _Stop(
                         Status.BLOCKED, f"bot check at {origin}; it is not a sign-in and no credential passes it"
                     )
-                raise _Stop(Status.NEEDS_LOGIN, f"sign-in required at {origin}")
+                plan = await state.await_plan()
+                if not _access_inspection(plan):
+                    raise _Stop(Status.NEEDS_LOGIN, f"sign-in required at {origin}")
+                # A task inspecting an access boundary needs its observed wall read and verified, not passed.
+                decision = _code_decision(Operation.READ, None)
             uncertain = decision.confidence < self._config.thresholds.recover_below
             decided_by = Decider.JEV
             if (uncertain or decision.operation not in _NOT_ACTING) and (
@@ -944,7 +959,7 @@ class Agent:
                 raise failure.stop()
         started = time.monotonic()
         state.form_continues = False
-        if decision.operation not in {Operation.FILL, *SCROLLING}:
+        if decision.operation not in {Operation.FILL, Operation.READ, *SCROLLING}:
             state.form_values.clear()
         facts_before = len(state.notes.facts)
         reason = state.hint if decision.directed else None
@@ -1695,7 +1710,9 @@ class Agent:
             "field": target.model_dump(mode="json", exclude_none=True),
             "other_fields": [
                 control.model_dump(
-                    mode="json", include={"label", "context", "role", "value", "input_type"}, exclude_none=True
+                    mode="json",
+                    include={"label", "context", "role", "value", "input_type", "input_name", "autocomplete"},
+                    exclude_none=True,
                 )
                 for control in observation.controls
                 if control.id != target.id and (Operation.FILL in control.operations or control.role == "combobox")
@@ -1887,31 +1904,38 @@ class Agent:
     async def _read_before_interaction(
         self, state: _RunState, observation: Observation, decision: Decision, decided_by: Decider = Decider.JEV
     ) -> bool:
+        # A native dialog pauses JavaScript, so capture cannot run until the dialog has been handled.
+        if observation.dialog is not None:
+            return False
+        if state.ready_plan is None and any(not candidate.outcome_read for candidate in state.transaction_candidates):
+            await state.await_plan()
         # A read takes in the whole page, so a scroll over one never read only spends steps: Jev judges evidence from
         # the viewport, and scrolled a country list for Mongolia until recovery ran out and the run stopped stuck.
         unread_scroll = decision.operation in SCROLLING and not any(
             key[0] == observation.document_key for key in state.reads
         )
+        transaction_pending = _unread_transaction(state)
         if decision.operation in _NOT_ACTING or (
-            decision.read_assessment is not ReadAssessment.EVIDENCE and not unread_scroll
+            decision.read_assessment is not ReadAssessment.EVIDENCE and not unread_scroll and not transaction_pending
         ):
             return False
-        if state.read_here and _only_typed_since_read(state.history):
+        if not transaction_pending and state.read_here and _only_typed_since_read(state.history):
             # The page was read, and since then only a field's own text changed, which is the run's own writing:
             # pypi-newer read its httpx results again after typing "requests", only because the box's text had.
             return False
         seen = _seen(observation)
-        if (seen in state.passed and seen != state.acted_on) or state.typed_on_passed:
+        if not transaction_pending and ((seen in state.passed and seen != state.acted_on) or state.typed_on_passed):
             # Back on a page exactly as the run left it unread, perhaps with its own typing added: Jev judged it
             # had nothing to read then, and nothing it holds has changed. Walking back through a wizard to correct
             # a field, Jev called each earlier step evidence on the way, and reading them cost 4s a step.
             return False
         plan = await state.await_plan()
-        if not _unread(plan, state.notes):
+        if not transaction_pending and not _unread(plan, state.notes):
             return False
         # An interaction can remove evidence, so read first and reconsider before authorizing the next action.
         reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
-        return not await self._step(state, observation, reading, decided_by)
+        skipped = await self._step(state, observation, reading, decided_by)
+        return transaction_pending or not skipped
 
     async def _reread_if_changed(self, state: _RunState, observation: Observation) -> bool:
         """Read a page state again when what an earlier read of it evidenced is no longer on it; whether it read.
@@ -1972,7 +1996,8 @@ class Agent:
         capture = capture or await self._capture()
         plan = await state.await_plan()
         wanted = [r for r in state.notes.unresolved(plan) if r.kind is RequirementKind.INFORMATION]
-        owed = not wanted and state.owes_read and plan.page_answer_expected
+        transaction_pending = _unread_transaction(state)
+        owed = transaction_pending or (not wanted and state.owes_read and plan.page_answer_expected)
         if owed:
             # Every requirement was evidenced off the page before the last interaction redrew it, so they are
             # asked again of what it drew: a reader asked nothing would leave the pre-filter fare answering.
@@ -1995,7 +2020,7 @@ class Agent:
             # what the last interaction drew. A barren skip read nothing, and leaves the read owed.
             state.owes_read = False
             key = observation.document_key, capture.sha256, wanted_ids
-            if key in state.reads:
+            if key in state.reads and not transaction_pending:
                 trace("read_skipped", reason="unchanged_content_and_requirements")
                 return False, True
             state.reads.add(key)
@@ -2047,6 +2072,8 @@ class Agent:
             incomplete=state.incomplete,
             require_all_evidence=require_all_evidence or (state.through_end and state.pages > 0),
         )
+        for candidate in state.transaction_candidates:
+            candidate.outcome_read = True
         for requirement in wanted:
             state.notes.supersede(requirement.id, capture.url, capture.sha256, capture.text)
         state.incomplete.update(outcome.incomplete)
@@ -2466,6 +2493,13 @@ class Agent:
                         "When the notes already answer every open requirement, the next "
                         "subgoal is to finish. Recovery memory records earlier diagnoses and subgoals; "
                         "use the recent steps to judge whether to try another way. "
+                        "For a covered control, dismiss the observed overlay before trying the underlying "
+                        "control again. Do not alternate the same blocked click with scrolling. "
+                        "For a fill correction, return its exact non-secret task value in text, bound to the "
+                        "chosen control. Use field semantics rather than a validation message as its identity. "
+                        "A successful submission may have changed the page before it was read. Read and check "
+                        "the outcome before submitting again; do not create another transaction to repair an "
+                        "uncertain report. Manage an existing transaction through its observed controls or links. "
                         "HTTP failures describe this browser session, not what the site permits in general. "
                         "Failed links are withheld on unchanged source pages; use another observed route or stop. "
                         "Dates are relative to the supplied current date.\n\n"
@@ -2531,6 +2565,22 @@ class Agent:
         elif chosen is not None and operation is not None and 0 <= chosen < len(observation.controls):
             state.directed = (operation, observation.controls[chosen].id)
             named = observation.controls[chosen]
+            if (
+                operation is Operation.FILL
+                and Operation.FILL in named.operations
+                and not named.sensitive
+                and generation.data.text
+                and generation.data.text.strip()
+                and not self._redactor.reveals(generation.data.text)
+                and any(
+                    re.search(rf"(?<![\w@.+-]){re.escape(generation.data.text)}(?![\w@+-]|\.\w)", source)
+                    for source in (state.task, *state.inputs.values(), *(fact.text for fact in state.notes.facts))
+                )
+            ):
+                state.form_values[(observation.document_key, named.id)] = (
+                    named,
+                    _FieldText(missing=False, text=generation.data.text),
+                )
             if state.unsure_commit == (operation, named.id, _describe(named), observation.url):
                 state.confirmed_commit = state.unsure_commit
         state.unsure_commit = None
@@ -2568,7 +2618,8 @@ class Agent:
         observation after the browser's bounded loading wait, not the state that prompted the DONE choice.
         """
         fresh = await self._observe()
-        if fresh.response_status is not None and fresh.response_status >= 400:
+        inspect_wall = fresh.response_status in {401, 403} and _access_inspection(await state.await_plan())
+        if fresh.response_status is not None and fresh.response_status >= 400 and not inspect_wall:
             raise _HttpFailure(url=fresh.url, status=fresh.response_status).stop()
         state.ledger.reserve(CostComponent.JEV)
         await state.await_plan()
@@ -3254,7 +3305,19 @@ def _controls_text(observation: Observation) -> str:
                 "index": index,
                 **control.model_dump(
                     mode="json",
-                    include={"label", "context", "role", "value", "operations", "selected", "expanded", "blocking"},
+                    include={
+                        "label",
+                        "context",
+                        "role",
+                        "value",
+                        "operations",
+                        "selected",
+                        "expanded",
+                        "blocking",
+                        "input_type",
+                        "input_name",
+                        "autocomplete",
+                    },
                     exclude_none=True,
                 ),
             }
@@ -3370,6 +3433,27 @@ def _dialog_question(task: str, dialog: Dialog | None) -> NoulQuestion | None:
         ),
         true="Acceptance commits a destructive or externally visible change.",
         false="Acceptance only navigates, reveals information or edits a reversible draft.",
+    )
+
+
+def _access_inspection(plan: Plan) -> bool:
+    return (
+        plan.inspect_access
+        and plan.answer_expected
+        and bool(plan.requirements)
+        and all(requirement.kind is RequirementKind.INFORMATION for requirement in plan.requirements)
+    )
+
+
+def _unread_transaction(state: _RunState) -> bool:
+    # Possible submissions also include searches and filters. Only a requested state change needs a receipt read.
+    return (
+        state.ready_plan is not None
+        and any(requirement.kind is RequirementKind.ACTION for requirement in state.ready_plan.requirements)
+        and any(
+            not candidate.outcome_read and candidate.committing is not False
+            for candidate in state.transaction_candidates
+        )
     )
 
 

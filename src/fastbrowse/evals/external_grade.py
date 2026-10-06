@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationEr
 
 from fastbrowse.evals.corpus import Grade, TaskRef
 from fastbrowse.evals.live_tasks import Outcome
+from fastbrowse.evals.native_state import TrustedObservations, attached_observations
 
 if TYPE_CHECKING:
     from fastbrowse.evals.corpus import Grader
@@ -167,6 +168,8 @@ class _Request(BaseModel):
     schema_version: Literal[1] = 1
     task: TaskRef
     outcome: _OutcomePayload
+    native_observations: TrustedObservations | None = None
+    """The harness's own samples, a sibling of `outcome` and never a field of it, since `outcome` is the agent's."""
 
 
 def _jsonable(value: object) -> JsonValue:
@@ -183,7 +186,11 @@ def _jsonable(value: object) -> JsonValue:
 
 
 def grade_request(ref: TaskRef, outcome: Outcome) -> _Request:
-    """The one JSON request a grader command receives: the pinned task and the observed attempt."""
+    """The one JSON request a grader command receives: the pinned task and the observed attempt, plus the watcher's
+    samples when one is attached for this grade."""
+    trusted = attached_observations()
+    if trusted is not None and trusted.task_id != ref.id:
+        raise GraderError(f"{ref.id}: attached observations belong to task {trusted.task_id}")
     return _Request(
         task=ref,
         outcome=_OutcomePayload(
@@ -195,6 +202,7 @@ def grade_request(ref: TaskRef, outcome: Outcome) -> _Request:
             evidence=None if outcome.evidence is None else _jsonable(outcome.evidence),
             unobservable=outcome.unobservable,
         ),
+        native_observations=trusted,
     )
 
 
@@ -307,7 +315,10 @@ class LocalCommandGrader:
         current = file_digest(self._code)
         if current != self._digest:
             raise GraderError(f"grader code changed since it was pinned: {current} != {self._digest}")
-        payload = grade_request(ref, outcome).model_dump_json().encode("utf-8")
+        request = grade_request(ref, outcome)
+        # The key is absent, not null, without a watcher, so a strict grader written before it existed is unaffected.
+        absent = None if request.native_observations is not None else {"native_observations"}
+        payload = request.model_dump_json(exclude=absent).encode("utf-8")
         stdout = await _run_command(self._command, payload, seconds=self._timeout, environment=safe_environment())
         try:
             reported = Grade.model_validate_json(stdout)

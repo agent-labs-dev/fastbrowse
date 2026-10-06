@@ -1,0 +1,47 @@
+{
+  "kind": "capped-diagnostic-receipt",
+  "max_dollars_per_attempt": 0.04,
+  "publishable": false,
+  "runs": [
+    {
+      "file": "native-fixes-heldout-before.jsonl",
+      "sha256": "d58c5f643abc1384dba4605d55537a4d93aa5bce55f4f504de0b8114863545d4",
+      "attempts": 27,
+      "passed": 21,
+      "dollars": 0.39176,
+      "unknown_cost": 0,
+      "git_sha": "08869c258bbedd2e5f5d30589656a8dfb6ea7587",
+      "dirty": false
+    },
+    {
+      "file": "native-fixes-heldout-main-py313.jsonl",
+      "sha256": "3165b76b3f32ea6a5e772a7d26d3644674f315d8439c453bc06428bc486a6264",
+      "attempts": 27,
+      "passed": 23,
+      "dollars": 0.38907,
+      "unknown_cost": 0,
+      "git_sha": "08869c258bbedd2e5f5d30589656a8dfb6ea7587",
+      "dirty": false
+    },
+    {
+      "file": "native-fixes-dev.jsonl",
+      "sha256": "917516d33ae1cc81b7def711d5c9af4604cc819722aa4dd488bef8fb37421caa",
+      "attempts": 39,
+      "passed": 39,
+      "dollars": 0.37667,
+      "unknown_cost": 0,
+      "git_sha": "860c54ba59b8a37e5ac6f77fe9ba59050a28c292",
+      "dirty": true
+    },
+    {
+      "file": "native-fixes-heldout-after.jsonl",
+      "sha256": "ffb019c6f739ad0661e708b4fb88ac8ccac8acc6945345db674009d085fc84d1",
+      "attempts": 27,
+      "passed": 22,
+      "dollars": 0.36051,
+      "unknown_cost": 0,
+      "git_sha": "860c54ba59b8a37e5ac6f77fe9ba59050a28c292",
+      "dirty": true
+    }
+  ]
+}

@@ -656,3 +656,43 @@ async def test_select_the_page_refuses_is_not_executed(
     result = await page.act(action, obs)
     assert result.outcome is StepOutcome.FAILED
     assert result.detail and "'Free'" in result.detail
+
+
+@pytest.mark.parametrize("detail_race", [False, True])
+async def test_covered_target_reports_visible_overlay_controls(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, monkeypatch: pytest.MonkeyPatch, detail_race: bool
+) -> None:
+    await page.navigate(f"{main_site}/dispatch.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "const cover = document.getElementById('cover'); cover.style.display = 'block'; "
+        "cover.setAttribute('role','dialog'); cover.setAttribute('aria-label','Basket'); "
+        "cover.innerHTML = '<button aria-label=Close>Close</button>'; "
+        "cover.firstElementChild.onclick = () => cover.style.display = 'none';",
+    )
+
+    if detail_race:
+        evaluate = page._evaluate
+
+        async def racing_evaluate(session_id: str, expression: str, *, context_id: int | None = None) -> object:
+            if "const cover = hit?.closest" in expression:
+                raise BrowserError("Execution context changed while describing the obstruction")
+            return await evaluate(session_id, expression, context_id=context_id)
+
+        monkeypatch.setattr(page, "_evaluate", racing_evaluate)
+    before = await page.observe()
+    result = await page.act(Action(operation=Operation.CLICK, target_id=find(before, "One way").id), before)
+    assert result.outcome is StepOutcome.COVERED
+    if detail_race:
+        assert result.detail == "Target is covered."
+    else:
+        assert "Basket" in (result.detail or "") and "Close" in (result.detail or "")
+    assert await eval_value(browser_session, browser_session.active_session_id, "window.clicks") == []
+    closed = await page.act(
+        Action(operation=Operation.CLICK, target_id=find(await page.observe(), "Close").id), await page.observe()
+    )
+    assert closed.outcome is StepOutcome.EXECUTED
+    after = await page.observe()
+    retried = await page.act(Action(operation=Operation.CLICK, target_id=find(after, "One way").id), after)
+    assert retried.outcome is StepOutcome.EXECUTED

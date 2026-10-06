@@ -756,6 +756,8 @@ async def read(
                     "- Values typed into fields, suggestions and previews are inputs, not results.\n\n"
                     "# Tallies\nFor a count of records or a ranking by record count, return tally groups: "
                     "each key is the label stated in its records, and each record cites its own source blocks. "
+                    "Group headings and per-group counts are context, not records: enumerate the requested "
+                    "child entities and verify their filters and required status. "
                     "Use continues.tallies while more pages remain and tallies with complete=true only on the "
                     "last requested page. List only records from this chunk; never repeat earlier records, quote "
                     "their text, calculate totals or write claims for counted records. Code deduplicates, counts "
@@ -1725,6 +1727,10 @@ async def _read_choices(
     tokens: TokenBudget,
     ledger: Ledger | None,
 ) -> _ChoiceRead:
+    # A group heading can supply a plausible scalar while the requested count needs its child records.
+    requirements = tuple(requirement for requirement in requirements if not requirement.count_records)
+    if not requirements:
+        return _ChoiceRead()
     candidates = read_candidates(capture)
     if not candidates and next(_iter_read_candidates(capture, capture.blocks), None) is None:
         logger.debug("read reader=llm reason=no_bounded_candidate_set")

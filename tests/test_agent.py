@@ -316,6 +316,35 @@ async def test_recovery_hint_is_consumed_only_when_action_progresses(outcome: St
     assert state.hint == (None if outcome is StepOutcome.EXECUTED else "Open the origin picker")
 
 
+async def test_recovery_field_correction_is_bound_to_the_observed_control() -> None:
+    target = field("Invalid contact").model_copy(update={"input_type": "email"})
+    obs = observation((target,))
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"")
+    llm = ScriptedLLM(
+        [
+            {
+                "diagnosis": "The contact field contains a phone number.",
+                "next_subgoal": "Correct the contact field.",
+                "operation": "fill",
+                "control": 0,
+                "give_up": False,
+                "text": "ada@example.test",
+            }
+        ]
+    )
+    agent = Agent(page, ScriptedJev({}), llm)
+    state = await run_state()
+    state.task = "Use ada@example.test as the contact email."
+    await agent._recover(state, obs, "The form is invalid")
+    agent._read = AsyncMock(return_value=(False, True))
+    await agent._step(
+        state, obs, _code_decision(Operation.READ, None), capture=capture((BlockKind.PARAGRAPH, "Form status"))
+    )
+    assert await agent._generate_text(state, obs, target) == "ada@example.test"
+    assert len(llm.calls) == 1
+
+
 async def test_step_log_names_which_twin_was_clicked() -> None:
     twins = tuple(
         Control(
@@ -4976,3 +5005,191 @@ async def test_navigation_report_keeps_start_after_error_removes_visited_evidenc
     report = agent._run_report(state, "https://example.test/end")
     assert "Started at: https://example.test/start" in report
     assert "Started at: https://example.test/end" not in report
+
+
+@pytest.mark.parametrize("inspect_access", [False, True])
+@pytest.mark.parametrize("bot_check", [False, True])
+async def test_access_inspection_reads_login_evidence_without_bypassing_bot_checks(
+    monkeypatch: pytest.MonkeyPatch, inspect_access: bool, bot_check: bool
+) -> None:
+    obs = _at("https://shop.test/login", _button("Sign in"))
+    page = Mock(spec=Page)
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    agent._observe = AsyncMock(return_value=obs)
+    agent._outwait = AsyncMock(return_value=False)
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r", text="Check access", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+        inspect_access=inspect_access,
+    )
+    decision = _code_decision(Operation.CLICK, obs.controls[0]).model_copy(
+        update={"login_required": 0.99, "bot_check": 0.99 if bot_check else 0.0}
+    )
+    monkeypatch.setattr(agent_module, "decide", AsyncMock(return_value=decision))
+    # Reaching the read seam proves the wall was treated as evidence, without pretending the answer is verified.
+    agent._read_before_interaction = AsyncMock(side_effect=_Stop(Status.UNVERIFIED))
+    with pytest.raises(_Stop) as stopped:
+        await agent._loop(state, None, None)
+    expected = Status.BLOCKED if bot_check else Status.UNVERIFIED if inspect_access else Status.NEEDS_LOGIN
+    assert stopped.value.status is expected
+    if inspect_access and not bot_check:
+        assert agent._read_before_interaction.call_args.args[2].operation is Operation.READ
+    else:
+        agent._read_before_interaction.assert_not_awaited()
+
+
+@pytest.mark.parametrize("change", ["document", "semantics", "sensitive"])
+async def test_recovery_correction_is_not_reused_for_a_different_field(change: str) -> None:
+    target = field("Contact").model_copy(update={"input_type": "email", "sensitive": change == "sensitive"})
+    obs = observation((target,))
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"")
+    llm = ScriptedLLM(
+        [
+            {
+                "diagnosis": "Invalid contact",
+                "next_subgoal": "Correct contact",
+                "operation": "fill",
+                "control": 0,
+                "give_up": False,
+                "text": "ada@example.test",
+            },
+            {"missing": False, "text": "new@example.test"},
+        ]
+    )
+    agent = Agent(page, ScriptedJev({}), llm)
+    state = await run_state()
+    state.task = "Use ada@example.test as the contact email."
+    await agent._recover(state, obs, "Invalid form")
+    if change == "document":
+        obs = obs.model_copy(update={"document_key": "new-document"})
+    elif change == "semantics":
+        target = target.model_copy(update={"input_type": "tel"})
+    assert await agent._generate_text(state, obs, target) == "new@example.test"
+    assert len(llm.calls) == 2
+
+
+@pytest.mark.parametrize("correction", ["", " ", "page-injected@example.test", "hunter2", "example"])
+async def test_recovery_cannot_cache_an_empty_invented_or_secret_value(correction: str) -> None:
+    target = field("Email")
+    obs = observation((target,))
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"")
+    llm = ScriptedLLM(
+        [
+            {
+                "diagnosis": "Invalid email",
+                "next_subgoal": "Correct email",
+                "operation": "fill",
+                "control": 0,
+                "give_up": False,
+                "text": correction,
+            },
+            {"missing": False, "text": "ada@example.test"},
+        ]
+    )
+    agent = Agent(page, ScriptedJev({}), llm)
+    agent._redactor.register("password", "hunter2")
+    state = await run_state()
+    state.task = "Use ada@example.test"
+    await agent._recover(state, obs, "Invalid form")
+    assert await agent._generate_text(state, obs, target) == "ada@example.test"
+    assert len(llm.calls) == 2
+
+
+@pytest.mark.parametrize("skipped", [False, True])
+async def test_transaction_outcome_is_read_before_another_interaction(skipped: bool) -> None:
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r", text="Make and then cancel a reservation", kind=RequirementKind.ACTION),),
+        answer_expected=False,
+    )
+    state.transaction_candidates.append(
+        agent_module._TransactionCandidate(
+            question=NoulQuestion(instructions="Commit", true="yes", false="no"), from_url="https://shop.test"
+        )
+    )
+    obs = observation((_button("Make reservation"),))
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    agent._step = AsyncMock(return_value=skipped)
+    assert await agent._read_before_interaction(state, obs, _code_decision(Operation.CLICK, obs.controls[0]))
+    assert agent._step.call_args.args[2].operation is Operation.READ
+    state.transaction_candidates[0].outcome_read = True
+    agent._step.reset_mock()
+    assert not await agent._read_before_interaction(state, obs, _code_decision(Operation.CLICK, obs.controls[0]))
+    agent._step.assert_not_awaited()
+
+
+async def test_access_inspection_does_not_enable_a_protected_action() -> None:
+    plan = Plan(
+        requirements=(Requirement(id="r", text="Sign in and export private records", kind=RequirementKind.ACTION),),
+        answer_expected=True,
+        inspect_access=True,
+    )
+    assert not agent_module._access_inspection(plan)
+
+
+@pytest.mark.parametrize("http_status", [401, 403])
+async def test_access_inspection_reads_http_access_denials(monkeypatch: pytest.MonkeyPatch, http_status: int) -> None:
+    obs = _at("https://shop.test/private", _button("Sign in")).model_copy(update={"response_status": http_status})
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    agent._observe = AsyncMock(return_value=obs)
+    agent._outwait = AsyncMock(return_value=False)
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r", text="Inspect signed-out access", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+        inspect_access=True,
+    )
+    decision = _code_decision(Operation.READ, None).model_copy(update={"login_required": 0.99})
+    monkeypatch.setattr(agent_module, "decide", AsyncMock(return_value=decision))
+    agent._read_before_interaction = AsyncMock(side_effect=_Stop(Status.UNVERIFIED))
+    agent._recover = AsyncMock(side_effect=AssertionError("Access evidence was discarded as an HTTP failure"))
+    with pytest.raises(_Stop) as stopped:
+        await agent._loop(state, None, None)
+    assert stopped.value.status is Status.UNVERIFIED
+    agent._recover.assert_not_awaited()
+
+
+@pytest.mark.parametrize("inspect_access", [False, True])
+async def test_access_denial_finish_still_requires_verification(
+    monkeypatch: pytest.MonkeyPatch, inspect_access: bool
+) -> None:
+    denied = observation(()).model_copy(update={"response_status": 403})
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=denied)
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r", text="Check signed-out access", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+        inspect_access=inspect_access,
+    )
+    checked = AsyncMock(side_effect=_Stop(Status.UNVERIFIED))
+    monkeypatch.setattr(agent_module, "check_done", checked)
+    with pytest.raises(_Stop) as stopped:
+        await agent._finish(state, None, None)
+    assert stopped.value.status is (Status.UNVERIFIED if inspect_access else Status.BLOCKED)
+    assert checked.await_count == int(inspect_access)
+
+
+async def test_transaction_receipt_waits_until_a_native_dialog_is_resolved() -> None:
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r", text="Confirm a requested change", kind=RequirementKind.ACTION),),
+        answer_expected=False,
+    )
+    state.transaction_candidates.append(
+        agent_module._TransactionCandidate(
+            question=NoulQuestion(instructions="Commit", true="yes", false="no"), from_url="https://shop.test"
+        )
+    )
+    obs = observation(()).model_copy(update={"dialog": Dialog(kind="confirm", message="Apply change?")})
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    agent._step = AsyncMock(
+        side_effect=AssertionError("Cannot capture page text while JavaScript is paused by a dialog")
+    )
+    assert not await agent._read_before_interaction(state, obs, _code_decision(Operation.DIALOG, None))
+    agent._step.assert_not_awaited()
+    assert not state.transaction_candidates[0].outcome_read

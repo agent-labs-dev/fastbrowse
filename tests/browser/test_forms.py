@@ -11,6 +11,20 @@ from fastbrowse.page import Action
 from tests.browser.test_browser import eval_value, find
 
 
+@pytest.mark.parametrize("kind", ["email", "tel"])
+async def test_validation_labels_preserve_field_semantics(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, kind: str
+) -> None:
+    await page.navigate(f"{main_site}/dispatch.html")
+    html = f'<form><input type={kind} name=contact_{kind} autocomplete={kind} aria-label="Invalid contact"></form>'
+    await eval_value(
+        browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(html)}"
+    )
+    control = find(await page.observe(), "Invalid contact")
+    assert control.input_name == f"contact_{kind}"
+    assert control.autocomplete == kind
+
+
 async def form(page: CdpPage, session: BrowserSession, site: str, script: str = "") -> None:
     await page.navigate(f"{site}/dispatch.html")
     html = "<form><label>Name<input id=name required></label><label>Email<input id=email></label></form>"
