@@ -6,10 +6,12 @@ cloud.cost  # metered lines, available after exit
 """
 
 import asyncio
+from collections.abc import Sequence
 from contextlib import suppress
 from decimal import Decimal
 from types import TracebackType
 from typing import Self
+from uuid import UUID
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
@@ -17,7 +19,10 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from fastbrowse.clients.validation import RETRYABLE_STATUS, TRANSIENT_TRANSPORT
 from fastbrowse.models import BrowserConnection, CostBasis, CostComponent, CostLine, Unavailable
 
-API = "https://api.browser-use.com/api/v3"
+API_V3 = "https://api.browser-use.com/api/v3"
+API_V4 = "https://api.browser-use.com/api/v4"
+# https://docs.browser-use.com/cloud/api-v4/browsers/create-browser-session: "up to 3 ready extensions".
+MAX_EXTENSIONS = 3
 
 
 class _BrowserView(BaseModel):
@@ -38,6 +43,18 @@ class BrowserUseCloudUnavailable(BrowserUseCloudError, Unavailable):
     """Browser Use Cloud could not be reached, or answered with a retryable status."""
 
 
+def _extension_ids(extensions: Sequence[str]) -> list[str]:
+    try:
+        ids = [str(UUID(extension)) for extension in extensions]
+    except ValueError:
+        raise BrowserUseCloudError("cloud_extensions takes extension IDs, which are UUIDs") from None
+    if len(set(ids)) != len(ids):
+        raise BrowserUseCloudError("cloud_extensions names the same extension twice")
+    if len(ids) > MAX_EXTENSIONS:
+        raise BrowserUseCloudError(f"a cloud browser takes at most {MAX_EXTENSIONS} extensions")
+    return ids
+
+
 class BrowserUseCloudBrowser:
     def __init__(
         self,
@@ -49,10 +66,15 @@ class BrowserUseCloudBrowser:
         profile: str | None = None,
         viewport: tuple[int, int] | None = None,
         allow_resizing: bool = False,
+        extensions: Sequence[str] = (),
     ) -> None:
         self._http = http
         self._headers = {"X-Browser-Use-API-Key": api_key}
-        self._body: dict[str, str | int] = {"timeout": timeout_minutes}
+        # Only the V4 create call takes extensions, so a run that asks for none stays on the V3 path it was built on.
+        self._api = API_V4 if extensions else API_V3
+        self._body: dict[str, str | int | list[str]] = {"timeout": timeout_minutes}
+        if extensions:
+            self._body["extensionIds"] = _extension_ids(extensions)
         if allow_resizing:
             self._body["allowResizing"] = True
         if proxy_country is not None:
@@ -147,9 +169,9 @@ class BrowserUseCloudBrowser:
             CostLine(component=CostComponent.PROXY, basis=CostBasis.METERED, dollars=float(browser.proxy_cost)),
         )
 
-    async def _call(self, method: str, path: str, *, json: dict[str, str | int]) -> httpx.Response:
+    async def _call(self, method: str, path: str, *, json: dict[str, str | int | list[str]]) -> httpx.Response:
         try:
-            response = await self._http.request(method, f"{API}{path}", headers=self._headers, json=json)
+            response = await self._http.request(method, f"{self._api}{path}", headers=self._headers, json=json)
         except TRANSIENT_TRANSPORT:
             # The request carries the API key header; never let the transport error's request escape.
             raise BrowserUseCloudUnavailable(f"Browser Use Cloud {method} {path} failed") from None

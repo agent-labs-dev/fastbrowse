@@ -116,8 +116,11 @@ async def _browser(
     proxy_country: str | None = "us",
     viewport: tuple[int, int] | None = None,
     allow_resizing: bool = False,
+    cloud_extensions: Sequence[str] = (),
 ) -> AsyncGenerator[BrowserConnection]:
     """The browser a run drives: one it is handed, a cloud browser, or local Chrome."""
+    if cloud_extensions and (key is None or cdp_url is not None or cdp_port is not None):
+        raise BrowserError("cloud_extensions load into a Browser Use Cloud browser this run starts, which needs a key")
     if cdp_url is not None and cdp_port is not None:
         raise BrowserError("cdp_url and cdp_port both name a browser to attach to; pass one")
     if cdp_url is not None or cdp_port is not None:
@@ -147,7 +150,13 @@ async def _browser(
             yield connection
         return
     remote = BrowserUseCloudBrowser(
-        key, http=http, profile=profile, proxy_country=proxy_country, viewport=viewport, allow_resizing=allow_resizing
+        key,
+        http=http,
+        profile=profile,
+        proxy_country=proxy_country,
+        viewport=viewport,
+        allow_resizing=allow_resizing,
+        extensions=cloud_extensions,
     )
     try:
         async with remote:
@@ -171,6 +180,7 @@ async def run_task(
     proxy_country: str | None = "us",
     viewport: tuple[int, int] | None = None,
     cloud_allow_resizing: bool = False,
+    cloud_extensions: Sequence[str] = (),
     jev: JevClient | None = None,
     llm: LLMClient | None = None,
     output_schema: type[BaseModel] | None = None,
@@ -206,8 +216,10 @@ async def run_task(
     `cloud_profile` names a profile on that cloud account, so a site someone signed into once in that
     profile is still signed in here; it is the remote counterpart of `LocalChrome.profile`. `proxy_country`
     and `viewport` shape a cloud browser this run starts. `cloud_allow_resizing` opts that browser into
-    CDP viewport changes, which the cloud service otherwise ignores. These options mean nothing for the
-    other two browsers. `jev` and
+    CDP viewport changes, which the cloud service otherwise ignores. `cloud_extensions` lists up to three
+    distinct extension IDs (UUIDs of ready extensions on that account) to load into the cloud browser; it is
+    an error with a local or attached browser rather than ignored. The other cloud options mean nothing for
+    the other two browsers. `jev` and
     `llm` default to clients built from `Settings` (the environment, then `.env`), so an embedder that
     resolves its own credentials, or serves Jev from somewhere else, passes them instead.
 
@@ -246,6 +258,7 @@ async def run_task(
                     proxy_country=proxy_country,
                     viewport=viewport,
                     allow_resizing=cloud_allow_resizing,
+                    cloud_extensions=cloud_extensions,
                 ) as connection:
                     if on_event is not None:
                         await on_event(BrowserEvent(live_url=connection.live_url, browser_id=connection.browser_id))

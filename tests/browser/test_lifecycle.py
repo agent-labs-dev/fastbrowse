@@ -506,6 +506,57 @@ async def test_cloud_teardown_preserves_original_error_and_cost(stop_fails: bool
                     pass
 
 
+EXTENSION_A, EXTENSION_B = "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f", "11111111-2222-4333-8444-555555555555"
+
+
+@pytest.mark.parametrize(
+    ("extensions", "version"), [((), "v3"), ((EXTENSION_A, EXTENSION_B), "v4")], ids=["none", "some"]
+)
+async def test_cloud_extensions_pick_the_api_version(extensions: tuple[str, ...], version: str) -> None:
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200, json={"id": "created", "cdpUrl": "https://cdp.test", "webSocketDebuggerUrl": "ws://cdp.test"}
+        )
+
+    cost: list[CostLine] = []
+    async with (
+        httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http,
+        _browser("key", LocalChrome(), http, cost, cloud_extensions=extensions),
+    ):
+        pass
+    cloud = [request for request in requests if request.url.host == "api.browser-use.com"]
+    assert {request.url.path.split("/")[2] for request in cloud} == {version}
+    body = json.loads(cloud[0].content)
+    assert body.get("extensionIds") == (list(extensions) or None)
+    assert [request.method for request in cloud] == ["POST", "PATCH"]
+
+
+@pytest.mark.parametrize(
+    "extensions",
+    [
+        ("not-a-uuid",),
+        ("",),
+        (EXTENSION_A, EXTENSION_A),
+        (EXTENSION_A, EXTENSION_A.upper()),
+        (EXTENSION_A, EXTENSION_B, "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"),
+    ],
+)
+def test_cloud_extensions_are_validated_before_any_request(extensions: tuple[str, ...]) -> None:
+    with pytest.raises(BrowserUseCloudError):
+        BrowserUseCloudBrowser("key", http=httpx.AsyncClient(), extensions=extensions)
+
+
+@pytest.mark.parametrize("browser", [{}, {"cdp_url": "ws://x"}, {"cdp_port": 9222}])
+async def test_cloud_extensions_need_a_cloud_browser(browser: dict[str, Any]) -> None:
+    async with httpx.AsyncClient() as http:
+        with pytest.raises(BrowserError, match="cloud_extensions"):
+            async with _browser(None, LocalChrome(), http, [], cloud_extensions=(EXTENSION_A,), **browser):
+                pass
+
+
 @pytest.mark.parametrize("cancel_start", [False, True])
 async def test_local_chrome_threads_startup_and_shutdown(monkeypatch: pytest.MonkeyPatch, cancel_start: bool) -> None:
     loop = asyncio.get_running_loop()
