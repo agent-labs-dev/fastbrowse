@@ -24,33 +24,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Task-supplied sign-in addresses open directly. Blank opening pages get one reload before any interaction,
   so a cold app can recover without repeating a submission. Shortcuts leave unspecified filters to observed
   controls, and recovery can return toward the caller's start page when a guessed address makes no progress.
-- `run_task` takes `cloud_extensions`, up to three distinct extension IDs from your Browser Use Cloud account,
-  and loads them into the cloud browser it starts. Asking for extensions with local Chrome or an attached
-  browser is an error, since neither can load them. Runs that ask for none are unchanged.
-
-- fastbrowse can now be used from JavaScript with no Python on the machine. `npm install fastbrowse` installs a
-  TypeScript SDK and, as an optional dependency, the agent as a native binary for macOS, Linux (glibc) or Windows.
-  No install script runs and nothing is downloaded on first use. `Fastbrowse.start()` starts the binary and
-  `run(task, options)` returns the `RunResult` a Python caller gets, with the same statuses, citations and cost
-  lines. The secret resolver, `until`, `onEvent` and `onFrame` are functions in your own program, so a secret
-  value stays there until the moment it is typed, and an `AbortSignal` cancels a run and closes its browser.
-  `output` takes a Zod, ArkType or other Standard Schema that can write itself as JSON Schema, or a JSON Schema
-  object; with the first, `result.output` is the data as that schema validated it, and has its type. A run fills
-  flat string, number, integer and boolean fields today, and a schema with any other field ends `unverified`.
-  The [README](README.md#use-it-from-javascript) has the install and a first run.
-
-- `fastbrowse serve --stdio` is the entry point the SDK drives, and any program can speak to it: JSON-RPC 2.0,
-  one message per line, with the methods `initialize`, `run`, `run/cancel` and `shutdown`. It runs one task at a
-  time and takes its keys from the environment, as the command line does. `run_task`, the command line's
-  existing flags and the MCP server are unchanged.
-
-- One tag now publishes one version to PyPI and to npm. The release builds all five binaries and runs each through a
-  handshake and a task on local Chrome before anything is published. npm publishing uses trusted publishing, as PyPI
-  does, so no token is stored. CI fails when the npm version differs from the Python one. The macOS binaries carry
-  an ad-hoc signature and are not notarized, the Windows binary is not signed, and there is no binary for Alpine or
-  another musl system.
-
-## [0.5.19] - 2026-10-05
 
 - Form controls retain their input name and autocomplete purpose after validation changes their labels.
   Recovery corrections are bound to the observed field and reuse only supplied, non-secret values.
@@ -88,6 +61,34 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   sorted listing's later page holds the pricier products, so a price quoted on an earlier page had no candidate
   and the data came back empty while the answer was right. A quote the final page corrected is not offered as a
   current value, and a candidate pool wider than Jev's option ceiling is grouped rather than dropped.
+
+## [0.5.19] - 2026-10-06
+
+- `run_task` takes `cloud_extensions`, up to three distinct extension IDs from your Browser Use Cloud account,
+  and loads them into the cloud browser it starts. Asking for extensions with local Chrome or an attached
+  browser is an error, since neither can load them. Runs that ask for none are unchanged.
+
+- fastbrowse can now be used from JavaScript with no Python on the machine. `npm install fastbrowse` installs a
+  TypeScript SDK and, as an optional dependency, the agent as a native binary for macOS, Linux (glibc) or Windows.
+  No install script runs and nothing is downloaded on first use. `Fastbrowse.start()` starts the binary and
+  `run(task, options)` returns the `RunResult` a Python caller gets, with the same statuses, citations and cost
+  lines. The secret resolver, `until`, `onEvent` and `onFrame` are functions in your own program, so a secret
+  value stays there until the moment it is typed, and an `AbortSignal` cancels a run and closes its browser.
+  `output` takes a Zod, ArkType or other Standard Schema that can write itself as JSON Schema, or a JSON Schema
+  object; with the first, `result.output` is the data as that schema validated it, and has its type. A run fills
+  flat string, number, integer and boolean fields today, and a schema with any other field ends `unverified`.
+  The [README](README.md#use-it-from-javascript) has the install and a first run.
+
+- `fastbrowse serve --stdio` is the entry point the SDK drives, and any program can speak to it: JSON-RPC 2.0,
+  one message per line, with the methods `initialize`, `run`, `run/cancel` and `shutdown`. It runs one task at a
+  time and takes its keys from the environment, as the command line does. `run_task`, the command line's
+  existing flags and the MCP server are unchanged.
+
+- One tag now publishes one version to PyPI and to npm. The release builds all five binaries and runs each through a
+  handshake and a task on local Chrome before anything is published. npm publishing uses trusted publishing, as PyPI
+  does, so no token is stored. CI fails when the npm version differs from the Python one. The macOS binaries carry
+  an ad-hoc signature and are not notarized, the Windows binary is not signed, and there is no binary for Alpine or
+  another musl system.
 
 ## [0.5.18] - 2026-10-05
 
