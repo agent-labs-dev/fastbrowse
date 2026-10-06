@@ -11,6 +11,28 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- fastbrowse can now be used from JavaScript with no Python on the machine. `npm install fastbrowse` installs a
+  TypeScript SDK and, as an optional dependency, the agent as a native binary for macOS, Linux (glibc) or Windows.
+  No install script runs and nothing is downloaded on first use. `Fastbrowse.start()` starts the binary and
+  `run(task, options)` returns the `RunResult` a Python caller gets, with the same statuses, citations and cost
+  lines. The secret resolver, `until`, `onEvent` and `onFrame` are functions in your own program, so a secret
+  value stays there until the moment it is typed, and an `AbortSignal` cancels a run and closes its browser.
+  `output` takes a Zod, ArkType or other Standard Schema that can write itself as JSON Schema, or a JSON Schema
+  object; with the first, `result.output` is the data as that schema validated it, and has its type. A run fills
+  flat string, number, integer and boolean fields today, and a schema with any other field ends `unverified`.
+  The [README](README.md#use-it-from-javascript) has the install and a first run.
+
+- `fastbrowse serve --stdio` is the entry point the SDK drives, and any program can speak to it: JSON-RPC 2.0,
+  one message per line, with the methods `initialize`, `run`, `run/cancel` and `shutdown`. It runs one task at a
+  time and takes its keys from the environment, as the command line does. `run_task`, the command line's
+  existing flags and the MCP server are unchanged.
+
+- One tag now publishes one version to PyPI and to npm. The release builds all five binaries and runs each
+  through a handshake and a task on local Chrome before anything is published, and signs and notarizes the two
+  macOS binaries. npm publishing uses trusted publishing, as PyPI does, so no token is stored. CI fails when the
+  npm version differs from the Python one. The Windows binary is not signed, and there is no binary for Alpine
+  or another musl system.
+
 ## [0.5.18] - 2026-10-05
 
 - A run can now take over a window that is already open, in Chrome or in an Electron app such as VS Code or Slack.

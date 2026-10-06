@@ -28,21 +28,27 @@ Run the gate before you push. CI runs the same checks, and `main` requires them:
 uv run ruff check . && uv run ruff format --check .
 uv run ty check
 uv run python scripts/changelog.py --check "$(uv version --short)"
+uv run python scripts/npm_versions.py
 uv run python scripts/no_slop.py
 uv run vale sync && uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs src scripts tests
 uv run pytest -q
 npm ci --ignore-scripts && npm run check:browser
+npm run check:sdk
 uv run actionlint
 uv run python .sift/agents.py check
 uv run python .sift/gate.py --base origin/main
 ```
 
-The JavaScript check needs Node.js 22 or newer. Audit evidence commands and tool limits are in the
+The JavaScript checks need Node.js 22 or newer. `npm run check:sdk` lints, type-checks and tests the SDK in
+`packages/sdk`, and its tests start `fastbrowse serve` from the uv environment. Audit evidence commands and tool limits are in the
 [sift project skill](.agents/skills/sift-project/SKILL.md).
 
 The JavaScript SDK's types in `packages/sdk/src/protocol.ts` are generated from the models in
 `src/fastbrowse/protocol.py` and the models those use. After changing one, run `npm run generate:sdk` and commit
 the result. CI fails when the committed file differs from what the models produce.
+
+The npm packages are published at the Python package's version. `scripts/npm_versions.py` fails when
+`packages/sdk/package.json` holds another number, and with `--write` sets it from `pyproject.toml`.
 
 Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for anything a user would notice, saying
 what changed and why.
