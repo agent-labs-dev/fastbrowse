@@ -4,6 +4,7 @@ import type { Writable } from 'node:stream';
 
 import { resolveBinary } from './binary.ts';
 import { FastbrowseError, ProcessExitedError } from './errors.ts';
+import { type OutputSchema, type TypedRunResult, withOutput } from './output.ts';
 import type {
   BrowserEvent,
   InitializeParams,
@@ -87,15 +88,23 @@ export class Fastbrowse {
    * Rejects with `RpcError` when the server refuses the request, which it does before a browser opens: for a
    * bad option, for a missing key, and with the busy code while another run on this instance is active. Rejects
    * with `ProcessExitedError` when the fastbrowse process is gone.
+   *
+   * With `output`, the result's `output` is the data as that schema validated it. A schema that cannot be sent
+   * rejects before anything is, a keyword the server cannot enforce rejects with its `unsupported_schema` code,
+   * and data the schema refuses rejects with `OutputValidationError`, which carries the result.
    */
-  async run(task: string, options: RunOptions = {}): Promise<RunResult> {
+  async run<Schema extends OutputSchema>(
+    task: string,
+    options: RunOptions & { output?: Schema } = {},
+  ): Promise<TypedRunResult<Schema>> {
     // The server names the run in every event it sends, which is how a run refused as busy hears nothing of
     // the one that is active.
     const runId = randomUUID();
     if (options.onEvent) this.#listeners.set(runId, options.onEvent);
     try {
       const params = runParams(runId, task, this.#browser, options);
-      return (await this.#server.connection.request('run', params)) as RunResult;
+      const result = (await this.#server.connection.request('run', params)) as RunResult;
+      return await withOutput(result, options.output);
     } finally {
       this.#listeners.delete(runId);
     }

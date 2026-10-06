@@ -11,6 +11,8 @@ import signal
 import sys
 from typing import Any
 
+from pydantic import BaseModel
+
 from fastbrowse import serve
 from fastbrowse.models import (
     Attachment,
@@ -55,6 +57,18 @@ async def echo(task: str, *, attachments: tuple[Attachment, ...], **_: Any) -> R
     """Answers with the request it was started by, and with each attachment's bytes as the run received them."""
     received = {"params": requests[-1], "attachments": [list(attachment.content) for attachment in attachments]}
     return _result(answer=task, data=received)
+
+
+async def found(task: str, *, inputs: dict[str, str], output_schema: type[BaseModel], **_: Any) -> RunResult:
+    """Fills the model the server built from the request's schema with the JSON in the `found` input."""
+    names = {field.alias or name: name for name, field in output_schema.model_fields.items()}
+    values = {names[key]: value for key, value in json.loads(inputs["found"]).items()}
+    return _result(data=output_schema.model_validate(values).model_dump(mode="json"))
+
+
+async def request_count(task: str, **_: Any) -> RunResult:
+    """Answers with how many `run` requests the server has read, this one included."""
+    return _result(data=len(requests))
 
 
 async def three_events(task: str, *, on_event: EventHandler, **_: Any) -> RunResult:
