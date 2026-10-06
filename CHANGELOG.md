@@ -27,11 +27,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   time and takes its keys from the environment, as the command line does. `run_task`, the command line's
   existing flags and the MCP server are unchanged.
 
-- One tag now publishes one version to PyPI and to npm. The release builds all five binaries and runs each
-  through a handshake and a task on local Chrome before anything is published, and signs and notarizes the two
-  macOS binaries. npm publishing uses trusted publishing, as PyPI does, so no token is stored. CI fails when the
-  npm version differs from the Python one. The Windows binary is not signed, and there is no binary for Alpine
-  or another musl system.
+- One tag now publishes one version to PyPI and to npm. The release builds all five binaries and runs each through a
+  handshake and a task on local Chrome before anything is published. npm publishing uses trusted publishing, as PyPI
+  does, so no token is stored. CI fails when the npm version differs from the Python one. The macOS binaries carry
+  an ad-hoc signature and are not notarized, the Windows binary is not signed, and there is no binary for Alpine or
+  another musl system.
 
 ## [0.5.18] - 2026-10-05
 

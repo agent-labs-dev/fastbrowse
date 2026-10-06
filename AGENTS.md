@@ -162,14 +162,14 @@ A release that publishes or changes a comparison figure also needs the fixture s
 (`.github/workflows/evals.yml` fails on any regression) and, for a head-to-head figure, the comparison re-run on
 that same build.
 
-One tag publishes one version to PyPI and npm (`.github/workflows/release.yml`). It first builds the wheel
-and the five binaries, smoke-tests each, and signs and notarizes the macOS two (`scripts/macos_sign.py`). Then,
-each step needing the one before: the GitHub release with **the changelog entry as its notes**, PyPI, the five
-platform packages, the SDK. PyPI and npm take the job's OIDC identity, so no token is stored; the certificate
-and notary credentials are secrets of the `apple-signing` environment. No registry takes a version back, so
-finish a release that failed partway by re-running its failed jobs. Started by hand
-(`gh workflow run release.yml --ref <branch>`), the workflow stops after signing and publishes nothing: do
-that after changing the build or the signing.
+One tag publishes one version to PyPI and npm (`.github/workflows/release.yml`). It first builds the wheel and the
+five binaries and smoke-tests each. The macOS two keep PyInstaller's ad-hoc signatures
+(`scripts/macos_signatures.py` checks them), which is enough for a binary installed through npm. Then, each step
+needing the one before: the GitHub release with **the changelog entry as its notes**, PyPI, the five platform
+packages, the SDK. PyPI and npm take the job's OIDC identity, so no token is stored. No registry takes a version
+back, so finish a release that failed partway by re-running its failed jobs. Started by hand (`gh workflow run
+release.yml --ref <branch>`), the workflow stops after the binaries and publishes nothing: do that after changing
+the build.
 
 After PyPI the workflow asks fastbrowse.ai to rebuild, since its changelog page reads this file at build
 time. `scripts/changelog.py` is what reads the entry, so the repository, the release and the site never tell
