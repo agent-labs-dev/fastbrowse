@@ -60,8 +60,8 @@ against `dev` only**, and `heldout` is run before and after a round and never de
 task versions and publishing rules are in [docs/agents/evals.md](docs/agents/evals.md); read it before changing
 agent behaviour or a task.
 
-Store detailed eval runs and validation in the dedicated Langfuse project. Keep local logs in ignored
-`artifacts/evals/`; Git keeps manifests, source hashes and compact publication baselines. Verify uploads by
+Store detailed eval runs and validation in the dedicated Langfuse project. Keep local logs in an ignored
+artifacts directory; Git keeps manifests, source hashes and compact publication baselines. Verify uploads by
 reading them back before removing local evidence. Public results contain only the sanitized projection.
 
 ## Architecture
