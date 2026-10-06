@@ -70,6 +70,8 @@ jobs:
           echo "fastbrowse-$TARGET: $((kib / 1024)) MB unpacked ($kib KiB)"
           echo "| \`$TARGET\` | $((kib / 1024)) MB |" >> "$GITHUB_STEP_SUMMARY"
       - run: tar -czf "fastbrowse-$TARGET.tar.gz" -C dist fastbrowse
+        # Otherwise macOS tar adds a `._<file>` entry for each file with extended attributes.
+        env: {COPYFILE_DISABLE: "1"}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: fastbrowse-${{ matrix.target }}

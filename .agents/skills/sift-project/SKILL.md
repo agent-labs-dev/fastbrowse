@@ -5,8 +5,10 @@ description: "Quality gate, audit evidence, live roots and cleanup boundaries fo
 
 # fastbrowse audit guidance
 
-fastbrowse is a Python 3.13+ package with CLI, MCP and embedding entry points. Two owned JavaScript
+fastbrowse is a Python 3.13+ package with CLI, MCP, embedding and `serve` entry points. Two owned JavaScript
 expressions run inside browser pages through CDP. Python browser tests exercise them against Chrome.
+`packages/sdk` is the TypeScript SDK published to npm as `fastbrowse`. It starts `fastbrowse serve --stdio`,
+and its tests run against that server from the uv environment.
 
 ## Gate
 
@@ -17,18 +19,22 @@ uv run ruff check .
 uv run ruff format --check .
 uv run ty check
 uv run python scripts/changelog.py --check "$(uv version --short)"
+uv run python scripts/npm_versions.py
 uv run python scripts/no_slop.py
 uv run vale sync
 uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs src scripts tests
 uv run pytest -q
 npm run check:browser
+npm run generate:sdk && git diff --exit-code -- packages/sdk/src/protocol.ts
+npm run check:sdk
 uv run actionlint
 uv run python .sift/agents.py check
 uv run python .sift/gate.py --base origin/main
 ```
 
 Every command must exit 0. Node.js 22+ is needed only for development. CI retains the required `check`
-status, which depends on the Python matrix, secret scan and sift job. The sift job uses the PR base
+status, which depends on the Python matrix, secret scan, sift job and SDK job, and on the five binary builds
+when a change touches what is frozen. The sift job uses the PR base
 rather than main for its changed-file rules. No ast-grep dependency is needed while there are no rules.
 The vendored sift helpers are version 0.3.0; do not rewrite their source locally.
 
@@ -58,6 +64,10 @@ gitleaks detect --source . --no-banner --redact
 
 - `fastbrowse.run_task`, package exports, public Pydantic models and callback protocols are consumed by embedders.
 - `pyproject.toml` registers `fastbrowse.cli:main` and `fastbrowse.mcp_server:main` console scripts.
+- `fastbrowse serve` is reached through `cli.main`; `fastbrowse.protocol` models are the wire the npm SDK reads.
+- `packages/sdk/src/index.ts` exports are the npm package's public API. `fastbrowse.scripted` is named at run
+  time by `serve --run-task` in the smoke scripts and is a hidden import of the frozen build.
+- `scripts/` stand-alone programs are called from `ci.yml`, `binaries.yml` and `release.yml`.
 - MCP registers its browse tool and uses its schema/docstrings as model-visible descriptions.
 - `src/fastbrowse/browser/page.py` loads snapshot and capture JavaScript by file path; both are wheel assets.
 - CDP event registrations, context-manager methods, pytest fixtures and test discovery call symbols indirectly.
@@ -76,12 +86,15 @@ See [the evaluation workflow](../../../docs/evals.md#workflow) for paid-run prer
 | Paths | Zone |
 |---|---|
 | src/fastbrowse Python and browser/capture.js, browser/snapshot.js | production |
+| packages/sdk/src/ except protocol.ts | production |
+| packages/sdk/test/ | test |
+| packages/sdk/src/protocol.ts | generated |
 | scripts/ | script |
 | tests/ Python | test |
 | tests/browser/sites/, evals/fixtures/, audit/fixtures/ | fixture |
 | docs/results/, src/fastbrowse/evals/versions.json | generated |
 | src/fastbrowse/browser/autoconsent/, .sift/gate.py, .sift/agents.py | vendor |
-| .github/, tool manifests and lockfiles | config |
+| .github/, packaging/, tool manifests and lockfiles | config |
 | Markdown and .agents/skills/ | docs |
 
 ## Conventions

@@ -84,6 +84,7 @@ a fresh local Chrome fails. Local Chrome is fully supported with `--local`. A br
 from a container to a hosted browser with a CDP endpoint, is driven in place with `--cdp-url ws://…` or
 `--cdp-port 9222`: the run opens one tab and leaves the browser as it was found. To drive a window that is
 already open, such as an Electron app, see [Open windows and Electron apps](#open-windows-and-electron-apps).
+A Node program needs neither uv nor Python: see [Use it from JavaScript](#use-it-from-javascript).
 
 ```sh
 export OPENROUTER_API_KEY=...   # for Jev and the LLM that plans and reads
@@ -337,6 +338,99 @@ See [Jev routing](docs/jev.md#provider-failover) for key precedence, overrides a
 Any other source
 can be passed as `run_task(jev=...)`, implementing async `evaluate(state, questions)`; `run_task(llm=...)`
 accepts an implementation of the `LLMClient.generate(...)` protocol in `fastbrowse.llm`.
+
+## Use it from JavaScript
+
+`npm install fastbrowse` gives a Node program the same agent, with no Python and no uv on the machine. The
+package is a TypeScript SDK with no dependencies. With it npm installs one of five packages that hold the agent
+as a native binary, the one for your platform: `@fastbrowse/darwin-arm64`, `darwin-x64`, `linux-arm64`,
+`linux-x64` or `win32-x64`. No install script runs and nothing is downloaded on first use, so it installs under
+pnpm and bun with scripts blocked, and it starts offline. It needs Node.js 20 or newer. The npm packages carry
+the PyPI package's version and are published by the same tag, starting with the release after 0.5.18.
+
+The binary brings no browser. It finds local Chrome, starts a Browser Use Cloud browser, or drives one already
+running, as the command line does. It reads the same keys from the environment of your process
+(`OPENROUTER_API_KEY`, and `BROWSER_USE_API_KEY` for a cloud browser); `env` in `Fastbrowse.start` adds to them.
+
+```sh
+npm install fastbrowse zod
+export OPENROUTER_API_KEY=...
+```
+
+```ts
+import { Fastbrowse } from 'fastbrowse';
+import { z } from 'zod';
+
+const Release = z.object({ package: z.string(), version: z.string() });
+
+const fb = await Fastbrowse.start({ local: true });
+try {
+  const result = await fb.run('Find the httpx package and report its name and latest released version.', {
+    start: 'https://pypi.org/',
+    output: Release,
+    limits: { maxDollars: 0.1 },
+    onEvent: event => {
+      if (event.type === 'step') console.error(event.step.operation, event.step.target);
+    },
+    signal: AbortSignal.timeout(120_000),
+  });
+  console.log(result.status, result.answer);
+  if (result.status === 'complete') console.log(result.output.package, result.output.version);
+  for (const evidence of result.evidence) console.log(`  "${evidence.quote}" from ${evidence.url}`);
+} finally {
+  await fb.close();
+}
+```
+
+`Fastbrowse.start` starts one fastbrowse process and `run` sends it a task. The process serves one run at a
+time: a second `run` while one is active rejects with the busy error, and a program that wants runs side by
+side starts more instances. `close()` shuts the process down and waits for it. The process also exits when
+yours does, however yours ended.
+
+`run` resolves with the result whatever status the run ended in, so `needs_login` or `stuck` is read from
+`status` and is not an exception. It rejects when no run took place or none finished: with `RpcError` when the
+server refuses the request before a browser opens (a bad option, a missing key, a busy server), with
+`AbortError` when `signal` stopped the run, and with `ProcessExitedError` when the process is gone.
+
+The result is the `RunResult` the Python library returns, with the same statuses, citations and cost lines.
+Its fields keep their Python names, such as `final_url`, since the types are generated from the Python models;
+the options are camelCase. The structured data is in `data`, as in Python. The SDK adds
+`output`: with a Zod (4.2 or newer) or ArkType schema, or a Valibot schema wrapped by
+`@valibot/to-json-schema`, `output` is `data` after the schema's own validation and transforms, and has the
+schema's output type. Data the schema refuses rejects with `OutputValidationError`, which carries the result.
+A JSON Schema object is accepted too; `output` is then `data`, typed `unknown`.
+
+What a run can fill today is narrower than what a schema can say. The server accepts nested objects, arrays,
+`enum`, `const` and optional values, and refuses any other keyword by name before a browser opens. A run
+fills a flat object of required string, number, integer and boolean fields, as the example has. With any
+other field the run ends `unverified` with no data.
+
+The callbacks that keep credentials and the last word in your code cross the process boundary:
+
+```ts
+await fb.run('Log in as standard_user with the saved password and add the backpack to the cart.', {
+  start: 'https://www.saucedemo.com/',
+  authorization: { irreversibleActions: true },
+  secrets: {
+    refs: [{ name: 'password', origins: ['https://www.saucedemo.com'] }],
+    resolve: name => vault.get(name),
+  },
+  until: url => url.endsWith('/cart.html'),
+});
+```
+
+`secrets.resolve` is called each time a value is typed and never for an origin its ref does not cover, so the
+value leaves your vault at that moment and a one-time code is fresh. `until` gets the address the run ended on,
+and anything but `true` keeps the run from `complete`. `onFrame` receives JPEG frames of the active tab;
+without it no frame is sent. A callback that throws ends the run with status `error`. The other options are
+the command line's: `inputs`, `attachments` as bytes, `downloads`, `record`, and the browser choices
+`chrome`, `cloudProfile`, `cdpUrl`, `cdpPort`, `attach`, `targetMatch` and `proxyCountry`, which
+`Fastbrowse.start` also takes as defaults for every run.
+
+There is no binary for Alpine or another musl system, and none for a platform outside the five. There
+`Fastbrowse.start` rejects with an error that names the platform, and a binary of your own is named with
+`binaryPath` or `FASTBROWSE_BINARY`. The macOS binaries are signed with a Developer ID and notarized. The
+Windows binary is not signed. Bun and Deno are untested.
 
 ## Use it from an MCP client
 
