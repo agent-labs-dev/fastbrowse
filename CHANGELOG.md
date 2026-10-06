@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Icon-only buttons use recognized SVG glyph names when other labels are missing. Button-styled links expose
+  one clickable control. Empty plans retain the requested outcome, and required CI checks reject failed jobs.
+
 - Store detailed eval evidence in Langfuse, serve sanitized public campaigns, and keep compact regression baselines in Git.
   Grades, completion, retries, unknown costs and missing coverage remain separate.
   Cancelled competitor runs stop their child processes before another eval starts.
@@ -21,6 +24,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Task-supplied sign-in addresses open directly. Blank opening pages get one reload before any interaction,
   so a cold app can recover without repeating a submission. Shortcuts leave unspecified filters to observed
   controls, and recovery can return toward the caller's start page when a guessed address makes no progress.
+- `run_task` takes `cloud_extensions`, up to three distinct extension IDs from your Browser Use Cloud account,
+  and loads them into the cloud browser it starts. Asking for extensions with local Chrome or an attached
+  browser is an error, since neither can load them. Runs that ask for none are unchanged.
 
 - fastbrowse can now be used from JavaScript with no Python on the machine. `npm install fastbrowse` installs a
   TypeScript SDK and, as an optional dependency, the agent as a native binary for macOS, Linux (glibc) or Windows.
