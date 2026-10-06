@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- `run_task` takes `cloud_extensions`, up to three distinct extension IDs from your Browser Use Cloud account,
+  and loads them into the cloud browser it starts. Asking for extensions with local Chrome or an attached
+  browser is an error, since neither can load them. Runs that ask for none are unchanged.
+
 - fastbrowse can now be used from JavaScript with no Python on the machine. `npm install fastbrowse` installs a
   TypeScript SDK and, as an optional dependency, the agent as a native binary for macOS, Linux (glibc) or Windows.
   No install script runs and nothing is downloaded on first use. `Fastbrowse.start()` starts the binary and

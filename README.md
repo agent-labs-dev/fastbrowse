@@ -291,7 +291,9 @@ the run opens its own tab and closes the tabs it owns. It leaves the browser and
 cookies and other changes made by the task can persist. `cdp_port=` finds the same browser from its DevTools
 port on `127.0.0.1`. `attach=True` and `target_match=` drive a window already open and leave it open, as
 `--attach` and `--target-match` do. Pass `browser_api_key=` to start a cloud browser;
-with neither argument, it runs local Chrome. Passing both is an error.
+with neither argument, it runs local Chrome. Passing both is an error. `cloud_extensions=[...]` loads up to
+three of your account's ready Browser Use Cloud extensions, by ID, into that cloud browser; it is an error with
+local or attached browsers.
 
 `connect_cdp()` hands a script of your own the attached page, without the agent. Downloads go to `downloads=`, or
 to a scratch directory removed on exit:
