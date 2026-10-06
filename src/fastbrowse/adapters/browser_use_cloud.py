@@ -105,16 +105,19 @@ class BrowserUseCloudBrowser:
             browser = await asyncio.shield(creation)
             if browser.cdp_url is None:
                 raise BrowserUseCloudError(f"browser {browser.id} started without a CDP URL")
-            try:
-                version = await self._http.get(f"{browser.cdp_url}/json/version")
-            except TRANSIENT_TRANSPORT as error:
-                raise BrowserUseCloudUnavailable(
-                    f"browser {browser.id} did not answer ({type(error).__name__})"
-                ) from None
-            if version.status_code in RETRYABLE_STATUS:
-                raise BrowserUseCloudUnavailable(f"browser {browser.id} answered HTTP {version.status_code}")
-            version.raise_for_status()
-            ws_url = str(version.json()["webSocketDebuggerUrl"])
+            if browser.cdp_url.startswith(("ws://", "wss://")):
+                ws_url = browser.cdp_url
+            else:
+                try:
+                    version = await self._http.get(f"{browser.cdp_url}/json/version")
+                except TRANSIENT_TRANSPORT as error:
+                    raise BrowserUseCloudUnavailable(
+                        f"browser {browser.id} did not answer ({type(error).__name__})"
+                    ) from None
+                if version.status_code in RETRYABLE_STATUS:
+                    raise BrowserUseCloudUnavailable(f"browser {browser.id} answered HTTP {version.status_code}")
+                version.raise_for_status()
+                ws_url = str(version.json()["webSocketDebuggerUrl"])
             self._connection = BrowserConnection(
                 cdp_url=ws_url, live_url=browser.live_url, browser_id=browser.id, remote=True
             )

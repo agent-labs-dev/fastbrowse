@@ -518,20 +518,28 @@ async def test_cloud_extensions_pick_the_api_version(extensions: tuple[str, ...]
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         return httpx.Response(
-            200, json={"id": "created", "cdpUrl": "https://cdp.test", "webSocketDebuggerUrl": "ws://cdp.test"}
+            200,
+            json={
+                "id": "created",
+                "cdpUrl": "wss://cdp.test/browser/created" if version == "v4" else "https://cdp.test",
+                "webSocketDebuggerUrl": "ws://cdp.test",
+            },
         )
 
     cost: list[CostLine] = []
     async with (
         httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http,
-        _browser("key", LocalChrome(), http, cost, cloud_extensions=extensions),
+        _browser("key", LocalChrome(), http, cost, cloud_extensions=extensions) as connection,
     ):
-        pass
+        assert connection.cdp_url == ("wss://cdp.test/browser/created" if version == "v4" else "ws://cdp.test")
     cloud = [request for request in requests if request.url.host == "api.browser-use.com"]
     assert {request.url.path.split("/")[2] for request in cloud} == {version}
     body = json.loads(cloud[0].content)
     assert body.get("extensionIds") == (list(extensions) or None)
     assert [request.method for request in cloud] == ["POST", "PATCH"]
+    assert [request.method for request in requests] == (
+        ["POST", "PATCH"] if version == "v4" else ["POST", "GET", "PATCH"]
+    )
 
 
 @pytest.mark.parametrize(
