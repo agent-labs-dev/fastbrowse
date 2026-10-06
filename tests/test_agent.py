@@ -5212,3 +5212,19 @@ async def test_empty_transaction_outcome_does_not_prevent_recovery_navigation() 
     await agent._read(state, capture((BlockKind.PARAGRAPH, "")), obs)
     assert not state.notes.evidenced("r")
     assert not await agent._read_before_interaction(state, obs, _code_decision(Operation.CLICK, obs.controls[0]))
+
+
+@pytest.mark.parametrize("attribute", ["input_name", "autocomplete"])
+async def test_field_metadata_echoes_are_masked_before_models_see_them(attribute: str) -> None:
+    reflected = "field-hunter2-purpose"
+    target = field("Email").model_copy(update={attribute: reflected})
+    raw = observation((target,))
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=raw)
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    agent._redactor.register("password", "hunter2")
+    observed = await agent._observe()
+    assert "hunter2" not in observed.model_dump_json()
+    assert getattr(observed.controls[0], attribute) == "field-" + "\u2022" * 7 + "-purpose"
+    assert agent._raw_observation is raw
+    assert getattr(raw.controls[0], attribute) == reflected

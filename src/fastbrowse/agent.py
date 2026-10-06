@@ -1305,6 +1305,8 @@ class Agent:
                     "label": mask(control.label),
                     "context": None if control.context is None else mask(control.context),
                     "value": None if control.value is None else mask(control.value),
+                    "input_name": None if control.input_name is None else mask(control.input_name),
+                    "autocomplete": None if control.autocomplete is None else mask(control.autocomplete),
                     "href": None if control.href is None else mask(control.href),
                     "frame_origin": None if control.frame_origin is None else mask(control.frame_origin),
                     "submit_semantics": None if control.submit_semantics is None else mask(control.submit_semantics),
