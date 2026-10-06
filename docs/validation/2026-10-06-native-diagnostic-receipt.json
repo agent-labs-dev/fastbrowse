@@ -155,6 +155,62 @@
       "unknown_cost": 0,
       "git_sha": "60f57a6b7a902690c9fdaf3f6fc05e4d02617e88",
       "dirty": true
+    },
+    {
+      "file": "native-final-count-fixtures.jsonl",
+      "sha256": "a08ebac03a615c5d64ddf6e878c2cfcf428ccef1e1b2e2a5eca5ebfff989062b",
+      "attempts": 9,
+      "passed": 8,
+      "dollars": 0.10566,
+      "unknown_cost": 0,
+      "git_sha": "234c147b7e6b433901c48f0c84402538e12d012a",
+      "dirty": false,
+      "max_recorded_attempt_dollars": 0.04086,
+      "cap_is_soft_after_call": true
+    },
+    {
+      "file": "native-final-heldout.jsonl",
+      "sha256": "080cb35db501cfc3d4067fa8c39fa59fcd2281567161576fda5a024a0e9a3a42",
+      "attempts": 25,
+      "passed": 21,
+      "dollars": 0.35271,
+      "unknown_cost": 0,
+      "git_sha": "234c147b7e6b433901c48f0c84402538e12d012a",
+      "dirty": false,
+      "scheduled_slots": 27,
+      "started_slots": 25,
+      "unstarted_slots": 2,
+      "complete_draw": false,
+      "shared_cap": 0.39,
+      "attempt_ledger": "native-final-heldout.attempts.jsonl",
+      "attempt_ledger_sha256": "0e92b57e208c258d6e9c89c7a4b0999870c2a76cc778dc4ff70c524875f43c08",
+      "physical_rows": 33,
+      "unstarted_budget_rows": 8,
+      "stop_reason": "Budget prevents the remaining two slots from starting; interrupted only their retry waits after all started slots finished.",
+      "max_recorded_attempt_dollars": 0.04533,
+      "cap_is_soft_after_call": true
+    },
+    {
+      "file": "native-fixes-fixtures.jsonl",
+      "sha256": "44ff22aa2e551fa0043f60d838942063024175b0e8b8eec4953be676e6323cc2",
+      "attempts": 5,
+      "passed": 5,
+      "dollars": 0.00741,
+      "unknown_cost": 0,
+      "git_sha": "860c54ba59b8a37e5ac6f77fe9ba59050a28c292",
+      "dirty": true,
+      "interrupted_inflight_attempts": 1,
+      "inflight_cost": "unknown"
+    },
+    {
+      "file": "native-fixes-confirm-dialog.jsonl",
+      "sha256": "edfa165b888c4c31650dfdf4f1f08be9de1a508749c5d714e174c9bc968a83dd",
+      "attempts": 3,
+      "passed": 3,
+      "dollars": 0.00249,
+      "unknown_cost": 0,
+      "git_sha": "860c54ba59b8a37e5ac6f77fe9ba59050a28c292",
+      "dirty": true
     }
   ],
   "traces": [
@@ -168,5 +224,22 @@
       "sha256": "efee51e8ea239e5e4d38e05354339b9df1351dcacc274791ec2f5bbb71eb4f4f",
       "synthetic_feed_only": true
     }
-  ]
+  ],
+  "budget": {
+    "approved_dollars": 200,
+    "prior_reported_source": "2026-10-05-budget-accounting.json",
+    "prior_reported_dollars": 138.28974,
+    "this_receipt_recorded_dollars": 6.06547,
+    "known_charge_floor": 144.35521,
+    "unresolved_charge_reserve": 55.1,
+    "additional_unreconciled_precaution": 0.4,
+    "conservative_total": 199.85521,
+    "additional_paid_runs_authorized_within_remaining_capacity": false
+  },
+  "raw_artifacts": {
+    "storage": "Local measurement logs, outside the repository",
+    "directory": "/home/cjber/.cache/fastbrowse-e2e-20261005/measurement-logs",
+    "published_summary": "2026-10-06-native-final-results.json",
+    "note": "Hashes identify retained original local artifacts; the committed summary includes final selected slots and every unstarted budget refusal, without page content."
+  }
 }

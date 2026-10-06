@@ -98,3 +98,29 @@ continuing records, new claim records, untracked list items, derived facts and p
 path. Seven counterexamples and the valid scope-context case are covered; 601 agent and retrieval tests pass.
 The preliminary context check passed 3/3 for $0.05901, before the final narrowing. The failed full campaigns stay
 recorded. These experiments do not establish that the count path is resolved, or that native corpus grades improved.
+
+The final clean focused check on `234c147` passed 8/9 for $0.10566. One count attempt cost $0.04086, exceeding its $0.04
+diagnostic cap after the last request. The held-out check on that build finished 25 of 27 scheduled slots, passing 21, for $0.35271.
+The $0.39 shared guard prevented the remaining two slots from starting. Only the unstarted slots' retry waits were interrupted after all started slots finished. The attempt ledger retains those budget refusals. This
+incomplete draw cannot establish a held-out improvement or supply publication evidence. Its failures were
+not used to change agent behavior.
+
+A downstream audit independently found that the new freeform field name and autocomplete metadata could echo
+a resolved secret into model input. Both reflected-secret cases failed before masking these fields alongside
+other observation text. Raw controls remain unchanged for browser guards. All 603 agent and retrieval tests
+pass after the fix; the second-model pre-push and post-push reviews found no further issue. This security fix
+was made after the recorded `234c147` diagnostics and has no new paid evaluation claim.
+
+The reconciled recorded floor is $144.35521: the earlier budget receipt reports $138.28974 and this receipt
+adds $6.06547. The earlier running estimate included an additional $0.40 precaution, which is now shown
+separately. With the $55.10 unresolved-charge reserve, the conservative total is $199.85521 against $200. Further paid draws are stopped. The final held-out attempt maximum was $0.04533; per-attempt caps are checked
+after actual requests and can exceed $0.04. The shared reservation guard prevented additional starts.
+The remaining count reliability failure and the incomplete native comparison prevent an improved headline.
+
+The [final result summary](2026-10-06-native-final-results.json) retains every final selected slot and budget
+refusal without page content. Original local logs remain at the directory named in the receipt, with SHA-256
+hashes for audit. These local artifacts are not a public comparison dataset.
+
+CI on `ed31e85` passed all 2196 tests on both Python 3.13 and 3.14, together with browser, secret,
+formatting, type, prose and project gates. This verifies the source build; it does not waive the failed
+fixture attempt or incomplete paired comparison.
