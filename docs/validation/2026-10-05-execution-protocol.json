@@ -1,0 +1,54 @@
+{
+  "budget_usd": 200,
+  "budget_scope": "model API and cloud-browser spend, including retries",
+  "seed": 75,
+  "per_stratum": 3,
+  "repeats": 3,
+  "arms": [
+    "fastbrowse",
+    "browser-use"
+  ],
+  "draw_rule": "lowest seed from 0 through 9999 whose eligible draw covers all eight sites, chosen before performance measurement",
+  "corpus_digest": "01bb3e37607b046bbc7a0feb1126db8e761d166e372e35ea62a126b02715a7ce",
+  "capsule_run_id": "cmp2",
+  "grader": "pinned upstream JavaScript score with native capsule observations",
+  "endpoint_adapter": "Host and Origin mapped to local capsule; local asset and redirect origins mapped to the common public endpoint. Upstream source remains unmodified.",
+  "pins": {
+    "public_proxy.py": "61aa077bc1bd9d5a5d3324334aba2126ead0c286db2ba87da3c56e5ef574876e",
+    "reset_capsule.py": "b4c79a5ae6cfe2239308edf4ed7bf1ffd469740a59f1f2876c7069711ca8f07a",
+    "native_state_grader.mjs": "ef292f8871a894c90fbb0ef4ce28102319e9a66396f9c1e87075dceae49baa93"
+  },
+  "setup_disclosure": "The recorded capsule setup subtotal is retained separately. Failed setup and endpoint startup logs are retained, but a complete end-to-end cold setup duration was not measured. Agent time excludes setup.",
+  "recorded_capsule_setup_seconds": 1021.25,
+  "setup_seconds": null,
+  "final_measured_commit": "bae3e92fd2f9c73a83710b39f497cc0dddee0d65",
+  "final_live_concurrency": 2,
+  "fixture_ci_run": "37378249101",
+  "fixture_ci_budget_disclosure": "Completed paid three-repeat fixture run: 95/96, $0.49362 recovered from the complete CI artifact and included in the total. The extraction failure is retained.",
+  "temporary_directory": "/home/cjber/.cache/fastbrowse-e2e-20261005/browser-tmp",
+  "diagnostic_interruptions": "All earlier rounds retained. Temporary filesystem quota aborted one live campaign; in-flight pricing before the durable cancellation fix remains unreconciled.",
+  "cancelled_fixture_ci_run": 37370106062,
+  "budget_monitor": "Stop at $115 known reported spend while live suites run in parallel, reserving $85. For serial corpus and fixtures, stop at $145 and reserve $55. These reserves include $5 for an additional unreconciled interrupted Fastbrowse attempt; all earlier interrupted calls remain disclosed.",
+  "corpus_measured_git_sha": "7284c3c6d090f29f215e796d995871265b9fb23e",
+  "corpus_run": "matched-0.5.19-paired-gate",
+  "paired_publication_floor": "three graded repeats per included task; stopped draws cannot headline",
+  "budget_reserve": "Serial cutoff $145 with $55 reserved; parallel-live cutoff $115 with $85 reserved. Maximum approved total $200.",
+  "fixture_ci_extraction_run": {
+    "run_id": 37386069955,
+    "git_sha": "ae54d1d9e92e88f5f268932b0af12aa1239f472c",
+    "passed": 89,
+    "attempts": 96,
+    "dollars": 0.4514,
+    "failure": "seven unavailable results during provider HTTP 503 failures; release remains blocked"
+  },
+  "fixture_ci_recovery_run": {
+    "run_id": 37388098451,
+    "git_sha": "ae54d1d9e92e88f5f268932b0af12aa1239f472c",
+    "reason": "Prior run repeat zero and two passed 32/32; seven middle-repeat unavailable results coincided with provider HTTP 503 errors. Recovery rerun retains and counts the prior failed round.",
+    "passed": 96,
+    "attempts": 96,
+    "priced": 96,
+    "dollars": 0.8074,
+    "conclusion": "success"
+  }
+}

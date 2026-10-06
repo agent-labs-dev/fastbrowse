@@ -1,0 +1,92 @@
+{
+  "findings": [
+    {
+      "severity": "advise",
+      "check": "baseline",
+      "detail": "arxiv-title v7: no published baseline at this task version; a baseline exists only at v3, v5"
+    },
+    {
+      "severity": "advise",
+      "check": "baseline",
+      "detail": "expandtesting-login v7: no published baseline at this task version; a baseline exists only at v3, v5"
+    },
+    {
+      "severity": "regress",
+      "check": "cost",
+      "detail": "flights-search v9: median $0.0051 against 0.5.14 $0.0024; over 19% and more than $0.001"
+    },
+    {
+      "severity": "advise",
+      "check": "baseline",
+      "detail": "github-license v7: no published baseline at this task version; a baseline exists only at v3, v5"
+    },
+    {
+      "severity": "regress",
+      "check": "speed",
+      "detail": "github-open v9: median 11.9s against 0.5.14 9.5s; over 19% and more than 1s"
+    },
+    {
+      "severity": "advise",
+      "check": "baseline",
+      "detail": "google-flights v7: no published baseline at this task version; a baseline exists only at v3, v5"
+    },
+    {
+      "severity": "advise",
+      "check": "baseline",
+      "detail": "hn-top v7: no published baseline at this task version; a baseline exists only at v3, v5"
+    },
+    {
+      "severity": "advise",
+      "check": "baseline",
+      "detail": "practice-login v7: no published baseline at this task version; a baseline exists only at v3, v5"
+    },
+    {
+      "severity": "advise",
+      "check": "baseline",
+      "detail": "pypi-newer v7: no published baseline at this task version; a baseline exists only at v3, v5"
+    },
+    {
+      "severity": "advise",
+      "check": "baseline",
+      "detail": "pypi-structured v7: no published baseline at this task version; a baseline exists only at v3, v5"
+    },
+    {
+      "severity": "advise",
+      "check": "baseline",
+      "detail": "pypi-version v7: no published baseline at this task version; a baseline exists only at v3, v5"
+    },
+    {
+      "severity": "advise",
+      "check": "baseline",
+      "detail": "saucedemo-cart v7: no published baseline at this task version; a baseline exists only at v3, v5"
+    },
+    {
+      "severity": "advise",
+      "check": "baseline",
+      "detail": "saucedemo-checkout v7: no published baseline at this task version; a baseline exists only at v3, v5"
+    },
+    {
+      "severity": "advise",
+      "check": "baseline",
+      "detail": "saucedemo-locked-out v7: no published baseline at this task version; a baseline exists only at v3, v5"
+    },
+    {
+      "severity": "advise",
+      "check": "baseline",
+      "detail": "saucedemo-pause v6: no published baseline at this task version; a baseline exists only at v2, v4"
+    },
+    {
+      "severity": "advise",
+      "check": "baseline",
+      "detail": "wiki-godel v7: no published baseline at this task version; a baseline exists only at v3, v5"
+    }
+  ],
+  "operational": {
+    "selected_attempts": 117,
+    "ledger_attempts": 121,
+    "retries": 4,
+    "retry_seconds": 33.1,
+    "retry_dollars": 0.0118
+  }
+}
+BLOCKED 2 findings; the rows are not publishable

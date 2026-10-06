@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tarfile
+
+ROOT = Path('/tmp/fastbrowse-local-e2e-20261005/workspace/WindTunnel-5ca8644e23826ebb30108e7bad240b61043bfe67')
+ARCHIVE = ROOT.parent / 'WindTunnel-5ca8644.tar.gz'
+DIGEST = '9254737b8062a4a7140ec2a91f3b111abe648bd6d649b2775d2e68ad1f054d82'
+SETUP = Path('/tmp/fastbrowse-local-e2e-20261005/new-comparison')
+SITES = {'tailwind-nextjs-blog','bulletproof-react','directory-9d8','nextjs-starter-medusa','easyappointments','learnhouse','idurar-erp-crm','hi-events'}
+
+site, run_id = sys.argv[1:]
+request = json.load(sys.stdin)
+if site not in SITES or not run_id or request['site'] != site or request['run_id'] != run_id:
+    raise SystemExit('refused an unrecognized isolated capsule')
+body = ARCHIVE.read_bytes()
+if hashlib.sha256(body).hexdigest() != DIGEST:
+    raise SystemExit('upstream archive changed')
+with tarfile.open(fileobj=io.BytesIO(body), mode='r:gz') as archive:
+    prefix = ROOT.name + '/'
+    for member in archive.getmembers():
+        if not member.isfile() or not member.name.startswith(prefix):
+            continue
+        relative = member.name[len(prefix):]
+        if relative.startswith(('harness/','capsules/','fixtures/','scoring/')):
+            source = archive.extractfile(member)
+            assert source is not None
+            if (ROOT / relative).read_bytes() != source.read():
+                raise SystemExit('upstream evaluator or capsule definition changed: ' + relative)
+environment = dict(os.environ)
+environment.update(json.loads((SETUP / 'grader-env.json').read_text()))
+result = subprocess.run([str(ROOT / 'harness/bin/capsule'), site, 'reset', '--run-id', 'cmp2'], env=environment, capture_output=True, timeout=180)
+if result.returncode:
+    raise SystemExit('isolated capsule reset failed with exit ' + str(result.returncode))
+print('reset complete')

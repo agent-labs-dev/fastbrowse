@@ -1,0 +1,410 @@
+{
+  "run": {
+    "run_id": "519f1d0ee962",
+    "run_started": "2026-10-05T21:47:43+00:00",
+    "fastbrowse_version": "0.5.19",
+    "git_sha": "7284c3c6d090f29f215e796d995871265b9fb23e",
+    "git_dirty": false,
+    "python": "3.13.16",
+    "source": "windtunnel",
+    "argv": [
+      "windtunnel",
+      "--site-urls",
+      "/tmp/fastbrowse-local-e2e-20261005/new-comparison/site-urls.json",
+      "--public-site-urls",
+      "/tmp/fastbrowse-local-e2e-20261005/new-comparison/public-site-urls.json",
+      "--cache",
+      "/tmp/fastbrowse-local-e2e-20261005/new-comparison/corpus-cache",
+      "--seed",
+      "75",
+      "--per-stratum",
+      "3",
+      "--arms",
+      "fastbrowse",
+      "browser-use",
+      "--repeat",
+      "3",
+      "--retries",
+      "1",
+      "--max-attempts",
+      "100",
+      "--out",
+      "/tmp/fastbrowse-local-e2e-20261005/new-comparison/runs/matched-0.5.19-paired-gate",
+      "--reset-command",
+      "[redacted]",
+      "--reset-code",
+      "/tmp/fastbrowse-local-e2e-20261005/new-comparison/reset_capsule.py",
+      "--reset-sha256",
+      "b4c79a5ae6cfe2239308edf4ed7bf1ffd469740a59f1f2876c7069711ca8f07a",
+      "--reset-timeout",
+      "240",
+      "--grader-code",
+      "/tmp/fastbrowse-local-e2e-20261005/new-comparison/native_state_grader.mjs",
+      "--grader-sha256",
+      "ef292f8871a894c90fbb0ef4ce28102319e9a66396f9c1e87075dceae49baa93",
+      "--grader-timeout",
+      "120",
+      "--execute",
+      "--authorize",
+      "--grader-command",
+      "[redacted]"
+    ],
+    "arms": {
+      "fastbrowse": {
+        "pin": "run.fastbrowse_version + run.git_sha",
+        "tier": "A"
+      },
+      "browser-use": {
+        "pin": "browser-use-sdk==3.11.3; hosted model reported per row",
+        "tier": "hosted"
+      }
+    },
+    "sites": {
+      "tailwind-nextjs-blog": "https://kathy-alto-bytes-eight.trycloudflare.com",
+      "bulletproof-react": "https://variations-diploma-hay-dreams.trycloudflare.com",
+      "directory-9d8": "https://contains-generators-were-mass.trycloudflare.com",
+      "nextjs-starter-medusa": "https://kijiji-organizing-pdas-assigned.trycloudflare.com",
+      "easyappointments": "https://playlist-engaging-geneva-jane.trycloudflare.com",
+      "learnhouse": "https://mainly-transmission-audience-sol.trycloudflare.com",
+      "idurar-erp-crm": "https://electoral-voices-description-cup.trycloudflare.com",
+      "hi-events": "https://trained-system-adjacent-imagine.trycloudflare.com"
+    },
+    "remote": true,
+    "seed": 75,
+    "per_stratum": 3,
+    "repeats": 3,
+    "retries": 1,
+    "fixture_auth": {
+      "lh-8": [
+        "password",
+        "username"
+      ],
+      "hev-8": [
+        "password",
+        "username"
+      ],
+      "id-2": [
+        "password",
+        "username"
+      ]
+    }
+  },
+  "corpus": {
+    "schema_version": 1,
+    "source": "windtunnel",
+    "revision": "5ca8644e23826ebb30108e7bad240b61043bfe67",
+    "sha256": "9254737b8062a4a7140ec2a91f3b111abe648bd6d649b2775d2e68ad1f054d82",
+    "seed": 75,
+    "per_stratum": 3,
+    "tasks": [
+      {
+        "source": "windtunnel",
+        "revision": "5ca8644e23826ebb30108e7bad240b61043bfe67",
+        "sha256": "9254737b8062a4a7140ec2a91f3b111abe648bd6d649b2775d2e68ad1f054d82",
+        "id": "lh-8",
+        "stratum": "act-long",
+        "start": "https://mainly-transmission-audience-sol.trycloudflare.com/",
+        "task": "Sign in as admin@webmcp-eval.com with password WebmcpEvalAdmin!234, open the course dashboard, and report how many published lessons the Evaluation Foundations course contains in total.",
+        "site": "learnhouse",
+        "metadata": {
+          "predicate": {
+            "type": "answer",
+            "matches": "(lessons?|activities)[^.]{0,40}\\b(4|four)\\b|\\b(4|four)\\b[^.]{0,40}(lessons?|activities)"
+          },
+          "params": {},
+          "max_steps": {
+            "webmcp": 10,
+            "cu": 30,
+            "structured": 24
+          },
+          "auth": true
+        },
+        "digest": "0823e58eee61a916b682178e2b7aaa8989699763675244133d126d8251077eb3"
+      },
+      {
+        "source": "windtunnel",
+        "revision": "5ca8644e23826ebb30108e7bad240b61043bfe67",
+        "sha256": "9254737b8062a4a7140ec2a91f3b111abe648bd6d649b2775d2e68ad1f054d82",
+        "id": "hev-8",
+        "stratum": "act-long",
+        "start": "https://trained-system-adjacent-imagine.trycloudflare.com/",
+        "task": "Log in to the organizer dashboard as organizer@webmcp-eval.test with password WebmcpEval123! and report the current status of the WebMCP Community Workshop event.",
+        "site": "hi-events",
+        "metadata": {
+          "predicate": {
+            "type": "answer",
+            "matches": "(status|workshop|event)[^.]{0,80}\\b(live|published|on[ -]?sale)\\b|\\b(live|published|on[ -]?sale)\\b[^.]{0,80}(status|workshop|event)|^\\W*((final )?answer:)?\\W*(live|published|on[ -]?sale)\\b[^.]{0,40}\\.?$|\\b(is|are|remains?|shows?|currently)\\b[^.]{0,25}\\b(live|published|on[ -]?sale)\\b",
+            "not_contains": [
+              "could not determine",
+              "couldn't determine",
+              "unable to determine",
+              "could not verify",
+              "couldn't verify",
+              "could not log in",
+              "couldn't log in",
+              "unable to log in",
+              "never reached"
+            ]
+          },
+          "params": {},
+          "max_steps": {
+            "webmcp": 10,
+            "cu": 30,
+            "structured": 24
+          },
+          "auth": true
+        },
+        "digest": "d77c87203b75a8ef306abfe521c88fee33c516fc5d0e43d24154da6922830c57"
+      },
+      {
+        "source": "windtunnel",
+        "revision": "5ca8644e23826ebb30108e7bad240b61043bfe67",
+        "sha256": "9254737b8062a4a7140ec2a91f3b111abe648bd6d649b2775d2e68ad1f054d82",
+        "id": "hev-9",
+        "stratum": "act-long",
+        "start": "https://trained-system-adjacent-imagine.trycloudflare.com/event/1/webmcp-community-workshop",
+        "task": "Register Riley Fox, riley.fox@example.com, for one General admission ticket, note the order reference code (it starts with \"o_\"), then use the event page's order lookup with that code and the same email to check the order and report its status.",
+        "site": "hi-events",
+        "metadata": {
+          "predicate": {
+            "probe": "orders",
+            "assert": {
+              "contains": {
+                "orders": 1
+              }
+            }
+          },
+          "params": {},
+          "max_steps": {
+            "webmcp": 12,
+            "cu": 35,
+            "structured": 28
+          }
+        },
+        "digest": "9b1af6d983619903c69387daeb95521d723a1f048e490c50beb4e3b36de43add"
+      },
+      {
+        "source": "windtunnel",
+        "revision": "5ca8644e23826ebb30108e7bad240b61043bfe67",
+        "sha256": "9254737b8062a4a7140ec2a91f3b111abe648bd6d649b2775d2e68ad1f054d82",
+        "id": "id-2",
+        "stratum": "act-short",
+        "start": "https://electoral-voices-description-cup.trycloudflare.com/",
+        "task": "Log in at /login as admin@admin.com with password admin123, then report the total amount of invoice 1/2026.",
+        "site": "idurar-erp-crm",
+        "metadata": {
+          "predicate": {
+            "type": "answer",
+            "contains": [
+              "250"
+            ]
+          },
+          "params": {},
+          "max_steps": {
+            "webmcp": 8,
+            "cu": 24,
+            "structured": 20
+          },
+          "auth": true
+        },
+        "digest": "2ba1f5ef981d52ed93b74f0f52ba57762dc9e1b62bcbb32ce1f3f0df254305aa"
+      },
+      {
+        "source": "windtunnel",
+        "revision": "5ca8644e23826ebb30108e7bad240b61043bfe67",
+        "sha256": "9254737b8062a4a7140ec2a91f3b111abe648bd6d649b2775d2e68ad1f054d82",
+        "id": "directory-filter",
+        "stratum": "act-short",
+        "start": "https://contains-generators-were-mass.trycloudflare.com/",
+        "task": "Filter the directory to developer tools, then report one result shown in the filtered list.",
+        "site": "directory-9d8",
+        "metadata": {
+          "predicate": {
+            "type": "answer",
+            "matches": "\\b(github|react)\\b"
+          },
+          "params": {},
+          "max_steps": {}
+        },
+        "digest": "8be15bb145b470f03e05654cfc39c8ecbc524c2006c956a418b1a87b8fea82f8"
+      },
+      {
+        "source": "windtunnel",
+        "revision": "5ca8644e23826ebb30108e7bad240b61043bfe67",
+        "sha256": "9254737b8062a4a7140ec2a91f3b111abe648bd6d649b2775d2e68ad1f054d82",
+        "id": "md-4",
+        "stratum": "act-short",
+        "start": "https://kijiji-organizing-pdas-assigned.trycloudflare.com/",
+        "task": "What sizes does the Medusa Sweatshirt come in? List them all.",
+        "site": "nextjs-starter-medusa",
+        "metadata": {
+          "predicate": {
+            "type": "answer",
+            "contains": [
+              "xl"
+            ]
+          },
+          "params": {},
+          "max_steps": {
+            "webmcp": 8,
+            "cu": 24,
+            "structured": 20
+          }
+        },
+        "digest": "a03b82bd95f0a327cb9cf5fe486a095643e4d4b601f52be5a694a08e0c58639e"
+      },
+      {
+        "source": "windtunnel",
+        "revision": "5ca8644e23826ebb30108e7bad240b61043bfe67",
+        "sha256": "9254737b8062a4a7140ec2a91f3b111abe648bd6d649b2775d2e68ad1f054d82",
+        "id": "md-2",
+        "stratum": "answer",
+        "start": "https://kijiji-organizing-pdas-assigned.trycloudflare.com/",
+        "task": "What is the store's shipping policy? How long does delivery take?",
+        "site": "nextjs-starter-medusa",
+        "metadata": {
+          "predicate": {
+            "type": "answer",
+            "contains": [
+              "3-5 business days"
+            ]
+          },
+          "params": {},
+          "max_steps": {
+            "webmcp": 6,
+            "cu": 18,
+            "structured": 18
+          }
+        },
+        "digest": "bc8af570a42506aff0e1594127ae45f7abb446dd55ed0d446a44bf1c308623f6"
+      },
+      {
+        "source": "windtunnel",
+        "revision": "5ca8644e23826ebb30108e7bad240b61043bfe67",
+        "sha256": "9254737b8062a4a7140ec2a91f3b111abe648bd6d649b2775d2e68ad1f054d82",
+        "id": "blog-read-author",
+        "stratum": "answer",
+        "start": "https://kathy-alto-bytes-eight.trycloudflare.com/about",
+        "task": "Who is the author shown on this About page?",
+        "site": "tailwind-nextjs-blog",
+        "metadata": {
+          "predicate": {
+            "type": "answer",
+            "contains": [
+              "azimuth"
+            ]
+          },
+          "params": {},
+          "max_steps": {}
+        },
+        "digest": "c8504cb7520a06ef98e6cb37fe6e3ea0e984ffa184609dc6db70df21f8feb61a"
+      },
+      {
+        "source": "windtunnel",
+        "revision": "5ca8644e23826ebb30108e7bad240b61043bfe67",
+        "sha256": "9254737b8062a4a7140ec2a91f3b111abe648bd6d649b2775d2e68ad1f054d82",
+        "id": "react-auth-boundary",
+        "stratum": "answer",
+        "start": "https://variations-diploma-hay-dreams.trycloudflare.com/",
+        "task": "Check whether the private app is accessible while signed out; do not sign in.",
+        "site": "bulletproof-react",
+        "metadata": {
+          "predicate": {
+            "type": "answer",
+            "matches": "(redirect|unauthorized|denied|forbidden|inaccessible|not\\W{0,4}accessible|(cannot|can'?t|could not|couldn'?t|unable to)[^.]{0,30}(access|reach|view|open|see)|not\\W{0,4}reachable|requires? (signing|sign|log|logging|authentication)|(must|need to|have to) (log|sign) in|restricted to signed|only visible to signed|blocked)"
+          },
+          "params": {},
+          "max_steps": {}
+        },
+        "digest": "713823166ef89640baa3d5611157f42ec673803174e957df3a19a46558d882a1"
+      },
+      {
+        "source": "windtunnel",
+        "revision": "5ca8644e23826ebb30108e7bad240b61043bfe67",
+        "sha256": "9254737b8062a4a7140ec2a91f3b111abe648bd6d649b2775d2e68ad1f054d82",
+        "id": "ea-7",
+        "stratum": "transaction",
+        "start": "https://playlist-engaging-geneva-jane.trycloudflare.com/",
+        "task": "Book a Consultation at the earliest available slot for Casey Reed, email casey.reed@example.com, phone +1 555 0177 \u2014 then cancel that same appointment with the reason \"schedule conflict\". Report the cancellation result.",
+        "site": "easyappointments",
+        "metadata": {
+          "predicate": {
+            "probe": "database",
+            "assert": {
+              "contains": {
+                "customers": 2
+              }
+            }
+          },
+          "params": {},
+          "max_steps": {
+            "webmcp": 12,
+            "cu": 35,
+            "structured": 28
+          }
+        },
+        "digest": "87bf1bd2425ffe5304995cf1c132ad0eb8c7067061701e0811cd6e0bb948de31"
+      },
+      {
+        "source": "windtunnel",
+        "revision": "5ca8644e23826ebb30108e7bad240b61043bfe67",
+        "sha256": "9254737b8062a4a7140ec2a91f3b111abe648bd6d649b2775d2e68ad1f054d82",
+        "id": "md-8",
+        "stratum": "transaction",
+        "start": "https://kijiji-organizing-pdas-assigned.trycloudflare.com/",
+        "task": "Buy one Medusa T-Shirt, size L, color Black \u2014 add it to the cart and complete guest checkout as Jane Tester, jane.tester@example.test, 1 High Street, London, N1 9GU, United Kingdom, phone +44 20 7946 0000, using the store's test payment method. Report the order confirmation.",
+        "site": "nextjs-starter-medusa",
+        "metadata": {
+          "predicate": {
+            "probe": "database",
+            "assert": {
+              "contains": {
+                "orders": 1
+              }
+            }
+          },
+          "params": {},
+          "max_steps": {
+            "webmcp": 15,
+            "cu": 40,
+            "structured": 32
+          }
+        },
+        "digest": "2da6197cc37df42efd89ed0f9fd4fc64151d9a6174bdb4a4c050709465108ce5"
+      },
+      {
+        "source": "windtunnel",
+        "revision": "5ca8644e23826ebb30108e7bad240b61043bfe67",
+        "sha256": "9254737b8062a4a7140ec2a91f3b111abe648bd6d649b2775d2e68ad1f054d82",
+        "id": "ea-6",
+        "stratum": "transaction",
+        "start": "https://playlist-engaging-geneva-jane.trycloudflare.com/",
+        "task": "Book a Haircut appointment with Jane Doe at the earliest available slot for the customer Alex Runner, email alex.runner@example.com, phone +1 555 0199. Confirm the booking went through.",
+        "site": "easyappointments",
+        "metadata": {
+          "predicate": {
+            "probe": "appointments",
+            "assert": {
+              "contains": {
+                "service": {
+                  "name": "Haircut"
+                },
+                "customer": {
+                  "email": "alex.runner@example.com"
+                }
+              }
+            }
+          },
+          "params": {},
+          "max_steps": {
+            "webmcp": 12,
+            "cu": 35,
+            "structured": 28
+          }
+        },
+        "digest": "8acda11fa278a95e59133e276ac4ac2c20831a7f688f27e55c096bb7935fba72"
+      }
+    ],
+    "digest": "01bb3e37607b046bbc7a0feb1126db8e761d166e372e35ea62a126b02715a7ce"
+  }
+}

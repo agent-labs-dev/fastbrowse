@@ -1,0 +1,11 @@
+{
+  "method": "Offline report regeneration from unchanged recorded attempts; no agents, grades or prices rerun",
+  "measured_agent_git_sha": "7284c3c6d090f29f215e796d995871265b9fb23e",
+  "original_report_sha256": "1e9510429a000229094b644f3f0b1427d804cc2822131dbb3e13db1cfa80ef63",
+  "attempt_ledger_sha256": "66b68a307c7b6cc35b8ba7b9ccaf0bc9ec26a3029ed98403dfc177d6895b6864",
+  "corrected_producer_file_sha256": "c487fd5afc4ef7b72241146a9561685f865350f6cf35f5369f1aebdf6008c390",
+  "original_paired_task_repeats": 33,
+  "corrected_paired_task_repeats": 0,
+  "original_headline": "paired on 33 task-repeats across 11 tasks: fastbrowse correct 22/33 (completed 18); browser-use correct 31/33 (completed 33)",
+  "corrected_headline": "INSUFFICIENT PAIRED DATA: a task every requested arm was eligible for has an ungraded or missing repeat, so no arm-to-arm comparison is reported."
+}

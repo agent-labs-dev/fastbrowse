@@ -1,0 +1,24 @@
+#!/usr/bin/env node
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+const root='/tmp/fastbrowse-local-e2e-20261005/workspace/WindTunnel-5ca8644e23826ebb30108e7bad240b61043bfe67';
+const setup='/tmp/fastbrowse-local-e2e-20261005/new-comparison';
+const file=root+'/scoring/predicates.mjs';
+if(createHash('sha256').update(readFileSync(file)).digest('hex')!=='1e9be92f6261a6f074b53c282fdd881d3f4874a47e37e689d17182b4fac7daf6') throw new Error('upstream predicate code changed');
+const {score}=await import(pathToFileURL(file));
+const request=JSON.parse(readFileSync(0,'utf8'));
+const predicate=request.task.metadata.predicate;
+const site=request.task.site;
+const sites=new Set(['tailwind-nextjs-blog','bulletproof-react','directory-9d8','nextjs-starter-medusa','easyappointments','learnhouse','idurar-erp-crm','hi-events']);
+if(!sites.has(site)||!predicate.probe) throw new Error('unrecognized isolated state probe');
+let observed;
+const capsule={observe:async(probe,args)=>{
+ const env={...process.env,...JSON.parse(readFileSync(setup+'/grader-env.json','utf8'))};
+ observed=JSON.parse(execFileSync(root+'/harness/bin/observe',[site,probe,JSON.stringify(args),'--run-id','cmp2'],{env,timeout:90000,encoding:'utf8',maxBuffer:8*1024*1024}));
+ return observed;
+}};
+const result=await score(predicate,capsule);
+if(result.detail.startsWith('probe-error:')) throw new Error(result.detail);
+process.stdout.write(JSON.stringify({grader:'windtunnel-native-state',version:'1',passed:Boolean(result.pass),failure:result.pass?null:result.detail,evidence:{probe:predicate.probe,assert:predicate.assert,observation:observed,capsule_run_id:'cmp2'}}));

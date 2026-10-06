@@ -1,0 +1,36 @@
+[
+  {
+    "campaign": "h2h-0.5.19-final-20261005",
+    "recorded_attempts": 67,
+    "recorded_known_cost": 13.62413,
+    "watch_events": 68,
+    "reason": "Interrupted before cancellation-ledger fix",
+    "cost_reconciliation_complete": false,
+    "unrecorded_inflight_cost": "unknown, not zero",
+    "watch_events_not_completed_in_ledger": 1
+  },
+  {
+    "campaign": "h2h-0.5.19-final-disk-20261005",
+    "recorded_attempts": 10,
+    "recorded_known_cost": 1.60661,
+    "watch_events": 12,
+    "reason": "Interrupted before cancellation-ledger fix",
+    "cost_reconciliation_complete": false,
+    "unrecorded_inflight_cost": "unknown, not zero",
+    "watch_events_not_completed_in_ledger": 2,
+    "recovered_hosted_session": "fca033ef-dc42-422b-8492-cdcc5574d62c",
+    "recovered_hosted_usd": 0.562068,
+    "remaining_unreconciled_watch_events": 1,
+    "receipt": "interrupted-wiki-session-cost.json"
+  },
+  {
+    "campaign": "fixtures-0.5.19-final-default-20261005",
+    "recorded_attempts": 6,
+    "recorded_known_cost": 0.00861,
+    "watch_events": 0,
+    "reason": "Interrupted before cancellation-ledger fix",
+    "cost_reconciliation_complete": false,
+    "unrecorded_inflight_cost": "unknown, not zero",
+    "watch_events_not_completed_in_ledger": 0
+  }
+]

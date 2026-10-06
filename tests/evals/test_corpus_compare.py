@@ -554,28 +554,64 @@ def test_scattered_partial_repeats_do_not_add_up_to_a_headline(tmp_path: Path) -
     assert len(report.attempts) == 8
 
 
-def test_an_inadequate_task_is_excluded_from_totals_but_kept_in_diagnostics(tmp_path: Path) -> None:
-    """One adequate task headlines while a two-repeat task stays out of every total and every raw row stays."""
+def test_a_missing_graded_repeat_for_an_eligible_task_blocks_a_completed_headline(tmp_path: Path) -> None:
+    """The completed draw that exposed this: eleven tasks had three graded repeats each and one task's reset
+    failed on its third repeat. Excluding that task after reading its grades headlined the remaining repeats, a
+    figure chosen after the outcomes were known. Expected coverage is the tasks every requested arm was eligible
+    for, decided before any grade, so one uncovered slot refuses the comparison and every raw row stays."""
     log = tmp_path / "reset.log"
     reset = _reset(tmp_path, log)
-    corpus = _corpus([_answer_task("a-1"), _state_task(probe=False, task_id="s-1")])
-    adequate, inadequate = corpus.tasks
+    tasks = [_answer_task(f"a-{index}") for index in range(4)]
+    corpus = Corpus.build(SOURCES["windtunnel"], tasks, per_stratum=4, seed=7)
+    faulty = next(ref for ref in corpus.tasks if ref.id == "a-3")
     arms = ("fastbrowse", "browser-use")
     specs = {arm: _spec(_arm_runner(arm, log)) for arm in arms}
     attempts = [
-        _arm_attempt(reset, ref, arm=arm, repeat=repeat)
-        for ref, repeats in ((adequate, (0, 1, 2)), (inadequate, (0, 1)))
-        for repeat in repeats
+        _arm_attempt(
+            reset,
+            ref,
+            arm=arm,
+            repeat=repeat,
+            graded=not (ref.digest == faulty.digest and repeat == 2 and arm == "browser-use"),
+        )
+        for repeat in range(3)
+        for ref in corpus.tasks
         for arm in arms
     ]
     report = _report(corpus, arms, attempts, repeats=3, specs=specs)
-    assert {digest for digest, _ in report.paired_tasks} == {adequate.digest}
+    assert report.headline.startswith("INSUFFICIENT PAIRED DATA")
+    assert report.paired_tasks == ()
+    assert report.paired["fastbrowse"].graded == report.paired["browser-use"].graded == 0
+    # The ungraded reset row and every other physical row stay in the report, so the ledger still explains it.
+    assert len(report.attempts) == 3 * 4 * 2
+    assert cc._run_cleanly(attempts) is False
+
+
+def test_a_transient_outage_recovered_by_a_graded_retry_covers_its_slot(tmp_path: Path) -> None:
+    """A provider outage a retry recovered leaves an ungraded physical row, but the slot was graded, so it is
+    covered and must not refuse the headline the way a reset failure that never recovered does."""
+    log = tmp_path / "reset.log"
+    reset = _reset(tmp_path, log)
+    corpus = _corpus([_answer_task()])
+    task = corpus.tasks[0]
+    arms = ("fastbrowse", "browser-use")
+    specs = {arm: _spec(_arm_runner(arm, log)) for arm in arms}
+    attempts = []
+    for repeat in range(3):
+        for arm in arms:
+            if repeat == 1 and arm == "browser-use":
+                attempts.append(
+                    _arm_attempt(
+                        reset, task, arm=arm, repeat=repeat, retry=0, graded=False, completion=Ending.UNAVAILABLE
+                    )
+                )
+                attempts.append(_arm_attempt(reset, task, arm=arm, repeat=repeat, retry=1, graded=True))
+            else:
+                attempts.append(_arm_attempt(reset, task, arm=arm, repeat=repeat))
+    report = _report(corpus, arms, attempts, repeats=3, specs=specs)
+    assert report.headline.startswith("paired on 3 task-repeats across 1 tasks")
     assert len(report.paired_tasks) == 3
     assert report.paired["fastbrowse"].graded == report.paired["browser-use"].graded == 3
-    assert report.headline.startswith("paired on 3 task-repeats across 1 tasks")
-    # All ten physical rows are retained, including the four the inadequate task produced.
-    assert len(report.attempts) == 10
-    assert inadequate.digest in {record.task_digest for record in report.attempts}
 
 
 @pytest.mark.parametrize("stop", ["truncated", "interrupted"])
@@ -605,7 +641,15 @@ def _record(reset: cc.ResetSpec) -> cc.ResetRecord:
     )
 
 
-def _attempt(ref: TaskRef, *, graded: bool, passed: bool, arm: str = "fastbrowse", repeat: int = 0) -> cc.Attempt:
+def _attempt(
+    ref: TaskRef,
+    *,
+    graded: bool,
+    passed: bool,
+    arm: str = "fastbrowse",
+    repeat: int = 0,
+    completion: Ending = Ending.DONE,
+) -> cc.Attempt:
     grade = Grade(grader="fixture", version="1", passed=passed) if graded else None
     return cc.Attempt(
         corpus="c" * 64,
@@ -618,8 +662,8 @@ def _attempt(ref: TaskRef, *, graded: bool, passed: bool, arm: str = "fastbrowse
         repeat=repeat,
         arm=arm,
         raw_status="complete",
-        completion=Ending.DONE,
-        completed=True,
+        completion=completion,
+        completed=completion is Ending.DONE,
         graded=graded,
         grade=grade,
         passed=(grade.passed and True) if grade is not None else None,
@@ -628,14 +672,23 @@ def _attempt(ref: TaskRef, *, graded: bool, passed: bool, arm: str = "fastbrowse
 
 
 def _arm_attempt(
-    reset: cc.ResetSpec, ref: TaskRef, *, arm: str, repeat: int, graded: bool = True, passed: bool = True
+    reset: cc.ResetSpec,
+    ref: TaskRef,
+    *,
+    arm: str,
+    repeat: int,
+    graded: bool = True,
+    passed: bool = True,
+    completion: Ending = Ending.DONE,
+    retry: int = 0,
 ) -> cc.ArmAttempt:
     return cc.ArmAttempt(
         arm=arm,
         pin="pin",
         tier="A",
+        retry=retry,
         reset=_record(reset),
-        attempt=_attempt(ref, graded=graded, passed=passed, arm=arm, repeat=repeat),
+        attempt=_attempt(ref, graded=graded, passed=passed, arm=arm, repeat=repeat, completion=completion),
     )
 
 
@@ -1222,13 +1275,16 @@ def test_pairing_drops_a_task_one_requested_arm_is_ineligible_for(tmp_path: Path
     arms = ("fastbrowse", "jev-ultrafast")
     answer_digest = next(ref.digest for ref in corpus.tasks if ref.stratum == "answer")
     state_digest = next(ref.digest for ref in corpus.tasks if ref.stratum != "answer")
-    # jev-ultrafast has no row at all on the answer task, so that task is not a fair pair for either arm.
+    # jev-ultrafast has no row at all on the answer task, so that task is not a fair pair for either arm. The
+    # answer task is also missing a fastbrowse repeat, but because it was ineligible before outcomes it is not
+    # expected coverage and must not refuse the state task's headline.
     attempts = [
         _arm_attempt(reset, ref, arm=arm, repeat=repeat)
         for repeat in range(3)
         for ref in corpus.tasks
         for arm in arms
         if not (arm == "jev-ultrafast" and ref.digest == answer_digest)
+        and not (arm == "fastbrowse" and ref.digest == answer_digest and repeat == 2)
     ]
     report = cc.build_report(
         corpus,

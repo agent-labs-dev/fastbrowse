@@ -810,6 +810,27 @@ def paired_tasks(
     return tuple(shared)
 
 
+def uncovered_expected(
+    corpus: Corpus, arms: Sequence[str], attempts: Sequence[ArmAttempt], repeats: int
+) -> tuple[tuple[str, int, str], ...]:
+    """The planned task-arm-repeat slots a completed draw failed to grade.
+
+    Expected is decided from the corpus and the requested arms before any outcome is read: a task every requested
+    arm is eligible for is planned at every repeat. A slot is covered when at least one physical attempt on it is
+    graded, so a transient outage a retry recovered is covered while an ungraded or absent slot is not. A task one
+    requested arm could never attempt is not planned and is left out, as the supported-arm contract requires."""
+    graded = {(item.attempt.task_digest, item.attempt.repeat, item.arm) for item in attempts if item.attempt.graded}
+    missing: list[tuple[str, int, str]] = []
+    for ref in corpus.tasks:
+        if any(arm_eligible(arm, ref) is not None for arm in arms):
+            continue
+        for repeat in range(repeats):
+            for arm in arms:
+                if (ref.digest, repeat, arm) not in graded:
+                    missing.append((ref.digest, repeat, arm))
+    return tuple(missing)
+
+
 def paired_totals(
     attempts: Sequence[ArmAttempt], arms: Sequence[str], shared: Sequence[tuple[str, int]]
 ) -> dict[str, PairedArm]:
@@ -861,6 +882,13 @@ def build_report(
     specs: dict[str, ArmSpec],
 ) -> ComparisonReport:
     shared = paired_tasks(corpus, arms, attempts, repeats)
+    stopped = truncated or interrupted
+    # A stopped draw already refuses a headline; only a draw that ran to completion is judged on whether every
+    # planned task-arm-repeat was graded. An ungraded or missing slot on a task every requested arm was eligible
+    # for cannot be dropped after its grades are known to headline the rest.
+    incomplete = () if stopped else uncovered_expected(corpus, arms, attempts, repeats)
+    if incomplete:
+        shared = ()
     paired = paired_totals(attempts, arms, shared)
     totals = {arm: arm_totals(attempts, arm) for arm in arms}
     records = tuple(
@@ -920,7 +948,10 @@ def build_report(
         interrupted=interrupted,
         headline=(
             "INSUFFICIENT PAIRED DATA: the draw stopped before completion, so no arm-to-arm comparison is reported."
-            if truncated or interrupted
+            if stopped
+            else "INSUFFICIENT PAIRED DATA: a task every requested arm was eligible for has an ungraded or missing "
+            "repeat, so no arm-to-arm comparison is reported."
+            if incomplete
             else headline_for(arms, shared, paired)
         ),
         note=note,

@@ -1,0 +1,11 @@
+{
+  "campaign": "h2h-0.5.19-aborted-wrong-wrapper-20261005",
+  "selected_results": 0,
+  "physical_attempts": 2,
+  "hosted_stopped": true,
+  "recovered_hosted_usd": 0.33408,
+  "fastbrowse_usd": null,
+  "fastbrowse_seconds": 8.9,
+  "additional_reserved_usd": 5,
+  "purpose": "wrong-wrapper core pair, cancelled; not a heldout measurement"
+}

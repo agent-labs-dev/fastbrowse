@@ -32,7 +32,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   independent correctness. WindTunnel tasks marked excluded by upstream are left out, and authenticated
   fixtures use named credentials scoped to their site.
 - External comparison figures require three paired repeats for each included task. Scattered partial repeats
-  cannot combine into a score, and stopped draws retain diagnostics without a comparison headline.
+  cannot combine into a score, and stopped draws retain diagnostics without a comparison headline. A completed
+  draw also refuses a figure when a task every requested arm could attempt has an ungraded or missing repeat,
+  instead of dropping that task after its grades are known.
 - Structured extraction reads scalar values from every page the run quoted, not only the one it ended on. A
   sorted listing's later page holds the pricier products, so a price quoted on an earlier page had no candidate
   and the data came back empty while the answer was right. A quote the final page corrected is not offered as a
