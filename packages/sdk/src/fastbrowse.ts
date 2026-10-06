@@ -2,12 +2,14 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { Writable } from 'node:stream';
 
+import { abortable } from './abort.ts';
 import { resolveBinary } from './binary.ts';
 import { FastbrowseError, ProcessExitedError } from './errors.ts';
 import type {
   BrowserEvent,
   InitializeParams,
   InitializeResult,
+  RunCancelParams,
   RunEvent,
   RunParams,
   RunResult,
@@ -86,7 +88,8 @@ export class Fastbrowse {
    *
    * Rejects with `RpcError` when the server refuses the request, which it does before a browser opens: for a
    * bad option, for a missing key, and with the busy code while another run on this instance is active. Rejects
-   * with `ProcessExitedError` when the fastbrowse process is gone.
+   * with `ProcessExitedError` when the fastbrowse process is gone. Rejects with `AbortError` when `signal`
+   * stopped the run.
    */
   async run(task: string, options: RunOptions = {}): Promise<RunResult> {
     // The server names the run in every event it sends, which is how a run refused as busy hears nothing of
@@ -95,7 +98,13 @@ export class Fastbrowse {
     if (options.onEvent) this.#listeners.set(runId, options.onEvent);
     try {
       const params = runParams(runId, task, this.#browser, options);
-      return (await this.#server.connection.request('run', params)) as RunResult;
+      const { connection } = this.#server;
+      return await abortable(
+        options.signal,
+        () => connection.request('run', params) as Promise<RunResult>,
+        // The reply says only that the request was read, and a process that has gone rejects the run itself.
+        () => void connection.request('run/cancel', { run_id: runId } satisfies RunCancelParams).catch(() => {}),
+      );
     } finally {
       this.#listeners.delete(runId);
     }

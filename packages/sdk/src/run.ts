@@ -51,6 +51,11 @@ export interface RunOptions extends BrowserOptions {
   record?: string;
   /** Called with the browser event and then each step event, in the order the run produced them. */
   onEvent?: (event: StepEvent | BrowserEvent) => void;
+  /**
+   * Stops the run when it aborts. `run` then rejects with `AbortError`, after the run's browser has closed.
+   * A signal that has already aborted starts no run.
+   */
+  signal?: AbortSignal;
 }
 
 type Sparse<Fields> = { [Name in keyof Fields]?: Fields[Name] | undefined };
