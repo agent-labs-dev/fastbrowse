@@ -172,9 +172,8 @@ def store_campaign(sdk: Any, campaign: Campaign) -> StoredCampaign:
         as_type="evaluator",
         trace_context={"trace_id": sha[:32]},
         output={"sha256": sha, "content": content},
-        metadata={"kind": "public-eval-evidence", "recorded_times": "in campaign, storage time is not run time"},
+        metadata={"kind": "private-eval-evidence", "recorded_times": "in campaign, storage time is not run time"},
     ) as span:
-        span.set_trace_as_public()
         return StoredCampaign(
             id=campaign.id,
             sha256=sha,

@@ -72,9 +72,10 @@ red fixture gate refuses a release even when it publishes no comparison.
 ## Results browser and tracking
 
 Detailed evals and validation live in the dedicated [fastbrowse-evals Langfuse project](https://us.cloud.langfuse.com/project/cmuwjxra401iyad0cymgswes5).
-Keep local output under ignored `artifacts/evals/`. Git stores the public campaign manifest, source hash receipts
+Keep local output under ignored `artifacts/evals/`. Git stores the campaign manifest, source hash receipts
 and compact published score baselines. It does not store run logs, recordings or generated evidence bundles.
-The public results browser retrieves hash-checked, sanitized campaigns from Langfuse during its server-side build.
+Eval traces remain private. The public results page withholds campaigns and comparison figures until all
+remaining issues are resolved, complete matched runs are reviewed, and the maintainer explicitly approves publication.
 Project credentials stay in ignored configuration and server-side build settings.
 
 `fastbrowse.evals.evidence` projects task identifiers, source hashes, grades, completion, build identifiers,
@@ -91,7 +92,7 @@ uv run --with 'langfuse>=4.17,<5' python -m fastbrowse.evals.storage \
 ```
 
 The command requires `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and the US Langfuse host. It verifies the
-project id and name before writing. Public campaign traces contain only the validated projection.
+project id and name before writing. Campaign traces remain private and contain only the validated projection.
 `--archive-root` preserves original source files as private, compressed chunks; the reader reconstructs their
 bytes and verifies each original hash. Campaign storage times describe the upload, never an invented run time.
 An identical campaign reuses its verified stored observation. Changed projections get different content identities.

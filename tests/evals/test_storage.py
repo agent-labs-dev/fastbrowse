@@ -130,3 +130,13 @@ def test_resumed_archive_reuses_receipt_and_refuses_replacing_original(tmp_path:
     path.write_bytes(b"edited")
     with pytest.raises(ValueError, match="cannot be replaced"):
         list(storage.store_archive(None, tmp_path, previous))
+
+
+def test_campaign_upload_does_not_enable_public_sharing() -> None:
+    def publish() -> None:
+        raise AssertionError("Eval publication requires maintainer approval")
+
+    span = SimpleNamespace(trace_id="a" * 32, id="b" * 16, set_trace_as_public=publish)
+    sdk = SimpleNamespace(start_as_current_observation=lambda **_: nullcontext(span))
+    campaign = Campaign(id="private-run", kind="diagnostic", sources=[], attempts=[])
+    assert storage.store_campaign(sdk, campaign).id == "private-run"
