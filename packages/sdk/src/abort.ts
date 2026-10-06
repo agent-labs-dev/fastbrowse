@@ -3,7 +3,7 @@
 import { AbortError, RpcError } from './errors.ts';
 import type { ErrorCode } from './protocol.ts';
 
-const CANCELLED: ErrorCode = -32002;
+export const CANCELLED: ErrorCode = -32002;
 
 /**
  * Make the `run` request with `send`, and call `cancel` if `signal` aborts while it is waiting on its reply.

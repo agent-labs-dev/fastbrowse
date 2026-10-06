@@ -30,6 +30,11 @@ export class AbortError extends FastbrowseError {
   }
 }
 
+/** What a thrown value says. A callback is the caller's code, and it can throw anything. */
+export function messageOf(thrown: unknown): string {
+  return thrown instanceof Error ? thrown.message : String(thrown);
+}
+
 /** The server's error reply to a request. `code` is one of the protocol's error codes. */
 export class RpcError extends FastbrowseError {
   readonly code: number;

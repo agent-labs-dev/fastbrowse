@@ -3,18 +3,10 @@ import { randomUUID } from 'node:crypto';
 import type { Writable } from 'node:stream';
 
 import { abortable } from './abort.ts';
+import { Callbacks } from './callbacks.ts';
 import { resolveBinary } from './binary.ts';
 import { FastbrowseError, ProcessExitedError } from './errors.ts';
-import type {
-  BrowserEvent,
-  InitializeParams,
-  InitializeResult,
-  RunCancelParams,
-  RunEvent,
-  RunParams,
-  RunResult,
-  StepEvent,
-} from './protocol.ts';
+import type { InitializeParams, InitializeResult, RunCancelParams, RunParams, RunResult } from './protocol.ts';
 import { Connection } from './rpc.ts';
 import { type BrowserOptions, browserParams, type RunOptions, runParams } from './run.ts';
 
@@ -50,18 +42,14 @@ export class Fastbrowse {
   readonly fastbrowseVersion: string;
   readonly #server: Server;
   readonly #browser: Partial<RunParams>;
-  /** Who hears the events of each run that is waiting on its reply, by run id. */
-  readonly #listeners = new Map<string, (event: StepEvent | BrowserEvent) => void>();
+  readonly #callbacks: Callbacks;
   #closed: Promise<void> | undefined;
 
   private constructor(server: Server, fastbrowseVersion: string, browser: Partial<RunParams>) {
     this.#server = server;
     this.fastbrowseVersion = fastbrowseVersion;
     this.#browser = browser;
-    server.connection.onNotification('run/event', params => {
-      const { run_id: runId, event } = params as unknown as RunEvent;
-      this.#listeners.get(runId)?.(event);
-    });
+    this.#callbacks = new Callbacks(server.connection);
   }
 
   /** Start a fastbrowse process and check that it speaks this SDK's protocol version. */
@@ -98,19 +86,14 @@ export class Fastbrowse {
     // The server names the run in every event it sends, which is how a run refused as busy hears nothing of
     // the one that is active.
     const runId = randomUUID();
-    if (options.onEvent) this.#listeners.set(runId, options.onEvent);
-    try {
-      const params = runParams(runId, task, this.#browser, options);
-      const { connection } = this.#server;
-      return await abortable(
-        options.signal,
-        () => connection.request('run', params) as Promise<RunResult>,
-        // The reply says only that the request was read, and a process that has gone rejects the run itself.
-        () => void connection.request('run/cancel', { run_id: runId } satisfies RunCancelParams).catch(() => {}),
-      );
-    } finally {
-      this.#listeners.delete(runId);
-    }
+    const params = runParams(runId, task, this.#browser, options);
+    const { connection } = this.#server;
+    // The reply says only that the request was read, and a process that has gone rejects the run itself.
+    const cancel = () =>
+      void connection.request('run/cancel', { run_id: runId } satisfies RunCancelParams).catch(() => {});
+    return this.#callbacks.during(runId, options, cancel, () =>
+      abortable(options.signal, () => connection.request('run', params) as Promise<RunResult>, cancel),
+    );
   }
 
   /**

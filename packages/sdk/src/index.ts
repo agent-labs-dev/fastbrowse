@@ -11,9 +11,10 @@ export type {
   ErrorCode,
   Evidence,
   RunResult,
+  SecretRef,
   Status,
   StepEvent,
   StepFact,
   StepResult,
 } from './protocol.ts';
-export type { Attachment, BrowserOptions, RunOptions } from './run.ts';
+export type { Attachment, BrowserOptions, RunOptions, Secrets } from './run.ts';
