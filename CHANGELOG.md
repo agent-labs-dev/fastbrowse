@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.19] - 2026-10-06
+
 - `run_task` takes `cloud_extensions`, up to three distinct extension IDs from your Browser Use Cloud account,
   and loads them into the cloud browser it starts. Asking for extensions with local Chrome or an attached
   browser is an error, since neither can load them. Runs that ask for none are unchanged.
@@ -901,7 +903,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.18...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.19...HEAD
+[0.5.19]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.19
 [0.5.18]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.18
 [0.5.17]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.17
 [0.5.16]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.16
