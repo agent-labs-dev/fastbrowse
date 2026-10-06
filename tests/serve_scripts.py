@@ -6,7 +6,8 @@ these in the hidden `--run-task` option instead, as `tests.serve_scripts:<name>`
 
 from typing import Any
 
-from fastbrowse.models import BrowserEvent, CostBreakdown, EventHandler, RunResult, Status
+from fastbrowse.models import BrowserEvent, CostBreakdown, EventHandler, RunResult, SecretResolver, Status
+from fastbrowse.safety import origin_of, resolve_secret
 
 
 async def echo(task: str, *, on_event: EventHandler, **_: Any) -> RunResult:
@@ -15,6 +16,24 @@ async def echo(task: str, *, on_event: EventHandler, **_: Any) -> RunResult:
     return RunResult(
         status=Status.COMPLETE,
         answer=f"echo: {task}",
+        data=None,
+        evidence=(),
+        steps=(),
+        cost=CostBreakdown(lines=()),
+        artifacts=(),
+    )
+
+
+async def type_secret(task: str, *, start: str, secrets: SecretResolver, on_event: EventHandler, **_: Any) -> RunResult:
+    """A run that resolves its first secret for the start page, the way the agent does before it types one.
+
+    The answer says how long the value was and never what it was, which is as much as a real run reports.
+    """
+    value = await resolve_secret(secrets, secrets.available()[0].name, origin_of(start))
+    await on_event(BrowserEvent(live_url=None))
+    return RunResult(
+        status=Status.COMPLETE,
+        answer="nothing to type" if value is None else f"typed {len(value)} characters",
         data=None,
         evidence=(),
         steps=(),
