@@ -9,6 +9,7 @@ import json
 import os
 import signal
 import sys
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
@@ -97,6 +98,22 @@ async def killed(task: str, *, on_event: EventHandler, **_: Any) -> RunResult:
     await on_event(BrowserEvent(live_url=None))
     os.kill(os.getpid(), signal.SIGKILL)
     return _result()
+
+
+async def until_cancelled(task: str, *, inputs: dict[str, str] | None, on_event: EventHandler, **_: Any) -> RunResult:
+    """Answers with how many runs the server has been asked for.
+
+    Given a `closed` input it never finishes, and writes the file that input names once its browser has closed.
+    """
+    await on_event(BrowserEvent(live_url=None))
+    if not inputs or "closed" not in inputs:
+        return _result(data=len(requests))
+    try:
+        return await asyncio.Future()
+    finally:
+        # A real browser takes a moment to close, and the server has to wait for it.
+        await asyncio.sleep(0.05)
+        await asyncio.to_thread(Path(inputs["closed"]).write_text, "closed")
 
 
 def _listening(transport: serve.StdioTransport) -> serve.StdioTransport:

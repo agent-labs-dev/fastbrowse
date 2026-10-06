@@ -20,6 +20,16 @@ export class ProcessExitedError extends FastbrowseError {
   }
 }
 
+/**
+ * The caller's `AbortSignal` stopped the run. `cause` is the signal's reason, which for `AbortSignal.timeout`
+ * is a `TimeoutError`.
+ */
+export class AbortError extends FastbrowseError {
+  constructor(reason: unknown) {
+    super('the run was aborted', { cause: reason });
+  }
+}
+
 /** The server's error reply to a request. `code` is one of the protocol's error codes. */
 export class RpcError extends FastbrowseError {
   readonly code: number;

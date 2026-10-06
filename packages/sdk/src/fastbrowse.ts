@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { Writable } from 'node:stream';
 
+import { abortable } from './abort.ts';
 import { resolveBinary } from './binary.ts';
 import { FastbrowseError, ProcessExitedError } from './errors.ts';
 import { type OutputSchema, type TypedRunResult, withOutput } from './output.ts';
@@ -9,6 +10,7 @@ import type {
   BrowserEvent,
   InitializeParams,
   InitializeResult,
+  RunCancelParams,
   RunEvent,
   RunParams,
   RunResult,
@@ -87,7 +89,8 @@ export class Fastbrowse {
    *
    * Rejects with `RpcError` when the server refuses the request, which it does before a browser opens: for a
    * bad option, for a missing key, and with the busy code while another run on this instance is active. Rejects
-   * with `ProcessExitedError` when the fastbrowse process is gone.
+   * with `ProcessExitedError` when the fastbrowse process is gone. Rejects with `AbortError` when `signal`
+   * stopped the run.
    *
    * With `output`, the result's `output` is the data as that schema validated it. A schema that cannot be sent
    * rejects before anything is, a keyword the server cannot enforce rejects with its `unsupported_schema` code,
@@ -103,7 +106,13 @@ export class Fastbrowse {
     if (options.onEvent) this.#listeners.set(runId, options.onEvent);
     try {
       const params = runParams(runId, task, this.#browser, options);
-      const result = (await this.#server.connection.request('run', params)) as RunResult;
+      const { connection } = this.#server;
+      const result = await abortable(
+        options.signal,
+        () => connection.request('run', params) as Promise<RunResult>,
+        // The reply says only that the request was read, and a process that has gone rejects the run itself.
+        () => void connection.request('run/cancel', { run_id: runId } satisfies RunCancelParams).catch(() => {}),
+      );
       return await withOutput(result, options.output);
     } finally {
       this.#listeners.delete(runId);
