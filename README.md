@@ -432,8 +432,9 @@ that default.
 
 There is no binary for Alpine or another musl system, and none for a platform outside the five. There
 `Fastbrowse.start` rejects with an error that names the platform, and a binary of your own is named with
-`binaryPath` or `FASTBROWSE_BINARY`. The macOS binaries are signed with a Developer ID and notarized. The
-Windows binary is not signed. Bun and Deno are untested.
+`binaryPath` or `FASTBROWSE_BINARY`. The macOS binaries carry an ad-hoc signature and are not notarized, which a Mac
+that allows programs only by the team that signed them refuses. The Windows binary is not signed. Bun and Deno are
+untested.
 
 ## Use it from an MCP client
 

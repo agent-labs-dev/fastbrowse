@@ -124,7 +124,7 @@ jobs:
           if [ "$EVENT" != pull_request ] || ! git diff --quiet HEAD^1 HEAD -- \
             src/fastbrowse ':!src/fastbrowse/evals' ':!src/fastbrowse/audit' pyproject.toml uv.lock packaging \
             scripts/smoke_binary.py .github/workflows/binaries.yml .github/workflows/ci.yml \
-            scripts/npm_platform_package.py scripts/smoke_npm_install.py \
+            scripts/npm_platform_package.py scripts/smoke_npm_install.py scripts/macos_signatures.py \
             packages/sdk/package.json packages/sdk/tsconfig.json packages/sdk/tsconfig.build.json packages/sdk/src
           then echo "binaries=true" >> "$GITHUB_OUTPUT"
           else echo "binaries=false" >> "$GITHUB_OUTPUT"
