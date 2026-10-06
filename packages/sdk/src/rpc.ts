@@ -45,7 +45,7 @@ export class Connection {
   }
 
   /** Call a method and wait for its reply. Rejects with `RpcError` when the server answers with an error. */
-  request(method: string, params: Params = {}): Promise<unknown> {
+  request(method: string, params: object = {}): Promise<unknown> {
     if (this.#ended) return Promise.reject(this.#ended);
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {

@@ -2,7 +2,7 @@
 
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repository = fileURLToPath(new URL('../../../', import.meta.url));
@@ -46,6 +46,27 @@ export function launcher(...command: string[]): Launcher {
 }
 
 /** One of the scripts in `servers/`. Each is the real server with one thing about it changed. */
-export function scriptedServer(name: string): Launcher {
-  return launcher(python, fileURLToPath(new URL(`./servers/${name}.py`, import.meta.url)));
+export function scriptedServer(name: string, ...args: string[]): Launcher {
+  return launcher(python, fileURLToPath(new URL(`./servers/${name}.py`, import.meta.url)), ...args);
+}
+
+/**
+ * What `Fastbrowse.start` takes to get the real server with `run`, one of the runs in `servers/scripted_run.py`,
+ * in place of the agent.
+ */
+export function scriptedRun(run: string): { binaryPath: string; env: Record<string, string> } {
+  // `--record` is refused without an ffmpeg to encode with, and the machine running the tests may have none.
+  const tools = mkdtempSync(join(tmpdir(), 'fastbrowse-sdk-'));
+  writeFileSync(join(tools, 'ffmpeg'), '#!/bin/sh\n');
+  chmodSync(join(tools, 'ffmpeg'), 0o755);
+  return {
+    binaryPath: scriptedServer('scripted_run', run).path,
+    env: {
+      PATH: `${tools}${delimiter}${process.env.PATH}`,
+      // The server refuses a run it has no model keys for, whatever would have run it.
+      OPENROUTER_API_KEY: 'unused',
+      AI_GATEWAY_API_KEY: 'unused',
+      BROWSER_USE_API_KEY: 'unused',
+    },
+  };
 }
