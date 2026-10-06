@@ -26,8 +26,11 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test \"test/*.test.ts\""
   },
-  "devDependencies": {
-    "@types/node": "20.19.43",
-    "typescript": "7.0.2"
+  "optionalDependencies": {
+    "@fastbrowse/darwin-arm64": "0.5.18",
+    "@fastbrowse/darwin-x64": "0.5.18",
+    "@fastbrowse/linux-arm64": "0.5.18",
+    "@fastbrowse/linux-x64": "0.5.18",
+    "@fastbrowse/win32-x64": "0.5.18"
   }
 }
