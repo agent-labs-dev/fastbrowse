@@ -5,9 +5,12 @@ types generated for the JavaScript SDK are read from one definition.
 """
 
 from enum import IntEnum, StrEnum
+from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr
+from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, StrictInt, StrictStr
+
+from fastbrowse.models import Authorization, BrowserEvent, Limits, LocalChrome, StepEvent
 
 # Changes only when the wire format does, so it is not the package version: a release that leaves the
 # messages alone leaves this alone, and an SDK can tell a binary it cannot talk to from one that is merely newer.
@@ -18,8 +21,17 @@ type RequestId = StrictInt | StrictStr
 
 
 class Method(StrEnum):
+    """What a client can ask of the server."""
+
     INITIALIZE = "initialize"
+    RUN = "run"
     SHUTDOWN = "shutdown"
+
+
+class ServerMethod(StrEnum):
+    """What the server sends without being asked."""
+
+    RUN_EVENT = "run/event"
 
 
 class ErrorCode(IntEnum):
@@ -89,3 +101,57 @@ class InitializeParams(BaseModel):
 class InitializeResult(BaseModel):
     protocol_version: int
     fastbrowse_version: str
+
+
+class RunAttachment(Params):
+    """An `Attachment` as it travels: JSON has no bytes, so the content is base64."""
+
+    name: str
+    mime_type: str
+    content: Base64Bytes
+
+
+class RunParams(Params):
+    """One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.
+
+    The reply is the `RunResult`. No API key is among the fields: model and browser keys come from the
+    environment the server inherited.
+    """
+
+    run_id: str = Field(min_length=1)
+    """Chosen by the client, and carried by every message the server sends about this run."""
+    task: str
+    start: str | None = None
+    inputs: dict[str, str] | None = None
+    attachments: tuple[RunAttachment, ...] = ()
+    limits: Limits | None = None
+    authorization: Authorization | None = None
+    downloads: Path | None = None
+    record: Path | None = None
+    local: bool = False
+    """Local Chrome instead of a Browser Use Cloud browser."""
+    chrome: LocalChrome | None = None
+    """Which local Chrome, and how. A headed window or a kept profile implies `local`."""
+    cloud_profile: str | None = None
+    cdp_url: str | None = None
+    cdp_port: int | None = None
+    attach: bool = False
+    target_match: str | None = None
+    proxy_country: str | None = None
+    viewport: tuple[int, int] | None = None
+    cloud_allow_resizing: bool = False
+
+
+class RunEvent(BaseModel):
+    """The params of `run/event`: one thing a run did, written before that run's reply."""
+
+    run_id: str
+    event: StepEvent | BrowserEvent
+
+
+class Notification(BaseModel):
+    """A message from the server that takes no reply. It has no `id` member at all, which is what marks it."""
+
+    jsonrpc: Literal["2.0"] = "2.0"
+    method: ServerMethod
+    params: Any

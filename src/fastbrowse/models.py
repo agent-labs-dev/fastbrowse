@@ -1,12 +1,13 @@
 """Run-level contracts: what a caller passes in and what a run returns."""
 
+import base64
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_serializer
 
 
 class Frozen(BaseModel):
@@ -351,6 +352,12 @@ class StepEvent(Frozen):
     frame: bytes | None = None
     """A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not,
     and also when a resolved secret was showing as page text: pixels cannot be masked the way text is."""
+
+    @field_serializer("frame", when_used="json-unless-none")
+    def _frame_as_base64(self, frame: bytes) -> str:
+        # Pydantic writes bytes into JSON as UTF-8, which a PNG is not, so the event could not be dumped at all.
+        # The standard alphabet, not pydantic's URL-safe one: it is what a browser's `atob` reads.
+        return base64.b64encode(frame).decode("ascii")
 
 
 class BrowserEvent(Frozen):
