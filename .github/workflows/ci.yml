@@ -48,7 +48,8 @@ jobs:
       - run: uv run python scripts/no_slop.py
       - run: uv run vale sync
       - run: uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs src scripts tests
-      - run: uv run python -m fastbrowse.evals.evidence --check
+      - name: Check stored eval manifest
+        run: uv run python -m fastbrowse.evals.storage --manifest docs/results/evidence.manifest.json --check
       - run: uv run pytest -q
       # A published row cannot be hand-edited past `--publish`: the added or changed docs/results files are
       # gated against the trusted rows at the base branch, and a new results file with no ledger is refused.

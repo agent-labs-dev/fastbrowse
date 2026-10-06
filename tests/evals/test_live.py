@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import runpy
+import sys
 import time
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import UTC, date, datetime, timedelta
@@ -24,6 +25,38 @@ from fastbrowse.models import Unavailable
 from fastbrowse.telemetry import TRACE, trace, traced
 
 RUNNER: dict[str, Any] = runpy.run_path(str(live.ULTRAFAST_RUNNER))
+
+
+async def test_cancelled_competitor_stops_child_after_launcher_exits(tmp_path: Path) -> None:
+    pid_file = tmp_path / "child"
+    script = tmp_path / "launch.py"
+    script.write_text(
+        "import subprocess, sys\n"
+        "from pathlib import Path\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+        f"Path({str(pid_file)!r}).write_text(str(child.pid))\n"
+    )
+    attempt = asyncio.create_task(live._invoke((sys.executable,), script, {}, {}, str(tmp_path)))
+    try:
+        for _ in range(500):
+            if pid_file.exists():
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("competitor did not start its child")
+        attempt.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await attempt
+        async with asyncio.timeout(5):
+            while True:
+                try:
+                    os.kill(int(pid_file.read_text()), 0)
+                except ProcessLookupError:
+                    break
+                await asyncio.sleep(0.05)
+    finally:
+        attempt.cancel()
+        await asyncio.gather(attempt, return_exceptions=True)
 
 
 def task(task_id: str) -> LiveTask:

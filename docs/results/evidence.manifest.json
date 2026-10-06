@@ -1,0 +1,447 @@
+{
+  "schema_version": 1,
+  "project_id": "cmuwjxra401iyad0cymgswes5",
+  "base_url": "https://us.cloud.langfuse.com",
+  "campaigns": [
+    {
+      "id": "0.5.14",
+      "sha256": "b96f9ac3bc6c404b6fdf39ecde5c4eb05bce5741f932755b572b97d25fd18b5d",
+      "trace_id": "b96f9ac3bc6c404b6fdf39ecde5c4eb0",
+      "observation_id": "a13455295c6f23fa",
+      "stored_at": "2026-10-06T16:32:18.715683Z",
+      "attempts": 120
+    },
+    {
+      "id": "0.5.6",
+      "sha256": "82c3280f0e695e36f371c6c05321eca3b3d38a72e8804bd2cfc304f0492ff9a0",
+      "trace_id": "82c3280f0e695e36f371c6c05321eca3",
+      "observation_id": "6872eeddeb6c943c",
+      "stored_at": "2026-10-06T16:32:18.716427Z",
+      "attempts": 273
+    },
+    {
+      "id": "0.5.7",
+      "sha256": "f418cf169b93a8d7ff7c0e489037a8141b43b98b6ca055348906f98e0782d13d",
+      "trace_id": "f418cf169b93a8d7ff7c0e489037a814",
+      "observation_id": "6ff7770219d7c553",
+      "stored_at": "2026-10-06T16:32:18.717001Z",
+      "attempts": 273
+    },
+    {
+      "id": "0.5.8",
+      "sha256": "7da8b7f9e88be52c592843579d1d06a70f013fcafd70101d3ece2b969e5eea0b",
+      "trace_id": "7da8b7f9e88be52c592843579d1d06a7",
+      "observation_id": "668805cc3cc39a82",
+      "stored_at": "2026-10-06T16:32:18.717541Z",
+      "attempts": 303
+    },
+    {
+      "id": "0.5.9",
+      "sha256": "e8a2c9e29d3811a44335dca6ec8a5604e5350d3927828723e9347761ce2c188d",
+      "trace_id": "e8a2c9e29d3811a44335dca6ec8a5604",
+      "observation_id": "dfadd18a85983b51",
+      "stored_at": "2026-10-06T16:32:18.717878Z",
+      "attempts": 120
+    },
+    {
+      "id": "2026-09-29-final",
+      "sha256": "f767a1d0133ddbce995f85f9ba33e6a2351776bbe9b9225cfba811a807f8fae8",
+      "trace_id": "f767a1d0133ddbce995f85f9ba33e6a2",
+      "observation_id": "d7abe8915e96ad0a",
+      "stored_at": "2026-10-06T16:32:18.718157Z",
+      "attempts": 149
+    },
+    {
+      "id": "2026-09-29-ultrafast-attempts",
+      "sha256": "ff0a25ccd55fba881f99785fcf3d033194b5bebd733ac6f4d3baa53dc97e2df2",
+      "trace_id": "ff0a25ccd55fba881f99785fcf3d0331",
+      "observation_id": "dbe2474ad095e8eb",
+      "stored_at": "2026-10-06T16:32:18.718470Z",
+      "attempts": 127
+    },
+    {
+      "id": "2026-09-29-ultrafast-fairness-ten",
+      "sha256": "996ef7dff5564e4bb86e66d34feeb92432a81fbf6d7d1a9a4e01c0e8c4932227",
+      "trace_id": "996ef7dff5564e4bb86e66d34feeb924",
+      "observation_id": "cdeee5ff5c75861f",
+      "stored_at": "2026-10-06T16:32:18.718732Z",
+      "attempts": 133
+    },
+    {
+      "id": "2026-09-29-ultrafast-matched-ten",
+      "sha256": "204378ec1d8512a519811d2efdf01857384bbd8b71ca18c52463854a730ba2de",
+      "trace_id": "204378ec1d8512a519811d2efdf01857",
+      "observation_id": "cfe4035f17250f8b",
+      "stored_at": "2026-10-06T16:32:18.718866Z",
+      "attempts": 11
+    },
+    {
+      "id": "2026-09-29-ultrafast-ready-ten",
+      "sha256": "a3afec78479fc246550895dc3900599874fc30b9e9a7b453724193595a40f342",
+      "trace_id": "a3afec78479fc246550895dc39005998",
+      "observation_id": "8bb79df225548408",
+      "stored_at": "2026-10-06T16:32:18.719016Z",
+      "attempts": 79
+    },
+    {
+      "id": "2026-09-29-ultrafast-resizable-ten",
+      "sha256": "b12c22f7bd588ed1ff8737075a6c19735cb35ef06c7cbdac8b231bc139b8c84f",
+      "trace_id": "b12c22f7bd588ed1ff8737075a6c1973",
+      "observation_id": "a8648a71a999cc73",
+      "stored_at": "2026-10-06T16:32:18.719122Z",
+      "attempts": 12
+    },
+    {
+      "id": "2026-09-29-ultrafast-three",
+      "sha256": "758dde8dea0868c6e63d9386d7e0045a77ab8e9936e531355469ad2186591d6f",
+      "trace_id": "758dde8dea0868c6e63d9386d7e0045a",
+      "observation_id": "b1b398cd2f98402e",
+      "stored_at": "2026-10-06T16:32:18.719224Z",
+      "attempts": 36
+    },
+    {
+      "id": "2026-09-29-ultrafast",
+      "sha256": "a93353af1ef7f019fff69ed422871dbdfd67bfe83d4743087549bb98e0c0b0ee",
+      "trace_id": "a93353af1ef7f019fff69ed422871dbd",
+      "observation_id": "10b14fb6289bda71",
+      "stored_at": "2026-10-06T16:32:18.719453Z",
+      "attempts": 120
+    },
+    {
+      "id": "2026-10-05-corpus-diagnostic",
+      "sha256": "6daef1f24ecb68ab7c264f1518434280dad55ea8b0527093dfba813a0922d7cc",
+      "trace_id": "6daef1f24ecb68ab7c264f1518434280",
+      "observation_id": "2e2dff8d80e5b9fd",
+      "stored_at": "2026-10-06T16:32:18.719652Z",
+      "attempts": 17
+    },
+    {
+      "id": "2026-10-05-fixtures-0.5.19-20261005",
+      "sha256": "a65c20d4df3f362184cc31792e0cb68073c6c01c069a7a3ed3638bf9b9ade9db",
+      "trace_id": "a65c20d4df3f362184cc31792e0cb680",
+      "observation_id": "24ed7a46544ca28a",
+      "stored_at": "2026-10-06T16:32:18.719829Z",
+      "attempts": 96
+    },
+    {
+      "id": "2026-10-05-fixtures-0.5.19-ci-extraction-20261005",
+      "sha256": "f4adc187c7e7b0f5292581119f13a0c859e1d8c3ccaac8ed4640244fc6c26da9",
+      "trace_id": "f4adc187c7e7b0f5292581119f13a0c8",
+      "observation_id": "983f8b365816bb61",
+      "stored_at": "2026-10-06T16:32:18.720030Z",
+      "attempts": 96
+    },
+    {
+      "id": "2026-10-05-fixtures-0.5.19-ci-paired-gate-20261005",
+      "sha256": "ffd0240a689176ffca9c9a698f84e97fdcdaaa2a27cff746b617fd7b667ca43a",
+      "trace_id": "ffd0240a689176ffca9c9a698f84e97f",
+      "observation_id": "b6c53c3c30d3d019",
+      "stored_at": "2026-10-06T16:32:18.720226Z",
+      "attempts": 96
+    },
+    {
+      "id": "2026-10-05-fixtures-0.5.19-ci-recovery-20261005",
+      "sha256": "731b827cc16177bd97e52178c7d42665ebf9c79af978a0e228a38654c1144022",
+      "trace_id": "731b827cc16177bd97e52178c7d42665",
+      "observation_id": "2ae1ee2b8e008564",
+      "stored_at": "2026-10-06T16:32:18.720434Z",
+      "attempts": 96
+    },
+    {
+      "id": "2026-10-05-fixtures-0.5.19-durable-20261005",
+      "sha256": "53d2398e0f1337cf44c20e1d45ebde04ac22ef68476db958d261dec501cac191",
+      "trace_id": "53d2398e0f1337cf44c20e1d45ebde04",
+      "observation_id": "d08b038d34133daa",
+      "stored_at": "2026-10-06T16:32:18.720673Z",
+      "attempts": 96
+    },
+    {
+      "id": "2026-10-05-fixtures-0.5.19-extraction-20261005",
+      "sha256": "00cd444f12e00bb9bacb29283e1b7bbd2e6bde8c64254e971fa7f3339a2e95d4",
+      "trace_id": "00cd444f12e00bb9bacb29283e1b7bbd",
+      "observation_id": "8c8483a944990b21",
+      "stored_at": "2026-10-06T16:32:18.720876Z",
+      "attempts": 96
+    },
+    {
+      "id": "2026-10-05-fixtures-0.5.19-final-20261005",
+      "sha256": "39c03dd212e7c10644479df36c8bda09f05d08412a94fbb198428f6f7508a114",
+      "trace_id": "39c03dd212e7c10644479df36c8bda09",
+      "observation_id": "8eac62b01c96339d",
+      "stored_at": "2026-10-06T16:32:18.721072Z",
+      "attempts": 96
+    },
+    {
+      "id": "2026-10-05-fixtures-0.5.19-final-default-20261005",
+      "sha256": "5ae7e3ad9ed5b9871c0568c3a7d3277d1426f0be665c0cf5168e556880a6c97d",
+      "trace_id": "5ae7e3ad9ed5b9871c0568c3a7d3277d",
+      "observation_id": "d04912e4630c628d",
+      "stored_at": "2026-10-06T16:32:18.721213Z",
+      "attempts": 6
+    },
+    {
+      "id": "2026-10-05-gateway-before-fixture-fix",
+      "sha256": "e6561f95a1bab782f3276859b7b207f600c512ab78c8ac07ba0a7aaca00a9242",
+      "trace_id": "e6561f95a1bab782f3276859b7b207f6",
+      "observation_id": "c8260c3511996f21",
+      "stored_at": "2026-10-06T16:32:18.721369Z",
+      "attempts": 96
+    },
+    {
+      "id": "2026-10-05-github-fixtures",
+      "sha256": "789b5bfb1246ab0f508e14e1b0996c035f9e729f9fac262976214762a4a34d7a",
+      "trace_id": "789b5bfb1246ab0f508e14e1b0996c03",
+      "observation_id": "ae2c83cac7e1b427",
+      "stored_at": "2026-10-06T16:32:18.721611Z",
+      "attempts": 96
+    },
+    {
+      "id": "2026-10-05-h2h-0.5.19-20261005",
+      "sha256": "c592ca0516662060a5cbd234a656e923f503c6a97d14ce3bd61e4bcf5a84d7c5",
+      "trace_id": "c592ca0516662060a5cbd234a656e923",
+      "observation_id": "2198de989df527db",
+      "stored_at": "2026-10-06T16:32:18.721830Z",
+      "attempts": 120
+    },
+    {
+      "id": "2026-10-05-h2h-0.5.19-dev-after-extraction-20261005",
+      "sha256": "01b13148e07b76f7576ea9a082083c922193ad0231669ca08570651abb1484f7",
+      "trace_id": "01b13148e07b76f7576ea9a082083c92",
+      "observation_id": "a929d1d63c8992a7",
+      "stored_at": "2026-10-06T16:32:18.721955Z",
+      "attempts": 13
+    },
+    {
+      "id": "2026-10-05-h2h-0.5.19-durable-20261005",
+      "sha256": "d3faa96da055d8c1b7b28cf0568cee19e7f5bed01cd9bc146c8e1c35ee16ee54",
+      "trace_id": "d3faa96da055d8c1b7b28cf0568cee19",
+      "observation_id": "d0d4c833011ed96c",
+      "stored_at": "2026-10-06T16:32:18.722140Z",
+      "attempts": 121
+    },
+    {
+      "id": "2026-10-05-h2h-0.5.19-final-20261005",
+      "sha256": "9be77795bc1e562fcbfcfca0e01467154c26ee9a8d6e3f72f073a5e666c54e58",
+      "trace_id": "9be77795bc1e562fcbfcfca0e0146715",
+      "observation_id": "36503517bc0a9fc1",
+      "stored_at": "2026-10-06T16:32:18.722317Z",
+      "attempts": 67
+    },
+    {
+      "id": "2026-10-05-h2h-0.5.19-final-disk-20261005",
+      "sha256": "e8c280d6f653c2e1a52d3c8f4873bd65f439e1e921f613b6596d0c947b848139",
+      "trace_id": "e8c280d6f653c2e1a52d3c8f4873bd65",
+      "observation_id": "44ddbc54c8f4602c",
+      "stored_at": "2026-10-06T16:32:18.724846Z",
+      "attempts": 10
+    },
+    {
+      "id": "2026-10-05-h2h-0.5.19-heldout-after-extraction-20261005",
+      "sha256": "457182033325dabb17c0ece826f46ed4e583c17db2ab268e6d2c3383bee0ec03",
+      "trace_id": "457182033325dabb17c0ece826f46ed4",
+      "observation_id": "4b3b94cb5a1c82f4",
+      "stored_at": "2026-10-06T16:32:18.724936Z",
+      "attempts": 9
+    },
+    {
+      "id": "2026-10-05-h2h-0.5.19-heldout-before-extraction-20261005",
+      "sha256": "b283a5c784dbd07cf3b77530e1c1096b03a5eeda8a71117687e4c6287a43277a",
+      "trace_id": "b283a5c784dbd07cf3b77530e1c1096b",
+      "observation_id": "d8227a8ea57469da",
+      "stored_at": "2026-10-06T16:32:18.725012Z",
+      "attempts": 10
+    },
+    {
+      "id": "2026-10-05-local-fixtures",
+      "sha256": "647b5a1118cb11f4754f4f2f3989f7d37c30aa6b467228e0d36943c8eeeca956",
+      "trace_id": "647b5a1118cb11f4754f4f2f3989f7d3",
+      "observation_id": "a91fe78739a37aaa",
+      "stored_at": "2026-10-06T16:32:18.725216Z",
+      "attempts": 96
+    },
+    {
+      "id": "2026-10-05-native-corpus-attempts",
+      "sha256": "66b31c00e5bea197e1d580ebf8a173ef810c4bb5997aba4517152cf530129ceb",
+      "trace_id": "66b31c00e5bea197e1d580ebf8a173ef",
+      "observation_id": "d9b4e31f8f4a5603",
+      "stored_at": "2026-10-06T16:32:18.725402Z",
+      "attempts": 73
+    },
+    {
+      "id": "2026-10-05-native-corpus-preflight",
+      "sha256": "1c9080dba3929db8355ff3ad48d32f14f399ea0cbe6f9fc0d42a769b2a4d7f47",
+      "trace_id": "1c9080dba3929db8355ff3ad48d32f14",
+      "observation_id": "428ef63a1c857395",
+      "stored_at": "2026-10-06T16:32:18.725508Z",
+      "attempts": 12
+    },
+    {
+      "id": "2026-10-05-openrouter-cli-fixtures",
+      "sha256": "3a21005d90303039c6f904b05578eda99f63a3d02fb70eb97e1cade37db90ec2",
+      "trace_id": "3a21005d90303039c6f904b05578eda9",
+      "observation_id": "e10d120d9d997026",
+      "stored_at": "2026-10-06T16:32:18.725597Z",
+      "attempts": 32
+    },
+    {
+      "id": "native-fixes-heldout-before",
+      "sha256": "fe009daf2c75229ec530e8280169758a7c73bd75d80395fd1c732b8b4f60e74a",
+      "trace_id": "fe009daf2c75229ec530e8280169758a",
+      "observation_id": "4e07599678975e61",
+      "stored_at": "2026-10-06T16:32:18.725690Z",
+      "attempts": 27
+    },
+    {
+      "id": "native-fixes-heldout-main-py313",
+      "sha256": "af18e3d3905345a976c2d21e05773becbc2affdfd6a1cccd9657077df71d6bdd",
+      "trace_id": "af18e3d3905345a976c2d21e05773bec",
+      "observation_id": "5aba661d0e522796",
+      "stored_at": "2026-10-06T16:32:18.725784Z",
+      "attempts": 27
+    },
+    {
+      "id": "native-fixes-dev",
+      "sha256": "a24f2e58b9a341b3c66a8be9c273a24bd0df96b5efeeab18865ed36d5db9025a",
+      "trace_id": "a24f2e58b9a341b3c66a8be9c273a24b",
+      "observation_id": "f5958ce2e81005da",
+      "stored_at": "2026-10-06T16:32:18.725885Z",
+      "attempts": 39
+    },
+    {
+      "id": "native-fixes-heldout-after",
+      "sha256": "aeef09e804ee6786d4bf7aa352f648741d7d7d4a3fa6017cc00d646836df0437",
+      "trace_id": "aeef09e804ee6786d4bf7aa352f64874",
+      "observation_id": "3af37bd4172449a5",
+      "stored_at": "2026-10-06T16:32:18.725981Z",
+      "attempts": 27
+    },
+    {
+      "id": "native-fixes-fixtures-final",
+      "sha256": "8edba81f76c85ff2f179852baf29ccbb43aa38742c1ea3a6e737770780319037",
+      "trace_id": "8edba81f76c85ff2f179852baf29ccbb",
+      "observation_id": "c9fb25ae932169cc",
+      "stored_at": "2026-10-06T16:32:18.726137Z",
+      "attempts": 96
+    },
+    {
+      "id": "native-fixes-list-recovery",
+      "sha256": "2cac9a6c1dc7bb2491f1d9f7d653b58c9a11e91c14da9fa76e272e5b623ec928",
+      "trace_id": "2cac9a6c1dc7bb2491f1d9f7d653b58c",
+      "observation_id": "24d3b327e1be3cb9",
+      "stored_at": "2026-10-06T16:32:18.726233Z",
+      "attempts": 3
+    },
+    {
+      "id": "native-fixes-stated-total",
+      "sha256": "91379487ede655c04dfb0e99e5ea99c299fa8927332b300784812e472a12e004",
+      "trace_id": "91379487ede655c04dfb0e99e5ea99c2",
+      "observation_id": "27344cddf16189c9",
+      "stored_at": "2026-10-06T16:32:18.726319Z",
+      "attempts": 3
+    },
+    {
+      "id": "native-fixes-clean-fixtures",
+      "sha256": "c24ac9e7a3a2f34e6500bbf2f34944678e0c0aae1c3a85b0b5d96d52fc996538",
+      "trace_id": "c24ac9e7a3a2f34e6500bbf2f3494467",
+      "observation_id": "eac3575ecc531013",
+      "stored_at": "2026-10-06T16:32:18.726464Z",
+      "attempts": 96
+    },
+    {
+      "id": "native-count-trace-run",
+      "sha256": "bf16d4d40f45ca619faaa9c7717370d322976b3e1435fd78f5363d09387c7211",
+      "trace_id": "bf16d4d40f45ca619faaa9c7717370d3",
+      "observation_id": "6945e02938cdb4af",
+      "stored_at": "2026-10-06T16:32:18.726556Z",
+      "attempts": 1
+    },
+    {
+      "id": "native-tally-repair-fixtures",
+      "sha256": "31446567cce9174f8fbd3f83e05629ad4e49ed8dcd061122d4047fda02746cf3",
+      "trace_id": "31446567cce9174f8fbd3f83e05629ad",
+      "observation_id": "942ad52a79b1e0cb",
+      "stored_at": "2026-10-06T16:32:18.726612Z",
+      "attempts": 3
+    },
+    {
+      "id": "native-repaired-clean-fixtures",
+      "sha256": "01a0e1ac999ae9963722314a999dfb99695283e9c53f65dcadaf8d51e95ea88d",
+      "trace_id": "01a0e1ac999ae9963722314a999dfb99",
+      "observation_id": "45dca02a9222bb28",
+      "stored_at": "2026-10-06T16:32:18.726756Z",
+      "attempts": 96
+    },
+    {
+      "id": "native-repair-trace-run",
+      "sha256": "7bd7abd1eacfe2f5b19ef073a7cea05c33196cbbe7be9631cee9c5cd5eb42892",
+      "trace_id": "7bd7abd1eacfe2f5b19ef073a7cea05c",
+      "observation_id": "400920f7dd4324d2",
+      "stored_at": "2026-10-06T16:32:18.726849Z",
+      "attempts": 1
+    },
+    {
+      "id": "native-boundary-clean-fixtures",
+      "sha256": "f27559c87ed0a01419263b00ca04d93fbdb2d8ed9482c79a1d25f1e98f0fe9d5",
+      "trace_id": "f27559c87ed0a01419263b00ca04d93f",
+      "observation_id": "e24dff15014e8751",
+      "stored_at": "2026-10-06T16:32:18.726994Z",
+      "attempts": 96
+    },
+    {
+      "id": "native-boundary-failure-run",
+      "sha256": "4991cad41dcf8baa508f9af148a08aeaf7d200c512e7e999faf3a151153b10c4",
+      "trace_id": "4991cad41dcf8baa508f9af148a08aea",
+      "observation_id": "c7e7f2a4af6a7031",
+      "stored_at": "2026-10-06T16:32:18.727102Z",
+      "attempts": 3
+    },
+    {
+      "id": "native-count-context-fixtures",
+      "sha256": "b7edc679a3e3d4f8ef8520763b37cf11054d3fb3aa796df78f5cd975ae5f33d5",
+      "trace_id": "b7edc679a3e3d4f8ef8520763b37cf11",
+      "observation_id": "29479ce92bf4e95e",
+      "stored_at": "2026-10-06T16:32:18.727162Z",
+      "attempts": 3
+    },
+    {
+      "id": "native-final-count-fixtures",
+      "sha256": "49ed091cd1edccff2184e15ab47dc3c336e14ce9e59dd4c9a97d5bf50ca6512a",
+      "trace_id": "49ed091cd1edccff2184e15ab47dc3c3",
+      "observation_id": "5a5ad65822e302c9",
+      "stored_at": "2026-10-06T16:32:18.727224Z",
+      "attempts": 9
+    },
+    {
+      "id": "native-final-heldout",
+      "sha256": "48b5ad12aea0752713b9d45f19f4fbf436a364e2707d886b62e70d69d63dca7b",
+      "trace_id": "48b5ad12aea0752713b9d45f19f4fbf4",
+      "observation_id": "482303225e4261b6",
+      "stored_at": "2026-10-06T16:32:18.727311Z",
+      "attempts": 33
+    },
+    {
+      "id": "native-fixes-fixtures",
+      "sha256": "0b6abb5dcfdc2ebedd45242e95e59f36efd8d7f2cff4e0c600ecfe7b39daf6c3",
+      "trace_id": "0b6abb5dcfdc2ebedd45242e95e59f36",
+      "observation_id": "876fb0c3df44509c",
+      "stored_at": "2026-10-06T16:32:18.727379Z",
+      "attempts": 5
+    },
+    {
+      "id": "native-fixes-confirm-dialog",
+      "sha256": "ce00a65541052498fb7b5873cfb05e2b3b841356889272a378e6d328a282f9b3",
+      "trace_id": "ce00a65541052498fb7b5873cfb05e2b",
+      "observation_id": "1cb74fa36256bbdf",
+      "stored_at": "2026-10-06T16:32:18.727435Z",
+      "attempts": 3
+    },
+    {
+      "id": "live-fixes-after",
+      "sha256": "1cac067e0b415c72def08c5801f07902b84959217c0975522fa311b14003e2f2",
+      "trace_id": "1cac067e0b415c72def08c5801f07902",
+      "observation_id": "71dec661be4f7324",
+      "stored_at": "2026-10-06T16:35:43.190647Z",
+      "attempts": 66
+    }
+  ]
+}

@@ -33,7 +33,7 @@ from fastbrowse.evals.native_state import (
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "native_grader.py"
-SUPPLEMENTS = ROOT / "docs" / "validation" / "2026-10-06-native-state-supplements.json"
+SUPPLEMENTS = ROOT / "src" / "fastbrowse" / "evals" / "native-state-supplements.json"
 PREDICATE: dict[str, JsonValue] = {"probe": "database", "assert": {"contains": {"customers": 2}}}
 OBSERVER = "e" * 64
 OBSERVE = [{"kind": "probe", "name": "state", "probe": "p"}]

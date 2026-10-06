@@ -630,6 +630,73 @@ def test_a_removed_result_file_fails_the_diff_check(tmp_path: Path) -> None:
     assert any("removed" in finding.detail for finding in findings)
 
 
+@pytest.mark.parametrize("tamper", [False, True])
+def test_migrated_baseline_must_preserve_original_scores(tmp_path: Path, tamper: bool) -> None:
+    import hashlib
+
+    from fastbrowse.evals import baseline
+
+    repo = _published_base(tmp_path)
+    results = repo / "docs/results" / f"{RELEASE}.jsonl"
+    content = results.read_bytes()
+    rows = baseline.scores([json.loads(line) for line in content.splitlines()])
+    if tamper:
+        rows[0]["passed"] = not rows[0]["passed"]
+    entry = {
+        "source": {"path": results.relative_to(repo).as_posix(), "sha256": hashlib.sha256(content).hexdigest()},
+        "rows": rows,
+    }
+    (results.parent / baseline.NAME).write_text(json.dumps([entry]) + "\n")
+    ledger = publication.ledger_path(results)
+    ledger_content = ledger.read_bytes()
+    (results.parent / "evidence.manifest.archive.json").write_text(
+        json.dumps(
+            [
+                {
+                    "path": results.relative_to(repo).as_posix(),
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                    "bytes": len(content),
+                    "observation_ids": ["c" * 16],
+                    "trace_id": hashlib.sha256(content).hexdigest()[:32],
+                    "stored_at": "2026-10-06T10:00:00Z",
+                },
+                {
+                    "path": ledger.relative_to(repo).as_posix(),
+                    "sha256": hashlib.sha256(ledger_content).hexdigest(),
+                    "bytes": len(ledger_content),
+                    "observation_ids": ["b" * 16],
+                    "trace_id": hashlib.sha256(ledger_content).hexdigest()[:32],
+                    "stored_at": "2026-10-06T10:00:00Z",
+                },
+            ]
+        )
+    )
+    results.unlink()
+    publication.ledger_path(results).unlink()
+    _commit(repo, "migrate baseline")
+    findings = publication.validate_diff("main", root=repo)
+    assert any(finding.severity == REFUSE for finding in findings) is tamper
+    assert publication.trusted_rows("HEAD", root=repo) == rows
+
+
+def test_existing_compact_baseline_cannot_be_changed_or_removed(tmp_path: Path) -> None:
+    from fastbrowse.evals import baseline
+
+    repo = _published_base(tmp_path)
+    results = repo / "docs/results" / f"{RELEASE}.jsonl"
+    entry = {
+        "source": {"path": results.relative_to(repo).as_posix(), "sha256": "a" * 64},
+        "rows": baseline.scores([json.loads(line) for line in results.read_text().splitlines()]),
+    }
+    target = results.parent / baseline.NAME
+    target.write_text(json.dumps([entry]) + "\n")
+    _commit(repo, "compact base")
+    subprocess.run(["git", "branch", "-f", "main", "HEAD"], cwd=repo, check=True, capture_output=True)
+    target.write_text("[]\n")
+    _commit(repo, "drop compact history")
+    assert any("baseline changed" in finding.detail for finding in publication.validate_diff("main", root=repo))
+
+
 def test_a_renamed_result_file_fails_the_diff_check(tmp_path: Path) -> None:
     repo = _published_base(tmp_path)
     old = repo / "docs" / "results" / f"{RELEASE}.jsonl"

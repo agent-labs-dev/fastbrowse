@@ -26,6 +26,7 @@ at BASE, so a published row cannot be hand-edited past the gate.
 """
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -38,7 +39,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from fastbrowse.evals import versions
+from fastbrowse.evals import baseline, versions
+from fastbrowse.evals.storage import ArchiveReceipt, read_archive
 
 REFUSE: Literal["refuse"] = "refuse"
 """A deterministic integrity failure: the rows cannot be published."""
@@ -127,9 +129,9 @@ def baselines(path: Path) -> list[dict[str, Any]]:
     The attempt ledgers live beside the results files and share the extension, so they are skipped: an attempt
     is not a baseline, and reading one as a row would count it twice.
     """
-    files = sorted(path.glob("*.jsonl")) if path.is_dir() else [path]
-    files = [file for file in files if not file.name.endswith(_LEDGER_SUFFIX)]
-    return [row for file in files for row in read_jsonl(file)]
+    if path.is_dir():
+        return [row for _, rows in baseline.published(path) for row in rows]
+    return [] if path.name.endswith(_LEDGER_SUFFIX) else read_jsonl(path)
 
 
 def _git(root: Path, *args: str) -> str:
@@ -145,10 +147,7 @@ def changed_results(base: str, root: Path = versions.ROOT) -> list[Path]:
     `--no-renames` makes a rename a deletion and an addition, so a published file cannot be moved past the gate,
     and `D` is included so a deletion is seen rather than silently dropping a baseline.
     """
-    try:
-        compare = _git(root, "merge-base", "HEAD", base).strip() or base
-    except RuntimeError:
-        compare = base
+    compare = _merge_base(base, root)
     listing = _git(
         root, "diff", "--name-only", "--no-renames", "--diff-filter=AMD", compare, "HEAD", "--", "docs/results"
     )
@@ -164,10 +163,23 @@ def changed_results(base: str, root: Path = versions.ROOT) -> list[Path]:
     return sorted(root / line for line in found)
 
 
+def _merge_base(base: str, root: Path) -> str:
+    try:
+        return _git(root, "merge-base", "HEAD", base).strip() or base
+    except RuntimeError:
+        return base
+
+
 def trusted_rows(base: str, root: Path = versions.ROOT) -> list[dict[str, Any]]:
     """Every published row at `base`, the trusted side of the comparison a branch cannot edit."""
     listing = _git(root, "ls-tree", "-r", "--name-only", base, "--", "docs/results")
     rows: list[dict[str, Any]] = []
+    if f"docs/results/{baseline.NAME}" in listing.splitlines():
+        rows.extend(
+            row
+            for entry in baseline.load(_git(root, "show", f"{base}:docs/results/{baseline.NAME}"))
+            for row in entry.rows
+        )
     for line in listing.splitlines():
         line = line.strip()
         if not line.endswith(".jsonl") or line.endswith(_LEDGER_SUFFIX):
@@ -183,15 +195,76 @@ def validate_diff(base: str, root: Path = versions.ROOT) -> list[Finding]:
     file is, and a new results file with no attempt ledger beside it is refused, so `--publish` cannot be
     bypassed by hand-editing `docs/results`.
     """
+    base = _merge_base(base, root)
     changed = changed_results(base, root)
-    if not changed:
-        return []
     findings: list[Finding] = []
+    raw_validation = _git(root, "diff", "--name-only", "--diff-filter=AM", base, "--", "docs/validation")
+    for name in raw_validation.splitlines():
+        findings.append(_finding(REFUSE, "storage", f"{name}: detailed validation belongs in Langfuse"))
+    archived = {item["path"]: item for item in read_archive(root / "docs/results/evidence.manifest.json")}
+    try:
+        previous_archives = json.loads(_git(root, "show", f"{base}:docs/results/evidence.manifest.archive.json"))
+    except RuntimeError:
+        previous_archives = []
+    for item in previous_archives:
+        receipt = ArchiveReceipt.model_validate(item).model_dump(mode="json")
+        if archived.get(receipt["path"]) != receipt:
+            findings.append(_finding(REFUSE, "history", f"{receipt['path']}: archive receipt changed or removed"))
+
+    def preserved(name: str) -> bool:
+        receipt = archived.get(name)
+        if receipt is None:
+            return False
+        try:
+            original = subprocess.run(
+                ["git", "show", f"{base}:{name}"], cwd=root, capture_output=True, check=True, timeout=60
+            ).stdout
+        except subprocess.CalledProcessError:
+            return False
+        return (
+            receipt.get("sha256") == hashlib.sha256(original).hexdigest()
+            and receipt.get("bytes") == len(original)
+            and bool(receipt.get("observation_ids"))
+        )
+
+    try:
+        baseline.published(root / "docs/results")
+        compact = {entry.source.path: entry for entry in baseline.read(root / "docs/results")}
+    except ValueError as exc:
+        return [*findings, _finding(REFUSE, "history", str(exc))]
+    removed = _git(root, "diff", "--name-only", "--diff-filter=D", base, "--", "docs/results", "docs/validation")
+    for name in removed.splitlines():
+        if not preserved(name):
+            findings.append(_finding(REFUSE, "history", f"{name}: removed evidence needs its original archive receipt"))
+    try:
+        previous_compact = baseline.load(_git(root, "show", f"{base}:docs/results/{baseline.NAME}"))
+    except RuntimeError:
+        previous_compact = []
+    for entry in previous_compact:
+        if compact.get(entry.source.path) != entry:
+            findings.append(_finding(REFUSE, "history", f"{entry.source.path}: compact publication baseline changed"))
+    for name, entry in compact.items():
+        if any(old.source.path == name for old in previous_compact):
+            continue
+        try:
+            original = _git(root, "show", f"{base}:{name}")
+        except RuntimeError:
+            findings.append(_finding(REFUSE, "history", f"{name}: a compact baseline needs already published rows"))
+            continue
+        if (
+            hashlib.sha256(original.encode()).hexdigest() != entry.source.sha256
+            or baseline.scores([json.loads(line) for line in original.splitlines() if line.strip()]) != entry.rows
+        ):
+            findings.append(_finding(REFUSE, "history", f"{name}: compact baseline differs from published rows"))
     trusted = trusted_rows(base, root)
     for path in changed:
         relative = path.relative_to(root).as_posix()
         release = path.stem
         if not path.exists():
+            if relative in compact:
+                continue
+            if path.parent != root / "docs/results" and preserved(relative):
+                continue
             findings.append(_finding(REFUSE, "history", f"{relative}: a published result file was removed"))
             continue
         rows = read_jsonl(path)

@@ -42,6 +42,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from fastbrowse.evals import baseline
+
 LOCK = Path(__file__).with_name("versions.json")
 ROOT = Path(__file__).parents[3]
 DOCS = ROOT / "docs" / "evals.md"
@@ -276,7 +278,7 @@ def publish(release: str, source: Path) -> Path:
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", release):
         raise ValueError("release must be a numeric x.y.z version")
     target = RESULTS / f"{release}.jsonl"
-    if target.exists() or ledger_path(target).exists():
+    if target.exists() or ledger_path(target).exists() or any(name == release for name, _ in published()):
         raise ValueError(f"{target} exists: published results are never rewritten; publish under a new release")
     rows = read(source)
     ledger_file = ledger_path(source)
@@ -322,12 +324,7 @@ def _release_key(release: str) -> tuple[int, ...]:
 
 def published() -> list[tuple[str, list[dict[str, Any]]]]:
     """Every published release with its rows, newest first."""
-    files = sorted(
-        (file for file in RESULTS.glob("*.jsonl") if not file.name.endswith(".attempts.jsonl")),
-        key=lambda file: _release_key(file.stem),
-        reverse=True,
-    )
-    return [(f.stem, [json.loads(line) for line in f.read_text(encoding="utf-8").splitlines() if line]) for f in files]
+    return sorted(baseline.published(RESULTS), key=lambda item: _release_key(item[0]), reverse=True)
 
 
 def _measured(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:

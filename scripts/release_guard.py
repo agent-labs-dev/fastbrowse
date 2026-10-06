@@ -28,6 +28,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from fastbrowse.evals import baseline
+
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = "evals.yml"
 API = "https://api.github.com"
@@ -43,10 +45,7 @@ _HEX40 = re.compile(r"^[0-9a-f]{40}$")
 
 def comparison_rows(version: str, root: Path = ROOT) -> list[dict[str, Any]] | None:
     """The comparison a release would publish, or None when it publishes none."""
-    target = root / "docs" / "results" / f"{version}.jsonl"
-    if not target.exists():
-        return None
-    return [json.loads(line) for line in target.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return next((rows for release, rows in baseline.published(root / "docs/results") if release == version), None)
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:

@@ -11,14 +11,16 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Store detailed eval evidence in Langfuse, serve sanitized public campaigns, and keep compact regression baselines in Git.
+  Grades, completion, retries, unknown costs and missing coverage remain separate.
+  Cancelled competitor runs stop their child processes before another eval starts.
+
 - Headed sections preserve styled pairs as separate records, so counts can distinguish groups from their
   items. Covered-target recovery excludes controls belonging to the target's own fixed container.
 
 - Task-supplied sign-in addresses open directly. Blank opening pages get one reload before any interaction,
   so a cold app can recover without repeating a submission. Shortcuts leave unspecified filters to observed
   controls, and recovery can return toward the caller's start page when a guessed address makes no progress.
-- Eval results export a content-minimized attempt history for the public results browser and an optional
-  private Parallax tracker. Grades, completion, retries, unknown costs and missing coverage remain separate.
 
 ## [0.5.19] - 2026-10-05
 

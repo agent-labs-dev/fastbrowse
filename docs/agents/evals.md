@@ -71,43 +71,40 @@ red fixture gate refuses a release even when it publishes no comparison.
 
 ## Results browser and tracking
 
-The public results browser reads `docs/results/evidence.json`. Regenerate it with
-`uv run python -m fastbrowse.evals.evidence`; CI checks the same export. It projects only task identifiers,
-source hashes, recorded grades, completion, build identifiers, time and cost. Answers, page content,
-credentials, local paths and error text stay out. Each campaign stands alone; campaigns may overlap.
-An unknown schedule stays unknown. Older rows without repeat identifiers receive ledger-order trial indices,
-which do not establish a repeat protocol. `evidence-schedules.json` records declared slot counts, and the sanitized
-`evidence-archive.json` retains diagnostics whose original logs are outside the repository. Its receipt
-links identify the original files and their hashes. Keep those originals when adding an archive.
+Detailed evals and validation live in the dedicated [fastbrowse-evals Langfuse project](https://us.cloud.langfuse.com/project/cmuwjxra401iyad0cymgswes5).
+Keep local output under ignored `artifacts/evals/`. Git stores the public campaign manifest, source hash receipts
+and compact published score baselines. It does not store run logs, recordings or generated evidence bundles.
+The public results browser retrieves hash-checked, sanitized campaigns from Langfuse during its server-side build.
+Project credentials stay in ignored configuration and server-side build settings.
 
-The browser is an inspection surface, not a publication gate. Failed and incomplete diagnostics remain
-visible without changing the approved figures in `summary.json`. Regenerate the evidence export when
-adding result rows or diagnostics. The publication and release checks above still decide what may headline.
+`fastbrowse.evals.evidence` projects task identifiers, source hashes, grades, completion, build identifiers,
+time and cost. Answers, page content, credentials, local paths and error text stay out. Failed and incomplete
+runs remain visible; their presence never approves a headline comparison. Unknown schedules, costs and historical
+start times remain unknown. All physical runs and retries remain in the projection, including interrupted runs.
 
-`scripts/track_evals.py` sends the same projection through an independently installed private Parallax
-tracker. Parallax is not a Fastbrowse dependency, and its code stays private. Install its `track` extra in
-a maintainer environment; the current tracking contract is Parallax PR 292 at
-`377bd94d3ab9f71e5364a9f979ec4dc73fbfd97a`. Run a dry run before writing:
+Upload and verify a projection, using Langfuse's optional SDK in the maintainer environment:
 
 ```sh
-uv run --with '/path/to/parallax[track]' python scripts/track_evals.py docs/results/evidence.json --all
+uv run --with 'langfuse>=4.17,<5' python -m fastbrowse.evals.storage \
+  --push artifacts/evals/evidence.json --manifest docs/results/evidence.manifest.json \
+  --out artifacts/evals/readback.json
 ```
 
-`--push` records those experiments without executing tasks or changing their grades. It requires
-`LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and
-`PARALLAX_LANGFUSE_PROJECT=fastbrowse-evals`. The tracker checks the project-scoped keys, and the adapter
-refuses any project named differently. Identical projections push idempotently; a changed ledger or declared
-schedule creates a new experiment, preserving the earlier record. Keep credentials in ignored local configuration. Public CI needs
-neither these keys nor private Parallax access.
+The command requires `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and the US Langfuse host. It verifies the
+project id and name before writing. Public campaign traces contain only the validated projection.
+`--archive-root` preserves original source files as private, compressed chunks; the reader reconstructs their
+bytes and verifies each original hash. Campaign storage times describe the upload, never an invented run time.
+An identical campaign reuses its verified stored observation. Changed projections get different content identities.
+Keep the local originals until the upload and read-back checks pass.
 
-Grades and completion have separate scores. All physical attempts stay in each task's repeat details;
-known spend includes retries, and any unknown attempt prevents an aggregate cost estimate. An attempt
-refused before browser start covers no scheduled slot. Campaigns without a recorded start timestamp are
-reported as skipped rather than assigned an invented date. Missing historical protocol information prevents
-cross-campaign statistical comparisons: the strict publication gate remains the regression authority.
-Langfuse projects require authentication; selected traces can be shared publicly. The public site uses the
-sanitized export so its result browser needs no Langfuse login.
+CI validates the compact manifest without credentials. Compact publication baselines preserve the original
+scores, timing, cost and protocol used by the regression gate. A baseline migrated from a published file must
+match that file's hash and score projection; an existing compact baseline cannot be edited or removed.
+The publication and release gates still control headline figures. The latest diagnostic is not a published score.
 
+Parallax's private tracking work remains the reference for dataset experiments and comparison dashboards.
+Its code is not a Fastbrowse dependency. Eval uploads use `fastbrowse.evals.storage`, and the public reader
+uses the same pinned campaign observations.
 
 ## Matched external corpus
 
@@ -169,7 +166,7 @@ one fails it. A supplement that lists `unwitnessed` requirements never passes: i
 (`--upstream`, with required `--upstream-code` and `--upstream-code-sha256`) and accepting samples only from the
 observer whose digest is `--observer-sha256`. Probe observers use an `--observe-arg` command template; HTTP
 observers use `--base-urls` and `--auth-file`. The one supplement shipped,
-`docs/validation/2026-10-06-native-state-supplements.json`, strengthens the upstream booking-then-cancel task, whose
+`src/fastbrowse/evals/native-state-supplements.json`, strengthens the upstream booking-then-cancel task, whose
 upstream check (two customers) is also met by an uncancelled or doubled booking. The capsule does not store the
 cancellation reason and no action audit exists, so that task is limited and ungraded even when the sequence holds.
 `fastbrowse.evals.corpus_compare` runs the observer as a watcher around each physical attempt. Options, which must

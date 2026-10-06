@@ -34,6 +34,18 @@ def _row(*, sha: str = "a" * 40, dirty: bool = False) -> dict:
     return {"run": {"fastbrowse_version": "0.5.19", "git_sha": sha, "git_dirty": dirty}}
 
 
+def test_archiving_raw_rows_does_not_hide_a_comparison_from_the_release_guard(tmp_path: Path) -> None:
+    from fastbrowse.evals import baseline
+
+    directory = tmp_path / "docs/results"
+    directory.mkdir(parents=True)
+    row = _row()
+    entry = {"source": {"path": "docs/results/0.5.19.jsonl", "sha256": "a" * 64}, "rows": [row]}
+    (directory / baseline.NAME).write_text(json.dumps([entry]) + "\n")
+    assert release_guard.comparison_rows("0.5.19", root=tmp_path) == [row]
+    assert release_guard.comparison_rows("0.5.20", root=tmp_path) is None
+
+
 def _git(path: Path, *args: str) -> str:
     done = subprocess.run(["git", *args], cwd=path, check=True, capture_output=True, text=True)
     return done.stdout.strip()

@@ -242,6 +242,17 @@ def test_published_rows_are_slim_immutable_and_generate_the_tables(results: Path
     assert "| fastbrowse | 3/6 | $0.0100 (median), $0.0100 mean | 10.0s |" in versions.render_readme(readme)
     with pytest.raises(ValueError, match="no <!-- evals:headline -->"):
         versions.render_readme("no markers")
+    from fastbrowse.evals import baseline, publication
+
+    compact = baseline.Baseline(
+        source={"path": "docs/results/9.9.9.jsonl", "sha256": "a" * 64},
+        rows=baseline.scores([json.loads(line) for line in published.read_text().splitlines()]),
+    )
+    (published.parent / baseline.NAME).write_text("[" + compact.model_dump_json() + "]")
+    published.unlink()
+    publication.ledger_path(published).unlink()
+    with pytest.raises(ValueError, match="never rewritten"):
+        _publish(results, _repeats("pypi-version"))
 
 
 def test_a_first_publication_writes_its_own_section_or_nothing(results: Path, monkeypatch: pytest.MonkeyPatch) -> None:

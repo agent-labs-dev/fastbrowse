@@ -9,12 +9,13 @@ cart or flight-form check. The hosted Browser Use agent's SDK does not say where
 tasks it is graded on the answer alone (the cart by naming the backpack). Navigation tasks, graded only on the
 page, leave it out.
 
-The [fairness audit](validation/2026-09-29-fairness.md) explains the corrected protocol and recorded failure
-diagnoses. The [earlier comparison](validation/2026-09-29-ultrafast.md) is diagnostic evidence only, not a
+The private fairness audit explains the corrected protocol and recorded failure diagnoses;
+[archive receipts](results/evidence.manifest.archive.json) identify its stored source.
+The earlier comparison is diagnostic evidence only, not a
 source for benchmark claims.
 
-The [hosted and corpus fixture validation](validation/2026-10-05-local-e2e.md) retains three full
-fixture campaigns, their build provenance and every failure.
+The hosted and corpus fixture validation in the private archive retains three full
+fixture campaigns, their build provenance and every failure. The public results browser shows their sanitized data.
 
 ## Local fixtures
 
@@ -272,8 +273,8 @@ A published figure carries its caveats with it. Read a table above with these in
   judgement of the same thing.
 - On answer tasks the hosted Browser Use agent is graded on its answer alone, because its SDK does not report
   where its browser ended. Navigation tasks, graded on the page, leave it out of the comparison.
-- The 2026-09-29 ultrafast run is [diagnostic evidence](validation/2026-09-29-ultrafast.md), not a source for a
-  competitive claim; the [fairness audit](validation/2026-09-29-fairness.md) records what it corrected.
+- The 2026-09-29 ultrafast run is diagnostic evidence, not a source for a competitive claim.
+  Its fairness audit is preserved in the private archive, indexed by [source receipts](results/evidence.manifest.archive.json).
 - A figure from a dirty tree, another build, or a superseded task version is not comparable with the current one,
   and each generated table names the task versions changed since its runs.
 
@@ -334,7 +335,7 @@ one run count once in that summary. The local suite stores the counts without pr
 
 ### 0.5.14, 2026-09-29
 
-Ten repeats on six navigation tasks. The [full audit](validation/2026-09-29-final-comparison.md) retains all 149
+Ten repeats on six navigation tasks. The full audit in the private archive retains all 149
 physical attempts and explains the two HN pairs excluded from both arms. Fastbrowse had more HN HTTP 419
 attempts; their cause remains unknown. Ultrafast had the lower median scored-run cost.
 
@@ -676,9 +677,9 @@ which passed. No agent failure was replaced. The 121 physical attempts therefore
 the transient attempt's time and cost are not in the aggregates.
 
 The generated [0.5.9 tables](#059-2026-09-28) report the scored attempts.
-[Published rows](results/0.5.9.jsonl) hold grades, timing, cost and clean build provenance;
-[site-state evidence](results/mock-evidence/0.5.9.jsonl) holds each answer and recorded effects;
-[excluded outage evidence](results/mock-evidence/0.5.9-outages.jsonl) records the replaced attempt and why.
+[Published baselines](results/publication-baselines.json) hold grades, timing, cost and clean build provenance.
+The private Langfuse archive holds site-state evidence and the excluded outage's recorded effects;
+[archive receipts](results/evidence.manifest.archive.json) identify the original files and their hashes.
 The initial run used `4e7143c`; the retry used `f2a9a58`, which added harness retries without changing the
 agent, prompts or graders. Browser Use used its hosted default, `claude-opus-4.7`. Fastbrowse's configured
 providers are recorded in each published row; this is a product comparison, not a same-model experiment.

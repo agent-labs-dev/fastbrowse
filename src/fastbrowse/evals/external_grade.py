@@ -247,7 +247,7 @@ async def _terminate(process: asyncio.subprocess.Process) -> None:
 
 
 async def _run_command(
-    command: Sequence[str], payload: bytes, *, seconds: float, environment: Mapping[str, str]
+    command: Sequence[str], payload: bytes, *, seconds: float, environment: Mapping[str, str], cwd: str | None = None
 ) -> bytes:
     try:
         process = await asyncio.create_subprocess_exec(
@@ -256,6 +256,7 @@ async def _run_command(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=dict(environment),
+            cwd=cwd,
             start_new_session=True,
         )
     except FileNotFoundError as exc:

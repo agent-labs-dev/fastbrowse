@@ -53,6 +53,7 @@ from fastbrowse.clients.environment import JevSource, load_settings
 from fastbrowse.clients.typesafe import OPENROUTER_MODEL, OPENROUTER_URL, TYPESAFE_URL
 from fastbrowse.clients.validation import RETRYABLE_STATUS, TRANSIENT_TRANSPORT
 from fastbrowse.clients.vercel import GATEWAY_URL
+from fastbrowse.evals import external_grade
 from fastbrowse.evals.live_tasks import TASKS, Category, LiveTask, Outcome, PageEvidence, page_defect, prompt
 from fastbrowse.evals.more_tasks import DEV, HELDOUT, STRETCH_DEV, STRETCH_HELDOUT
 from fastbrowse.evals.observe import FINAL_SCRIPTS, FinalPage, observe_browser
@@ -345,11 +346,13 @@ async def _on_fast_event(task: LiveTask, event: StepEvent | BrowserEvent) -> Non
 async def prepare_ultrafast() -> None:
     """Install jev-ultrafast's environment once, so no run is timed installing it."""
     with tempfile.TemporaryDirectory(prefix="ultra-prepare-") as runtime:
-        process = await asyncio.create_subprocess_exec(
-            *ULTRAFAST_COMMAND, "-c", "import jev_ultrafast", env=arm_environment("jev-ultrafast", runtime), cwd=runtime
+        await external_grade._run_command(
+            (*ULTRAFAST_COMMAND, "-c", "import jev_ultrafast"),
+            b"",
+            seconds=STUCK_SECONDS,
+            environment=arm_environment("jev-ultrafast", runtime),
+            cwd=runtime,
         )
-        if await process.wait() != 0:
-            raise RuntimeError(f"could not install {ULTRAFAST}")
 
 
 def _ultrafast_env(cdp_ws: str, runtime: str) -> dict[str, str]:
@@ -704,6 +707,12 @@ def _crashed(
     )
 
 
+def crash_status(exc: Exception, *, expired: bool) -> tuple[str, str | None]:
+    cause = Unavailable(f"still running after {STUCK_SECONDS // 60} minutes") if expired else exc
+    status = Status.UNAVAILABLE.value if isinstance(cause, (Unavailable, *TRANSIENT_TRANSPORT)) else None
+    return f"{type(cause).__name__}: {cause}", status
+
+
 def grade(
     arm: str, task: LiveTask, truth: object, outcome: Outcome, report: ArmReport
 ) -> tuple[bool, str | None, Ending]:
@@ -756,15 +765,14 @@ async def run_arm(
                 task, http, downloads, bitwarden=bitwarden, record=record, started=started
             )
     except Exception as exc:  # a crashed arm is a failed task, recorded rather than aborting the comparison
-        error = Unavailable(f"still running after {STUCK_SECONDS // 60} minutes") if cap.expired() else exc
-        unavailable = isinstance(error, (Unavailable, *TRANSIENT_TRANSPORT))
+        error, status = crash_status(exc, expired=cap.expired())
         return _crashed(
             arm,
             task,
-            f"{type(error).__name__}: {error}",
+            error,
             at=at,
             seconds=time.monotonic() - started,
-            status=Status.UNAVAILABLE.value if unavailable else None,
+            status=status,
             record=record,
         )
     correct, failure, ending = grade(arm, task, truth, outcome, report)
@@ -873,19 +881,16 @@ def arm_environment(name: str, runtime: str, source: Mapping[str, str] | None = 
 async def _invoke(
     command: tuple[str, ...], script: Path, request: Mapping[str, object], env: dict[str, str], cwd: str
 ) -> bytes:
-    process = await asyncio.create_subprocess_exec(
-        *command, str(script), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, env=env, cwd=cwd
+    stdout = await external_grade._run_command(
+        (*command, str(script)),
+        json.dumps(request).encode(),
+        seconds=STUCK_SECONDS,
+        environment=env,
+        cwd=cwd,
     )
-    try:
-        stdout, _ = await process.communicate(json.dumps(request).encode())
-    except BaseException:
-        if process.returncode is None:
-            process.kill()
-        await process.wait()
-        raise
     lines = stdout.splitlines()
-    if process.returncode != 0 or not lines:
-        raise RuntimeError(f"{script.name} exited {process.returncode} without a result")
+    if not lines:
+        raise RuntimeError(f"{script.name} exited without a result")
     return lines[-1]
 
 
@@ -938,11 +943,13 @@ async def oss_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | Non
 
 async def prepare_oss() -> None:
     with tempfile.TemporaryDirectory(prefix="bu-prepare-") as runtime:
-        process = await asyncio.create_subprocess_exec(
-            *OSS_COMMAND, "-c", "import browser_use", env=arm_environment("browser-use-oss", runtime), cwd=runtime
+        await external_grade._run_command(
+            (*OSS_COMMAND, "-c", "import browser_use"),
+            b"",
+            seconds=STUCK_SECONDS,
+            environment=arm_environment("browser-use-oss", runtime),
+            cwd=runtime,
         )
-        if await process.wait() != 0:
-            raise RuntimeError(f"could not install {OSS_PIN}")
 
 
 async def _run_fast(

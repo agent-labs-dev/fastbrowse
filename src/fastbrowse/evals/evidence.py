@@ -234,7 +234,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    output = args.out or args.root / "docs/results/evidence.json"
+    output = args.out or args.root / "artifacts/evals/evidence.json"
     rendered = json.dumps(export(args.root).model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
     if args.check:
         if output.read_text() != rendered:

@@ -32,7 +32,7 @@ something that was never on the page. Every claim in an answer cites a verbatim 
 
 The Ultrafast comparison covers six navigation tasks against Browser Use Ultrafast (`jev-ultrafast`).
 Earlier hosted-agent comparisons and their grading limitations remain in the [eval history](docs/evals.md#results).
-Scored-run medians exclude earlier outage attempts. The [full audit](docs/validation/2026-09-29-final-comparison.md)
+Scored-run medians exclude earlier outage attempts. The [full audit](https://fastbrowse.ai/evals/)
 includes every retry, first-attempt outcomes, unknown charges and the two HN pairs excluded from both arms.
 
 <!-- evals:headline -->

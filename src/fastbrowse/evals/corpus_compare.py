@@ -38,19 +38,17 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, model_validator
 
-from fastbrowse.clients.validation import TRANSIENT_TRANSPORT
 from fastbrowse.evals import corpus as corpus_module
 from fastbrowse.evals import external_grade
 from fastbrowse.evals.corpus import Attempt, Corpus, Grader, TaskRef, _build_grader, _source, preflight
 from fastbrowse.evals.datasets import SOURCES, load_tasks
 from fastbrowse.evals.external_grade import DEFAULT_TIMEOUT
-from fastbrowse.evals.live import ARMS, NAVIGATION_FAILED, STUCK_SECONDS, ArmReport, ArmSpec, _down
+from fastbrowse.evals.live import ARMS, NAVIGATION_FAILED, STUCK_SECONDS, ArmReport, ArmSpec, _down, crash_status
 from fastbrowse.evals.live_tasks import Category, LiveTask, Outcome
 from fastbrowse.evals.native_state import attached
 from fastbrowse.evals.state_watch import ObserverSpec, StateWatcher, build_observer
 from fastbrowse.evals.status import Ending, normalize
 from fastbrowse.evals.versions import provenance
-from fastbrowse.models import Status, Unavailable
 
 SCHEMA_VERSION = 1
 
@@ -490,12 +488,8 @@ async def run_arm_attempt(
             interrupted = True
             error = grade_error = "interrupted"
         except Exception as exc:  # one arm crashing is that attempt's row, never the end of the comparison
-            timed_out = cap.expired()
-            cause = Unavailable(f"still running after {STUCK_SECONDS // 60} minutes") if timed_out else exc
-            unavailable = isinstance(cause, (Unavailable, *TRANSIENT_TRANSPORT))
-            error = f"{type(cause).__name__}: {cause}"
-            raw_status = Status.UNAVAILABLE.value if unavailable else None
-            ending = Ending.UNAVAILABLE if unavailable else Ending.ERROR
+            error, raw_status = crash_status(exc, expired=cap.expired())
+            ending = normalize(raw_status)
             grade_error = error
         else:
             raw_status = report.status
