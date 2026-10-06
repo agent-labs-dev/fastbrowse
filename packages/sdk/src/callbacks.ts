@@ -1,8 +1,15 @@
 // What the server sends while a run is under way, handed to the callbacks of the run it names.
 
-import { CANCELLED } from './abort.ts';
 import { FastbrowseError, messageOf, RpcError } from './errors.ts';
-import type { RunEvent, RunFrame, RunResult, RunUntilParams, SecretsResolveParams, ServerMethod } from './protocol.ts';
+import {
+  ErrorCode,
+  type RunEvent,
+  type RunFrame,
+  type RunResult,
+  type RunUntilParams,
+  type SecretsResolveParams,
+  ServerMethod,
+} from './protocol.ts';
 import type { Connection } from './rpc.ts';
 import type { RunOptions } from './run.ts';
 
@@ -18,25 +25,28 @@ export class Callbacks {
   readonly #runs = new Map<string, Served>();
 
   constructor(connection: Connection) {
-    connection.onNotification('run/event', params => {
+    connection.onNotification(ServerMethod.RUN_EVENT, params => {
       const { run_id: runId, event } = params as unknown as RunEvent;
-      this.#tell(runId, 'run/event', options => options.onEvent?.(event));
+      this.#tell(runId, ServerMethod.RUN_EVENT, options => options.onEvent?.(event));
     });
-    connection.onNotification('run/frame', params => {
+    connection.onNotification(ServerMethod.RUN_FRAME, params => {
       const { run_id: runId, frame } = params as unknown as RunFrame;
-      this.#tell(runId, 'run/frame', options => options.onFrame?.(Uint8Array.from(Buffer.from(frame, 'base64'))));
+      const jpeg = Uint8Array.from(Buffer.from(frame, 'base64'));
+      this.#tell(runId, ServerMethod.RUN_FRAME, options => options.onFrame?.(jpeg));
     });
-    connection.onRequest('run/until', params => {
+    connection.onRequest(ServerMethod.RUN_UNTIL, async params => {
       const { run_id: runId, url } = params as unknown as RunUntilParams;
-      return this.#asked(runId, 'until')(url);
+      // The server ends the run as an error on any reply but a boolean, and a check in plain JavaScript can
+      // return anything.
+      return (await this.#asked(runId, 'until')(url)) === true;
     });
-    connection.onRequest('secrets/resolve', async params => {
+    connection.onRequest(ServerMethod.SECRETS_RESOLVE, async params => {
       const { run_id: runId, name, origin } = params as unknown as SecretsResolveParams;
       const secrets = this.#asked(runId, 'secrets');
       try {
         return await secrets.resolve(name, origin);
       } catch {
-        // The server puts this message in the run's result, and what a resolver throws may quote the value.
+        // What a resolver throws may quote the value, so it stays in this process.
         throw new FastbrowseError(`the resolver threw for the secret '${name}'`);
       }
     });
@@ -63,7 +73,7 @@ export class Callbacks {
       // A run can finish before the cancellation reaches it, and its callback failed all the same.
       return served.failure === undefined ? result : endedBy(served.failure);
     } catch (error) {
-      if (served.failure !== undefined && error instanceof RpcError && error.code === CANCELLED) {
+      if (served.failure !== undefined && error instanceof RpcError && error.code === ErrorCode.CANCELLED) {
         return endedBy(served.failure);
       }
       throw error;

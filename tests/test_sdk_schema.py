@@ -87,3 +87,19 @@ def test_the_script_prints_the_same_schema_every_time() -> None:
 
     assert json.loads(first) == sdk_schema.schema(protocol)
     assert first == printed()
+
+
+def test_the_version_the_codes_and_the_method_names_are_printed_beside_the_models() -> None:
+    constants = sdk_schema.schema(protocol)["constants"]
+
+    assert constants["PROTOCOL_VERSION"] == 1
+    assert constants["ErrorCode"]["CANCELLED"] == -32002
+    assert constants["Method"] == {
+        "INITIALIZE": "initialize",
+        "RUN": "run",
+        "RUN_CANCEL": "run/cancel",
+        "SHUTDOWN": "shutdown",
+    }
+    assert constants["ServerMethod"]["SECRETS_RESOLVE"] == "secrets/resolve"
+    # Only what the module defines: an enum it imports for a field is in the types already.
+    assert constants.keys() == {"PROTOCOL_VERSION", "ErrorCode", "Method", "ServerMethod"}

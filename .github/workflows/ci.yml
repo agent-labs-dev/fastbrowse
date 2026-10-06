@@ -89,10 +89,15 @@ jobs:
       - run: npm run generate:sdk
       - run: git diff --exit-code -- packages/sdk/src/protocol.ts
       - run: npm run check:sdk
+      # The package says it runs on Node 20, and its tests need a newer Node to run TypeScript. The files built
+      # above are started here on that floor: one `initialize` against the server, then close.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: {node-version: "20", package-manager-cache: false}
+      - run: node packages/sdk/test/node_floor.mjs .venv/bin/fastbrowse
 
   # Five builds on five runners cost more than the rest of CI together, so a pull request pays for them only
-  # when it touches what is frozen, what freezes it, what packs it for npm, or how the SDK finds it once
-  # installed. The eval and audit packages are not in the executable.
+  # when it touches what is frozen, what freezes it, what packs it for npm, or the SDK that the install smoke
+  # packs and starts it with. The eval and audit packages are not in the executable.
   # Every push to `main` builds, so a change the filter misjudged is still caught before a release.
   changes:
     runs-on: ubuntu-latest
@@ -110,7 +115,7 @@ jobs:
             src/fastbrowse ':!src/fastbrowse/evals' ':!src/fastbrowse/audit' pyproject.toml uv.lock packaging \
             scripts/smoke_binary.py .github/workflows/binaries.yml .github/workflows/ci.yml \
             scripts/npm_platform_package.py scripts/smoke_npm_install.py \
-            packages/sdk/package.json packages/sdk/src/binary.ts
+            packages/sdk/package.json packages/sdk/tsconfig.json packages/sdk/tsconfig.build.json packages/sdk/src
           then echo "binaries=true" >> "$GITHUB_OUTPUT"
           else echo "binaries=false" >> "$GITHUB_OUTPUT"
           fi

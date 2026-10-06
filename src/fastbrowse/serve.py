@@ -18,10 +18,19 @@ import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from importlib.metadata import version
-from typing import Any, Protocol
+from typing import Annotated, Any, Protocol
 
 import httpx
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import (
+    BaseModel,
+    StrictInt,
+    StrictStr,
+    TypeAdapter,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    WrapValidator,
+    model_validator,
+)
 
 from fastbrowse import options
 from fastbrowse.adapters.local_chrome import find_chrome
@@ -29,11 +38,9 @@ from fastbrowse.clients.environment import ConfigurationError, Settings, load_se
 from fastbrowse.models import (
     Attachment,
     BrowserEvent,
-    CostBreakdown,
     LocalChrome,
     RunResult,
     SecretRef,
-    Status,
     StepEvent,
 )
 from fastbrowse.output_schema import UnsupportedSchema, output_model
@@ -108,15 +115,18 @@ class StdioTransport:
             with contextlib.suppress(RuntimeError):
                 loop.call_soon_threadsafe(self._lines.put_nowait, line)
 
-        pending = bytearray()
+        # The pieces of a line still arriving. They are joined once, when its end comes: joining per chunk
+        # copies a 50 MB `run` a thousand times over.
+        pending: list[bytes] = []
         while chunk := os.read(self._read_fd, 1 << 16):
-            pending += chunk
-            *lines, rest = bytes(pending).split(b"\n")
-            pending = bytearray(rest)
-            for line in lines:
-                deliver(line)
+            *ended, rest = chunk.split(b"\n")
+            for line in ended:
+                deliver(b"".join((*pending, line)))
+                pending.clear()
+            if rest:
+                pending.append(rest)
         if pending:
-            deliver(bytes(pending))
+            deliver(b"".join(pending))
         deliver(None)
 
     async def send(self, line: bytes) -> None:
@@ -201,24 +211,48 @@ _SECRET_VALUE: TypeAdapter[str | None] = TypeAdapter(str | None)
 _UNTIL_ANSWER: TypeAdapter[bool] = TypeAdapter(bool)
 
 
-def _ended_by_client(failure: ClientError) -> RunResult:
-    """The result of a run that stopped because the client failed one of its callbacks.
+def _or_none(value: Any, read: ValidatorFunctionWrapHandler) -> Any:
+    try:
+        return read(value)
+    except ValidationError:
+        return None
 
-    The run was under way, so this is a result and not an error reply. `run_task` lets a callback's exception
-    through with nothing attached, and has closed the browser by the time it arrives here, so what the run
-    did before then is in the events already sent and not in this. The text is the method and the client's
-    own message, and no part of a reply that could not be used.
+
+class _ReplyError(BaseModel):
+    """The `error` of a client's reply, read for what it holds.
+
+    `protocol.Error` is what a client should write. A reply that falls short of it still has to end the run
+    waiting on it, so a member of the wrong type is read as absent and anything that is not an object as
+    an error with no members.
     """
-    return RunResult(
-        status=Status.ERROR,
-        answer=None,
-        data=None,
-        evidence=(),
-        steps=(),
-        cost=CostBreakdown(lines=()),
-        artifacts=(),
-        error=str(failure),
-    )
+
+    code: Annotated[StrictInt | None, WrapValidator(_or_none)] = None
+    message: Annotated[StrictStr | None, WrapValidator(_or_none)] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _of_any_shape(cls, error: Any) -> Any:
+        return error if isinstance(error, dict) else {}
+
+
+class _Reply(BaseModel):
+    """A client's answer to one of the server's requests: a `Response` or an `ErrorResponse`, whichever came."""
+
+    # The server's own ids are integers, so no other id answers anything.
+    id: StrictInt
+    result: Any = None
+    # Some clients write both members and leave the unused one null.
+    error: _ReplyError | None = None
+
+
+@dataclass(frozen=True)
+class _Question:
+    """One of the server's requests that the client has not answered yet."""
+
+    method: ServerMethod
+    answer: asyncio.Future[Any]
+    failure: str | None
+    """What to say when the client answers with an error, in place of the message it sent."""
 
 
 @dataclass(frozen=True)
@@ -250,14 +284,12 @@ class Server:
         self._runner = runner
         self._settings = settings
         self._closing = False
-        # The id of the run in progress. One at a time: a caller that wants more starts more processes.
+        # One run at a time: a caller that wants more starts more processes.
         self._active: str | None = None
-        # The task answering it, until the run ends or is cancelled.
         self._running: asyncio.Task[None] | None = None
         self._answering: set[asyncio.Task[None]] = set()
-        # The server's own requests that the client has not answered yet, by the id each was sent with.
-        self._asked = 0
-        self._pending: dict[int, tuple[ServerMethod, asyncio.Future[Any]]] = {}
+        self._last_request_id = 0
+        self._pending: dict[int, _Question] = {}
         self._handlers: dict[Method, _Handler[Any]] = {
             Method.INITIALIZE: _Handler(InitializeParams, self._initialize),
             Method.RUN: _Handler(RunParams, self._run, background=True),
@@ -362,13 +394,22 @@ class Server:
             await self._notify(ServerMethod.RUN_EVENT, RunEvent(run_id=params.run_id, event=event))
 
         try:
-            return await self._runner(
-                params.task, **await self._arguments(params), **self._callbacks(params), on_event=on_event
-            )
+            arguments = await self._arguments(params)
+            try:
+                return await self._runner(params.task, **arguments, **self._callbacks(params), on_event=on_event)
+            except ConfigurationError:
+                raise
+            except ClientError as exc:
+                # `run_task` lets a callback's exception through with nothing attached, so what the run did
+                # before then is in the events already sent and not in this.
+                return options.error_result(str(exc))
+            except Exception as exc:
+                # The run was under way, and whatever ends one of those is a result with a status. The reply
+                # has room for what went wrong and none for where, so the traceback goes to the log.
+                log.exception("serve: run %r failed", params.run_id)
+                return options.error_result(f"{type(exc).__name__}: {exc}")
         except ConfigurationError as exc:
             raise Refused(ErrorCode.CONFIGURATION, str(exc)) from None
-        except ClientError as exc:
-            return _ended_by_client(exc)
         except asyncio.CancelledError:
             # The runner has unwound by now, and that is what closed its browser.
             raise Refused(ErrorCode.CANCELLED, f"run {params.run_id!r} was cancelled") from None
@@ -402,8 +443,8 @@ class Server:
             raise Refused(ErrorCode.UNSUPPORTED_SCHEMA, f"run: output_schema: {exc}") from None
         options.recording(params.record)
         settings = self._settings()
-        asked = params.chrome or LocalChrome()
-        chrome = options.chrome(settings, asked.headed, asked.profile, asked.binary)
+        local = params.chrome or LocalChrome()
+        chrome = options.chrome(settings, local.headed, local.profile, local.binary)
         handed_over = options.handed_over(
             params.cdp_url,
             params.cdp_port,
@@ -432,7 +473,7 @@ class Server:
             "cdp_port": params.cdp_port,
             "attach": params.attach,
             "target_match": params.target_match,
-            "proxy_country": "us" if proxy_country is None else proxy_country,
+            "proxy_country": options.proxy_country(proxy_country),
             "viewport": params.viewport,
             "cloud_allow_resizing": params.cloud_allow_resizing,
             "inputs": params.inputs,
@@ -450,8 +491,11 @@ class Server:
 
     def _secrets(self, params: RunParams) -> ClientSecrets | None:
         async def ask(name: str, origin: str) -> str | None:
-            asked = SecretsResolveParams(run_id=params.run_id, name=name, origin=origin)
-            return await self._request(ServerMethod.SECRETS_RESOLVE, asked, _SECRET_VALUE)
+            question = SecretsResolveParams(run_id=params.run_id, name=name, origin=origin)
+            # A client's own account of why it has no value may quote the value, and the run's result is read
+            # by people and models the value is kept from.
+            failure = f"the client could not resolve the secret {name!r}"
+            return await self._request(ServerMethod.SECRETS_RESOLVE, question, _SECRET_VALUE, failure=failure)
 
         return ClientSecrets(params.secrets, ask) if params.secrets else None
 
@@ -462,8 +506,8 @@ class Server:
             await self._notify(ServerMethod.RUN_FRAME, RunFrame(run_id=params.run_id, frame=frame))
 
         async def until(url: str) -> bool:
-            asked = RunUntilParams(run_id=params.run_id, url=url)
-            return await self._request(ServerMethod.RUN_UNTIL, asked, _UNTIL_ANSWER)
+            question = RunUntilParams(run_id=params.run_id, url=url)
+            return await self._request(ServerMethod.RUN_UNTIL, question, _UNTIL_ANSWER)
 
         # A run with no frame handler starts no screencast, so a client that reads no frames pays for none.
         return {"on_frame": on_frame if params.frames else None, "until": until if params.until else None}
@@ -471,19 +515,22 @@ class Server:
     async def _notify(self, method: ServerMethod, params: BaseModel) -> None:
         await self._write(Notification(method=method, params=params))
 
-    async def _request[R](self, method: ServerMethod, params: BaseModel, result: TypeAdapter[R]) -> R:
+    async def _request[R](
+        self, method: ServerMethod, params: BaseModel, result: TypeAdapter[R], *, failure: str | None = None
+    ) -> R:
         """Ask the client, and wait for its answer as long as it takes.
 
         There is no timeout here. What is waiting is a run, and its `max_seconds` already bounds it. An error
-        reply raises `ClientError`, and so does a result that is not what `result` describes.
+        reply raises `ClientError`, and so does a result that is not what `result` describes. The error's text
+        is the client's message, or `failure` when the client's message is not to be repeated.
         """
-        self._asked += 1
-        request_id = self._asked
-        reply: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
-        self._pending[request_id] = (method, reply)
+        self._last_request_id += 1
+        request_id = self._last_request_id
+        question = _Question(method, asyncio.get_running_loop().create_future(), failure)
+        self._pending[request_id] = question
         try:
             await self._write(ServerRequest(id=request_id, method=method, params=params))
-            answer = await reply
+            answer = await question.answer
         finally:
             del self._pending[request_id]
         try:
@@ -493,32 +540,25 @@ class Server:
             problems = "; ".join(error["msg"] for error in exc.errors(include_input=False))
             raise ClientError(method, f"the result cannot be used: {problems}") from None
 
-    def _settle(self, reply: dict[str, Any]) -> None:
+    def _settle(self, payload: dict[str, Any]) -> None:
         """Hand a reply from the client to the request that is waiting for it.
 
         Nothing of the reply is logged, and nothing is written back: its result may be a secret's value, and
         JSON-RPC has no answer to an answer.
         """
-        request_id = _id_of(reply)
-        pending = self._pending.get(request_id) if isinstance(request_id, int) else None
-        if pending is None or pending[1].done():
+        try:
+            reply = _Reply.model_validate(payload)
+        except ValidationError:
+            reply = None
+        question = None if reply is None else self._pending.get(reply.id)
+        if reply is None or question is None or question.answer.done():
             # A run that was stopped while its question was out leaves the answer with nobody to take it.
             log.debug("serve: a reply to no request")
-            return
-        method, waiting = pending
-        # Some clients write both members and leave the unused one null.
-        if reply.get("error") is None:
-            waiting.set_result(reply.get("result"))
-            return
-        error = reply["error"] if isinstance(reply["error"], dict) else {}
-        code, message = error.get("code"), error.get("message")
-        waiting.set_exception(
-            ClientError(
-                method,
-                message if isinstance(message, str) else "the client replied with an error",
-                code if isinstance(code, int) and not isinstance(code, bool) else None,
-            )
-        )
+        elif reply.error is None:
+            question.answer.set_result(reply.result)
+        else:
+            message = question.failure or reply.error.message or "the client replied with an error"
+            question.answer.set_exception(ClientError(question.method, message, reply.error.code))
 
     async def _write(self, message: BaseModel) -> None:
         await self._transport.send(message.model_dump_json().encode() + b"\n")

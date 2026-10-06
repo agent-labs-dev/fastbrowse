@@ -1,9 +1,7 @@
 // A run the caller can stop with an `AbortSignal`.
 
 import { AbortError, RpcError } from './errors.ts';
-import type { ErrorCode } from './protocol.ts';
-
-export const CANCELLED: ErrorCode = -32002;
+import { ErrorCode } from './protocol.ts';
 
 /**
  * Make the `run` request with `send`, and call `cancel` if `signal` aborts while it is waiting on its reply.
@@ -24,7 +22,8 @@ export async function abortable<Result>(
     return await send();
   } catch (error) {
     // `shutdown` cancels a run too, and that one the caller did not abort.
-    if (signal.aborted && error instanceof RpcError && error.code === CANCELLED) throw new AbortError(signal.reason);
+    if (signal.aborted && error instanceof RpcError && error.code === ErrorCode.CANCELLED)
+      throw new AbortError(signal.reason);
     throw error;
   } finally {
     signal.removeEventListener('abort', cancel);

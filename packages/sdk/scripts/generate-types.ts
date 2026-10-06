@@ -3,6 +3,8 @@
 //     npm run generate:sdk
 //
 // `scripts/sdk_schema.py` prints the models as JSON Schema, and json-schema-to-typescript turns that into types.
+// The protocol version, the error codes and the method names come with it and are written as values, so the
+// SDK holds no copy of one that could fall behind the server's.
 
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
@@ -18,8 +20,31 @@ const BANNER = `// Generated from the models in src/fastbrowse/protocol.py and s
 
 const ROOT = 'GeneratedRoot';
 
-/** The types for a schema whose `$defs` hold the models. Each definition becomes one exported type. */
-export async function render(schema: JSONSchema): Promise<string> {
+type Constant = number | string;
+
+/** What `scripts/sdk_schema.py` prints: the models as JSON Schema, and the values both sides have to agree on. */
+type Document = JSONSchema & { constants?: Record<string, Constant | Record<string, Constant>> };
+
+function literal(value: Constant): string {
+  return typeof value === 'string' ? `'${value}'` : String(value);
+}
+
+/** One exported value per constant. An enum is an object of its members, which may share its type's name. */
+function renderConstants(constants: NonNullable<Document['constants']>): string {
+  return Object.entries(constants)
+    .map(([name, value]) => {
+      if (typeof value !== 'object') return `export const ${name} = ${literal(value)};\n`;
+      const members = Object.entries(value).map(([member, held]) => `  ${member}: ${literal(held)},\n`);
+      return `export const ${name} = {\n${members.join('')}} as const;\n`;
+    })
+    .join('');
+}
+
+/**
+ * The types for a schema whose `$defs` hold the models, and the values of its `constants`. Each definition
+ * becomes one exported type.
+ */
+export async function render({ constants = {}, ...schema }: Document): Promise<string> {
   const names = Object.keys(schema.$defs ?? {});
   // The compiler writes a type for the root and for what the root refers to. The root here refers to every
   // definition so that each is written, and its own type, which describes no message, is taken out again.
@@ -36,7 +61,7 @@ export async function render(schema: JSONSchema): Promise<string> {
     bannerComment: BANNER,
     style: { singleQuote: true, printWidth: 120 },
   });
-  return types.replace(new RegExp(`\nexport interface ${ROOT} \\{[^}]*\\}\n`), '');
+  return types.replace(new RegExp(`\nexport interface ${ROOT} \\{[^}]*\\}\n`), '') + renderConstants(constants);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

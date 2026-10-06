@@ -4,6 +4,9 @@ Every model `fastbrowse.protocol` defines is in it, found by looking at the modu
 reaches the SDK without being listed here. `RunResult` is added by name, since it is the reply to `run` and
 the protocol module only imports it.
 
+Beside the models, under `constants`, are the values a client has to hold the same as the server: the protocol
+version, and the members of each enum the module defines, which are the error codes and the method names.
+
     uv run python scripts/sdk_schema.py
 
 `npm run generate:sdk` runs this and writes `packages/sdk/src/protocol.ts` from what it prints.
@@ -11,11 +14,12 @@ the protocol module only imports it.
 
 import json
 import sys
+from enum import Enum
 from types import ModuleType
 from typing import Any
 
 from pydantic import BaseModel
-from pydantic.json_schema import GenerateJsonSchema, JsonSchemaMode, JsonSchemaValue, models_json_schema
+from pydantic.json_schema import GenerateJsonSchema, JsonSchemaMode, models_json_schema
 from pydantic_core import core_schema
 
 from fastbrowse import protocol
@@ -37,16 +41,6 @@ class _AsWritten(GenerateJsonSchema):
         if self.mode == "serialization":
             return not field.get("serialization_exclude")
         return super().field_is_required(field, total)
-
-    def ser_schema(
-        self, schema: core_schema.SerSchema | core_schema.IncExSeqSerSchema | core_schema.IncExDictSerSchema
-    ) -> JsonSchemaValue | None:
-        written = super().ser_schema(schema)
-        # Such a serializer is skipped for None, which is then written as null. Pydantic describes only what the
-        # serializer returns, and `StepEvent.frame` would come out as a string that is never null.
-        if written is not None and schema.get("when_used") == "json-unless-none":
-            return {"anyOf": [written, {"type": "null"}]}
-        return written
 
 
 def _mode(model: type[BaseModel]) -> JsonSchemaMode:
@@ -85,10 +79,24 @@ def _for_the_type_generator(node: Any, *, named: bool = False) -> Any:
     }
 
 
+def _constants(module: ModuleType) -> dict[str, Any]:
+    """The module's enums by member name, and its upper-case numbers, such as `PROTOCOL_VERSION`."""
+    found: dict[str, Any] = {}
+    for name, value in vars(module).items():
+        if isinstance(value, type) and issubclass(value, Enum) and value.__module__ == module.__name__:
+            found[name] = {member.name: member.value for member in value}
+        elif name.isupper() and isinstance(value, int):
+            found[name] = value
+    return dict(sorted(found.items()))
+
+
 def schema(module: ModuleType = protocol) -> dict[str, Any]:
-    """One document whose `$defs` hold every model in `module`, `RunResult`, and whatever those refer to."""
+    """One document whose `$defs` hold every model in `module`, `RunResult`, and whatever those refer to.
+
+    Its `constants` are no part of JSON Schema. The type generator takes them out before it reads the rest.
+    """
     _, document = models_json_schema([(model, _mode(model)) for model in _models(module)], schema_generator=_AsWritten)
-    return _for_the_type_generator(document)
+    return _for_the_type_generator(document) | {"constants": _constants(module)}
 
 
 if __name__ == "__main__":

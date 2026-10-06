@@ -5,14 +5,18 @@ are the file descriptors, line length and the exit code, start the command as a 
 """
 
 import json
+import os
 import subprocess
 import sys
+import threading
+import time
 from importlib.metadata import version
 from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
 
+from fastbrowse import serve
 from fastbrowse.protocol import PROTOCOL_VERSION, Error, ErrorCode
 from tests.serve_client import serving
 
@@ -199,6 +203,33 @@ def test_a_request_line_over_64_kib_is_read_whole() -> None:
     (reply,) = _lines(stdout)
     assert reply["id"] == long_id
     assert reply["result"]["protocol_version"] == 1
+
+
+async def test_reading_a_long_line_takes_time_in_proportion_to_its_length() -> None:
+    # An attachment makes a `run` one line of tens of megabytes. Joining what has arrived to each new chunk
+    # copies the line once per chunk, which took 8 seconds for 50 MB and four times that for twice as much.
+    line = b"x" * (96 << 20)
+    read_fd, write_fd = os.pipe()
+
+    def write() -> None:
+        with open(write_fd, "wb") as pipe:
+            pipe.write(line + b"\nshort\ntail")
+
+    writer = threading.Thread(target=write)
+    writer.start()
+    transport = serve.StdioTransport(read_fd, 1)
+    try:
+        started = time.perf_counter()
+        first = await transport.receive()
+        elapsed = time.perf_counter() - started
+        rest = [await transport.receive() for _ in range(3)]
+    finally:
+        writer.join()
+        os.close(read_fd)
+
+    assert first == line
+    assert rest == [b"short", b"tail", None]
+    assert elapsed < 5.0
 
 
 def test_a_write_to_stdout_from_inside_the_process_goes_to_stderr_and_not_into_the_stream() -> None:

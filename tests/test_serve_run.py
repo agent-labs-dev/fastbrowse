@@ -447,7 +447,7 @@ async def test_the_server_answers_other_requests_while_a_run_is_active() -> None
     assert reply["result"]["status"] == "complete"
 
 
-async def test_a_run_that_raises_is_an_internal_error_and_the_server_keeps_serving() -> None:
+async def test_a_run_that_raises_ends_as_an_error_result_and_the_server_keeps_serving() -> None:
     attempts = 0
 
     async def flaky(task: str, **_: Any) -> RunResult:
@@ -461,7 +461,7 @@ async def test_a_run_that_raises_is_an_internal_error_and_the_server_keeps_servi
         failed = await client.request("run", _run("run-1"))
         result = await client.result("run", _run("run-2"))
 
-    assert failed["error"] == {"code": -32603, "message": "RuntimeError: Chrome went away"}
+    assert (failed["result"]["status"], failed["result"]["error"]) == ("error", "RuntimeError: Chrome went away")
     assert result["status"] == "complete"
 
 

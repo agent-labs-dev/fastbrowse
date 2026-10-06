@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from fastbrowse import cli
+from fastbrowse import cli, options
 from fastbrowse.clients.environment import Settings
 from fastbrowse.models import CostBreakdown, RunResult, Status
 
@@ -190,7 +190,7 @@ async def test_explicit_cloud_overrides_environment_profile(monkeypatch: pytest.
 
     async def fake(task: str, **kwargs: object) -> RunResult:
         seen.update(kwargs)
-        return cli._refused("test")
+        return options.error_result("test")
 
     monkeypatch.setattr(cli, "run_task", fake)
     await cli.run(cli._parse(["task", "--cloud"]))
@@ -203,7 +203,7 @@ async def test_cli_login_and_blocked_have_distinct_exit_codes(monkeypatch: pytes
     for status in (Status.NEEDS_LOGIN, Status.BLOCKED):
 
         async def fake(task: str, target: Status = status, **kwargs: object) -> RunResult:
-            return cli._refused("test").model_copy(update={"status": target})
+            return options.error_result("test").model_copy(update={"status": target})
 
         monkeypatch.setattr(cli, "run_task", fake)
         codes.append(await cli.run(cli._parse(["task", "--local"])))
@@ -213,7 +213,7 @@ async def test_cli_login_and_blocked_have_distinct_exit_codes(monkeypatch: pytes
 async def test_login_advice_is_added_only_to_cli_output(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    result = cli._refused("Sign-in required").model_copy(update={"status": Status.NEEDS_LOGIN})
+    result = options.error_result("Sign-in required").model_copy(update={"status": Status.NEEDS_LOGIN})
 
     async def fake(task: str, **kwargs: object) -> RunResult:
         return result

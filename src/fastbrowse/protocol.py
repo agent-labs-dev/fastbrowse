@@ -4,14 +4,13 @@ JSON-RPC 2.0, one message per line. Every shape that crosses the pipe is a model
 types generated for the JavaScript SDK are read from one definition.
 """
 
-import base64
 from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_serializer
+from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
-from fastbrowse.models import Authorization, BrowserEvent, Limits, LocalChrome, SecretRef, StepEvent
+from fastbrowse.models import Authorization, BrowserEvent, Image, Limits, LocalChrome, SecretRef, StepEvent
 
 # Changes only when the wire format does, so it is not the package version: a release that leaves the
 # messages alone leaves this alone, and an SDK can tell a binary it cannot talk to from one that is merely newer.
@@ -177,13 +176,8 @@ class RunFrame(BaseModel):
     """The params of `run/frame`: the active tab as it looked a moment ago. Sent only to a run that set `frames`."""
 
     run_id: str
-    frame: bytes
-    """One JPEG, as base64."""
-
-    @field_serializer("frame", when_used="json")
-    def _frame_as_base64(self, frame: bytes) -> str:
-        # The standard alphabet, as a step event's frame is written, since it is what a browser's `atob` reads.
-        return base64.b64encode(frame).decode("ascii")
+    frame: Image
+    """One JPEG."""
 
 
 class Notification(BaseModel):
