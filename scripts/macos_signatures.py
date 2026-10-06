@@ -1,10 +1,15 @@
-"""Check that every Mach-O file of one frozen macOS build carries a signature that holds.
+"""Sign every Mach-O file of one frozen macOS build ad hoc, and check that each signature holds.
 
-    python scripts/macos_signatures.py dist/fastbrowse
+    python scripts/macos_signatures.py sign dist/fastbrowse
+    python scripts/macos_signatures.py verify dist/fastbrowse
 
-The build is not signed with a certificate and not notarized. PyInstaller signs each file it collects ad hoc,
-and that is what is checked here: a Mac with Apple silicon runs no code without a signature, so a file that
-lost its own stops the program at the moment it is loaded.
+The build is not signed with a certificate and not notarized. A Mac with Apple silicon runs no code without a
+signature, and an ad-hoc one, which names no certificate, is what it gets here.
+
+PyInstaller signs what it collects, and still the build is signed again. The Python library comes out of a
+framework, and it keeps the signature it had there, which seals files the build does not carry. The Mac loads
+it all the same, and `codesign --verify` calls it broken, as would any tool that checks a program before
+allowing it.
 
 An ad-hoc signature is enough for a build installed through npm. Gatekeeper assesses a file only when it
 carries the quarantine attribute, which a browser sets on what it downloads and npm does not set on what it
@@ -30,10 +35,11 @@ class Failed(Exception):
 
 
 def mach_o_files(tree: Path) -> list[Path]:
-    """Every file in the build that carries a signature.
+    """Every file in the build that carries a signature, the executable last.
 
     Found by how a file starts and not by its name: PyInstaller collects libraries under names with no suffix.
-    A symbolic link is left out, since the file it points to is in the list already.
+    The executable is last because that is the order Apple asks for, the code a program loads before the
+    program. A symbolic link is left out, since the file it points to is in the list already.
     """
     executable = tree / "fastbrowse"
     if not executable.is_file() or not (tree / "_internal").is_dir():
@@ -48,13 +54,26 @@ def mach_o_files(tree: Path) -> list[Path]:
     return [*found, executable]
 
 
+def _codesign(*arguments: str, path: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["codesign", *arguments, str(path)], capture_output=True, text=True)
+
+
+def sign(tree: Path) -> int:
+    files = mach_o_files(tree)
+    for path in files:
+        # No hardened runtime: under it a program loads only libraries signed by its own team, and an ad-hoc
+        # signature names no team, so the executable would refuse the Python library beside it.
+        done = _codesign("--force", "--sign", "-", "--timestamp=none", path=path)
+        if done.returncode != 0:
+            raise Failed(f"codesign could not sign {path}:\n{done.stderr.strip()}")
+    return len(files)
+
+
 def verify(tree: Path) -> int:
     files = mach_o_files(tree)
     problems = []
     for path in files:
-        valid = subprocess.run(
-            ["codesign", "--verify", "--strict", "--verbose=2", str(path)], capture_output=True, text=True
-        )
+        valid = _codesign("--verify", "--strict", "--verbose=2", path=path)
         if valid.returncode != 0:
             problems.append(f"{path}: the signature does not hold: {valid.stderr.strip()}")
     if problems:
@@ -64,10 +83,15 @@ def verify(tree: Path) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("tree", type=Path)
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("sign", help="sign every Mach-O file of the build ad hoc").add_argument("tree", type=Path)
+    commands.add_parser("verify", help="check the signature of every Mach-O file").add_argument("tree", type=Path)
     args = parser.parse_args()
     try:
-        print(f"{verify(args.tree)} Mach-O files in {args.tree} are validly signed")
+        if args.command == "sign":
+            print(f"signed {sign(args.tree)} Mach-O files in {args.tree} ad hoc")
+        else:
+            print(f"{verify(args.tree)} Mach-O files in {args.tree} are validly signed")
     except Failed as exc:
         print(f"FAILED: {exc}", file=sys.stderr)
         return 1

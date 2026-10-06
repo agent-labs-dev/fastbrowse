@@ -1,8 +1,8 @@
-"""`scripts/macos_signatures.py`: check the signature of every Mach-O file of one frozen build.
+"""`scripts/macos_signatures.py`: sign every Mach-O file of one frozen build ad hoc, and check each signature.
 
 `codesign` is stood in for by a program of the same name on the PATH, which writes down how it was called and
-answers as told. That shows what the script asks of it on any system. The last tests use the real `codesign`
-with an ad-hoc identity, and run on macOS only.
+answers as told. That shows what the script asks of it on any system. The last tests use the real `codesign`,
+and run on macOS only.
 """
 
 import json
@@ -73,33 +73,62 @@ def codesign(tmp_path: Path) -> Codesign:
     return Codesign(tmp_path)
 
 
-def test_every_mach_o_file_is_checked_once_and_strictly(tmp_path: Path, codesign: Codesign) -> None:
+def _names(tree: Path, calls: list[list[str]]) -> list[str]:
+    return [Path(call[-1]).relative_to(tree).as_posix() for call in calls]
+
+
+def test_every_mach_o_file_is_signed_once_and_the_executable_last(tmp_path: Path, codesign: Codesign) -> None:
     tree = _frozen(tmp_path)
 
-    done = codesign.run(str(tree))
+    done = codesign.run("sign", str(tree))
 
     assert done.returncode == 0, done.stderr
-    calls = codesign.calls()
-    # A link is the file it points to, and a file that is no Mach-O file carries no signature to check.
-    assert [Path(call[-1]).relative_to(tree).as_posix() for call in calls] == [
+    # A link is the file it points to, and signing it again would sign that file twice.
+    assert _names(tree, codesign.calls()) == [
         "_internal/libpython3.13.dylib",
         "_internal/pydantic_core/_pydantic_core.cpython-313-darwin.so",
         "fastbrowse",
     ]
+
+
+def test_signing_is_ad_hoc_and_without_the_hardened_runtime(tmp_path: Path, codesign: Codesign) -> None:
+    codesign.run("sign", str(_frozen(tmp_path)))
+
+    for call in codesign.calls():
+        # `--force` replaces the signature a file came with.
+        assert call[:-1] == ["--force", "--sign", "-", "--timestamp=none"]
+
+
+def test_a_file_that_cannot_be_signed_fails_the_command(tmp_path: Path, codesign: Codesign) -> None:
+    done = codesign.run("sign", str(_frozen(tmp_path)), REFUSE="libpython")
+
+    assert done.returncode == 1
+    assert "libpython3.13.dylib" in done.stderr
+
+
+def test_verify_checks_every_mach_o_file_strictly(tmp_path: Path, codesign: Codesign) -> None:
+    tree = _frozen(tmp_path)
+
+    done = codesign.run("verify", str(tree))
+
+    assert done.returncode == 0, done.stderr
+    calls = codesign.calls()
+    assert len(calls) == 3
     assert all(call[:2] == ["--verify", "--strict"] for call in calls)
 
 
-def test_a_file_whose_signature_does_not_hold_fails_the_command(tmp_path: Path, codesign: Codesign) -> None:
-    done = codesign.run(str(_frozen(tmp_path)), REFUSE="_pydantic_core")
+def test_verify_fails_on_a_file_whose_signature_does_not_hold(tmp_path: Path, codesign: Codesign) -> None:
+    done = codesign.run("verify", str(_frozen(tmp_path)), REFUSE="_pydantic_core")
 
     assert done.returncode == 1
     assert "_pydantic_core.cpython-313-darwin.so" in done.stderr
 
 
-def test_a_directory_that_is_not_a_build_is_refused(tmp_path: Path, codesign: Codesign) -> None:
+@pytest.mark.parametrize("command", ["sign", "verify"])
+def test_a_directory_that_is_not_a_build_is_refused(tmp_path: Path, codesign: Codesign, command: str) -> None:
     (tmp_path / "fastbrowse").mkdir()
 
-    done = codesign.run(str(tmp_path / "fastbrowse"))
+    done = codesign.run(command, str(tmp_path / "fastbrowse"))
 
     assert done.returncode == 1
     assert "not a macOS build" in done.stderr
@@ -111,37 +140,41 @@ needs_codesign = pytest.mark.skipif(
 )
 
 
-def _ad_hoc(root: Path) -> Path:
-    """A build whose two Mach-O files are copies of a real one, signed as PyInstaller signs. They are never run."""
+def _real(root: Path) -> Path:
+    """A build whose two Mach-O files are copies of a real one. They are there to be signed, and are never run."""
     tree = root / "fastbrowse"
     (tree / "_internal").mkdir(parents=True)
-    for path in (tree / "_internal" / "libpython3.13.dylib", tree / "fastbrowse"):
-        shutil.copyfile("/bin/echo", path)
-        subprocess.run(["codesign", "--force", "--sign", "-", "--timestamp=none", str(path)], check=True)
+    shutil.copyfile("/bin/echo", tree / "fastbrowse")
+    shutil.copyfile("/bin/echo", tree / "_internal" / "libpython3.13.dylib")
     (tree / "fastbrowse").chmod(0o755)
     return tree
 
 
-def _script(tree: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, str(SCRIPT), str(tree)], capture_output=True, text=True)
+def _script(*arguments: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([sys.executable, str(SCRIPT), *arguments], capture_output=True, text=True)
 
 
 @needs_codesign
-def test_an_ad_hoc_signed_build_passes(tmp_path: Path) -> None:
-    done = _script(_ad_hoc(tmp_path))
+def test_a_signed_build_verifies(tmp_path: Path) -> None:
+    tree = _real(tmp_path)
 
-    assert done.returncode == 0, done.stderr
+    signed = _script("sign", str(tree))
+    assert signed.returncode == 0, signed.stderr
+
+    verified = _script("verify", str(tree))
+    assert verified.returncode == 0, verified.stderr
 
 
 @needs_codesign
-def test_a_file_changed_after_signing_fails(tmp_path: Path) -> None:
-    tree = _ad_hoc(tmp_path)
+def test_a_file_changed_after_signing_fails_verification(tmp_path: Path) -> None:
+    tree = _real(tmp_path)
+    _script("sign", str(tree))
     library = tree / "_internal" / "libpython3.13.dylib"
     changed = bytearray(library.read_bytes())
     changed[len(changed) // 2] ^= 0xFF
     library.write_bytes(changed)
 
-    done = _script(tree)
+    done = _script("verify", str(tree))
 
     assert done.returncode == 1
     assert "libpython3.13.dylib" in done.stderr

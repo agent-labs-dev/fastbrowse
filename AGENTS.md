@@ -163,8 +163,8 @@ A release that publishes or changes a comparison figure also needs the fixture s
 that same build.
 
 One tag publishes one version to PyPI and npm (`.github/workflows/release.yml`). It first builds the wheel and the
-five binaries and smoke-tests each. The macOS two keep PyInstaller's ad-hoc signatures
-(`scripts/macos_signatures.py` checks them), which is enough for a binary installed through npm. Then, each step
+five binaries and smoke-tests each. The macOS two are signed ad hoc
+(`scripts/macos_signatures.py`), which is enough for a binary installed through npm. Then, each step
 needing the one before: the GitHub release with **the changelog entry as its notes**, PyPI, the five platform
 packages, the SDK. PyPI and npm take the job's OIDC identity, so no token is stored. No registry takes a version
 back, so finish a release that failed partway by re-running its failed jobs. Started by hand (`gh workflow run
