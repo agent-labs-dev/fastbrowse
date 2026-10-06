@@ -25,7 +25,7 @@ from tests.browser.conftest import SITES, _handler_for
 # Windows has no `ps`, and the process tree is how a test finds the Chrome that the server started.
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="reads the process tree with ps")
 
-TOKEN = "s3cr3t-T0ken-225"
+TOKEN = "s3cr3t-T0ken-225"  # gitleaks:allow
 TASK = "fill Token = secret:token; click Save"
 CANCELLED = -32002
 MODEL_KEYS = ("TYPESAFE_API_KEY", "AI_GATEWAY_API_KEY", "OPENROUTER_API_KEY", "BROWSER_USE_API_KEY")
