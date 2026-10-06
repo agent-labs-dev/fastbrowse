@@ -1,0 +1,33 @@
+{
+  "name": "fastbrowse",
+  "version": "0.5.18",
+  "description": "Browser automation with cited answers, structured output and code-controlled credentials and authorization.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agent-labs-dev/fastbrowse.git",
+    "directory": "packages/sdk"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test \"test/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "20.19.43",
+    "typescript": "7.0.2"
+  }
+}
