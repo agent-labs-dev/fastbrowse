@@ -44,10 +44,20 @@ class RecordingArtifactSink:
         return artifact
 
 
-def _handler_for(directory: Path, iframe_origin: str | None = None) -> type[BaseHTTPRequestHandler]:
+def _handler_for(
+    directory: Path, iframe_origin: str | None = None, posted: list[str] | None = None
+) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: object) -> None:
             pass
+
+        def do_POST(self) -> None:
+            # What a page sent is the one view of it a test has when the browser belongs to another process.
+            body = self.rfile.read(int(self.headers["Content-Length"])).decode()
+            if posted is not None:
+                posted.append(body)
+            self.send_response(204)
+            self.end_headers()
 
         def do_GET(self) -> None:
             if self.path.startswith("/http-error/"):

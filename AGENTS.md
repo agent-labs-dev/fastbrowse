@@ -19,18 +19,22 @@ assumption checked against Typesafe's documentation.
 uv sync --all-extras          # the browser-use SDK and the mcp extra too, which ty checks
 uv run fastbrowse "..." --start https://example.com/
 uv run fastbrowse-mcp         # the MCP server, stdio
+uv run fastbrowse serve --stdio   # JSON-RPC for another process; the JavaScript SDK starts this
 ```
 
-The gate, which CI runs in this order on Python 3.13 and 3.14 (the browser and sift checks on 3.13):
+The gate, which CI runs in this order on Python 3.13 and 3.14 (the browser, sift and SDK checks on 3.13):
 
 ```sh
 uv run ruff check . && uv run ruff format --check .
 uv run ty check                                     # ty, not pyright
 uv run python scripts/changelog.py --check "$(uv version --short)"
+uv run python scripts/npm_versions.py               # the npm versions are the Python one
 uv run python scripts/no_slop.py
 uv run vale sync && uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs src scripts tests
 uv run pytest -q
 npm ci --ignore-scripts && npm run check:browser
+npm run generate:sdk && git diff --exit-code -- packages/sdk/src/protocol.ts
+npm run check:sdk                                   # starts `fastbrowse serve` from the uv environment
 uv run actionlint
 uv run python .sift/agents.py check
 uv run python .sift/gate.py --base origin/main
@@ -79,8 +83,14 @@ The run loop is `src/fastbrowse/agent.py`, and everything else is a seam it call
   from the task, then the answer's claims checked against the quotes.
 - **[safety.py](src/fastbrowse/safety.py)** owns secrets and irreversible actions. **[effects.py](src/fastbrowse/effects.py)** says what an action actually did,
   which is how a no-op is told from progress. **[telemetry.py](src/fastbrowse/telemetry.py)** is the ledger: steps, calls, dollars.
-- **[cli.py](src/fastbrowse/cli.py)**, **[mcp_server.py](src/fastbrowse/mcp_server.py)** and **`run_task`** are the three entry points; [options.py](src/fastbrowse/options.py) holds the rules
-  they share, so a flag means the same thing in all of them.
+- **[cli.py](src/fastbrowse/cli.py)**, **[mcp_server.py](src/fastbrowse/mcp_server.py)**, **[serve.py](src/fastbrowse/serve.py)** and **`run_task`** are the four entry points; [options.py](src/fastbrowse/options.py) holds the rules
+  they share, so a flag means the same thing in all of them. `serve` is `fastbrowse serve --stdio`: it calls
+  `run_task` for another process over JSON-RPC, one run at a time, and adds no agent logic. Its messages are the
+  models in [protocol.py](src/fastbrowse/protocol.py); [output_schema.py](src/fastbrowse/output_schema.py) turns a caller's JSON Schema into an `output_schema`.
+- **[packages/sdk](packages/sdk)** is the TypeScript SDK, `fastbrowse` on npm. It starts `serve` and knows the agent by
+  the protocol alone; [its types](packages/sdk/src/protocol.ts) are generated from the Python models (`npm run generate:sdk`).
+  What it starts is the package frozen by [packaging/fastbrowse.spec](packaging/fastbrowse.spec), without the MCP server, shipped as one
+  `@fastbrowse/<os>-<arch>` npm package per platform.
 
 ## Rules and invariants
 
@@ -144,15 +154,24 @@ Single-context: one glossary and one ADR directory at the repo root, created on 
 Versions are patch-by-patch unless the maintainer says otherwise, and every one needs a changelog entry:
 
 1. Add the entry under the new version's heading in `CHANGELOG.md` (Keep a Changelog, prose bullets).
-2. `uv version <x.y.z>`, then open a `chore: <x.y.z>` PR. CI fails if the version has no entry.
+2. `uv version <x.y.z>`, then `uv run python scripts/npm_versions.py --write`, which gives the SDK's manifest
+   the same number. Open a `chore: <x.y.z>` PR. CI fails if the version has no entry or npm disagrees with it.
 3. After it merges, `git tag v<x.y.z> && git push origin v<x.y.z>`.
 
 A release that publishes or changes a comparison figure also needs the fixture suites green on the release build
 (`.github/workflows/evals.yml` fails on any regression) and, for a head-to-head figure, the comparison re-run on
 that same build.
 
-The tag builds, creates the GitHub release with **the changelog entry as its notes**, publishes to PyPI by
-trusted publishing, and then asks fastbrowse.ai to rebuild, since its changelog page reads this file at build
+One tag publishes one version to PyPI and npm (`.github/workflows/release.yml`). It first builds the wheel
+and the five binaries, smoke-tests each, and signs and notarizes the macOS two (`scripts/macos_sign.py`). Then,
+each step needing the one before: the GitHub release with **the changelog entry as its notes**, PyPI, the five
+platform packages, the SDK. PyPI and npm take the job's OIDC identity, so no token is stored; the certificate
+and notary credentials are secrets of the `apple-signing` environment. No registry takes a version back, so
+finish a release that failed partway by re-running its failed jobs. Started by hand
+(`gh workflow run release.yml --ref <branch>`), the workflow stops after signing and publishes nothing: do
+that after changing the build or the signing.
+
+After PyPI the workflow asks fastbrowse.ai to rebuild, since its changelog page reads this file at build
 time. `scripts/changelog.py` is what reads the entry, so the repository, the release and the site never tell
 three stories about one version. `.github/workflows/site.yml` asks for the same rebuild whenever
 `CHANGELOG.md`, `README.md` or `docs/` change on `main`, so the site never waits for a release to catch up. It

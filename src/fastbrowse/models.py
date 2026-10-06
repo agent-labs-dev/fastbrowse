@@ -1,12 +1,13 @@
 """Run-level contracts: what a caller passes in and what a run returns."""
 
+import base64
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Annotated, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, PlainSerializer
 
 
 class Frozen(BaseModel):
@@ -345,10 +346,20 @@ class ArtifactSink(Protocol):
     async def put(self, kind: ArtifactKind, name: str, mime_type: str, content: bytes) -> Artifact: ...
 
 
+def _as_base64(image: bytes) -> str:
+    return base64.b64encode(image).decode("ascii")
+
+
+# Pydantic writes bytes into JSON as UTF-8, which an image is not, so a model holding one could not be dumped
+# at all. The standard alphabet, not pydantic's URL-safe one: it is what a browser's `atob` reads.
+Image = Annotated[bytes, PlainSerializer(_as_base64, return_type=str, when_used="json")]
+"""The bytes of a PNG or JPEG. In JSON they are base64."""
+
+
 class StepEvent(Frozen):
     type: Literal["step"] = "step"
     step: StepResult
-    frame: bytes | None = None
+    frame: Image | None = None
     """A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not,
     and also when a resolved secret was showing as page text: pixels cannot be masked the way text is."""
 

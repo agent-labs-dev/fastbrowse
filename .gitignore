@@ -4,6 +4,8 @@ __pycache__/
 .env
 artifacts/
 dist/
+# PyInstaller's work directory.
+build/
 .pytest_cache/
 .ruff_cache/
 

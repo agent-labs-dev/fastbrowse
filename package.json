@@ -2,9 +2,18 @@
   "name": "fastbrowse-dev",
   "private": true,
   "scripts": {
-    "check:browser": "biome ci src/fastbrowse/browser/capture.js src/fastbrowse/browser/snapshot.js"
+    "check:browser": "biome ci src/fastbrowse/browser/capture.js src/fastbrowse/browser/snapshot.js",
+    "generate:sdk": "node packages/sdk/scripts/generate-types.ts",
+    "check:sdk": "biome ci packages/sdk && npm --prefix packages/sdk run typecheck && npm --prefix packages/sdk test"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.15"
+    "@biomejs/biome": "2.5.15",
+    "@standard-schema/spec": "1.1.0",
+    "@types/node": "20.19.43",
+    "arktype": "2.2.7",
+    "json-schema-to-typescript": "16.0.0",
+    "typescript": "7.0.2",
+    "valibot": "1.5.0",
+    "zod": "4.6.5"
   }
 }

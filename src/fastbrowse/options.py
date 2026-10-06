@@ -1,6 +1,8 @@
-"""The rules an entry point applies to what its operator asked for, written once for the CLI and the MCP server.
+"""The rules an entry point applies to what its operator asked for, written once for the CLI, the MCP server and
+`serve`.
 
-Both take the same flags for the browser and for secrets, and both had their own copy of what those flags mean.
+The CLI and the MCP server take the same flags for the browser and for secrets, and both had their own copy of
+what those flags mean. `serve` takes the browser ones as fields of a `run` request.
 A rule with two copies is a rule that can come to mean two things: the MCP server would keep letting `--headed`
 unset `FASTBROWSE_HEADED` long after the CLI stopped, and nothing would fail.
 """
@@ -8,29 +10,86 @@ unset `FASTBROWSE_HEADED` long after the CLI stopped, and nothing would fail.
 import argparse
 import hashlib
 import os
+import shutil
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastbrowse.clients.environment import ConfigurationError, Settings
-from fastbrowse.models import LocalChrome, SecretValue, StepResult
+from fastbrowse.models import CostBreakdown, LocalChrome, RunResult, SecretValue, Status, StepResult
 
 
-def cloud(local: bool, chrome: LocalChrome, cloud_profile: str | None) -> bool:
+def cloud(local: bool, chrome: LocalChrome, cloud_profile: str | None, proxy_country: str | None = None) -> bool:
     """Browser Use Cloud unless the operator asked for local Chrome: `--local`, or a headed window or kept profile,
     which only local Chrome has, whether from its flag or from FASTBROWSE_HEADED / FASTBROWSE_PROFILE.
 
     Cloud is the default: its browsers pass bot checks a fresh local Chrome fails, and they carry none of a desktop
     Chrome's own interface (see `_quiet_password_manager`).
+
+    A cloud profile or a country asked of local Chrome is refused: the run would start signed out, or browse from
+    this machine's address, and report neither.
     """
     on_cloud = not (local or chrome.headed or chrome.profile is not None)
-    if cloud_profile is not None and not on_cloud:
-        raise ConfigurationError(
-            "--cloud-profile needs the cloud browser: drop it, or drop --local, --headed and --profile "
-            "(and FASTBROWSE_HEADED / FASTBROWSE_PROFILE)"
-        )
+    for flag, value in (("--cloud-profile", cloud_profile), ("--proxy-country", proxy_country)):
+        if value is not None and not on_cloud:
+            raise ConfigurationError(
+                f"{flag} needs the cloud browser: drop it, or drop --local, --headed and --profile "
+                "(and FASTBROWSE_HEADED / FASTBROWSE_PROFILE)"
+            )
     return on_cloud
+
+
+def handed_over(
+    cdp_url: str | None,
+    cdp_port: int | None,
+    *,
+    attach: bool,
+    target_match: str | None,
+    local: bool,
+    cloud_asked: bool = False,
+    chrome: LocalChrome,
+    cloud_profile: str | None,
+    proxy_country: str | None,
+) -> bool:
+    """Whether the run drives a browser the operator already runs, named by URL or by port.
+
+    Attaching replaces every option that shapes a started browser, so combining them is refused the way
+    `--cloud-profile` on local Chrome is: as a configuration error, before any browser work. `--headed` and
+    `--profile` count from FASTBROWSE_HEADED / FASTBROWSE_PROFILE too, which `chrome` already reflects.
+    """
+    if cdp_url is not None and cdp_port is not None:
+        raise ConfigurationError("--cdp-url and --cdp-port both name a browser to attach to; pass one")
+    if cdp_url is None and cdp_port is None:
+        if attach or target_match is not None:
+            raise ConfigurationError("--attach and --target-match need --cdp-url or --cdp-port")
+        return False
+    flag = "--cdp-url" if cdp_url is not None else "--cdp-port"
+    conflicts = [
+        conflict
+        for conflict, on in (
+            ("--local", local),
+            ("--cloud", cloud_asked),
+            ("--headed", chrome.headed),
+            ("--profile", chrome.profile is not None),
+            ("--cloud-profile", cloud_profile is not None),
+            ("--proxy-country", proxy_country is not None),
+        )
+        if on
+    ]
+    if conflicts:
+        raise ConfigurationError(f"{flag} attaches to a browser already running; drop {', '.join(conflicts)}")
+    if cdp_url is not None and not cdp_url.startswith(("ws://", "wss://")):
+        raise ConfigurationError(f"--cdp-url expects a ws:// or wss:// URL, got {cdp_url!r}")
+    if cdp_port is not None and not 0 < cdp_port < 65536:
+        raise ConfigurationError(f"--cdp-port expects a port from 1 to 65535, got {cdp_port}")
+    return True
+
+
+def recording(record: Path | None) -> None:
+    """A recording is encoded by ffmpeg, and without it the run would browse to the end and save nothing."""
+    if record is not None and shutil.which("ffmpeg") is None:
+        raise ConfigurationError("--record needs ffmpeg on PATH")
 
 
 def country_code(value: str) -> str:
@@ -44,15 +103,30 @@ def country_code(value: str) -> str:
     return code
 
 
-def browser_key(settings: Settings, cloud: bool) -> str | None:
+def proxy_country(asked: str | None) -> str:
+    """The country a cloud browser browses from: the one asked for, and the United States when none was."""
+    return "us" if asked is None else asked
+
+
+def browser_key(settings: Settings, on_cloud: bool) -> str | None:
     """The cloud browser's key when the run wants one; None runs local Chrome."""
-    return settings.browser_key() if cloud else None
+    return settings.browser_key() if on_cloud else None
 
 
-def chrome(settings: Settings, headed: bool, profile: Path | None) -> LocalChrome:
-    """The flags add to FASTBROWSE_HEADED and FASTBROWSE_PROFILE; they cannot unset them."""
+def chrome(settings: Settings, headed: bool, profile: Path | None, binary: str | None = None) -> LocalChrome:
+    """The flags add to FASTBROWSE_HEADED and FASTBROWSE_PROFILE; they cannot unset them.
+
+    `binary` replaces FASTBROWSE_CHROME instead: each names one program, and a caller who names one for this run
+    means that one.
+    """
     local = settings.local_chrome()
-    return local.model_copy(update={"headed": headed or local.headed, "profile": profile or local.profile})
+    return local.model_copy(
+        update={
+            "binary": binary or local.binary,
+            "headed": headed or local.headed,
+            "profile": profile or local.profile,
+        }
+    )
 
 
 def env_secret(pair: str) -> tuple[str, str]:
@@ -100,6 +174,24 @@ def merged_secrets(values: Mapping[str, SecretValue], vault: Mapping[str, Secret
     if clash := values.keys() & vault.keys():
         raise ValueError(f"a declared secret and the vault item both set {', '.join(sorted(clash))}")
     return {**values, **vault}
+
+
+def error_result(error: str) -> RunResult:
+    """A run with nothing to report but why it failed, in the shape of any other, so a caller branches on `status`.
+
+    It stands for a run the CLI never started, and for one `serve` saw end on an exception, whose browser has
+    closed by then: what that run did is in the events already sent.
+    """
+    return RunResult(
+        status=Status.ERROR,
+        answer=None,
+        data=None,
+        evidence=(),
+        steps=(),
+        cost=CostBreakdown(lines=()),
+        artifacts=(),
+        error=error,
+    )
 
 
 def step_label(step: StepResult) -> str:
