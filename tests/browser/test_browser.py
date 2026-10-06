@@ -951,3 +951,20 @@ async def test_icon_only_buttons_keep_their_named_glyphs(
         "Product",
         "heart icon",
     ]
+
+
+async def test_a_button_wrapped_in_a_link_is_offered_once(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        'document.body.innerHTML = \'<a href="/icons.html"><button type="button">Continue</button></a>\';',
+    )
+    observation = await observe_until(page, "Continue")
+    controls = [control for control in observation.controls if control.label == "Continue"]
+    assert len(controls) == 1
+    result = await page.act(Action(operation=Operation.CLICK, target_id=controls[0].id), observation)
+    assert result.outcome is StepOutcome.EXECUTED
+    assert (await page.observe()).url.endswith("/icons.html")

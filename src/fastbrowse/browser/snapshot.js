@@ -390,6 +390,14 @@
       rname = roleOf(e);
     if (!rname || r.width <= 0 || r.height <= 0 || x < 0 || x >= innerWidth) continue;
     if (rname === 'gridcell' && e.querySelector('button,[role="button"]')) continue;
+    // A button-styled link offers the same label twice, but its inner button owns every useful click point.
+    if (rname === 'link') {
+      const nested = e.querySelectorAll(SELECTOR);
+      const button = nested.length === 1 ? nested[0] : null;
+      if (button?.tagName === 'BUTTON' && visible(button) && !button.matches(':disabled') &&
+          !button.closest('[aria-disabled="true"],[inert]') && labelOf(button) === labelOf(e)) continue;
+    }
+
     const id = identity(e);
     registry.controls.add(e);
     const base = {
