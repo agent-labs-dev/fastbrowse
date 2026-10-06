@@ -962,6 +962,34 @@ async def test_recovery_can_direct_a_page_operation_with_no_control_to_name(oper
     assert followed is not None and followed.operation is operation and followed.target is None
 
 
+async def test_recovery_can_return_from_a_guessed_address_after_the_opening_leaves_recent_history() -> None:
+    state = await run_state()
+    state.started_url = "https://catalogue.test/entry"
+    guessed = "https://catalogue.test/resources/?category=unknown"
+    state.invented = {guessed}
+    state.history.extend(
+        HistoryEntry(operation=Operation.READ, target=None, outcome=StepOutcome.EXECUTED, page_changed=False)
+        for _ in range(20)
+    )
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"png")
+    llm = ScriptedLLM(
+        [
+            {
+                "diagnosis": "the guessed filter is empty",
+                "next_subgoal": "Go back to the entry page",
+                "give_up": False,
+                "operation": "back",
+                "control": None,
+            }
+        ]
+    )
+    await Agent(page, ScriptedJev({}), llm)._recover(state, _at(guessed), "the filters changed nothing")
+
+    assert state.started_url in llm.calls[0][1][1].content
+    assert state.directed == (Operation.BACK, None)
+
+
 @pytest.mark.parametrize("recover_below", [0.55, 1.0])
 async def test_directed_done_still_requires_verification_after_an_exhausted_read(recover_below: float) -> None:
     state = await run_state()
@@ -2027,6 +2055,34 @@ async def test_a_read_waits_for_an_empty_page_to_draw_and_never_reads_nothing(
     read_text = agent._read.await_args.args[1].text
     assert read_text == ("httpx 0.28.1" if draws else "")
     assert llm.calls == []
+
+
+@pytest.mark.parametrize("acted", [False, True])
+@pytest.mark.parametrize("shortcut", [False, True])
+async def test_a_blank_opening_reloads_once_without_repeating_an_action(acted: bool, shortcut: bool) -> None:
+    state = await run_state()
+    if acted:
+        state.history.append(
+            HistoryEntry(operation=Operation.FILL, target="Email", outcome=StepOutcome.EXECUTED, page_changed=False)
+        )
+    page = Mock(spec=Page)
+    page.navigate = AsyncMock()
+    llm = ScriptedLLM([])
+    agent = Agent(page, ScriptedJev({}), llm)
+    agent._outwait = AsyncMock(return_value=False)
+    blank = _at("https://account.test/")
+    state.started_url = "https://account.test/start" if shortcut else blank.url
+    if shortcut:
+        state.invented.add(blank.url)
+
+    assert await agent._settle_blank_opening(state, blank) is not acted
+    assert await agent._settle_blank_opening(state, blank) is False
+    assert page.navigate.await_count == (0 if acted else 1)
+    if not acted:
+        page.navigate.assert_awaited_once_with(blank.url, back_to=state.started_url if shortcut else None)
+    assert agent._outwait.await_count == (0 if acted else 1)
+    assert llm.calls == []
+    assert len(state.history) == int(acted)
 
 
 @pytest.mark.parametrize("twins", [1, 2])

@@ -327,6 +327,7 @@ class _RunState:
     """Controls a fill or select has written, by document, so only a field's first new value counts as progress by
     itself. A new document restarts control ids, and its fields would otherwise inherit the last page's writes."""
     recoveries: int = 0
+    blank_opening_checked: bool = False
     recovery_log: deque[str] = field(default_factory=lambda: deque(maxlen=_RECOVERY_RECORDS))
     recovered_at: int = 0
     """`len(history)` when a tripwire last recovered the run. Evidence a recovery already acted on is
@@ -660,6 +661,8 @@ class Agent:
                     await self._recover(state, observation, _read_exhausted(state))
                 continue
             raw = self._raw_observation or observation
+            if not _drew_something(raw) and await self._settle_blank_opening(state, raw):
+                continue
             origin = origin_of(raw.url)
             page = (raw.url, raw.document_key)
             if state.planning.done():
@@ -739,11 +742,6 @@ class Agent:
                         decision.model_copy(update={"operation": Operation.READ, "target": None}),
                         False,
                     )
-            if uncertain and not _drew_something(raw) and await self._outwait(raw):
-                # A blank page and no idea what to do is a page still rendering: a script-built app settles before it
-                # draws, and recovery on it saw an empty login form and spent 5 to 13s saying so. A page with text is
-                # drawn: waiting on the-internet's bare "New Window" page cost every run the whole 12s.
-                continue
             if uncertain and state.ready_plan is None:
                 # Unsure without the requirements: the plan is already in flight and costs less than recovery.
                 await state.await_plan()
@@ -938,6 +936,25 @@ class Agent:
             if (await self._observe()).page_key != stuck.page_key:
                 return True
         return False
+
+    async def _settle_blank_opening(self, state: _RunState, observation: Observation) -> bool:
+        if state.blank_opening_checked or any(entry.operation is not None for entry in state.history):
+            return False
+        state.blank_opening_checked = True
+        if await self._outwait(observation):
+            return True
+        # A cold app can leave the first document blank after the loading wait. Reloading once gives its
+        # scripts another chance, but doing so after an interaction could discard a form or repeat a submission.
+        if (
+            state.started_url is None
+            or urlsplit(observation.url).scheme not in {"http", "https"}
+            or (observation.response_status is not None and observation.response_status >= 400)
+        ):
+            return False
+        trace("blank_reload", url=observation.url)
+        back_to = state.started_url if observation.url in state.invented else None
+        await self._page.navigate(observation.url, back_to=back_to)
+        return True
 
     async def _step(
         self,
@@ -2500,6 +2517,10 @@ class Agent:
                         "use the recent steps to judge whether to try another way. "
                         "For a covered control, dismiss the observed overlay before trying the underlying "
                         "control again. Do not alternate the same blocked click with scrolling. "
+                        "For a reversible filter, tab or sort selection, an unchanged selection and result "
+                        "set do not prove the click took effect. If that selection is still required and its "
+                        "control is visible, retry the selection rather than scrolling to look for results "
+                        "that never changed. This does not permit repeating a transaction or submission. "
                         "For a fill correction, return its exact non-secret task value in text, bound to the "
                         "chosen control. Use field semantics rather than a validation message as its identity. "
                         "A successful submission may have changed the page before it was read. Read and check "
@@ -2507,6 +2528,9 @@ class Agent:
                         "uncertain report. Manage an existing transaction through its observed controls or links. "
                         "HTTP failures describe this browser session, not what the site permits in general. "
                         "Failed links are withheld on unchanged source pages; use another observed route or stop. "
+                        "An opening shortcut is a guessed address. If its page leaves requirements open and "
+                        "its controls change nothing, use back toward the caller's start page and choose from "
+                        "the controls there instead of repeating actions on the guessed page. "
                         "Dates are relative to the supplied current date.\n\n"
                         f"# Trust\n{UNTRUSTED}"
                     ),
@@ -2517,6 +2541,8 @@ class Agent:
                         f"## Controls\n{_controls_text(_without_failed_links(state, observation))}\n\n"
                         f"## Page\n{observation.url}\nHTTP status: {observation.response_status}\n"
                         f"{observation.viewport_text}{secrets}\n\n"
+                        f"## Caller start page\n{self._redactor.redact(state.started_url or state.first_url or '')}\n\n"
+                        f"## Current address was proposed\n{observation.url in state.invented}\n\n"
                         f"## HTTP failure\n{state.http_failure.message if state.http_failure else 'none'}\n\n"
                         "## Notes read so far\n"
                         f"{state.notes.render(self._config.observation.working_notes_chars) or 'none'}\n\n"
