@@ -314,3 +314,41 @@ def test_cdp_port_must_be_a_port(
         cli.main()
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "error" and "--cdp-port expects a port from 1 to 65535" in result["error"]
+
+
+@pytest.mark.parametrize(
+    ("argv", "task"),
+    [
+        (["serve the invoices page"], "serve the invoices page"),
+        (["server"], "server"),
+        (["--cdp-port", "9222", "serve"], "serve"),
+    ],
+    ids=["a task that starts with the word", "a task that contains it", "the word after a flag"],
+)
+def test_only_serve_as_the_first_argument_is_the_subcommand(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], task: str
+) -> None:
+    # `serve` is taken as a subcommand in one position only, so every other command line is still a task.
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None))
+    tasks = []
+
+    async def fake_run_task(task: str, **kwargs: object) -> RunResult:
+        tasks.append(task)
+        return RunResult(
+            status=Status.COMPLETE,
+            answer="ok",
+            data=None,
+            evidence=(),
+            steps=(),
+            cost=CostBreakdown(lines=()),
+            artifacts=(),
+            error=None,
+        )
+
+    monkeypatch.setattr(cli, "run_task", fake_run_task)
+    cdp = [] if "--cdp-port" in argv else ["--cdp-url", "ws://browser.test/devtools"]
+    monkeypatch.setattr("sys.argv", ["fastbrowse", *argv, *cdp])
+    with pytest.raises(SystemExit) as exit_:
+        cli.main()
+    assert exit_.value.code == 0
+    assert tasks == [task]

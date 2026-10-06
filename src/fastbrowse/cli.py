@@ -13,6 +13,9 @@ Secrets come from `--secret NAME=ENV_VAR`, read from that variable, or `--bitwar
 `--secret NAME=ENV_VAR@ORIGIN` declares an exact or wildcard origin; without it, the scope is the `--start`
 origin. A secret with neither is refused. Bitwarden matches the item against `--start` and limits its values to
 that origin.
+
+`fastbrowse serve --stdio` is a different program on the same command: it serves runs to another process over
+JSON-RPC, and is `serve.py`.
 """
 
 import argparse
@@ -26,7 +29,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from fastbrowse import options
+from fastbrowse import options, serve
 from fastbrowse.adapters.bitwarden import BitwardenError, bitwarden_login
 from fastbrowse.clients.environment import ConfigurationError, load_settings
 from fastbrowse.models import (
@@ -319,6 +322,9 @@ def _refused(error: str) -> RunResult:
 
 
 def main() -> None:
+    # Only as the first argument, so a task that mentions the word, or `--local serve`, is still a task.
+    if sys.argv[1:2] == ["serve"]:
+        sys.exit(serve.main(sys.argv[2:]))
     args = _parse(sys.argv[1:])
     # Retries, failovers and a recording that could not be written are warnings; say whose they are.
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING, format="fastbrowse: %(levelname)s %(message)s")
