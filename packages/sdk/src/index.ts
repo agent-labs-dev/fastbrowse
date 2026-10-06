@@ -1,4 +1,4 @@
-export { FastbrowseError, ProcessExitedError, RpcError } from './errors.ts';
+export { AbortError, FastbrowseError, ProcessExitedError, RpcError } from './errors.ts';
 export { type CloseOptions, Fastbrowse, type StartOptions } from './fastbrowse.ts';
 // The result and the events are the wire's own shapes, so their fields keep the Python models' snake_case names.
 export type {
