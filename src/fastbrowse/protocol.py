@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
-from fastbrowse.models import Authorization, BrowserEvent, Limits, LocalChrome, StepEvent
+from fastbrowse.models import Authorization, BrowserEvent, Limits, LocalChrome, SecretRef, StepEvent
 
 # Changes only when the wire format does, so it is not the package version: a release that leaves the
 # messages alone leaves this alone, and an SDK can tell a binary it cannot talk to from one that is merely newer.
@@ -25,6 +25,7 @@ class Method(StrEnum):
 
     INITIALIZE = "initialize"
     RUN = "run"
+    RUN_CANCEL = "run/cancel"
     SHUTDOWN = "shutdown"
 
 
@@ -32,6 +33,7 @@ class ServerMethod(StrEnum):
     """What the server sends without being asked."""
 
     RUN_EVENT = "run/event"
+    SECRETS_RESOLVE = "secrets/resolve"
 
 
 class ErrorCode(IntEnum):
@@ -126,6 +128,8 @@ class RunParams(Params):
     attachments: tuple[RunAttachment, ...] = ()
     limits: Limits | None = None
     authorization: Authorization | None = None
+    secrets: tuple[SecretRef, ...] = ()
+    """The secrets the client holds, by name and origin. A value is asked for with `secrets/resolve`."""
     downloads: Path | None = None
     record: Path | None = None
     local: bool = False
@@ -142,6 +146,16 @@ class RunParams(Params):
     cloud_allow_resizing: bool = False
 
 
+class RunCancelParams(Params):
+    """Which run to stop. One that is not active, because it finished or never was, is left as it is.
+
+    The reply says only that the request was read. The run's own reply is what says it was cancelled: the
+    `cancelled` error, written after its browser has closed.
+    """
+
+    run_id: str
+
+
 class RunEvent(BaseModel):
     """The params of `run/event`: one thing a run did, written before that run's reply."""
 
@@ -155,3 +169,25 @@ class Notification(BaseModel):
     jsonrpc: Literal["2.0"] = "2.0"
     method: ServerMethod
     params: Any
+
+
+class ServerRequest(BaseModel):
+    """A call from the server that the client answers, with a `Response` or an `ErrorResponse` carrying its id.
+
+    The ids are the server's own and count up from one. A client's ids may be the same numbers: a reply is
+    told from a request by having no `method`, so the two never meet.
+    """
+
+    jsonrpc: Literal["2.0"] = "2.0"
+    id: int
+    method: ServerMethod
+    params: Any
+
+
+class SecretsResolveParams(BaseModel):
+    """The params of `secrets/resolve`: one value the run is about to type. The reply is the value, or null."""
+
+    run_id: str
+    name: str
+    origin: str
+    """Where it will be typed. The server has already checked it against the origins the ref declared."""

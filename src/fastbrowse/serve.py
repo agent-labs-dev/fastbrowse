@@ -21,12 +21,12 @@ from importlib.metadata import version
 from typing import Any, Protocol
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from fastbrowse import options
 from fastbrowse.adapters.local_chrome import find_chrome
 from fastbrowse.clients.environment import ConfigurationError, Settings, load_settings
-from fastbrowse.models import Attachment, BrowserEvent, LocalChrome, RunResult, StepEvent
+from fastbrowse.models import Attachment, BrowserEvent, LocalChrome, RunResult, SecretRef, StepEvent
 from fastbrowse.protocol import (
     PROTOCOL_VERSION,
     Error,
@@ -40,11 +40,15 @@ from fastbrowse.protocol import (
     Request,
     RequestId,
     Response,
+    RunCancelParams,
     RunEvent,
     RunParams,
+    SecretsResolveParams,
     ServerMethod,
+    ServerRequest,
 )
 from fastbrowse.run import run_task
+from fastbrowse.safety import secret_allowed
 
 log = logging.getLogger(__name__)
 
@@ -142,6 +146,48 @@ class Refused(Exception):
         self.message = message
 
 
+class ClientError(Exception):
+    """The client failed one of the server's requests: an error reply, or a result of the wrong shape.
+
+    Raised where the answer was awaited, which is inside the run's callback.
+    """
+
+    def __init__(self, method: ServerMethod, message: str, code: int | None = None) -> None:
+        super().__init__(f"{method}: {message}")
+        self.method = method
+        self.message = message
+        self.code = code
+        """The code of the client's error reply. None when the client replied with a result that could not be used."""
+
+
+type Ask = Callable[[str, str], Awaitable[str | None]]
+"""Ask whoever holds a secret for its value, by name and origin."""
+
+
+class ClientSecrets:
+    """A run's `SecretResolver` for values the client holds. Each one is asked for as it is typed, and none is kept.
+
+    The origin rule is applied here, ahead of the question: a client asked about an origin its ref does not
+    cover would have to apply the rule a second time to refuse, and the two could disagree.
+    """
+
+    def __init__(self, refs: tuple[SecretRef, ...], ask: Ask) -> None:
+        self._refs = refs
+        self._ask = ask
+
+    def available(self) -> tuple[SecretRef, ...]:
+        return self._refs
+
+    async def resolve(self, name: str, origin: str) -> str | None:
+        ref = next((ref for ref in self._refs if ref.name == name), None)
+        if ref is None or not secret_allowed(ref, origin):
+            return None
+        return await self._ask(name, origin)
+
+
+_SECRET_VALUE: TypeAdapter[str | None] = TypeAdapter(str | None)
+
+
 @dataclass(frozen=True)
 class _Handler[P: BaseModel]:
     params: type[P]
@@ -173,10 +219,16 @@ class Server:
         self._closing = False
         # The id of the run in progress. One at a time: a caller that wants more starts more processes.
         self._active: str | None = None
+        # The task answering it, until the run ends or is cancelled.
+        self._running: asyncio.Task[None] | None = None
         self._answering: set[asyncio.Task[None]] = set()
+        # The server's own requests that the client has not answered yet, by the id each was sent with.
+        self._asked = 0
+        self._pending: dict[int, tuple[ServerMethod, asyncio.Future[Any]]] = {}
         self._handlers: dict[Method, _Handler[Any]] = {
             Method.INITIALIZE: _Handler(InitializeParams, self._initialize),
             Method.RUN: _Handler(RunParams, self._run, background=True),
+            Method.RUN_CANCEL: _Handler(RunCancelParams, self._run_cancel),
             Method.SHUTDOWN: _Handler(NoParams, self._shutdown),
         }
 
@@ -190,9 +242,9 @@ class Server:
             while not self._closing and (line := await self._transport.receive()) is not None:
                 await self._receive(line)
         finally:
-            # A run outlives the loop that started it, and cancelling it is what closes its browser.
-            for task in self._answering:
-                task.cancel()
+            # A run outlives the loop that started it. Cancelling it closes its browser, and the process stays
+            # until that is done and the run is answered.
+            self._cancel_run()
             await asyncio.gather(*self._answering, return_exceptions=True)
         return 0
 
@@ -201,6 +253,9 @@ class Server:
             payload = json.loads(line)
         except ValueError as exc:
             await self._write(ErrorResponse(id=None, error=Error(code=ErrorCode.PARSE_ERROR, message=str(exc))))
+            return
+        if isinstance(payload, dict) and "method" not in payload and ("result" in payload or "error" in payload):
+            self._settle(payload)
             return
         try:
             request = Request.model_validate(payload)
@@ -215,7 +270,9 @@ class Server:
             return
         answering = self._answer(request, handler.call(params))
         if handler.background:
-            task = asyncio.create_task(answering)
+            # Started here and not on the loop's next turn, so a `run/cancel` or the end of input on the
+            # next line finds the run under way.
+            task = asyncio.Task(answering, loop=asyncio.get_running_loop(), eager_start=True)
             self._answering.add(task)
             task.add_done_callback(self._answering.discard)
         else:
@@ -264,6 +321,7 @@ class Server:
         if self._active is not None:
             raise Refused(ErrorCode.BUSY, f"run {self._active!r} is still active, and a server runs one at a time")
         self._active = params.run_id
+        self._running = asyncio.current_task()
 
         async def on_event(event: StepEvent | BrowserEvent) -> None:
             # The run waits for this before it goes on, which puts the events on the wire in order and ahead of
@@ -274,8 +332,21 @@ class Server:
             return await self._runner(params.task, **await self._arguments(params), on_event=on_event)
         except ConfigurationError as exc:
             raise Refused(ErrorCode.CONFIGURATION, str(exc)) from None
+        except asyncio.CancelledError:
+            # The runner has unwound by now, and that is what closed its browser.
+            raise Refused(ErrorCode.CANCELLED, f"run {params.run_id!r} was cancelled") from None
         finally:
-            self._active = None
+            self._active = self._running = None
+
+    async def _run_cancel(self, params: RunCancelParams) -> None:
+        if params.run_id == self._active:
+            self._cancel_run()
+
+    def _cancel_run(self) -> None:
+        # Once per run. A second cancellation would land in the runner while it is closing the browser.
+        running, self._running = self._running, None
+        if running is not None:
+            running.cancel()
 
     async def _arguments(self, params: RunParams) -> dict[str, Any]:
         """A `run` request as `run_task`'s arguments, or the reason it cannot become a run.
@@ -330,12 +401,69 @@ class Server:
             ),
             "limits": params.limits,
             "authorization": params.authorization,
+            "secrets": self._secrets(params),
             "downloads": params.downloads,
             "record": params.record,
         }
 
+    def _secrets(self, params: RunParams) -> ClientSecrets | None:
+        async def ask(name: str, origin: str) -> str | None:
+            asked = SecretsResolveParams(run_id=params.run_id, name=name, origin=origin)
+            return await self._request(ServerMethod.SECRETS_RESOLVE, asked, _SECRET_VALUE)
+
+        return ClientSecrets(params.secrets, ask) if params.secrets else None
+
     async def _notify(self, method: ServerMethod, params: BaseModel) -> None:
         await self._write(Notification(method=method, params=params))
+
+    async def _request[R](self, method: ServerMethod, params: BaseModel, result: TypeAdapter[R]) -> R:
+        """Ask the client, and wait for its answer as long as it takes.
+
+        There is no timeout here. What is waiting is a run, and its `max_seconds` already bounds it. An error
+        reply raises `ClientError`, and so does a result that is not what `result` describes.
+        """
+        self._asked += 1
+        request_id = self._asked
+        reply: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        self._pending[request_id] = (method, reply)
+        try:
+            await self._write(ServerRequest(id=request_id, method=method, params=params))
+            answer = await reply
+        finally:
+            del self._pending[request_id]
+        try:
+            return result.validate_python(answer, strict=True)
+        except ValidationError as exc:
+            # Named by what was expected and never by what came: the answer may be a secret's value.
+            problems = "; ".join(error["msg"] for error in exc.errors(include_input=False))
+            raise ClientError(method, f"the result cannot be used: {problems}") from None
+
+    def _settle(self, reply: dict[str, Any]) -> None:
+        """Hand a reply from the client to the request that is waiting for it.
+
+        Nothing of the reply is logged, and nothing is written back: its result may be a secret's value, and
+        JSON-RPC has no answer to an answer.
+        """
+        request_id = _id_of(reply)
+        pending = self._pending.get(request_id) if isinstance(request_id, int) else None
+        if pending is None or pending[1].done():
+            # A run that was stopped while its question was out leaves the answer with nobody to take it.
+            log.debug("serve: a reply to no request")
+            return
+        method, waiting = pending
+        # Some clients write both members and leave the unused one null.
+        if reply.get("error") is None:
+            waiting.set_result(reply.get("result"))
+            return
+        error = reply["error"] if isinstance(reply["error"], dict) else {}
+        code, message = error.get("code"), error.get("message")
+        waiting.set_exception(
+            ClientError(
+                method,
+                message if isinstance(message, str) else "the client replied with an error",
+                code if isinstance(code, int) and not isinstance(code, bool) else None,
+            )
+        )
 
     async def _write(self, message: BaseModel) -> None:
         await self._transport.send(message.model_dump_json().encode() + b"\n")
