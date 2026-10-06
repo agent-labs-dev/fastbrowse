@@ -2591,18 +2591,27 @@ async def test_tally_reader_requires_explicit_unfiltered_scope_and_revalidates_e
 
 
 @pytest.mark.parametrize(("stated", "value"), [(False, "1"), (True, "3"), (True, "999")])
-async def test_a_quoted_whole_list_total_can_answer_beside_an_unfinished_tally(stated: bool, value: str) -> None:
-    page = capture((BlockKind.LIST_ITEM, "Item A"), (BlockKind.PARAGRAPH, "Total matching items: 3"))
+@pytest.mark.parametrize("with_context", [False, True])
+async def test_a_quoted_whole_list_total_can_answer_beside_an_unfinished_tally(
+    stated: bool, value: str, with_context: bool
+) -> None:
+    page = capture(
+        (BlockKind.LIST_ITEM, "Item A"),
+        (BlockKind.PARAGRAPH, "Total matching items: 3"),
+        (BlockKind.PARAGRAPH, "Scope: all entries"),
+    )
     notes = Notes()
     record = Fact(reader=FactReader.LLM, text="Item A", evidence=block_evidence(page, "s0"))
     notes.add(record)
+    context = Fact(reader=FactReader.LLM, text="Scope: all entries", evidence=block_evidence(page, "s2"))
+    notes.add(context)
     tally = notes.add_tally(Tally(requirement_id="r", key="items", records=(fact_id(record),)))
     requirement = Requirement(id="r", text="Total item count", kind=RequirementKind.INFORMATION, count_records=True)
     claim: JsonValue = {
         "requirement_id": "r",
         "text": value,
         "cite": {"first": "s1", "last": "s1"} if stated else None,
-        "draws_on": [] if stated else [fact_id(tally)],
+        "draws_on": ([] if stated else [fact_id(tally)]) + ([fact_id(context)] if with_context else []),
     }
     await read(
         ScriptedLLM([{"claims": [claim], "answered": True}]),
@@ -2617,6 +2626,7 @@ async def test_a_quoted_whole_list_total_can_answer_beside_an_unfinished_tally(s
     if answered:
         fact = next(f for f in notes.facts if f.requirement_id == "r")
         assert fact.evidence is not None and fact.evidence.quote == "Total matching items: 3"
+        assert bool(fact.basis) is with_context
 
 
 async def test_tally_field_and_a_range_of_the_same_records_leave_no_untallied_basis() -> None:
@@ -3441,3 +3451,67 @@ async def test_a_malformed_tally_field_is_repaired_before_it_poisons_the_count(l
     assert len(llm.calls) == 2
     assert len(outcome.cost_lines) == 2
     assert ledger.llm_calls == 2 and ledger.breakdown().known_dollars == 0.002
+
+
+@pytest.mark.parametrize(
+    "basis_kind", ["tally", "record", "derived", "untracked", "claim_record", "continuation", "prior_context"]
+)
+async def test_a_partial_count_cannot_borrow_a_matching_number_from_page_context(basis_kind: str) -> None:
+    page = capture(
+        *((BlockKind.LIST_ITEM, f"Entry {label}") for label in ("A", "B", "C")),
+        (BlockKind.PARAGRAPH, "Page 3 of 10"),
+        (BlockKind.LIST_ITEM, "Another entry"),
+    )
+    notes = Notes()
+    records = [
+        Fact(reader=FactReader.LLM, text=f"Entry {label}", evidence=block_evidence(page, f"s{i}"))
+        for i, label in enumerate(("A", "B", "C"))
+    ]
+    for record in records:
+        notes.add(record)
+    tally = notes.add_tally(Tally(requirement_id="r", key="entries", records=tuple(fact_id(r) for r in records)))
+    basis = tally if basis_kind == "tally" else records[0]
+    if basis_kind == "derived":
+        basis = Fact(
+            reader=FactReader.LLM,
+            text="A contextual conclusion",
+            evidence=block_evidence(page, "s3"),
+            basis=(fact_id(records[0]),),
+        )
+        notes.add(basis)
+    elif basis_kind == "untracked":
+        basis = Fact(reader=FactReader.LLM, text="Another entry", evidence=block_evidence(page, "s4"))
+        notes.add(basis)
+    elif basis_kind == "continuation":
+        basis = Fact(reader=FactReader.LLM, text="Page 3 of 10", evidence=block_evidence(page, "s3"))
+        notes.add(basis)
+        notes.add_continuation("r", fact_id(basis))
+    elif basis_kind == "prior_context":
+        prior = capture((BlockKind.PARAGRAPH, "Scope: all entries"))
+        basis = Fact(reader=FactReader.LLM, text=prior.text, evidence=block_evidence(prior, "s0"))
+        notes.add(basis)
+    requirement = Requirement(id="r", text="Total entry count", kind=RequirementKind.INFORMATION, count_records=True)
+    await read(
+        ScriptedLLM(
+            [
+                {
+                    "claims": [
+                        {
+                            "requirement_id": "r",
+                            "text": "3",
+                            "cite": {"first": "s3", "last": "s3"},
+                            "draws_on": [] if basis_kind == "claim_record" else [fact_id(basis)],
+                            "records": [{"first": "s4", "last": "s4"}] if basis_kind == "claim_record" else [],
+                        }
+                    ],
+                    "answered": True,
+                }
+            ]
+        ),
+        page,
+        requirement.text,
+        ["r"],
+        notes,
+        requirements=[requirement],
+    )
+    assert not notes.evidenced("r")

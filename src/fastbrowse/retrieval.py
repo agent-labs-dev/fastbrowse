@@ -371,9 +371,29 @@ def _remember(
     return fact
 
 
-def _quoted_count(fact: Fact) -> bool:
-    if fact.evidence is None or fact.basis:
+def _quoted_count(fact: Fact, notes: Notes, records: Mapping[str, Fact], capture: Capture) -> bool:
+    if fact.evidence is None:
         return False
+    if fact.basis:
+        facts = {fact_id(value): value for value in notes.facts}
+        counted = set(records) | set(notes.comparison_records()) | {key for t in notes.tallies for key in t.records}
+        for key in fact.basis:
+            context = facts.get(key)
+            # Scope quotes may accompany a stated total; counted records cannot turn a page number into that total.
+            if key in counted or context is None or context.evidence is None or context.basis or context.tally:
+                return False
+            if context.evidence.capture_sha256 != capture.sha256:
+                return False
+            blocks = [b for b in capture.blocks if b.start < context.evidence.end and b.end > context.evidence.start]
+            if not blocks or any(
+                b.kind not in {BlockKind.HEADING, BlockKind.PARAGRAPH, BlockKind.LINK} for b in blocks
+            ):
+                return False
+            if any(
+                b.frame_id != context.evidence.frame_id or (b.source_url or capture.url) != context.evidence.url
+                for b in blocks
+            ):
+                return False
     numbers = re.findall(r"\b\d[\d,]*\b", fact.text)
     quoted = {number.replace(",", "") for number in re.findall(r"\b\d[\d,]*\b", fact.evidence.quote)}
     return len(numbers) == 1 and numbers[0].replace(",", "") in quoted
@@ -1068,7 +1088,7 @@ async def read(
             references[f"claim:{index}"] = fact_id(fact)
             requirement_id = claim.requirement_id if claim.requirement_id in requirement_ids else None
             if requirement_id in {t.requirement_id for t in notes.tallies} and not (
-                requirement_id in counting and _quoted_count(fact)
+                requirement_id in counting and _quoted_count(fact, so_far, records, capture)
             ):
                 # A derived total needs complete tallies. A total the page states has its own quote to verify.
                 requirement_id = None

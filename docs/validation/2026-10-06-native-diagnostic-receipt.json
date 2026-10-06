@@ -102,6 +102,71 @@
       "unknown_cost": 0,
       "git_sha": "afb218ef909a64b96ecc7ffa51314748cb624753",
       "dirty": true
+    },
+    {
+      "file": "native-repaired-clean-fixtures.jsonl",
+      "sha256": "974792c91e9d1092545105c656efb18de88fbc1563bbf8b0c62c582f22a08b8c",
+      "attempts": 96,
+      "passed": 94,
+      "dollars": 0.89668,
+      "unknown_cost": 0,
+      "git_sha": "875d376dd5c4b7e1a43c147be2824bb2ca223103",
+      "dirty": false
+    },
+    {
+      "file": "native-repair-trace-run.jsonl",
+      "sha256": "32750104fcac5f7fd042e56136013a13b75cd8bd06146fab2b2c7be01e4cc3f6",
+      "attempts": 1,
+      "passed": 1,
+      "dollars": 0.02697,
+      "unknown_cost": 0,
+      "git_sha": "875d376dd5c4b7e1a43c147be2824bb2ca223103",
+      "dirty": false
+    },
+    {
+      "file": "native-boundary-clean-fixtures.jsonl",
+      "sha256": "622a153305d7225a405b567ffe64c9c900d120330dda2e9a9c2eb90c024e0954",
+      "attempts": 96,
+      "passed": 95,
+      "dollars": 0.98626,
+      "unknown_cost": 0,
+      "git_sha": "60f57a6b7a902690c9fdaf3f6fc05e4d02617e88",
+      "dirty": false,
+      "max_dollars_per_attempt": 0.08,
+      "campaign_max_dollars": 1.5,
+      "parallel_repeats": 3
+    },
+    {
+      "file": "native-boundary-failure-run.jsonl",
+      "sha256": "656c2429e468b54b6eacc6b5ffcad1c29eb5c999a0f859c16b7cb5b5d3d4d7f9",
+      "attempts": 3,
+      "passed": 3,
+      "dollars": 0.07021,
+      "unknown_cost": 0,
+      "git_sha": "60f57a6b7a902690c9fdaf3f6fc05e4d02617e88",
+      "dirty": false
+    },
+    {
+      "file": "native-count-context-fixtures.jsonl",
+      "sha256": "22ccbe698147c5a2d6bf700830cf21a35e6ade42a970649adf62028a6724bfc2",
+      "attempts": 3,
+      "passed": 3,
+      "dollars": 0.05901,
+      "unknown_cost": 0,
+      "git_sha": "60f57a6b7a902690c9fdaf3f6fc05e4d02617e88",
+      "dirty": true
+    }
+  ],
+  "traces": [
+    {
+      "file": "native-repair-model-trace.jsonl",
+      "sha256": "26a9bacde00d1b9726b28fa167693c38d3acb769e77bad1412ebc9f5d832c09a",
+      "synthetic_feed_only": true
+    },
+    {
+      "file": "native-boundary-failure-model-trace.jsonl",
+      "sha256": "efee51e8ea239e5e4d38e05354339b9df1351dcacc274791ec2f5bbb71eb4f4f",
+      "synthetic_feed_only": true
     }
   ]
 }

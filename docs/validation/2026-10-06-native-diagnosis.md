@@ -84,3 +84,17 @@ A later response trace showed another extraction error: a tally field copied the
 into its literal delimiter. Reader instructions and field descriptions now separate code metadata from page
 text. Exact quote validation remains unchanged. The earlier repair campaign still contains a failure and cannot
 establish that the count path is resolved. This change is general to every annotated capture.
+
+The next clean campaign, on `875d376`, finished 94/96, costing $0.89668. One count stopped stuck and one
+per-digit sign-in exceeded its $0.04 diagnostic cap. The source-boundary build `60f57a6` finished 95/96,
+costing $0.98626, with three isolated parallel repeats and a $0.08 per-attempt cap. The count still failed once.
+Different caps prevent treating those scores as a before/after improvement. Its three response-trace attempts
+passed, costing $0.07021; they did not reproduce the remaining failed attempt.
+
+A separate generic regression showed that a directly quoted total could not carry quoted scope context. The
+first proposed change was discarded after review exposed a derived count borrowing a page number. The narrowed
+rule admits only directly quoted, non-record context from the current capture and source. Tallies, counted and
+continuing records, new claim records, untracked list items, derived facts and prior captures cannot use this
+path. Seven counterexamples and the valid scope-context case are covered; 601 agent and retrieval tests pass.
+The preliminary context check passed 3/3 for $0.05901, before the final narrowing. The failed full campaigns stay
+recorded. These experiments do not establish that the count path is resolved, or that native corpus grades improved.
