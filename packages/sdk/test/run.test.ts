@@ -137,6 +137,31 @@ test('a per-run option left undefined leaves the default from start in place', a
   });
 });
 
+test('a per-run null takes a default from start out of that run, and the next run has it again', async () => {
+  const defaults = { cdpPort: 9222, attach: true, viewport: [800, 600] as [number, number] };
+  await withServer({ ...scriptedRun('echo'), ...defaults }, async fb => {
+    // The server refuses `cdp_port` beside `cdp_url`, so without the null this run could not name its own browser.
+    assert.deepEqual(await sent(fb, { cdpPort: null, attach: null, ...ownBrowser }), {
+      task: 'Add the kettle to the cart',
+      cdp_url: ownBrowser.cdpUrl,
+      viewport: [800, 600],
+    });
+    assert.deepEqual(await sent(fb, {}), {
+      task: 'Add the kettle to the cart',
+      cdp_port: 9222,
+      attach: true,
+      viewport: [800, 600],
+    });
+  });
+});
+
+test('a null for an option start gave no default for sends nothing', async () => {
+  await withServer(scriptedRun('echo'), async fb => {
+    const params = await sent(fb, { ...ownBrowser, chrome: null, proxyCountry: null });
+    assert.deepEqual(params, { task: 'Add the kettle to the cart', cdp_url: ownBrowser.cdpUrl });
+  });
+});
+
 test('an attachment passed as bytes arrives intact', async () => {
   // Every byte value, so one the encoding mangles is one the run would not get back.
   const content = Uint8Array.from({ length: 256 }, (_, byte) => byte);

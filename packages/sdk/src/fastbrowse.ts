@@ -7,15 +7,20 @@ import { Callbacks } from './callbacks.ts';
 import { resolveBinary } from './binary.ts';
 import { FastbrowseError, ProcessExitedError } from './errors.ts';
 import { type OutputSchema, type TypedRunResult, withOutput } from './output.ts';
-import type { InitializeParams, InitializeResult, RunCancelParams, RunParams, RunResult } from './protocol.ts';
+import {
+  type InitializeParams,
+  type InitializeResult,
+  Method,
+  PROTOCOL_VERSION,
+  type RunCancelParams,
+  type RunParams,
+  type RunResult,
+} from './protocol.ts';
 import { Connection } from './rpc.ts';
 import { type BrowserOptions, browserParams, type RunOptions, runParams } from './run.ts';
 
-/** The wire format this SDK speaks. It is the server's `PROTOCOL_VERSION`, and the handshake compares the two. */
-const PROTOCOL_VERSION = 1;
-
-// A run that is cancelled by `shutdown` closes its browser before the process exits, and Chrome takes its time.
-const DEFAULT_GRACE_PERIOD_MS = 10_000;
+// Three times the 10 s the server gives Chrome to exit before it kills it: a server killed first orphans that Chrome.
+const DEFAULT_GRACE_PERIOD_MS = 30_000;
 
 /** How to start the fastbrowse process, and the browser every run uses unless that run says otherwise. */
 export interface StartOptions extends BrowserOptions {
@@ -34,7 +39,7 @@ export interface StartOptions extends BrowserOptions {
 }
 
 export interface CloseOptions {
-  /** How long the process gets to exit after `shutdown` before it is killed. Ten seconds by default. */
+  /** How long the process gets to exit after `shutdown` before it is killed. Thirty seconds by default. */
   gracePeriodMs?: number;
 }
 
@@ -60,7 +65,7 @@ export class Fastbrowse {
     const server = new Server(binary, env, options.stderr ?? 'inherit');
     try {
       const hello: InitializeParams = { protocol_version: PROTOCOL_VERSION };
-      const reply = (await server.connection.request('initialize', hello)) as InitializeResult;
+      const reply = (await server.connection.request(Method.INITIALIZE, hello)) as InitializeResult;
       if (reply.protocol_version !== PROTOCOL_VERSION) {
         throw new FastbrowseError(
           `this SDK speaks protocol version ${PROTOCOL_VERSION}, and fastbrowse ${reply.fastbrowse_version} at ` +
@@ -79,9 +84,9 @@ export class Fastbrowse {
    * is read from `status`, and is not an exception.
    *
    * Rejects with `RpcError` when the server refuses the request, which it does before a browser opens: for a
-   * bad option, for a missing key, and with the busy code while another run on this instance is active. Rejects
-   * with `ProcessExitedError` when the fastbrowse process is gone. Rejects with `AbortError` when `signal`
-   * stopped the run.
+   * bad option, for a missing key, and with the busy code while another run on this instance is active. A run
+   * that fails after that resolves with status `error`. Rejects with `ProcessExitedError` when the fastbrowse
+   * process is gone. Rejects with `AbortError` when `signal` stopped the run.
    *
    * With `output`, the result's `output` is the data as that schema validated it. A schema that cannot be sent
    * rejects before anything is, a keyword the server cannot enforce rejects with its `unsupported_schema` code,
@@ -98,9 +103,9 @@ export class Fastbrowse {
     const { connection } = this.#server;
     // The reply says only that the request was read, and a process that has gone rejects the run itself.
     const cancel = () =>
-      void connection.request('run/cancel', { run_id: runId } satisfies RunCancelParams).catch(() => {});
+      void connection.request(Method.RUN_CANCEL, { run_id: runId } satisfies RunCancelParams).catch(() => {});
     const result = await this.#callbacks.during(runId, options, cancel, () =>
-      abortable(options.signal, () => connection.request('run', params) as Promise<RunResult>, cancel),
+      abortable(options.signal, () => connection.request(Method.RUN, params) as Promise<RunResult>, cancel),
     );
     return withOutput(result, options.output);
   }
@@ -116,7 +121,7 @@ export class Fastbrowse {
 
   async #close(gracePeriodMs: number): Promise<void> {
     // The reply says nothing the exit does not, and a process that died earlier answers with a rejection.
-    this.#server.connection.request('shutdown').catch(() => {});
+    this.#server.connection.request(Method.SHUTDOWN).catch(() => {});
     const overdue = setTimeout(() => void this.#server.kill(), gracePeriodMs);
     await this.#server.exited;
     clearTimeout(overdue);

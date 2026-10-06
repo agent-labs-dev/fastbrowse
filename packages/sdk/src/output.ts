@@ -1,7 +1,7 @@
 // The `output` option of `run`: the JSON Schema it puts on the wire, and the typed value it makes of the data
 // that comes back.
 
-import { FastbrowseError } from './errors.ts';
+import { FastbrowseError, messageOf } from './errors.ts';
 import type { RunResult, Status } from './protocol.ts';
 
 /** The extension a schema library implements to write itself as JSON Schema, by the name its specification has. */
@@ -104,8 +104,9 @@ export function wireSchema(schema: OutputSchema): Record<string, unknown> {
   try {
     return props.jsonSchema.input({ target: TARGET });
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new FastbrowseError(`the output schema cannot be written as JSON Schema: ${reason}`, { cause: error });
+    throw new FastbrowseError(`the output schema cannot be written as JSON Schema: ${messageOf(error)}`, {
+      cause: error,
+    });
   }
 }
 

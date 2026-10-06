@@ -52,7 +52,13 @@ export interface Secrets {
 
 type MaybePromise<Value> = Value | Promise<Value>;
 
-export interface RunOptions extends BrowserOptions {
+/**
+ * Each option as one run may give it. Null takes the default `Fastbrowse.start` was given out of that run:
+ * a default `cdpPort` has to go before the run can ask for `local`, and leaving the option out keeps it.
+ */
+export type PerRun<Options> = { [Name in keyof Options]?: Options[Name] | null };
+
+export interface RunOptions extends PerRun<BrowserOptions> {
   /** The address to start on. Without one, the first address is proposed from the task. */
   start?: string;
   inputs?: Record<string, string>;
@@ -86,11 +92,16 @@ export interface RunOptions extends BrowserOptions {
   signal?: AbortSignal;
 }
 
-type Sparse<Fields> = { [Name in keyof Fields]?: Fields[Name] | undefined };
+type Sparse<Fields> = { [Name in keyof Fields]?: Fields[Name] | null | undefined };
 
 /** The fields that were given. A default must survive a per-run option that is there but undefined. */
-function given<Fields>(fields: Sparse<Fields>): Partial<Fields> {
-  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)) as Partial<Fields>;
+function given<Fields>(fields: Sparse<Fields>): Sparse<Fields> {
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)) as Sparse<Fields>;
+}
+
+/** The fields that hold a value. A null is dropped here, after it has replaced the default it was given to clear. */
+function held<Fields>(fields: Sparse<Fields>): Partial<Fields> {
+  return Object.fromEntries(Object.entries(given(fields)).filter(([, value]) => value !== null)) as Partial<Fields>;
 }
 
 function snakeKeys<Model>(fields: CamelKeys<Model>): Model {
@@ -102,8 +113,8 @@ function snakeKeys<Model>(fields: CamelKeys<Model>): Model {
   ) as Model;
 }
 
-/** The fields of a `run` request that say which browser. */
-export function browserParams(options: BrowserOptions): Partial<RunParams> {
+/** The fields of a `run` request that say which browser, with a null wherever the caller gave one. */
+function browserFields(options: PerRun<BrowserOptions>): Sparse<RunParams> {
   return given<RunParams>({
     local: options.local,
     chrome: options.chrome && snakeKeys<LocalChrome>(options.chrome),
@@ -118,12 +129,16 @@ export function browserParams(options: BrowserOptions): Partial<RunParams> {
   });
 }
 
+/** The browser every run of an instance uses, as the fields of a `run` request. */
+export function browserParams(options: BrowserOptions): Partial<RunParams> {
+  return held<RunParams>(browserFields(options));
+}
+
 /** The `run` request for a task: the defaults from `start`, then this run's own options over them. */
 export function runParams(runId: string, task: string, defaults: Partial<RunParams>, options: RunOptions): RunParams {
   return {
-    ...defaults,
-    ...browserParams(options),
-    ...given<RunParams>({
+    ...held<RunParams>({ ...defaults, ...browserFields(options) }),
+    ...held<RunParams>({
       start: options.start,
       inputs: options.inputs,
       attachments: options.attachments?.map(attachment => ({

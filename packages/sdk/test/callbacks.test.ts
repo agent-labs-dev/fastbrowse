@@ -92,6 +92,16 @@ test('until returning false keeps the run from complete', async () => {
   });
 });
 
+for (const answer of ['yes', 1, undefined, null]) {
+  test(`until returning ${JSON.stringify(answer)} keeps the run from complete, as anything but true does`, async () => {
+    await withRun('ends_on_an_order', async fb => {
+      // What plain JavaScript can return, and a check written as `url => url.match(...)` does.
+      const until = (() => answer) as unknown as () => boolean;
+      assert.equal((await fb.run('Place the order', { ...ownBrowser, until })).status, 'unverified');
+    });
+  });
+}
+
 test('onFrame receives each frame as the bytes the run sent', async () => {
   await withRun('two_frames', async fb => {
     const frames: Uint8Array[] = [];
@@ -149,7 +159,7 @@ for (const [how, resolve] of refusals) {
     await withRun('types_secrets', async fb => {
       const result = await typeTwice(fb, { refs, resolve });
       assert.equal(result.status, 'error');
-      assert.equal(result.error, "secrets/resolve: the resolver threw for the secret 'SHOP_TOTP'");
+      assert.equal(result.error, "secrets/resolve: the client could not resolve the secret 'SHOP_TOTP'");
       assert.doesNotMatch(JSON.stringify(result), /horse/);
       // The server is done with that run, and takes the next one.
       assert.deepEqual((await typeTwice(fb, { refs, resolve: () => '7' })).data, ['7', '7']);

@@ -10,9 +10,7 @@ const OWN_BINARY = 'pass binaryPath or set FASTBROWSE_BINARY to run a binary of 
 
 /** What resolution asks of the machine it runs on. */
 export interface Host {
-  /** `process.platform`. */
   platform: string;
-  /** `process.arch`. */
   arch: string;
   /** Whether the C library is musl, as on Alpine. Asked on Linux only. */
   musl(): boolean;

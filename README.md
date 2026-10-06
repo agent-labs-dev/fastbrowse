@@ -390,7 +390,8 @@ yours does, however yours ended.
 `run` resolves with the result whatever status the run ended in, so `needs_login` or `stuck` is read from
 `status` and is not an exception. It rejects when no run took place or none finished: with `RpcError` when the
 server refuses the request before a browser opens (a bad option, a missing key, a busy server), with
-`AbortError` when `signal` stopped the run, and with `ProcessExitedError` when the process is gone.
+`AbortError` when `signal` stopped the run, and with `ProcessExitedError` when the process is gone. A run that
+fails after it has started resolves with status `error`.
 
 The result is the `RunResult` the Python library returns, with the same statuses, citations and cost lines.
 Its fields keep their Python names, such as `final_url`, since the types are generated from the Python models;
@@ -425,7 +426,8 @@ and anything but `true` keeps the run from `complete`. `onFrame` receives JPEG f
 without it no frame is sent. A callback that throws ends the run with status `error`. The other options are
 the command line's: `inputs`, `attachments` as bytes, `downloads`, `record`, and the browser choices
 `chrome`, `cloudProfile`, `cdpUrl`, `cdpPort`, `attach`, `targetMatch` and `proxyCountry`, which
-`Fastbrowse.start` also takes as defaults for every run.
+`Fastbrowse.start` also takes as defaults for every run. A run passes `null` for one of them to go without
+that default.
 
 There is no binary for Alpine or another musl system, and none for a platform outside the five. There
 `Fastbrowse.start` rejects with an error that names the platform, and a binary of your own is named with

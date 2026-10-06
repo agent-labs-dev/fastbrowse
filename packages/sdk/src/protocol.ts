@@ -382,3 +382,27 @@ export interface ServerRequest {
   method: ServerMethod;
   params: unknown;
 }
+export const ErrorCode = {
+  PARSE_ERROR: -32700,
+  INVALID_REQUEST: -32600,
+  METHOD_NOT_FOUND: -32601,
+  INVALID_PARAMS: -32602,
+  INTERNAL_ERROR: -32603,
+  BUSY: -32001,
+  CANCELLED: -32002,
+  CONFIGURATION: -32003,
+  UNSUPPORTED_SCHEMA: -32004,
+} as const;
+export const Method = {
+  INITIALIZE: 'initialize',
+  RUN: 'run',
+  RUN_CANCEL: 'run/cancel',
+  SHUTDOWN: 'shutdown',
+} as const;
+export const PROTOCOL_VERSION = 1;
+export const ServerMethod = {
+  RUN_EVENT: 'run/event',
+  RUN_FRAME: 'run/frame',
+  RUN_UNTIL: 'run/until',
+  SECRETS_RESOLVE: 'secrets/resolve',
+} as const;

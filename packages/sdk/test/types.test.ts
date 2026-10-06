@@ -31,3 +31,15 @@ test('a model that does not say whether it takes unknown fields gets a closed ty
   const { additionalProperties: _, ...unsaid } = ping;
   assert.doesNotMatch(await render({ $defs: { Ping: unsaid } }), /\[k: string\]/);
 });
+
+test('a constant becomes an exported value, and an enum an object of its members', async () => {
+  const types = await render({
+    $defs: { Ping: ping },
+    constants: { PROTOCOL_VERSION: 3, Code: { BUSY: -32001 }, Method: { RUN_CANCEL: 'run/cancel', RUN: 'run' } },
+  });
+  assert.match(types, /^export const PROTOCOL_VERSION = 3;$/m);
+  assert.match(types, /^export const Code = \{\n {2}BUSY: -32001,\n\} as const;$/m);
+  assert.match(types, /^export const Method = \{\n {2}RUN_CANCEL: 'run\/cancel',\n {2}RUN: 'run',\n\} as const;$/m);
+  assert.match(types, /export interface Ping \{/);
+  assert.equal(types.match(/^export /gm)?.length, 4);
+});

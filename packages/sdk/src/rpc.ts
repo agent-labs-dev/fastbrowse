@@ -4,6 +4,7 @@ import type { Readable, Writable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 
 import { FastbrowseError, messageOf, RpcError } from './errors.ts';
+import { ErrorCode } from './protocol.ts';
 
 type Id = number | string;
 type Params = Record<string, unknown>;
@@ -16,10 +17,6 @@ interface Pending {
 /** Answers a request the server makes. What it returns is the result, and what it throws is the error reply. */
 export type RequestHandler = (params: Params) => unknown;
 export type NotificationHandler = (params: Params) => void;
-
-// JSON-RPC's own codes for a request this side cannot serve.
-const METHOD_NOT_FOUND = -32601;
-const INTERNAL_ERROR = -32603;
 
 export class Connection {
   readonly #output: Writable;
@@ -111,13 +108,13 @@ export class Connection {
     }
     const handler = this.#requests.get(method);
     if (!handler) {
-      this.#send({ id, error: { code: METHOD_NOT_FOUND, message: `unknown method '${method}'` } });
+      this.#send({ id, error: { code: ErrorCode.METHOD_NOT_FOUND, message: `unknown method '${method}'` } });
       return;
     }
     try {
       this.#send({ id, result: (await handler(params)) ?? null });
     } catch (error) {
-      this.#send({ id, error: { code: INTERNAL_ERROR, message: messageOf(error) } });
+      this.#send({ id, error: { code: ErrorCode.INTERNAL_ERROR, message: messageOf(error) } });
     }
   }
 }
