@@ -2042,6 +2042,9 @@ class Agent:
                     return await self._read(state, drawn, observation)
             # Nothing on the page can evidence anything, so the reader is not asked.
             trace("read", url=self._redactor.redact(capture.url), chars=0, wanted=[r.id for r in wanted])
+            # A blank outcome was inspected too. It proves nothing, but must not prevent recovery from navigating.
+            for candidate in state.transaction_candidates:
+                candidate.outcome_read = True
             spent(False)
             return False, False
         following = next_page_control(observation) if observation is not None else None

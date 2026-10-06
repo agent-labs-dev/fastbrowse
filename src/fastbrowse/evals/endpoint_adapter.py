@@ -42,7 +42,7 @@ _HOP = frozenset(
 )
 _REQUEST_DROPPED = _HOP | {"host", "accept-encoding"}
 _REWRITTEN_TYPES = ("text/", "javascript", "json", "xml")
-_REWRITTEN_REQUEST_HEADERS = ("Origin", "Referer")
+_REWRITTEN_REQUEST_HEADERS = frozenset({"origin", "referer", "x-forwarded-host"})
 
 
 class EndpointMapError(ValueError):
@@ -186,8 +186,8 @@ def make_handler(site: str, upstream: str, public_map: Callable[[], Mapping[str,
             headers = {k: v for k, v in self.headers.items() if k.lower() not in _REQUEST_DROPPED}
             headers["Host"] = urlsplit(upstream).netloc
             headers["Accept-Encoding"] = "identity"
-            for name in (*_REWRITTEN_REQUEST_HEADERS, "X-Forwarded-Host"):
-                if name in headers:
+            for name in headers:
+                if name.lower() in _REWRITTEN_REQUEST_HEADERS:
                     headers[name] = rewriter.request_header(name, headers[name])
             if not self.path.startswith("/"):
                 # `@host` or an absolute URL appended to the origin would move the authority to the client's choice.

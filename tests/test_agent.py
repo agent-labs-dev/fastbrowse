@@ -5193,3 +5193,22 @@ async def test_transaction_receipt_waits_until_a_native_dialog_is_resolved() -> 
     assert not await agent._read_before_interaction(state, obs, _code_decision(Operation.DIALOG, None))
     agent._step.assert_not_awaited()
     assert not state.transaction_candidates[0].outcome_read
+
+
+async def test_empty_transaction_outcome_does_not_prevent_recovery_navigation() -> None:
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r", text="Apply a change", kind=RequirementKind.ACTION),),
+        answer_expected=False,
+    )
+    state.transaction_candidates.append(
+        agent_module._TransactionCandidate(
+            question=NoulQuestion(instructions="Commit", true="yes", false="no"), from_url="https://shop.test"
+        )
+    )
+    obs = observation((_button("Back to account"),))
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    agent._outwait = AsyncMock(return_value=False)
+    await agent._read(state, capture((BlockKind.PARAGRAPH, "")), obs)
+    assert not state.notes.evidenced("r")
+    assert not await agent._read_before_interaction(state, obs, _code_decision(Operation.CLICK, obs.controls[0]))

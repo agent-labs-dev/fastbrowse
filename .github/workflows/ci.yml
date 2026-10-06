@@ -18,7 +18,8 @@ jobs:
           curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | tar -xz -C "$RUNNER_TEMP" gitleaks
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - name: Scan for secrets
-        run: gitleaks detect --source . --no-banner --redact
+        # Checkout fetches other branches too; scan this build's complete ancestry, not unrelated branch content.
+        run: gitleaks detect --source . --no-banner --redact --log-opts=HEAD
   gate:
     permissions: {contents: read}
     runs-on: ubuntu-latest
@@ -89,4 +90,3 @@ jobs:
           SIFT_RESULT: ${{ needs.sift.result }}
           SECRETS_RESULT: ${{ needs.secrets.result }}
         run: test "$GATE_RESULT" = success && test "$SIFT_RESULT" = success && test "$SECRETS_RESULT" = success
-

@@ -371,6 +371,14 @@ def _remember(
     return fact
 
 
+def _quoted_count(fact: Fact) -> bool:
+    if fact.evidence is None or fact.basis:
+        return False
+    numbers = re.findall(r"\b\d[\d,]*\b", fact.text)
+    quoted = {number.replace(",", "") for number in re.findall(r"\b\d[\d,]*\b", fact.evidence.quote)}
+    return len(numbers) == 1 and numbers[0].replace(",", "") in quoted
+
+
 # A page of a list costs two short block labels a record. The cap is what one capture can plausibly show, and
 # bounds what one page adds to the notes. It is applied in code, not the schema: a reply over it, or a pager-only
 # chunk with no records, would otherwise fail validation and end the run over a page that read fine.
@@ -566,7 +574,7 @@ def read_tallies(
 ) -> ReadOutcome | None:
     if capture.inaccessible_frames or len(capture.text) > _READ_CHUNK_CHARS:
         return None
-    records = [b for b in capture.blocks if b.kind is BlockKind.RECORD]
+    records = [b for b in capture.blocks if b.kind in _COUNTED_KINDS]
     if not records or {r.requirement_id for r in readers} != set(requirement_ids):
         return None
     parts = chunk(capture, _READ_CHUNK_CHARS)
@@ -758,6 +766,9 @@ async def read(
                     "each key is the label stated in its records, and each record cites its own source blocks. "
                     "Group headings and per-group counts are context, not records: enumerate the requested "
                     "child entities and verify their filters and required status. "
+                    "When the page explicitly states the requested total for the entire matching list, "
+                    "quote that statement as a claim instead of deriving it from partial tallies. A displayed "
+                    "subtotal, group count or number loaded so far does not state the requested whole-list total. "
                     "Use continues.tallies while more pages remain and tallies with complete=true only on the "
                     "last requested page. List only records from this chunk; never repeat earlier records, quote "
                     "their text, calculate totals or write claims for counted records. Code deduplicates, counts "
@@ -907,7 +918,7 @@ async def read(
                 continue
             group = continuation.tallies[0]
             field = group.field
-            records = [b for b in capture.blocks if b.kind is BlockKind.RECORD]
+            records = [b for b in capture.blocks if b.kind in _COUNTED_KINDS]
             if (
                 field is not None
                 and group.key is None
@@ -1023,8 +1034,10 @@ async def read(
                 continue
             references[f"claim:{index}"] = fact_id(fact)
             requirement_id = claim.requirement_id if claim.requirement_id in requirement_ids else None
-            if requirement_id in {t.requirement_id for t in notes.tallies}:
-                # Only the counted records and explicit coverage close a tally, never a generated total.
+            if requirement_id in {t.requirement_id for t in notes.tallies} and not (
+                requirement_id in counting and _quoted_count(fact)
+            ):
+                # A derived total needs complete tallies. A total the page states has its own quote to verify.
                 requirement_id = None
             # A site that sorts or filters its own list by the quantity compared settles the superlative on its
             # leading record: the rest of the list cannot beat it. The page has to say so, in its own text, and
@@ -2074,6 +2087,12 @@ def claim_check_questions(
     requirements = "\n".join(requirement.model_dump_json() for requirement in information)
     context = f"{UNTRUSTED}\n\n# Requirements\n{requirements}\n\n# Answer\n{composed.answer}\n\n# Notes\n"
     question = "\n\nDoes the answer leave any information requirement without an answer the notes evidence?"
+    if any(requirement.count_records for requirement in information):
+        question += (
+            " A record count needs complete matching-record tallies or a quoted statement of the requested "
+            "whole-list total. A group count, subtotal, or number loaded so far does not answer it. "
+            "The quoted count must refer to the requested entities with the task's filters and scope."
+        )
     omission = NoulQuestion(
         instructions=context + question,
         true="Yes, at least one requirement is unanswered or unevidenced.",

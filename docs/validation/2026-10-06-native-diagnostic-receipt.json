@@ -42,6 +42,36 @@
       "unknown_cost": 0,
       "git_sha": "860c54ba59b8a37e5ac6f77fe9ba59050a28c292",
       "dirty": true
+    },
+    {
+      "file": "native-fixes-fixtures-final.jsonl",
+      "sha256": "e77ecd410932aac439ce61fe93d7e5bdae5aa663b06ddeb128c7a98365ec3c90",
+      "attempts": 96,
+      "passed": 95,
+      "dollars": 0.92037,
+      "unknown_cost": 0,
+      "git_sha": "860c54ba59b8a37e5ac6f77fe9ba59050a28c292",
+      "dirty": true
+    },
+    {
+      "file": "native-fixes-list-recovery.jsonl",
+      "sha256": "23bc278ca70acbb2787fcdfc476cabe036bc91f7969bb6cf2b74cb488957c5b7",
+      "attempts": 3,
+      "passed": 1,
+      "dollars": 0.08652,
+      "unknown_cost": 0,
+      "git_sha": "5e3b65e37708ced3af93f0fda13d79e0b3b1000e",
+      "dirty": true
+    },
+    {
+      "file": "native-fixes-stated-total.jsonl",
+      "sha256": "447fa7ff3c76dad4b315b1977ac7c7a3ce6449ac1230c8eec98bf09a4cc4222c",
+      "attempts": 3,
+      "passed": 3,
+      "dollars": 0.07385,
+      "unknown_cost": 0,
+      "git_sha": "5e3b65e37708ced3af93f0fda13d79e0b3b1000e",
+      "dirty": true
     }
   ]
 }

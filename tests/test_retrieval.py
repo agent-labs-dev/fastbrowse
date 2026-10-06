@@ -2541,14 +2541,12 @@ async def test_invalid_tally_field_cannot_close_or_partially_count_a_list(fault:
 
 @pytest.mark.parametrize("reuse", [False, True])
 @pytest.mark.parametrize("count_records", [False, True])
+@pytest.mark.parametrize("record_kind", [BlockKind.RECORD, BlockKind.LIST_ITEM])
 async def test_tally_reader_requires_explicit_unfiltered_scope_and_revalidates_every_record(
-    reuse: bool, count_records: bool
+    reuse: bool, count_records: bool, record_kind: BlockKind
 ) -> None:
     page = capture(
-        *(
-            (BlockKind.RECORD, f"Record {i}\nOwner: {owner}\nState: open")
-            for i, owner in enumerate(["Ada", "Ben", "Ada"])
-        )
+        *((record_kind, f"Record {i}\nOwner: {owner}\nState: open") for i, owner in enumerate(["Ada", "Ben", "Ada"]))
     )
     requirement = Requirement(
         id="r",
@@ -2588,6 +2586,35 @@ async def test_tally_reader_requires_explicit_unfiltered_scope_and_revalidates_e
     ]:
         assert read_tallies(changed, result.tally_readers, ["r"]) is None
     assert read_tallies(page, result.tally_readers, ["r", "other"]) is None
+
+
+@pytest.mark.parametrize(("stated", "value"), [(False, "1"), (True, "3"), (True, "999")])
+async def test_a_quoted_whole_list_total_can_answer_beside_an_unfinished_tally(stated: bool, value: str) -> None:
+    page = capture((BlockKind.LIST_ITEM, "Item A"), (BlockKind.PARAGRAPH, "Total matching items: 3"))
+    notes = Notes()
+    record = Fact(reader=FactReader.LLM, text="Item A", evidence=block_evidence(page, "s0"))
+    notes.add(record)
+    tally = notes.add_tally(Tally(requirement_id="r", key="items", records=(fact_id(record),)))
+    requirement = Requirement(id="r", text="Total item count", kind=RequirementKind.INFORMATION, count_records=True)
+    claim: JsonValue = {
+        "requirement_id": "r",
+        "text": value,
+        "cite": {"first": "s1", "last": "s1"} if stated else None,
+        "draws_on": [] if stated else [fact_id(tally)],
+    }
+    await read(
+        ScriptedLLM([{"claims": [claim], "answered": True}]),
+        page,
+        "Total item count",
+        ["r"],
+        notes,
+        requirements=[requirement],
+    )
+    answered = stated and value == "3"
+    assert notes.evidenced("r") is answered
+    if answered:
+        fact = next(f for f in notes.facts if f.requirement_id == "r")
+        assert fact.evidence is not None and fact.evidence.quote == "Total matching items: 3"
 
 
 async def test_tally_field_and_a_range_of_the_same_records_leave_no_untallied_basis() -> None:

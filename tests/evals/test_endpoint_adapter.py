@@ -1,5 +1,6 @@
 """The endpoint adapter: exact-origin rewriting, cookie attributes kept, and requests forwarded to the capsule."""
 
+import http.client
 import json
 import socket
 import threading
@@ -92,6 +93,24 @@ def test_forwards_and_rewrites_only_the_exact_origin(adapter: tuple[str, Threadi
     assert seen["Origin"] == origin
     assert seen["Referer"] == origin + "/a"
     assert seen["X-Forwarded-Host"] == origin.removeprefix("http://")
+
+
+def test_lowercase_tunnel_headers_are_rewritten(adapter: tuple[str, ThreadingHTTPServer]) -> None:
+    url, capsule = adapter
+    connection = http.client.HTTPConnection("127.0.0.1", int(url.rsplit(":", 1)[1]))
+    try:
+        connection.request(
+            "GET", "/", headers={"origin": PUBLIC, "referer": PUBLIC + "/a", "x-forwarded-host": "site.example.test"}
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+        response.read()
+    finally:
+        connection.close()
+    seen = {name.lower(): value for name, value in _Capsule.seen[0].items()}
+    origin = f"http://127.0.0.1:{capsule.server_port}"
+    assert seen["origin"] == origin and seen["referer"] == origin + "/a"
+    assert seen["x-forwarded-host"] == origin.removeprefix("http://")
 
 
 def test_cookie_attributes_are_kept_and_only_the_upstream_domain_changes(

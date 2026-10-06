@@ -50,3 +50,21 @@ Focused verification covers access walls, field correction, record totals, cover
 state sequence grading, credential redirects and endpoint forwarding. CI runs the complete test gate. Every
 release still requires green three-repeat fixture Evals on its exact commit; a new comparison also needs a
 complete paired draw and the publication gate. No native improvement figure is published from this diagnosis.
+
+The broad capped local fixture run finished 95/96, costing $0.92037. One infinite-scroll attempt retained 40 of
+60 records and stopped stuck. This is a failure, not a passing partial answer. Subsequent inspection found that
+reusable tally extraction accepted record blocks but excluded list items that ordinary tally extraction accepts.
+The list-item regression failed before aligning those paths; all 229 retrieval tests passed afterward. The
+original failed attempt remains in the diagnostic receipt. These local results cannot authorize publication.
+
+The first three-run recovery check passed 1/3, costing $0.08652. The list-item fix alone did not resolve the
+failure. A directly quoted whole-list total was also suppressed whenever earlier partial tallies existed.
+Direct page statements now retain their quotes for the normal claim verification; derived totals still need
+complete tally evidence. The direct and derived cases have separate regression coverage. After this fix the
+task passed 3/3, costing $0.07385. All 232 retrieval tests pass, including a quoted-count check that rejects an
+unsupported number. Both recovery checks remain recorded.
+
+Post-push review fixed lowercase origin headers that bypassed endpoint rewriting and repeated forced reads of
+blank transaction outcomes. A blank outcome proves nothing but permits recovery to navigate. CI's secret scan
+now checks the build's complete ancestry: a fresh clone reproduced its false positive on an artificial token in
+an unrelated contributor branch, while the PR branch and its merge commit had no findings.
