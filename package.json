@@ -1,8 +1,12 @@
 {
   "name": "fastbrowse-dev",
   "private": true,
+  "workspaces": [
+    "packages/sdk"
+  ],
   "scripts": {
-    "check:browser": "biome ci src/fastbrowse/browser/capture.js src/fastbrowse/browser/snapshot.js"
+    "check:browser": "biome ci src/fastbrowse/browser/capture.js src/fastbrowse/browser/snapshot.js",
+    "check:sdk": "biome ci packages/sdk && npm run typecheck --workspace fastbrowse && npm test --workspace fastbrowse"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15"

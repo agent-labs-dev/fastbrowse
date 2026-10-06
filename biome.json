@@ -3,7 +3,9 @@
   "files": {
     "includes": [
       "src/fastbrowse/browser/capture.js",
-      "src/fastbrowse/browser/snapshot.js"
+      "src/fastbrowse/browser/snapshot.js",
+      "packages/sdk/**/*.ts",
+      "!packages/sdk/dist"
     ]
   },
   "formatter": {
