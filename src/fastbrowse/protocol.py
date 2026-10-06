@@ -4,11 +4,12 @@ JSON-RPC 2.0, one message per line. Every shape that crosses the pipe is a model
 types generated for the JavaScript SDK are read from one definition.
 """
 
+import base64
 from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_serializer
 
 from fastbrowse.models import Authorization, BrowserEvent, Limits, LocalChrome, SecretRef, StepEvent
 
@@ -32,6 +33,8 @@ class ServerMethod(StrEnum):
     """What the server sends without being asked."""
 
     RUN_EVENT = "run/event"
+    RUN_FRAME = "run/frame"
+    RUN_UNTIL = "run/until"
     SECRETS_RESOLVE = "secrets/resolve"
 
 
@@ -129,6 +132,11 @@ class RunParams(Params):
     authorization: Authorization | None = None
     secrets: tuple[SecretRef, ...] = ()
     """The secrets the client holds, by name and origin. A value is asked for with `secrets/resolve`."""
+    frames: bool = False
+    """Send the active tab as `run/frame` notifications while the run goes on. Off, the page is never filmed."""
+    until: bool = False
+    """Whether the client holds a check of its own. The check is a function and stays there: the server asks
+    it with `run/until`."""
     downloads: Path | None = None
     record: Path | None = None
     local: bool = False
@@ -150,6 +158,19 @@ class RunEvent(BaseModel):
 
     run_id: str
     event: StepEvent | BrowserEvent
+
+
+class RunFrame(BaseModel):
+    """The params of `run/frame`: the active tab as it looked a moment ago. Sent only to a run that set `frames`."""
+
+    run_id: str
+    frame: bytes
+    """One JPEG, as base64."""
+
+    @field_serializer("frame", when_used="json")
+    def _frame_as_base64(self, frame: bytes) -> str:
+        # The standard alphabet, as a step event's frame is written, since it is what a browser's `atob` reads.
+        return base64.b64encode(frame).decode("ascii")
 
 
 class Notification(BaseModel):
@@ -180,3 +201,11 @@ class SecretsResolveParams(BaseModel):
     name: str
     origin: str
     """Where it will be typed. The server has already checked it against the origins the ref declared."""
+
+
+class RunUntilParams(BaseModel):
+    """The params of `run/until`: the address a run ended on. The reply is a boolean, and false keeps the run
+    from `complete`."""
+
+    run_id: str
+    url: str
