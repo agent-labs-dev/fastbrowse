@@ -1,0 +1,68 @@
+name: Binaries
+# The native executable, built and smoke-tested once per target. CI calls this when a change could alter what
+# is frozen, and the release calls it before anything is published, so both test the build a user would get.
+#
+# Each target leaves one artifact, `fastbrowse-<target>`, holding `fastbrowse-<target>.tar.gz`. The archive
+# unpacks to `fastbrowse/`, the executable with `_internal/` beside it. It is an archive because an uploaded
+# artifact loses file modes, and the executable bit with them.
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions: {}
+defaults:
+  run:
+    shell: bash
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    permissions: {contents: read}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # PyInstaller cannot build for another platform, and pydantic-core is compiled, so each target is built
+        # on a runner of its own kind. The labels name an image and never `-latest`: the oldest still offered
+        # per target, since a build runs on the system it was built on and on newer ones. `macos-15-intel` is
+        # the last Intel image GitHub offers besides `macos-26-intel`.
+        include:
+          - {target: darwin-arm64, runner: macos-14}
+          - {target: darwin-x64, runner: macos-15-intel}
+          - {target: linux-x64, runner: ubuntu-22.04}
+          - {target: linux-arm64, runner: ubuntu-22.04-arm}
+          - {target: win32-x64, runner: windows-2022}
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with: {python-version: "3.13"}
+      # The package and PyInstaller, with no extra and no development tool, so the tree cannot pick one up.
+      - run: uv sync --locked --no-dev --group freeze
+      - run: uv run --no-sync pyinstaller packaging/fastbrowse.spec --noconfirm
+      # Chrome has no Linux arm64 build, and GitHub's arm image carries no browser but Firefox. Playwright
+      # publishes a Chromium for it. Ubuntu 22.04 lets it start its sandbox; 24.04's AppArmor rules do not.
+      - name: Install Chromium
+        if: matrix.target == 'linux-arm64'
+        run: |
+          npx --yes playwright@1.63.0 install --with-deps chromium
+          chrome="$(find "$HOME/.cache/ms-playwright" -type f -name chrome -path '*chromium-*' | head -n 1)"
+          test -x "$chrome"
+          echo "FASTBROWSE_CHROME=$chrome" >> "$GITHUB_ENV"
+      # The handshake, then one run on local Chrome with the scripted models that ship in the package.
+      - run: uv run --no-sync python scripts/smoke_binary.py dist/fastbrowse/fastbrowse
+      - name: Record the size
+        id: size
+        run: |
+          kib="$(du -sk dist/fastbrowse | cut -f1)"
+          echo "kib=$kib" >> "$GITHUB_OUTPUT"
+          echo "fastbrowse-$TARGET: $((kib / 1024)) MB unpacked ($kib KiB)"
+          echo "| \`$TARGET\` | $((kib / 1024)) MB |" >> "$GITHUB_STEP_SUMMARY"
+      - run: tar -czf "fastbrowse-$TARGET.tar.gz" -C dist fastbrowse
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fastbrowse-${{ matrix.target }}
+          path: fastbrowse-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          # Already compressed.
+          compression-level: 0
