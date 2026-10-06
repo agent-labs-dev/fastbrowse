@@ -105,7 +105,7 @@ async def make_plan(
     llm: LLMClient, task: str, *, start: str | None = None, ledger: Ledger | None = None
 ) -> Generation[Plan]:
     site = "" if start is None else f"\n\n# Start page\n{start}"
-    return await llm.generate(
+    generated = await llm.generate(
         LLMPurpose.PLAN,
         [
             _instructions(),
@@ -114,3 +114,10 @@ async def make_plan(
         Plan,
         ledger=ledger,
     )
+
+    if generated.data.requirements or generated.data.run_reports:
+        return generated
+    # An empty plan lets a verifier accept unrelated page facts because no requested outcome remains to prove.
+    kind = RequirementKind.INFORMATION if generated.data.answer_expected else RequirementKind.ACTION
+    requirement = Requirement(id="req_1", text=task, kind=kind)
+    return generated.model_copy(update={"data": generated.data.model_copy(update={"requirements": (requirement,)})})
