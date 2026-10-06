@@ -387,8 +387,8 @@ _MAX_CONTINUING_RECORDS = 60
 
 class _TallyField(Frozen):
     span: _Cite
-    prefix: str
-    suffix: str
+    prefix: str = Field(description="Exact literal record text before the grouped value, excluding source metadata.")
+    suffix: str = Field(description="Exact literal record text after the grouped value, excluding source metadata.")
 
 
 class _TallyGroup(Frozen):
@@ -749,6 +749,10 @@ async def read(
                 content=(
                     "# Reader\nAnswer the question from this capture's source blocks and the collected "
                     "evidence. Each claim states only what its cited blocks, and the claims it draws on, show.\n\n"
+                    "# Sources\nThe [source id], (block kind) and embedded-frame labels are code's annotations, "
+                    "not page text. Repeated table headers provide context, not literal text inside every row. "
+                    "Citations use the source id; literal field delimiters use only the record text after those "
+                    "annotations. Do not copy annotation prefixes into field delimiters.\n\n"
                     "# Claims\n"
                     "- A claim cites one run of blocks. For a comparison, put every compared record from this "
                     "chunk in the conclusion's records as block ranges only. Code copies their quotes into its "
@@ -903,7 +907,8 @@ async def read(
                             role="user",
                             content="Your tally field range could not be resolved into complete matching records. "
                             "Read the same capture again. Use explicit record block ranges when the field's "
-                            "delimiters or range cannot be verified. A field range must contain only complete "
+                            "delimiters or range cannot be verified. The [source id] and (block kind) "
+                            "annotations are not literal record text. A field range must contain only complete "
                             "record blocks, with key=null and records=[]. Retain every matching record and "
                             "keep the requirement open unless the evidence covers the entire requested list.",
                         ),

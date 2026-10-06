@@ -79,3 +79,8 @@ attempt remain in the receipt. A passing focused repeat alone cannot establish r
 
 The capped repair check passed 3/3, costing $0.05670. The invalid-range cases still fail closed after one retry,
 and call and dollar limits stop the retry before requesting another response. This remains provisional evidence.
+
+A later response trace showed another extraction error: a tally field copied the source block kind annotation
+into its literal delimiter. Reader instructions and field descriptions now separate code metadata from page
+text. Exact quote validation remains unchanged. The earlier repair campaign still contains a failure and cannot
+establish that the count path is resolved. This change is general to every annotated capture.
