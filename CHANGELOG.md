@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Eval results export a content-minimized attempt history for the public results browser and an optional
+  private Parallax tracker. Grades, completion, retries, unknown costs and missing coverage remain separate.
+
 ## [0.5.19] - 2026-10-05
 
 - Form controls retain their input name and autocomplete purpose after validation changes their labels.

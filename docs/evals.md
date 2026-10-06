@@ -1,5 +1,8 @@
 # Evals
 
+[Browse recorded attempts](https://fastbrowse.ai/evals), including failed diagnostics, grades, completion,
+time, cost and source hashes. Approved comparison figures below still come from the publication gate.
+
 Grades use fixture requests, truth APIs and final page evidence read by the harness. Missing evidence fails a
 check that requires it: for every arm whose final page the harness observes, an answer alone cannot pass a URL,
 cart or flight-form check. The hosted Browser Use agent's SDK does not say where its browser ended, so on answer

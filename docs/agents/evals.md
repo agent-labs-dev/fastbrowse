@@ -69,6 +69,46 @@ attests: a dispatch under three repeats fails before it spends and the fixture t
 red fixture gate refuses a release even when it publishes no comparison.
 
 
+## Results browser and tracking
+
+The public results browser reads `docs/results/evidence.json`. Regenerate it with
+`uv run python -m fastbrowse.evals.evidence`; CI checks the same export. It projects only task identifiers,
+source hashes, recorded grades, completion, build identifiers, time and cost. Answers, page content,
+credentials, local paths and error text stay out. Each campaign stands alone; campaigns may overlap.
+An unknown schedule stays unknown. Older rows without repeat identifiers receive ledger-order trial indices,
+which do not establish a repeat protocol. `evidence-schedules.json` records declared slot counts, and the sanitized
+`evidence-archive.json` retains diagnostics whose original logs are outside the repository. Its receipt
+links identify the original files and their hashes. Keep those originals when adding an archive.
+
+The browser is an inspection surface, not a publication gate. Failed and incomplete diagnostics remain
+visible without changing the approved figures in `summary.json`. Regenerate the evidence export when
+adding result rows or diagnostics. The publication and release checks above still decide what may headline.
+
+`scripts/track_evals.py` sends the same projection through an independently installed private Parallax
+tracker. Parallax is not a Fastbrowse dependency, and its code stays private. Install its `track` extra in
+a maintainer environment; the current tracking contract is Parallax PR 292 at
+`377bd94d3ab9f71e5364a9f979ec4dc73fbfd97a`. Run a dry run before writing:
+
+```sh
+uv run --with '/path/to/parallax[track]' python scripts/track_evals.py docs/results/evidence.json --all
+```
+
+`--push` records those experiments without executing tasks or changing their grades. It requires
+`LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and
+`PARALLAX_LANGFUSE_PROJECT=fastbrowse-evals`. The tracker checks the project-scoped keys, and the adapter
+refuses any project named differently. Identical projections push idempotently; a changed ledger or declared
+schedule creates a new experiment, preserving the earlier record. Keep credentials in ignored local configuration. Public CI needs
+neither these keys nor private Parallax access.
+
+Grades and completion have separate scores. All physical attempts stay in each task's repeat details;
+known spend includes retries, and any unknown attempt prevents an aggregate cost estimate. An attempt
+refused before browser start covers no scheduled slot. Campaigns without a recorded start timestamp are
+reported as skipped rather than assigned an invented date. Missing historical protocol information prevents
+cross-campaign statistical comparisons: the strict publication gate remains the regression authority.
+Langfuse projects require authentication; selected traces can be shared publicly. The public site uses the
+sanitized export so its result browser needs no Langfuse login.
+
+
 ## Matched external corpus
 
 `fastbrowse.evals.corpus_compare` runs the same live arm adaptors on one pinned, seeded draw. Every arm sees
