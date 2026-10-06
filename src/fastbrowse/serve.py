@@ -27,6 +27,7 @@ from fastbrowse import options
 from fastbrowse.adapters.local_chrome import find_chrome
 from fastbrowse.clients.environment import ConfigurationError, Settings, load_settings
 from fastbrowse.models import Attachment, BrowserEvent, LocalChrome, RunResult, SecretRef, StepEvent
+from fastbrowse.output_schema import UnsupportedSchema, output_model
 from fastbrowse.protocol import (
     PROTOCOL_VERSION,
     Error,
@@ -359,6 +360,10 @@ class Server:
             proxy_country = None if params.proxy_country is None else options.country_code(params.proxy_country)
         except argparse.ArgumentTypeError as exc:
             raise Refused(ErrorCode.INVALID_PARAMS, f"run: proxy_country: {exc}") from None
+        try:
+            output_schema = None if params.output_schema is None else output_model(params.output_schema)
+        except UnsupportedSchema as exc:
+            raise Refused(ErrorCode.UNSUPPORTED_SCHEMA, f"run: output_schema: {exc}") from None
         options.recording(params.record)
         settings = self._settings()
         asked = params.chrome or LocalChrome()
@@ -401,6 +406,7 @@ class Server:
             ),
             "limits": params.limits,
             "authorization": params.authorization,
+            "output_schema": output_schema,
             "secrets": self._secrets(params),
             "downloads": params.downloads,
             "record": params.record,

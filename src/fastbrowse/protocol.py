@@ -128,6 +128,8 @@ class RunParams(Params):
     attachments: tuple[RunAttachment, ...] = ()
     limits: Limits | None = None
     authorization: Authorization | None = None
+    output_schema: dict[str, Any] | None = None
+    """The shape of `RunResult.data`, as JSON Schema draft 2020-12 with an object at its root."""
     secrets: tuple[SecretRef, ...] = ()
     """The secrets the client holds, by name and origin. A value is asked for with `secrets/resolve`."""
     downloads: Path | None = None
