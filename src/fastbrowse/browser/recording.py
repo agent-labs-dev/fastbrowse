@@ -30,6 +30,7 @@ from cdp_use.cdp.page.events import ScreencastFrameEvent
 from fastbrowse.browser.session import BrowserSession
 from fastbrowse.models import Decider, Operation, RunResult, StepResult
 from fastbrowse.page import BrowserError
+from fastbrowse.spawn import system_environment
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,7 @@ class Recording:
             *("-c:v", "libx264", "-qp", "0", "-preset", "ultrafast", "-pix_fmt", "yuv444p", str(self._uncaptioned)),
             stdin=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=system_environment(),
         )
         self._session.client.register.Page.screencastFrame(self._on_frame)
         self._started = time.monotonic()
@@ -175,6 +177,7 @@ class Recording:
             *("-loglevel", "error", "-y", "-i", str(self._uncaptioned), "-filter_complex", graph),
             *("-map", "[captioned]", *encode, "captioned.mp4", "-map", "[plain]", *encode, "plain.mp4"),
             stderr=asyncio.subprocess.PIPE,
+            env=system_environment(),
             cwd=self._scratch.name,
         )
         try:

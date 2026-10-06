@@ -16,6 +16,7 @@ from typing import IO
 
 from fastbrowse.models import BrowserConnection, LocalChrome
 from fastbrowse.page import BrowserError
+from fastbrowse.spawn import system_environment
 
 
 def free_port() -> int:
@@ -100,6 +101,7 @@ def local_chrome(options: LocalChrome) -> Generator[BrowserConnection]:
             ],
             stdout=subprocess.DEVNULL,
             stderr=log,
+            env=system_environment(),
         )
         try:
             yield BrowserConnection(cdp_url=_wait_for_ws(active, proc, log), live_url=None, remote=False)
