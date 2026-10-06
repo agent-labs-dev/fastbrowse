@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from fastbrowse.adapters.totp import TotpError, one_time_code
 from fastbrowse.models import SecretValue
+from fastbrowse.spawn import system_environment
 
 
 class BitwardenError(RuntimeError):
@@ -102,7 +103,12 @@ def bitwarden_login(item: str, origin: str) -> dict[str, SecretValue]:
     """Read `item` (a name or id) from the unlocked vault; `BW_SESSION` must be in the environment."""
     try:
         done = subprocess.run(
-            ["bw", "get", "item", item, "--nointeraction"], capture_output=True, text=True, timeout=30, check=False
+            ["bw", "get", "item", item, "--nointeraction"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+            env=system_environment(),
         )
     except FileNotFoundError:
         raise BitwardenError("the Bitwarden CLI (bw) is not installed") from None
