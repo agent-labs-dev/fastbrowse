@@ -152,6 +152,9 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           BINARIES_RESULT: ${{ needs.binaries.result }}
         run: |
-          test "$GATE_RESULT" = success && test "$SIFT_RESULT" = success && test "$SDK_RESULT" = success && test "$SECRETS_RESULT" = success
+          test "$GATE_RESULT" = success
+          test "$SIFT_RESULT" = success
+          test "$SDK_RESULT" = success
+          test "$SECRETS_RESULT" = success
           test "$CHANGES_RESULT" = success
           test "$BINARIES_RESULT" = success || test "$BINARIES_RESULT" = skipped
