@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastbrowse.clients.environment import ConfigurationError, Settings
-from fastbrowse.models import LocalChrome, SecretValue, StepResult
+from fastbrowse.models import CostBreakdown, LocalChrome, RunResult, SecretValue, Status, StepResult
 
 
 def cloud(local: bool, chrome: LocalChrome, cloud_profile: str | None, proxy_country: str | None = None) -> bool:
@@ -47,7 +47,7 @@ def handed_over(
     attach: bool,
     target_match: str | None,
     local: bool,
-    cloud: bool = False,
+    cloud_asked: bool = False,
     chrome: LocalChrome,
     cloud_profile: str | None,
     proxy_country: str | None,
@@ -69,7 +69,7 @@ def handed_over(
         conflict
         for conflict, on in (
             ("--local", local),
-            ("--cloud", cloud),
+            ("--cloud", cloud_asked),
             ("--headed", chrome.headed),
             ("--profile", chrome.profile is not None),
             ("--cloud-profile", cloud_profile is not None),
@@ -103,9 +103,14 @@ def country_code(value: str) -> str:
     return code
 
 
-def browser_key(settings: Settings, cloud: bool) -> str | None:
+def proxy_country(asked: str | None) -> str:
+    """The country a cloud browser browses from: the one asked for, and the United States when none was."""
+    return "us" if asked is None else asked
+
+
+def browser_key(settings: Settings, on_cloud: bool) -> str | None:
     """The cloud browser's key when the run wants one; None runs local Chrome."""
-    return settings.browser_key() if cloud else None
+    return settings.browser_key() if on_cloud else None
 
 
 def chrome(settings: Settings, headed: bool, profile: Path | None, binary: str | None = None) -> LocalChrome:
@@ -169,6 +174,24 @@ def merged_secrets(values: Mapping[str, SecretValue], vault: Mapping[str, Secret
     if clash := values.keys() & vault.keys():
         raise ValueError(f"a declared secret and the vault item both set {', '.join(sorted(clash))}")
     return {**values, **vault}
+
+
+def error_result(error: str) -> RunResult:
+    """A run with nothing to report but why it failed, in the shape of any other, so a caller branches on `status`.
+
+    It stands for a run the CLI never started, and for one `serve` saw end on an exception, whose browser has
+    closed by then: what that run did is in the events already sent.
+    """
+    return RunResult(
+        status=Status.ERROR,
+        answer=None,
+        data=None,
+        evidence=(),
+        steps=(),
+        cost=CostBreakdown(lines=()),
+        artifacts=(),
+        error=error,
+    )
 
 
 def step_label(step: StepResult) -> str:

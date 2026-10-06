@@ -253,8 +253,8 @@ async def test_an_error_reply_raises_where_the_value_was_awaited() -> None:
 
     assert reply["result"]["status"] == "complete"
     (raised,) = typist.raised
-    assert (raised.method, raised.code, raised.message) == ("secrets/resolve", -32000, "the vault is locked")
-    assert str(raised) == "secrets/resolve: the vault is locked"
+    assert (raised.method, raised.code) == ("secrets/resolve", -32000)
+    assert str(raised) == "secrets/resolve: the client could not resolve the secret 'SHOP_PASSWORD'"
 
 
 @pytest.mark.parametrize(

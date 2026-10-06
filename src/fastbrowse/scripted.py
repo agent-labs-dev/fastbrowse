@@ -27,7 +27,7 @@ from fastbrowse.telemetry import Ledger
 
 
 class Step(Frozen):
-    operation: str
+    operation: Operation
     label: str
     pick: str | None = None
 
@@ -38,7 +38,7 @@ def steps(task: str) -> tuple[Step, ...]:
     for part in filter(None, map(str.strip, task.split(";"))):
         action, _, pick = map(str.strip, part.partition("="))
         operation, _, label = action.partition(" ")
-        found.append(Step(operation=operation, label=label.strip(), pick=pick or None))
+        found.append(Step(operation=Operation(operation), label=label.strip(), pick=pick or None))
     return tuple(found)
 
 
@@ -85,14 +85,14 @@ class ScriptedJev:
     def _choice(self, key: str, question: ChoiceQuestion) -> str | None:
         step = self._step
         if key == "operation":
-            return step.operation if step else Operation.DONE.value
+            return (step.operation if step else Operation.DONE).value
         if key == "read_assessment":
             return "absent"
         if step is None:
             return None
         if key == "pick":
             return step.pick
-        if key == f"{step.operation}_target":
+        if key == f"{step.operation.value}_target":
             # A control's id is only known once the page is indexed, so the script names it by its label.
             for option, described in question.criteria.items():
                 if isinstance(described, Mapping) and described.get("label") == step.label:

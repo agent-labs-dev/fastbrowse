@@ -58,10 +58,17 @@ _NOTES = frozenset({"description", "title", "default", "$schema", "$defs"})
 """Keywords that say nothing about the value, and so may sit beside any other."""
 _OBJECT = ("properties", "required", "additionalProperties")
 _REFERENCE = re.compile(r"#/\$defs/(.+)")
+
+
 # Pydantic would otherwise read "3" as an integer and "yes" as a boolean, which the caller's schema does not.
+def _whole(value: Any) -> Any:
+    # JSON has one number type, so JSON Schema calls 3.0 an integer, and a JavaScript client writes one either way.
+    return int(value) if isinstance(value, float) and value.is_integer() else value
+
+
 _SCALARS: dict[str, Any] = {
     "string": Annotated[str, Strict()],
-    "integer": Annotated[int, Strict()],
+    "integer": Annotated[int, Strict(), BeforeValidator(_whole)],
     "number": Annotated[float, Strict()],
     "boolean": Annotated[bool, Strict()],
     "null": None,

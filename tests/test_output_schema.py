@@ -102,7 +102,8 @@ SKU = {"sku": {"type": "string"}}
     ("schema", "matching", "mismatched"),
     [
         ({"type": "string"}, ["kettle", ""], [3, None, ["kettle"]]),
-        ({"type": "integer"}, [3, -1], ["three", "3", 3.5, True, None]),
+        # JSON has one number type, so 3.0 is the integer 3 to JSON Schema.
+        ({"type": "integer"}, [3, -1, 3.0, -0.0, 1e3], ["three", "3", "3.0", 3.5, True, None]),
         ({"type": "number"}, [3.5, 3], ["three", "3.5", True, None]),
         ({"type": "boolean"}, [True, False], ["yes", 1, None]),
         ({"type": "null"}, [None], ["null", 0]),

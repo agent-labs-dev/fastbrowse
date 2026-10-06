@@ -173,10 +173,13 @@ async def test_an_error_reply_to_a_secret_ends_the_run_as_an_error_result() -> N
 
     async with serving(runner=typist, settings=_settings) as client:
         run = await client.call("run", _run(secrets=[PASSWORD]))
-        await client.refuse(await _asked(client), -32000, "the vault is locked")
+        await client.refuse(await _asked(client), -32000, f"the vault refused {VALUE}")
         reply = await client.reply(run)
 
-    assert reply["result"] == ERRORED | {"error": "secrets/resolve: the vault is locked"}
+    # The text is the server's own: a client that is not the SDK could put the value in its message.
+    assert reply["result"] == ERRORED | {
+        "error": "secrets/resolve: the client could not resolve the secret 'SHOP_PASSWORD'"
+    }
 
 
 async def test_a_secret_reply_of_the_wrong_shape_ends_the_run_as_an_error_result_that_does_not_repeat_it(
@@ -193,11 +196,60 @@ async def test_a_secret_reply_of_the_wrong_shape_ends_the_run_as_an_error_result
     assert VALUE not in exchange.written.decode() + caplog.text
 
 
-async def test_a_run_that_fails_on_its_own_is_still_an_internal_error_and_not_a_result() -> None:
+async def test_a_run_that_fails_on_its_own_is_an_error_result_with_its_traceback_in_the_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     async def broken(task: str, **_: Any) -> RunResult:
         raise ValueError("no such page")
 
     async with serving(runner=broken, settings=_settings) as client:
         response = await client.request("run", _run(until=True, frames=True))
 
-    assert response["error"] == {"code": -32603, "message": "ValueError: no such page"}
+    assert "error" not in response
+    assert response["result"] == ERRORED | {"error": "ValueError: no such page"}
+    assert "Traceback" in caplog.text and "no such page" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "error",
+    ["the orders page never loaded", ["no"], {"code": "-32000", "message": 7}, {}],
+    ids=["text", "a list", "members of the wrong type", "no members"],
+)
+async def test_an_error_reply_the_server_cannot_read_still_ends_the_run_and_none_of_it_is_repeated(
+    error: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    browsing = Browsing()
+
+    async with serving(runner=browsing, settings=_settings) as client:
+        run = await client.call("run", _run(until=True))
+        asked = await _asked_until(client)
+        await client.send({"jsonrpc": "2.0", "id": asked["id"], "error": error})
+        reply = await client.reply(run)
+
+    assert reply["result"] == ERRORED | {"error": "run/until: the client replied with an error"}
+    assert "never loaded" not in caplog.text
+
+
+async def test_an_error_reply_with_one_member_of_the_wrong_type_keeps_the_other() -> None:
+    browsing = Browsing()
+
+    async with serving(runner=browsing, settings=_settings) as client:
+        run = await client.call("run", _run(until=True))
+        asked = await _asked_until(client)
+        await client.send({"jsonrpc": "2.0", "id": asked["id"], "error": {"code": True, "message": "not yet"}})
+        reply = await client.reply(run)
+
+    assert reply["result"]["error"] == "run/until: not yet"
+
+
+async def test_a_reply_with_both_members_and_a_null_error_is_read_as_its_result() -> None:
+    browsing = Browsing()
+
+    async with serving(runner=browsing, settings=_settings) as client:
+        run = await client.call("run", _run(until=True))
+        asked = await _asked_until(client)
+        await client.send({"jsonrpc": "2.0", "id": asked["id"], "result": True, "error": None})
+        reply = await client.reply(run)
+
+    assert reply["result"]["status"] == "complete"

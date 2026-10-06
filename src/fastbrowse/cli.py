@@ -34,10 +34,8 @@ from fastbrowse.clients.environment import ConfigurationError, load_settings
 from fastbrowse.models import (
     Authorization,
     BrowserEvent,
-    CostBreakdown,
     Limits,
     LocalChrome,
-    RunResult,
     SecretValue,
     Status,
     StepEvent,
@@ -222,7 +220,7 @@ async def run(args: argparse.Namespace) -> int:
         attach=args.attach,
         target_match=args.target_match,
         local=args.local,
-        cloud=args.cloud,
+        cloud_asked=args.cloud,
         chrome=chrome,
         cloud_profile=args.cloud_profile,
         proxy_country=args.proxy_country,
@@ -239,7 +237,7 @@ async def run(args: argparse.Namespace) -> int:
         cdp_port=args.cdp_port,
         attach=args.attach,
         target_match=args.target_match,
-        proxy_country="us" if args.proxy_country is None else args.proxy_country,
+        proxy_country=options.proxy_country(args.proxy_country),
         secrets=secrets,
         limits=limits,
         authorization=Authorization(irreversible_actions=args.authorize),
@@ -269,20 +267,6 @@ async def run(args: argparse.Namespace) -> int:
     return EXIT_CODES[result.status]
 
 
-def _refused(error: str) -> RunResult:
-    """A run that never started, in the shape of one that did, so a caller parsing `--json` can branch on `status`."""
-    return RunResult(
-        status=Status.ERROR,
-        answer=None,
-        data=None,
-        evidence=(),
-        steps=(),
-        cost=CostBreakdown(lines=()),
-        artifacts=(),
-        error=error,
-    )
-
-
 def main() -> None:
     # Only as the first argument, so a task that mentions the word, or `--local serve`, is still a task.
     if sys.argv[1:2] == ["serve"]:
@@ -294,5 +278,5 @@ def main() -> None:
         sys.exit(asyncio.run(run(args)))
     except ConfigurationError as exc:
         if args.json:
-            print(_refused(str(exc)).model_dump_json(indent=2))
+            print(options.error_result(str(exc)).model_dump_json(indent=2))
         sys.exit(f"fastbrowse: {exc}")
