@@ -68,3 +68,14 @@ Post-push review fixed lowercase origin headers that bypassed endpoint rewriting
 blank transaction outcomes. A blank outcome proves nothing but permits recovery to navigate. CI's secret scan
 now checks the build's complete ancestry: a fresh clone reproduced its false positive on an artificial token in
 an unrelated contributor branch, while the PR branch and its merge commit had no findings.
+
+The clean `afb218e` fixture campaign also finished 95/96. Its second infinite-scroll repeat failed, despite the
+preceding focused 3/3 check. A separate state trace reproduced the failure: a malformed tally field range left
+an uncovered record and permanently blocked the count. A bounded retry now repairs field extraction on the
+same saved capture before any of that response is merged. A second invalid response still leaves the requirement
+open. This applies to any counted list and uses neither fixture names nor expected values. The generic regression
+failed before the repair; 591 agent and retrieval tests pass afterward. The failed clean campaign and tracing
+attempt remain in the receipt. A passing focused repeat alone cannot establish reliability.
+
+The capped repair check passed 3/3, costing $0.05670. The invalid-range cases still fail closed after one retry,
+and call and dollar limits stop the retry before requesting another response. This remains provisional evidence.

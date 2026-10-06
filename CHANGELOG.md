@@ -19,6 +19,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   retrieval still requires login, and bot challenges still block the run.
 - Record counts use quoted child records instead of a scalar group total. Covered clicks report the visible
   obstruction, and requested transactions have their outcome read before another interaction.
+  Malformed tally field ranges get one repair attempt on the saved capture before later counts are marked incomplete.
 - External capsule endpoints preserve cookie security attributes while mapping their declared hostnames.
   Strict state supplements use independently sampled sequences and leave missing evidence ungraded.
 

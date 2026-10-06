@@ -884,6 +884,34 @@ async def read(
                 max_output_tokens=tokens.read_output_tokens,
                 ledger=ledger,
             )
+            groups = [g for t in result.data.tallies if t.requirement_id in requirement_ids for g in t.groups]
+            groups.extend(g for c in result.data.continues if c.requirement_id in requirement_ids for g in c.tallies)
+            if any(
+                g.field is not None
+                and (g.key is not None or g.records or _field_groups(capture, part, g.field) is None)
+                for g in groups
+            ):
+                # A malformed field range must be repaired on this capture before it poisons later pages' counts.
+                if ledger is not None:
+                    ledger.record(result.cost)
+                costs.append(result.cost)
+                result = await llm.generate(
+                    LLMPurpose.READ,
+                    [
+                        *messages,
+                        Message(
+                            role="user",
+                            content="Your tally field range could not be resolved into complete matching records. "
+                            "Read the same capture again. Use explicit record block ranges when the field's "
+                            "delimiters or range cannot be verified. A field range must contain only complete "
+                            "record blocks, with key=null and records=[]. Retain every matching record and "
+                            "keep the requirement open unless the evidence covers the entire requested list.",
+                        ),
+                    ],
+                    _ReadResponse,
+                    max_output_tokens=tokens.read_output_tokens,
+                    ledger=ledger,
+                )
         if ledger is not None:
             ledger.record(result.cost)
         costs.append(result.cost)

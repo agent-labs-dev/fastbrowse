@@ -72,6 +72,36 @@
       "unknown_cost": 0,
       "git_sha": "5e3b65e37708ced3af93f0fda13d79e0b3b1000e",
       "dirty": true
+    },
+    {
+      "file": "native-fixes-clean-fixtures.jsonl",
+      "sha256": "b7c8a51eb42cfc30a1f729af4cb4b0fef7a2eb54d38872b50895ce74260912cf",
+      "attempts": 96,
+      "passed": 95,
+      "dollars": 0.87336,
+      "unknown_cost": 0,
+      "git_sha": "afb218ef909a64b96ecc7ffa51314748cb624753",
+      "dirty": false
+    },
+    {
+      "file": "native-count-trace-run.jsonl",
+      "sha256": "55f53006bab251001ee246245fb9620beb02f13332833e5456de7958ccb207bc",
+      "attempts": 1,
+      "passed": 0,
+      "dollars": 0.02926,
+      "unknown_cost": 0,
+      "git_sha": "afb218ef909a64b96ecc7ffa51314748cb624753",
+      "dirty": false
+    },
+    {
+      "file": "native-tally-repair-fixtures.jsonl",
+      "sha256": "eba1682ee8282072e3701dc2879ec0b9bb19769a3d68aa46176da3971f67f573",
+      "attempts": 3,
+      "passed": 3,
+      "dollars": 0.0567,
+      "unknown_cost": 0,
+      "git_sha": "afb218ef909a64b96ecc7ffa51314748cb624753",
+      "dirty": true
     }
   ]
 }

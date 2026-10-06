@@ -2534,9 +2534,11 @@ async def test_invalid_tally_field_cannot_close_or_partially_count_a_list(fault:
         "tallies": [{"requirement_id": "r", "complete": True, "groups": [field]}],
     }
     notes = Notes()
-    result = await read(ScriptedLLM([response]), page, "Count by owner", ["r"], notes)
+    llm = ScriptedLLM([response, response])
+    result = await read(llm, page, "Count by owner", ["r"], notes)
     assert result.incomplete == ("r",) and result.uncovered == 1
     assert not notes.evidenced("r") and not notes.tallies
+    assert len(llm.calls) == 2 and len(result.cost_lines) == 2
 
 
 @pytest.mark.parametrize("reuse", [False, True])
@@ -3386,3 +3388,56 @@ async def test_record_count_ignores_group_totals_and_counts_matching_children() 
     assert notes.evidenced("r")
     assert sum(tally.count for tally in notes.tallies) == 4
     assert len(llm.calls) == 1
+
+
+@pytest.mark.parametrize("limit", [None, "calls", "dollars"])
+async def test_a_malformed_tally_field_is_repaired_before_it_poisons_the_count(limit: str | None) -> None:
+    page = capture((BlockKind.LIST_ITEM, "Entry A"), (BlockKind.PARAGRAPH, "List finished"))
+    invalid: JsonValue = {
+        "answered": True,
+        "claims": [],
+        "tallies": [
+            {
+                "requirement_id": "r",
+                "complete": True,
+                "groups": [
+                    {
+                        "key": None,
+                        "field": {"span": {"first": "s0", "last": "s1"}, "prefix": "", "suffix": ""},
+                    }
+                ],
+            }
+        ],
+    }
+    corrected: JsonValue = {
+        "answered": True,
+        "claims": [],
+        "tallies": [
+            {
+                "requirement_id": "r",
+                "complete": True,
+                "groups": [
+                    {
+                        "key": None,
+                        "records": [{"first": "s0", "last": "s0"}],
+                    }
+                ],
+            }
+        ],
+    }
+    notes = Notes()
+    llm = ScriptedLLM([invalid, corrected])
+    ledger = Ledger(Limits(max_llm_calls=1) if limit == "calls" else Limits(max_dollars=0.001) if limit else Limits())
+    if limit:
+        with pytest.raises(BudgetExceeded):
+            await read(llm, page, "Count entries", ["r"], notes, ledger=ledger)
+        assert len(llm.calls) == 1 and ledger.breakdown().known_dollars == 0.001
+        assert not notes.evidenced("r") and not notes.tallies
+        return
+    outcome = await read(llm, page, "Count entries", ["r"], notes, ledger=ledger)
+    assert notes.evidenced("r")
+    assert not outcome.incomplete
+    assert outcome.uncovered == 0
+    assert len(llm.calls) == 2
+    assert len(outcome.cost_lines) == 2
+    assert ledger.llm_calls == 2 and ledger.breakdown().known_dollars == 0.002
