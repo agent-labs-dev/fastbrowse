@@ -20,7 +20,7 @@ export type JsonValue = unknown;
 /**
  * What the server sends without being asked.
  */
-export type ServerMethod = 'run/event' | 'secrets/resolve';
+export type ServerMethod = 'run/event' | 'run/frame' | 'run/until' | 'secrets/resolve';
 export type Operation =
   | 'click'
   | 'hover'
@@ -282,6 +282,13 @@ export interface StepFact {
   deep_link: string | null;
 }
 /**
+ * The params of `run/frame`: the active tab as it looked a moment ago. Sent only to a run that set `frames`.
+ */
+export interface RunFrame {
+  run_id: string;
+  frame: string;
+}
+/**
  * One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.
  *
  * The reply is the `RunResult`. No API key is among the fields: model and browser keys come from the
@@ -301,6 +308,8 @@ export interface RunParams {
     [k: string]: unknown;
   } | null;
   secrets?: SecretRef[];
+  frames?: boolean;
+  until?: boolean;
   downloads?: string | null;
   record?: string | null;
   local?: boolean;
@@ -344,6 +353,14 @@ export interface RunResult {
    * The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed.
    */
   recordings: string[];
+}
+/**
+ * The params of `run/until`: the address a run ended on. The reply is a boolean, and false keeps the run
+ * from `complete`.
+ */
+export interface RunUntilParams {
+  run_id: string;
+  url: string;
 }
 /**
  * The params of `secrets/resolve`: one value the run is about to type. The reply is the value, or null.
