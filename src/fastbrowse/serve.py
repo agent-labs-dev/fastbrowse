@@ -40,6 +40,7 @@ from fastbrowse.protocol import (
     Request,
     RequestId,
     Response,
+    RunCancelParams,
     RunEvent,
     RunParams,
     SecretsResolveParams,
@@ -218,6 +219,8 @@ class Server:
         self._closing = False
         # The id of the run in progress. One at a time: a caller that wants more starts more processes.
         self._active: str | None = None
+        # The task answering it, until the run ends or is cancelled.
+        self._running: asyncio.Task[None] | None = None
         self._answering: set[asyncio.Task[None]] = set()
         # The server's own requests that the client has not answered yet, by the id each was sent with.
         self._asked = 0
@@ -225,6 +228,7 @@ class Server:
         self._handlers: dict[Method, _Handler[Any]] = {
             Method.INITIALIZE: _Handler(InitializeParams, self._initialize),
             Method.RUN: _Handler(RunParams, self._run, background=True),
+            Method.RUN_CANCEL: _Handler(RunCancelParams, self._run_cancel),
             Method.SHUTDOWN: _Handler(NoParams, self._shutdown),
         }
 
@@ -238,9 +242,9 @@ class Server:
             while not self._closing and (line := await self._transport.receive()) is not None:
                 await self._receive(line)
         finally:
-            # A run outlives the loop that started it, and cancelling it is what closes its browser.
-            for task in self._answering:
-                task.cancel()
+            # A run outlives the loop that started it. Cancelling it closes its browser, and the process stays
+            # until that is done and the run is answered.
+            self._cancel_run()
             await asyncio.gather(*self._answering, return_exceptions=True)
         return 0
 
@@ -266,7 +270,9 @@ class Server:
             return
         answering = self._answer(request, handler.call(params))
         if handler.background:
-            task = asyncio.create_task(answering)
+            # Started here and not on the loop's next turn, so a `run/cancel` or the end of input on the
+            # next line finds the run under way.
+            task = asyncio.Task(answering, loop=asyncio.get_running_loop(), eager_start=True)
             self._answering.add(task)
             task.add_done_callback(self._answering.discard)
         else:
@@ -315,6 +321,7 @@ class Server:
         if self._active is not None:
             raise Refused(ErrorCode.BUSY, f"run {self._active!r} is still active, and a server runs one at a time")
         self._active = params.run_id
+        self._running = asyncio.current_task()
 
         async def on_event(event: StepEvent | BrowserEvent) -> None:
             # The run waits for this before it goes on, which puts the events on the wire in order and ahead of
@@ -325,8 +332,21 @@ class Server:
             return await self._runner(params.task, **await self._arguments(params), on_event=on_event)
         except ConfigurationError as exc:
             raise Refused(ErrorCode.CONFIGURATION, str(exc)) from None
+        except asyncio.CancelledError:
+            # The runner has unwound by now, and that is what closed its browser.
+            raise Refused(ErrorCode.CANCELLED, f"run {params.run_id!r} was cancelled") from None
         finally:
-            self._active = None
+            self._active = self._running = None
+
+    async def _run_cancel(self, params: RunCancelParams) -> None:
+        if params.run_id == self._active:
+            self._cancel_run()
+
+    def _cancel_run(self) -> None:
+        # Once per run. A second cancellation would land in the runner while it is closing the browser.
+        running, self._running = self._running, None
+        if running is not None:
+            running.cancel()
 
     async def _arguments(self, params: RunParams) -> dict[str, Any]:
         """A `run` request as `run_task`'s arguments, or the reason it cannot become a run.

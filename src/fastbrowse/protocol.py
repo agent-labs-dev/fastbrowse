@@ -25,6 +25,7 @@ class Method(StrEnum):
 
     INITIALIZE = "initialize"
     RUN = "run"
+    RUN_CANCEL = "run/cancel"
     SHUTDOWN = "shutdown"
 
 
@@ -143,6 +144,16 @@ class RunParams(Params):
     proxy_country: str | None = None
     viewport: tuple[int, int] | None = None
     cloud_allow_resizing: bool = False
+
+
+class RunCancelParams(Params):
+    """Which run to stop. One that is not active, because it finished or never was, is left as it is.
+
+    The reply says only that the request was read. The run's own reply is what says it was cancelled: the
+    `cancelled` error, written after its browser has closed.
+    """
+
+    run_id: str
 
 
 class RunEvent(BaseModel):
