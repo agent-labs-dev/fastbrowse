@@ -562,6 +562,14 @@
       "observation_id": "ae3705f47ff0009f",
       "stored_at": "2026-10-06T21:04:40.336786Z",
       "attempts": 1
+    },
+    {
+      "id": "local-serial-hev-9-1791320948696756559",
+      "sha256": "2452146fd993765e531fed9c5311be5f2dafcd804e6f8318d6e686293dfe5b3b",
+      "trace_id": "2452146fd993765e531fed9c5311be5f",
+      "observation_id": "678aaf668d8b34b1",
+      "stored_at": "2026-10-06T21:12:09.230480Z",
+      "attempts": 1
     }
   ]
 }
