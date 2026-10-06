@@ -20,7 +20,7 @@ export type JsonValue = unknown;
 /**
  * What the server sends without being asked.
  */
-export type ServerMethod = 'run/event';
+export type ServerMethod = 'run/event' | 'secrets/resolve';
 export type Operation =
   | 'click'
   | 'hover'
@@ -224,6 +224,15 @@ export interface RunAttachment {
   content: string;
 }
 /**
+ * Which run to stop. One that is not active, because it finished or never was, is left as it is.
+ *
+ * The reply says only that the request was read. The run's own reply is what says it was cancelled: the
+ * `cancelled` error, written after its browser has closed.
+ */
+export interface RunCancelParams {
+  run_id: string;
+}
+/**
  * The params of `run/event`: one thing a run did, written before that run's reply.
  */
 export interface RunEvent {
@@ -288,6 +297,7 @@ export interface RunParams {
   attachments?: RunAttachment[];
   limits?: Limits | null;
   authorization?: Authorization | null;
+  secrets?: SecretRef[];
   downloads?: string | null;
   record?: string | null;
   local?: boolean;
@@ -300,6 +310,13 @@ export interface RunParams {
   proxy_country?: string | null;
   viewport?: [number, number] | null;
   cloud_allow_resizing?: boolean;
+}
+export interface SecretRef {
+  name: string;
+  /**
+   * Origins (scheme://host[:port]) the value may be typed into; models only ever see `name`.
+   */
+  origins: string[];
 }
 export interface RunResult {
   status: Status;
@@ -324,4 +341,24 @@ export interface RunResult {
    * The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed.
    */
   recordings: string[];
+}
+/**
+ * The params of `secrets/resolve`: one value the run is about to type. The reply is the value, or null.
+ */
+export interface SecretsResolveParams {
+  run_id: string;
+  name: string;
+  origin: string;
+}
+/**
+ * A call from the server that the client answers, with a `Response` or an `ErrorResponse` carrying its id.
+ *
+ * The ids are the server's own and count up from one. A client's ids may be the same numbers: a reply is
+ * told from a request by having no `method`, so the two never meet.
+ */
+export interface ServerRequest {
+  jsonrpc: '2.0';
+  id: number;
+  method: ServerMethod;
+  params: unknown;
 }
