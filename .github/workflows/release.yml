@@ -1,10 +1,10 @@
 name: Release
-# One tag publishes one version to PyPI and to npm. Nothing is published until the wheel, the five binaries
-# and the two signed macOS builds have all passed, and then in an order that never leaves a package pointing
-# at one that is not there yet: PyPI, the five platform packages, the SDK.
+# One tag publishes one version to PyPI and to npm. Nothing is published until the wheel and the five binaries
+# have all passed, and then in an order that never leaves a package pointing at one that is not there yet:
+# PyPI, the five platform packages, the SDK.
 #
-# Run by hand, it stops after signing and publishes nothing. That is how the certificate and the notary
-# credentials are tried without spending a version number, which no registry gives back.
+# Run by hand, it stops after the binaries and publishes nothing. That is how a change to the build is tried
+# without spending a version number, which no registry gives back.
 on:
   push:
     tags: ["v*"]
@@ -59,102 +59,10 @@ jobs:
     permissions: {contents: read}
     uses: ./.github/workflows/binaries.yml
 
-  # macOS runs a program only if it is signed, and Gatekeeper stops one that Apple has not notarized. The build
-  # is signed here and not while it is frozen, so that pull requests build with no certificate. Everything
-  # the binaries workflow checked of the build is checked again afterwards, because signing rewrites every
-  # Mach-O file and turns on the hardened runtime.
-  sign:
-    name: sign ${{ matrix.target }}
-    needs: binaries
-    runs-on: ${{ matrix.runner }}
-    environment: apple-signing
-    permissions: {contents: read}
-    strategy:
-      fail-fast: false
-      matrix:
-        # The runners the two targets were built on, so the signed build is run where the unsigned one was.
-        include:
-          - {target: darwin-arm64, runner: macos-14}
-          - {target: darwin-x64, runner: macos-15-intel}
-    env:
-      TARGET: ${{ matrix.target }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: {persist-credentials: false}
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        with:
-          python-version: "3.13"
-          enable-cache: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: fastbrowse-${{ matrix.target }}
-          path: ${{ runner.temp }}/unsigned
-      - name: Unpack the build
-        run: |
-          mkdir "$RUNNER_TEMP/build"
-          tar -xzf "$RUNNER_TEMP/unsigned/fastbrowse-$TARGET.tar.gz" -C "$RUNNER_TEMP/build"
-          echo "BUILD=$RUNNER_TEMP/build/fastbrowse" >> "$GITHUB_ENV"
-          echo "KEYCHAIN=$RUNNER_TEMP/signing.keychain-db" >> "$GITHUB_ENV"
-      # The certificate goes into a keychain made for this job and deleted at its end. `CSC_LINK` is the
-      # base64 of the .p12 that holds the Developer ID Application certificate and its key.
-      - name: Import the signing certificate
-        env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-        run: |
-          password="$(openssl rand -hex 24)"
-          printf '%s' "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
-          security create-keychain -p "$password" "$KEYCHAIN"
-          security set-keychain-settings -lut 3600 "$KEYCHAIN"
-          security unlock-keychain -p "$password" "$KEYCHAIN"
-          security import "$RUNNER_TEMP/certificate.p12" -f pkcs12 -P "$CSC_KEY_PASSWORD" -k "$KEYCHAIN" -T /usr/bin/codesign
-          rm "$RUNNER_TEMP/certificate.p12"
-          # Without this, codesign stops to ask for the keychain's password, and no one is there to type it.
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$KEYCHAIN" > /dev/null
-          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
-          # By its hash: a name can match more than one certificate.
-          identity="$(security find-identity -v -p codesigning "$KEYCHAIN" | awk '/Developer ID Application/ {print $2; exit}')"
-          test -n "$identity"
-          echo "IDENTITY=$identity" >> "$GITHUB_ENV"
-      - run: uv run --no-project python scripts/macos_sign.py sign "$BUILD" --identity "$IDENTITY" --keychain "$KEYCHAIN"
-      - name: Notarize
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-        run: uv run --no-project python scripts/macos_sign.py notarize "$BUILD"
-      # Every Mach-O file: a Developer ID signature that holds, the hardened runtime, Apple's timestamp, and a
-      # notarization ticket Apple answers for when asked.
-      - run: uv run --no-project python scripts/macos_sign.py verify "$BUILD" --notarized
-      - run: uv run --no-project python scripts/smoke_binary.py "$BUILD/fastbrowse"
-      # Then as the npm package it is published in, whose files are copies of the ones signed above.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with: {node-version: "22", package-manager-cache: false}
-      - run: npm ci --ignore-scripts
-      - name: Assemble the npm platform package
-        run: |
-          uv run --no-project python scripts/npm_platform_package.py "$BUILD" \
-            --target "$TARGET" --version "$(uv version --short)" --out "$RUNNER_TEMP/npm-package"
-      - run: uv run --no-project python scripts/macos_sign.py verify "$RUNNER_TEMP/npm-package/fastbrowse" --notarized
-      - run: uv run --no-project python scripts/smoke_npm_install.py "$RUNNER_TEMP/npm-package"
-      - if: always()
-        run: security delete-keychain "$KEYCHAIN" || true
-      # The same archive the binaries workflow uploads, under a name that says it is the signed one.
-      - run: tar -czf "fastbrowse-$TARGET.tar.gz" -C "$RUNNER_TEMP/build" fastbrowse
-        # Otherwise macOS tar adds a `._<file>` entry for each file with extended attributes.
-        env: {COPYFILE_DISABLE: "1"}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: fastbrowse-${{ matrix.target }}-signed
-          path: fastbrowse-${{ matrix.target }}.tar.gz
-          if-no-files-found: error
-          # Already compressed.
-          compression-level: 0
-
   # The first job that publishes. It needs every build job, and each later publish job needs the one before
-  # it, so a target that fails to build, to pass its smoke test or to be notarized publishes nothing anywhere.
+  # it, so a target that fails to build or to pass its smoke test publishes nothing anywhere.
   github-release:
-    needs: [build, binaries, sign]
+    needs: [build, binaries]
     # A run started by hand is a rehearsal and ends here, and with this job every job after it is skipped.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -220,16 +128,12 @@ jobs:
           pattern: fastbrowse-*
           path: ${{ runner.temp }}/builds
       # All six are made ready before the first is published, so a package that cannot be assembled or built
-      # leaves npm untouched. The macOS packages come from the signed builds and from no other.
+      # leaves npm untouched.
       - name: Assemble the platform packages
         run: |
           for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-x64; do
-            case "$target" in
-              darwin-*) artifact="fastbrowse-$target-signed" ;;
-              *) artifact="fastbrowse-$target" ;;
-            esac
             uv run --no-project python scripts/npm_platform_package.py \
-              "$RUNNER_TEMP/builds/$artifact/fastbrowse-$target.tar.gz" \
+              "$RUNNER_TEMP/builds/fastbrowse-$target/fastbrowse-$target.tar.gz" \
               --target "$target" --version "$VERSION" --out "$RUNNER_TEMP/npm/$target"
           done
       - run: npm ci --ignore-scripts

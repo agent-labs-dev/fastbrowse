@@ -49,6 +49,13 @@ jobs:
           chrome="$(find "$HOME/.cache/ms-playwright" -type f -name chrome -path '*chromium-*' | head -n 1)"
           test -x "$chrome"
           echo "FASTBROWSE_CHROME=$chrome" >> "$GITHUB_ENV"
+      # Before the smoke test, so what it runs is what ships. PyInstaller leaves the Python library with the
+      # signature of the framework it came from, which `codesign --verify` rejects in a build that is not one.
+      - name: Sign ad hoc
+        if: startsWith(matrix.target, 'darwin-')
+        run: |
+          uv run --no-sync python scripts/macos_signatures.py sign dist/fastbrowse
+          uv run --no-sync python scripts/macos_signatures.py verify dist/fastbrowse
       # The handshake, then one run on local Chrome with the scripted models that ship in the package.
       - run: uv run --no-sync python scripts/smoke_binary.py dist/fastbrowse/fastbrowse
       # The same tree as the npm package a user gets. It is packed with the SDK, the two are installed into an
