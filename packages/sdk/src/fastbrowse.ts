@@ -26,7 +26,10 @@ const DEFAULT_GRACE_PERIOD_MS = 10_000;
 
 /** How to start the fastbrowse process, and the browser every run uses unless that run says otherwise. */
 export interface StartOptions extends BrowserOptions {
-  /** The fastbrowse executable to run. Without it, the `FASTBROWSE_BINARY` environment variable names one. */
+  /**
+   * The fastbrowse executable to run. Without it, the `FASTBROWSE_BINARY` environment variable names one, and
+   * without that it is the one in the `@fastbrowse/<platform>-<arch>` package installed with this package.
+   */
   binaryPath?: string;
   /** Environment variables for the fastbrowse process, on top of the ones this process has. */
   env?: Record<string, string>;
