@@ -89,7 +89,8 @@ jobs:
       - run: npm run check:sdk
 
   # Five builds on five runners cost more than the rest of CI together, so a pull request pays for them only
-  # when it touches what is frozen or what freezes it. The eval and audit packages are not in the executable.
+  # when it touches what is frozen, what freezes it, what packs it for npm, or how the SDK finds it once
+  # installed. The eval and audit packages are not in the executable.
   # Every push to `main` builds, so a change the filter misjudged is still caught before a release.
   changes:
     runs-on: ubuntu-latest
@@ -105,7 +106,9 @@ jobs:
         run: |
           if [ "$EVENT" != pull_request ] || ! git diff --quiet HEAD^1 HEAD -- \
             src/fastbrowse ':!src/fastbrowse/evals' ':!src/fastbrowse/audit' pyproject.toml uv.lock packaging \
-            scripts/smoke_binary.py .github/workflows/binaries.yml .github/workflows/ci.yml
+            scripts/smoke_binary.py .github/workflows/binaries.yml .github/workflows/ci.yml \
+            scripts/npm_platform_package.py scripts/smoke_npm_install.py \
+            packages/sdk/package.json packages/sdk/src/binary.ts
           then echo "binaries=true" >> "$GITHUB_OUTPUT"
           else echo "binaries=false" >> "$GITHUB_OUTPUT"
           fi
