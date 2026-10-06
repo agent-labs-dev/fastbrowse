@@ -15,6 +15,7 @@ from typing import Any
 from fastbrowse.models import BrowserEvent, CostBreakdown, RunResult, Status
 from tests.serve_client import FakeClient, serving
 from tests.test_serve_run import Recorder, _run, _settings
+from tests.test_serve_secrets import PASSWORD, SHOP, Typist
 
 REPO = Path(__file__).resolve().parent.parent
 CANCELLED = -32002
@@ -286,3 +287,21 @@ def test_the_command_exits_zero_with_its_browser_closed_on_shutdown_during_a_run
     assert replies[2]["result"] is None
     assert replies[1]["error"]["code"] == CANCELLED
     assert marker.read_text() == "closed"
+
+
+async def test_cancelling_a_run_that_is_waiting_on_a_secret_ends_it_and_the_late_value_goes_nowhere() -> None:
+    typist = Typist(("SHOP_PASSWORD", SHOP))
+    async with serving(runner=typist, settings=_settings) as client:
+        run = await _under_way(client, "run-1", secrets=[PASSWORD])
+        question = await client.receive()
+        assert question["method"] == "secrets/resolve"
+
+        await client.result("run/cancel", {"run_id": "run-1"})
+        reply = await client.reply(run)
+        await client.send({"jsonrpc": "2.0", "id": question["id"], "result": "hunter2-correct-horse"})
+        handshake = await client.result("initialize", {"protocol_version": 1})
+
+    assert reply["error"]["code"] == CANCELLED
+    assert typist.resolved == []
+    assert handshake["protocol_version"] == 1
+    assert client.inbox == []
