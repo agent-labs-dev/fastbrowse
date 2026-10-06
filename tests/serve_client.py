@@ -52,9 +52,20 @@ class FakeClient:
 
     async def receive(self) -> dict[str, Any]:
         """The next message from the server, whatever it is."""
-        line = await self.receive_line()
+        return self.parse(await self.receive_line())
+
+    @staticmethod
+    def parse(line: bytes) -> dict[str, Any]:
         assert line.endswith(b"\n") and b"\n" not in line[:-1], f"not one line: {line!r}"
         return json.loads(line)
+
+    async def respond(self, request: dict[str, Any], result: Any) -> None:
+        """Answer one of the server's own requests."""
+        await self.send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+
+    async def refuse(self, request: dict[str, Any], code: int, message: str) -> None:
+        """Answer one of the server's own requests with an error, as a client whose callback threw does."""
+        await self.send({"jsonrpc": "2.0", "id": request["id"], "error": {"code": code, "message": message}})
 
     async def call(self, method: str, params: dict[str, Any] | None = None) -> int:
         """Send a request and return its id without waiting, for a test that has more to say before the reply."""
