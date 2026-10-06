@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
-from fastbrowse.models import Authorization, BrowserEvent, Limits, LocalChrome, StepEvent
+from fastbrowse.models import Authorization, BrowserEvent, Limits, LocalChrome, SecretRef, StepEvent
 
 # Changes only when the wire format does, so it is not the package version: a release that leaves the
 # messages alone leaves this alone, and an SDK can tell a binary it cannot talk to from one that is merely newer.
@@ -32,6 +32,7 @@ class ServerMethod(StrEnum):
     """What the server sends without being asked."""
 
     RUN_EVENT = "run/event"
+    SECRETS_RESOLVE = "secrets/resolve"
 
 
 class ErrorCode(IntEnum):
@@ -128,6 +129,8 @@ class RunParams(Params):
     authorization: Authorization | None = None
     output_schema: dict[str, Any] | None = None
     """The shape of `RunResult.data`, as JSON Schema draft 2020-12 with an object at its root."""
+    secrets: tuple[SecretRef, ...] = ()
+    """The secrets the client holds, by name and origin. A value is asked for with `secrets/resolve`."""
     downloads: Path | None = None
     record: Path | None = None
     local: bool = False
@@ -157,3 +160,25 @@ class Notification(BaseModel):
     jsonrpc: Literal["2.0"] = "2.0"
     method: ServerMethod
     params: Any
+
+
+class ServerRequest(BaseModel):
+    """A call from the server that the client answers, with a `Response` or an `ErrorResponse` carrying its id.
+
+    The ids are the server's own and count up from one. A client's ids may be the same numbers: a reply is
+    told from a request by having no `method`, so the two never meet.
+    """
+
+    jsonrpc: Literal["2.0"] = "2.0"
+    id: int
+    method: ServerMethod
+    params: Any
+
+
+class SecretsResolveParams(BaseModel):
+    """The params of `secrets/resolve`: one value the run is about to type. The reply is the value, or null."""
+
+    run_id: str
+    name: str
+    origin: str
+    """Where it will be typed. The server has already checked it against the origins the ref declared."""
