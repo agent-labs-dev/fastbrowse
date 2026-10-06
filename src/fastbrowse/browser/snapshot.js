@@ -169,6 +169,18 @@
 
   // Their text is code, not a name: Amazon nests a <style> inside a result card's link.
   const CODE = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+  // Icon-only buttons hide their glyph from accessibility text, but the icon library still names it.
+  const iconLabel = e => {
+    const glyphs = new Set();
+    for (const icon of e.querySelectorAll('svg')) {
+      if (!showing(icon)) continue;
+      for (const token of icon.classList) {
+        const glyph = /^(?:icon-tabler|tabler-icon|lucide)-([a-z][a-z0-9-]{0,47})$/.exec(token);
+        if (glyph && !/^(?:icon|xs|sm|lg|xl|\d+x|spin|pulse)$/.test(glyph[1])) glyphs.add(glyph[1]);
+      }
+    }
+    return glyphs.size === 1 ? `${[...glyphs][0].replace(/-/g, ' ')} icon` : '';
+  };
   const labelOf = (e, seen = new Set()) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
@@ -383,7 +395,7 @@
     const base = {
       id,
       role: rname,
-      label: labelOf(e) || rname,
+      label: labelOf(e) || (rname === 'button' ? iconLabel(e) : '') || rname,
       offscreen: y < 0 || y >= innerHeight,
       distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
       sensitive: secret(source),

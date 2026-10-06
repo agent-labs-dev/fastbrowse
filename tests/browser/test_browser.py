@@ -917,3 +917,37 @@ async def test_required_radios_use_their_form_group_validity(
 async def test_screenshots_match_the_png_frame_contract(page: CdpPage, main_site: str) -> None:
     await page.navigate(main_site)
     assert (await page.screenshot()).startswith(b"\x89PNG\r\n\x1a\n")
+
+
+async def test_icon_only_buttons_keep_their_named_glyphs(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.body.innerHTML = '"
+        '<button><svg class="icon icon-tabler icon-tabler-plus" aria-hidden="true"></svg></button>'
+        '<button aria-label="Remove item"><svg class="lucide lucide-minus" aria-hidden="true"></svg></button>'
+        '<button><svg class="lucide lucide-icon lucide-minus" aria-hidden="true"></svg></button>'
+        '<button><svg class="icon icon-tabler icon-tabler-sm" aria-hidden="true"></svg></button>'
+        '<button><svg class="tabler-icon tabler-icon-plus"></svg></button>'
+        '<button><svg class="lucide lucide-minus" style="display:none"></svg>'
+        '<svg class="lucide lucide-plus"></svg></button>'
+        '<button><svg class="lucide lucide-minus"></svg><svg class="lucide lucide-plus"></svg></button>'
+        '<button title="Add item"><svg class="lucide lucide-plus"></svg></button>'
+        '<a href="/product">Product<button><svg class="lucide lucide-heart"></svg></button></a>\';',
+    )
+    observation = await observe_until(page, "Remove item")
+    assert [control.label for control in observation.controls] == [
+        "plus icon",
+        "Remove item",
+        "minus icon",
+        "button",
+        "plus icon",
+        "plus icon",
+        "button",
+        "Add item",
+        "Product",
+        "heart icon",
+    ]
