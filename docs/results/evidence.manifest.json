@@ -442,6 +442,126 @@
       "observation_id": "71dec661be4f7324",
       "stored_at": "2026-10-06T16:35:43.190647Z",
       "attempts": 66
+    },
+    {
+      "id": "local-serial-lh-8-1791317196205780228",
+      "sha256": "48d245374133f216938b60369888e7ef5f6dad843cdff7bd0460f61a7335bc36",
+      "trace_id": "48d245374133f216938b60369888e7ef",
+      "observation_id": "e8fa7e74699d214f",
+      "stored_at": "2026-10-06T20:07:54.719154Z",
+      "attempts": 1
+    },
+    {
+      "id": "local-serial-hev-8-1791317504670929503",
+      "sha256": "40845952d147fbafc1a5f605539f7aa3127386bf2af0cedd8e7b9fa31068a851",
+      "trace_id": "40845952d147fbafc1a5f605539f7aa3",
+      "observation_id": "217e60dc63427203",
+      "stored_at": "2026-10-06T20:20:40.405380Z",
+      "attempts": 1
+    },
+    {
+      "id": "local-serial-hev-9-1791317594898482476",
+      "sha256": "a1d16744d91b036c5ad268db8efd287d64bbac7bcfe39f670e048d5741e3c58a",
+      "trace_id": "a1d16744d91b036c5ad268db8efd287d",
+      "observation_id": "0b71890390687277",
+      "stored_at": "2026-10-06T20:20:40.920429Z",
+      "attempts": 1
+    },
+    {
+      "id": "local-serial-hev-9-1791318147136671644",
+      "sha256": "5a2793dad313d9af65b8fc688e758e971fa3c8b48534c66f80a58e480a943eb7",
+      "trace_id": "5a2793dad313d9af65b8fc688e758e97",
+      "observation_id": "119fe41012165a98",
+      "stored_at": "2026-10-06T20:29:32.019107Z",
+      "attempts": 1
+    },
+    {
+      "id": "local-serial-blog-read-author-1791319092546264697",
+      "sha256": "37c630bf79f03d4fa6321d3d31baf480e8ebecd0e411f72ed9153be347956c82",
+      "trace_id": "37c630bf79f03d4fa6321d3d31baf480",
+      "observation_id": "9938ab3ac390beaa",
+      "stored_at": "2026-10-06T20:40:02.796750Z",
+      "attempts": 1
+    },
+    {
+      "id": "local-serial-directory-filter-1791318806013604428",
+      "sha256": "800a5ae7cee6f2923523a324dc669298f24daf3a842faa0a489fa7c704762e5c",
+      "trace_id": "800a5ae7cee6f2923523a324dc669298",
+      "observation_id": "835e34d6a15bcc6f",
+      "stored_at": "2026-10-06T20:40:03.268569Z",
+      "attempts": 1
+    },
+    {
+      "id": "local-serial-id-2-1791318663810438912",
+      "sha256": "5935a2e558067b1ebadf9ff9de96165642b79f5390136fc9a6db1f005f278ee0",
+      "trace_id": "5935a2e558067b1ebadf9ff9de961656",
+      "observation_id": "688d594f69b9a7e1",
+      "stored_at": "2026-10-06T20:40:12.180011Z",
+      "attempts": 1
+    },
+    {
+      "id": "local-serial-md-2-1791319029842589052",
+      "sha256": "836ade848ccb42c70d4fda63c445a549c9bcd907484c748036f59e76a40c9a28",
+      "trace_id": "836ade848ccb42c70d4fda63c445a549",
+      "observation_id": "18dcc055fdeeb6a5",
+      "stored_at": "2026-10-06T20:40:14.412082Z",
+      "attempts": 1
+    },
+    {
+      "id": "local-serial-md-4-1791318980632902892",
+      "sha256": "79eba5d11b03e2288536b917558401347c6acc75cb93f09223200b7e53b34d44",
+      "trace_id": "79eba5d11b03e2288536b91755840134",
+      "observation_id": "8e95fdf94ff5b43d",
+      "stored_at": "2026-10-06T20:40:14.596351Z",
+      "attempts": 1
+    },
+    {
+      "id": "local-serial-react-auth-boundary-1791319152881302406",
+      "sha256": "39d26dbf221dd2b4c801b9e33a486be664fb4103fa58eda033c590421dbf1dc2",
+      "trace_id": "39d26dbf221dd2b4c801b9e33a486be6",
+      "observation_id": "187543e4e28ec6c1",
+      "stored_at": "2026-10-06T20:47:31.442727Z",
+      "attempts": 1
+    },
+    {
+      "id": "local-serial-react-auth-boundary-1791319590574843553",
+      "sha256": "1b58a41f073c8fab69264c243e14ef0783547a8177062817403b989b4ae33fa1",
+      "trace_id": "1b58a41f073c8fab69264c243e14ef07",
+      "observation_id": "10866dbf87daf845",
+      "stored_at": "2026-10-06T20:47:32.035631Z",
+      "attempts": 1
+    },
+    {
+      "id": "local-serial-md-8-1791319631997447913",
+      "sha256": "f928a8cb5f63ef38d3c76196012857b879b736132201ed0a9663acd0fb71b326",
+      "trace_id": "f928a8cb5f63ef38d3c76196012857b8",
+      "observation_id": "8219eefc733f3748",
+      "stored_at": "2026-10-06T20:52:05.348940Z",
+      "attempts": 1
+    },
+    {
+      "id": "local-serial-ea-6-1791320033724630191",
+      "sha256": "637eb84ff01b108ef58fdd6575e9aa4fe0987661f01d3ef61953480b7da4c633",
+      "trace_id": "637eb84ff01b108ef58fdd6575e9aa4f",
+      "observation_id": "5e35326fefffc2c6",
+      "stored_at": "2026-10-06T21:04:28.712264Z",
+      "attempts": 1
+    },
+    {
+      "id": "local-serial-ea-7-1791320166959280339",
+      "sha256": "72bd94fd532fa513ac4601fa1f0d55b0f167cb5cd0190fb2a67b3f55314876c9",
+      "trace_id": "72bd94fd532fa513ac4601fa1f0d55b0",
+      "observation_id": "c2efa35e2ef5dee3",
+      "stored_at": "2026-10-06T21:04:29.261476Z",
+      "attempts": 1
+    },
+    {
+      "id": "local-serial-md-8-1791319913797568486",
+      "sha256": "c4d76a313bcaf709eab12d5f611cd29e684bbb901fd8a01ed6830447b2815e9d",
+      "trace_id": "c4d76a313bcaf709eab12d5f611cd29e",
+      "observation_id": "ae3705f47ff0009f",
+      "stored_at": "2026-10-06T21:04:40.336786Z",
+      "attempts": 1
     }
   ]
 }
