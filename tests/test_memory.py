@@ -310,6 +310,25 @@ def test_render_keeps_source_quote_once_and_retains_distinct_fact_text(text: str
     assert rendered.evidence_ids == (fact_id(fact),) and notes.evidence[fact_id(fact)] == source
 
 
+def test_navigation_writes_a_shared_long_source_url_once_without_losing_product_fields() -> None:
+    address = "https://shop.test/product?tracking=" + "x" * 300
+    facts = tuple(
+        Fact(
+            text=text,
+            evidence=evidence().model_copy(update={"url": address, "start": nth, "end": nth + 1}),
+            reader=FactReader.LLM,
+        )
+        for nth, text in enumerate(("Title: Charger A", "Price: GBP20", "Power: 65W", "Ports: two USB-C"))
+    )
+    notes = Notes(facts)
+    rendered = notes.render_for_navigation(700)
+    assert all(fact.text in rendered for fact in facts)
+    assert rendered.count(json.dumps(address)) == 1
+    assert "facts omitted" not in rendered
+    assert len(rendered) <= 700
+    assert all(fact.evidence is not None and fact.evidence.url == address for fact in notes.facts)
+
+
 @pytest.mark.parametrize("quote_last", [False, True])
 def test_navigation_retains_recent_progress_when_source_quotes_exceed_its_budget(quote_last: bool) -> None:
     quote = "catalogue " * 800

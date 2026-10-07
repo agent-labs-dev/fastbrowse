@@ -293,11 +293,17 @@ class Notes:
             raise ValueError("max_chars must be nonnegative")
         marker = f"[{len(self._facts)} facts omitted]"
         lines: list[str] = []
+        sources: dict[str, int] = {}
         used = len(marker)
         # A long source quote can consume the whole action budget and hide which items were already checked.
         # Actions need progress claims; readers and verification retain their separate quoted view.
         for key, fact in reversed(self._facts.items()):
-            source = "" if fact.evidence is None else f" url={json.dumps(fact.evidence.url)}"
+            source = ""
+            if fact.evidence is not None:
+                address = fact.evidence.url
+                source = f" source={sources.get(address, len(sources) + 1)}"
+                if address not in sources:
+                    source += f" url={json.dumps(address)}"
             line = (
                 f"{json.dumps(fact.text, ensure_ascii=False)} "
                 f"requirements={','.join(sorted(self._requirements[key])) or '-'}{source}"
@@ -305,6 +311,8 @@ class Notes:
             if used + len(line) + 1 <= max_chars:
                 lines.append(line)
                 used += len(line) + 1
+                if fact.evidence is not None:
+                    sources.setdefault(fact.evidence.url, len(sources) + 1)
         omitted = len(self._facts) - len(lines)
         if omitted:
             lines.append(f"[{omitted} facts omitted]")

@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Navigation notes write each source URL once and reference it from the remaining claims, preserving full
+  addresses while leaving more room for product details and progress.
+
 - Identical control relevance questions share one Jev score within each pass. Controls remain separate
   action targets, with fresh selection and authorization.
 

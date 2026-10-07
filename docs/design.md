@@ -19,7 +19,8 @@ gate is not a guarantee that every externally visible change is detected.
 ## Reading and citations
 
 The policy's read assessment distinguishes useful evidence from editable query previews and irrelevant
-content. Evidence is read before another interaction can remove it. Reads are deduplicated by document,
+content. Navigation notes write each source URL once and refer to it from later claims. Evidence is read
+before another interaction can remove it. Reads are deduplicated by document,
 capture hash and unresolved information requirements, so changed content can be read again. A paraphrase
 of a collected quote does not restore the read budget; new source quotes and newly evidenced requirements
 do. Identical relevance questions share one score within a pass, while controls remain separate action
