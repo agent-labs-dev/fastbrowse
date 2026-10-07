@@ -1,0 +1,65 @@
+name: Approve benchmark publication
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha256:
+        description: SHA256 of the reviewed docs/results/benchmark-candidate.json bytes
+        required: true
+        type: string
+      allow_first_publication:
+        description: Approve establishing the first baseline when none is published
+        required: true
+        type: boolean
+        default: false
+permissions: {}
+jobs:
+  approve:
+    runs-on: ubuntu-latest
+    permissions: {contents: read, actions: read}
+    steps:
+      - name: Require the maintainer on main
+        env:
+          ACTOR: ${{ github.actor }}
+          REF: ${{ github.ref }}
+        run: test "$ACTOR" = cjber && test "$REF" = refs/heads/main
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {fetch-depth: 0, persist-credentials: false}
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with: {python-version: '3.13'}
+      - run: uv sync --locked
+      - name: Validate full coverage and the exact fixture build
+        env:
+          GH_TOKEN: '${{ github.token }}'
+          BOOTSTRAP: '${{ inputs.allow_first_publication }}'
+        run: |
+          args=()
+          if [ "$BOOTSTRAP" = true ]; then args+=(--bootstrap); fi
+          uv run python -m fastbrowse.evals.benchmarks --candidate docs/results/benchmark-candidate.json \
+            --baseline docs/results/benchmarks.json --verify-fixture "${args[@]}"
+      - name: Bind approval to the reviewed bytes
+        env:
+          CANDIDATE_DIGEST: ${{ inputs.candidate_sha256 }}
+        run: |
+          uv run python - <<'PY'
+          import hashlib, json, os
+          from datetime import UTC, datetime
+          from pathlib import Path
+          from fastbrowse.evals.benchmarks import Approval
+          content = Path('docs/results/benchmark-candidate.json').read_bytes()
+          digest = hashlib.sha256(content).hexdigest()
+          if digest != os.environ['CANDIDATE_DIGEST']:
+              raise SystemExit('candidate bytes differ from the reviewed digest')
+          receipt = Approval(
+              candidate_sha256=digest,
+              workflow_run=int(os.environ['GITHUB_RUN_ID']),
+              head_sha=os.environ['GITHUB_SHA'],
+              approved_by=os.environ['GITHUB_ACTOR'],
+              approved_at=datetime.now(UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
+          )
+          Path('benchmark-approval.json').write_text(receipt.model_dump_json(indent=2) + '\n')
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: benchmark-approval
+          path: benchmark-approval.json
+          if-no-files-found: error
