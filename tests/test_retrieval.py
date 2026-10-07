@@ -2666,10 +2666,11 @@ async def test_tally_reader_requires_explicit_unfiltered_scope_and_revalidates_e
     assert read_tallies(page, result.tally_readers, ["r", "other"]) is None
 
 
+@pytest.mark.parametrize("incomplete", [False, True])
 @pytest.mark.parametrize(("stated", "value"), [(False, "1"), (True, "3"), (True, "999")])
 @pytest.mark.parametrize("with_context", [False, True])
 async def test_a_quoted_whole_list_total_can_answer_beside_an_unfinished_tally(
-    stated: bool, value: str, with_context: bool
+    stated: bool, value: str, with_context: bool, incomplete: bool
 ) -> None:
     page = capture(
         (BlockKind.LIST_ITEM, "Item A"),
@@ -2696,6 +2697,7 @@ async def test_a_quoted_whole_list_total_can_answer_beside_an_unfinished_tally(
         ["r"],
         notes,
         requirements=[requirement],
+        incomplete=["r"] if incomplete else [],
     )
     answered = stated and value == "3"
     assert notes.evidenced("r") is answered
@@ -3672,3 +3674,26 @@ async def test_reopened_requirement_reads_earlier_quotes_again() -> None:
     llm = ScriptedLLM([{"claims": [], "answered": False}])
     await read(llm, page, requirement.text, ["r"], notes, jev=jev, requirements=(requirement,))
     assert len(llm.calls) == 1 and "novelty" not in jev.requests[0][1]
+
+
+async def test_a_quoted_count_does_not_repair_another_requirements_missing_records() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Total matching items: 3"))
+    notes = Notes()
+    requirements = [
+        Requirement(id="count", text="Total item count", kind=RequirementKind.INFORMATION, count_records=True),
+        Requirement(id="names", text="Names of all matching items", kind=RequirementKind.INFORMATION),
+    ]
+    claims: JsonValue = [
+        {"requirement_id": key, "text": "3", "cite": {"first": "s0", "last": "s0"}} for key in ("count", "names")
+    ]
+    await read(
+        ScriptedLLM([{"claims": claims, "answered": True}]),
+        page,
+        "Total item count and item names",
+        ["count", "names"],
+        notes,
+        requirements=requirements,
+        incomplete=["count", "names"],
+    )
+    assert notes.evidenced("count")
+    assert not notes.evidenced("names")
