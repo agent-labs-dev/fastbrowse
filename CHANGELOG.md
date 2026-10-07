@@ -11,6 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- `AI_GATEWAY_API_KEY` on its own is now enough to run fastbrowse. The LLM that plans and reads used to need
+  `OPENROUTER_API_KEY` even when Jev already went through the Vercel AI Gateway; with no OpenRouter key it now
+  calls the same models through the gateway. OpenRouter stays first when its key is set. The MCP server and
+  `fastbrowse serve` accept the gateway key at startup too.
+
 ## [0.5.19] - 2026-10-06
 
 - `run_task` takes `cloud_extensions`, up to three distinct extension IDs from your Browser Use Cloud account,

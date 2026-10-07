@@ -34,20 +34,32 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with: {python-version: "3.13"}
       - run: uv sync --locked --all-extras
+      - name: Check the model credentials
+        # A missing provider fails before the first task, with its setting named and no empty score report.
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+        run: uv run python scripts/eval_stability.py --check-providers
       - name: Run the fixture eval suites
+        id: fixtures
         # The runner exits non-zero on any failed attempt. The stability check below is the verdict, so a
         # dispatch with a target under 100% is judged against that target. It also requires every task of both
         # suites at the full repeat count, so a runner that died part way cannot pass on the rows it left.
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
         run: |
           uv run python -m fastbrowse.evals.runner \
             --suite local mock \
             --repeat "${{ inputs.repeat || '3' }}" \
             --out artifacts/evals/nightly.jsonl
       - name: Check the stability budget
-        if: always()
+        # A credential check that failed leaves no rows, and a stability error would then read as a task failure;
+        # this step stays out of a run that never started.
+        if: always() && steps.fixtures.outcome != 'skipped'
         run: |
           uv run python scripts/eval_stability.py artifacts/evals/nightly.jsonl \
             --target "${{ inputs.target || '1.0' }}" \

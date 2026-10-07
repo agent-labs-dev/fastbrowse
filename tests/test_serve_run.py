@@ -330,8 +330,8 @@ async def test_invalid_params_are_refused_before_run_task_is_called(params: dict
 @pytest.mark.parametrize(
     ("settings", "fields", "named"),
     [
-        ({"openrouter_api_key": None}, {}, "OPENROUTER_API_KEY"),
-        ({"openrouter_api_key": None}, {"local": True}, "OPENROUTER_API_KEY"),
+        ({"openrouter_api_key": None, "ai_gateway_api_key": None}, {}, "OPENROUTER_API_KEY"),
+        ({"openrouter_api_key": None, "ai_gateway_api_key": None}, {"local": True}, "OPENROUTER_API_KEY"),
         ({"browser_use_api_key": None}, {}, "BROWSER_USE_API_KEY"),
         ({"chrome": "not-installed-anywhere"}, {"local": True}, "Chrome was not found"),
         ({}, {"local": True, "cloud_profile": "prof_1"}, "--cloud-profile"),

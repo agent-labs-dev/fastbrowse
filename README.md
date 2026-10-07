@@ -88,7 +88,7 @@ A Node program needs neither uv nor Python: see [Use it from JavaScript](#use-it
 
 ```sh
 export OPENROUTER_API_KEY=...   # for Jev and the LLM that plans and reads
-# export AI_GATEWAY_API_KEY=... # optional Jev backup through the Vercel AI Gateway
+# export AI_GATEWAY_API_KEY=... # Vercel AI Gateway: Jev backup, and the LLM when OPENROUTER_API_KEY is unset
 export BROWSER_USE_API_KEY=...  # the cloud browser; or pass --local to use Chrome
 uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
