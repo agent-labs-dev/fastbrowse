@@ -50,7 +50,9 @@ class Group(PublicModel):
     source_sha256: Digest
     task_ids: list[Identifier]
     repeats: Annotated[int, Field(gt=0)]
-    limits: list[Annotated[str, Field(min_length=1, max_length=240)]]
+    limits: Annotated[
+        list[Annotated[str, Field(pattern=r"^[A-Za-z0-9 ,.;:()'%+_=-]{1,240}$")]], Field(min_length=1, max_length=12)
+    ]
     rows: list[Row]
 
     @model_validator(mode="after")
