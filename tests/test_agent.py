@@ -5325,3 +5325,34 @@ async def test_reader_error_keeps_collected_evidence(monkeypatch: pytest.MonkeyP
     assert result.status is Status.ERROR and result.error == "input rejected"
     assert result.answer and result.citations and result.evidence
     assert llm.calls == []
+
+
+@pytest.mark.parametrize(
+    ("landings", "expected"),
+    [
+        ([(503, True)], 503),
+        ([(503, True), (200, False)], 503),
+        ([(503, True), (200, True)], None),
+        ([(404, False), (200, True)], None),
+        ([(503, None)], 503),
+        ([(200, True)], None),
+    ],
+)
+async def test_failed_submission_survives_navigation_but_not_a_successful_submission(
+    landings: list[tuple[int, bool | None]], expected: int | None
+) -> None:
+    state = await run_state()
+    for status, committing in landings:
+        state.transaction_candidates.append(
+            agent_module._TransactionCandidate(
+                question=NoulQuestion(instructions="Commit", true="yes", false="no"),
+                from_url="https://shop.test/form",
+                landed_url="https://shop.test/result",
+                landed_status=status,
+                committing=committing,
+            )
+        )
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    agent._classify = AsyncMock()
+    failure = await agent._failed_submission(state)
+    assert (failure.status if failure else None) == expected
