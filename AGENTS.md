@@ -30,7 +30,7 @@ uv run ty check                                     # ty, not pyright
 uv run python scripts/changelog.py --check "$(uv version --short)"
 uv run python scripts/npm_versions.py               # the npm versions are the Python one
 uv run python scripts/no_slop.py
-uv run vale sync && uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs src scripts tests
+uv run vale sync && uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs skills src scripts tests
 uv run pytest -q
 npm ci --ignore-scripts && npm run check:browser
 npm run generate:sdk && git diff --exit-code -- packages/sdk/src/protocol.ts

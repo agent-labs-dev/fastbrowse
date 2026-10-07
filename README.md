@@ -437,6 +437,12 @@ There is no binary for Alpine or another musl system, and none for a platform ou
 that allows programs only by the team that signed them refuses. The Windows binary is not signed. Bun and Deno are
 untested.
 
+## Use it from Codex or Claude Code
+
+Install the [fastbrowse skill](docs/skill.md) to delegate website tasks from a coding agent. It uses the MCP
+tool when connected, or the CLI, and preserves the task's citations, status, authorization, and budget.
+The guide covers installation, configuration, and prompts for both agents.
+
 ## Use it from an MCP client
 
 `fastbrowse-mcp` serves one `browse` tool over [MCP](https://modelcontextprotocol.io), so Claude Code, Claude
