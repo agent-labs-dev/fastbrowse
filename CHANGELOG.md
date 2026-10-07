@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A directly quoted total can answer a count after an earlier record tally was incomplete. Derived counts
+  still require complete records, and page scope and answer claims remain verified.
+
 - Runs that stop on a blocked page, an error or a limit retain a final screenshot when step frames are enabled.
   The capture checks the current page for secrets and preserves the run status.
 

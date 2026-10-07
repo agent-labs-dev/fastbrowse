@@ -2666,10 +2666,11 @@ async def test_tally_reader_requires_explicit_unfiltered_scope_and_revalidates_e
     assert read_tallies(page, result.tally_readers, ["r", "other"]) is None
 
 
+@pytest.mark.parametrize("incomplete", [False, True])
 @pytest.mark.parametrize(("stated", "value"), [(False, "1"), (True, "3"), (True, "999")])
 @pytest.mark.parametrize("with_context", [False, True])
 async def test_a_quoted_whole_list_total_can_answer_beside_an_unfinished_tally(
-    stated: bool, value: str, with_context: bool
+    stated: bool, value: str, with_context: bool, incomplete: bool
 ) -> None:
     page = capture(
         (BlockKind.LIST_ITEM, "Item A"),
@@ -2696,6 +2697,7 @@ async def test_a_quoted_whole_list_total_can_answer_beside_an_unfinished_tally(
         ["r"],
         notes,
         requirements=[requirement],
+        incomplete=["r"] if incomplete else [],
     )
     answered = stated and value == "3"
     assert notes.evidenced("r") is answered
