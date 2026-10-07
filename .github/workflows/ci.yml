@@ -18,7 +18,8 @@ jobs:
           curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | tar -xz -C "$RUNNER_TEMP" gitleaks
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - name: Scan for secrets
-        run: gitleaks detect --source . --no-banner --redact
+        # Checkout fetches other branches too; scan this build's complete ancestry, not unrelated branch content.
+        run: gitleaks detect --source . --no-banner --redact --log-opts=HEAD
   gate:
     permissions: {contents: read}
     runs-on: ubuntu-latest
@@ -30,7 +31,8 @@ jobs:
         python: ["3.13", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: {persist-credentials: false}
+        # Full history so the publication check can read docs/results as they stand on the base branch.
+        with: {fetch-depth: 0, persist-credentials: false}
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           python-version: "${{ matrix.python }}"
@@ -48,7 +50,15 @@ jobs:
       - run: uv run python scripts/no_slop.py
       - run: uv run vale sync
       - run: uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs skills src scripts tests
+      - name: Check stored eval manifest
+        run: uv run python -m fastbrowse.evals.storage --manifest docs/results/evidence.manifest.json --check
       - run: uv run pytest -q
+      # A published row cannot be hand-edited past `--publish`: the added or changed docs/results files are
+      # gated against the trusted rows at the base branch, and a new results file with no ledger is refused.
+      # This is deterministic, so it needs no model key and runs on a pull request.
+      - name: Check changed published eval rows
+        env: {BASE: "${{ github.base_ref || github.event.repository.default_branch }}"}
+        run: uv run python -m fastbrowse.evals.publication --check-diff "origin/$BASE"
 
   sift:
     runs-on: ubuntu-latest
@@ -142,7 +152,9 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           BINARIES_RESULT: ${{ needs.binaries.result }}
         run: |
-          test "$GATE_RESULT" = success && test "$SIFT_RESULT" = success && test "$SDK_RESULT" = success && test "$SECRETS_RESULT" = success
+          test "$GATE_RESULT" = success
+          test "$SIFT_RESULT" = success
+          test "$SDK_RESULT" = success
+          test "$SECRETS_RESULT" = success
           test "$CHANGES_RESULT" = success
           test "$BINARIES_RESULT" = success || test "$BINARIES_RESULT" = skipped
-

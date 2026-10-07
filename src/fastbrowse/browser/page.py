@@ -177,6 +177,8 @@ class _SnapshotControl(Frozen):
     href: str | None = None
     options: tuple[str, ...] = ()
     input_type: str | None = None
+    input_name: str | None = None
+    autocomplete: str | None = None
     submit_semantics: str | None = None
     checked: bool | None = None
     selected: bool | None = None
@@ -706,6 +708,36 @@ class CdpPage(Page):
             dialog.cancel()
             await asyncio.gather(task, dialog, return_exceptions=True)
 
+    async def _covered_detail(self, target: tuple[str, str, int, list[object] | None]) -> str:
+        session_id, _frame, local_id, _guard = target
+        # A cart or menu can cover a still-indexed button. Name the drawn obstruction so recovery can dismiss it.
+        detail = None
+        with suppress(BrowserError):
+            detail = await self._evaluate(
+                session_id,
+                "(() => { const e = window.__fastbrowse?.nodes.get("
+                f"{local_id}); "
+                "if (!e) return null; const rect = e.getBoundingClientRect(); "
+                "const hit = e.ownerDocument.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2); "
+                "let cover = hit?.closest('[role=dialog],dialog,[role=menu],[popover]'); "
+                "if (!cover) for (let node = hit; node && node !== e.ownerDocument.body; node = node.parentElement) { "
+                "if (!node.contains(e) && e.ownerDocument.defaultView.getComputedStyle(node).position === 'fixed' && "
+                "node.querySelector('button,[role=button],a[href]')) { cover = node; break; } } "
+                "cover ||= hit; if (!cover) return null; const label = node => "
+                "(node.getAttribute('aria-label') || node.getAttribute('title') || node.textContent || '')"
+                ".trim().slice(0, 120); "
+                "const controls = Array.from(cover.querySelectorAll('button,[role=button],a[href]'))"
+                ".filter(node => node.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))"
+                ".slice(0, 8).map(label).filter(Boolean); "
+                "return JSON.stringify({role:cover.getAttribute('role') || cover.tagName.toLowerCase(), "
+                "label:cover.getAttribute('aria-label') || cover.getAttribute('title') || null, controls}); })()",
+            )
+        return (
+            f"Target is covered by {detail}. Dismiss an observed obstruction before retrying."
+            if detail
+            else "Target is covered."
+        )
+
     async def _click(
         self, target: tuple[str, str, int, list[object] | None] | None, point: _Point
     ) -> tuple[StepOutcome, str | None]:
@@ -714,7 +746,7 @@ class CdpPage(Page):
         if point is None:
             return StepOutcome.STALE, "target disconnected"
         if point == "covered":
-            return StepOutcome.COVERED, None
+            return StepOutcome.COVERED, await self._covered_detail(target)
         return await self._click_point(target, point)
 
     async def _hover(
@@ -725,7 +757,7 @@ class CdpPage(Page):
         if point is None:
             return StepOutcome.STALE, "target disconnected"
         if point == "covered":
-            return StepOutcome.COVERED, None
+            return StepOutcome.COVERED, await self._covered_detail(target)
         # The pointer stays where it lands, so what the hover reveals is still shown when the page is next read.
         await self._move(target[0], point)
         return StepOutcome.EXECUTED, None
@@ -771,7 +803,7 @@ class CdpPage(Page):
         if point is None:
             return StepOutcome.STALE, "target disconnected"
         if point == "covered":
-            return StepOutcome.COVERED, None
+            return StepOutcome.COVERED, await self._covered_detail(target)
         if secret and not secret_origin:
             return StepOutcome.FAILED, "secret fill requires an authorized origin"
         # Ported from browser-use/jev-ultrafast (MIT), browser.py: fill clicks before typing.
@@ -1635,6 +1667,8 @@ def _control_from_raw(
         href=c.href,
         options=c.options,
         input_type=c.input_type,
+        input_name=c.input_name,
+        autocomplete=c.autocomplete,
         submit_semantics=c.submit_semantics,
         checked=c.checked,
         selected=c.selected,

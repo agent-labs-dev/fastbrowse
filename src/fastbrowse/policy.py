@@ -509,7 +509,8 @@ def build_request(
     if context.check_login:
         questions["login_required"] = _noul(
             "Does a sign-in or verification wall block the task in state, with no credentials given in the task to "
-            "pass it?",
+            "pass it? An unrelated sign-in link is not a wall. If the task asks to inspect access restrictions, "
+            "observing the wall advances that task without signing in.",
             "A sign-in, verification or access wall blocks the task and the task gives no way through it.",
             "The task can progress without signing in, or the task supplies the credentials to sign in.",
         )
@@ -687,6 +688,8 @@ def _element(control: Control, *, compact: bool = False) -> dict[str, JsonValue]
         "selected": control.selected,
         "expanded": control.expanded,
         "input_type": control.input_type,
+        "input_name": control.input_name,
+        "autocomplete": control.autocomplete,
     }
     element.update({key: value for key, value in optional.items() if value is not None})
     if control.options:

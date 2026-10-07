@@ -461,8 +461,8 @@ class Server:
                 "Chrome was not found: install it, or name it in FASTBROWSE_CHROME or in `chrome.binary`"
             )
         browser_api_key = options.browser_key(settings, on_cloud)
-        settings.openrouter_key()
         async with httpx.AsyncClient() as http:
+            settings.llm(http)
             settings.jev(http)
         return {
             "start": params.start,

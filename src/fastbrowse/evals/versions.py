@@ -9,12 +9,11 @@ change: `versions.json` holds a fingerprint of each task, made of its fields and
 layout) of its grader and answer key, followed into every `fastbrowse.evals` helper and constant they use. A test
 fails when a fingerprint no longer matches, so a task cannot change and keep its version.
 
-Published results are rows committed to `docs/results/<release>.jsonl`, never retyped: the tables in
-`docs/evals.md` and the README headline are generated from them, and a test fails when either differs.
+Approved compact results generate the site feed. Full evidence and source grades are tracked in Parallax.
 
     uv run python -m fastbrowse.evals.versions --bump TASK_ID ...                   # after changing a task
     uv run python -m fastbrowse.evals.versions --publish RELEASE artifacts/evals/live.jsonl
-    uv run python -m fastbrowse.evals.versions --docs                              # regenerate the docs
+    uv run python -m fastbrowse.evals.versions --docs                              # regenerate the approved feed
 """
 
 import argparse
@@ -25,7 +24,6 @@ import hashlib
 import inspect
 import io
 import json
-import math
 import platform
 import re
 import statistics
@@ -36,28 +34,26 @@ import tokenize
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import PackageNotFoundError, distribution, version
 from pathlib import Path
 from types import CodeType
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, ValidationError
+from pydantic import BaseModel
+
+from fastbrowse.evals import baseline
 
 LOCK = Path(__file__).with_name("versions.json")
 ROOT = Path(__file__).parents[3]
-DOCS = ROOT / "docs" / "evals.md"
-README = ROOT / "README.md"
 RESULTS = ROOT / "docs" / "results"
-LEGACY = RESULTS / "legacy.json"
 _ADDRESS = re.compile(r" at 0x[0-9a-f]+")
-_OWN = "fastbrowse.evals"
+_OWN = ("fastbrowse.evals", "parallax.browser_use")
 _CONSTANT = (str, bytes, int, float, bool, tuple, frozenset, dict, re.Pattern, enum.Enum)
 _SKIP = {tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER}
 ARM_LABELS = {
     "fastbrowse": "fastbrowse",
     "browser-use": "Browser Use agent",
     "jev-ultrafast": "Browser Use Ultrafast",
-    "cua-codex": "Codex + Cua Driver",
 }
 
 
@@ -105,7 +101,10 @@ def _function(fn: Callable[..., object], seen: set[str]) -> object:
             seen.add(key)
             reached[name] = _source(value)
         elif isinstance(value, _CONSTANT) and not inspect.isclass(value):
-            reached[name] = _stable(value, seen)
+            # Exception.__name__ also reaches a module global, so a file move must preserve its logical namespace.
+            reached[name] = (
+                scope.get("__fingerprint_namespace__", value) if name == "__name__" else _stable(value, seen)
+            )
     cells = [cell.cell_contents for cell in getattr(fn, "__closure__", None) or ()]
     defaults = getattr(fn, "__defaults__", None) or ()
     return {
@@ -143,12 +142,16 @@ def _stable(value: object, seen: set[str]) -> object:
 
 def fingerprint(task: object) -> str:
     """What the task asks and how it is graded, hashed: equal fingerprints grade the same run the same way."""
+    from fastbrowse.evals.catalog import CatalogTask
+
+    if isinstance(task, CatalogTask):
+        return task.source_fingerprint
     assert dataclasses.is_dataclass(task) and not isinstance(task, type)
     seen: set[str] = set()
     # `rolling` says how to fingerprint the task, not what it asks: its text is hashed under its stable name.
     fields = {f.name: _stable(getattr(task, f.name), seen) for f in dataclasses.fields(task) if f.name != "rolling"}
     if hasattr(task, "expect"):
-        from fastbrowse.evals.live import grade
+        from fastbrowse.evals.grade import grade
         from fastbrowse.evals.live_tasks import LiveTask, prompt
         from fastbrowse.evals.status import status_matches
 
@@ -179,6 +182,9 @@ def suite_version(task_ids: Iterable[str], lock: Mapping[str, Mapping[str, Any]]
 
 
 def _git(*args: str) -> str | None:
+    # An installed package can sit inside another project's checkout, so parent discovery is not build identity.
+    if not (ROOT / "src" / "fastbrowse" / "evals" / "versions.py").is_file():
+        return None
     try:
         done = subprocess.run(
             ["git", *args], cwd=Path(__file__).parent, capture_output=True, text=True, timeout=10, check=True
@@ -192,20 +198,31 @@ def provenance(**extra: object) -> dict[str, object]:
     """Who ran: the build, its commit, the interpreter, and a run id shared by every row of one invocation.
 
     `git_dirty` is None outside a checkout (an installed wheel) and True when tracked files had uncommitted
-    changes, so a score from an unreviewed tree is marked as one.
+    changes or untracked, non-ignored files were present, so a score from an unreviewed tree is marked as one.
+    Ignored paths (an `artifacts/` directory) do not dirty a build; an untracked executable does.
     """
     try:
         build = version("fastbrowse")
     except PackageNotFoundError:
         build = None
     sha = _git("rev-parse", "HEAD")
-    status = None if sha is None else _git("status", "--porcelain", "--untracked-files=no")
+    status = None if sha is None else _git("status", "--porcelain")
+    dirty = None if status is None else bool(status)
+    if sha is None:
+        try:
+            receipt = json.loads(distribution("fastbrowse").read_text("direct_url.json") or "{}")
+        except (PackageNotFoundError, ValueError):
+            receipt = {}
+        vcs = receipt.get("vcs_info") if isinstance(receipt, dict) else None
+        commit = vcs.get("commit_id") if isinstance(vcs, dict) else None
+        if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit):
+            sha, dirty = commit, False
     return {
         "run_id": uuid.uuid4().hex[:12],
         "run_started": datetime.now(UTC).isoformat(timespec="seconds"),
         "fastbrowse_version": build,
         "git_sha": sha,
-        "git_dirty": None if status is None else bool(status),
+        "git_dirty": dirty,
         "python": platform.python_version(),
         **extra,
     }
@@ -229,7 +246,7 @@ def mismatches(tasks: Sequence[Any]) -> list[str]:
 
 def all_tasks() -> tuple[dict[str, tuple[Any, ...]], tuple[Any, ...]]:
     """The live suites and the local fixtures; imported here so the harness can import this module."""
-    from fastbrowse.evals.live import SUITES
+    from fastbrowse.evals.catalog import SUITES
     from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
     from fastbrowse.evals.tasks import TASKS
 
@@ -244,7 +261,9 @@ _KEPT = ("arm", "task", "repeat", "category", "suite", "suite_version", "task_ve
          "answered", "session_seconds", "replaces_run_id", "final_url", "final_page", "failure_class", "site_probe",
          "actions", "decisions", "step_cap", "step_cap_unit", "decision_cap", "provenance")  # fmt: skip
 _RUN_KEPT = ("run_id", "run_started", "fastbrowse_version", "git_sha", "git_dirty", "providers", "max_steps",
-             "concurrency", "jev_ultrafast", "arms", "python", "argv")  # fmt: skip
+             "concurrency", "jev_ultrafast", "arms", "python", "argv", "benchmark_family", "benchmark_origin",
+             "benchmark_suite", "benchmark_runner_sha", "benchmark_runner_dirty",
+             "benchmark_catalog_sha256")  # fmt: skip
 
 
 def slim(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -256,20 +275,20 @@ def slim(row: Mapping[str, Any]) -> dict[str, Any]:
     return kept
 
 
-class _StatisticsRow(BaseModel):
-    model_config = ConfigDict(strict=True)
-
-    arm: str = Field(min_length=1)
-    passed: bool
-    correct: bool
-    seconds: FiniteFloat = Field(ge=0)
-    dollars: FiniteFloat | None = Field(ge=0)
-
-
 def publish(release: str, source: Path) -> Path:
-    """Commit `source`'s rows as `release`'s published results; refuse rows that cannot be traced or compared."""
+    """Commit `source`'s rows as `release`'s published results; refuse rows the publication gate blocks.
+
+    The gate reads the attempt ledger beside `source`, so retries and their spend are published with the score.
+    Each live task needs three distinct measured repeats, and each fastbrowse task is compared at the task version
+    it ran against the newest published release that ran the same protocol and model route with three attempts.
+    """
+    from fastbrowse.evals.publication import gate, ledger_path
+
+    def read(file: Path) -> list[dict[str, Any]]:
+        return [json.loads(line) for line in file.read_text(encoding="utf-8").splitlines() if line.strip()]
+
     if release == "auto":
-        rows = [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines() if line.strip()]
+        rows = read(source)
         releases = {(row.get("run") or {}).get("fastbrowse_version") for row in rows}
         if len(releases) != 1 or None in releases:
             raise ValueError("rows must identify one fastbrowse release")
@@ -277,69 +296,38 @@ def publish(release: str, source: Path) -> Path:
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", release):
         raise ValueError("release must be a numeric x.y.z version")
     target = RESULTS / f"{release}.jsonl"
-    if target.exists():
+    if target.exists() or ledger_path(target).exists() or any(name == release for name, _ in published()):
         raise ValueError(f"{target} exists: published results are never rewritten; publish under a new release")
-    from fastbrowse.evals.live_tasks import PageEvidence, page_defect
-    from fastbrowse.evals.observe import VIEWPORT
-
-    rows = [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines() if line.strip()]
-    lock = load_lock()
-    problems = []
-    for row in rows:
-        run = row.get("run") or {}
-        where = f"{row.get('arm')} {row.get('task')}"
-        if row.get("category") == "navigate" and row.get("passed"):
-            try:
-                evidence = PageEvidence.model_validate(row.get("final_page"))
-                defect = page_defect(evidence)
-            except ValidationError:
-                defect = "missing or invalid final-page evidence"
-            if defect:
-                problems.append(f"{where}: {defect}")
-
-        if (
-            row.get("category") == "navigate"
-            and row.get("arm") in {"fastbrowse", "jev-ultrafast"}
-            and row.get("normalized_status") != "unavailable"
-        ):
-            try:
-                page = PageEvidence.model_validate(row.get("final_page"))
-                dimensions = (page.inner_width, page.inner_height, page.device_pixel_ratio)
-            except ValidationError:
-                dimensions = (None, None, None)
-            if dimensions[:2] != (VIEWPORT["width"], VIEWPORT["height"]) or not math.isclose(
-                dimensions[2] or 0, VIEWPORT["deviceScaleFactor"], rel_tol=1e-6
-            ):
-                problems.append(f"{where}: navigation viewport is missing or differs from the comparison setup")
-
-        try:
-            _StatisticsRow.model_validate(row)
-        except ValidationError as exc:
-            problems.append(f"{where}: {exc.error_count()} invalid fields ({exc.errors()[0]['loc']})")
-            continue
-        if not run.get("git_sha") or run.get("git_dirty") is not False:
-            problems.append(f"{where}: not from a clean, committed tree")
-        elif run.get("fastbrowse_version") != release:
-            problems.append(f"{where}: ran fastbrowse {run.get('fastbrowse_version')}, not {release}")
-        if not run.get("run_started") or not run.get("run_id"):
-            problems.append(f"{where}: missing run date or id")
-        if not row.get("suite") or not row.get("suite_version"):
-            problems.append(f"{where}: missing suite or suite version")
-        current = task_version(str(row.get("task")), lock)
-        if current is None:
-            problems.append(f"{where}: no task by that id is in versions.json")
-        elif row.get("task_version") != current:
-            problems.append(f"{where}: task version {row.get('task_version')} is not the current one")
-    if not rows or problems:
-        raise ValueError("\n".join(problems) or f"{source} has no rows")
-    # The results file is never rewritten, so every page it regenerates must be checked before it exists.
-    if "<!-- evals:headline -->" not in README.read_text(encoding="utf-8"):
-        raise ValueError("README.md has no <!-- evals:headline --> block")
-    if _RESULTS_HEADING not in DOCS.read_text(encoding="utf-8"):
-        raise ValueError("docs/evals.md has no Results section")
+    rows = read(source)
+    ledger_file = ledger_path(source)
+    ledger = read(ledger_file) if ledger_file.exists() else None
+    report = gate(
+        rows,
+        release=release,
+        ledger=ledger,
+        baselines_=[row for _, published_rows in published() for row in published_rows],
+        require_ledger=True,
+    )
+    if report.blocking:
+        raise ValueError("\n".join(f"{finding.check}: {finding.detail}" for finding in report.blocking))
     RESULTS.mkdir(parents=True, exist_ok=True)
     ordered = sorted((slim(r) for r in rows), key=lambda r: (r["arm"], r["task"], r["run"]["run_started"] or ""))
-    target.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in ordered), encoding="utf-8")
+    assert ledger is not None
+    bundle = (
+        (ledger_path(target), "".join(json.dumps(row, sort_keys=True) + "\n" for row in ledger)),
+        (target, "".join(json.dumps(row, sort_keys=True) + "\n" for row in ordered)),
+    )
+    created: list[Path] = []
+    try:
+        for path, text in bundle:
+            with path.open("x", encoding="utf-8") as output:
+                created.append(path)
+                output.write(text)
+    except BaseException:
+        # A disk error must not leave a half-publication that prevents a clean retry of the same release.
+        for path in created:
+            path.unlink()
+        raise
     return target
 
 
@@ -349,37 +337,13 @@ def _release_key(release: str) -> tuple[int, ...]:
 
 def published() -> list[tuple[str, list[dict[str, Any]]]]:
     """Every published release with its rows, newest first."""
-    files = sorted(RESULTS.glob("*.jsonl"), key=lambda f: _release_key(f.stem), reverse=True)
-    return [(f.stem, [json.loads(line) for line in f.read_text(encoding="utf-8").splitlines() if line]) for f in files]
+    return sorted(baseline.published(RESULTS), key=lambda item: _release_key(item[0]), reverse=True)
 
 
 def _measured(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     """The attempts that measured the arm. One that ended `unavailable` was stopped by a provider outage outlasting
     every retry, so it says nothing about the arm."""
     return [r for r in rows if r.get("normalized_status") != "unavailable"]
-
-
-def _arm_stats(rows: Sequence[Mapping[str, Any]]) -> dict[str, str]:
-    if not rows:
-        return dict.fromkeys(
-            ("passed", "correct", "median time", "mean time", "median cost", "mean cost", "total cost"), "-"
-        )
-    seconds = [r["seconds"] for r in rows]
-    dollars = [r["dollars"] for r in rows if r["dollars"] is not None]
-    unpriced = f" ({len(rows) - len(dollars)} unpriced)" if len(dollars) < len(rows) else ""
-    return {
-        "passed": f"{sum(r['passed'] for r in rows)}/{len(rows)}",
-        "correct": f"{sum(r['correct'] for r in rows)}/{len(rows)}",
-        "median time": f"{statistics.median(seconds):.1f}s",
-        "mean time": f"{statistics.mean(seconds):.1f}s",
-        "median cost": f"${statistics.median(dollars):.4f}" if not unpriced else "unknown",
-        "mean cost": f"${statistics.mean(dollars):.4f}" if not unpriced else "unknown",
-        "total cost": f"${sum(dollars):.2f}{unpriced}" if dollars else "unknown",
-    }
-
-
-def _label(arm: str) -> str:
-    return ARM_LABELS.get(arm, arm)
 
 
 def _arm_rank(arm: str) -> int:
@@ -404,39 +368,6 @@ class _Comparison:
     """The attempts every figure is taken from: as many per arm at each task."""
     left_out: list[str]
     """Tasks some arm has no measured attempt at, so none of their attempts are scored."""
-
-    @property
-    def title(self) -> str:
-        tasks = len({r["task"] for r in self.scored})
-        noun = "task" if tasks == 1 else "tasks"
-        if len(self.arms) == 1:
-            return f"{_label(self.arms[0])} alone, on the {tasks} {noun} only it ran"
-        return " against ".join(_label(a) for a in self.arms) + f", on the same {tasks} {noun}"
-
-    @property
-    def note(self) -> str:
-        """Selected results and exclusions; earlier retries are separate, and unavailable does not identify a cause."""
-        made = {arm: len(attempts) for arm, attempts in _by_arm(self.rows).items()}
-        same = len(set(made.values())) == 1
-        note = (
-            f"Each arm has {next(iter(made.values()))} selected results, excluding earlier retries."
-            if same
-            else "Selected results, excluding earlier retries: "
-            + ", ".join(f"{_label(arm)} {n}" for arm, n in made.items())
-            + "."
-        )
-        outages = {arm: len(a) - len(_measured(a)) for arm, a in _by_arm(self.rows).items()}
-        if not any(outages.values()):
-            return note
-        named = " and ".join(f"{n} for {_label(arm)}" for arm, n in outages.items() if n)
-        note += f" Unavailable results: {named}. Each arm is scored on the same {len(self.scored) // len(self.arms)}"
-        note += ": an attempt one arm lost is dropped for every arm at that task." if len(self.arms) > 1 else "."
-        for task in self.left_out:
-            missing = [
-                a for a in self.arms if not _measured([r for r in self.rows if r["task"] == task and r["arm"] == a])
-            ]
-            note += f" `{task}` is left out, with no {' or '.join(map(_label, missing))} attempt measured."
-        return note
 
 
 def _by_comparison(rows: Sequence[Mapping[str, Any]]) -> list[_Comparison]:
@@ -480,135 +411,11 @@ def _pass(row: Mapping[str, Any]) -> tuple[object, int]:
     return row.get("replaces_run_id") or (row.get("run") or {}).get("run_id"), row["repeat"]
 
 
-def results_table(release: str, rows: Sequence[Mapping[str, Any]]) -> str:
-    return "\n\n".join(
-        _results_table(release, comparison)
-        for suite in _by_suite(rows).values()
-        for comparison in _by_comparison(suite)
-    )
-
-
 def _by_suite(rows: Sequence[Mapping[str, Any]]) -> dict[tuple[str, str], list[Mapping[str, Any]]]:
     groups: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
     for row in rows:
         groups.setdefault((row["suite"], row["suite_version"]), []).append(row)
     return dict(sorted(groups.items()))
-
-
-def _results_table(release: str, comparison: _Comparison) -> str:
-    """One comparison in `release`'s published rows as a results table, with the suite version and runs behind it
-    and any task changed since, so an old score cannot pass for one of the tasks as they stand."""
-    columns = ["passed", "correct", "median time", "mean time", "median cost", "mean cost", "total cost"]
-    rows = comparison.rows
-    (suite, revision), *_ = _by_suite(rows)
-    lines = [f"`{suite}` `{revision}`: {comparison.title}.", "",
-             "| | " + " | ".join(columns) + " |", "|:--|" + ":--|" * len(columns)]  # fmt: skip
-    scored = _by_arm(comparison.scored)
-    for arm in comparison.arms:
-        stats = _arm_stats(scored.get(arm, []))
-        label = f"{_label(arm)} ({release})" if arm == "fastbrowse" else _label(arm)
-        lines.append(f"| {label} | " + " | ".join(stats[c] for c in columns) + " |")
-    runs = sorted({(r["run"]["run_id"], (r["run"]["git_sha"] or "")[:7]) for r in rows})
-    lines += ["", comparison.note + " Runs: " + ", ".join(f"`{run}` at `{sha}`" for run, sha in runs) + "."]
-    lock = load_lock()
-    changed = sorted(
-        {(r["task"], r["task_version"], task_version(r["task"], lock)) for r in rows}
-        - {(r["task"], r["task_version"], r["task_version"]) for r in rows}
-    )
-    if changed:
-        lines.append(
-            "Changed since these runs: "
-            + ", ".join(f"`{task}` v{then} → {'removed' if now is None else f'v{now}'}" for task, then, now in changed)
-            + "; compare them only against runs of the same version."
-        )
-    return "\n".join(lines)
-
-
-def headline(release: str, rows: Sequence[Mapping[str, Any]]) -> str:
-    """The README's comparison table, from the newest published results."""
-    days = sorted(r["run"]["run_started"][:10] for r in rows if r["run"]["run_started"])
-    tasks = {r["task"] for r in rows}
-    lines = [
-        f"Measured on {days[-1]} with the build released as {release}: {len(tasks)} tasks, "
-        f"{len(rows)} selected results across all arms, "
-        + ("on cloud and local browsers." if any(r["arm"] == "cua-codex" for r in rows) else "on cloud browsers."),
-        "",
-    ]
-    alone = 0
-    for (suite, revision), suite_rows in _by_suite(rows).items():
-        for comparison in _by_comparison(suite_rows):
-            if len(comparison.arms) == 1:
-                alone += len({r["task"] for r in comparison.rows})
-                continue
-            lines += [f"Suite `{suite}` `{revision}`: {comparison.title}.", "",
-                      "| | runs passed | cost per scored run | median time |", "|:--|:--|:--|:--|"]  # fmt: skip
-            scored = _by_arm(comparison.scored)
-            for arm in comparison.arms:
-                s = _arm_stats(scored.get(arm, []))
-                cost = f"{s['median cost']} (median), {s['mean cost']} mean"
-                lines.append(f"| {_label(arm)} | {s['passed']} | {cost} | {s['median time']} |")
-            lines += ["", comparison.note, ""]
-    if alone:
-        lines.append(f"{alone} {'task' if alone == 1 else 'tasks'} graded on fastbrowse alone "
-                     f"{'is' if alone == 1 else 'are'} in [docs/evals.md](docs/evals.md#results).")  # fmt: skip
-    return "\n".join(lines).rstrip()
-
-
-class _LegacyArm(BaseModel):
-    passed: int
-    total: int
-    correct: int
-    median_seconds: float
-    mean_seconds: float
-    median_dollars: float
-    mean_dollars: float
-    total_dollars: float
-
-
-class _LegacyResults(BaseModel):
-    release: str
-    date: str
-    tasks: int
-    repeats: int
-    concurrency: int
-    max_steps: int
-    source: str
-    arms: dict[str, _LegacyArm]
-
-
-def legacy_docs(*, headline_only: bool = False) -> str:
-    old = _LegacyResults.model_validate_json(LEGACY.read_text(encoding="utf-8"))
-    lines = [
-        f"Measured on {old.date} with the build released as {old.release}: {old.tasks} answer tasks, "
-        f"{old.repeats} attempts each on cloud browsers.",
-        "",
-        "| | passed | cost per task | median time |"
-        if headline_only
-        else "| | passed | correct answer | median time | mean time | median cost | mean cost | suite total |",
-        "|:--|:--|:--|:--|" if headline_only else "|:--|:--|:--|:--|:--|:--|:--|:--|",
-    ]
-    for arm, stats in old.arms.items():
-        label = ARM_LABELS[arm]
-        if headline_only:
-            lines.append(
-                f"| {label} | {stats.passed}/{stats.total} | ${stats.median_dollars:.4f} (median), "
-                f"${stats.mean_dollars:.4f} mean | {stats.median_seconds:.1f}s |"
-            )
-        else:
-            lines.append(
-                f"| {label} | {stats.passed}/{stats.total} | {stats.correct}/{stats.total} | "
-                f"{stats.median_seconds:.1f}s | {stats.mean_seconds:.1f}s | ${stats.median_dollars:.4f} | "
-                f"${stats.mean_dollars:.4f} | ${stats.total_dollars:.2f} |"
-            )
-    lines += ["", "These are historical aggregates, predating versioned rows and the current stricter graders."]
-    if not headline_only:
-        lines += [
-            f"That release used {old.concurrency} concurrent runs and a {old.max_steps}-step limit for "
-            "fastbrowse and jev-ultrafast. The current limit is generated above.",
-            f"The [archived report]({old.source}) preserves task, navigation and split-suite detail.",
-            "`docs/results/legacy.json` records these aggregates; it is excluded from the site feed.",
-        ]
-    return "\n".join(lines)
 
 
 class MetricSummary(BaseModel):
@@ -718,258 +525,11 @@ def render_summary() -> str:
     return summary().model_dump_json(indent=2) + "\n"
 
 
-def _cell(text: str) -> str:
-    return " ".join(text.split()).replace("|", "\\|")
-
-
-def protocol_docs() -> str:
-    from fastbrowse.evals.live import ARMS, MAX_STEPS, ULTRAFAST_TEXT_MODEL
-
-    lines = [
-        "Every arm receives `Start at {start}. {task}`. CDP runners also receive the declared start URL.",
-        "Both navigation arms enable cloud resizing; Fastbrowse matches pinned Ultrafast's 1120 by 780 "
-        "CSS-pixel viewport at device scale 1. Cloud sessions otherwise ignore CDP resizing. "
-        "Final evidence records actual inner width, inner height and device pixel ratio for both arms, "
-        "before their browser driver disconnects. "
-        "Publication rejects scored navigation rows whose viewport is missing or different. Earlier diagnostic "
-        "batches inherited varying cloud dimensions and are not pooled with these runs.",
-        f"fastbrowse and browser-use OSS use a {MAX_STEPS}-step limit. Ultrafast permits {MAX_STEPS} executed "
-        f"actions and at most {2 * MAX_STEPS} decisions, so stale choices do not consume its action budget. "
-        f"Codex + Cua Driver permits {MAX_STEPS} browser tool calls, including observations. "
-        "The hosted API exposes no step limit.",
-        "The existing harness has no common dollar or wall-time cap; "
-        "cloud browsers expire after their configured lifetime.",
-        "Default arms: " + ", ".join(f"`{name}`" for name, arm in ARMS.items() if arm.default) + ".",
-        "Browser Use Ultrafast is `jev-ultrafast`, the upstream browser-use/jev-ultrafast package. "
-        "The `browser-use` arm runs the separate hosted Browser Use agent; its results are not Ultrafast results.",
-        "Ultrafast uses the same selected Jev route as fastbrowse, OpenRouter by default, "
-        f"with its upstream text helper, {ULTRAFAST_TEXT_MODEL}, and reasoning disabled. "
-        "No direct TypeSafe key is needed when using OpenRouter.",
-        "",
-        "| Arm | Pin | Tier |",
-        "|---|---|---|",
-    ]
-    lines.extend(f"| `{name}` | {arm.pin} | {arm.tier} |" for name, arm in ARMS.items())
-    lines += [
-        "",
-        "`browser-use-oss` is opt-in and installed in an isolated uv environment only when selected.",
-        "Its Pydantic pin conflicts with the hosted SDK, so it is not a project extra.",
-        "`cua-codex` is opt-in and uses the supported coding-agent + Cua Driver MCP route. "
-        "Cua's standalone `cua-agent` package is deprecated. This arm runs Codex with `gpt-6-astra`, "
-        "xhigh reasoning and the default service tier, on a private local Linux Xvfb/Openbox desktop. "
-        "It receives only Cua's browser observation, navigation and input tools. "
-        "Completion tasks without credentials use the existing graders; safe-stop and login tasks are excluded. "
-        "Rows record the local environment; their timing is not a controlled comparison with cloud arms. "
-        "The CLI does not expose billed spend, so dollars remain unknown, never zero.",
-        "Install the pinned driver and Codex CLI from the arm table, plus Xvfb, Openbox and dbus-daemon. "
-        "Authenticate Codex before running `uv run --extra mcp python -m fastbrowse.evals.live "
-        "--arms cua-codex --suite dev --concurrency 1`. "
-        "`CUA_DRIVER` and `CUA_CODEX` select executable paths, with their versions checked before the run. "
-        "Every attempt keeps its tool and model events in a unique `artifacts/evals/cua/` directory. "
-        "The arm owns its desktop, driver transport, browser profile and cleanup. Video recording is unsupported.",
-        "The jev-ultrafast runner answers a one-option choice itself, as fastbrowse does, because Jev refuses it, "
-        "and drops a code fence its text helper's model wraps around JSON, which upstream's strict parse rejects.",
-        "Rows keep raw `status`, `task_successful` and `normalized_status`: "
-        "`done`, `stopped`, `budget`, `timeout`, `error`, `blocked` or `unavailable`.",
-        "A pass requires a correct grade and `done`, or the exact expected fastbrowse stop.",
-        "The hosted arm is `done` when its agent answered: it called `done` with a result that was not an error, "
-        "or, never calling `done`, replied with the answer the session kept as its output. That is its own "
-        "completion, as fastbrowse is held to its own. Browser Use's `is_task_successful` is kept in the row "
-        "(`task_successful`) but decides nothing: it is Browser Use's later judgement of the session, and it failed "
-        "correct answers whose sessions showed no sign of failing or giving up.",
-        "A final browser document reporting HTTP 408, 419, 429 or 5xx is retried for either arm. A separate "
-        "start-page probe is only diagnostic, except that an initial navigation failure is confirmed as an "
-        "outage when the site also fails that probe. Raw status, grade and document evidence remain recorded.",
-        "Navigation tasks require observed final-document HTTP status and nonempty title or text, as well as "
-        "the requested destination and completion status. A matching URL alone cannot pass an HTTP error page.",
-        "Browser IPC or CDP reply timeouts have a separate browser_transport label and one retry. A transport "
-        "exception is not proof of a transient fault; repeated failures remain visible and exclude the paired "
-        "comparison instead of being attributed to the agent.",
-        "The harness fetches each task site's start page every 15 seconds. Slow or failed probes are retained "
-        "as site_probe evidence; they do not change an agent's grade or prove an outage in its browser. Earlier "
-        "protocols excluded overlapping attempts, including passes, which these new runs no longer do.",
-        "Tasks run only on sites that stay up. the-internet.herokuapp.com caused 13 of the 17 site failures in a "
-        "day's runs, across all six of its tasks, so since 0.5.8 those tasks run on practice.expandtesting.com's "
-        "copies of the same pages; its login task, which `expandtesting-login` already was, was dropped, and "
-        "nested frames, which the copy lacks, became `frame-heading`.",
-        'A hosted session Browser Use itself ends with "Task ended unexpectedly." is a Browser Use outage: its agent '
-        "neither answered nor gave up. A session ending in `error` with any other output is scored as its failure.",
-        "An attempt of any arm still running after 15 minutes is stopped as an outage: the slowest finished attempts "
-        "took about three minutes.",
-        "From 0.5.10, slow provider calls and recovered request failures stay in the scored attempt, with their "
-        "full wall time and cost. Trace telemetry cannot turn a completed or failed attempt into an outage.",
-        "Earlier releases excluded fastbrowse attempts with Jev calls over 2 seconds or recovered request failures, "
-        "although other arms did not expose those measurements. Published rows retain that historical selection "
-        "bias; the new task versions must not be compared with them as if the grading rules were unchanged.",
-        "An attempt an outage ended is waited out and run again, up to five times over about 25 minutes.",
-        "A row still unavailable after that is recorded but scores nothing, and neither does the same repeat of "
-        "every other arm at that task: each comparison scores its arms on the same attempts at the same tasks.",
-        "Time runs from the start of an attempt to the agent's answer, all of it counted. Releases up to 0.5.7 "
-        "subtracted the failed requests and backoff fastbrowse's client measured inside an attempt, which no other "
-        "arm could; every published time, those releases' included, is now wall time.",
-        "The hosted arm's time ends at its agent's answer, by Browser Use's own clock from the session's creation. "
-        "Its API reports the session stopped as much as two minutes later (`session_seconds`), which is not counted.",
-        "Earlier unavailable attempts are counted by `retries`; their time and cost are not aggregated "
-        "into the scored row.",
-        "New runs also write an adjacent `*.attempts.jsonl` ledger, including every outage and selected "
-        "attempt, its trace, "
-        "reported cost, elapsed time, repeat, build and scheduled retry wait. `selected` identifies the "
-        "row retained in the "
-        "main file, including a final unavailable attempt after retries are exhausted. Unknown cost stays unknown.",
-        "Recordings get a fresh filename for every retry. Arm launch order rotates between repeats; "
-        "concurrency is shared.",
-        "Keep this ledger with the scored rows: retry time and spend belong in operational totals, not "
-        "hidden in a score.",
-        "A slow call that eventually returns is still scored; provider errors and timeouts use the "
-        "bounded outage retry rule.",
-        "Existing timing includes browser setup. These rows do not claim the planned handoff-only timing protocol.",
-        "Jev is priced at list ($0.042 per million input tokens) whenever the gateway meters a request at $0, for "
-        "fastbrowse and jev-ultrafast alike.",
-    ]
-    return "\n\n".join(lines[:4]) + "\n" + "\n".join(lines[4:])
-
-
-def feed_schema_docs() -> str:
-    models = (ResultsSummary, ReleaseSummary, ArmSummary, MetricSummary, TaskChange)
-    lines = [
-        f"Schema version {ResultsSummary.model_fields['schema_version'].default}. "
-        "Each releases entry represents one comparison in one release, suite and suite version.",
-        "",
-        "| Object | Fields |",
-        "|---|---|",
-    ]
-    for model in models:
-        lines.append(f"| `{model.__name__}` | " + ", ".join(f"`{name}`" for name in model.model_fields) + " |")
-    lines += [
-        "",
-        "`releases` is newest first, and within a release the suites run in their defined order, `core` first. "
-        "`date` is the latest UTC run date in that group.",
-        "Each entry is one comparison: `compared` names the arms scored on its `tasks`, every arm on all of them, "
-        "since a task runs only on the arms it grades on equal terms. A suite has one entry per comparison, "
-        "those with most arms first; the first `core` entry is fastbrowse against Browser Use.",
-        "Schema version 2 added `compared` and `tasks`; version 1 pooled a suite's comparisons into one entry.",
-        "`arms` maps registry names to statistics across the scored attempts, failures included. `total` counts "
-        "them; `excluded` counts attempts made but not scored, ended by an outage or matched to one.",
-        "`seconds` and `dollars` contain numeric median and mean values; dollars are USD. "
-        "Seconds leave out measured outage waits.",
-        "`priced` counts attempts with known cost. Both dollar statistics are null if any attempt is unpriced.",
-        "`task_versions_changed` compares each task with the last published release that included it:",
-        "`task`, `previous` and `current` version lists. New tasks have an empty previous list;",
-        "tasks absent from the current group are not reported as removed. The first release has no changes.",
-        "Separate suite versions never share an aggregate. No wall-clock generation timestamp is emitted.",
-    ]
-    if not published():
-        lines += ["There are no published JSONL rows yet; the generated releases array is empty."]
-    return "\n".join(lines)
-
-
-def docs_blocks(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) -> dict[str, str]:
-    """The generated parts of docs/evals.md, by marker name: a task table per split suite, the versions, and a
-    table per published release."""
-    from fastbrowse.evals.mock_tasks import TASKS as MOCK
-    from fastbrowse.evals.tasks import TASKS as LOCAL
-
-    suites, _ = all_tasks()
-    lock = load_lock()
-    blocks = {"protocol": protocol_docs(), "feed-schema": feed_schema_docs(), "legacy": legacy_docs()}
-    for name, tasks in suites.items():
-        if name == "core":
-            continue  # the core suite's table says how each task is graded, which is prose; a test checks its ids
-        rows = [f"| `{t.id}` | {t.category.value} | {task_version(t.id, lock)} | {_cell(t.task)} |" for t in tasks]
-        blocks[f"tasks:{name}"] = "| Task | Category | Version | Asks |\n|---|---|---|---|\n" + "\n".join(rows)
-    named = [(f"`{name}`", tasks) for name, tasks in suites.items()] + [
-        ("local fixtures", LOCAL),
-        ("mock fixtures", MOCK),
-    ]
-    versions = [f"| {name} | {len(tasks)} | `{suite_version((t.id for t in tasks), lock)}` |" for name, tasks in named]
-    changed = sorted((task_id, entry["version"]) for task_id, entry in lock.items() if entry["version"] > 1)
-    table = "| Suite | Tasks | Version |\n|---|---|---|\n" + "\n".join(versions)
-    if changed:
-        table += "\n\nTasks past version 1: " + ", ".join(f"`{task_id}` v{v}" for task_id, v in changed) + "."
-    blocks["versions"] = table
-    for release, rows in published() if releases is None else releases:
-        blocks[f"results:{release}"] = results_table(release, rows)
-    return blocks
-
-
-def _render(text: str, blocks: Mapping[str, str], where: str) -> str:
-    """`text` with each `<!-- evals:NAME -->` ... `<!-- /evals:NAME -->` block replaced by its generated body."""
-    for name, body in blocks.items():
-        pattern = re.compile(rf"(<!-- evals:{re.escape(name)} -->).*?(<!-- /evals:{re.escape(name)} -->)", re.S)
-        if not pattern.search(text):
-            raise ValueError(f"{where} has no <!-- evals:{name} --> block")
-        text = pattern.sub(lambda m, body=body: f"{m.group(1)}\n{body}\n{m.group(2)}", text)
-    return text
-
-
-_RESULTS_HEADING = "\n## Results\n"
-
-
-def render_docs(text: str) -> str:
-    """docs/evals.md with its generated blocks; a newly published release gets its own section, newest first."""
-    releases = published()
-    for release, rows in releases:
-        name = f"results:{release}"
-        if f"<!-- evals:{name} -->" in text:
-            continue
-        start = text.index(_RESULTS_HEADING) + len(_RESULTS_HEADING)
-        end = next((m.start() for m in re.finditer(r"\n## ", text) if m.start() >= start), len(text))
-        older = (
-            m.start()
-            for m in re.finditer(r"\n### (\S+), \d{4}-\d{2}-\d{2}\n", text)
-            if start <= m.start() < end and _release_key(m[1]) < _release_key(release)
-        )
-        at = next(older, end)
-        day = rows[0]["run"]["run_started"][:10]
-        text = f"{text[:at]}\n### {release}, {day}\n\n<!-- evals:{name} -->\n<!-- /evals:{name} -->\n{text[at:]}"
-    return _render(text, docs_blocks(releases), "docs/evals.md")
-
-
-def render_readme(text: str) -> str:
-    """Keep live-site and controlled-fixture comparisons separate, from the same published rows."""
-    releases = published()
-    live = [(release, [row for row in rows if not row["suite"].startswith("mock-")]) for release, rows in releases]
-    newest = [(release, rows) for release, rows in live if rows][:1]
-    live_text = headline(*newest[0]) if newest else legacy_docs(headline_only=True)
-    mocks = [(release, [row for row in rows if row["suite"].startswith("mock-")]) for release, rows in releases]
-    newest_mock = next(((release, rows) for release, rows in mocks if rows), None)
-    if newest_mock is not None:
-        release, rows = newest_mock
-        day = max(row["run"]["run_started"][:10] for row in rows)
-        lines = [
-            "### Controlled mock-site comparison",
-            "",
-            f"Release {release}, {day}. Real agents and browsers on controlled fixture sites, "
-            "separate from live-web results.",
-            "",
-            "| Suite | Agent | Passed | Median cost | Median time |",
-            "|:--|:--|:--|:--|:--|",
-        ]
-        for (suite, _revision), suite_rows in _by_suite(rows).items():
-            for comparison in _by_comparison(suite_rows):
-                for arm, arm_rows in _by_arm(comparison.scored).items():
-                    stats = _arm_stats(arm_rows)
-                    lines.append(
-                        f"| `{suite}` | {_label(arm)} | {stats['passed']} | "
-                        f"{stats['median cost']} | {stats['median time']} |"
-                    )
-        lines += [
-            "",
-            "Confirmation gates are scored separately from task completion. Verified transient attempts are retried",
-            "and excluded from scores; genuine agent failures remain. Full protocol and attempt records are in",
-            "[docs/evals.md](docs/evals.md#stateful-mock-comparison).",
-        ]
-        live_text += "\n\n" + "\n".join(lines)
-    return _render(text, {"headline": live_text}, "README.md")
-
-
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="check or update the eval versions and published results")
     parser.add_argument("--bump", nargs="*", default=[], metavar="TASK_ID")
     parser.add_argument("--publish", nargs=2, metavar=("RELEASE", "ROWS"), help="commit a results file as RELEASE")
-    parser.add_argument(
-        "--docs", action="store_true", help="regenerate eval docs, README headline and docs/results/summary.json"
-    )
+    parser.add_argument("--docs", action="store_true", help="regenerate the compact approved results feed")
     args = parser.parse_args(argv)
     suites, local = all_tasks()
     tasks = {t.id: t for t in (*(t for s in suites.values() for t in s), *local)}
@@ -986,8 +546,6 @@ def main(argv: list[str]) -> int:
         except ValueError as exc:
             parser.error(str(exc))
     if args.docs or args.publish:
-        DOCS.write_text(render_docs(DOCS.read_text(encoding="utf-8")), encoding="utf-8")
-        README.write_text(render_readme(README.read_text(encoding="utf-8")), encoding="utf-8")
         RESULTS.mkdir(parents=True, exist_ok=True)
         (RESULTS / "summary.json").write_text(render_summary(), encoding="utf-8")
     problems = mismatches(list(tasks.values()))

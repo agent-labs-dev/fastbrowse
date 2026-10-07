@@ -1,30 +1,51 @@
-# Evals
+# Eval workflow
 
-Unit tests cannot tell you whether the agent still browses well. The suites can.
+Read this before changing agent behavior, fixture tasks or running paid browser checks.
 
-```sh
-uv run python -m fastbrowse.evals.runner                      # local fixtures, headless Chrome, ~$0.005 a task
-uv run --extra browser-use python -m fastbrowse.evals.live    # live head-to-head, three arms
-uv run --extra browser-use python -m fastbrowse.evals.live --arms fastbrowse --suite heldout --repeat 3
-```
+## Iterate and verify
 
-`--suite` picks the set: `core` (the published suite), `dev`, `heldout`, and the harder `stretch-dev` and
-`stretch-heldout`. **Agent changes are iterated against `dev` only.** `heldout` is run before and after a
-round of changes and never debugged, so its score says whether a round improved the agent or only its dev
-score. A change made to fix a named held-out task spends that set's value; say so in the PR when it happens.
+Agent changes are iterated against `dev` only. Measure `heldout` before and after a round, and never debug
+its tasks. If a held-out task was used to design a fix, disclose that loss of independence in the PR.
+Fix the general cause, then verify the local and mock fixture suites and the relevant dev tasks.
 
-All suites use `OPENROUTER_API_KEY` for the LLM and, unless `TYPESAFE_API_KEY` is supplied, Jev.
-`AI_GATEWAY_API_KEY` adds a Jev backup. The live suite also needs `BROWSER_USE_API_KEY`. Upstream outages look
-exactly like regressions, so re-read a red run before believing it.
+The internal live suite, external corpora, comparator adapters and recording tools live in Parallax under
+`parallax.browser_use`. Run its `parallax browser internal --help`, `official --help`, `data --help` and
+`track --help` in the maintainer checkout. The internal comparison uses Browser Use hosted default and Jev
+Ultrafast; label the Python SDK agent separately when used. Unsupported Ultrafast tasks use hosted default
+and retain their coverage limitation. Never pool the best score from separate agents.
 
-Every result row records its build (`run`: version, commit, dirty tree, models) and the `task_version` it ran;
-compare rows only at equal task versions. Changing what a task asks or how it grades means
-`python -m fastbrowse.evals.versions --bump TASK_ID --docs`, and a test fails until you do. Results are
-published as committed rows (`--publish`). The README headline, the results and task tables and the suite
-versions in [docs/evals.md](../evals.md) are generated from the code and those rows, and a test fails when
-they differ; regenerate them in the same PR ([versions](../evals.md#versions)).
+Parallax imports source benchmark grades as source reports. Its own semantic judgments use Jev with an LLM
+fallback. Imported predicates, weighted rubrics and full-task judgments retain their original meanings and
+are never relabeled as Parallax semantic verdicts.
 
-A published comparison has one route: rows committed with `--publish` at the task versions they ran, every
-physical attempt kept, and retries and their spend recorded with them. Never type a number into prose.
-`.github/workflows/evals.yml` runs the fixture suites on a schedule and on demand; a release that publishes a
-comparison needs that job green and, for a head-to-head figure, the comparison re-run on the same build.
+## Before spending
+
+Use an approved total budget. Update and record the agent, comparator, dataset and judge revisions before
+running, and verify current provider availability and pricing. Preserve the campaign ledger across resumes;
+unknown spend stays reserved until reconciled. A provider outage is recorded as an ungraded infrastructure
+failure, not silently converted into a task failure or removed from the denominator.
+
+The scheduled fixture job checks configured providers before running. A gateway key alone covers Jev and
+the LLM; direct TypeSafe and OpenRouter routes are also supported. Keys stay in ignored configuration.
+Heavy local checks run through `~/scripts/agent-heavy`, with owned browsers and containers stopped on exit.
+
+## Evidence and release
+
+Detailed runs and validation live in the private
+[fastbrowse-evals Langfuse project](https://us.cloud.langfuse.com/project/cmuwjxra401iyad0cymgswes5).
+Keep raw output in ignored `artifacts/evals/`, with private filesystem permissions. Git stores compact
+approved baselines and source identity receipts, not logs, recordings, decrypted tasks or credentials.
+
+Parallax exports the internal catalog into Fastbrowse and checks it byte-for-byte. The Fastbrowse publication
+gate requires the matching catalog digest, clean committed runner and agent builds, current task versions,
+complete task coverage, three measured repeats and every physical run in the ledger. Matched task success,
+time and cost regressions block publication. No result is published until complete runs are reviewed and
+the maintainer explicitly approves it.
+
+The fixture workflow must be green on the release build. A changed comparison must also be rerun on that
+build. CI validates changed result rows and their ledgers against base-branch baselines. The release guard
+refuses a missing fixture receipt or executable changes after a comparison measurement.
+
+Public projections contain ids, source hashes, grades, completion, build identity, time and cost only. Answers,
+page content, credentials, local paths and private trace links never enter a public dataset or page. Langfuse
+upload is not publication approval. Read-back checks must verify an upload before marking tracking complete.

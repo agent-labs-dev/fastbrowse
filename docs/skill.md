@@ -1,27 +1,29 @@
-# Use fastbrowse from Codex or Claude Code
+# Use fastbrowse with your agent
 
-The [fastbrowse skill](../skills/fastbrowse/SKILL.md) lets a coding agent delegate a website task to fastbrowse
+The [fastbrowse skill](../skills/fastbrowse/SKILL.md) lets an agent that supports Agent Skills delegate a website task to fastbrowse
 and interpret its status and citations. It prefers an existing local Chrome connection, then local Chrome.
 It uses an MCP server configured for that browser choice, or the CLI. Cloud browsing is available when requested or local browsing is unavailable.
+Agents without skill support can use the CLI or MCP server directly.
 Installing the skill installs instructions; the browser and model credentials still need configuration.
 
 ## Install
 
-From a checkout of this repository, install the skill for either or both agents with the
+From a checkout of this repository, install the skill for your agent with the
 [Skills CLI](https://github.com/vercel-labs/skills):
 
 ```sh
-npx skills add ./ --skill fastbrowse --agent codex claude-code
+npx skills add ./ --skill fastbrowse
 ```
 
 The same installer can fetch the skill from GitHub without a checkout:
 
 ```sh
-npx skills add agent-labs-dev/fastbrowse --skill fastbrowse --agent codex claude-code
+npx skills add agent-labs-dev/fastbrowse --skill fastbrowse
 ```
 
-The installer uses project scope by default. Add `--global` for all projects, or select just `codex` or
-`claude-code`. Review the skill before installing it. For a manual install, copy `skills/fastbrowse` into
+Choose your agent when the installer prompts. The installer uses project scope by default.
+Add `--global` for all projects, or `--agent codex claude-code` to select those two agents explicitly.
+Review the skill before installing it. For a manual install, copy `skills/fastbrowse` into
 `.agents/skills/fastbrowse` for Codex or `.claude/skills/fastbrowse` for Claude Code in the project where you
 want to browse. Keep its `references` directory beside `SKILL.md`. Personal installs use
 `~/.agents/skills/fastbrowse` or `~/.claude/skills/fastbrowse`. Start a new agent session after installation.

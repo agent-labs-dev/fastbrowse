@@ -8,7 +8,7 @@ posted, whether an order was placed or a password changed.
 
 Each mock task gets a site of its own, so one task's session, basket or order can never decide another's grade.
 
-Needs OPENROUTER_API_KEY for Jev and the LLM; see fastbrowse.clients.environment for optional backups.
+Needs OPENROUTER_API_KEY or AI_GATEWAY_API_KEY; see fastbrowse.clients.environment for provider routing.
 """
 
 import argparse
@@ -51,6 +51,11 @@ HEADROOM = 0.6
 its cap, and reaching the cap fails a run that was doing the right thing slowly."""
 
 
+def fixture_config() -> Config:
+    """Fixtures own their scripted consent steps, so automatic refusal must not remove their controls."""
+    return Config(refuse_cookie_banners=False)
+
+
 def _row(
     result: RunResult, *, task_id: str, failure: str | None, seconds: float, lost: float, limit: int
 ) -> dict[str, object]:
@@ -89,11 +94,11 @@ async def _drive(
     attachments: tuple[Attachment, ...] = (),
 ) -> tuple[RunResult, float, float]:
     """One run of one task, returning its result and how long it took, wall and transient."""
-    config = Config()
+    config = fixture_config()
     jev, llm = settings.jev(http), settings.llm(http)
     started = time.monotonic()
     with traced() as events:
-        async with BrowserSession(connection, sink) as session:
+        async with BrowserSession(connection, sink, refuse_cookie_banners=config.refuse_cookie_banners) as session:
             page = CdpPage(session, config)
             result = await Agent(page, jev, llm, config=config, secrets=secrets).run(
                 task.task,
@@ -213,10 +218,12 @@ async def main(argv: list[str]) -> int:
                     }
                     rows.append(row)
                     out.write(json.dumps(row) + "\n")
+                    out.flush()
                     mark = "PASS" if row["passed"] else "FAIL"
                     print(
                         f"{mark} {suite:5} {task.id:26} {row['status']:20} {row['seconds']:>6}s ${row['dollars']:<8}",
                         row["failure"] or "",
+                        flush=True,
                     )
                     used = cast("int", row["steps"])
                     budget = cast("int", row["step_limit"])

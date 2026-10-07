@@ -6,7 +6,8 @@ FASTBROWSE_JEV_SOURCE picks openrouter, typesafe or gateway explicitly. OpenRout
 gateway as backup; the gateway uses direct when configured, otherwise OpenRouter.
 FASTBROWSE_JEV_BASE_URL points either at a proxy or another host serving the same API, and
 FASTBROWSE_JEV_MODEL pins an OpenRouter or direct model. A custom endpoint or model disables automatic failover.
-LLM: OPENROUTER_API_KEY.
+LLM: OPENROUTER_API_KEY; when it is absent, AI_GATEWAY_API_KEY serves the same models through the Vercel AI
+Gateway's OpenAI-compatible chat completions.
 Cloud browser: BROWSER_USE_API_KEY. FASTBROWSE_LLM_MODEL overrides every purpose at once, and
 FASTBROWSE_LLM_MODEL_<PURPOSE> (PLAN, READ, FIELD_TEXT, RECOVER, COMPOSE, VERIFY, SHORTCUT) overrides one.
 FASTBROWSE_LLM_REASONING sets the reasoning effort: low (default), medium or high. FASTBROWSE_CHROME
@@ -24,7 +25,12 @@ from pydantic import AliasChoices, Field, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from fastbrowse.clients.failover import FailoverJevClient
-from fastbrowse.clients.openai_compatible import OpenAICompatibleLLM, ReasoningEffort
+from fastbrowse.clients.openai_compatible import (
+    GATEWAY_PROVIDER_ROUTING,
+    OPENROUTER_PROVIDER_ROUTING,
+    OpenAICompatibleLLM,
+    ReasoningEffort,
+)
 from fastbrowse.clients.typesafe import OPENROUTER_MODEL, OPENROUTER_URL, TYPESAFE_URL, TypeSafeJevClient
 from fastbrowse.clients.vercel import GATEWAY_URL, VercelGatewayJevClient
 from fastbrowse.jev import JEV_MODEL, JevClient
@@ -57,6 +63,16 @@ class JevSource(StrEnum):
     OPENROUTER = "openrouter"
     TYPESAFE = "typesafe"
     GATEWAY = "gateway"
+
+
+class LLMSource(StrEnum):
+    OPENROUTER = "openrouter"
+    GATEWAY = "gateway"
+
+
+_LLM_LABELS = {LLMSource.OPENROUTER: "OpenRouter", LLMSource.GATEWAY: "Vercel AI Gateway"}
+LLM_OPENROUTER_URL = "https://openrouter.ai/api/v1"
+LLM_GATEWAY_URL = "https://ai-gateway.vercel.sh/v1"
 
 
 class ConfigurationError(RuntimeError):
@@ -146,7 +162,12 @@ class Settings(BaseSettings):
         """Which providers a run will call, for the first line of a log: an outage reads differently with no backup."""
         source, backup = self.jev_route()
         failover = f"backup {backup}" if backup is not None else "no backup: an outage past its retries ends the run"
-        return f"Jev {source} ({failover}); LLM {', '.join(sorted(set(self.models().values())))} via OpenRouter"
+        models = ", ".join(sorted(set(self.models().values())))
+        return f"Jev {source} ({failover}); LLM {models} via {_LLM_LABELS[self.llm_source()]}"
+
+    def llm_source(self) -> LLMSource:
+        """Where the LLM goes: OpenRouter when keyed, otherwise the gateway, which serves the same models."""
+        return LLMSource.OPENROUTER if self.openrouter_api_key else LLMSource.GATEWAY
 
     def jev(self, http: httpx.AsyncClient) -> JevClient:
         source, backup_source = self.jev_route()
@@ -187,12 +208,27 @@ class Settings(BaseSettings):
                 assert_never(source)
 
     def llm(self, http: httpx.AsyncClient) -> LLMClient:
+        return self._llm_client(self.llm_source(), http)
+
+    def _llm_client(self, source: LLMSource, http: httpx.AsyncClient) -> LLMClient:
+        match source:
+            case LLMSource.OPENROUTER:
+                if not self.openrouter_api_key:
+                    raise ConfigurationError("set OPENROUTER_API_KEY or AI_GATEWAY_API_KEY for the LLM")
+                key, base_url, routing = self.openrouter_api_key, LLM_OPENROUTER_URL, OPENROUTER_PROVIDER_ROUTING
+            case LLMSource.GATEWAY:
+                if not self.ai_gateway_api_key:
+                    raise ConfigurationError("set AI_GATEWAY_API_KEY or OPENROUTER_API_KEY for the LLM")
+                key, base_url, routing = self.ai_gateway_api_key, LLM_GATEWAY_URL, GATEWAY_PROVIDER_ROUTING
+            case _:
+                assert_never(source)
         return OpenAICompatibleLLM(
-            self.openrouter_key(),
+            key.get_secret_value(),
             http=http,
-            base_url="https://openrouter.ai/api/v1",
+            base_url=base_url,
             models=self.models(),
             reasoning_effort=self.llm_reasoning,
+            provider_routing=routing,
         )
 
     def openrouter_key(self) -> str:
