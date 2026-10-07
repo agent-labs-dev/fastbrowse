@@ -30,6 +30,15 @@ from fastbrowse.telemetry import BudgetExceeded, Ledger
 _TRUNCATION_RETRY_FACTOR = 4
 """How much larger the output cap is on the one retry after a response ran into it."""
 
+OPENROUTER_PROVIDER_ROUTING: dict[str, JsonValue] = {"require_parameters": True, "sort": "latency"}
+"""OpenRouter routing: an endpoint that ignores response_format would treat the schema as a hint, so none is
+routed to. OpenRouter's default routing sent gemini-3.8-flash reads to Vertex at a 2.4s median where AI Studio
+answered the same read in 1.3s; sorting by latency keeps fallbacks and follows the faster endpoint."""
+
+GATEWAY_PROVIDER_ROUTING: dict[str, JsonValue] = {"sort": "ttft"}
+"""The Vercel AI Gateway documents `ttft` for the lowest time to first token where OpenRouter calls that sort
+`latency`, and takes no `require_parameters`: the gateway matches the schema itself."""
+
 
 def _image_url(content: bytes) -> str:
     if content.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -172,12 +181,14 @@ class OpenAICompatibleLLM:
         base_url: str,
         models: Mapping[LLMPurpose, str],
         reasoning_effort: ReasoningEffort | None = None,
+        provider_routing: JsonValue | None = OPENROUTER_PROVIDER_ROUTING,
     ) -> None:
         self._api_key = api_key
         self._http = http
         self._base_url = base_url.rstrip("/")
         self._models = dict(models)
         self._reasoning_effort = reasoning_effort
+        self._provider_routing = provider_routing
 
     def _scrubbed(self, text: str) -> str:
         return text.replace(self._api_key, "[api key]") if self._api_key else text
@@ -240,11 +251,9 @@ class OpenAICompatibleLLM:
                     "strict": True,
                 },
             },
-            # An endpoint that ignores response_format would treat the schema as a hint, so none is routed to.
-            # OpenRouter's default routing sent gemini-3.8-flash reads to Vertex at a 2.4s median where AI Studio
-            # answered the same read in 1.3s; sorting by latency keeps fallbacks and follows the faster endpoint.
-            "provider": {"require_parameters": True, "sort": "latency"},
         }
+        if self._provider_routing is not None:
+            body["provider"] = self._provider_routing
         if self._reasoning_effort is not None:
             body["reasoning"] = {"effort": self._reasoning_effort.value}
         costs: list[CostLine] = []

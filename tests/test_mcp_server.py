@@ -342,7 +342,7 @@ async def test_configure_reads_secrets_and_ceilings_from_flags() -> None:
         (["--headed"], {}, {"chrome": "no-such-chrome"}, "Chrome was not found"),
         # FASTBROWSE_HEADED alone still means local Chrome, as it did before cloud became the default.
         ([], {}, {"chrome": "no-such-chrome", "headed": True}, "Chrome was not found"),
-        (["--local"], {}, {"openrouter_api_key": None}, "OPENROUTER_API_KEY"),
+        (["--local"], {}, {"openrouter_api_key": None, "ai_gateway_api_key": None}, "OPENROUTER_API_KEY"),
         (["--local"], {}, {"ai_gateway_api_key": None, "jev_source": JevSource.GATEWAY}, "AI_GATEWAY_API_KEY"),
         (["--max-steps", "0"], {}, {}, "--max-steps"),
         (["--max-dollars", "-1"], {}, {}, "--max-dollars"),

@@ -16,7 +16,10 @@ defaults:
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions: {contents: read}
+    permissions:
+      contents: read
+      # The eval guard reads workflow results for this build.
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,6 +42,15 @@ jobs:
       # Install the wheel alone, outside the checkout, before anything is published: a module or data file
       # (snapshot.js is read at import) missing from the wheel fails here instead of on users' machines.
       - run: uv run --isolated --no-project --with dist/*.whl python -c "import fastbrowse.browser.page, fastbrowse.cli"
+      # Every release needs the Evals workflow green on its exact commit on main; a comparison also needs its
+      # measured build in the release history and running the same executable code. Read-only status queries; no
+      # repository secret is added. Before the GitHub release or PyPI, so a red fixture gate stops any release
+      # and a comparison cannot ship on code nobody ran.
+      - name: Check the release evals guard
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uv run python scripts/release_guard.py "$(uv version --short)"
       # The release notes ARE the changelog entry, so the GitHub release, the repository and the site all
       # say the same thing about a version. A tag whose version has no entry fails here rather than
       # publishing notes nobody wrote.

@@ -321,6 +321,22 @@ def _invoice_total(result: MockResult, site: Site) -> str | None:
 
 TASKS: tuple[MockTask, ...] = (
     MockTask(
+        "mock-cold-sign-in",
+        "/cold-start",
+        f"Sign in as {GRACE} with the saved password, then tell me the reference and item of the order on your "
+        "orders page.",
+        _read_orders,
+        secrets={"password": GRACE_PASSWORD},
+    ),
+    MockTask(
+        "mock-supplied-sign-in-route",
+        "/entry",
+        f"Sign in at /login as {GRACE} with the saved password, then tell me the reference and item of the "
+        "order on your orders page.",
+        _read_orders,
+        secrets={"password": GRACE_PASSWORD},
+    ),
+    MockTask(
         "mock-sign-in",
         "/login",
         f"Sign in as {GRACE} with the saved password, then tell me the reference and item of the order on your "

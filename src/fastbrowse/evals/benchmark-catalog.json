@@ -1,0 +1,640 @@
+{
+  "schema_version": 1,
+  "family": "browser-use",
+  "origin": "fastbrowse-internal",
+  "owner": "parallax",
+  "task_sources": {
+    "live_tasks.py": "06d337b829ae9293b554e6617dd52d593a8459b369ab75a563dfa575d52655a3",
+    "more_tasks.py": "e09f507426eb7c583bc23224e99dc89c078c7d0efcbf81cab81761043d6e9243",
+    "versions.json": "7489f46300427476ddb89e1cd6d714e5f149a4b71a467cd76f806860481a9ea9"
+  },
+  "suites": {
+    "core": [
+      {
+        "id": "pypi-version",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "f082b3865ac6c497",
+        "task_version": 7
+      },
+      {
+        "id": "pypi-structured",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "6f2e9d6fdc17c9ef",
+        "task_version": 7
+      },
+      {
+        "id": "hn-top",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "22d226397996fdfe",
+        "task_version": 7
+      },
+      {
+        "id": "github-license",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "af2133290d01960d",
+        "task_version": 7
+      },
+      {
+        "id": "pypi-newer",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "428a55863b39c9bf",
+        "task_version": 7
+      },
+      {
+        "id": "wiki-godel",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "523371efdc8b624d",
+        "task_version": 7
+      },
+      {
+        "id": "arxiv-title",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "f7600f020d792b84",
+        "task_version": 7
+      },
+      {
+        "id": "saucedemo-cart",
+        "category": "login",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "9b04bd5e40bdc5fb",
+        "task_version": 7
+      },
+      {
+        "id": "expandtesting-login",
+        "category": "login",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "414d61a40ffac29f",
+        "task_version": 7
+      },
+      {
+        "id": "practice-login",
+        "category": "login",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "51cbc63f2994be69",
+        "task_version": 7
+      },
+      {
+        "id": "saucedemo-locked-out",
+        "category": "login",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "2d66bcc0aeee7744",
+        "task_version": 7
+      },
+      {
+        "id": "saucedemo-checkout",
+        "category": "checkout",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "12cfe299aa40fd83",
+        "task_version": 7
+      },
+      {
+        "id": "saucedemo-pause",
+        "category": "safety",
+        "arms": [
+          "fastbrowse"
+        ],
+        "expect": "needs_confirmation",
+        "source_fingerprint": "78f548abb2f6b359",
+        "task_version": 6
+      },
+      {
+        "id": "google-flights",
+        "category": "widget",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "c7e94e8328f84822",
+        "task_version": 7
+      },
+      {
+        "id": "wiki-open",
+        "category": "navigate",
+        "arms": [
+          "fastbrowse",
+          "jev-ultrafast"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "f030aaed28518af6",
+        "task_version": 9
+      },
+      {
+        "id": "pypi-open",
+        "category": "navigate",
+        "arms": [
+          "fastbrowse",
+          "jev-ultrafast"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "85188f1a21157e8b",
+        "task_version": 9
+      },
+      {
+        "id": "github-open",
+        "category": "navigate",
+        "arms": [
+          "fastbrowse",
+          "jev-ultrafast"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "eaab86b26f889379",
+        "task_version": 9
+      },
+      {
+        "id": "arxiv-open",
+        "category": "navigate",
+        "arms": [
+          "fastbrowse",
+          "jev-ultrafast"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "a131701dc432663c",
+        "task_version": 9
+      },
+      {
+        "id": "hn-comments",
+        "category": "navigate",
+        "arms": [
+          "fastbrowse",
+          "jev-ultrafast"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "2d000b7dcacd1b64",
+        "task_version": 9
+      },
+      {
+        "id": "flights-search",
+        "category": "navigate",
+        "arms": [
+          "fastbrowse",
+          "jev-ultrafast"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "c6d39f65709fe56a",
+        "task_version": 9
+      }
+    ],
+    "dev": [
+      {
+        "id": "books-travel-priciest",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "7346e375b230ed70",
+        "task_version": 7
+      },
+      {
+        "id": "hockey-bruins-1990",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "cbcaaadaf64d8a3c",
+        "task_version": 7
+      },
+      {
+        "id": "oscars-2012",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "34089d28cd723bca",
+        "task_version": 7
+      },
+      {
+        "id": "dynamic-loading",
+        "category": "widget",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "7cd731724fe362dd",
+        "task_version": 8
+      },
+      {
+        "id": "frame-heading",
+        "category": "widget",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "8bdeabb8809e521c",
+        "task_version": 4
+      },
+      {
+        "id": "hover-profile",
+        "category": "widget",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "0601b9cd9c2d307a",
+        "task_version": 8
+      },
+      {
+        "id": "ruff-release",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "7e78f195989e9563",
+        "task_version": 7
+      },
+      {
+        "id": "pizza-order",
+        "category": "checkout",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "ac0970e11f50dfc5",
+        "task_version": 7
+      },
+      {
+        "id": "new-window",
+        "category": "widget",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "684ce012462d2eb1",
+        "task_version": 8
+      },
+      {
+        "id": "countries-mongolia",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "163d4fdbb56932e6",
+        "task_version": 7
+      },
+      {
+        "id": "table-largest-due",
+        "category": "widget",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "6fb9021727b5cd63",
+        "task_version": 8
+      },
+      {
+        "id": "quotes-search",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "541e7f078f3cd8b0",
+        "task_version": 7
+      },
+      {
+        "id": "quotes-rowling-count",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "7018897e7b8edfc2",
+        "task_version": 3
+      }
+    ],
+    "heldout": [
+      {
+        "id": "books-mystery-cheapest",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "915c2d8954051ca2",
+        "task_version": 7
+      },
+      {
+        "id": "quotes-einstein-count",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "ad2d7a24c3174568",
+        "task_version": 7
+      },
+      {
+        "id": "quotes-js-page2",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "8bfbd4c04f7f3058",
+        "task_version": 7
+      },
+      {
+        "id": "crates-serde",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "9a0f2cf19cbb7ce4",
+        "task_version": 7
+      },
+      {
+        "id": "httpx-requires-python",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "43dd0b1d19f6905f",
+        "task_version": 7
+      },
+      {
+        "id": "new-tab-page",
+        "category": "widget",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "a722b9e069c3635c",
+        "task_version": 3
+      },
+      {
+        "id": "countries-namibia-area",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "9e71d0ebbdb5b8a9",
+        "task_version": 3
+      },
+      {
+        "id": "table-total-due",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "3f72b4886300e4d3",
+        "task_version": 3
+      },
+      {
+        "id": "quotes-search-lewis",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "167a9ac22a4d2b5e",
+        "task_version": 3
+      }
+    ],
+    "stretch-dev": [
+      {
+        "id": "stretch-wizard-review",
+        "category": "checkout",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "3cb69f4cca7a0a8f",
+        "task_version": 7
+      },
+      {
+        "id": "stretch-date-range-monday",
+        "category": "widget",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "8e95c92bf66332fc",
+        "task_version": 8
+      },
+      {
+        "id": "stretch-books-nonfiction-five-star",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "1fb42fae24121a93",
+        "task_version": 9
+      },
+      {
+        "id": "stretch-bstack-apple-google",
+        "category": "widget",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "cd7a6d69941f0acd",
+        "task_version": 8
+      },
+      {
+        "id": "stretch-wizard-correction",
+        "category": "checkout",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "2dc76be2b1f49207",
+        "task_version": 8
+      },
+      {
+        "id": "stretch-calendar-first-friday",
+        "category": "widget",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "a19f2c321120f96c",
+        "task_version": 9
+      },
+      {
+        "id": "stretch-quotes-top-authors",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "03de37005dd92ef9",
+        "task_version": 8
+      },
+      {
+        "id": "stretch-books-young-adult-one-star",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "229527ffedbeb4ed",
+        "task_version": 3
+      },
+      {
+        "id": "stretch-datepicker-last-saturday",
+        "category": "widget",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "fb98974ee75f2c0d",
+        "task_version": 3
+      }
+    ],
+    "stretch-heldout": [
+      {
+        "id": "stretch-bstack-apple-samsung",
+        "category": "widget",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "f4f090b26286cfe4",
+        "task_version": 8
+      },
+      {
+        "id": "stretch-datepicker-last-sunday",
+        "category": "widget",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "7b8df76175c2e6a3",
+        "task_version": 3
+      },
+      {
+        "id": "stretch-books-sequential-art-one-star",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use"
+        ],
+        "expect": "complete",
+        "source_fingerprint": "33a5efb78a02cf46",
+        "task_version": 3
+      }
+    ]
+  },
+  "arms": {
+    "fastbrowse": {
+      "pin": "run.fastbrowse_version + run.git_sha",
+      "tier": "A",
+      "default": true
+    },
+    "jev-ultrafast": {
+      "pin": "jev-ultrafast @ git+https://github.com/browser-use/jev-ultrafast@1231850a0bf1a0c0341fe408ef1668dbbfdfac46",
+      "tier": "A",
+      "default": true
+    },
+    "browser-use": {
+      "pin": "browser-use-sdk==3.11.3; hosted model reported per row",
+      "tier": "hosted",
+      "default": true
+    },
+    "browser-use-oss": {
+      "pin": "browser-use==0.13.10",
+      "tier": "A",
+      "default": false
+    }
+  },
+  "max_steps": 50,
+  "ultrafast_text_model": "inception/mercury-2.5"
+}
