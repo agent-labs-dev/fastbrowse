@@ -14,8 +14,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - A portable fastbrowse skill lets Codex and Claude Code delegate website tasks through MCP or the CLI.
   Coding agents prefer an existing local Chrome connection, then local Chrome, with cloud as a fallback.
   The [skill guide](docs/skill.md) covers installation, configuration, citations, and authorization.
-- Verbatim facts appear once in model notes, reducing context used by readers and answer drafting while retaining
-  their source quotes and citation references.
 
 ## [0.5.19] - 2026-10-06
 

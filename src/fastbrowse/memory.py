@@ -311,13 +311,8 @@ class Notes:
                 else f"source={json.dumps(fact.evidence.source_id)} url={json.dumps(fact.evidence.url)} "
                 f"quote={json.dumps(fact.evidence.quote, ensure_ascii=False)}"
             )
-            text = (
-                ""
-                if fact.evidence is not None and fact.text == fact.evidence.quote
-                else (json.dumps(fact.text, ensure_ascii=False) + " ")
-            )
             return (
-                f"[{shown_ids.get(key, key)}] {text}"
+                f"[{shown_ids.get(key, key)}] {json.dumps(fact.text, ensure_ascii=False)} "
                 f"requirements={','.join(sorted(self._requirements[key])) or '-'} {source}" + basis_text(fact)
             )
 
