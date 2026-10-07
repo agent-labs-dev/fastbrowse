@@ -78,11 +78,16 @@ class _Piece(Frozen):
     header: Block | None = None
 
 
-def _table_header(capture: Capture, block: Block) -> Block | None:
-    lines = capture.text[block.start : block.end].splitlines(keepends=True)
+def _table_header_from_text(text: str) -> str | None:
+    lines = text.splitlines(keepends=True)
     if len(lines) >= 2 and re.fullmatch(r"\s*\|?[\s:|\-]+\|?\s*", lines[1]) and "---" in lines[1]:
-        return block.model_copy(update={"end": block.start + len(lines[0]) + len(lines[1])})
+        return lines[0] + lines[1]
     return None
+
+
+def _table_header(capture: Capture, block: Block) -> Block | None:
+    header = _table_header_from_text(capture.text[block.start : block.end])
+    return block.model_copy(update={"end": block.start + len(header)}) if header is not None else None
 
 
 def _lines(capture: Capture, start: int, end: int, max_chars: int) -> Iterator[tuple[int, int]]:
@@ -1159,6 +1164,8 @@ def _context(text: str, start: int, end: int, block: Block) -> str:
     line_start = text.rfind("\n", 0, start) + 1
     line_end = text.find("\n", end)
     row = text[line_start : len(text) if line_end == -1 else line_end]
+    if _table_header_from_text(text) is None:
+        return f"{_marks(block)}row: {row}"
     header_cells = [cell for _, _, cell in _cells(text.split("\n", 1)[0])]
     column = len(re.findall(r"(?<!\\)\|", text[line_start:start])) - 1
     name = header_cells[column] if 0 <= column < len(header_cells) else "?"
@@ -1447,6 +1454,14 @@ class _ChoiceRead(Frozen):
     cost_lines: tuple[CostLine, ...] = ()
 
 
+def _read_groups(candidates: Sequence[Candidate]) -> dict[str, tuple[Candidate, ...]]:
+    groups: dict[tuple[str, str, str | None], list[Candidate]] = {}
+    for candidate in candidates:
+        key = (str(candidate.value), candidate.evidence.url, candidate.evidence.frame_id)
+        groups.setdefault(key, []).append(candidate)
+    return {group[0].id: tuple(group) for group in groups.values()}
+
+
 def _read_request(
     capture: Capture,
     requirements: Sequence[Requirement],
@@ -1454,6 +1469,22 @@ def _read_request(
     *,
     blocks: Sequence[Block] | None = None,
 ) -> tuple[JsonValue, dict[str, ChoiceQuestion]]:
+    groups = _read_groups(candidates)
+    criteria: dict[str, JsonValue] = {}
+    for key, group in groups.items():
+        sources: list[dict[str, JsonValue]] = [
+            {
+                "source_id": candidate.evidence.source_id,
+                "quote": candidate.evidence.quote,
+                "context": candidate.context,
+            }
+            for candidate in group
+        ]
+        criteria[key] = (
+            {"value": str(group[0].value), **sources[0]}
+            if len(group) == 1
+            else {"value": str(group[0].value), "sources": [source for source in sources]}
+        )
     questions: dict[str, ChoiceQuestion] = {}
     for requirement in requirements:
         # Plan has no answer-shape field. Jev judges the requirement's meaning in this same call;
@@ -1467,21 +1498,19 @@ def _read_request(
                 "synthesis: lists, comparisons, summaries, explanations, counts, calculations, several facts, "
                 "or relevant passages no candidate covers, including one side of a comparison."
                 + (
+                    " Repeated values share one candidate with all their source contexts. A value answers only "
+                    "when a source states it for the requested record and field."
+                    if len(groups) < len(candidates)
+                    else ""
+                )
+                + (
                     " Only passages judged relevant are shown; other passages have been omitted."
                     if blocks is not None
                     else ""
                 )
             ),
             criteria={
-                **{
-                    candidate.id: {
-                        "value": str(candidate.value),
-                        "source_id": candidate.evidence.source_id,
-                        "quote": candidate.evidence.quote,
-                        "context": candidate.context,
-                    }
-                    for candidate in candidates
-                },
+                **criteria,
                 "synthesis": "Relevant evidence needs the LLM reader, or the answer shape is uncertain.",
                 "absent": "This page contains no evidence for the requirement; skip reading it.",
             },
@@ -1601,6 +1630,7 @@ async def _read_choices(
         ledger.record(evaluation.cost)
     facts: list[Fact] = []
     absent: list[str] = []
+    groups = _read_groups(candidates)
     for requirement in requirements:
         answer = evaluation.answers.get(requirement.id)
         if not isinstance(answer, ChoiceAnswer) or answer.confidence < _READ_CONFIDENCE:
@@ -1613,15 +1643,24 @@ async def _read_choices(
             logger.debug("read reader=none requirement=%s reason=absent", requirement.id)
             absent.append(requirement.id)
             continue
-        copied = copy_field(answer, candidates)
-        if copied is None:
+        group = groups.get(answer.choice)
+        if group is None:
             logger.debug(
                 "read reader=llm requirement=%s reason=%s",
                 requirement.id,
                 "synthesis" if answer.choice == "synthesis" else "invalid_choice",
             )
             continue
-        value, evidence = copied
+        selected = group[0]
+        context = (
+            tuple(
+                Fact(text=str(candidate.value), evidence=candidate.evidence, reader=FactReader.JEV_CHOICE)
+                for candidate in group
+            )
+            if len(group) > 1
+            else ()
+        )
+        facts.extend(context)
         logger.debug("read reader=jev_choice requirement=%s reason=scalar_candidate", requirement.id)
         # The candidate's evidence was cut from this capture by code, so it is kept as selected, not re-found.
         # The text is the value alone: the draft answer states a fact's text, and prefixed with the requirement it
@@ -1629,8 +1668,9 @@ async def _read_choices(
         facts.append(
             Fact(
                 requirement_id=requirement.id,
-                text=str(value),
-                evidence=evidence,
+                text=str(selected.value),
+                evidence=None if context else selected.evidence,
+                basis=tuple(fact_id(fact) for fact in context),
                 reader=FactReader.JEV_CHOICE,
             )
         )
