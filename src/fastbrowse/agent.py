@@ -126,6 +126,8 @@ GENERATE = "generate"
 # Long enough for a browser-verification page to run its check and hand over, short enough that a page
 # which never moves still ends as needs_login well inside a run's time budget.
 _INTERSTITIAL_SECONDS = 12.0
+# A fresh observation can wait three seconds for loading, and a background capture needs time to activate.
+_ENDING_FRAME_SECONDS = 6.0
 # How long the first load waits for a shortcut. Flash-lite answers in 0.5 to 1s, and a start page loads in one
 # to four, so a proposal later than this is an outlier and the start page is opened instead.
 _SHORTCUT_WAIT_SECONDS = 2.0
@@ -617,7 +619,7 @@ class Agent:
             return result
         # A blocked or failed run still needs its ending page, checked for secrets at capture time.
         try:
-            async with asyncio.timeout(2):
+            async with asyncio.timeout(_ENDING_FRAME_SECONDS):
                 frame = await self._frame()
         except (BrowserError, TimeoutError):
             logger.debug("final page frame unavailable")
