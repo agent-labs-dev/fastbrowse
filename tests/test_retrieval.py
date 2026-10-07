@@ -3591,3 +3591,81 @@ async def test_a_partial_count_cannot_borrow_a_matching_number_from_page_context
         requirements=[requirement],
     )
     assert not notes.evidenced("r")
+
+
+@pytest.mark.parametrize("probability,skip", [(0.1, True), (0.11, False), (0.7, False), (None, False)])
+async def test_repeated_page_read_requires_confident_novelty_assessment(probability: float | None, skip: bool) -> None:
+    page = capture((BlockKind.PARAGRAPH, "Price: GBP25.99"))
+    fact = Fact(text="Price: GBP25.99", evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+    notes = Notes((fact,))
+    requirement = Requirement(id="r", text="Find the price", kind=RequirementKind.INFORMATION)
+    answers: dict[str, Answer] = {"r": _choice("synthesis")}
+    if probability is not None:
+        answers["novelty"] = NoulAnswer(probability=probability)
+    jev = _ReadJev(answers)
+    llm = ScriptedLLM([{"claims": [], "answered": False}])
+    ledger = Ledger(Limits())
+    result = await read(llm, page, requirement.text, ["r"], notes, jev=jev, requirements=(requirement,), ledger=ledger)
+    assert len(llm.calls) == (0 if skip else 1)
+    assert len(jev.requests) == ledger.jev_calls == 1
+    state, questions = jev.requests[0]
+    assert "novelty" in questions
+    assert isinstance(state, dict)
+    previous = state["previous"]
+    assert isinstance(previous, list) and isinstance(previous[0], dict)
+    assert fact.evidence is not None and previous[0]["quote"] == fact.evidence.quote
+    assert not notes.evidenced("r") and notes.facts == (fact,)
+    assert result.cost_lines[0].component is CostComponent.JEV
+
+
+async def test_requirement_named_novelty_cannot_skip_a_read() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Price: GBP25.99"))
+    notes = Notes((Fact(text="Price", evidence=block_evidence(page, "s0"), reader=FactReader.LLM),))
+    requirement = Requirement(id="novelty", text="Find the price", kind=RequirementKind.INFORMATION)
+    jev = _ReadJev({"novelty": NoulAnswer(probability=0)})
+    llm = ScriptedLLM([{"claims": [], "answered": False}])
+    await read(llm, page, requirement.text, ["novelty"], notes, jev=jev, requirements=(requirement,))
+    assert len(llm.calls) == 1
+    assert isinstance(jev.requests[0][1]["novelty"], ChoiceQuestion)
+
+
+async def test_previous_quotes_from_another_address_do_not_suppress_reading() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Price: GBP25.99"))
+    earlier = block_evidence(page, "s0").model_copy(update={"url": "https://example.test/other"})
+    notes = Notes((Fact(text="Price", evidence=earlier, reader=FactReader.LLM),))
+    requirement = Requirement(id="r", text="Find the price", kind=RequirementKind.INFORMATION)
+    jev = _ReadJev({"r": _choice("synthesis"), "novelty": NoulAnswer(probability=0)})
+    llm = ScriptedLLM([{"claims": [], "answered": False}])
+    await read(llm, page, requirement.text, ["r"], notes, jev=jev, requirements=(requirement,))
+    assert len(llm.calls) == 1 and "novelty" not in jev.requests[0][1]
+
+
+async def test_novelty_is_omitted_when_comparing_quotes_exceeds_input_budget() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Price: GBP25.99"))
+    earlier = block_evidence(page, "s0").model_copy(update={"quote": "Price: GBP25.99 " * 5000})
+    notes = Notes((Fact(text="Price", evidence=earlier, reader=FactReader.LLM),))
+    requirement = Requirement(id="r", text="Find the price", kind=RequirementKind.INFORMATION)
+    jev = _ReadJev({"r": _choice("synthesis"), "novelty": NoulAnswer(probability=0)})
+    llm = ScriptedLLM([{"claims": [], "answered": False}])
+    await read(
+        llm,
+        page,
+        requirement.text,
+        ["r"],
+        notes,
+        jev=jev,
+        requirements=(requirement,),
+        tokens=TokenBudget(state_plus_largest_question=10000, state_plus_all_questions=10000),
+    )
+    assert len(llm.calls) == 1 and "novelty" not in jev.requests[0][1]
+
+
+async def test_reopened_requirement_reads_earlier_quotes_again() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Price: GBP25.99"))
+    notes = Notes((Fact(text="Price", evidence=block_evidence(page, "s0"), requirement_id="r", reader=FactReader.LLM),))
+    notes.unevidence(("r",))
+    requirement = Requirement(id="r", text="Find the price", kind=RequirementKind.INFORMATION)
+    jev = _ReadJev({"r": _choice("synthesis"), "novelty": NoulAnswer(probability=0)})
+    llm = ScriptedLLM([{"claims": [], "answered": False}])
+    await read(llm, page, requirement.text, ["r"], notes, jev=jev, requirements=(requirement,))
+    assert len(llm.calls) == 1 and "novelty" not in jev.requests[0][1]

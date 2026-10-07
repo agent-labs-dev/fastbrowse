@@ -65,6 +65,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   sorted listing's later page holds the pricier products, so a price quoted on an earlier page had no candidate
   and the data came back empty while the answer was right. A quote the final page corrected is not offered as a
   current value, and a candidate pool wider than Jev's option ceiling is grouped rather than dropped.
+- On a previously read page, Jev checks for new evidence alongside short-fact choices. A confident
+  duplicate assessment skips the prose read; changed values and uncertain assessments still reach a reader.
+  Runs that hit a money or time limit return collected facts with citations and keep `budget_exceeded` status.
+
 - A portable fastbrowse skill lets Codex and Claude Code delegate website tasks through MCP or the CLI.
   Coding agents prefer an existing local Chrome connection, then local Chrome, with cloud as a fallback.
   The [skill guide](docs/skill.md) covers installation, configuration, citations, and authorization.

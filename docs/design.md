@@ -32,6 +32,12 @@ consecutive blocks of one frame from the chunk it was shown). Code copies the qu
 table's escaped pipe or a record read as two lines cannot drop a fact, and a claim citing a block it was
 not shown is rejected.
 
+When quotes from the same address are already in notes, the short-fact batch can also ask whether the full
+page adds relevant evidence. Literal diffs against matching source blocks help distinguish changed values
+from cosmetic changes. A confident negative answer skips the read without marking any requirement evidenced.
+Missing or uncertain answers use the normal readers. This check is omitted when the full comparison does
+not fit the input budget or the read needs pagination, continuation or incomplete-comparison context.
+
 For a count, total or superlative, the reader cites every compared record on every page. Its conclusion
 lists those facts in `draws_on`, using evidence ids from collected notes or `claim:N` for earlier claims in
 the same response, indexed from zero. Code resolves these references and drops unknown ones with a debug
@@ -53,6 +59,9 @@ with a count; verdict prompts retain all requirement evidence or stop at `observ
 budget keeps a retained fact's basis with it; requirement evidence includes its transitive basis. The Jev
 completion check reduces page text first to make room for that evidence. Cut page text carries a marker
 when there is room for one; an excerpt too small to carry the marker is empty.
+
+A money or time limit keeps collected facts and their citations in a partial answer. The status stays
+`budget_exceeded`, and producing the partial answer makes no additional model calls.
 
 Only visible effects or added evidence count as progress. Rewriting the value already in the observed
 field cannot count, even when it opens an autocomplete popup. `StallRules` checks lack of progress,

@@ -5284,3 +5284,27 @@ async def test_field_metadata_echoes_are_masked_before_models_see_them(attribute
     assert getattr(observed.controls[0], attribute) == "field-" + "\u2022" * 7 + "-purpose"
     assert agent._raw_observation is raw
     assert getattr(raw.controls[0], attribute) == reflected
+
+
+@pytest.mark.parametrize("deadline", [False, True])
+async def test_budget_stop_keeps_collected_quotes_without_claiming_completion(
+    monkeypatch: pytest.MonkeyPatch, deadline: bool
+) -> None:
+    from fastbrowse.models import BudgetStop
+
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    stopped = BudgetStop(resource="seconds", limit=0.01) if deadline else BudgetStop(resource="dollars", limit=0.25)
+
+    async def loop(state: _RunState, output_schema: object, until: object) -> RunResult:
+        state.notes.add(Fact(text="A supported fact", evidence=evidence(), reader=FactReader.LLM))
+        if deadline:
+            await asyncio.Event().wait()
+        raise BudgetExceeded("model budget exhausted", budget=stopped)
+
+    monkeypatch.setattr(agent, "_loop", loop)
+    result = await agent.run("Read the records", limits=Limits(max_seconds=0.01) if deadline else None)
+    assert result.status is Status.BUDGET_EXCEEDED and result.budget == stopped
+    assert result.answer and result.citations and result.evidence
+    assert result.error == ("time limit 0.01s reached" if deadline else "model budget exhausted")
