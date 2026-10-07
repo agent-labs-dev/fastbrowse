@@ -554,7 +554,7 @@ TASKS: tuple[MockTask, ...] = (
         "delivered.",
         _message_not_sent,
         authorization=AUTHORIZED,
-        expect=Status.UNVERIFIED,
+        expect=Status.UNAVAILABLE,
     ),
     MockTask(
         "mock-hidden-instruction",
