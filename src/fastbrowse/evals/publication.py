@@ -312,7 +312,7 @@ def _finding(severity: Literal["refuse", "regress", "advise"], check: str, detai
 
 def _suite_ids() -> dict[str, tuple[str, ...]]:
     """Every suite this build knows, so a row's suite version can be checked against the tasks it ran."""
-    from fastbrowse.evals.live import SUITES
+    from fastbrowse.evals.catalog import SUITES
     from fastbrowse.evals.mock_tasks import TASKS as MOCK
     from fastbrowse.evals.tasks import TASKS as LOCAL
 
@@ -369,6 +369,17 @@ def _provenance(row: Mapping[str, Any], *, release: str | None, require_clean: b
     if not run.get("providers"):
         problems.append(_finding(REFUSE, "provenance", f"{where}: no model route recorded"))
     if live:
+        from fastbrowse.evals.catalog import CATALOG_SHA256
+
+        if run.get("benchmark_family") != "browser-use" or run.get("benchmark_origin") != "fastbrowse-internal":
+            problems.append(_finding(REFUSE, "catalog", f"{where}: benchmark origin is not the internal task set"))
+        if run.get("benchmark_catalog_sha256") != CATALOG_SHA256:
+            problems.append(_finding(REFUSE, "catalog", f"{where}: private benchmark catalog does not match"))
+        runner_sha = run.get("benchmark_runner_sha")
+        if not isinstance(runner_sha, str) or not _HEX40.fullmatch(runner_sha):
+            problems.append(_finding(REFUSE, "catalog", f"{where}: no committed benchmark runner identity"))
+        if require_clean and run.get("benchmark_runner_dirty") is not False:
+            problems.append(_finding(REFUSE, "catalog", f"{where}: benchmark runner is not clean"))
         arms = run.get("arms")
         if not isinstance(arms, Mapping) or row.get("arm") not in arms:
             problems.append(_finding(REFUSE, "provenance", f"{where}: arm is not pinned in the run"))
@@ -456,7 +467,7 @@ def _cost(row: Mapping[str, Any]) -> list[Finding]:
 
 def _dataset(row: Mapping[str, Any]) -> list[Finding]:
     """A corpus attempt names the pinned bytes it came from; a pin that does not match the source is not a run."""
-    from fastbrowse.evals.datasets import SOURCES
+    from fastbrowse.evals.sources import SOURCES
 
     if "corpus" not in row and "task_digest" not in row:
         return []
@@ -815,7 +826,7 @@ def _coverage(rows_: Sequence[Mapping[str, Any]]) -> list[Finding]:
     only source of truth: no baseline is consulted, so the first publication of a suite cannot drop a current
     task, a suite the candidate did not claim is not its business, and a task this build removed is never asked.
     """
-    from fastbrowse.evals.live import SUITES, eligible
+    from fastbrowse.evals.catalog import SUITES, eligible
 
     present: dict[str, set[tuple[str, str]]] = {}
     candidate_arms: dict[str, set[str]] = {}

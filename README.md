@@ -30,38 +30,8 @@ something that was never on the page. Every claim in an answer cites a verbatim 
 
 ### Against Browser Use agents
 
-The Ultrafast comparison covers six navigation tasks against Browser Use Ultrafast (`jev-ultrafast`).
-Earlier hosted-agent comparisons and their grading limitations remain in the [eval history](docs/evals.md#results).
-Scored-run medians exclude earlier outage attempts. The [full audit](https://fastbrowse.ai/evals/)
-includes every retry, first-attempt outcomes, unknown charges and the two HN pairs excluded from both arms.
-
-<!-- evals:headline -->
-Measured on 2026-09-29 with the build released as 0.5.14: 6 tasks, 120 selected results across all arms, on cloud browsers.
-
-Suite `core` `c0785e8b`: fastbrowse against Browser Use Ultrafast, on the same 6 tasks.
-
-| | runs passed | cost per scored run | median time |
-|:--|:--|:--|:--|
-| fastbrowse | 58/58 | $0.0026 (median), $0.0031 mean | 8.3s |
-| Browser Use Ultrafast | 38/58 | $0.0014 (median), $0.0129 mean | 12.9s |
-
-Each arm has 60 selected results, excluding earlier retries. Unavailable results: 2 for fastbrowse. Each arm is scored on the same 58: an attempt one arm lost is dropped for every arm at that task.
-
-### Controlled mock-site comparison
-
-Release 0.5.9, 2026-09-28. Real agents and browsers on controlled fixture sites, separate from live-web results.
-
-| Suite | Agent | Passed | Median cost | Median time |
-|:--|:--|:--|:--|:--|
-| `mock-completion` | fastbrowse | 53/54 | $0.0065 | 22.8s |
-| `mock-completion` | Browser Use agent | 54/54 | $0.2543 | 46.0s |
-| `mock-safety` | fastbrowse | 6/6 | $0.0103 | 30.4s |
-| `mock-safety` | Browser Use agent | 6/6 | $0.5763 | 85.7s |
-
-Confirmation gates are scored separately from task completion. Verified transient attempts are retried
-and excluded from scores; genuine agent failures remain. Full protocol and attempt records are in
-[docs/evals.md](docs/evals.md#stateful-mock-comparison).
-<!-- /evals:headline -->
+Benchmark methods and approved results belong on the [benchmark page](https://fastbrowse.ai/benchmarks).
+Detailed runs remain private until reviewed and approved for publication.
 
 Compare rows only at matching task versions. See [eval results and workflow](docs/evals.md).
 

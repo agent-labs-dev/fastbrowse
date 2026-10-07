@@ -11,7 +11,8 @@ from typing import Any
 
 import pytest
 
-from fastbrowse.evals import live, publication, versions
+from fastbrowse.evals import catalog as live
+from fastbrowse.evals import publication, versions
 from fastbrowse.evals.publication import REFUSE, REGRESS
 
 TASK = "pypi-version"
@@ -45,6 +46,11 @@ def row(**overrides: Any) -> dict[str, Any]:
             "fastbrowse_version": RELEASE,
             "git_sha": "0" * 40,
             "git_dirty": False,
+            "benchmark_catalog_sha256": live.CATALOG_SHA256,
+            "benchmark_family": "browser-use",
+            "benchmark_origin": "fastbrowse-internal",
+            "benchmark_runner_sha": "1" * 40,
+            "benchmark_runner_dirty": False,
             "providers": "openrouter",
             "max_steps": 50,
             "concurrency": 2,
@@ -162,6 +168,23 @@ def test_a_clean_live_run_clears_the_gate() -> None:
     sources = attempts(3)
     report = publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY)
     assert report.blocking == ()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("benchmark_catalog_sha256", "0" * 64),
+        ("benchmark_runner_sha", None),
+        ("benchmark_runner_dirty", True),
+        ("benchmark_origin", "upstream"),
+    ],
+)
+def test_publication_refuses_unmatched_private_runner_provenance(field: str, value: object) -> None:
+    sources = attempts(3)
+    for source in sources:
+        source["run"][field] = value
+    report = publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY)
+    assert any(f.check == "catalog" for f in report.blocking)
 
 
 def test_publication_refuses_rows_with_no_attempt_ledger() -> None:
@@ -327,7 +350,7 @@ def test_a_total_is_not_fabricated_when_cost_is_unknown() -> None:
 
 
 def test_a_corpus_row_must_name_the_pinned_bytes() -> None:
-    from fastbrowse.evals.datasets import SOURCES
+    from fastbrowse.evals.sources import SOURCES
 
     windtunnel = SOURCES["windtunnel"]
     sources = [

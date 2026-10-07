@@ -57,7 +57,7 @@ The [sift project skill](.agents/skills/sift-project/SKILL.md) records audit com
 
 Unit tests cannot tell you whether the agent still browses well; the suites can. **Agent changes are iterated
 against `dev` only**, and `heldout` is run before and after a round and never debugged. The commands, keys,
-task versions and publishing rules are in [docs/agents/evals.md](docs/agents/evals.md); read it before changing
+task versions, Parallax benchmark ownership and publishing rules are in [docs/agents/evals.md](docs/agents/evals.md); read it before changing
 agent behaviour or a task.
 
 Store detailed eval runs and validation in the dedicated Langfuse project. Keep local logs in an ignored
