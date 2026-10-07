@@ -61,6 +61,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   sorted listing's later page holds the pricier products, so a price quoted on an earlier page had no candidate
   and the data came back empty while the answer was right. A quote the final page corrected is not offered as a
   current value, and a candidate pool wider than Jev's option ceiling is grouped rather than dropped.
+- A portable fastbrowse skill lets Codex and Claude Code delegate website tasks through MCP or the CLI.
+  Coding agents prefer an existing local Chrome connection, then local Chrome, with cloud as a fallback.
+  The [skill guide](docs/skill.md) covers installation, configuration, citations, and authorization.
 
 ## [0.5.19] - 2026-10-06
 
