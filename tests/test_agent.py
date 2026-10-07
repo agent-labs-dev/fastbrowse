@@ -5393,3 +5393,26 @@ async def test_stopped_run_frame_error_preserves_failure_or_cancellation(error):
         result = await agent.run("Read the page")
         assert result.status is Status.BLOCKED
         assert result.final_frame is None
+
+
+async def test_final_frame_deadline_cancels_a_hung_page_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastbrowse import agent as agent_module
+
+    cancelled = asyncio.Event()
+
+    async def hung_observation():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    page.observe = AsyncMock(side_effect=hung_observation)
+    page.screenshot = AsyncMock(return_value=b"unexpected")
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]), config=Config(step_frames=True))
+    monkeypatch.setattr(agent_module, "_ENDING_FRAME_SECONDS", 0.01)
+    result = await agent._conclude(await run_state(), None)
+    assert result.status is Status.COMPLETE and result.final_frame is None
+    assert cancelled.is_set()
+    page.screenshot.assert_not_awaited()
