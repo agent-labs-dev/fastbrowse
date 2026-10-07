@@ -57,6 +57,7 @@ ARM_LABELS = {
     "fastbrowse": "fastbrowse",
     "browser-use": "Browser Use agent",
     "jev-ultrafast": "Browser Use Ultrafast",
+    "cua-codex": "Codex + Cua Driver",
 }
 
 
@@ -373,7 +374,7 @@ def _arm_stats(rows: Sequence[Mapping[str, Any]]) -> dict[str, str]:
         "mean time": f"{statistics.mean(seconds):.1f}s",
         "median cost": f"${statistics.median(dollars):.4f}" if not unpriced else "unknown",
         "mean cost": f"${statistics.mean(dollars):.4f}" if not unpriced else "unknown",
-        "total cost": f"${sum(dollars):.2f}{unpriced}",
+        "total cost": f"${sum(dollars):.2f}{unpriced}" if dollars else "unknown",
     }
 
 
@@ -529,7 +530,8 @@ def headline(release: str, rows: Sequence[Mapping[str, Any]]) -> str:
     tasks = {r["task"] for r in rows}
     lines = [
         f"Measured on {days[-1]} with the build released as {release}: {len(tasks)} tasks, "
-        f"{len(rows)} selected results across all arms, on cloud browsers.",
+        f"{len(rows)} selected results across all arms, "
+        + ("on cloud and local browsers." if any(r["arm"] == "cua-codex" for r in rows) else "on cloud browsers."),
         "",
     ]
     alone = 0
@@ -733,6 +735,7 @@ def protocol_docs() -> str:
         "batches inherited varying cloud dimensions and are not pooled with these runs.",
         f"fastbrowse and browser-use OSS use a {MAX_STEPS}-step limit. Ultrafast permits {MAX_STEPS} executed "
         f"actions and at most {2 * MAX_STEPS} decisions, so stale choices do not consume its action budget. "
+        f"Codex + Cua Driver permits {MAX_STEPS} browser tool calls, including observations. "
         "The hosted API exposes no step limit.",
         "The existing harness has no common dollar or wall-time cap; "
         "cloud browsers expire after their configured lifetime.",
@@ -751,6 +754,19 @@ def protocol_docs() -> str:
         "",
         "`browser-use-oss` is opt-in and installed in an isolated uv environment only when selected.",
         "Its Pydantic pin conflicts with the hosted SDK, so it is not a project extra.",
+        "`cua-codex` is opt-in and uses the supported coding-agent + Cua Driver MCP route. "
+        "Cua's standalone `cua-agent` package is deprecated. This arm runs Codex with `gpt-6-astra`, "
+        "xhigh reasoning and the default service tier, on a private local Linux Xvfb/Openbox desktop. "
+        "It receives only Cua's browser observation, navigation and input tools. "
+        "Completion tasks without credentials use the existing graders; safe-stop and login tasks are excluded. "
+        "Rows record the local environment; their timing is not a controlled comparison with cloud arms. "
+        "The CLI does not expose billed spend, so dollars remain unknown, never zero.",
+        "Install the pinned driver and Codex CLI from the arm table, plus Xvfb, Openbox and dbus-daemon. "
+        "Authenticate Codex before running `uv run --extra mcp python -m fastbrowse.evals.live "
+        "--arms cua-codex --suite dev --concurrency 1`. "
+        "`CUA_DRIVER` and `CUA_CODEX` select executable paths, with their versions checked before the run. "
+        "Every attempt keeps its tool and model events in a unique `artifacts/evals/cua/` directory. "
+        "The arm owns its desktop, driver transport, browser profile and cleanup. Video recording is unsupported.",
         "The jev-ultrafast runner answers a one-option choice itself, as fastbrowse does, because Jev refuses it, "
         "and drops a code fence its text helper's model wraps around JSON, which upstream's strict parse rejects.",
         "Rows keep raw `status`, `task_successful` and `normalized_status`: "

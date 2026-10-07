@@ -35,7 +35,7 @@ Every arm receives `Start at {start}. {task}`. CDP runners also receive the decl
 
 Both navigation arms enable cloud resizing; Fastbrowse matches pinned Ultrafast's 1120 by 780 CSS-pixel viewport at device scale 1. Cloud sessions otherwise ignore CDP resizing. Final evidence records actual inner width, inner height and device pixel ratio for both arms, before their browser driver disconnects. Publication rejects scored navigation rows whose viewport is missing or different. Earlier diagnostic batches inherited varying cloud dimensions and are not pooled with these runs.
 
-fastbrowse and browser-use OSS use a 50-step limit. Ultrafast permits 50 executed actions and at most 100 decisions, so stale choices do not consume its action budget. The hosted API exposes no step limit.
+fastbrowse and browser-use OSS use a 50-step limit. Ultrafast permits 50 executed actions and at most 100 decisions, so stale choices do not consume its action budget. Codex + Cua Driver permits 50 browser tool calls, including observations. The hosted API exposes no step limit.
 
 The existing harness has no common dollar or wall-time cap; cloud browsers expire after their configured lifetime.
 Default arms: `fastbrowse`, `jev-ultrafast`, `browser-use`.
@@ -48,9 +48,12 @@ Ultrafast uses the same selected Jev route as fastbrowse, OpenRouter by default,
 | `jev-ultrafast` | jev-ultrafast @ git+https://github.com/browser-use/jev-ultrafast@1231850a0bf1a0c0341fe408ef1668dbbfdfac46 | A |
 | `browser-use` | browser-use-sdk==3.11.3; hosted model reported per row | hosted |
 | `browser-use-oss` | browser-use==0.13.10 | A |
+| `cua-codex` | cua-driver==0.34.0; codex-cli==0.160.1 | local |
 
 `browser-use-oss` is opt-in and installed in an isolated uv environment only when selected.
 Its Pydantic pin conflicts with the hosted SDK, so it is not a project extra.
+`cua-codex` is opt-in and uses the supported coding-agent + Cua Driver MCP route. Cua's standalone `cua-agent` package is deprecated. This arm runs Codex with `gpt-6-astra`, xhigh reasoning and the default service tier, on a private local Linux Xvfb/Openbox desktop. It receives only Cua's browser observation, navigation and input tools. Completion tasks without credentials use the existing graders; safe-stop and login tasks are excluded. Rows record the local environment; their timing is not a controlled comparison with cloud arms. The CLI does not expose billed spend, so dollars remain unknown, never zero.
+Install the pinned driver and Codex CLI from the arm table, plus Xvfb, Openbox and dbus-daemon. Authenticate Codex before running `uv run --extra mcp python -m fastbrowse.evals.live --arms cua-codex --suite dev --concurrency 1`. `CUA_DRIVER` and `CUA_CODEX` select executable paths, with their versions checked before the run. Every attempt keeps its tool and model events in a unique `artifacts/evals/cua/` directory. The arm owns its desktop, driver transport, browser profile and cleanup. Video recording is unsupported.
 The jev-ultrafast runner answers a one-option choice itself, as fastbrowse does, because Jev refuses it, and drops a code fence its text helper's model wraps around JSON, which upstream's strict parse rejects.
 Rows keep raw `status`, `task_successful` and `normalized_status`: `done`, `stopped`, `budget`, `timeout`, `error`, `blocked` or `unavailable`.
 A pass requires a correct grade and `done`, or the exact expected fastbrowse stop.

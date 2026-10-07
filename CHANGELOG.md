@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- The live comparison runner has an opt-in `cua-codex` arm for Codex with Cua Driver on a private Linux desktop.
+  It uses the existing task graders, records driver and model versions, and keeps every attempt's tool trace.
+  Its local timings and unknown billed cost are identified in the results.
+
 - A portable fastbrowse skill lets Codex and Claude Code delegate website tasks through MCP or the CLI.
   Coding agents prefer an existing local Chrome connection, then local Chrome, with cloud as a fallback.
   The [skill guide](docs/skill.md) covers installation, configuration, citations, and authorization.

@@ -28,10 +28,12 @@ import json
 import logging
 import os
 import re
+import signal
 import statistics
 import sys
 import tempfile
 import time
+import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
@@ -181,6 +183,7 @@ class _ObservedAgent(Agent):
 
 _running: ContextVar[str] = ContextVar("live_running", default="-")
 """`<arm> <task>` for the run a log record came from: eight runs overlap, and a bare retry warning names none."""
+_attempt_artifact: ContextVar[str | None] = ContextVar("live_attempt_artifact", default=None)
 
 
 class _NameRun(logging.Filter):
@@ -220,7 +223,7 @@ class ArmReport(BaseModel):
     """Model choices made, of which `actions` were executed: a stale page discards a choice before it acts."""
     step_cap: int | None = None
     decision_cap: int | None = None
-    step_cap_unit: Literal["actions", "steps"] | None = None
+    step_cap_unit: Literal["actions", "steps", "tool_calls"] | None = None
     """The unit `step_cap` counts in: this arm's actions, fastbrowse's steps."""
     decision_log: list[JsonValue] = []
     stale: list[JsonValue] = []
@@ -748,6 +751,7 @@ async def run_arm(
     record: Path | None,
 ) -> EvalRow:
     _running.set(f"{arm} {task.id}")
+    _attempt_artifact.set(None)
     started = time.monotonic()
     at = time.time()
     try:
@@ -758,7 +762,7 @@ async def run_arm(
     except Exception as exc:  # a crashed arm is a failed task, recorded rather than aborting the comparison
         error = Unavailable(f"still running after {STUCK_SECONDS // 60} minutes") if cap.expired() else exc
         unavailable = isinstance(error, (Unavailable, *TRANSIENT_TRANSPORT))
-        return _crashed(
+        row = _crashed(
             arm,
             task,
             f"{type(error).__name__}: {error}",
@@ -767,6 +771,9 @@ async def run_arm(
             status=Status.UNAVAILABLE.value if unavailable else None,
             record=record,
         )
+        if artifact := _attempt_artifact.get():
+            row = row.model_copy(update={"artifact": artifact, "model": CUA_MODEL, "unknown_cost": True})
+        return row
     correct, failure, ending = grade(arm, task, truth, outcome, report)
     if failure is not None and report.failure_class == BROWSER_TRANSPORT:
         ending = Ending.UNAVAILABLE
@@ -844,7 +851,7 @@ class ArmSpec(BaseModel):
     runner: Callable[..., Awaitable[tuple[Outcome, ArmReport]]]
     pin: str
     env_allowlist: tuple[str, ...]
-    tier: Literal["A", "hosted"]
+    tier: Literal["A", "hosted", "local"]
     default: bool = True
     prepare: Callable[[], Awaitable[None]] | None = None
 
@@ -854,6 +861,9 @@ OSS_PIN = "browser-use==0.13.10"
 OSS_COMMAND = ("uv", "run", "--no-project", "--quiet", "--with", OSS_PIN, "python")
 OSS_RUNNER = ULTRAFAST_RUNNER.with_name("browser_use_oss_arm.py")
 OSS_MODEL = "google/gemini-3.8-flash"
+CUA_RUNNER = ULTRAFAST_RUNNER.with_name("cua_codex_arm.py")
+CUA_MODEL = "gpt-6-astra"
+CUA_PIN = "cua-driver==0.34.0; codex-cli==0.160.1"
 
 
 def arm_environment(name: str, runtime: str, source: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -871,16 +881,37 @@ def arm_environment(name: str, runtime: str, source: Mapping[str, str] | None = 
 
 
 async def _invoke(
-    command: tuple[str, ...], script: Path, request: Mapping[str, object], env: dict[str, str], cwd: str
+    command: tuple[str, ...],
+    script: Path,
+    request: Mapping[str, object],
+    env: dict[str, str],
+    cwd: str,
+    *,
+    graceful: bool = False,
 ) -> bytes:
     process = await asyncio.create_subprocess_exec(
-        *command, str(script), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, env=env, cwd=cwd
+        *command,
+        str(script),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        env=env,
+        cwd=cwd,
+        start_new_session=graceful,
     )
     try:
         stdout, _ = await process.communicate(json.dumps(request).encode())
     except BaseException:
         if process.returncode is None:
-            process.kill()
+            if graceful:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    async with asyncio.timeout(30):
+                        await process.wait()
+                except TimeoutError:
+                    process.kill()
+            else:
+                process.kill()
         await process.wait()
         raise
     lines = stdout.splitlines()
@@ -897,6 +928,12 @@ class _OssReport(BaseModel):
     seconds: float
     dollars: float | None = None
     error: str | None = None
+
+
+class _CuaReport(_OssReport):
+    status: Literal["done", "stopped", "budget_exceeded", "error"]
+    final: FinalPage
+    provenance: dict[str, JsonValue]
 
 
 async def oss_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | None) -> tuple[Outcome, ArmReport]:
@@ -945,6 +982,77 @@ async def prepare_oss() -> None:
             raise RuntimeError(f"could not install {OSS_PIN}")
 
 
+async def cua_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | None) -> tuple[Outcome, ArmReport]:
+    if record is not None:
+        raise ValueError("cua-codex records tool and model traces, not --record videos")
+    if task.secrets or task.bitwarden_item or task.expect != Status.COMPLETE:
+        raise ValueError("cua-codex supports completion tasks without credentials")
+    artifact = Path("artifacts/evals/cua") / f"{task.id}-{uuid.uuid4().hex}"
+    _attempt_artifact.set(str(artifact))
+    started = time.monotonic()
+    request = {
+        "start": task.start,
+        "goal": prompt(task),
+        "max_steps": MAX_STEPS,
+        "model": CUA_MODEL,
+        "driver": os.environ.get("CUA_DRIVER", "cua-driver"),
+        "codex": os.environ.get("CUA_CODEX", "codex"),
+        "output_schema": task.output_schema.model_json_schema() if task.output_schema else None,
+        "artifact": str(artifact.resolve()),
+    }
+    await asyncio.to_thread(artifact.mkdir, parents=True, exist_ok=False)
+    await asyncio.to_thread((artifact / "request.json").write_text, json.dumps({"task": task.id, "request": request}))
+    with tempfile.TemporaryDirectory(prefix="cua-run-") as runtime:
+        env = {key: os.environ[key] for key in _RUNTIME_ENV if key in os.environ}
+        # Auth is read by Codex itself; neither the task nor the model receives its value.
+        env["CODEX_HOME"] = await asyncio.to_thread(
+            lambda: str(Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).resolve())
+        )
+        try:
+            ran = _CuaReport.model_validate_json(
+                await _invoke((sys.executable,), CUA_RUNNER, request, env, runtime, graceful=True)
+            )
+        except Exception as exc:
+            return Outcome(None, None, None), ArmReport(
+                status="error",
+                seconds=time.monotonic() - started,
+                dollars=None,
+                unknown_cost=True,
+                error=f"{type(exc).__name__}: {exc}",
+                artifact=str(artifact),
+                model=CUA_MODEL,
+            )
+    final = ran.final
+    return Outcome(ran.answer, ran.data, final.url, controls=final.controls, evidence=final.evidence), ArmReport(
+        status=ran.status,
+        seconds=ran.seconds,
+        dollars=None,
+        steps=ran.steps,
+        error=ran.error,
+        step_cap=MAX_STEPS,
+        step_cap_unit="tool_calls",
+        model=CUA_MODEL,
+        unknown_cost=True,
+        provenance=ran.provenance,
+        observe_error=final.error,
+        artifact=str(artifact),
+    )
+
+
+async def prepare_cua() -> None:
+    command = (
+        sys.executable,
+        "-c",
+        "import runpy, sys; arm = runpy.run_path(sys.argv[1]); arm['prerequisites'](sys.argv[2], sys.argv[3])",
+        str(CUA_RUNNER),
+        os.environ.get("CUA_DRIVER", "cua-driver"),
+        os.environ.get("CUA_CODEX", "codex"),
+    )
+    process = await asyncio.create_subprocess_exec(*command)
+    if await process.wait() != 0:
+        raise RuntimeError(f"cua-codex requires {CUA_PIN}, Linux, Xvfb, Openbox and the mcp extra")
+
+
 async def _run_fast(
     task: LiveTask, http: httpx.AsyncClient, downloads: Path, **kwargs: Any
 ) -> tuple[Outcome, ArmReport]:
@@ -961,6 +1069,10 @@ async def _run_hosted(task: LiveTask, http: httpx.AsyncClient, _: Path, **kwargs
 
 async def _run_oss(task: LiveTask, http: httpx.AsyncClient, _: Path, **kwargs: Any) -> tuple[Outcome, ArmReport]:
     return await oss_arm(task, http, record=kwargs["record"])
+
+
+async def _run_cua(task: LiveTask, http: httpx.AsyncClient, _: Path, **kwargs: Any) -> tuple[Outcome, ArmReport]:
+    return await cua_arm(task, http, record=kwargs["record"])
 
 
 async def _prepare_ultra() -> None:
@@ -981,10 +1093,15 @@ ARMS: dict[str, ArmSpec] = {
     "browser-use-oss": ArmSpec(
         runner=_run_oss, pin=OSS_PIN, env_allowlist=_RUNTIME_ENV, tier="A", default=False, prepare=prepare_oss
     ),
+    "cua-codex": ArmSpec(
+        runner=_run_cua, pin=CUA_PIN, env_allowlist=_RUNTIME_ENV, tier="local", default=False, prepare=prepare_cua
+    ),
 }
 
 
 def eligible(arm: str, task: LiveTask) -> bool:
+    if arm == "cua-codex":
+        return task.expect == Status.COMPLETE and not task.secrets and task.bitwarden_item is None
     return arm in task.arms or (arm == "browser-use-oss" and task.expect == Status.COMPLETE)
 
 
@@ -1012,9 +1129,11 @@ def summarize(rows: list[EvalRow], arms: list[str]) -> None:
         priced = [r.dollars for r in arm_rows if r.dollars is not None]
         seconds = [r.seconds for r in arm_rows]
         unknown = len(arm_rows) - len(priced)
+        cost = f"${sum(priced):.4f}" if priced else "cost unknown"
         print(
             f"{arm}: {passed}/{len(arm_rows)} passed, {correct} correct, median {statistics.median(seconds):.1f}s, "
-            f"${sum(priced):.4f}" + (f" ({unknown} runs of unknown cost)" if unknown else "")
+            + cost
+            + (f" ({unknown} runs of unknown cost)" if unknown else "")
         )
         if excluded := len(ran) - len(arm_rows):
             print(f"  {excluded} runs ended by a provider outage, excluded")
@@ -1076,8 +1195,8 @@ async def main(argv: list[str]) -> int:
     for flag, count in (("--concurrency", args.concurrency), ("--repeat", args.repeat)):
         if count <= 0:
             parser.error(f"{flag} must be positive")
-    if args.record is not None and "browser-use-oss" in args.arms:
-        parser.error("browser-use-oss does not support --record")
+    if args.record is not None and any(arm in args.arms for arm in ("browser-use-oss", "cua-codex")):
+        parser.error("browser-use-oss and cua-codex do not support --record")
     tasks = [
         t
         for suite in args.suite or (list(SUITES) if args.only else ["core"])
@@ -1184,7 +1303,8 @@ async def main(argv: list[str]) -> int:
                 out.flush()
                 mark = "PASS" if row.passed else "FAIL"
                 print(
-                    f"{mark} {arm:13} {task.id:20} {row.seconds!s:>6}s ${row.dollars!s:<8}",
+                    f"{mark} {arm:13} {task.id:20} {row.seconds!s:>6}s "
+                    + ("cost unknown" if row.dollars is None else f"${row.dollars:<8}"),
                     "" if row.passed else _cause(row),
                     flush=True,
                 )
