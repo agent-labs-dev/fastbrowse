@@ -716,7 +716,7 @@ async def read(
     rejected = 0
     uncovered = 0
     ordered: set[str] = set()
-    stated_counts: set[str] = set()
+    stated_counts: set[tuple[str, str]] = set()
     expands: str | None = None
     tally_complete: set[str] = set()
     through_end: tuple[str, ...] = ()
@@ -1102,7 +1102,7 @@ async def read(
             requirement_id = claim.requirement_id if claim.requirement_id in requirement_ids else None
             stated_count = requirement_id in counting and _quoted_count(fact, so_far, records, capture)
             if stated_count:
-                stated_counts.add(fact_id(fact))
+                stated_counts.add((requirement_id, fact_id(fact)))
             if requirement_id in {t.requirement_id for t in notes.tallies} and not stated_count:
                 # A derived total needs complete tallies. A total the page states has its own quote to verify.
                 requirement_id = None
@@ -1182,7 +1182,11 @@ async def read(
         blocked.update(requirement_ids)
     for fact in found:
         # Missing records invalidate a derived tally, but a separately quoted total does not depend on them.
-        stated_count = fact_id(fact) in stated_counts and fact.requirement_id not in lost and not records_only
+        stated_count = (
+            (fact.requirement_id, fact_id(fact)) in stated_counts
+            and fact.requirement_id not in lost
+            and not records_only
+        )
         if fact.requirement_id in continues or (fact.requirement_id in blocked and not stated_count):
             fact = fact.model_copy(update={"requirement_id": None})
         # Its quote was verified against this capture when the chunk was read.
