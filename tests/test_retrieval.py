@@ -3593,7 +3593,10 @@ async def test_a_partial_count_cannot_borrow_a_matching_number_from_page_context
     assert not notes.evidenced("r")
 
 
-@pytest.mark.parametrize("probability,skip", [(0.1, True), (0.11, False), (0.7, False), (None, False)])
+@pytest.mark.parametrize(
+    "probability,skip",
+    [(0.1, True), (0.14, True), (0.18, True), (0.2, True), (0.21, False), (0.7, False), (None, False)],
+)
 async def test_repeated_page_read_requires_confident_novelty_assessment(probability: float | None, skip: bool) -> None:
     page = capture((BlockKind.PARAGRAPH, "Price: GBP25.99"))
     fact = Fact(text="Price: GBP25.99", evidence=block_evidence(page, "s0"), reader=FactReader.LLM)

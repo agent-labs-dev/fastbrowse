@@ -44,6 +44,7 @@ from fastbrowse.telemetry import Ledger, trace
 
 # A mistaken choice marks a requirement evidenced; favor the reader whenever selection is uncertain.
 _READ_CONFIDENCE = 0.90
+_NO_NEW_EVIDENCE_CONFIDENCE = 0.80
 # Long passages belong with the reader; bounded spans keep one batched choice cheaper than generation.
 _READ_SPAN_CHARS = 320
 # Long passages crowd out other relevance questions, so score bounded windows of neighboring blocks.
@@ -1910,7 +1911,7 @@ async def _read_choices(
     if ledger is not None:
         ledger.record(evaluation.cost)
     novelty_answer = evaluation.answers.get("novelty") if compare_previous and not focused else None
-    if isinstance(novelty_answer, NoulAnswer) and 1 - novelty_answer.probability >= _READ_CONFIDENCE:
+    if isinstance(novelty_answer, NoulAnswer) and 1 - novelty_answer.probability >= _NO_NEW_EVIDENCE_CONFIDENCE:
         logger.debug("read reader=none reason=preserved_evidence")
         return _ChoiceRead(
             absent=tuple(requirement.id for requirement in requirements), cost_lines=(*costs, evaluation.cost)

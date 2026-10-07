@@ -594,7 +594,9 @@ class Agent:
                     self._redactor.redact(str(error)),
                 )
             except ObservationTooLarge as error:
-                return self._result(state, ledger, Status.OBSERVATION_LIMIT, error=str(error))
+                return self._partial_result(
+                    state.notes if state else Notes(), state, ledger, Status.OBSERVATION_LIMIT, str(error)
+                )
             except (JevError, LLMError, BrowserError) as error:
                 message = self._redactor.redact(str(error))[:500]
                 trace("run_error", kind=type(error).__name__, step=len(state.steps) if state else 0, error=message)
@@ -602,7 +604,7 @@ class Agent:
                     state is None and isinstance(error, NavigationTimeout | SiteUnreachable)
                 )
                 status = Status.UNAVAILABLE if unavailable else Status.ERROR
-                return self._result(state, ledger, status, error=message)
+                return self._partial_result(state.notes if state else Notes(), state, ledger, status, message)
             finally:
                 # A run can end before it ever needed the plan, and a plan still being written would bill it.
                 await head.discard()

@@ -5308,3 +5308,20 @@ async def test_budget_stop_keeps_collected_quotes_without_claiming_completion(
     assert result.status is Status.BUDGET_EXCEEDED and result.budget == stopped
     assert result.answer and result.citations and result.evidence
     assert result.error == ("time limit 0.01s reached" if deadline else "model budget exhausted")
+
+
+async def test_reader_error_keeps_collected_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    llm = ScriptedLLM([])
+    agent = Agent(page, ScriptedJev({}), llm)
+
+    async def loop(state: _RunState, output_schema: object, until: object) -> RunResult:
+        state.notes.add(Fact(text="A supported fact", evidence=evidence(), reader=FactReader.LLM))
+        raise JevError("input rejected")
+
+    monkeypatch.setattr(agent, "_loop", loop)
+    result = await agent.run("Read the records")
+    assert result.status is Status.ERROR and result.error == "input rejected"
+    assert result.answer and result.citations and result.evidence
+    assert llm.calls == []

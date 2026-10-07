@@ -68,6 +68,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - On a previously read page, Jev checks for new evidence alongside short-fact choices. A confident
   duplicate assessment skips the prose read; changed values and uncertain assessments still reach a reader.
   Runs that hit a money or time limit return collected facts with citations and keep `budget_exceeded` status.
+  Provider and browser errors also preserve collected evidence with their failure status.
 
 - A portable fastbrowse skill lets Codex and Claude Code delegate website tasks through MCP or the CLI.
   Coding agents prefer an existing local Chrome connection, then local Chrome, with cloud as a fallback.
