@@ -1,7 +1,8 @@
 # Use fastbrowse from Codex or Claude Code
 
 The [fastbrowse skill](../skills/fastbrowse/SKILL.md) lets a coding agent delegate a website task to fastbrowse
-and interpret its status and citations. It uses a connected fastbrowse MCP server when available, or the CLI.
+and interpret its status and citations. It prefers an existing local Chrome connection, then local Chrome.
+It uses an MCP server configured for that browser choice, or the CLI. Cloud browsing is available when requested or local browsing is unavailable.
 Installing the skill installs instructions; the browser and model credentials still need configuration.
 
 ## Install
@@ -28,8 +29,9 @@ want to browse. Keep its `references` directory beside `SKILL.md`. Personal inst
 ## Configure and use
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) for the CLI path. Set `OPENROUTER_API_KEY`
-and `BROWSER_USE_API_KEY` in the calling process environment or a local `.env`, outside the conversation.
-For local Chrome, only the model key is required: tell the agent to use local Chrome.
+in the calling process environment or a local `.env`, outside the conversation. Local Chrome is the skill
+default and needs only the model key. Add `BROWSER_USE_API_KEY` for cloud browsing. An existing DevTools
+connection reuses your Chrome; `--local` without a connection starts a separate browser.
 The [CLI guide](../README.md#try-it) covers browser profiles, secrets, and budgets.
 For MCP, use the [server setup](../README.md#use-it-from-an-mcp-client) instead; credentials belong to the server's environment.
 

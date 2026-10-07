@@ -10,9 +10,17 @@ with evidence and a status. Give it the user's goal and necessary values rather 
 
 ## Choose an entry point
 
-Use a connected fastbrowse MCP `browse` tool when available. Inspect its schema and pass `task`, `start` when
-known, `max_steps: 30`, and `max_dollars: 0.25`. Use a user-specified model-spend limit instead. Server ceilings still
-apply. The tool returns `status`, `answer`, evidence, and `next_step` when the task is unfinished.
+Prefer local browsing when a coding agent invokes this skill. Honor an explicit user browser choice first.
+Otherwise reuse an available local Chrome DevTools connection, opening a task tab; read
+[references/browser-access.md](references/browser-access.md) for connection discovery. If no connection is
+available, use CLI `--local` to start local Chrome. This starts a separate browser, not the user's signed-in
+Chrome. Use cloud only when the user requests it or local browsing is unavailable; explain the fallback.
+
+Use a connected fastbrowse MCP `browse` tool when its browser configuration matches that choice. Inspect its
+schema and pass `task`, `start` when known, `max_steps: 30`, and `max_dollars: 0.25`. Use a user-specified
+model-spend limit instead. Server ceilings still apply. If the server's browser configuration is unknown,
+use the CLI to make the browser choice explicit. The tool returns `status`, `answer`, evidence, and
+`next_step` when the task is unfinished.
 
 Otherwise use the CLI. Check `fastbrowse --help` if installed; otherwise check `uvx --from fastbrowse fastbrowse
 --help`. Run the installed command or the `uvx` form below. In a fastbrowse source checkout, use `uv run fastbrowse`.
@@ -20,7 +28,7 @@ Otherwise use the CLI. Check `fastbrowse --help` if installed; otherwise check `
 ```sh
 uvx --from fastbrowse fastbrowse \
   'Find the Blue Kettle and report its price. Do not purchase anything.' \
-  --start https://example.com/shop --json --max-steps 30 --max-dollars 0.25
+  --start https://example.com/shop --local --json --max-steps 30 --max-dollars 0.25
 ```
 
 The URL above is illustrative. Use the actual address from the task. Quote task text as one shell argument;
@@ -28,10 +36,10 @@ for generated commands, use an argument array rather than interpolating user tex
 Allow time for the browser run and wait for the process to finish. Progress goes to stderr and the JSON result
 goes to stdout. Preserve stdout even on a nonzero exit, since it can contain an unfinished run's evidence.
 
-fastbrowse needs an `OPENROUTER_API_KEY` configured in its environment or `.env`. A cloud browser is the default
-and also needs `BROWSER_USE_API_KEY`. Use `--local` when the task calls for local Chrome or cloud access is
-unavailable and Chrome is installed. A cloud browser cannot reach the caller's localhost. Check for configured
-keys without printing their values; if missing, ask the user to configure them outside the conversation.
+fastbrowse needs an `OPENROUTER_API_KEY` configured in its environment or `.env`. Local browsing needs Chrome;
+cloud browsing also needs `BROWSER_USE_API_KEY`. Pass `--local` or the existing browser's `--cdp-url` explicitly,
+since the CLI itself defaults to cloud. A cloud browser cannot reach the caller's localhost. Check for
+configured keys without printing their values; if missing, ask the user to configure them outside the conversation.
 
 `max_dollars` limits model spend only. Cloud browser and proxy charges are added after the browser stops and
 can exceed that limit. For a strict total-spend ceiling, use a permitted local or existing browser when

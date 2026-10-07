@@ -25,8 +25,13 @@ The CLI also supports `--bitwarden ITEM` for a user-selected login from an unloc
 
 ## An existing browser or Electron window
 
-Use a user-provided DevTools endpoint with `--cdp-url URL` or `--cdp-port PORT`. fastbrowse opens a task tab and
-leaves the browser running. Add `--attach` to drive an existing window; `--target-match TEXT` selects a window
+Look for a user-provided DevTools endpoint or an already enabled local Chrome connection. Chrome's
+`DevToolsActivePort` file in its user data directory contains the port and browser websocket path. Read
+those two lines and append the path to `ws://127.0.0.1:PORT`; do not read cookies or profile credentials. Some Chrome
+versions expose the websocket but return 404 for `/json/version`, so use `--cdp-url` in that case.
+
+Use a discovered or user-provided DevTools endpoint with `--cdp-url URL` or `--cdp-port PORT`. 
+fastbrowse opens a task tab and leaves the browser running. Add `--attach` to drive an existing window; `--target-match TEXT` selects a window
 by title or URL and implies attach. The selected window stays open after the run, but actions can change it.
 Treat cookies and other browser state as belonging to the user. Do not start or expose a debugging endpoint
 on their behalf unless the task requires it and they have authorized that access.
