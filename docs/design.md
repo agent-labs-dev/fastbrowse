@@ -23,12 +23,21 @@ content. Evidence is read before another interaction can remove it. Reads are de
 capture hash and unresolved information requirements, so changed content can be read again.
 
 For a bounded set of short quoted spans, Jev chooses a scalar fact, requests synthesis, or judges the
-requirement absent from the page. Uncertain choices, comparisons, partial evidence and paginated lists
-reach the LLM reader. `FactReader` records `jev_choice` or `llm`. Neither reader writes page text: Jev picks a
-span code cut from the capture, and the LLM reader cites the capture's source blocks by id (one block, or
+requirement absent from the page. Identical values from the same page and frame share one choice with all
+their source contexts. A selected repeated value retains every span through `Fact.basis`. Uncertain choices,
+comparisons, partial evidence and paginated lists reach the LLM reader. `FactReader` records `jev_choice` or
+`llm`. Neither reader writes page text: Jev picks a value from spans code cut from the capture, and the LLM
+reader cites the capture's source blocks by id (one block, or
 consecutive blocks of one frame from the chunk it was shown). Code copies the quote from those blocks, so a
 table's escaped pipe or a record read as two lines cannot drop a fact, and a claim citing a block it was
 not shown is rejected.
+
+When quotes from the same address are already in notes, the short-fact batch can also ask whether the full
+page adds relevant evidence. Literal diffs against matching source blocks help distinguish changed values
+from cosmetic changes. A negative answer with at least 80% probability skips the read without marking any
+requirement evidenced.
+Missing or uncertain answers use the normal readers. This check is omitted when the full comparison does
+not fit the input budget or the read needs pagination, continuation or incomplete-comparison context.
 
 For a count, total or superlative, the reader cites every compared record on every page. Its conclusion
 lists those facts in `draws_on`, using evidence ids from collected notes or `claim:N` for earlier claims in
@@ -51,6 +60,9 @@ with a count; verdict prompts retain all requirement evidence or stop at `observ
 budget keeps a retained fact's basis with it; requirement evidence includes its transitive basis. The Jev
 completion check reduces page text first to make room for that evidence. Cut page text carries a marker
 when there is room for one; an excerpt too small to carry the marker is empty.
+
+A money or time limit keeps collected facts and their citations in a partial answer. The status stays
+`budget_exceeded`, and producing the partial answer makes no additional model calls.
 
 Only visible effects or added evidence count as progress. Rewriting the value already in the observed
 field cannot count, even when it opens an autocomplete popup. `StallRules` checks lack of progress,

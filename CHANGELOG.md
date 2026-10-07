@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Jev chooses repeated short facts as one value, retaining every source quote and context. Duplicate locations
+  no longer split its confidence and send an otherwise clear lookup to the prose reader. Headerless tables
+  describe values by their row rather than inventing column headers.
+
+
+
 - A run whose form submission the server answered with an error no longer ends `complete` because a later page
   loaded cleanly. A message form that answered 503 with a page still saying "your message has been sent" was
   reloaded, the reload answered 200, and the run reported the message delivered. The last submission's status now
@@ -67,6 +73,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   sorted listing's later page holds the pricier products, so a price quoted on an earlier page had no candidate
   and the data came back empty while the answer was right. A quote the final page corrected is not offered as a
   current value, and a candidate pool wider than Jev's option ceiling is grouped rather than dropped.
+- On a previously read page, Jev checks for new evidence alongside short-fact choices. A confident
+  duplicate assessment skips the prose read; changed values and uncertain assessments still reach a reader.
+  Runs that hit a money or time limit return collected facts with citations and keep `budget_exceeded` status.
+  Provider and browser errors also preserve collected evidence with their failure status.
+
 - A portable fastbrowse skill lets Codex and Claude Code delegate website tasks through MCP or the CLI.
   Coding agents prefer an existing local Chrome connection, then local Chrome, with cloud as a fallback.
   The [skill guide](docs/skill.md) covers installation, configuration, citations, and authorization.

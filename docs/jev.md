@@ -71,7 +71,8 @@ and where fastbrowse follows it:
   question in `verification.py` and `safety.py` carries both descriptions.
 - **Concrete option boundaries, plus an escape option when coverage is incomplete.** The short-fact read
   offers `synthesis` for the LLM reader and `absent` for no relevant evidence. Scalar field extraction offers
-  `none`, and the policy offers `escalate`.
+  `none`, and the policy offers `escalate`. Repeated short values from the same page and frame share one option
+  with every source context, so identical answers do not compete as separate choices.
 - **Question ids are invisible to the model.** Everything the model needs is in the instruction text.
 - **Batch independent questions that share one state; answers cannot see each other.** The policy batches
   operation and target choices, read assessment and applicable sign-in and bot checks. Grouped targets need

@@ -30,9 +30,9 @@ class Fact(Frozen):
     tally: Tally | None = None
     text: str
     evidence: Evidence | None
-    """The span the fact was read from; None for a count, total or winner concluded from its basis alone."""
+    """The span the fact was read from; None when a repeated choice, count, total or winner rests on its basis."""
     basis: tuple[str, ...] = ()
-    """Fact ids of the facts this conclusion counts or compares."""
+    """Fact ids of the sources this choice, count or comparison rests on."""
     reader: FactReader
     """Which reader produced the fact; citations are built from it."""
 
@@ -225,27 +225,36 @@ class Notes:
         After a date picker's choice was corrected from 31/10 to 28/11, a new read quoted the new date, but the
         answer still quoted the old one, since both facts evidenced the requirement."""
         supporting = self.supporting(requirement_id)
-        if not any(fact.evidence and fact.evidence.capture_sha256 == sha256 for _, fact in supporting):
+        fresh = tuple(
+            evidence for evidence in self.supporting_evidence(requirement_id) if evidence.capture_sha256 == sha256
+        )
+        if not fresh:
             return
-        address = _address(url)
+        # A capture includes child frames whose quotes belong to their own addresses, not the parent page's.
+        addresses = {_address(url)} | {_address(span.url) for span in fresh}
+        evidence = self.evidence
         for key, fact in supporting:
-            evidence = fact.evidence
-            if (
-                evidence is not None
-                and evidence.capture_sha256 != sha256
-                and _address(evidence.url) == address
-                and not shows(text, evidence.quote)
+            sources = (
+                (evidence.get(source) for source in self.expand_evidence_ids((key,)))
+                if fact.reader is FactReader.JEV_CHOICE and fact.basis
+                else (fact.evidence,)
+            )
+            if any(
+                source is not None
+                and source.capture_sha256 != sha256
+                and _address(source.url) in addresses
+                and not shows(text, source.quote)
+                for source in sources
             ):
                 self._requirements[key].discard(requirement_id)
 
     def read_for(self, requirement_id: str) -> tuple[Evidence, ...]:
         """The spans read as evidence of a requirement, including those a later read superseded."""
-        supporting = {key for key, _ in self.supporting(requirement_id)}
-        return tuple(
-            fact.evidence
-            for key, fact in self._facts.items()
-            if fact.evidence is not None and (key in supporting or fact.requirement_id == requirement_id)
-        )
+        supporting = {key for key, _ in self.supporting(requirement_id)} | {
+            key for key, fact in self._facts.items() if fact.requirement_id == requirement_id
+        }
+        sources = set(self.expand_evidence_ids(supporting))
+        return tuple(fact.evidence for key, fact in self._facts.items() if fact.evidence is not None and key in sources)
 
     def supporting(self, requirement_id: str) -> tuple[tuple[str, Fact], ...]:
         """A tally is ranked by code; other facts keep the order they were read in."""
