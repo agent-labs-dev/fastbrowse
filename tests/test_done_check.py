@@ -13,7 +13,7 @@ from fastbrowse.page import Control, Observation
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 from fastbrowse.policy import HistoryEntry
 from fastbrowse.retrieval import claim_check_questions, compose
-from fastbrowse.verification import DoneVerdict, check_done, llm_verify, page_state
+from fastbrowse.verification import DoneVerdict, check_claims, check_done, llm_verify, page_state
 from tests.test_memory import evidence
 from tests.test_retrieval import ScriptedLLM
 
@@ -38,9 +38,11 @@ class _Jev:
         self.answers = answers
         self.state: JsonValue = None
         self.questions: Mapping[str, Question] = {}
+        self.requests: list[tuple[JsonValue, Mapping[str, Question]]] = []
 
     async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
         self.state, self.questions = state, questions
+        self.requests.append((state, questions))
         answers: dict[str, Answer] = {k: NoulAnswer(probability=p) for k, p in self.answers.items() if k in questions}
         cost = CostLine(component=CostComponent.JEV, basis=CostBasis.ESTIMATED, dollars=0.0)
         return Evaluation(model="test", answers=answers, input_tokens=1, cost=cost)
@@ -137,7 +139,9 @@ async def test_verdict_prompts_keep_late_requirement_evidence_when_notes_overflo
     ]:
         assert late.text in prompt and fact_id(late) in prompt
         assert "facts omitted]" in prompt
-    for state, batch in [(jev.state, jev.questions), ({"answer": composed.data.answer}, questions)]:
+    checker = _Jev({key: 0.0 for key in questions})
+    assert await check_claims(checker, composed.data, notes, Thresholds(), tokens=tokens) == composed.data
+    for state, batch in [(jev.state, jev.questions), *checker.requests]:
         state_chars = len(json.dumps(state))
         sizes = [len(q.model_dump_json()) for q in batch.values()]
         assert state_chars + max(sizes) <= largest * tokens.chars_per_token
