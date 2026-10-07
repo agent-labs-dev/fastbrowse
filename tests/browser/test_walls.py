@@ -10,8 +10,8 @@ from fastbrowse.agent import Agent
 from fastbrowse.browser import BrowserSession, CdpPage
 from fastbrowse.config import Config, ObservationLimits
 from fastbrowse.jev import Answer, Evaluation, NoulAnswer, NoulQuestion, Question
-from fastbrowse.models import Status
-from tests.browser.test_browser import observe_until
+from fastbrowse.models import CostBreakdown, RunResult, Status
+from tests.browser.test_browser import eval_value, observe_until
 from tests.test_policy import FREE, ScriptedJev
 from tests.test_retrieval import ScriptedLLM
 
@@ -69,3 +69,30 @@ async def test_the_pager_and_load_more_at_the_foot_of_a_long_listing_are_still_o
     assert len(labels) <= page._config.observation.max_offscreen_controls + len(
         [c for c in observation.controls if not c.offscreen]
     )
+
+
+@pytest.mark.parametrize("visible_secret", [False, True])
+async def test_ending_frame_waits_for_loading_without_exposing_a_secret(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, visible_secret: bool
+) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        """
+        document.body.innerHTML = '<div role="progressbar">Loading...</div><p>fixture-secret</p>';
+        true
+    """,
+    )
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]), config=Config(step_frames=True))
+    if visible_secret:
+        agent._redactor.register("fixture", "fixture-secret")
+    result = RunResult(
+        status=Status.BLOCKED, answer=None, data=None, evidence=(), steps=(), cost=CostBreakdown(), artifacts=()
+    )
+    result = await agent._ending_frame(result)
+    assert result.status is Status.BLOCKED
+    if visible_secret:
+        assert result.final_frame is None
+    else:
+        assert result.final_frame is not None and result.final_frame.startswith(b"\x89PNG")

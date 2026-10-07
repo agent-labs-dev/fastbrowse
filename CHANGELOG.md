@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Final screenshots allow the fresh page check to finish its loading wait before capture. Loading pages
+  retain their ending frame, with visible secrets still withheld.
+
 - A directly quoted total can answer a count after an earlier record tally was incomplete. Derived counts
   still require complete records, and page scope and answer claims remain verified.
 
