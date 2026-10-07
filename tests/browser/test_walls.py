@@ -40,8 +40,11 @@ def _short_wait(monkeypatch: pytest.MonkeyPatch) -> None:
 
 async def test_a_captcha_that_never_clears_is_blocked_not_a_sign_in(page: CdpPage, main_site: str) -> None:
     await page.navigate(f"{main_site}/challenge.html")
-    result = await Agent(page, WallJev(bot_check=0.9), ScriptedLLM([PLAN])).run("Find the release date")
+    result = await Agent(page, WallJev(bot_check=0.9), ScriptedLLM([PLAN]), config=Config(step_frames=True)).run(
+        "Find the release date"
+    )
     assert result.status is Status.BLOCKED
+    assert result.final_frame is not None and result.final_frame.startswith(b"\x89PNG")
     assert result.error is not None and "bot check" in result.error and "sign-in required" not in result.error
 
 
