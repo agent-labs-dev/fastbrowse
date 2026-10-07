@@ -179,6 +179,7 @@ async def test_records_keep_single_links_and_a_page_sized_card_is_not_one_record
         "<div class='card'><p>Outside</p><table><tr><td>Inside</td></tr></table></div>" * 3,
         "<div class='card'><p>Outside</p><ul><li>Inside</li><li>Another</li><li>Last</li></ul></div>" * 3,
         "<div><p>Layout</p><p>column</p></div>" * 3,
+        "<div class=column><h3>Column</h3><p>Content</p></div>" * 2,
     ],
     ids=[
         "two-siblings",
@@ -189,6 +190,7 @@ async def test_records_keep_single_links_and_a_page_sized_card_is_not_one_record
         "table",
         "list",
         "classless",
+        "two-headed-columns",
     ],
 )
 async def test_non_records_fall_back_to_the_walk(
@@ -201,6 +203,54 @@ async def test_non_records_fall_back_to_the_walk(
     capture = await page.capture()
     assert capture.blocks
     assert all(block.kind is not BlockKind.RECORD for block in capture.blocks)
+
+
+@pytest.mark.parametrize("groups", [2, 3, 4])
+@pytest.mark.parametrize("wrapped_heading", [False, True])
+async def test_two_item_styled_sections_keep_child_records_and_parent_headings(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, groups: int, wrapped_heading: bool
+) -> None:
+    await page.navigate(f"{main_site}/icons.html")
+    sections = []
+    for group in range(groups):
+        heading = f"<h2>Section {group}</h2>"
+        if wrapped_heading:
+            heading = f"<div>{heading}<p>2 items</p></div>"
+        children = "".join(
+            f'<div class="item"><p>Item {group}.{item}</p><p>Detail {group}.{item}</p></div>' for item in range(2)
+        )
+        sections.append(f'<section class="section">{heading}{children}</section>')
+    markup = "".join(sections)
+    await eval_value(
+        browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
+    )
+    capture = await page.capture()
+    records = [block for block in capture.blocks if block.kind is BlockKind.RECORD]
+    assert [capture.text[block.start : block.end] for block in records] == [
+        f"Item {group}.{item}\n\nDetail {group}.{item}" for group in range(groups) for item in range(2)
+    ]
+    assert [block.heading_path[-1] for block in records] == [
+        f"Section {group}" for group in range(groups) for _ in range(2)
+    ]
+
+
+async def test_two_linked_cards_inside_unlabelled_wrappers_remain_separate_records(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/icons.html")
+    markup = (
+        "<section><div><h2>Group</h2></div><div><div>"
+        '<a class="card" href="/one"><div><p>First item</p><span>Type</span></div></a>'
+        '<a class="card" href="/two"><div><p>Second item</p><span>Type</span></div></a>'
+        "</div></div></section>"
+    )
+    await eval_value(
+        browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
+    )
+    capture = await page.capture()
+    records = [block for block in capture.blocks if block.kind is BlockKind.RECORD]
+    assert len(records) == 2
+    assert [capture.text[block.start : block.end] for block in records] == ["First item\n\nType", "Second item\n\nType"]
 
 
 def _rated_card(rating: str, price: str) -> str:

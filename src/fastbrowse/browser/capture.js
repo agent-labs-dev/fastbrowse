@@ -197,13 +197,22 @@
   // A classless div repeated three times is usually page layout; a record is a styled unit or a semantic item.
   function repeated(el) {
     if (!el.classList.length && el.tagName !== 'ARTICLE' && el.tagName !== 'LI') return false;
-    return (
-      [...(el.parentNode?.children ?? [])].filter(
+    const siblings = [...(el.parentNode?.children ?? [])].filter(
         sibling =>
           sibling.tagName === el.tagName &&
           sibling.classList.length === el.classList.length &&
           [...el.classList].every(token => sibling.classList.contains(token)),
-      ).length >= 3
+      );
+    if (siblings.length >= 3) return true;
+    // Linked cards can sit inside an unlabelled list wrapper, so distinct destinations establish the pair.
+    if (siblings.length === 2 && el.tagName === 'A' && siblings.every(sibling => sibling.hasAttribute('href'))) {
+      return new Set(siblings.map(sibling => sibling.href)).size === siblings.length;
+    }
+    // A styled pair can be a two-column layout, so require a heading outside both items to name their group.
+    const section = el.parentElement;
+    return (
+      siblings.length === 2 &&
+      [...(section?.querySelectorAll('h1,h2,h3,h4,h5,h6') ?? [])].some(heading => siblings.every(sibling => !sibling.contains(heading)))
     );
   }
 
@@ -267,7 +276,7 @@
     if (el.tagName === 'PRE') return push('code', textOf(el));
     const record = recordText(el);
     if ((el.tagName === 'LI' && leaf(el)) || record !== null) {
-      const links = el.querySelectorAll('a[href]');
+      const links = el.matches('a[href]') ? [el] : el.querySelectorAll('a[href]');
       push(
         el.tagName === 'LI' ? 'list_item' : 'record',
         record ?? withRating(textOf(el), el),

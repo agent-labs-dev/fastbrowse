@@ -101,7 +101,8 @@ See [the evaluation workflow](../../../docs/evals.md#workflow) for paid-run prer
 
 Keep Python compatible with 3.13, Ruff at 120 columns and typed seam models. Preserve status, authorization,
 secret-origin and citation invariants. Comments explain the constraint behind code. Use ASCII punctuation.
-Generated eval tables and versions come from `fastbrowse.evals.versions`; do not edit them by hand.
+Parallax exports benchmark metadata; `fastbrowse.evals.versions` checks identities and generates the approved result feed.
+Detailed runs remain in private Langfuse. See `docs/agents/evals.md` before changing benchmark contracts.
 
 ## Risk order
 

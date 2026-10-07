@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from pydantic import model_validator
 
 from fastbrowse.models import Evidence, FactReader, Frozen
+from fastbrowse.page import Capture
 from fastbrowse.planner import Plan, Requirement
 
 
@@ -92,6 +93,25 @@ class Notes:
     @property
     def evidence(self) -> dict[str, Evidence]:
         return {key: fact.evidence for key, fact in self._facts.items() if fact.evidence is not None}
+
+    def current_evidence(self, capture: Capture | None = None) -> dict[str, Evidence]:
+        """The evidence a later read has not superseded, and a quote the given capture still shows on its address.
+
+        A superseded fact stays as context but is not a current value, so offering it would let the extraction
+        copy a price the final page corrected; a quote from another page still stands.
+        """
+        current = {
+            key: fact.evidence
+            for key, fact in self._facts.items()
+            if fact.evidence is not None and (fact.requirement_id is None or self._requirements[key])
+        }
+        if capture is None:
+            return current
+        return {
+            key: evidence
+            for key, evidence in current.items()
+            if _address(evidence.url) != _address(capture.url) or shows(capture.text, evidence.quote)
+        }
 
     def derived(self, key: str) -> bool:
         return key in self._facts and self._facts[key].evidence is None

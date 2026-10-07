@@ -169,6 +169,18 @@
 
   // Their text is code, not a name: Amazon nests a <style> inside a result card's link.
   const CODE = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+  // Icon-only buttons hide their glyph from accessibility text, but the icon library still names it.
+  const iconLabel = e => {
+    const glyphs = new Set();
+    for (const icon of e.querySelectorAll('svg')) {
+      if (!showing(icon)) continue;
+      for (const token of icon.classList) {
+        const glyph = /^(?:icon-tabler|tabler-icon|lucide)-([a-z][a-z0-9-]{0,47})$/.exec(token);
+        if (glyph && !/^(?:icon|xs|sm|lg|xl|\d+x|spin|pulse)$/.test(glyph[1])) glyphs.add(glyph[1]);
+      }
+    }
+    return glyphs.size === 1 ? `${[...glyphs][0].replace(/-/g, ' ')} icon` : '';
+  };
   const labelOf = (e, seen = new Set()) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
@@ -342,6 +354,8 @@
       e.ownerDocument.location.origin,
       e.ownerDocument.defaultView.performance.timeOrigin,
       submitSemantics(e),
+      source.getAttribute('name'),
+      source.getAttribute('autocomplete'),
       identity(source),
     ];
   };
@@ -376,16 +390,26 @@
       rname = roleOf(e);
     if (!rname || r.width <= 0 || r.height <= 0 || x < 0 || x >= innerWidth) continue;
     if (rname === 'gridcell' && e.querySelector('button,[role="button"]')) continue;
+    // A button-styled link offers the same label twice, but its inner button owns every useful click point.
+    if (rname === 'link') {
+      const nested = e.querySelectorAll(SELECTOR);
+      const button = nested.length === 1 ? nested[0] : null;
+      if (button?.tagName === 'BUTTON' && visible(button) && !button.matches(':disabled') &&
+          !button.closest('[aria-disabled="true"],[inert]') && labelOf(button) === labelOf(e)) continue;
+    }
+
     const id = identity(e);
     registry.controls.add(e);
     const base = {
       id,
       role: rname,
-      label: labelOf(e) || rname,
+      label: labelOf(e) || (rname === 'button' ? iconLabel(e) : '') || rname,
       offscreen: y < 0 || y >= innerHeight,
       distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
       sensitive: secret(source),
       input_type: source.type || null,
+      input_name: source.getAttribute('name') || null,
+      autocomplete: source.getAttribute('autocomplete') || null,
       frame_origin: e.ownerDocument.location.origin,
       frame_path: framePath(e.ownerDocument),
       form_id: fieldScope(source),

@@ -25,7 +25,7 @@ evals rather than taken from Typesafe.
 ## Provider failover
 
 Provider selection is **ours**: a supplied `TYPESAFE_API_KEY` selects direct TypeSafe for Jev.
-Otherwise `OPENROUTER_API_KEY` is primary; it also serves the LLM in either case.
+Otherwise `OPENROUTER_API_KEY` is primary. The LLM uses OpenRouter when keyed, otherwise the gateway.
 `AI_GATEWAY_API_KEY` adds a Vercel AI Gateway backup, or serves Jev when neither other key is supplied. `FASTBROWSE_JEV_SOURCE=openrouter`, `typesafe` or `gateway` overrides the first provider.
 OpenRouter and direct TypeSafe use the gateway as backup when keyed; the gateway uses direct TypeSafe
 when keyed, otherwise OpenRouter. A selected source without its key is a configuration error.

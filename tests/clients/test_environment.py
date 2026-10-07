@@ -3,9 +3,12 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import JsonValue, TypeAdapter
 
-from fastbrowse.clients.environment import ConfigurationError, JevSource, Settings
+from fastbrowse.clients.environment import DEFAULT_MODELS, ConfigurationError, JevSource, Settings
 from fastbrowse.jev import JevError, JevRetriesExhausted, NoulQuestion
+from fastbrowse.llm import Message
+from fastbrowse.models import CostBasis, Frozen, LLMPurpose
 
 
 @pytest.fixture(autouse=True)
@@ -136,3 +139,85 @@ async def test_source_model_defaults_and_explicit_pins(source: JevSource, pin: s
         client = settings(OPENROUTER_API_KEY="o", TYPESAFE_API_KEY="t", jev_source=source, jev_model=pin).jev(http)
         with pytest.raises(JevError):
             await client.evaluate("page", {"q": NoulQuestion(instructions="Is it?")})
+
+
+class Answer(Frozen):
+    answer: str
+
+
+async def _llm_request(values: dict[str, Any]) -> tuple[httpx.Request, Any]:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": '{"answer":"ok"}'}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2, "cost": 0.0001},
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = (
+            await settings(**values).llm(http).generate(LLMPurpose.READ, [Message(role="user", content="?")], Answer)
+        )
+    return seen[0], result
+
+
+async def test_llm_prefers_openrouter_when_its_key_is_set() -> None:
+    request, result = await _llm_request({"OPENROUTER_API_KEY": "o", "AI_GATEWAY_API_KEY": "g"})
+    assert str(request.url) == "https://openrouter.ai/api/v1/chat/completions"
+    assert request.headers["authorization"] == "Bearer o"
+    body = TypeAdapter(dict[str, JsonValue]).validate_json(request.content)
+    assert body["provider"] == {"require_parameters": True, "sort": "latency"}
+    assert result.cost.basis is CostBasis.METERED
+
+
+async def test_llm_uses_the_gateway_without_an_openrouter_key() -> None:
+    request, result = await _llm_request({"AI_GATEWAY_API_KEY": "g"})
+    assert str(request.url) == "https://ai-gateway.vercel.sh/v1/chat/completions"
+    # The credential goes only to the host it belongs to.
+    assert request.headers["authorization"] == "Bearer g"
+    body = TypeAdapter(dict[str, JsonValue]).validate_json(request.content)
+    assert body["model"] == DEFAULT_MODELS[LLMPurpose.READ]
+    assert body["provider"] == {"sort": "ttft"}
+    assert result.cost.basis is CostBasis.METERED
+
+
+async def test_gateway_usage_without_a_cost_stays_unknown() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        # The gateway reports `usage.cost`; a response without it must not read as free.
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": '{"answer":"ok"}'}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = (
+            await settings(AI_GATEWAY_API_KEY="g")
+            .llm(http)
+            .generate(LLMPurpose.READ, [Message(role="user", content="?")], Answer)
+        )
+    assert result.cost.basis is CostBasis.UNKNOWN and result.cost.dollars is None
+
+
+async def test_llm_without_a_key_names_both_settings() -> None:
+    async with httpx.AsyncClient() as http:
+        with pytest.raises(ConfigurationError) as error:
+            settings().llm(http)
+    assert "OPENROUTER_API_KEY" in str(error.value) and "AI_GATEWAY_API_KEY" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ({"OPENROUTER_API_KEY": "o", "AI_GATEWAY_API_KEY": "g"}, "via OpenRouter"),
+        ({"AI_GATEWAY_API_KEY": "g"}, "via Vercel AI Gateway"),
+    ],
+)
+def test_providers_names_the_llm_route(values: dict[str, Any], expected: str) -> None:
+    assert expected in settings(**values).providers()
