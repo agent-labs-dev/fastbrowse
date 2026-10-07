@@ -3720,3 +3720,24 @@ async def test_a_claim_check_that_cannot_fit_cannot_verify_an_answer() -> None:
     jev = ScriptedJev({}, noul=0.0)
     held = await check_claims(jev, composed, notes, Thresholds(), tokens=TokenBudget(state_plus_largest_question=1))
     assert held is None and jev.requests == []
+
+
+async def test_omission_evidence_fits_when_unrelated_claim_questions_need_other_batches() -> None:
+    from fastbrowse.verification import check_claims
+    from tests.test_policy import ScriptedJev
+
+    page = capture((BlockKind.PARAGRAPH, "Black pen GBP7. " + "description " * 300))
+    requirement = Requirement(id="r1", text="Describe the item and its price", kind=RequirementKind.INFORMATION)
+    fact = Fact(requirement_id="r1", text="Black pen GBP7", evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+    notes = Notes((fact,))
+    claims = tuple(
+        Claim(text=text, evidence_ids=(fact_id(fact),))
+        for text in ("The pen is black.", "It costs GBP7.", "The item is a pen.")
+    )
+    composed = assemble_answer(claims, notes, (requirement,))
+    tokens = TokenBudget(state_plus_largest_question=5000, state_plus_all_questions=5000, batch_tokens=1000)
+    jev = ScriptedJev({}, noul=0.0)
+    assert await check_claims(jev, composed, notes, Thresholds(), tokens=tokens) is composed
+    omission = next(q["requirement_omitted"] for q in jev.requests if "requirement_omitted" in q)
+    assert page.text in omission.instructions
+    assert len(jev.requests) > 1
