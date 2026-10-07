@@ -248,25 +248,22 @@ def structured_output() -> dict[str, Any]:
     """T2.8: a structured-output run validates data against its schema."""
     from pydantic import ValidationError
 
-    from fastbrowse.evals.live_tasks import TASKS
+    from fastbrowse.evals.live_tasks import Release
     from fastbrowse.run import run_task
-
-    task = next(task for task in TASKS if task.id == "pypi-structured")
-    assert task.output_schema is not None
 
     result = asyncio.run(
         run_task(
-            task.task,
-            start=task.start,
+            "What is the current release version of httpx? Return the package name and version.",
+            start="https://pypi.org/project/httpx/",
             chrome=LocalChrome(),
             limits=Limits(max_dollars=float(os.environ["FB_AUDIT_MAX_DOLLARS"])),
-            output_schema=task.output_schema,
+            output_schema=Release,
         )
     )
     valid = False
     if result.data is not None:
         try:
-            task.output_schema.model_validate(result.data)
+            Release.model_validate(result.data)
             valid = True
         except ValidationError:
             valid = False

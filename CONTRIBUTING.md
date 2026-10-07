@@ -62,9 +62,11 @@ verification needs eval results in the PR, in this order:
 2. Make and iterate on the change against `dev` only.
 3. Run `heldout` again on the finished change, and never tune against it.
 
+Run these commands in the maintainer's Parallax checkout:
+
 ```sh
-uv run --extra browser-use python -m fastbrowse.evals.live --arms fastbrowse --suite heldout --repeat 3
-uv run --extra browser-use python -m fastbrowse.evals.live --arms fastbrowse --suite dev --repeat 3
+uv run --extra browser parallax browser internal --arms fastbrowse --suite heldout --repeat 3
+uv run --extra browser parallax browser internal --arms fastbrowse --suite dev --repeat 3
 ```
 
 Paste the pass counts, time and cost from the final `dev` run and both `heldout` runs. A handful of runs on one site shows the change can

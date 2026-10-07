@@ -42,6 +42,11 @@ class Requirement(Frozen):
 class Plan(Frozen):
     requirements: tuple[Requirement, ...]
     answer_expected: bool
+    inspect_access: bool = Field(
+        default=False,
+        description="True only when the user asks to inspect whether access is restricted, rather than to "
+        "access protected content. A sign-in wall is evidence for that question, not permission to sign in.",
+    )
     run_reports: tuple[RunReport, ...] = ()
     """Requested reports about this run, copied from browser state rather than read from page text."""
 
@@ -87,6 +92,10 @@ def _instructions() -> Message:
             "reported is the order's total, not the total once the order is finished. Keep related output fields "
             "together when they identify one result. "
             "Do not create a separate requirement to find that same result again.\n\n"
+            "Set count_records for a requested total number of matching entities, including items nested in "
+            "groups. Preserve the requested entity and filters: group headings are not the entities they "
+            "contain. Do not turn a record count into a prose estimate. Set inspect_access only for an explicit "
+            "request to inspect access restrictions; never for a request to retrieve protected content.\n\n"
             "# Secrets\nNever write a password, token or other secret value into a requirement."
         ),
     )
@@ -96,7 +105,7 @@ async def make_plan(
     llm: LLMClient, task: str, *, start: str | None = None, ledger: Ledger | None = None
 ) -> Generation[Plan]:
     site = "" if start is None else f"\n\n# Start page\n{start}"
-    return await llm.generate(
+    generated = await llm.generate(
         LLMPurpose.PLAN,
         [
             _instructions(),
@@ -105,3 +114,10 @@ async def make_plan(
         Plan,
         ledger=ledger,
     )
+
+    if generated.data.requirements or generated.data.run_reports:
+        return generated
+    # An empty plan lets a verifier accept unrelated page facts because no requested outcome remains to prove.
+    kind = RequirementKind.INFORMATION if generated.data.answer_expected else RequirementKind.ACTION
+    requirement = Requirement(id="req_1", text=task, kind=kind)
+    return generated.model_copy(update={"data": generated.data.model_copy(update={"requirements": (requirement,)})})

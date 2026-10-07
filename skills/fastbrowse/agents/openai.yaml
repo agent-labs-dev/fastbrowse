@@ -1,0 +1,4 @@
+interface:
+  display_name: "fastbrowse"
+  short_description: "Run browser tasks with citations and verified status"
+  default_prompt: "Use $fastbrowse to complete this website task and return the verified result with citations."

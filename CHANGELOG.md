@@ -11,10 +11,61 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- `AI_GATEWAY_API_KEY` on its own is now enough to run fastbrowse. The LLM that plans and reads used to need
-  `OPENROUTER_API_KEY` even when Jev already went through the Vercel AI Gateway; with no OpenRouter key it now
-  calls the same models through the gateway. OpenRouter stays first when its key is set. The MCP server and
-  `fastbrowse serve` accept the gateway key at startup too.
+- Icon-only buttons use recognized SVG glyph names when other labels are missing. Button-styled links expose
+  one clickable control. Empty plans retain the requested outcome, and required CI checks reject failed jobs.
+
+- Store detailed eval evidence in Langfuse, serve sanitized public campaigns, and keep compact regression baselines in Git.
+  Grades, completion, retries, unknown costs and missing coverage remain separate.
+  Cancelled competitor runs stop their child processes before another eval starts.
+
+- Headed sections preserve styled pairs as separate records, so counts can distinguish groups from their
+  items. Covered-target recovery excludes controls belonging to the target's own fixed container.
+
+- Task-supplied sign-in addresses open directly. Blank opening pages get one reload before any interaction,
+  so a cold app can recover without repeating a submission. Shortcuts leave unspecified filters to observed
+  controls, and recovery can return toward the caller's start page when a guessed address makes no progress.
+
+- Form controls retain their input name and autocomplete purpose after validation changes their labels.
+  Recovery corrections are bound to the observed field and reuse only supplied, non-secret values.
+- Tasks inspecting access restrictions can read a sign-in wall or HTTP access denial as evidence. Protected
+  retrieval still requires login, and bot challenges still block the run.
+- Record counts use quoted child records instead of a scalar group total. Covered clicks report the visible
+  obstruction, and requested transactions have their outcome read before another interaction.
+  Malformed tally field ranges get one repair attempt on the saved capture before later counts are marked incomplete.
+- External capsule endpoints preserve cookie security attributes while mapping their declared hostnames.
+  Strict state supplements use independently sampled sequences and leave missing evidence ungraded.
+
+- Every release requires a successful Evals run on its exact commit. A release with no published comparison
+  once skipped the fixture gate and could ship agent code the Evals suites had not passed.
+
+- The LLM can use Vercel AI Gateway when no OpenRouter key is configured. The CLI, MCP server and fixture
+  evals share that routing, and scheduled evals check their credentials before starting a task.
+- `fastbrowse serve`, which the JavaScript SDK starts, accepts `AI_GATEWAY_API_KEY` alone too. Its startup
+  check still asked for `OPENROUTER_API_KEY` and refused a run the LLM could have served through the gateway.
+- External eval corpora can run pinned tasks with reproducible selection, attempt records and independent
+  grades. Ungraded attempts retain an unknown pass state instead of contributing to a benchmark score.
+- Fixture evals leave a page's scripted cookie banner to the agent. The browser layer's own consent refusal
+  had removed the mock support portal's banner before the agent could accept it, so that task's requirement
+  could not be satisfied.
+- Published eval comparisons require a clean build, complete task coverage, at least three measured repeats
+  and a ledger retaining every attempt and its spend. CI refuses missing evidence and matched correctness,
+  latency or cost regressions. A release needs successful fixture evals and measurements from the same code.
+- Interrupted live comparisons retain in-flight attempts and wait for active browsers to stop before closing
+  the ledger. Spend that cannot be recovered stays unknown instead of disappearing from the report.
+- External corpus comparisons reset each site before every attempt and report completion separately from
+  independent correctness. WindTunnel tasks marked excluded by upstream are left out, and authenticated
+  fixtures use named credentials scoped to their site.
+- External comparison figures require three paired repeats for each included task. Scattered partial repeats
+  cannot combine into a score, and stopped draws retain diagnostics without a comparison headline. A completed
+  draw also refuses a figure when a task every requested arm could attempt has an ungraded or missing repeat,
+  instead of dropping that task after its grades are known.
+- Structured extraction reads scalar values from every page the run quoted, not only the one it ended on. A
+  sorted listing's later page holds the pricier products, so a price quoted on an earlier page had no candidate
+  and the data came back empty while the answer was right. A quote the final page corrected is not offered as a
+  current value, and a candidate pool wider than Jev's option ceiling is grouped rather than dropped.
+- A portable fastbrowse skill lets Codex and Claude Code delegate website tasks through MCP or the CLI.
+  Coding agents prefer an existing local Chrome connection, then local Chrome, with cloud as a fallback.
+  The [skill guide](docs/skill.md) covers installation, configuration, citations, and authorization.
 
 ## [0.5.19] - 2026-10-06
 

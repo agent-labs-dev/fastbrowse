@@ -70,3 +70,15 @@ async def test_planning_keeps_a_spelled_out_search_out_of_the_requirements() -> 
     prompt = "\n".join(message.content for message in llm.calls[0][1])
     assert "'search for X, open its page and tell me Y' has one requirement, to find Y" in prompt
     assert "a click, entry or submission the task names is still an action requirement" in prompt
+
+
+@pytest.mark.parametrize("answer_expected", [False, True])
+async def test_an_empty_plan_retains_the_requested_outcome(answer_expected: bool) -> None:
+    task = "Check whether the document can be opened without signing in."
+    llm = PlannerLLM(Plan(requirements=(), answer_expected=answer_expected))
+    result = await make_plan(llm, task)
+    assert len(result.data.requirements) == 1
+    requirement = result.data.requirements[0]
+    assert requirement.text == task
+    assert requirement.kind is (RequirementKind.INFORMATION if answer_expected else RequirementKind.ACTION)
+    assert result.cost == llm.cost
