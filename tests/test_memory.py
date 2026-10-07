@@ -63,6 +63,25 @@ def test_a_read_that_evidenced_nothing_retires_nothing() -> None:
     assert notes.evidenced("r1")
 
 
+@pytest.mark.parametrize("source_url", ["https://example.test", "https://child.test"])
+def test_repeated_choice_sources_are_kept_and_retired_when_one_changes(source_url: str) -> None:
+    context = _quoted("Availability: 20", "before", source_url).model_copy(update={"requirement_id": None})
+    repeated = _quoted("20", "before", source_url).model_copy(update={"requirement_id": None})
+    answer = Fact(
+        requirement_id="r1",
+        text="20",
+        evidence=None,
+        reader=FactReader.JEV_CHOICE,
+        basis=(fact_id(context), fact_id(repeated)),
+    )
+    current = _quoted("Availability: 22", "after", source_url)
+    notes = Notes((context, repeated, answer, current))
+    assert context.evidence in notes.read_for("r1")
+    notes.supersede("r1", "https://example.test", "after", "20\nAvailability: 22")
+    assert fact_id(answer) not in {key for key, _ in notes.supporting("r1")}
+    assert notes.evidenced("r1")
+
+
 def test_notes_deduplicate_spans_without_losing_requirement_coverage() -> None:
     notes = Notes()
     assert notes.add(Fact(reader=FactReader.LLM, requirement_id="r1", text="First fact", evidence=evidence()))

@@ -6,6 +6,7 @@ Scalar extraction accepts a field from ``output_schema.model_fields``; unsupport
 annotations return ``UnsupportedField`` so callers can choose another strategy.
 """
 
+import difflib
 import json
 import logging
 import math
@@ -43,6 +44,7 @@ from fastbrowse.telemetry import Ledger, trace
 
 # A mistaken choice marks a requirement evidenced; favor the reader whenever selection is uncertain.
 _READ_CONFIDENCE = 0.90
+_NO_NEW_EVIDENCE_CONFIDENCE = 0.80
 # Long passages belong with the reader; bounded spans keep one batched choice cheaper than generation.
 _READ_SPAN_CHARS = 320
 # Long passages crowd out other relevance questions, so score bounded windows of neighboring blocks.
@@ -80,11 +82,16 @@ class _Piece(Frozen):
     header: Block | None = None
 
 
-def _table_header(capture: Capture, block: Block) -> Block | None:
-    lines = capture.text[block.start : block.end].splitlines(keepends=True)
+def _table_header_from_text(text: str) -> str | None:
+    lines = text.splitlines(keepends=True)
     if len(lines) >= 2 and re.fullmatch(r"\s*\|?[\s:|\-]+\|?\s*", lines[1]) and "---" in lines[1]:
-        return block.model_copy(update={"end": block.start + len(lines[0]) + len(lines[1])})
+        return lines[0] + lines[1]
     return None
+
+
+def _table_header(capture: Capture, block: Block) -> Block | None:
+    header = _table_header_from_text(capture.text[block.start : block.end])
+    return block.model_copy(update={"end": block.start + len(header)}) if header is not None else None
 
 
 def _lines(capture: Capture, start: int, end: int, max_chars: int) -> Iterator[tuple[int, int]]:
@@ -694,6 +701,7 @@ async def read(
     incomplete: Collection[str] = (),
     records_only: bool = False,
     require_all_evidence: bool = False,
+    revalidate: bool = False,
 ) -> ReadOutcome:
     """`notice` is what the caller knows about the page that its text does not say, such as its next-page control;
     it goes with every question the reader is asked, however the question is narrowed. `continuing` names the
@@ -726,7 +734,9 @@ async def read(
     ]
     # A pager notice is a caveat on what this page can answer, and the choice model picks quotes without weighing one.
     if jev is not None and wanted and not notice and not records_only:
-        chosen = await _read_choices(jev, capture, wanted, tokens=tokens, ledger=ledger)
+        chosen = await _read_choices(
+            jev, capture, wanted, tokens=tokens, ledger=ledger, notes=None if revalidate else notes
+        )
         costs.extend(chosen.cost_lines)
         for fact in chosen.facts:
             notes.add(fact)
@@ -1231,6 +1241,8 @@ def _context(text: str, start: int, end: int, block: Block) -> str:
     line_start = text.rfind("\n", 0, start) + 1
     line_end = text.find("\n", end)
     row = text[line_start : len(text) if line_end == -1 else line_end]
+    if _table_header_from_text(text) is None:
+        return f"{_marks(block)}row: {row}"
     header_cells = [cell for _, _, cell in _cells(text.split("\n", 1)[0])]
     column = len(re.findall(r"(?<!\\)\|", text[line_start:start])) - 1
     name = header_cells[column] if 0 <= column < len(header_cells) else "?"
@@ -1671,6 +1683,14 @@ class _ChoiceRead(Frozen):
     cost_lines: tuple[CostLine, ...] = ()
 
 
+def _read_groups(candidates: Sequence[Candidate]) -> dict[str, tuple[Candidate, ...]]:
+    groups: dict[tuple[str, str, str | None], list[Candidate]] = {}
+    for candidate in candidates:
+        key = (str(candidate.value), candidate.evidence.url, candidate.evidence.frame_id)
+        groups.setdefault(key, []).append(candidate)
+    return {group[0].id: tuple(group) for group in groups.values()}
+
+
 def _read_request(
     capture: Capture,
     requirements: Sequence[Requirement],
@@ -1678,6 +1698,22 @@ def _read_request(
     *,
     blocks: Sequence[Block] | None = None,
 ) -> tuple[JsonValue, dict[str, ChoiceQuestion]]:
+    groups = _read_groups(candidates)
+    criteria: dict[str, JsonValue] = {}
+    for key, group in groups.items():
+        sources: list[dict[str, JsonValue]] = [
+            {
+                "source_id": candidate.evidence.source_id,
+                "quote": candidate.evidence.quote,
+                "context": candidate.context,
+            }
+            for candidate in group
+        ]
+        criteria[key] = (
+            {"value": str(group[0].value), **sources[0]}
+            if len(group) == 1
+            else {"value": str(group[0].value), "sources": [source for source in sources]}
+        )
     questions: dict[str, ChoiceQuestion] = {}
     for requirement in requirements:
         # Plan has no answer-shape field. Jev judges the requirement's meaning in this same call;
@@ -1691,21 +1727,19 @@ def _read_request(
                 "synthesis: lists, comparisons, summaries, explanations, counts, calculations, several facts, "
                 "or relevant passages no candidate covers, including one side of a comparison."
                 + (
+                    " Repeated values share one candidate with all their source contexts. A value answers only "
+                    "when a source states it for the requested record and field."
+                    if len(groups) < len(candidates)
+                    else ""
+                )
+                + (
                     " Only passages judged relevant are shown; other passages have been omitted."
                     if blocks is not None
                     else ""
                 )
             ),
             criteria={
-                **{
-                    candidate.id: {
-                        "value": str(candidate.value),
-                        "source_id": candidate.evidence.source_id,
-                        "quote": candidate.evidence.quote,
-                        "context": candidate.context,
-                    }
-                    for candidate in candidates
-                },
+                **criteria,
                 "synthesis": "Relevant evidence needs the LLM reader, or the answer shape is uncertain.",
                 "absent": "This page contains no evidence for the requirement; skip reading it.",
             },
@@ -1727,7 +1761,7 @@ def _read_request(
     return state, questions
 
 
-def _read_fits(state: JsonValue, questions: Mapping[str, ChoiceQuestion], tokens: TokenBudget) -> bool:
+def _read_fits(state: JsonValue, questions: Mapping[str, Question], tokens: TokenBudget) -> bool:
     state_size = len(json.dumps(state)) / tokens.chars_per_token
     sizes = [len(question.model_dump_json()) / tokens.chars_per_token for question in questions.values()]
     return (
@@ -1794,41 +1828,97 @@ async def _read_choices(
     *,
     tokens: TokenBudget,
     ledger: Ledger | None,
+    notes: Notes | None = None,
 ) -> _ChoiceRead:
     # A group heading can supply a plausible scalar while the requested count needs its child records.
     requirements = tuple(requirement for requirement in requirements if not requirement.count_records)
     if not requirements:
         return _ChoiceRead()
+    previous: list[JsonValue] = []
+    blocks = {(block.source_id, block.frame_id): block for block in capture.blocks}
+    for fact in notes.facts if notes is not None else ():
+        evidence = fact.evidence
+        if evidence is None or evidence.url != capture.url:
+            continue
+        block = blocks.get((evidence.source_id, evidence.frame_id))
+        changes = (
+            "".join(
+                difflib.unified_diff(
+                    evidence.quote.splitlines(keepends=True),
+                    capture.text[block.start : block.end].splitlines(keepends=True),
+                    fromfile="earlier quote",
+                    tofile="current block",
+                )
+            )
+            if block is not None
+            else None
+        )
+        previous.append({"text": fact.text, "quote": evidence.quote, "frame_id": evidence.frame_id, "changes": changes})
     candidates = read_candidates(capture)
-    if not candidates and next(_iter_read_candidates(capture, capture.blocks), None) is None:
+    if not candidates and not previous and next(_iter_read_candidates(capture, capture.blocks), None) is None:
         logger.debug("read reader=llm reason=no_bounded_candidate_set")
         return _ChoiceRead()
     state, questions = _read_request(capture, requirements, candidates)
+    asked: dict[str, Question] = dict(questions)
+    compare_previous = False
+    reopened = notes is not None and any(
+        fact.requirement_id in {requirement.id for requirement in requirements}
+        and not notes.evidenced(fact.requirement_id)
+        for fact in notes.facts
+        if fact.requirement_id is not None
+    )
+    if previous and not reopened and isinstance(state, dict) and "novelty" not in asked:
+        compared = {**state, "previous": previous}
+        novelty = NoulQuestion(
+            instructions=(
+                f"{UNTRUSTED} Does the current page add relevant evidence not already preserved in previous "
+                "for any of these requirements? "
+                + "\n".join(requirement.text for requirement in requirements)
+                + "\nChanged prices, dates, availability, record identity or contradictions are new evidence. "
+                "Cosmetic changes and unrelated countdowns alone are not. The task being unfinished alone "
+                "does not mean this page adds evidence. Judge the quoted evidence, not its prose summaries."
+                " Changes are literal diffs against the current block with the same source id; use them "
+                "to locate changes, but judge all current page content too."
+            ),
+            true="The page adds relevant evidence, or this is uncertain.",
+            false="The earlier quotes already preserve all relevant evidence this page adds.",
+        )
+        if _read_fits(compared, {**asked, "novelty": novelty}, tokens):
+            state, asked = compared, {**asked, "novelty": novelty}
+            compare_previous = True
     focused = False
     costs: tuple[CostLine, ...] = ()
-    if not candidates or not _read_fits(state, questions, tokens):
+    if (not candidates and not compare_previous) or not _read_fits(state, asked, tokens):
         blocks, candidates, costs = await _focus(jev, capture, requirements, tokens=tokens, ledger=ledger)
         if not blocks:
             logger.debug("read reader=llm reason=unfocused")
             return _ChoiceRead(cost_lines=costs)
         state, questions = _read_request(capture, requirements, candidates, blocks=blocks)
+        asked = dict(questions)
         focused = True
     # Oversized captures should reach the chunked reader without paying for a doomed choice request.
-    if not _read_fits(state, questions, tokens):
+    if not _read_fits(state, asked, tokens):
         logger.debug("read reader=llm reason=choice_input_too_large")
         return _ChoiceRead(cost_lines=costs)
     if ledger is not None:
         ledger.reserve(CostComponent.JEV)
     try:
-        evaluation = await jev.evaluate(state, questions)
+        evaluation = await jev.evaluate(state, asked)
     except JevError:
         # An optional shortcut's rejected input or malformed answer must still reach the reader.
         logger.debug("read reader=llm reason=choice_error")
         return _ChoiceRead(cost_lines=costs)
     if ledger is not None:
         ledger.record(evaluation.cost)
+    novelty_answer = evaluation.answers.get("novelty") if compare_previous and not focused else None
+    if isinstance(novelty_answer, NoulAnswer) and 1 - novelty_answer.probability >= _NO_NEW_EVIDENCE_CONFIDENCE:
+        logger.debug("read reader=none reason=preserved_evidence")
+        return _ChoiceRead(
+            absent=tuple(requirement.id for requirement in requirements), cost_lines=(*costs, evaluation.cost)
+        )
     facts: list[Fact] = []
     absent: list[str] = []
+    groups = _read_groups(candidates)
     for requirement in requirements:
         answer = evaluation.answers.get(requirement.id)
         if not isinstance(answer, ChoiceAnswer) or answer.confidence < _READ_CONFIDENCE:
@@ -1841,15 +1931,24 @@ async def _read_choices(
             logger.debug("read reader=none requirement=%s reason=absent", requirement.id)
             absent.append(requirement.id)
             continue
-        copied = copy_field(answer, candidates)
-        if copied is None:
+        group = groups.get(answer.choice)
+        if group is None:
             logger.debug(
                 "read reader=llm requirement=%s reason=%s",
                 requirement.id,
                 "synthesis" if answer.choice == "synthesis" else "invalid_choice",
             )
             continue
-        value, evidence = copied
+        selected = group[0]
+        context = (
+            tuple(
+                Fact(text=str(candidate.value), evidence=candidate.evidence, reader=FactReader.JEV_CHOICE)
+                for candidate in group
+            )
+            if len(group) > 1
+            else ()
+        )
+        facts.extend(context)
         logger.debug("read reader=jev_choice requirement=%s reason=scalar_candidate", requirement.id)
         # The candidate's evidence was cut from this capture by code, so it is kept as selected, not re-found.
         # The text is the value alone: the draft answer states a fact's text, and prefixed with the requirement it
@@ -1857,8 +1956,9 @@ async def _read_choices(
         facts.append(
             Fact(
                 requirement_id=requirement.id,
-                text=str(value),
-                evidence=evidence,
+                text=str(selected.value),
+                evidence=None if context else selected.evidence,
+                basis=tuple(fact_id(fact) for fact in context),
                 reader=FactReader.JEV_CHOICE,
             )
         )
