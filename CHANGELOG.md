@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A portable fastbrowse skill lets Codex and Claude Code delegate website tasks through MCP or the CLI.
+  The [skill guide](docs/skill.md) covers installation, configuration, citations, and authorization.
+
 ## [0.5.19] - 2026-10-06
 
 - `run_task` takes `cloud_extensions`, up to three distinct extension IDs from your Browser Use Cloud account,
