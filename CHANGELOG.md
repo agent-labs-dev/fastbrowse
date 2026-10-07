@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Page redraws retain completed Jev relevance scores for unchanged controls in the same document and task
+  context. Unfinished batches still run in parallel, and every action is chosen from the fresh page.
+
+- Collected evidence includes a verbatim source quote once when the fact text is identical, reducing repeated
+  input in later reads and checks while preserving source quotes and citation links.
+
 - Jev chooses repeated short facts as one value, retaining every source quote and context. Duplicate locations
   no longer split its confidence and send an otherwise clear lookup to the prose reader. Headerless tables
   describe values by their row rather than inventing column headers.

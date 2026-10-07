@@ -27,7 +27,7 @@ failure, not silently converted into a task failure or removed from the denomina
 
 The scheduled fixture job checks configured providers before running. A gateway key alone covers Jev and
 the LLM; direct TypeSafe and OpenRouter routes are also supported. Keys stay in ignored configuration.
-Heavy local checks run through `~/scripts/agent-heavy`, with owned browsers and containers stopped on exit.
+Run local checks directly, with owned browsers and containers stopped on exit.
 
 ## Evidence and release
 

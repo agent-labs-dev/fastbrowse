@@ -8,7 +8,7 @@ A relevance filter shortlists dense pages before the action choice so late contr
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import assert_never
 
@@ -17,6 +17,7 @@ from pydantic import JsonValue
 from fastbrowse.batches import evaluate_batches
 from fastbrowse.config import Config
 from fastbrowse.jev import (
+    Answer,
     ChoiceAnswer,
     ChoiceQuestion,
     Evaluation,
@@ -203,8 +204,29 @@ class _Request:
     destination_groups: tuple[tuple[Control, ...], ...] = ()
 
 
+@dataclass(slots=True)
+class RelevanceCache:
+    """Completed relevance scores for one document and exact task context, including cancelled passes."""
+
+    context: tuple[str, str] | None = None
+    answers: dict[str, NoulAnswer] = field(default_factory=dict)
+
+    def prepare(self, document: str, state: JsonValue) -> dict[str, NoulAnswer]:
+        key = (document, json.dumps(state, sort_keys=True))
+        if key != self.context:
+            self.context = key
+            self.answers.clear()
+        return self.answers
+
+
 async def decide(
-    jev: JevClient, observation: Observation, context: StepContext, config: Config, *, ledger: Ledger | None = None
+    jev: JevClient,
+    observation: Observation,
+    context: StepContext,
+    config: Config,
+    *,
+    ledger: Ledger | None = None,
+    relevance_cache: RelevanceCache | None = None,
 ) -> Decision:
     """Ask Jev for the next action, reducing the observation when it will not fit."""
     controls = observation.controls
@@ -213,7 +235,7 @@ async def decide(
     tokens = 0
     shortlist_tried = len(controls) > config.observation.max_offered_controls
     if shortlist_tried:
-        shortlist = await _shortlist(jev, observation, controls, context, config, ledger)
+        shortlist = await _shortlist(jev, observation, controls, context, config, ledger, cache=relevance_cache)
         if shortlist is not None:
             controls, cost, tokens = shortlist
             reduction = Reduction.RELEVANCE
@@ -249,7 +271,9 @@ async def decide(
             continue
         if not shortlist_tried:
             shortlist_tried = True
-            shortlist = await _shortlist(jev, observation, controls, context, config, ledger, compact=True)
+            shortlist = await _shortlist(
+                jev, observation, controls, context, config, ledger, compact=True, cache=relevance_cache
+            )
             if shortlist is not None:
                 controls, cost, tokens = shortlist
                 reduction = Reduction.RELEVANCE
@@ -338,6 +362,7 @@ async def _shortlist(
     ledger: Ledger | None,
     *,
     compact: bool = False,
+    cache: RelevanceCache | None = None,
 ) -> tuple[tuple[Control, ...], list[CostLine], int] | None:
     protected = {i for i, control in enumerate(controls) if _protected(control)}
     candidates = [i for i in range(len(controls)) if i not in protected]
@@ -355,13 +380,26 @@ async def _shortlist(
         f"r{i}": NoulQuestion(instructions=f"Is this element relevant? {json.dumps(_relevance_element(controls[i]))}")
         for i in candidates
     }
-    # An element too large to score is left unscored rather than dropped.
-    answered = await evaluate_batches(jev, state, questions, tokens=config.tokens, ledger=ledger)
-    if answered is None:
-        return None
-    scores = {
-        int(key[1:]): answer.probability for key, answer in answered.answers.items() if isinstance(answer, NoulAnswer)
+    cached = {} if cache is None else cache.prepare(observation.document_key, state)
+    answers: dict[str, Answer] = {
+        key: cached[question.model_dump_json()]
+        for key, question in questions.items()
+        if question.model_dump_json() in cached
     }
+
+    def remember(key: str, answer: Answer) -> None:
+        if isinstance(answer, NoulAnswer):
+            cached[questions[key].model_dump_json()] = answer
+
+    # A redraw cancels unfinished batches, but scores already paid for remain valid for an identical question
+    # and context. Action selection still sees the fresh page; relevance never authorizes or chooses an action.
+    pending = {key: question for key, question in questions.items() if key not in answers}
+    answered = await evaluate_batches(jev, state, pending, tokens=config.tokens, ledger=ledger, on_answer=remember)
+    if answered is not None:
+        answers.update(answered.answers)
+    if not answers:
+        return None
+    scores = {int(key[1:]): answer.probability for key, answer in answers.items() if isinstance(answer, NoulAnswer)}
     # A failed answer says nothing about relevance, so keep unscored controls ahead of equally scored ones.
     ranked = sorted(candidates, key=lambda i: (-scores.get(i, 1.0), i in scores, i))
 
@@ -376,8 +414,19 @@ async def _shortlist(
             low = middle
         else:
             high = middle - 1
-    trace("shortlist", pool=len(controls), offered=len(protected) + low, scored=len(scores), requests=answered.requests)
-    return kept(low), list(answered.cost), answered.input_tokens
+    trace(
+        "shortlist",
+        pool=len(controls),
+        offered=len(protected) + low,
+        scored=len(scores),
+        requests=0 if answered is None else answered.requests,
+        reused=len(questions) - len(pending),
+    )
+    return (
+        kept(low),
+        ([] if answered is None else list(answered.cost)),
+        (0 if answered is None else answered.input_tokens),
+    )
 
 
 def _index_controls(controls: Sequence[Control]) -> dict[Operation, tuple[Control, ...]]:

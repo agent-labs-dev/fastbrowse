@@ -85,6 +85,7 @@ from fastbrowse.policy import (
     ObservationTooLarge,
     ReadAssessment,
     Reduction,
+    RelevanceCache,
     StepContext,
     decide,
 )
@@ -308,6 +309,7 @@ class _RunState:
     ledger: Ledger
     planning: asyncio.Task[Generation[Plan]]
     notes: Notes = field(default_factory=Notes)
+    relevance_cache: RelevanceCache = field(default_factory=RelevanceCache)
     steps: list[StepResult] = field(default_factory=list[StepResult])
     would_fire: list[Tripwire] = field(default_factory=list[Tripwire])
     history: list[HistoryEntry] = field(default_factory=list[HistoryEntry])
@@ -691,6 +693,7 @@ class Agent:
                     context,
                     self._config,
                     ledger=state.ledger,
+                    relevance_cache=state.relevance_cache,
                 ),
                 observation,
                 None,

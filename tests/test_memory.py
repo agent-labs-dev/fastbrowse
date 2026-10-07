@@ -296,3 +296,15 @@ def test_tally_aliases_keep_other_basis_quotes_and_citation_ids() -> None:
     assert f"[{fact_id(record)}]" not in rendered.text
     assert set(rendered.evidence_ids) == {fact_id(fact) for fact in (record, context, tally, conclusion)}
     assert notes.expand_evidence_ids((fact_id(conclusion),)) == (fact_id(record), fact_id(context), fact_id(conclusion))
+
+
+@pytest.mark.parametrize("text", ["Price: GBP25.99", "The charger costs GBP25.99"])
+def test_render_keeps_source_quote_once_and_retains_distinct_fact_text(text: str) -> None:
+    quote = "Price: GBP25.99"
+    source = evidence().model_copy(update={"quote": quote, "end": len(quote)})
+    fact = Fact(text=text, evidence=source, reader=FactReader.LLM)
+    notes = Notes((fact,))
+    rendered = notes.render_with_ids(2000)
+    assert rendered.text.count(json.dumps(quote)) == 1
+    assert text in rendered.text and 'source="s1"' in rendered.text
+    assert rendered.evidence_ids == (fact_id(fact),) and notes.evidence[fact_id(fact)] == source
