@@ -115,6 +115,14 @@
     "version": 5,
     "fingerprint": "473e5c76eaa1bb94"
   },
+  "mock-false-success": {
+    "version": 2,
+    "fingerprint": "ffa38a1dfd5b7fb3"
+  },
+  "mock-hidden-instruction": {
+    "version": 1,
+    "fingerprint": "2be26176544f7f2d"
+  },
   "mock-iframe-note": {
     "fingerprint": "3c914358b8c070fd",
     "version": 5
