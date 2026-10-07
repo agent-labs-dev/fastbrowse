@@ -25,10 +25,11 @@ from fastbrowse.retrieval import (
     ComposedAnswer,
     UnsupportedField,
     assemble_answer,
+    choose_candidate,
     claim_check_questions,
-    copy_field,
     field_candidates,
-    field_question,
+    field_candidates_from_notes,
+    merge_candidates,
     propose_text_fields,
     propose_text_fields_from_notes,
     transaction_check_question,
@@ -519,7 +520,9 @@ async def extract(
     if text_fields:
         # Notes first: they hold every page a comparison read, where the final page shows one side of it.
         proposed = (
-            await propose_text_fields_from_notes(llm, task, notes, text_fields, tokens=tokens, ledger=ledger)
+            await propose_text_fields_from_notes(
+                llm, task, notes, text_fields, capture=capture, tokens=tokens, ledger=ledger
+            )
             if notes is not None
             else {}
         )
@@ -535,21 +538,28 @@ async def extract(
         candidates = field_candidates(capture, field)
         if isinstance(candidates, UnsupportedField):
             return Extraction(data=None, evidence=(), problem=f"{name}: {candidates.reason}")
+        if notes is not None:
+            # The notes hold every page the run read; the final capture holds only the one it ended on, which
+            # for a sorted comparison is one side of it. Both pages are offered, the current one first.
+            quoted = field_candidates_from_notes(notes, field, capture=capture)
+            if isinstance(quoted, UnsupportedField):
+                return Extraction(data=None, evidence=(), problem=f"{name}: {quoted.reason}")
+            candidates = merge_candidates(candidates, quoted)
         if not candidates:
             continue
         try:
-            question = field_question(field, candidates, name=name, task=task, record_fields=tuple(schema.model_fields))
+            copied = await choose_candidate(
+                jev,
+                {"task": task, "page": {"url": capture.url, "title": capture.title}},
+                field,
+                candidates,
+                name=name,
+                task=task,
+                record_fields=tuple(schema.model_fields),
+                ledger=ledger,
+            )
         except ValueError as error:
             return Extraction(data=None, evidence=tuple(evidence), problem=f"{name}: {error}")
-        if ledger is not None:
-            ledger.reserve(CostComponent.JEV)
-        evaluation = await jev.evaluate(
-            {"task": task, "page": {"url": capture.url, "title": capture.title}}, {name: question}
-        )
-        if ledger is not None:
-            ledger.record(evaluation.cost)
-        answer = evaluation.answers.get(name)
-        copied = copy_field(answer, candidates) if answer is not None and answer.type == "choice" else None
         if copied is not None:
             values[name] = str(copied[0]) if not isinstance(copied[0], int | float | bool | str) else copied[0]
             evidence.append(copied[1])

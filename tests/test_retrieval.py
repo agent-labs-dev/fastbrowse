@@ -38,7 +38,9 @@ from fastbrowse.retrieval import (
     copy_field,
     draft_answer,
     field_candidates,
+    field_candidates_from_notes,
     field_question,
+    merge_candidates,
     propose_text_fields,
     propose_text_fields_from_notes,
     read,
@@ -50,7 +52,7 @@ from fastbrowse.telemetry import BudgetExceeded, Ledger
 from fastbrowse.verification import check_done
 
 
-def capture(*parts: tuple[BlockKind, str]) -> Capture:
+def capture(*parts: tuple[BlockKind, str], url: str = "https://example.test") -> Capture:
     text = "\n\n".join(part for _, part in parts)
     blocks: list[Block] = []
     start = 0
@@ -58,7 +60,7 @@ def capture(*parts: tuple[BlockKind, str]) -> Capture:
         blocks.append(Block(source_id=f"s{i}", kind=kind, frame_id=None, start=start, end=start + len(part)))
         start += len(part) + 2
     return Capture(
-        url="https://example.test",
+        url=url,
         title="Example",
         captured_at=datetime(2026, 1, 1, tzinfo=UTC),
         sha256=hashlib.sha256(text.encode()).hexdigest(),
@@ -880,6 +882,20 @@ async def test_a_text_field_from_a_note_keeps_the_notes_punctuation_not_the_mode
     assert found == {"label": (_HEADLINE, quote)}
 
 
+async def test_text_fields_from_notes_drop_a_superseded_quote() -> None:
+    """A corrected value stays as context but a citation of it does not carry into the extracted text."""
+    page = capture((BlockKind.PARAGRAPH, "Version: old"))
+    corrected = capture((BlockKind.PARAGRAPH, "Version: new"))
+    old = Fact(requirement_id="r", reader=FactReader.LLM, text="Version: old", evidence=block_evidence(page, "s0"))
+    new = Fact(requirement_id="r", reader=FactReader.LLM, text="Version: new", evidence=block_evidence(corrected, "s0"))
+    notes = Notes((old, new))
+    notes.supersede("r", corrected.url, corrected.sha256, corrected.text)
+    stale = next(iter(notes.evidence))
+    proposal: dict[str, JsonValue] = {"field": "label", "value": "old", "source_id": stale}
+    fields = {"label": Fields.model_fields["label"]}
+    assert not await propose_text_fields_from_notes(ScriptedLLM([{"fields": [proposal]}]), "Version?", notes, fields)
+
+
 async def test_a_name_the_task_gives_can_be_chosen_on_a_note_that_quotes_only_a_date() -> None:
     earlier = capture((BlockKind.PARAGRAPH, "May 14, 2026"))
     quote = block_evidence(earlier, "s0")
@@ -952,6 +968,252 @@ async def test_extraction_reserves_each_scalar_field() -> None:
     with pytest.raises(BudgetExceeded):
         await extract(jev, ScriptedLLM([]), "Get both fields", page, Record, ledger=ledger)
     assert len(jev.requests) == 1 and ledger.jev_calls == 1
+
+
+async def test_extract_takes_a_scalar_quoted_on_an_earlier_page_from_notes() -> None:
+    """A sorted listing's later page holds only the pricier side: the winner's price is in the notes, not the
+    capture, and asked only of the capture it came back as no data at all."""
+    from fastbrowse.verification import extract
+    from tests.test_policy import ScriptedJev
+
+    class Product(Frozen):
+        name: str
+        price: float
+
+    earlier = capture((BlockKind.LIST_ITEM, "Paper Filters - GBP 4.60"), url="https://example.test/search?page=1")
+    final = capture(
+        (BlockKind.LIST_ITEM, "Chrome Toaster - GBP 41.00"),
+        (BlockKind.LIST_ITEM, "Burr Grinder - GBP 89.99"),
+        url="https://example.test/search?page=2",
+    )
+    evidence = block_evidence(earlier, "s0")
+    fact = Fact(reader=FactReader.LLM, text="Paper Filters - GBP 4.60", evidence=evidence)
+    notes = Notes((fact,))
+    llm = ScriptedLLM([{"fields": [{"field": "name", "value": "Paper Filters", "source_id": fact_id(fact)}]}])
+    # The notes candidate follows the two current-page ones; without them the winning 4.60 is not offered.
+    jev = ScriptedJev({"price": "c2"})
+    result = await extract(
+        jev, llm, "Which product is the cheapest? Give its name and price.", final, Product, notes=notes
+    )
+    assert result.problem is None
+    assert result.data == {"name": "Paper Filters", "price": 4.6}
+    # The winner keeps the earlier page's own address, hash and offsets, not the final capture's.
+    quoted = next(item for item in result.evidence if item.quote == "4.60")
+    start = earlier.text.index("4.60")
+    assert (quoted.url, quoted.capture_sha256) == (earlier.url, earlier.sha256)
+    assert (quoted.start, quoted.end) == (start, start + 4)
+    assert quoted.quote == earlier.text[start : start + 4]
+
+
+def test_scalar_candidates_from_notes_drop_a_superseded_quote() -> None:
+    """A price the final page corrected stays as context but is not offered as a current value."""
+    page = capture((BlockKind.LIST_ITEM, "Paper Filters - GBP 4.60"))
+    corrected = capture((BlockKind.LIST_ITEM, "Paper Filters - GBP 5.20"))
+    old = Fact(
+        requirement_id="r", reader=FactReader.LLM, text="Paper Filters - GBP 4.60", evidence=block_evidence(page, "s0")
+    )
+    new = Fact(
+        requirement_id="r",
+        reader=FactReader.LLM,
+        text="Paper Filters - GBP 5.20",
+        evidence=block_evidence(corrected, "s0"),
+    )
+    notes = Notes((old, new))
+    notes.supersede("r", corrected.url, corrected.sha256, corrected.text)
+    candidates = field_candidates_from_notes(notes, Fields.model_fields["weight"])
+    assert not isinstance(candidates, UnsupportedField)
+    assert [candidate.value for candidate in candidates] == [5.20]
+
+
+def test_scalar_candidates_from_notes_drop_a_changed_quote_on_the_final_address() -> None:
+    """A context quote the final capture of its own address no longer shows is not a current value."""
+    old_page = capture((BlockKind.LIST_ITEM, "Paper Filters - GBP 4.60"))
+    final = capture((BlockKind.LIST_ITEM, "Paper Filters - GBP 5.20"))
+    context = Fact(reader=FactReader.LLM, text="Paper Filters - GBP 4.60", evidence=block_evidence(old_page, "s0"))
+    candidates = field_candidates_from_notes(Notes((context,)), Fields.model_fields["weight"], capture=final)
+    assert not isinstance(candidates, UnsupportedField)
+    assert candidates == ()
+
+
+def test_scalar_candidates_from_notes_keep_an_earlier_pages_date() -> None:
+    """A different page's timestamp is that page's evidence and is not dropped for the final page's date."""
+    earlier = capture((BlockKind.PARAGRAPH, "Due on 2026-09-17"), url="https://example.test/search?page=1")
+    final = capture((BlockKind.PARAGRAPH, "Due on 2026-10-01"), url="https://example.test/search?page=2")
+    fact = Fact(reader=FactReader.LLM, text="Due on 2026-09-17", evidence=block_evidence(earlier, "s0"))
+    candidates = field_candidates_from_notes(Notes((fact,)), Fields.model_fields["when"], capture=final)
+    assert not isinstance(candidates, UnsupportedField)
+    assert [candidate.value for candidate in candidates] == [date(2026, 9, 17)]
+
+
+def test_scalar_candidates_from_notes_keep_an_earlier_page_and_its_provenance() -> None:
+    """A different page's quote is not contradicted by the final page and keeps its own hash and offsets."""
+    earlier = capture((BlockKind.LIST_ITEM, "Paper Filters - GBP 4.60"), url="https://example.test/search?page=1")
+    final = capture((BlockKind.LIST_ITEM, "Chrome Toaster - GBP 41.00"), url="https://example.test/search?page=2")
+    fact = Fact(reader=FactReader.LLM, text="Paper Filters - GBP 4.60", evidence=block_evidence(earlier, "s0"))
+    candidates = field_candidates_from_notes(Notes((fact,)), Fields.model_fields["weight"], capture=final)
+    assert not isinstance(candidates, UnsupportedField)
+    assert [(candidate.value, candidate.evidence.url) for candidate in candidates] == [(4.60, earlier.url)]
+    quoted = candidates[0].evidence
+    start = earlier.text.index("4.60")
+    assert quoted.capture_sha256 == earlier.sha256
+    assert (quoted.start, quoted.end) == (start, start + 4)
+
+
+async def test_extract_selects_across_a_candidate_pool_over_jevs_option_cap() -> None:
+    """A pool wider than Jev's ceiling is grouped, not truncated: the last earlier-page value can still win."""
+    from fastbrowse.verification import extract
+    from tests.test_policy import ScriptedJev
+
+    class Price(Frozen):
+        price: float
+
+    count = MAX_CHOICE_OPTIONS + 1
+    earlier = capture(
+        *((BlockKind.LIST_ITEM, f"Weight: {index}.25 kg") for index in range(count)),
+        url="https://example.test/search?page=1",
+    )
+    final = capture((BlockKind.PARAGRAPH, "No weights here"), url="https://example.test/search?page=2")
+    notes = Notes(
+        tuple(
+            Fact(reader=FactReader.LLM, text=f"Weight: {index}.25 kg", evidence=block_evidence(earlier, f"s{index}"))
+            for index in range(count)
+        )
+    )
+    winner = count - 1
+    jev = ScriptedJev({"price_group": str(winner // 30), "price": f"c{winner}"})
+    result = await extract(jev, ScriptedLLM([]), "What is the last weight?", final, Price, notes=notes)
+    assert result.problem is None
+    assert result.data == {"price": winner + 0.25}
+    assert len(jev.requests) == 2
+    assert next(item for item in result.evidence if item.quote == f"{winner}.25").url == earlier.url
+
+
+async def test_extract_group_selection_reserves_each_jev_call() -> None:
+    """Grouping asks twice, so each Jev call reserves and the second is refused once the call limit is spent."""
+    from fastbrowse.models import Limits
+    from fastbrowse.telemetry import BudgetExceeded, Ledger
+    from fastbrowse.verification import extract
+    from tests.test_policy import ScriptedJev
+
+    class Price(Frozen):
+        price: float
+
+    count = MAX_CHOICE_OPTIONS + 1
+    earlier = capture(
+        *((BlockKind.LIST_ITEM, f"Weight: {index}.25 kg") for index in range(count)),
+        url="https://example.test/search?page=1",
+    )
+    final = capture((BlockKind.PARAGRAPH, "No weights here"), url="https://example.test/search?page=2")
+    notes = Notes(
+        tuple(
+            Fact(reader=FactReader.LLM, text=f"Weight: {index}.25 kg", evidence=block_evidence(earlier, f"s{index}"))
+            for index in range(count)
+        )
+    )
+    jev = ScriptedJev({})
+    ledger = Ledger(Limits(max_jev_calls=1))
+    with pytest.raises(BudgetExceeded):
+        await extract(jev, ScriptedLLM([]), "What is the last weight?", final, Price, notes=notes, ledger=ledger)
+    assert len(jev.requests) == 1 and ledger.jev_calls == 1
+
+
+@pytest.mark.parametrize(
+    "name,text,expected",
+    [
+        ("count", "Stock: 1,234 units", 1234),
+        ("amount", "Price: $1,234.50 today", Decimal("1234.50")),
+        ("weight", "Weight: 12.25 kg", 12.25),
+        ("when", "Due on 2026-09-17", date(2026, 9, 17)),
+        ("available", "Available: YES", True),
+    ],
+)
+def test_scalar_candidates_from_notes_are_typed_and_keep_verbatim_evidence(
+    name: str, text: str, expected: object
+) -> None:
+    page = capture((BlockKind.PARAGRAPH, text))
+    notes = Notes((Fact(reader=FactReader.LLM, text=text, evidence=block_evidence(page, "s0")),))
+    candidates = field_candidates_from_notes(notes, Fields.model_fields[name])
+    assert not isinstance(candidates, UnsupportedField)
+    assert len(candidates) == 1
+    assert candidates[0].value == expected
+    assert type(candidates[0].value) is type(expected)
+    assert candidates[0].evidence.quote == page.text[candidates[0].evidence.start : candidates[0].evidence.end]
+
+
+def test_scalar_candidates_from_notes_never_read_a_written_fact_value() -> None:
+    """A conclusion's number is the model's prose, not a page span: it cannot become an extracted value."""
+    page = capture((BlockKind.LIST_ITEM, "Paper Filters - GBP 4.60"))
+    read = Fact(reader=FactReader.LLM, text="Paper Filters - GBP 4.60", evidence=block_evidence(page, "s0"))
+    derived = Fact(reader=FactReader.LLM, text="The cheapest is 999", evidence=None, basis=(fact_id(read),))
+    notes = Notes((read, derived))
+    candidates = field_candidates_from_notes(notes, Fields.model_fields["weight"])
+    assert not isinstance(candidates, UnsupportedField)
+    candidate = candidates[0]
+    assert (candidate.value, type(candidate.value)) == (4.60, float)
+    assert candidate.evidence.quote == "4.60"
+    assert candidate.evidence.url == page.url
+    assert candidate.evidence.capture_sha256 == page.sha256
+    start = page.text.index("4.60")
+    assert (candidate.evidence.start, candidate.evidence.end) == (start, start + 4)
+    assert "Paper Filters" in candidate.context
+    assert not any(candidate.value == 999 for candidate in candidates)
+    assert isinstance(field_candidates_from_notes(notes, Fields.model_fields["records"]), UnsupportedField)
+
+
+def test_merge_candidates_dedupes_the_current_capture_and_renumbers() -> None:
+    """The notes and the capture hold the same page; one span is one option, with one id."""
+    page = capture((BlockKind.LIST_ITEM, "Paper Filters - GBP 4.60"))
+    notes = Notes((Fact(reader=FactReader.LLM, text="Paper Filters - GBP 4.60", evidence=block_evidence(page, "s0")),))
+    from_capture = field_candidates(page, Fields.model_fields["weight"])
+    from_notes = field_candidates_from_notes(notes, Fields.model_fields["weight"])
+    assert not isinstance(from_capture, UnsupportedField) and not isinstance(from_notes, UnsupportedField)
+    merged = merge_candidates(from_capture, from_notes)
+    assert len(merged) == 1
+    assert merged[0].id == "c0"
+    assert merged[0].value == 4.60
+    assert merged[0].evidence.capture_sha256 == page.sha256
+
+
+def test_merge_candidates_keeps_equal_text_on_different_urls() -> None:
+    """Capture hash is text-only, so two pages with the same text must not collapse into one candidate."""
+    first = capture((BlockKind.LIST_ITEM, "Paper Filters - GBP 4.60"), url="https://example.test/search?page=1")
+    second = capture((BlockKind.LIST_ITEM, "Paper Filters - GBP 4.60"), url="https://example.test/search?page=2")
+    assert first.sha256 == second.sha256
+    from_first = field_candidates(first, Fields.model_fields["weight"])
+    from_second = field_candidates(second, Fields.model_fields["weight"])
+    assert not isinstance(from_first, UnsupportedField) and not isinstance(from_second, UnsupportedField)
+    merged = merge_candidates(from_first, from_second)
+    assert [candidate.evidence.url for candidate in merged] == [first.url, second.url]
+    assert [candidate.id for candidate in merged] == ["c0", "c1"]
+
+
+def test_merge_candidates_keeps_changed_values_at_the_same_offsets() -> None:
+    first = capture((BlockKind.PARAGRAPH, "Price: 4.60"))
+    second = capture((BlockKind.PARAGRAPH, "Price: 5.20"))
+    old = field_candidates(first, Fields.model_fields["weight"])
+    new = field_candidates(second, Fields.model_fields["weight"])
+    assert not isinstance(old, UnsupportedField) and not isinstance(new, UnsupportedField)
+    assert [item.value for item in merge_candidates(old, new)] == [4.60, 5.20]
+
+
+async def test_candidate_selection_groups_again_when_the_inner_group_exceeds_the_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastbrowse import retrieval
+    from tests.test_policy import ScriptedJev
+
+    monkeypatch.setattr(retrieval, "MAX_CHOICE_OPTIONS", 8)
+    monkeypatch.setattr(retrieval, "_FIELD_GROUP_SIZE", 3)
+    page = capture((BlockKind.PARAGRAPH, "Price: 4.60"))
+    observed = field_candidates(page, Fields.model_fields["weight"])
+    assert not isinstance(observed, UnsupportedField)
+    candidates = tuple(observed[0].model_copy(update={"id": f"c{index}"}) for index in range(80))
+    jev = ScriptedJev({"price_group": "0", "price": "c0"})
+    result = await retrieval.choose_candidate(
+        jev, {}, Fields.model_fields["weight"], candidates, name="price", task="What is the price?"
+    )
+    assert result == (4.60, candidates[0].evidence)
+    assert len(jev.requests) == 3
 
 
 async def test_composition_and_claims_share_budget() -> None:
@@ -2272,21 +2534,21 @@ async def test_invalid_tally_field_cannot_close_or_partially_count_a_list(fault:
         "tallies": [{"requirement_id": "r", "complete": True, "groups": [field]}],
     }
     notes = Notes()
-    result = await read(ScriptedLLM([response]), page, "Count by owner", ["r"], notes)
+    llm = ScriptedLLM([response, response])
+    result = await read(llm, page, "Count by owner", ["r"], notes)
     assert result.incomplete == ("r",) and result.uncovered == 1
     assert not notes.evidenced("r") and not notes.tallies
+    assert len(llm.calls) == 2 and len(result.cost_lines) == 2
 
 
 @pytest.mark.parametrize("reuse", [False, True])
 @pytest.mark.parametrize("count_records", [False, True])
+@pytest.mark.parametrize("record_kind", [BlockKind.RECORD, BlockKind.LIST_ITEM])
 async def test_tally_reader_requires_explicit_unfiltered_scope_and_revalidates_every_record(
-    reuse: bool, count_records: bool
+    reuse: bool, count_records: bool, record_kind: BlockKind
 ) -> None:
     page = capture(
-        *(
-            (BlockKind.RECORD, f"Record {i}\nOwner: {owner}\nState: open")
-            for i, owner in enumerate(["Ada", "Ben", "Ada"])
-        )
+        *((record_kind, f"Record {i}\nOwner: {owner}\nState: open") for i, owner in enumerate(["Ada", "Ben", "Ada"]))
     )
     requirement = Requirement(
         id="r",
@@ -2326,6 +2588,45 @@ async def test_tally_reader_requires_explicit_unfiltered_scope_and_revalidates_e
     ]:
         assert read_tallies(changed, result.tally_readers, ["r"]) is None
     assert read_tallies(page, result.tally_readers, ["r", "other"]) is None
+
+
+@pytest.mark.parametrize(("stated", "value"), [(False, "1"), (True, "3"), (True, "999")])
+@pytest.mark.parametrize("with_context", [False, True])
+async def test_a_quoted_whole_list_total_can_answer_beside_an_unfinished_tally(
+    stated: bool, value: str, with_context: bool
+) -> None:
+    page = capture(
+        (BlockKind.LIST_ITEM, "Item A"),
+        (BlockKind.PARAGRAPH, "Total matching items: 3"),
+        (BlockKind.PARAGRAPH, "Scope: all entries"),
+    )
+    notes = Notes()
+    record = Fact(reader=FactReader.LLM, text="Item A", evidence=block_evidence(page, "s0"))
+    notes.add(record)
+    context = Fact(reader=FactReader.LLM, text="Scope: all entries", evidence=block_evidence(page, "s2"))
+    notes.add(context)
+    tally = notes.add_tally(Tally(requirement_id="r", key="items", records=(fact_id(record),)))
+    requirement = Requirement(id="r", text="Total item count", kind=RequirementKind.INFORMATION, count_records=True)
+    claim: JsonValue = {
+        "requirement_id": "r",
+        "text": value,
+        "cite": {"first": "s1", "last": "s1"} if stated else None,
+        "draws_on": ([] if stated else [fact_id(tally)]) + ([fact_id(context)] if with_context else []),
+    }
+    await read(
+        ScriptedLLM([{"claims": [claim], "answered": True}]),
+        page,
+        "Total item count",
+        ["r"],
+        notes,
+        requirements=[requirement],
+    )
+    answered = stated and value == "3"
+    assert notes.evidenced("r") is answered
+    if answered:
+        fact = next(f for f in notes.facts if f.requirement_id == "r")
+        assert fact.evidence is not None and fact.evidence.quote == "Total matching items: 3"
+        assert bool(fact.basis) is with_context
 
 
 async def test_tally_field_and_a_range_of_the_same_records_leave_no_untallied_basis() -> None:
@@ -3058,3 +3359,159 @@ async def test_tally_field_counts_leaf_list_items_from_their_start_boundary() ->
     assert not outcome.incomplete
     assert notes.evidenced("r")
     assert notes.tallies[0].count == 2
+
+
+async def test_record_count_ignores_group_totals_and_counts_matching_children() -> None:
+    page = capture(
+        (BlockKind.HEADING, "Available packages: 2"),
+        (BlockKind.LIST_ITEM, "Oak - available"),
+        (BlockKind.LIST_ITEM, "Elm - available"),
+        (BlockKind.HEADING, "Archived packages: 2"),
+        (BlockKind.LIST_ITEM, "Pine - archived"),
+        (BlockKind.LIST_ITEM, "Birch - archived"),
+    )
+    jev = _ReadJev({"r": _choice("c0")})
+    llm = ScriptedLLM(
+        [
+            {
+                "answered": True,
+                "claims": [],
+                "tallies": [
+                    {
+                        "requirement_id": "r",
+                        "complete": True,
+                        "groups": [
+                            {
+                                "key": None,
+                                "records": [{"first": f"s{i}", "last": f"s{i}"} for i in (1, 2, 4, 5)],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+    )
+    notes = Notes()
+    requirement = Requirement(id="r", text="Count every package", kind=RequirementKind.INFORMATION, count_records=True)
+    outcome = await read(llm, page, requirement.text, ["r"], notes, jev=jev, requirements=(requirement,))
+    assert not outcome.incomplete
+    assert notes.evidenced("r")
+    assert sum(tally.count for tally in notes.tallies) == 4
+    assert len(llm.calls) == 1
+
+
+@pytest.mark.parametrize("limit", [None, "calls", "dollars"])
+async def test_a_malformed_tally_field_is_repaired_before_it_poisons_the_count(limit: str | None) -> None:
+    page = capture((BlockKind.LIST_ITEM, "Entry A"), (BlockKind.PARAGRAPH, "List finished"))
+    invalid: JsonValue = {
+        "answered": True,
+        "claims": [],
+        "tallies": [
+            {
+                "requirement_id": "r",
+                "complete": True,
+                "groups": [
+                    {
+                        "key": None,
+                        "field": {"span": {"first": "s0", "last": "s1"}, "prefix": "", "suffix": ""},
+                    }
+                ],
+            }
+        ],
+    }
+    corrected: JsonValue = {
+        "answered": True,
+        "claims": [],
+        "tallies": [
+            {
+                "requirement_id": "r",
+                "complete": True,
+                "groups": [
+                    {
+                        "key": None,
+                        "records": [{"first": "s0", "last": "s0"}],
+                    }
+                ],
+            }
+        ],
+    }
+    notes = Notes()
+    llm = ScriptedLLM([invalid, corrected])
+    ledger = Ledger(Limits(max_llm_calls=1) if limit == "calls" else Limits(max_dollars=0.001) if limit else Limits())
+    if limit:
+        with pytest.raises(BudgetExceeded):
+            await read(llm, page, "Count entries", ["r"], notes, ledger=ledger)
+        assert len(llm.calls) == 1 and ledger.breakdown().known_dollars == 0.001
+        assert not notes.evidenced("r") and not notes.tallies
+        return
+    outcome = await read(llm, page, "Count entries", ["r"], notes, ledger=ledger)
+    assert notes.evidenced("r")
+    assert not outcome.incomplete
+    assert outcome.uncovered == 0
+    assert len(llm.calls) == 2
+    assert len(outcome.cost_lines) == 2
+    assert ledger.llm_calls == 2 and ledger.breakdown().known_dollars == 0.002
+
+
+@pytest.mark.parametrize(
+    "basis_kind", ["tally", "record", "derived", "untracked", "claim_record", "continuation", "prior_context"]
+)
+async def test_a_partial_count_cannot_borrow_a_matching_number_from_page_context(basis_kind: str) -> None:
+    page = capture(
+        *((BlockKind.LIST_ITEM, f"Entry {label}") for label in ("A", "B", "C")),
+        (BlockKind.PARAGRAPH, "Page 3 of 10"),
+        (BlockKind.LIST_ITEM, "Another entry"),
+    )
+    notes = Notes()
+    records = [
+        Fact(reader=FactReader.LLM, text=f"Entry {label}", evidence=block_evidence(page, f"s{i}"))
+        for i, label in enumerate(("A", "B", "C"))
+    ]
+    for record in records:
+        notes.add(record)
+    tally = notes.add_tally(Tally(requirement_id="r", key="entries", records=tuple(fact_id(r) for r in records)))
+    basis = tally if basis_kind == "tally" else records[0]
+    if basis_kind == "derived":
+        basis = Fact(
+            reader=FactReader.LLM,
+            text="A contextual conclusion",
+            evidence=block_evidence(page, "s3"),
+            basis=(fact_id(records[0]),),
+        )
+        notes.add(basis)
+    elif basis_kind == "untracked":
+        basis = Fact(reader=FactReader.LLM, text="Another entry", evidence=block_evidence(page, "s4"))
+        notes.add(basis)
+    elif basis_kind == "continuation":
+        basis = Fact(reader=FactReader.LLM, text="Page 3 of 10", evidence=block_evidence(page, "s3"))
+        notes.add(basis)
+        notes.add_continuation("r", fact_id(basis))
+    elif basis_kind == "prior_context":
+        prior = capture((BlockKind.PARAGRAPH, "Scope: all entries"))
+        basis = Fact(reader=FactReader.LLM, text=prior.text, evidence=block_evidence(prior, "s0"))
+        notes.add(basis)
+    requirement = Requirement(id="r", text="Total entry count", kind=RequirementKind.INFORMATION, count_records=True)
+    await read(
+        ScriptedLLM(
+            [
+                {
+                    "claims": [
+                        {
+                            "requirement_id": "r",
+                            "text": "3",
+                            "cite": {"first": "s3", "last": "s3"},
+                            "draws_on": [] if basis_kind == "claim_record" else [fact_id(basis)],
+                            "records": [{"first": "s4", "last": "s4"}] if basis_kind == "claim_record" else [],
+                        }
+                    ],
+                    "answered": True,
+                }
+            ]
+        ),
+        page,
+        requirement.text,
+        ["r"],
+        notes,
+        requirements=[requirement],
+    )
+    assert not notes.evidenced("r")

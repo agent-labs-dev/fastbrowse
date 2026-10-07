@@ -103,6 +103,10 @@
     "fingerprint": "87d02a3f9aaae488",
     "version": 5
   },
+  "mock-cold-sign-in": {
+    "version": 1,
+    "fingerprint": "1497a2177a1b701a"
+  },
   "mock-compare-prices": {
     "fingerprint": "65b30d9b47fe8787",
     "version": 5
@@ -186,6 +190,10 @@
   "mock-stock-count": {
     "fingerprint": "48ba4f4af3c609b5",
     "version": 5
+  },
+  "mock-supplied-sign-in-route": {
+    "version": 1,
+    "fingerprint": "0a325735f9462bce"
   },
   "mock-support-portal": {
     "fingerprint": "ab1e2ffe0f149b0f",

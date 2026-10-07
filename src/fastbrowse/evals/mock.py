@@ -296,6 +296,15 @@ class _Handler(BaseHTTPRequestHandler):
         parsed = urlsplit(self.path)
         path, query = parsed.path, dict(parse_qsl(parsed.query))
         self.site.visited(path)
+        if path == "/entry":
+            self._send(HTTPStatus.OK, b"<!doctype html><title>Entry</title>")
+            return
+        if path == "/cold-start":
+            if self.site.paths.count(path) == 1:
+                self._send(HTTPStatus.OK, b"<!doctype html><title>Loading</title>")
+            else:
+                self._login_form(query)
+            return
         route = {
             "/": self._home,
             "/shop": self._shop,

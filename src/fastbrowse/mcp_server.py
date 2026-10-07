@@ -550,8 +550,8 @@ async def configure(args: argparse.Namespace, settings: Settings, environ: Mappi
         seen.add((secret.name, secret.origin))
     # The same checks a run would make on its first model call, made now so a client shows a server that
     # failed to start rather than a tool that fails every call.
-    settings.openrouter_key()
     async with httpx.AsyncClient() as http:
+        settings.llm(http)
         settings.jev(http)
     token = settings.mcp_token.get_secret_value() if settings.mcp_token is not None else None
     if args.transport == "http" and token is None and not is_loopback(args.host):
