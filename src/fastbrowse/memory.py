@@ -205,9 +205,13 @@ class Notes:
         After a date picker's choice was corrected from 31/10 to 28/11, a new read quoted the new date, but the
         answer still quoted the old one, since both facts evidenced the requirement."""
         supporting = self.supporting(requirement_id)
-        if not any(evidence.capture_sha256 == sha256 for evidence in self.supporting_evidence(requirement_id)):
+        fresh = tuple(
+            evidence for evidence in self.supporting_evidence(requirement_id) if evidence.capture_sha256 == sha256
+        )
+        if not fresh:
             return
-        address = _address(url)
+        # A capture includes child frames whose quotes belong to their own addresses, not the parent page's.
+        addresses = {_address(url)} | {_address(span.url) for span in fresh}
         evidence = self.evidence
         for key, fact in supporting:
             sources = (
@@ -218,7 +222,7 @@ class Notes:
             if any(
                 source is not None
                 and source.capture_sha256 != sha256
-                and _address(source.url) == address
+                and _address(source.url) in addresses
                 and not shows(text, source.quote)
                 for source in sources
             ):

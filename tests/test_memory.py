@@ -63,9 +63,10 @@ def test_a_read_that_evidenced_nothing_retires_nothing() -> None:
     assert notes.evidenced("r1")
 
 
-def test_repeated_choice_sources_are_kept_and_retired_when_one_changes() -> None:
-    context = _quoted("Availability: 20", "before").model_copy(update={"requirement_id": None})
-    repeated = _quoted("20", "before").model_copy(update={"requirement_id": None})
+@pytest.mark.parametrize("source_url", ["https://example.test", "https://child.test"])
+def test_repeated_choice_sources_are_kept_and_retired_when_one_changes(source_url: str) -> None:
+    context = _quoted("Availability: 20", "before", source_url).model_copy(update={"requirement_id": None})
+    repeated = _quoted("20", "before", source_url).model_copy(update={"requirement_id": None})
     answer = Fact(
         requirement_id="r1",
         text="20",
@@ -73,7 +74,7 @@ def test_repeated_choice_sources_are_kept_and_retired_when_one_changes() -> None
         reader=FactReader.JEV_CHOICE,
         basis=(fact_id(context), fact_id(repeated)),
     )
-    current = _quoted("Availability: 22", "after")
+    current = _quoted("Availability: 22", "after", source_url)
     notes = Notes((context, repeated, answer, current))
     assert context.evidence in notes.read_for("r1")
     notes.supersede("r1", "https://example.test", "after", "20\nAvailability: 22")
