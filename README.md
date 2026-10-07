@@ -5,10 +5,10 @@
   <img src="assets/wordmark.svg" alt="fastbrowse" width="360">
 </picture>
 
-**Browser automation with results you can verify.**
+**Give your agent a browser.**
 
-Complete workflows, return cited answers or structured data, and check the result before your application acts on it.
-Jev chooses actions from the page; code controls credentials, authorization and spending.
+Run browser tasks locally or in a cloud browser. Jev chooses from indexed page controls; fastbrowse returns
+cited answers or schema-validated data. Code controls credentials, authorization and spending.
 
 [![pypi](https://img.shields.io/pypi/v/fastbrowse?style=flat-square&color=6366F1)](https://pypi.org/project/fastbrowse/)
 ![python](https://img.shields.io/badge/python-3.13%20%7C%203.14-475569?style=flat-square)
@@ -26,7 +26,7 @@ something that was never on the page. Every claim in an answer cites a verbatim 
 
 ![fastbrowse signing in to a shop, adding two products, filling the shipping form and placing the order](docs/assets/demo.gif)
 
-13 steps in 20.9s on local Chrome, shown 1.4x faster with pauses cut.
+Recorded on local Chrome: 13 steps, 20.9s and $0.0034 in model calls. Playback is 1.4x faster with pauses cut.
 
 ### Against Browser Use agents
 
@@ -408,11 +408,17 @@ There is no binary for Alpine or another musl system, and none for a platform ou
 that allows programs only by the team that signed them refuses. The Windows binary is not signed. Bun and Deno are
 untested.
 
-## Use it from Codex or Claude Code
+## Use fastbrowse with your agent
 
-Install the [fastbrowse skill](docs/skill.md) to delegate website tasks from a coding agent. It uses the MCP
+Install the [fastbrowse skill](docs/skill.md) to delegate website tasks from an agent that supports Agent Skills. It uses the MCP
 tool when connected, or the CLI, and preserves the task's citations, status, authorization, and budget.
-The guide covers installation, configuration, and prompts for both agents.
+The guide covers agent selection, configuration, and example prompts for Codex and Claude Code.
+Agents without skill support can use the CLI or MCP server directly.
+
+## Run fastbrowse through Nebula
+
+[Nebula](https://www.nebula.gg/) embeds fastbrowse in its agent harness, with browser steps, results and
+permitted vault logins. Use Bitwarden or 1Password through Nebula with credentials scoped to authorized websites.
 
 ## Use it from an MCP client
 
