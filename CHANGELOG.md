@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Runs that stop on a blocked page, an error or a limit retain a final screenshot when step frames are enabled.
+  The capture checks the current page for secrets and preserves the run status.
+
 - Jev chooses repeated short facts as one value, retaining every source quote and context. Duplicate locations
   no longer split its confidence and send an otherwise clear lookup to the prose reader. Headerless tables
   describe values by their row rather than inventing column headers.
