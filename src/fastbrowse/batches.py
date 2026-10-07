@@ -29,6 +29,7 @@ async def evaluate_batches(
     tokens: TokenBudget,
     ledger: Ledger | None,
     on_answer: Callable[[str, Answer], None] | None = None,
+    allow_failed_batches: bool = True,
 ) -> Answered | None:
     """None when no batch was answered; a question too large to send with the state alone goes unscored."""
     ratio = tokens.chars_per_token
@@ -68,6 +69,8 @@ async def evaluate_batches(
         try:
             evaluation = await jev.evaluate(state, questions)
         except JevError:
+            if not allow_failed_batches:
+                raise
             return None
         paid.append(evaluation.cost)
         nonlocal input_tokens, requests

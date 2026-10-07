@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Independent answer claim checks run in parallel batches. Each omission check keeps its own quoted-evidence
+  budget instead of sharing it with unrelated claim questions. Missing or failed checks cannot verify an answer.
+
 - Action decisions keep recent progress claims when a source quote exceeds their notes budget, so collecting
   a large quote does not hide which items were already checked. Reads and completion checks retain full quotes.
 

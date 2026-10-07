@@ -815,8 +815,10 @@ async def test_transaction_evidence_does_not_spend_the_omission_notes_budget() -
 
     assert await check_claims(jev, answer, notes, Thresholds(), ledger=ledger, transaction_evidence_ids=ids) == answer
 
-    assert len(jev.requests) == ledger.jev_calls == len(ledger.lines) == 2
-    claims = next(q for q in jev.requests if "requirement_omitted" in q)
+    assert len(jev.requests) == ledger.jev_calls == len(ledger.lines) == 3
+    claims = {
+        key: question for batch in jev.requests for key, question in batch.items() if key != TRANSACTION_CONTRADICTED
+    }
     assert claims == ordinary
     omission = claims["requirement_omitted"].instructions
     assert all(fact.text in omission for fact in notes.facts)
@@ -3672,3 +3674,49 @@ async def test_reopened_requirement_reads_earlier_quotes_again() -> None:
     llm = ScriptedLLM([{"claims": [], "answered": False}])
     await read(llm, page, requirement.text, ["r"], notes, jev=jev, requirements=(requirement,))
     assert len(llm.calls) == 1 and "novelty" not in jev.requests[0][1]
+
+
+async def test_independent_claim_checks_fit_separate_parallel_batches() -> None:
+    from fastbrowse.verification import check_claims
+
+    class SmallRequests:
+        active = 0
+        peak = 0
+        calls = 0
+
+        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+            if len(questions) > 1:
+                raise JevInputTooLarge("individual checks fit, the combined request does not")
+            self.calls += 1
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            await asyncio.sleep(0)
+            self.active -= 1
+            return Evaluation(
+                model="test",
+                answers={key: NoulAnswer(probability=0.0) for key in questions},
+                input_tokens=1,
+                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.001),
+            )
+
+    page = capture((BlockKind.PARAGRAPH, "Black pen GBP7"))
+    fact = Fact(text=page.text, evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+    notes = Notes((fact,))
+    composed = assemble_answer((Claim(text=fact.text, evidence_ids=(fact_id(fact),)),), notes, ())
+    jev, ledger = SmallRequests(), Ledger(Limits())
+    held = await check_claims(jev, composed, notes, Thresholds(), tokens=TokenBudget(batch_tokens=1), ledger=ledger)
+    assert held is composed and jev.calls == 2 and jev.peak == 2
+    assert ledger.jev_calls == 2 and ledger.breakdown().known_dollars == pytest.approx(0.002)
+
+
+async def test_a_claim_check_that_cannot_fit_cannot_verify_an_answer() -> None:
+    from fastbrowse.verification import check_claims
+    from tests.test_policy import ScriptedJev
+
+    page = capture((BlockKind.PARAGRAPH, "Black pen GBP7"))
+    fact = Fact(text=page.text, evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+    notes = Notes((fact,))
+    composed = assemble_answer((Claim(text=fact.text, evidence_ids=(fact_id(fact),)),), notes, ())
+    jev = ScriptedJev({}, noul=0.0)
+    held = await check_claims(jev, composed, notes, Thresholds(), tokens=TokenBudget(state_plus_largest_question=1))
+    assert held is None and jev.requests == []

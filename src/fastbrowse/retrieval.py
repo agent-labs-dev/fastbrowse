@@ -2253,10 +2253,8 @@ def claim_check_questions(
         true="Yes, at least one requirement is unanswered or unevidenced.",
         false="No, every requirement is answered and evidenced.",
     )
-    room = tokens.remaining_chars(
-        json.dumps({"answer": composed.answer}),
-        [q.model_dump_json() for q in (*questions.values(), omission)],
-    )
+    # Independent claim questions run in separate batches; they cannot consume this question's evidence budget.
+    room = tokens.remaining_chars(json.dumps({"answer": composed.answer}), [omission.model_dump_json()])
     notes_text = notes.render(room, preserve_requirements=True, json_encoded=True)
     questions["requirement_omitted"] = omission.model_copy(update={"instructions": context + notes_text + question})
     return questions
