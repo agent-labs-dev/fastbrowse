@@ -126,6 +126,8 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
+          # An approved issue can contain untrusted text; enable the action's Linux subprocess isolation too.
+          allowed_non_write_users: cjber
           claude_args: >-
             --max-turns 80
             --allowedTools "Read,Edit,Write,Glob,Grep,Bash(uv:*),Bash(npm:*),Bash(git diff:*),Bash(git status:*),Bash(git log:*),Bash(git show:*)"
@@ -209,7 +211,8 @@ jobs:
             git reset -q --hard
             git clean -qfd
             git apply --index "$dir/change.patch"
-            if git diff --cached --name-only -z | grep -zq '^\.github/'; then
+            git diff --cached --name-only -z > "$RUNNER_TEMP/changed-paths"
+            if grep -zq '^\.github/' < "$RUNNER_TEMP/changed-paths"; then
               echo "::error::The change for #$issue touches .github, which this workflow never publishes."
               continue
             fi
