@@ -285,6 +285,7 @@ class _TransactionCandidate:
     question: NoulQuestion
     from_url: str
     landed_url: str | None = None
+    landed_status: int | None = None
     committing: bool | None = None
     outcome_read: bool = False
 
@@ -1287,6 +1288,7 @@ class Agent:
         """Record on the last action what it did, which the next choice and recovery both read."""
         if state.transaction_candidates and state.transaction_candidates[-1].landed_url is None:
             state.transaction_candidates[-1].landed_url = observation.url
+            state.transaction_candidates[-1].landed_status = observation.response_status
         # An error document has the requested address too, but never proves the destination loaded.
         if observation.response_status is not None and observation.response_status >= 400:
             state.visited.pop(observation.url, None)
@@ -2652,6 +2654,8 @@ class Agent:
         inspect_wall = fresh.response_status in {401, 403} and _access_inspection(await state.await_plan())
         if fresh.response_status is not None and fresh.response_status >= 400 and not inspect_wall:
             raise _HttpFailure(url=fresh.url, status=fresh.response_status).stop()
+        if failed := await self._failed_submission(state):
+            raise failed.stop()
         state.ledger.reserve(CostComponent.JEV)
         await state.await_plan()
         draft = draft_answer(state.plan, state.notes) if state.plan.page_answer_expected else None
@@ -2846,25 +2850,7 @@ class Agent:
             for index, candidate in enumerate(state.transaction_candidates)
             if candidate.committing is None and (candidate.from_url in urls or candidate.landed_url in urls)
         }
-        if pending:
-            pages = dict.fromkeys(
-                url
-                for candidate in pending.values()
-                for url in (candidate.from_url, candidate.landed_url)
-                if url is not None
-            )
-            answered = await evaluate_batches(
-                self._jev,
-                {"pages": [{"url": url} for url in pages]},
-                {key: candidate.question for key, candidate in pending.items()},
-                tokens=self._config.tokens,
-                ledger=state.ledger,
-            )
-            if answered is not None:
-                for key, candidate in pending.items():
-                    verdict = answered.answers.get(key)
-                    if isinstance(verdict, NoulAnswer):
-                        candidate.committing = verdict.probability > self._config.thresholds.irreversible_above
+        await self._classify(state, pending)
         # A candidate Jev could not classify counts as committing: a failed call must not drop the receipt check.
         committed = {
             url
@@ -2874,6 +2860,56 @@ class Agent:
             if url is not None
         }
         return tuple(key for key, item in evidence.items() if item.url in committed)
+
+    async def _classify(self, state: _RunState, pending: Mapping[str, _TransactionCandidate]) -> None:
+        """Ask Jev which of `pending` committed something, leaving `committing` unset where it gave no answer."""
+        if not pending:
+            return
+        pages = dict.fromkeys(
+            url
+            for candidate in pending.values()
+            for url in (candidate.from_url, candidate.landed_url)
+            if url is not None
+        )
+        answered = await evaluate_batches(
+            self._jev,
+            {"pages": [{"url": url} for url in pages]},
+            {key: candidate.question for key, candidate in pending.items()},
+            tokens=self._config.tokens,
+            ledger=state.ledger,
+        )
+        if answered is None:
+            return
+        for key, candidate in pending.items():
+            verdict = answered.answers.get(key)
+            if isinstance(verdict, NoulAnswer):
+                candidate.committing = verdict.probability > self._config.thresholds.irreversible_above
+
+    async def _failed_submission(self, state: _RunState) -> _HttpFailure | None:
+        """The error the last committing action landed on, unless a later committing action landed cleanly.
+
+        The page a run finishes on is not the page its submission produced. A message form whose server answered
+        503 with a page still saying "your message has been sent" was reloaded with a GET, which answered 200, and
+        the run finished complete on the words it had read off the error page. Every authorized click is a
+        candidate, so only the ones Jev holds committing count: a later click on a link must not excuse the failed
+        send, and a link that 404'd before the run found its way must not fail a finished task.
+        """
+        landed = [candidate for candidate in state.transaction_candidates if candidate.landed_url is not None]
+        failed_at = next(
+            (i for i, c in enumerate(landed) if c.landed_status is not None and c.landed_status >= 400), None
+        )
+        if failed_at is None:
+            return None
+        since = landed[failed_at:]
+        await self._classify(state, {f"landed_{index}": c for index, c in enumerate(since) if c.committing is None})
+        # As with receipts, a candidate Jev could not classify counts as committing.
+        committing = [candidate for candidate in since if candidate.committing is not False]
+        if not committing:
+            return None
+        last = committing[-1]
+        if last.landed_url is None or last.landed_status is None or last.landed_status < 400:
+            return None
+        return _HttpFailure(url=last.landed_url, status=last.landed_status)
 
     async def _holds(self, state: _RunState, answer: ComposedAnswer) -> ComposedAnswer | None:
         return await check_claims(
