@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+### Added
+
+- The internal benchmark catalog includes the opt-in Codex and Cua Driver comparison arm, run by Parallax.
+
 - A run whose form submission the server answered with an error no longer ends `complete` because a later page
   loaded cleanly. A message form that answered 503 with a page still saying "your message has been sent" was
   reloaded, the reload answered 200, and the run reported the message delivered. The last submission's status now
