@@ -60,9 +60,9 @@ the browsing tasks it handles, and its main file links to browser access details
 the [Codex skill guidance](https://learn.chatgpt.com/docs/build-skills) and
 [Claude authoring guidance](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices).
 
-Test a skill change in a fresh agent session with real model calls and a local browser. Check the browser's
+Test a skill change in a fresh agent session with real model calls and a browser. Check the browser's
 result as well as the calling agent's answer: a cited read, interactive navigation, a form stopped before
-submission, and an explicitly authorized submission. Grade the form against server records, not the agent's
+submission, and an explicitly authorized submission. Grade the form against the server's receipt or records, not the agent's
 description. Also exercise missing configuration and exhausted budgets so unfinished runs remain unfinished.
 Run the documented commands from an installed copy outside this checkout, where repository docs cannot fill
 gaps in the skill. Test automatic selection separately from explicit invocation. These are behavioral checks,
