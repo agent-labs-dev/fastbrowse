@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Action decisions keep recent progress claims when a source quote exceeds their notes budget, so collecting
+  a large quote does not hide which items were already checked. Reads and completion checks retain full quotes.
+
 - Page redraws retain completed Jev relevance scores for unchanged controls in the same document and task
   context. Unfinished batches still run in parallel, and every action is chosen from the fresh page.
 

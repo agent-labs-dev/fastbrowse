@@ -308,3 +308,20 @@ def test_render_keeps_source_quote_once_and_retains_distinct_fact_text(text: str
     assert rendered.text.count(json.dumps(quote)) == 1
     assert text in rendered.text and 'source="s1"' in rendered.text
     assert rendered.evidence_ids == (fact_id(fact),) and notes.evidence[fact_id(fact)] == source
+
+
+@pytest.mark.parametrize("quote_last", [False, True])
+def test_navigation_retains_recent_progress_when_source_quotes_exceed_its_budget(quote_last: bool) -> None:
+    quote = "catalogue " * 800
+    source = evidence().model_copy(update={"quote": quote, "end": len(quote)})
+    basis = Fact(text=quote, evidence=source, reader=FactReader.LLM)
+    progress = Fact(
+        text="The first charger has been checked; the second charger is still unchecked.",
+        evidence=None,
+        basis=(fact_id(basis),),
+        reader=FactReader.LLM,
+    )
+    notes = Notes((progress, basis) if quote_last else (basis, progress))
+    assert progress.text in notes.render_for_navigation(500)
+    assert len(notes.render_for_navigation(500)) <= 500
+    assert json.dumps(quote) in notes.render(20_000)

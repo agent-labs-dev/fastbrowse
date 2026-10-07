@@ -287,6 +287,32 @@ class Notes:
     def unresolved(self, plan: Plan) -> tuple[Requirement, ...]:
         return tuple(requirement for requirement in plan.requirements if not self.evidenced(requirement.id))
 
+    def render_for_navigation(self, max_chars: int) -> str:
+        """Recent claims for picking the next action; completion checks use full quoted evidence."""
+        if max_chars < 0:
+            raise ValueError("max_chars must be nonnegative")
+        marker = f"[{len(self._facts)} facts omitted]"
+        lines: list[str] = []
+        used = len(marker)
+        # A long source quote can consume the whole action budget and hide which items were already checked.
+        # Actions need progress claims; readers and verification retain their separate quoted view.
+        for key, fact in reversed(self._facts.items()):
+            source = "" if fact.evidence is None else f" url={json.dumps(fact.evidence.url)}"
+            line = (
+                f"{json.dumps(fact.text, ensure_ascii=False)} "
+                f"requirements={','.join(sorted(self._requirements[key])) or '-'}{source}"
+            )
+            if used + len(line) + 1 <= max_chars:
+                lines.append(line)
+                used += len(line) + 1
+        omitted = len(self._facts) - len(lines)
+        if omitted:
+            lines.append(f"[{omitted} facts omitted]")
+        result = "\n".join(lines)
+        if len(result) > max_chars:
+            raise ValueError("max_chars is too small to report omitted facts")
+        return result
+
     def render(self, max_chars: int, *, preserve_requirements: bool = False, json_encoded: bool = False) -> str:
         return self.render_with_ids(
             max_chars, preserve_requirements=preserve_requirements, json_encoded=json_encoded

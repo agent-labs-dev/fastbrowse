@@ -3136,7 +3136,7 @@ class Agent:
             task=state.task,
             subgoal=state.hint,
             requirements=tuple(r.text for r in state.ready_plan.requirements) if state.ready_plan else (),
-            notes=state.notes.render(self._config.observation.working_notes_chars),
+            notes=state.notes.render_for_navigation(self._config.observation.working_notes_chars),
             history=_history(state.history, self._config.observation),
             recovery_memory=_recovery_memory(state, self._config.stall.max_recoveries, self._redactor),
             check_login=check_login,
