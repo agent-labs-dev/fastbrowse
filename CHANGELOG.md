@@ -50,6 +50,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - The LLM can use Vercel AI Gateway when no OpenRouter key is configured. The CLI, MCP server and fixture
   evals share that routing, and scheduled evals check their credentials before starting a task.
+- `fastbrowse serve`, which the JavaScript SDK starts, accepts `AI_GATEWAY_API_KEY` alone too. Its startup
+  check still asked for `OPENROUTER_API_KEY` and refused a run the LLM could have served through the gateway.
 - External eval corpora can run pinned tasks with reproducible selection, attempt records and independent
   grades. Ungraded attempts retain an unknown pass state instead of contributing to a benchmark score.
 - Fixture evals leave a page's scripted cookie banner to the agent. The browser layer's own consent refusal
