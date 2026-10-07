@@ -145,7 +145,8 @@ jobs:
             - .claude-pr/summary.md: Markdown with a "## What changed and why" section (two or three sentences)
               and an "## Evidence" section listing the checks you ran and their results. If you could not
               resolve the issue, change no files and say why in summary.md.
-      - run: |
+      - id: patch
+        run: |
           git add -A
           if git diff --cached --quiet; then
             echo "::warning::Claude changed nothing for #$ISSUE, so no PR. Remove the $LABEL label to try again."
@@ -154,7 +155,9 @@ jobs:
           fi
           git diff --cached --binary --no-renames > .claude-pr/change.patch
           git rev-parse HEAD > .claude-pr/base
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - if: steps.patch.outputs.changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: claude-issue-${{ matrix.issue }}
           path: |
@@ -196,19 +199,24 @@ jobs:
           for dir in "$CHANGES"/claude-issue-*; do
             issue=${dir##*/claude-issue-}
             branch="claude/issue-$issue"
+            if [ ! -f "$dir/base" ] || [ ! -f "$dir/change.patch" ]; then
+              echo "#$issue: no patch to publish"
+              continue
+            fi
             base=$(cat "$dir/base")
+            [[ "$base" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Invalid base for #$issue"; exit 1; }
             git checkout -q --detach "$base"
             git reset -q --hard
             git clean -qfd
             git apply --index "$dir/change.patch"
-            if git diff --cached --name-only | grep -q '^\.github/'; then
+            if git diff --cached --name-only -z | grep -zq '^\.github/'; then
               echo "::error::The change for #$issue touches .github, which this workflow never publishes."
               continue
             fi
 
             : > "$RUNNER_TEMP/additions.jsonl"
             git diff --cached --no-renames --name-only -z --diff-filter=d | while IFS= read -r -d '' path; do
-              base64 -w0 "$path" > "$RUNNER_TEMP/contents"
+              git cat-file blob ":$path" | base64 -w0 > "$RUNNER_TEMP/contents"
               jq -nc --arg path "$path" --rawfile contents "$RUNNER_TEMP/contents" '{$path, $contents}' \
                 >> "$RUNNER_TEMP/additions.jsonl"
             done
@@ -219,9 +227,9 @@ jobs:
             if [ -z "$title" ]; then
               title="fix: resolve #$issue"
             fi
-            # Reset the branch to the base, so a rerun after the label is removed starts from a clean slate.
+            # A retry must not overwrite an existing branch that someone may already be reviewing.
             gh api -X POST "repos/$REPO/git/refs" -f ref="refs/heads/$branch" -f sha="$base" > /dev/null \
-              || gh api -X PATCH "repos/$REPO/git/refs/heads/$branch" -f sha="$base" -F force=true > /dev/null
+              || { echo "::warning::Branch $branch already exists or could not be created; leaving it unchanged."; continue; }
             jq -n --arg repo "$REPO" --arg branch "$branch" --arg base "$base" --arg title "$title" \
               --arg body "Closes #$issue" \
               --slurpfile additions "$RUNNER_TEMP/additions.jsonl" --slurpfile deletions "$RUNNER_TEMP/deletions.json" \
