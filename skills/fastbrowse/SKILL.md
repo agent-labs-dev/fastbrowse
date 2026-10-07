@@ -11,7 +11,7 @@ with evidence and a status. Give it the user's goal and necessary values rather 
 ## Choose an entry point
 
 Use a connected fastbrowse MCP `browse` tool when available. Inspect its schema and pass `task`, `start` when
-known, `max_steps: 30`, and `max_dollars: 0.25`. Respect a user-specified budget instead. Server ceilings still
+known, `max_steps: 30`, and `max_dollars: 0.25`. Use a user-specified model-spend limit instead. Server ceilings still
 apply. The tool returns `status`, `answer`, evidence, and `next_step` when the task is unfinished.
 
 Otherwise use the CLI. Check `fastbrowse --help` if installed; otherwise check `uvx --from fastbrowse fastbrowse
@@ -32,6 +32,11 @@ fastbrowse needs an `OPENROUTER_API_KEY` configured in its environment or `.env`
 and also needs `BROWSER_USE_API_KEY`. Use `--local` when the task calls for local Chrome or cloud access is
 unavailable and Chrome is installed. A cloud browser cannot reach the caller's localhost. Check for configured
 keys without printing their values; if missing, ask the user to configure them outside the conversation.
+
+`max_dollars` limits model spend only. Cloud browser and proxy charges are added after the browser stops and
+can exceed that limit. For a strict total-spend ceiling, use a permitted local or existing browser when
+available; otherwise explain that fastbrowse cannot enforce that ceiling for cloud runs and establish an
+acceptable budget before starting one. Count earlier run costs against the user's total budget across retries.
 
 ## Set the task boundary
 
