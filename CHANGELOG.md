@@ -11,6 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A run whose form submission the server answered with an error no longer ends `complete` because a later page
+  loaded cleanly. A message form that answered 503 with a page still saying "your message has been sent" was
+  reloaded, the reload answered 200, and the run reported the message delivered. The last submission's status now
+  counts: an error there ends the run the way an error on the final page does, unless a later submission succeeded.
+
 ## [0.5.19] - 2026-10-06
 
 - `run_task` takes `cloud_extensions`, up to three distinct extension IDs from your Browser Use Cloud account,

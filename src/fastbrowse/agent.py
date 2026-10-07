@@ -278,7 +278,24 @@ class _TransactionCandidate:
     question: NoulQuestion
     from_url: str
     landed_url: str | None = None
+    landed_status: int | None = None
     committing: bool | None = None
+
+
+def _failed_submission(candidates: Sequence[_TransactionCandidate]) -> _HttpFailure | None:
+    """The error the last submission landed on, unless a later submission landed cleanly.
+
+    The page a run finishes on is not the page its submission produced. A message form whose server answered 503
+    with a page still saying "your message has been sent" was reloaded with a GET, which answered 200, and the run
+    finished complete on the words it had read off the error page.
+    """
+    landed = [candidate for candidate in candidates if candidate.landed_url is not None]
+    if not landed:
+        return None
+    last = landed[-1]
+    if last.landed_url is None or last.landed_status is None or last.landed_status < 400:
+        return None
+    return _HttpFailure(url=last.landed_url, status=last.landed_status)
 
 
 @dataclass(slots=True)
@@ -1255,6 +1272,7 @@ class Agent:
         """Record on the last action what it did, which the next choice and recovery both read."""
         if state.transaction_candidates and state.transaction_candidates[-1].landed_url is None:
             state.transaction_candidates[-1].landed_url = observation.url
+            state.transaction_candidates[-1].landed_status = observation.response_status
         # An error document has the requested address too, but never proves the destination loaded.
         if observation.response_status is not None and observation.response_status >= 400:
             state.visited.pop(observation.url, None)
@@ -2570,6 +2588,8 @@ class Agent:
         fresh = await self._observe()
         if fresh.response_status is not None and fresh.response_status >= 400:
             raise _HttpFailure(url=fresh.url, status=fresh.response_status).stop()
+        if failed := _failed_submission(state.transaction_candidates):
+            raise failed.stop()
         state.ledger.reserve(CostComponent.JEV)
         await state.await_plan()
         draft = draft_answer(state.plan, state.notes) if state.plan.page_answer_expected else None
