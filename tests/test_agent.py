@@ -5284,3 +5284,34 @@ async def test_field_metadata_echoes_are_masked_before_models_see_them(attribute
     assert getattr(observed.controls[0], attribute) == "field-" + "\u2022" * 7 + "-purpose"
     assert agent._raw_observation is raw
     assert getattr(raw.controls[0], attribute) == reflected
+
+
+@pytest.mark.parametrize(
+    ("landings", "expected"),
+    [
+        ([(503, True)], 503),
+        ([(503, True), (200, False)], 503),
+        ([(503, True), (200, True)], None),
+        ([(404, False), (200, True)], None),
+        ([(503, None)], 503),
+        ([(200, True)], None),
+    ],
+)
+async def test_failed_submission_survives_navigation_but_not_a_successful_submission(
+    landings: list[tuple[int, bool | None]], expected: int | None
+) -> None:
+    state = await run_state()
+    for status, committing in landings:
+        state.transaction_candidates.append(
+            agent_module._TransactionCandidate(
+                question=NoulQuestion(instructions="Commit", true="yes", false="no"),
+                from_url="https://shop.test/form",
+                landed_url="https://shop.test/result",
+                landed_status=status,
+                committing=committing,
+            )
+        )
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    agent._classify = AsyncMock()
+    failure = await agent._failed_submission(state)
+    assert (failure.status if failure else None) == expected
