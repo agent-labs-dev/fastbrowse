@@ -106,6 +106,17 @@ def test_render_reports_omissions_and_never_slices_a_citation() -> None:
     assert Notes().render(0) == ""
 
 
+def test_verbatim_evidence_fits_without_repeating_its_text() -> None:
+    quote = "Product specifications, price and delivery details. " * 100
+    fact = _quoted(quote, "product")
+    notes = Notes((fact,))
+    rendered = notes.render_with_ids(len(quote) + 1000, preserve_requirements=True)
+    assert rendered.evidence_ids == (fact_id(fact),)
+    assert f"quote={json.dumps(quote)}" in rendered.text
+    assert "requirements=r1" in rendered.text
+    assert notes.evidence[fact_id(fact)].quote == quote
+
+
 def test_requirement_evidence_has_priority_including_reused_spans() -> None:
     context = Fact(reader=FactReader.LLM, text="Context", evidence=evidence(sha="context"))
     early = Fact(reader=FactReader.LLM, requirement_id="r1", text="First answer", evidence=evidence(sha="early"))
