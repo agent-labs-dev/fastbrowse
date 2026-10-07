@@ -526,6 +526,82 @@ async def test_absent_after_focus_still_reaches_the_reader() -> None:
     assert len(jev.requests) == 2 and llm.calls
 
 
+async def test_a_large_block_claim_keeps_only_its_literal_supporting_excerpt() -> None:
+    text = "Site navigation. " * 100 + "Charger Example: $12, 40W, two USB-C ports." + " Other products. " * 100
+    page = capture((BlockKind.PARAGRAPH, text))
+    response: JsonValue = {
+        "claims": [
+            {
+                "cite": {"first": "s0", "last": "s0"},
+                "excerpt": "Charger Example: $12, 40W, two USB-C ports.",
+                "text": "The charger costs $12 and has 40W total power with two USB-C ports.",
+                "requirement_id": "r",
+            }
+        ],
+        "answered": True,
+    }
+    result = await read(ScriptedLLM([response]), page, "Report charger details", ["r"], Notes())
+    assert len(result.facts) == 1
+    evidence = result.facts[0].evidence
+    assert evidence is not None
+    assert evidence.quote == page.text[evidence.start : evidence.end] == "Charger Example: $12, 40W, two USB-C ports."
+    assert evidence.capture_sha256 == page.sha256
+
+
+@pytest.mark.parametrize("excerpt", ["Missing price", "Price: $12", "   "])
+async def test_an_excerpt_must_match_one_unique_source_passage(excerpt: str) -> None:
+    page = capture((BlockKind.PARAGRAPH, "Price: $12. Another record: Price: $12."))
+    response: JsonValue = {
+        "claims": [
+            {"cite": {"first": "s0", "last": "s0"}, "excerpt": excerpt, "text": "Price is $12", "requirement_id": "r"}
+        ],
+        "answered": True,
+    }
+    notes = Notes()
+    result = await read(ScriptedLLM([response]), page, "Find price", ["r"], notes)
+    assert not result.facts and not notes.evidenced("r")
+    assert result.rejected_claims == 1
+
+
+async def test_excerpt_matching_copies_original_punctuation_and_whitespace() -> None:
+    passage = "Ada" + chr(0x2019) + "s charger\nPrice: $12"
+    page = capture((BlockKind.PARAGRAPH, "Navigation. " + passage + " Footer."))
+    response: JsonValue = {
+        "claims": [
+            {
+                "cite": {"first": "s0", "last": "s0"},
+                "excerpt": "Ada's charger Price: $12",
+                "text": "Ada's charger costs $12",
+                "requirement_id": "r",
+            }
+        ],
+        "answered": True,
+    }
+    result = await read(ScriptedLLM([response]), page, "Find price", ["r"], Notes())
+    evidence = result.facts[0].evidence
+    assert evidence is not None
+    assert evidence.quote == passage == page.text[evidence.start : evidence.end]
+
+
+async def test_excerpt_cannot_reach_a_part_of_the_block_not_shown_in_this_chunk() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Unrelated. " * 100 + "Price: $12"))
+    response: JsonValue = {
+        "claims": [
+            {
+                "cite": {"first": "s0", "last": "s0"},
+                "excerpt": "Price: $12",
+                "text": "Price is $12",
+                "requirement_id": "r",
+            }
+        ],
+        "answered": True,
+    }
+    result = await read(
+        ScriptedLLM([response, {"claims": [], "answered": False}]), page, "Find price", ["r"], Notes(), max_chars=1000
+    )
+    assert not result.facts and result.rejected_claims == 1
+
+
 async def test_a_failed_focus_pass_falls_back_to_the_reader() -> None:
     requirement = Requirement(id="r", text="Find the price", kind=RequirementKind.INFORMATION)
     jev = _FocusJev("Price", "Price: $12", fail_focus=True)
@@ -3150,7 +3226,7 @@ async def test_final_page_refuses_to_drop_earlier_records_to_fit_prompt() -> Non
     evidence = block_evidence(earlier, "s0")
     notes = Notes([Fact(text=evidence.quote, evidence=evidence, reader=FactReader.LLM)])
     llm = ScriptedLLM([])
-    with pytest.raises(NotesTooLarge, match="every earlier record"):
+    with pytest.raises(NotesTooLarge, match=r"notes budget|every earlier record"):
         await read(
             llm,
             capture((BlockKind.RECORD, "last")),

@@ -393,10 +393,22 @@ async def _shortlist(
 
     # A redraw cancels unfinished batches, but scores already paid for remain valid for an identical question
     # and context. Action selection still sees the fresh page; relevance never authorizes or chooses an action.
-    pending = {key: question for key, question in questions.items() if key not in answers}
+    pending: dict[str, Question] = {}
+    representatives: dict[str, str] = {}
+    aliases: dict[str, str] = {}
+    # Twin controls can ask the same relevance question; one score suffices, but action targets stay distinct.
+    for key, question in questions.items():
+        if key not in answers:
+            representative = representatives.setdefault(question.model_dump_json(), key)
+            aliases[key] = representative
+            if representative == key:
+                pending[key] = question
     answered = await evaluate_batches(jev, state, pending, tokens=config.tokens, ledger=ledger, on_answer=remember)
     if answered is not None:
         answers.update(answered.answers)
+    answers.update(
+        {key: answers[representative] for key, representative in aliases.items() if representative in answers}
+    )
     if not answers:
         return None
     scores = {int(key[1:]): answer.probability for key, answer in answers.items() if isinstance(answer, NoulAnswer)}
@@ -420,7 +432,8 @@ async def _shortlist(
         offered=len(protected) + low,
         scored=len(scores),
         requests=0 if answered is None else answered.requests,
-        reused=len(questions) - len(pending),
+        reused=len(questions) - len(aliases),
+        duplicates=len(aliases) - len(pending),
     )
     return (
         kept(low),

@@ -487,6 +487,16 @@ def test_drag_is_not_offered_when_nothing_is_draggable() -> None:
     assert "drag_destination" not in request.questions
 
 
+async def test_identical_relevance_questions_share_one_score_but_keep_distinct_controls() -> None:
+    config = Config(observation=ObservationLimits(max_offered_controls=5))
+    controls = tuple(button(0).model_copy(update={"id": f"b{i}"}) for i in range(10))
+    jev = RelevanceJev({"operation": "click", "click_target": "b3"}, {"Button 0"})
+    result = await decide(jev, observation(controls), context(), config)
+    relevance = [questions for questions in jev.requests if "operation" not in questions]
+    assert sum(len(questions) for questions in relevance) == 1
+    assert result.target == controls[3]
+
+
 async def test_redraw_reuses_completed_relevance_without_reusing_the_action() -> None:
     config = Config(observation=ObservationLimits(max_offered_controls=5))
     jev = RelevanceJev({"operation": "click", "click_target": "b9"}, {"Button 9"})
