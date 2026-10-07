@@ -259,7 +259,8 @@ async def test_resolved_secret_is_masked_in_model_metadata_but_raw_url_is_preser
     field = find(obs, "Other field")
     jev = RecordingJev()
     jev.pick = {"operation": "fill", "fill_target": field.id, "pick": "secret:token"}
-    llm = ScriptedLLM([PLAN, PLAN, {"complete": True, "missing": []}, PLAN])
+    url_plan: JsonValue = {"requirements": [], "answer_expected": False, "run_reports": ["final_url"]}
+    llm = ScriptedLLM([PLAN, url_plan, {"complete": True, "missing": []}, PLAN])
     agent = Agent(page, jev, llm, config=CONFIG, secrets=Secrets(main_site))
     first = await agent.run("Fill the token", limits=Limits(max_steps=1))
     assert first.steps[0].outcome is StepOutcome.EXECUTED
@@ -272,7 +273,7 @@ async def test_resolved_secret_is_masked_in_model_metadata_but_raw_url_is_preser
         return True
 
     jev.pick = {"operation": "done"}
-    second = await agent.run("Get the count", output_schema=Output, until=until)
+    second = await agent.run("Report the current URL", output_schema=Output, until=until)
     assert second.status is Status.COMPLETE
     assert seen_urls == [f"{main_site}/safety.html#top-secret-value"]
     obs = await page.observe()

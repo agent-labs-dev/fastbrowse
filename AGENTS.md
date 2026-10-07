@@ -30,7 +30,7 @@ uv run ty check                                     # ty, not pyright
 uv run python scripts/changelog.py --check "$(uv version --short)"
 uv run python scripts/npm_versions.py               # the npm versions are the Python one
 uv run python scripts/no_slop.py
-uv run vale sync && uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs src scripts tests
+uv run vale sync && uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs skills src scripts tests
 uv run pytest -q
 npm ci --ignore-scripts && npm run check:browser
 npm run generate:sdk && git diff --exit-code -- packages/sdk/src/protocol.ts
@@ -57,8 +57,12 @@ The [sift project skill](.agents/skills/sift-project/SKILL.md) records audit com
 
 Unit tests cannot tell you whether the agent still browses well; the suites can. **Agent changes are iterated
 against `dev` only**, and `heldout` is run before and after a round and never debugged. The commands, keys,
-task versions and publishing rules are in [docs/agents/evals.md](docs/agents/evals.md); read it before changing
+task versions, Parallax benchmark ownership and publishing rules are in [docs/agents/evals.md](docs/agents/evals.md); read it before changing
 agent behaviour or a task.
+
+Store detailed eval runs and validation in the dedicated Langfuse project. Keep local logs in an ignored
+artifacts directory; Git keeps manifests, source hashes and compact publication baselines. Verify uploads by
+reading them back before removing local evidence. Public results contain only the sanitized projection.
 
 ## Architecture
 
@@ -156,11 +160,13 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
 1. Add the entry under the new version's heading in `CHANGELOG.md` (Keep a Changelog, prose bullets).
 2. `uv version <x.y.z>`, then `uv run python scripts/npm_versions.py --write`, which gives the SDK's manifest
    the same number. Open a `chore: <x.y.z>` PR. CI fails if the version has no entry or npm disagrees with it.
-3. After it merges, `git tag v<x.y.z> && git push origin v<x.y.z>`.
+3. After it merges, `gh workflow run evals.yml --ref main -f repeat=3`. Wait for a successful Evals run on the
+   exact commit that will be tagged.
+4. `git tag v<x.y.z> <tested-sha> && git push origin v<x.y.z>`.
 
-A release that publishes or changes a comparison figure also needs the fixture suites green on the release build
-(`.github/workflows/evals.yml` fails on any regression) and, for a head-to-head figure, the comparison re-run on
-that same build.
+Every release needs the fixture suites green on its exact commit on `main`; `.github/workflows/evals.yml`
+fails on any failed attempt or incomplete repeat coverage. A release that publishes a head-to-head figure also
+needs the comparison re-run on that same build.
 
 One tag publishes one version to PyPI and npm (`.github/workflows/release.yml`). It first builds the wheel and the
 five binaries and smoke-tests each. The macOS two are signed ad hoc

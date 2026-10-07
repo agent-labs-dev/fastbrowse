@@ -30,38 +30,8 @@ something that was never on the page. Every claim in an answer cites a verbatim 
 
 ### Against Browser Use agents
 
-The Ultrafast comparison covers six navigation tasks against Browser Use Ultrafast (`jev-ultrafast`).
-Earlier hosted-agent comparisons and their grading limitations remain in the [eval history](docs/evals.md#results).
-Scored-run medians exclude earlier outage attempts. The [full audit](docs/validation/2026-09-29-final-comparison.md)
-includes every retry, first-attempt outcomes, unknown charges and the two HN pairs excluded from both arms.
-
-<!-- evals:headline -->
-Measured on 2026-09-29 with the build released as 0.5.14: 6 tasks, 120 selected results across all arms, on cloud browsers.
-
-Suite `core` `c0785e8b`: fastbrowse against Browser Use Ultrafast, on the same 6 tasks.
-
-| | runs passed | cost per scored run | median time |
-|:--|:--|:--|:--|
-| fastbrowse | 58/58 | $0.0026 (median), $0.0031 mean | 8.3s |
-| Browser Use Ultrafast | 38/58 | $0.0014 (median), $0.0129 mean | 12.9s |
-
-Each arm has 60 selected results, excluding earlier retries. Unavailable results: 2 for fastbrowse. Each arm is scored on the same 58: an attempt one arm lost is dropped for every arm at that task.
-
-### Controlled mock-site comparison
-
-Release 0.5.9, 2026-09-28. Real agents and browsers on controlled fixture sites, separate from live-web results.
-
-| Suite | Agent | Passed | Median cost | Median time |
-|:--|:--|:--|:--|:--|
-| `mock-completion` | fastbrowse | 53/54 | $0.0065 | 22.8s |
-| `mock-completion` | Browser Use agent | 54/54 | $0.2543 | 46.0s |
-| `mock-safety` | fastbrowse | 6/6 | $0.0103 | 30.4s |
-| `mock-safety` | Browser Use agent | 6/6 | $0.5763 | 85.7s |
-
-Confirmation gates are scored separately from task completion. Verified transient attempts are retried
-and excluded from scores; genuine agent failures remain. Full protocol and attempt records are in
-[docs/evals.md](docs/evals.md#stateful-mock-comparison).
-<!-- /evals:headline -->
+Benchmark methods and approved results belong on the [benchmark page](https://fastbrowse.ai/benchmarks).
+Detailed runs remain private until reviewed and approved for publication.
 
 Compare rows only at matching task versions. See [eval results and workflow](docs/evals.md).
 
@@ -95,7 +65,8 @@ uvx fastbrowse "What is the title of the top story right now?" --start https://n
 
 Jev uses direct TypeSafe when `TYPESAFE_API_KEY` is supplied; otherwise OpenRouter is primary.
 Vercel AI Gateway is supported as a backup or an explicit primary. `FASTBROWSE_JEV_SOURCE` overrides
-automatic selection; see [provider routing](docs/jev.md#provider-failover). The LLM uses OpenRouter.
+automatic selection; see [provider routing](docs/jev.md#provider-failover). The LLM uses OpenRouter when
+`OPENROUTER_API_KEY` is set, otherwise the Vercel AI Gateway's OpenAI-compatible chat completions.
 
 `uvx` runs the published package in an isolated cached environment. `uv tool install fastbrowse` keeps it on your
 PATH, and `uv add fastbrowse` puts it in a project. Service keys can live in a `.env` file in the working directory;
@@ -436,6 +407,12 @@ There is no binary for Alpine or another musl system, and none for a platform ou
 `binaryPath` or `FASTBROWSE_BINARY`. The macOS binaries carry an ad-hoc signature and are not notarized, which a Mac
 that allows programs only by the team that signed them refuses. The Windows binary is not signed. Bun and Deno are
 untested.
+
+## Use it from Codex or Claude Code
+
+Install the [fastbrowse skill](docs/skill.md) to delegate website tasks from a coding agent. It uses the MCP
+tool when connected, or the CLI, and preserves the task's citations, status, authorization, and budget.
+The guide covers installation, configuration, and prompts for both agents.
 
 ## Use it from an MCP client
 

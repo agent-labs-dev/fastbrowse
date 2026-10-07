@@ -7,7 +7,7 @@ name: Site
 on:
   push:
     branches: [main]
-    paths: [CHANGELOG.md, README.md, docs/**]
+    paths: [CHANGELOG.md, README.md, docs/**, skills/**]
   workflow_call:
     secrets:
       SITE_DEPLOY_HOOK:

@@ -65,6 +65,8 @@ class Control(Frozen):
     href: str | None = None
     options: tuple[str, ...] = ()
     input_type: str | None = None
+    input_name: str | None = None
+    autocomplete: str | None = None
     submit_semantics: str | None = None
     """The enclosing form's implicit submission, if Enter in this control can submit it."""
     checked: bool | None = None
