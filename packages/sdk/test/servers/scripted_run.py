@@ -108,10 +108,12 @@ async def until_cancelled(task: str, *, inputs: dict[str, str] | None, on_event:
 
     Given a `closed` input it never finishes, and writes the file that input names once its browser has closed.
     """
-    await on_event(BrowserEvent(live_url=None))
     if not inputs or "closed" not in inputs:
+        await on_event(BrowserEvent(live_url=None))
         return _result(data=len(requests))
     try:
+        # The event can trigger cancellation before its notification returns, so cleanup must already be registered.
+        await on_event(BrowserEvent(live_url=None))
         return await asyncio.Future()
     finally:
         # A real browser takes a moment to close, and the server has to wait for it.
