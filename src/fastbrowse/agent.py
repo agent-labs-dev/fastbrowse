@@ -562,14 +562,15 @@ class Agent:
             except _Stop as stop:
                 if stop.status is Status.STUCK and state is not None and state.notes.evidence:
                     # What was read is still cited evidence; a caller told only "stuck" has to browse again for it.
-                    return self._partial_result(state.notes, state, ledger, stop.status, stop.error)
-                return self._result(state, ledger, stop.status, error=stop.error)
+                    result = self._partial_result(state.notes, state, ledger, stop.status, stop.error)
+                else:
+                    result = self._result(state, ledger, stop.status, error=stop.error)
             except TimeoutError:
                 if not deadline.expired():
                     raise
                 assert ledger.limits.max_seconds is not None
                 limit = f"time limit {ledger.limits.max_seconds}s reached"
-                return self._partial_result(
+                result = self._partial_result(
                     state.notes if state else Notes(),
                     state,
                     ledger,
@@ -578,7 +579,7 @@ class Agent:
                     budget=BudgetStop(resource="seconds", limit=ledger.limits.max_seconds),
                 )
             except BudgetExceeded as error:
-                return self._partial_result(
+                result = self._partial_result(
                     state.notes if state else Notes(),
                     state,
                     ledger,
@@ -587,7 +588,7 @@ class Agent:
                     budget=error.budget,
                 )
             except NotesTooLarge as error:
-                return self._partial_result(
+                result = self._partial_result(
                     state.notes if state else Notes(),
                     state,
                     ledger,
@@ -595,7 +596,7 @@ class Agent:
                     self._redactor.redact(str(error)),
                 )
             except ObservationTooLarge as error:
-                return self._partial_result(
+                result = self._partial_result(
                     state.notes if state else Notes(), state, ledger, Status.OBSERVATION_LIMIT, str(error)
                 )
             except (JevError, LLMError, BrowserError) as error:
@@ -605,10 +606,23 @@ class Agent:
                     state is None and isinstance(error, NavigationTimeout | SiteUnreachable)
                 )
                 status = Status.UNAVAILABLE if unavailable else Status.ERROR
-                return self._partial_result(state.notes if state else Notes(), state, ledger, status, message)
+                result = self._partial_result(state.notes if state else Notes(), state, ledger, status, message)
             finally:
                 # A run can end before it ever needed the plan, and a plan still being written would bill it.
                 await head.discard()
+        return await self._ending_frame(result)
+
+    async def _ending_frame(self, result: RunResult, *, requested: bool = False) -> RunResult:
+        if not (self._config.step_frames or requested):
+            return result
+        # A blocked or failed run still needs its ending page, checked for secrets at capture time.
+        try:
+            async with asyncio.timeout(2):
+                frame = await self._frame()
+        except (BrowserError, TimeoutError):
+            logger.debug("final page frame unavailable")
+            frame = None
+        return result.model_copy(update={"final_frame": frame})
 
     async def _loop(
         self, state: _RunState, output_schema: type[BaseModel] | None, until: UntilCheck | None
@@ -2994,16 +3008,8 @@ class Agent:
         result = self._result(
             state, state.ledger, status, answer=answer, data=data, evidence=tuple(cited.values()), citations=citations
         )
-        frame: bytes | None = None
-        if self._config.step_frames or RunReport.SCREENSHOT in state.plan.run_reports:
-            # Step frames show the page before an action; an ending navigation needs its own image. A requested
-            # screenshot is this same image, taken before the report so the report says whether it exists.
-            try:
-                async with asyncio.timeout(2):
-                    frame = await self._frame()
-            except (BrowserError, TimeoutError):
-                logger.debug("final page frame unavailable")
-            result = result.model_copy(update={"final_frame": frame})
+        result = await self._ending_frame(result, requested=RunReport.SCREENSHOT in state.plan.run_reports)
+        frame = result.final_frame
         if frame is None and RunReport.SCREENSHOT in state.plan.run_reports and result.status is Status.COMPLETE:
             # The image is what the caller asked for. A secret on screen, a dialog or a timeout can withhold it,
             # and a run that cannot hand it over has not done the task, whatever else it verified.
