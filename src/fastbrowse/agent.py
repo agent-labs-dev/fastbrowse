@@ -118,6 +118,7 @@ from fastbrowse.verification import (
     DoneVerdict,
     Extraction,
     LLMVerdict,
+    OutputAuditCache,
     check_claims,
     check_done,
     extract,
@@ -316,6 +317,7 @@ class _RunState:
     notes: Notes = field(default_factory=Notes)
     missing_answer_outputs: tuple[str, ...] = ()
     answer_corrections: tuple[AnswerCorrection, ...] = ()
+    output_audit_cache: OutputAuditCache = field(default_factory=dict)
     open_answer_outputs: tuple[str, ...] = ()
     rejected_answer_evidence: frozenset[tuple[str, str | None, str]] | None = None
     answer_check_evidence: str | None = None
@@ -2979,15 +2981,16 @@ class Agent:
             return prepared, True
         facts = draft_answer(state.plan, state.notes)
 
-        def failed_assertions() -> int:
-            return len(
-                {
-                    (correction.criterion, tuple(claim.model_dump_json() for claim in correction.claims))
-                    for correction in state.answer_corrections
-                }
+        def failed_checks() -> tuple[int, int]:
+            failures = {
+                (correction.stage, correction.criterion, tuple(claim.model_dump_json() for claim in correction.claims))
+                for correction in state.answer_corrections
+            }
+            return sum(stage == "source" for stage, _, _ in failures), sum(
+                stage == "assertion" for stage, _, _ in failures
             )
 
-        previous_failures = failed_assertions() if state.answer_corrections else None
+        previous_failures = failed_checks() if state.answer_corrections else None
         try:
             composed = (
                 await (
@@ -3011,11 +3014,11 @@ class Agent:
             if facts is None:
                 raise
             logger.warning("The composer failed; offering the reader's facts to the claim check", exc_info=True)
-            composed, facts, previous_failures = facts, None, 0
+            composed, facts, previous_failures = facts, None, (0, 0)
         held = await self._holds(state, composed)
         while held is None and state.answer_corrections:
-            failures = failed_assertions()
-            # Each repair must resolve a failed assertion; unchanged or worse prose cannot buy another attempt.
+            failures = failed_checks()
+            # Fixing cited sources can expose assertion failures; after that, only fewer assertions buy a repair.
             if previous_failures is not None and failures >= previous_failures:
                 break
             previous_failures = failures
@@ -3155,6 +3158,7 @@ class Agent:
                 llm=self._llm,
                 missing_outputs=missing,
                 corrections=corrections,
+                audit_cache=state.output_audit_cache,
                 allow_scalar_jev=len(state.plan.answer_checks) == 1
                 and sum(r.kind is RequirementKind.INFORMATION for r in state.plan.requirements) == 1,
                 task=state.task,

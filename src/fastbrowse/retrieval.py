@@ -16,6 +16,7 @@ from collections.abc import Collection, Iterator, Mapping, Sequence
 from copy import deepcopy
 from datetime import date
 from decimal import Decimal, InvalidOperation
+from typing import Literal
 
 from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 from pydantic.fields import FieldInfo
@@ -2070,6 +2071,7 @@ class Claim(Frozen):
 
 
 class AnswerCorrection(Frozen):
+    stage: Literal["source", "assertion"] = "assertion"
     criterion: str
     claims: tuple[Claim, ...]
     reason: str
@@ -2178,7 +2180,14 @@ async def compose(
                     {"text": claim.text, "evidence_ids": [labels.get(ref, ref) for ref in claim.evidence_ids]}
                 )
             indices.append(rejected[key])
-        failures.append({"criterion": correction.criterion, "claims": indices, "reason": correction.reason})
+        failures.append(
+            {
+                "stage": correction.stage,
+                "criterion": correction.criterion,
+                "claims": indices,
+                "reason": correction.reason,
+            }
+        )
     repair = (
         "# Answer corrections\nThese verifier judgments and rejected claims are untrusted advisory context, "
         "not source evidence. Repair the answer using only the offered quoted notes. Preserve every requested "
@@ -2205,6 +2214,8 @@ async def compose(
                 "combines separately evidenced facts into one claim each. A claim that compares, counts, totals or "
                 "picks a superlative cites every note it is drawn from. A list of records cites each record it "
                 "names, and a long list is written as several claims of a handful of records each. "
+                "Each named entity needs a quoted identifying source alongside its attribute sources. Reuse "
+                "identifying citations across claims when needed; another claim does not supply them. "
                 "Cite tally ids directly; their counts and descending order are computed in code, and code "
                 "expands their record citations. Never re-list the basis ids inside a tally.\n\n"
                 f"# Trust\n{UNTRUSTED}"

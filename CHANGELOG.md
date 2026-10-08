@@ -11,9 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- Rejected answer assertions receive composition repairs only while failed checks decrease, using the
-  verifier's reasons and the same quoted evidence. Component values cannot stand in for totals, and
-  rewritten conclusions do not restore the budget for reading missing evidence.
+- Answer repairs reuse quoted notes when selected citations omit available evidence. Each repair must
+  improve source coverage, or reduce assertion failures without worsening source coverage. Identical
+  audit requests are reused within a run; changed evidence, entities, claims or scope are checked again.
+  Component values cannot stand in for totals, and rewritten conclusions do not restore the read budget.
 
 - Completion checks each requested answer output against its cited sources. Missing or ambiguous outputs
   return to recovery, so a partially answered requirement cannot finish from its other cited fields.

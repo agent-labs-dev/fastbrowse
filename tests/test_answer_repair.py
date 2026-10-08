@@ -70,7 +70,7 @@ def price_notes():
 
 
 @pytest.mark.parametrize("source_missing", [False, True])
-async def test_only_assertion_failures_produce_advisory_corrections(source_missing: bool) -> None:
+async def test_source_and_assertion_failures_produce_untrusted_advisory_corrections(source_missing: bool) -> None:
     notes, fact = price_notes()
     claim = Claim(text="Price 12; free shipping", evidence_ids=(fact_id(fact),))
     answer = assemble_answer((claim,), notes, ())
@@ -83,7 +83,8 @@ async def test_only_assertion_failures_produce_advisory_corrections(source_missi
         ("Report the price.",),
         corrections=corrections,
     )
-    assert bool(corrections) is not source_missing
+    assert corrections
+    assert corrections[0].stage == ("source" if source_missing else "assertion")
     if corrections:
         assert corrections[0].claims == (claim,)
         assert corrections[0].criterion == "Report the price."
@@ -106,7 +107,7 @@ async def test_answer_repairs_once_and_reaudits_instead_of_accepting_failed_pros
     agent = Agent(Mock(spec=Page), RoutingJev(), llm)
     answer, verified = await agent._answer(state, None)
     assert verified is (repair_succeeds and not source_missing)
-    assert llm.composes == (1 if source_missing else 2)
+    assert llm.composes == 2
     if verified:
         assert answer.answer == "Member price 12"
         assert answer.citations[0].quote == "Member price 12"
@@ -182,7 +183,7 @@ async def test_comparison_repair_must_supply_all_operands_in_its_own_citations()
     assert "Alpha capacity 10" in correction_prompt and "Beta capacity 7" in correction_prompt
 
 
-@pytest.mark.parametrize("mode", ["improve", "worse", "omit"])
+@pytest.mark.parametrize("mode", ["improve", "worse", "omit", "retained-source"])
 async def test_answer_repairs_continue_only_while_failed_assertions_decrease(mode: str) -> None:
     state = await run_state()
     state.task = "Report the price and subscription term."
@@ -232,10 +233,18 @@ async def test_answer_repairs_continue_only_while_failed_assertions_decrease(mod
                 }
                 if mode == "omit" and self.composes >= 2:
                     response["claims"] = response["claims"][:1]
+                if mode == "retained-source" and self.composes == 1:
+                    response["claims"] = response["claims"][:1]
             else:
                 key, field = next(iter(json.loads(messages[-1].content)["criteria"].items()))
                 claims = field.get("reported_claims")
                 valid = claims is None or all(c["text"] in {"Member price 12", "Trial term 1 year"} for c in claims)
+                if claims is None and mode == "retained-source" and "term" in field["criterion"]:
+                    valid = any(
+                        "Trial term 1 year" in source["quote"]
+                        for record in field["sources"]
+                        for source in record["cited_sources"]
+                    )
                 if mode == "omit" and self.composes >= 2 and "term" in field["criterion"]:
                     valid = False
                 response = {"judgments": {key: "yes" if valid else "no"}, "reason": "Preserve the source condition."}
@@ -244,8 +253,8 @@ async def test_answer_repairs_continue_only_while_failed_assertions_decrease(mod
 
     llm = ImprovingWriter([])
     answer, verified = await Agent(Mock(spec=Page), AllClaimsJev(), llm)._answer(state, None)
-    assert verified is (mode == "improve")
-    assert llm.composes == (3 if mode == "improve" else 2)
+    assert verified is (mode in {"improve", "retained-source"})
+    assert llm.composes == (3 if mode in {"improve", "retained-source"} else 2)
     if verified:
         assert {claim.text for claim in answer.claims} == {"Member price 12", "Trial term 1 year"}
     assert state.ledger.llm_calls == len(llm.calls)

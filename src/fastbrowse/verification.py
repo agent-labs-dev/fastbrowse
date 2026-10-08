@@ -729,6 +729,13 @@ async def check_answer_outputs(
     available = await audit(source_messages, source_fields)
     absent = [criterion for key, criterion in uncertain.items() if available.get(key) != "yes"]
     if absent:
+        if corrections is not None:
+            # A selected claim can omit a quote already in the notes; rereading cannot repair its citations.
+            corrections.extend(
+                AnswerCorrection(stage="source", criterion=criterion, claims=selected_claims[key], reason=reasons[key])
+                for key, criterion in uncertain.items()
+                if available.get(key) != "yes"
+            )
         return reject(absent)
     assertion_messages = [
         Message(
