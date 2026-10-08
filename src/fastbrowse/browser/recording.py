@@ -71,6 +71,8 @@ class Recording:
         """The finished videos, set only once both are encoded: a failed run must not report a file it did not write."""
 
     async def __aenter__(self) -> Self:
+        if self._session.grant is not None:
+            raise RecordingError("a recording shows whatever the tab shows, so it cannot be used with allowed_origins")
         ffmpeg = shutil.which("ffmpeg")
         if ffmpeg is None:
             raise RecordingError("recording needs ffmpeg on PATH")

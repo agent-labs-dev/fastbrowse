@@ -75,6 +75,7 @@ from fastbrowse.page import (
     NavigationTimeout,
     Observation,
     Page,
+    ScreenshotsUnavailable,
     SiteUnreachable,
     pager_link,
 )
@@ -1483,7 +1484,12 @@ class Agent:
     async def _screenshots(self) -> tuple[bytes, ...]:
         """No image while a secret shows as page text: pixels cannot be masked like text. Typed fields are masked
         by the page itself."""
-        return () if self._secret_on_screen else (await self._page.screenshot(),)
+        if self._secret_on_screen:
+            return ()
+        try:
+            return (await self._page.screenshot(),)
+        except ScreenshotsUnavailable:
+            return ()
 
     def _secret_names(self, origin: str) -> tuple[str, ...]:
         """Stored secrets this origin may receive. With any, a sign-in wall is a step to take, not a stop."""
@@ -1560,7 +1566,10 @@ class Agent:
         """
         if self._reveals(await self._page.observe()):
             return None
-        return await self._page.screenshot()
+        try:
+            return await self._page.screenshot()
+        except ScreenshotsUnavailable:
+            return None
 
     def _reveals(self, observation: Observation) -> bool:
         """Whether a resolved secret shows on the page; live and recorded frames are held back while one does."""
