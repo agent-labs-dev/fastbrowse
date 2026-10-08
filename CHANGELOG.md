@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Plans keep a requested set of unnamed results and its per-result fields together, avoiding repeated
+  searches to satisfy separate discovery and reporting requirements. Named results and groups remain separate.
 - Navigation links keep their stale-attempt history when card labels or context change, so a redraw cannot
   restore a repeatedly failing destination. Separate in-page actions retain their own retry history.
 - Complete benchmark suites can be approved and published independently. Existing published suites stay
