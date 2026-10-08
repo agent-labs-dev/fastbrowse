@@ -5,6 +5,12 @@ identity, physical ledgers and private Langfuse read-back before producing `docs
 The file contains sanitized per-run grades, completion, time and cost. Official rubric scores retain
 their source meaning. Internal hosted and Ultrafast comparisons use separate matched task groups.
 
+Schema 2 can publish any nonempty set of complete suites; schema 1 requires all four groups. Official
+Fastbrowse suites do not require new comparator runs. Previously published comparator figures can be linked
+as references with their task and build differences stated. Every group inside one candidate still comes
+from the same measured agent and runner build. Adding a suite must retain the published groups and their
+regression checks; results from different builds cannot be combined under one build receipt.
+
 CI validates the candidate's exact coverage and compares matched scores, time and cost with the previous
 approved candidate. Unresolved costs, missing grades, incomplete coverage and a failed fixture workflow
 block publication. These checks detect recorded regressions; they do not prove that every website or

@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Complete benchmark suites can be approved and published independently. Existing published suites stay
+  present, and each suite retains its coverage, evidence and regression checks.
+
 - Final screenshots allow the fresh page check to finish its loading wait before capture. Loading pages
   retain their ending frame, with visible secrets still withheld.
 

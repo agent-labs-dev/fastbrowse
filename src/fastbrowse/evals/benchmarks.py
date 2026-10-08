@@ -85,7 +85,7 @@ class Fixture(PublicModel):
 
 
 class Candidate(PublicModel):
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2]
     campaign_id: Identifier
     agent_sha: Sha
     runner_sha: Sha
@@ -97,7 +97,10 @@ class Candidate(PublicModel):
     @model_validator(mode="after")
     def suites(self) -> Self:
         expected = {"internal-hosted", "internal-ultrafast", "bu-bench", "online-mind2web"}
-        if len(self.groups) != 4 or {g.id for g in self.groups} != expected:
+        ids = {g.id for g in self.groups}
+        if not self.groups or len(ids) != len(self.groups):
+            raise ValueError("at least one complete, unique benchmark group is required")
+        if self.schema_version == 1 and (len(self.groups) != 4 or ids != expected):
             raise ValueError("all four full benchmark groups are required")
         if self.agent_sha != self.fixture.head_sha:
             raise ValueError("fixtures must pass on the measured agent build")
@@ -124,15 +127,21 @@ def check_catalog(candidate: Candidate, path: Path) -> None:
     tasks = [task for suite in catalog["suites"].values() for task in suite]
     for group, other in (("internal-hosted", "browser-use"), ("internal-ultrafast", "jev-ultrafast")):
         required = {task["id"] for task in tasks if {"fastbrowse", other} <= set(task["arms"])}
-        found = next(g for g in candidate.groups if g.id == group)
+        found = next((g for g in candidate.groups if g.id == group), None)
+        if found is None:
+            continue
         if set(found.task_ids) != required or found.source_sha256 != candidate.catalog_sha256:
             raise ValueError("internal rows must cover the exact matched catalog")
 
 
 def regressions(candidate: Candidate, baseline: Candidate) -> None:
     previous = {g.id: g for g in baseline.groups}
+    if not previous.keys() <= {g.id for g in candidate.groups}:
+        raise ValueError("published benchmark groups cannot disappear")
     for group in candidate.groups:
-        old = previous[group.id]
+        old = previous.get(group.id)
+        if old is None:
+            continue
         if (group.source_sha256, sorted(group.task_ids), group.limits) != (
             old.source_sha256,
             sorted(old.task_ids),
@@ -293,7 +302,7 @@ def main() -> None:
             parser.error("the first publication requires explicit --bootstrap approval")
     if args.verify_fixture:
         check_fixture(candidate)
-    print(f"Validated {candidate.campaign_id}, all full groups covered")
+    print(f"Validated {candidate.campaign_id}, selected full groups covered")
 
 
 if __name__ == "__main__":

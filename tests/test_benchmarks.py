@@ -80,6 +80,37 @@ def test_complete_candidate_matches_the_catalog(candidate):
     check_catalog(Candidate.model_validate(candidate), CATALOG)
 
 
+def test_official_suite_can_publish_without_new_comparator_runs(candidate):
+    candidate.update(schema_version=2, groups=[candidate["groups"][2]])
+    check_catalog(Candidate.model_validate(candidate), CATALOG)
+
+
+def test_legacy_schema_still_requires_all_four_groups(candidate):
+    candidate["groups"] = [candidate["groups"][2]]
+    with pytest.raises(ValidationError, match="all four"):
+        Candidate.model_validate(candidate)
+
+
+@pytest.mark.parametrize("groups", [[], [2, 2]])
+def test_independent_publication_requires_unique_complete_groups(candidate, groups):
+    candidate.update(schema_version=2, groups=[candidate["groups"][i] for i in groups])
+    with pytest.raises(ValidationError):
+        Candidate.model_validate(candidate)
+
+
+def test_published_groups_cannot_be_removed(candidate):
+    before = Candidate.model_validate(candidate)
+    candidate.update(schema_version=2, groups=[candidate["groups"][2]])
+    with pytest.raises(ValueError, match="cannot disappear"):
+        regressions(Candidate.model_validate(candidate), before)
+
+
+def test_new_complete_suite_can_be_added_to_an_approved_campaign(candidate):
+    candidate["schema_version"] = 2
+    before = Candidate.model_validate({**candidate, "groups": [candidate["groups"][2]]})
+    regressions(Candidate.model_validate(candidate), before)
+
+
 @pytest.mark.parametrize(
     "change",
     [
