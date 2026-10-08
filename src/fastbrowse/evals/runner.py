@@ -14,6 +14,8 @@ Needs OPENROUTER_API_KEY or AI_GATEWAY_API_KEY; see fastbrowse.clients.environme
 import argparse
 import asyncio
 import json
+import math
+import os
 import sys
 import tempfile
 import time
@@ -22,6 +24,7 @@ from pathlib import Path
 from typing import cast
 
 import httpx
+from pydantic import Field
 
 from fastbrowse.adapters.local_chrome import local_chrome
 from fastbrowse.agent import Agent
@@ -36,7 +39,7 @@ from fastbrowse.evals.mock_tasks import MockTask
 from fastbrowse.evals.status import normalize
 from fastbrowse.evals.tasks import TASKS, LocalTask
 from fastbrowse.evals.versions import load_lock, provenance, suite_version, task_version
-from fastbrowse.models import Attachment, BrowserConnection, Limits, RunResult
+from fastbrowse.models import Attachment, BrowserConnection, CostBreakdown, Frozen, Limits, RunResult
 from fastbrowse.safety import ScopedSecrets, origin_of
 from fastbrowse.telemetry import traced, transient_seconds
 
@@ -54,13 +57,80 @@ HEADROOM = 0.6
 its cap, and reaching the cap fails a run that was doing the right thing slowly."""
 
 
+class _BudgetReceipt(Frozen):
+    approved_usd: float = Field(gt=0, allow_inf_nan=False)
+    known_usd: float = Field(default=0, ge=0, allow_inf_nan=False)
+    unknown_reserved_usd: float = Field(default=0, ge=0, allow_inf_nan=False)
+    reserved_usd: float = Field(default=0, ge=0, allow_inf_nan=False)
+    unknown_cost: bool = False
+    task: str | None = None
+    repeat: int | None = None
+
+    @property
+    def remaining(self) -> float:
+        return self.approved_usd - self.known_usd - self.unknown_reserved_usd - self.reserved_usd
+
+
+class _FixtureBudget:
+    def __init__(self, path: Path, approved_usd: float) -> None:
+        self.path = path
+        self.receipt = _BudgetReceipt(approved_usd=approved_usd)
+        # A previous process can still own unpriced requests; restarting must not erase its reservation.
+        with path.open("x", encoding="utf-8") as out:
+            out.write(self.receipt.model_dump_json() + "\n")
+        path.chmod(0o600)
+
+    def _save(self) -> None:
+        with tempfile.NamedTemporaryFile(mode="w", dir=self.path.parent, delete=False, encoding="utf-8") as out:
+            out.write(self.receipt.model_dump_json() + "\n")
+            temporary = Path(out.name)
+        temporary.replace(self.path)
+
+    def reserve(self, task: str, repeat: int) -> Limits:
+        remaining = self.receipt.remaining
+        if (
+            remaining <= 0
+            or self.receipt.reserved_usd
+            or self.receipt.unknown_reserved_usd
+            or self.receipt.unknown_cost
+        ):
+            raise ValueError("Fixture campaign has no unreserved budget")
+        self.receipt = self.receipt.model_copy(update={"reserved_usd": remaining, "task": task, "repeat": repeat})
+        self._save()
+        return Limits(max_dollars=remaining)
+
+    def settle(self, cost: CostBreakdown) -> None:
+        reserved = self.receipt.reserved_usd
+        if reserved <= 0:
+            raise ValueError("Fixture run has no budget reservation")
+        if any(line.dollars is not None and line.dollars < 0 for line in cost.lines):
+            raise ValueError("Fixture cost is negative; its reservation remains held")
+        known = cost.known_dollars
+        if not math.isfinite(known) or any(
+            line.dollars is not None and not math.isfinite(line.dollars) for line in cost.lines
+        ):
+            raise ValueError("Fixture cost is not finite; its reservation remains held")
+        unknown_cost = any(line.dollars is None for line in cost.lines)
+        unknown = max(0.0, reserved - known) if unknown_cost else 0.0
+        self.receipt = _BudgetReceipt.model_validate(
+            self.receipt.model_dump()
+            | {
+                "known_usd": self.receipt.known_usd + known,
+                "unknown_reserved_usd": self.receipt.unknown_reserved_usd + unknown,
+                "unknown_cost": self.receipt.unknown_cost or unknown_cost,
+                "reserved_usd": 0.0,
+            }
+        )
+        self._save()
+
+
 def fixture_config() -> Config:
     """Fixtures own their scripted consent steps, so automatic refusal must not remove their controls."""
     return Config(refuse_cookie_banners=False)
 
 
 def _row(
-    result: RunResult, *, task_id: str, failure: str | None, seconds: float, lost: float, limit: int
+    result: RunResult, *, task_id: str, failure: str | None, seconds: float, lost: float, limit: int | None
 ) -> dict[str, object]:
     """The fields every suite's row carries, so one report can read both."""
     return {
@@ -75,6 +145,7 @@ def _row(
         "transient_seconds": round(lost, 2),
         "dollars": None if result.cost.has_unknown else round(result.cost.known_dollars, 5),
         "unknown_cost": result.cost.has_unknown,
+        "cost": result.cost.model_dump(mode="json"),
         "seconds_by_call": result.cost.seconds_by_call(),
         "steps": len(result.steps),
         "step_limit": limit,
@@ -124,14 +195,14 @@ async def run_task(
     http: httpx.AsyncClient,
     sink: DirectorySink,
     settings: Settings,
+    *,
+    limits: Limits = LOCAL_LIMITS,
 ) -> dict[str, object]:
     recorder.clear()
-    result, seconds, lost = await _drive(
-        task, base_url + task.start, connection, http, sink, settings, None, LOCAL_LIMITS
-    )
+    result, seconds, lost = await _drive(task, base_url + task.start, connection, http, sink, settings, None, limits)
     failure = task.check(result, recorder.snapshot())
     return {"arm": "fastbrowse", "category": "fixture", "suite": "local"} | _row(
-        result, task_id=task.id, failure=failure, seconds=seconds, lost=lost, limit=cast(int, LOCAL_LIMITS.max_steps)
+        result, task_id=task.id, failure=failure, seconds=seconds, lost=lost, limit=limits.max_steps
     )
 
 
@@ -141,6 +212,8 @@ async def run_mock_task(
     http: httpx.AsyncClient,
     sink: DirectorySink,
     settings: Settings,
+    *,
+    limits: Limits = MOCK_LIMITS,
 ) -> dict[str, object]:
     """A site of this task's own, so nothing it does can be read by, or decided by, another task's run."""
     with mock_site() as (base_url, site):
@@ -153,7 +226,7 @@ async def run_mock_task(
             sink,
             settings,
             secrets,
-            MOCK_LIMITS,
+            limits,
             task.attachments,
         )
         failure = task.check(result, site)
@@ -169,7 +242,7 @@ async def run_mock_task(
                 failure=failure,
                 seconds=seconds,
                 lost=lost,
-                limit=cast(int, MOCK_LIMITS.max_steps),
+                limit=limits.max_steps,
             )
             | extra
         )
@@ -190,12 +263,17 @@ async def main(argv: list[str]) -> int:
     parser.add_argument("--only", nargs="*", default=[])
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--out", type=Path, default=Path("artifacts/evals/local.jsonl"))
+    parser.add_argument("--budget", type=float, help="approved total model dollars for the fixture campaign")
     args = parser.parse_args(argv)
     chosen, missing = _tasks(args.only, args.suite)
     if missing:
         parser.error(f"--only names no task: {', '.join(missing)}")
     if args.repeat < 1:
         parser.error("--repeat must be positive")
+    if args.budget is not None and (not math.isfinite(args.budget) or args.budget <= 0):
+        parser.error("--budget must be finite and positive")
+    if args.budget is not None and args.out.exists():
+        parser.error("budgeted fixture output already exists; reconcile its receipts before another campaign")
     settings = load_settings()
     lock = load_lock()
     stamps = {
@@ -203,6 +281,9 @@ async def main(argv: list[str]) -> int:
     }
     run = provenance(providers=settings.providers(), argv=list(argv))
     args.out.parent.mkdir(parents=True, exist_ok=True)
+    if args.budget is not None:
+        os.umask(0o077)
+    campaign = _FixtureBudget(args.out.with_suffix(".budget.json"), args.budget) if args.budget is not None else None
     rows: list[dict[str, object]] = []
     with (
         fixture_server() as (base_url, recorder),
@@ -213,15 +294,32 @@ async def main(argv: list[str]) -> int:
         async with httpx.AsyncClient(timeout=60) as http:
             for repeat in range(args.repeat):
                 for suite, task in chosen:
+                    if campaign is not None and (
+                        campaign.receipt.remaining <= 0
+                        or campaign.receipt.unknown_reserved_usd
+                        or campaign.receipt.unknown_cost
+                    ):
+                        print("Fixture campaign budget is committed; no further run admitted", flush=True)
+                        return 1
+                    limits = (
+                        campaign.reserve(task.id, repeat)
+                        if campaign is not None
+                        else (LOCAL_LIMITS if suite == "local" else MOCK_LIMITS)
+                    )
                     sink = DirectorySink(Path(downloads))
                     if suite == "local":
                         assert isinstance(task, LocalTask)
-                        row = await run_task(task, base_url, recorder, connection, http, sink, settings)
+                        row = await run_task(task, base_url, recorder, connection, http, sink, settings, limits=limits)
                     else:
                         assert isinstance(task, MockTask)
-                        row = await run_mock_task(task, connection, http, sink, settings)
+                        row = await run_mock_task(task, connection, http, sink, settings, limits=limits)
                     row |= {
-                        "run": run,
+                        "run": run
+                        | {
+                            "agent_limits": limits.model_dump(mode="json"),
+                            "budget_usd": args.budget,
+                            "budget_policy": "remaining-campaign-v1" if campaign is not None else "fixture-default-v1",
+                        },
                         "suite_version": stamps[suite],
                         "task_version": task_version(task.id, lock),
                         "repeat": repeat,
@@ -229,15 +327,17 @@ async def main(argv: list[str]) -> int:
                     rows.append(row)
                     out.write(json.dumps(row) + "\n")
                     out.flush()
+                    if campaign is not None:
+                        campaign.settle(CostBreakdown.model_validate(row["cost"]))
                     mark = "PASS" if row["passed"] else "FAIL"
                     print(
-                        f"{mark} {suite:5} {task.id:26} {row['status']:20} {row['seconds']:>6}s ${row['dollars']:<8}",
+                        f"{mark} {suite:5} {task.id:26} {row['status']:20} {row['seconds']:>6}s ${row['dollars']!s:<8}",
                         row["failure"] or "",
                         flush=True,
                     )
                     used = cast("int", row["steps"])
-                    budget = cast("int", row["step_limit"])
-                    if used > HEADROOM * budget:
+                    budget = limits.max_steps
+                    if budget is not None and used > HEADROOM * budget:
                         print(
                             f"WARN  {suite:5} {task.id:26} {used} of {budget} steps used "
                             f"({used / budget:.0%} of the budget)"
