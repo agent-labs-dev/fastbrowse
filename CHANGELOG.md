@@ -16,11 +16,14 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   outside the list are refused before they are sent, and a window or frame already open outside it is never read,
   captured or screenshotted. It scopes documents, not the network: images, scripts and requests a granted page makes
   to other hosts still load. Service workers are bypassed so every navigation meets the check, a scoped run delivers
-  no live frames or screenshots, and `record` is refused with it. Opaque child documents are excluded from text and controls. Without it nothing changes.
+  no live frames or screenshots, and `record` is refused with it. Opaque child documents are excluded from text
+  and controls. Without it nothing changes.
 
-- `run_task` and `connect_cdp` take `check_access`, an async callback awaited before browser startup and every observation, capture,
-  screenshot, address, navigation and action. If it raises, the run stops with a `BrowserError` that keeps only the
+- `run_task` and `connect_cdp` take `check_access`, an async callback awaited before browser startup and every
+  observation, capture, screenshot, address, navigation and action. If it raises, the run stops with a `BrowserError` that keeps only the
   exception's type.
+
+- Evaluation evidence can carry token-based API-equivalent cost ranges separately from recorded spend.
 
 - Runs no longer stop at implicit step, Jev-call, LLM-call, dollar or time ceilings. Callers can still set explicit limits when they need them.
 

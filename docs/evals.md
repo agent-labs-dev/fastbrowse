@@ -61,3 +61,30 @@ are not a controlled comparison with cloud arms. The eval browser keeps the hist
 the later Fastbrowse round and the focused dev regression checks separate. Source grades, completion,
 physical attempts and known costs are reported independently; unknown cost is never treated as zero.
 See Parallax's browser benchmark documentation for setup and retained attempt traces.
+
+### API-equivalent estimates
+
+An optional `estimated_api_cost` accompanies a recorded run without filling its `dollars` field.
+It names the model, usage digest, rate source and rate-check date. Missing usage or an unknown
+service tier stays unknown. Grade, completion and recorded time remain unchanged.
+
+Recover Cua usage from exact artifact paths in a retained private ledger:
+
+```sh
+uv run python -m fastbrowse.evals.api_cost --ledger <ledger.jsonl> --artifact-root <checkout> --out <recovery.json>
+```
+
+The recovery file binds estimates to the ledger digest and row index. It contains token counts and
+cost ranges, without messages, answers or local artifact paths. It does not publish results or edit
+the ledger. A publication must retain the original sources and verify that digest before joining rows.
+
+GPT-6 Astra standard API rates are $10 per million uncached input tokens, $1 for cached input,
+$12.50 for cache writes and $50 for output. Reasoning tokens are included in output tokens.
+[OpenAI pricing](https://developers.openai.com/api/docs/models/gpt-6-astra) doubles input and cache
+rates and multiplies output rates by 1.5 for requests above 272,000 input tokens. CLI usage totals
+combine requests, so totals above that threshold yield a short-to-long-context range. Totals below
+it prove every request used short-context rates. Estimates exclude subscription charges, browser
+infrastructure and runs without reported turn usage. Codex may omit startup prewarm tokens from
+turn totals, so these bounds cover only recorded tokens, not the complete run. The basis is
+`recorded-token-api-equivalent-range`. They never satisfy the official publication
+contract's requirement for recorded cost.
