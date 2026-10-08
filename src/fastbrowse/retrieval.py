@@ -1318,7 +1318,7 @@ def _context(text: str, start: int, end: int, block: Block) -> str:
     line_end = text.find("\n", end)
     row = text[line_start : len(text) if line_end == -1 else line_end]
     if _table_header_from_text(text) is None:
-        return f"{_marks(block)}table: {text}\nrow: {row}"
+        return f"{_marks(block)}leading row: {text.splitlines()[0]}\nrow: {row}"
     header_cells = [cell for _, _, cell in _cells(text.split("\n", 1)[0])]
     column = len(re.findall(r"(?<!\\)\|", text[line_start:start])) - 1
     name = header_cells[column] if 0 <= column < len(header_cells) else "?"
