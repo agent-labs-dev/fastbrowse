@@ -122,7 +122,10 @@ def _project(row: Mapping[str, Any], source: Source, index: int, selected: bool)
     data = payload if corpus else row
     run = data.get("run") or {}
     raw_status = data.get("raw_status") if corpus else data.get("status")
-    status = raw_status or ("reset_failed" if row.get("reset", {}).get("ok") is False else "not_started")
+    started = data.get("started", raw_status is not None and not data.get("budget_refused", False))
+    status = raw_status or (
+        "reset_failed" if row.get("reset", {}).get("ok") is False else "interrupted" if started else "not_started"
+    )
     unknown = data.get("unknown_cost", data.get("dollars") is None)
     task_version = data.get("task_digest") if corpus else data.get("task_version")
     grade = data.get("grade") or {}
@@ -145,7 +148,7 @@ def _project(row: Mapping[str, Any], source: Source, index: int, selected: bool)
         repeat=data.get("repeat", row.get("repeat", 0)),
         retry=row.get("retry", data.get("retries") or 0),
         selected=selected,
-        started=data.get("started", raw_status is not None and not data.get("budget_refused", False)),
+        started=started,
         status=status,
         passed=passed,
         completed=completed is True,

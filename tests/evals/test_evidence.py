@@ -105,3 +105,20 @@ def test_legacy_trials_without_repeat_ids_remain_distinct(tmp_path: Path) -> Non
     result = campaign(path, tmp_path)
     assert [attempt.repeat for attempt in result.attempts] == [0, 1, 2]
     assert result.scheduled_slots is None
+
+
+def test_started_attempt_without_final_status_is_interrupted(tmp_path: Path) -> None:
+    directory = tmp_path / "docs/validation"
+    directory.mkdir(parents=True)
+    path = directory / "interrupted.jsonl"
+    path.write_text(
+        json.dumps(
+            {"task": "example", "arm": "fastbrowse", "started": True, "status": None, "seconds": 9.6, "dollars": None}
+        )
+        + "\n"
+    )
+    attempt = campaign(path, tmp_path).attempts[0]
+    assert attempt.started is True
+    assert attempt.status == "interrupted"
+    assert attempt.seconds == 9.6
+    assert attempt.unknown_cost is True
