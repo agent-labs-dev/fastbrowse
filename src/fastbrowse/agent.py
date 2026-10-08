@@ -3341,23 +3341,33 @@ def _unread(plan: Plan, notes: Notes) -> bool:
 
 
 def _answer_evidence(notes: Notes) -> frozenset[tuple[str, str | None, str]]:
+    def source(evidence: Evidence) -> str:
+        page = notes.captured_page(evidence.capture_sha256, evidence.url)
+        return json.dumps(
+            {
+                "url": evidence.url,
+                "frame_id": evidence.frame_id,
+                "quote": evidence.quote,
+                "source_id": evidence.source_id,
+                "heading_path": evidence.heading_path,
+                "page_title": page.title if page is not None else None,
+            }
+        )
+
+    known = notes.evidence
     return frozenset(
         (
-            fact.evidence.url,
-            fact.evidence.frame_id,
+            fact.evidence.url if fact.evidence is not None else "",
+            fact.evidence.frame_id if fact.evidence is not None else None,
             json.dumps(
                 {
-                    "quote": fact.evidence.quote,
-                    "source_id": fact.evidence.source_id,
-                    "heading_path": fact.evidence.heading_path,
-                    "page_title": page.title
-                    if (page := notes.captured_page(fact.evidence.capture_sha256, fact.evidence.url)) is not None
-                    else None,
+                    "value": source(fact.evidence) if fact.evidence is not None else fact.text,
+                    "basis": sorted(
+                        source(known[key]) for key in notes.expand_evidence_ids(fact.basis) if key in known
+                    ),
                 }
             ),
         )
-        if fact.evidence is not None
-        else ("", None, fact.text)
         for fact in notes.facts
     )
 

@@ -5720,3 +5720,22 @@ def test_answer_evidence_tracks_identifying_context_without_unrelated_capture_ch
         update={"evidence": contextual.evidence.model_copy(update={"capture_sha256": "unrelated-redraw"})}
     )
     assert _answer_evidence(Notes((redraw,))) == changed
+
+
+@pytest.mark.parametrize("quoted", [False, True])
+def test_answer_evidence_changes_when_a_conclusion_gains_an_existing_supporting_quote(quoted: bool) -> None:
+    from fastbrowse.agent import _answer_evidence
+
+    page = capture((BlockKind.PARAGRAPH, "Pine capacity 10"), (BlockKind.PARAGRAPH, "Oak capacity 7"))
+    pine = Fact(text="Pine capacity 10", reader=FactReader.LLM, evidence=block_evidence(page, "s0"))
+    oak = Fact(text="Oak capacity 7", reader=FactReader.LLM, evidence=block_evidence(page, "s1"))
+    winner = Fact(
+        text="Pine has the highest capacity.",
+        reader=FactReader.LLM,
+        evidence=pine.evidence if quoted else None,
+        basis=(fact_id(pine),) if not quoted else (),
+    )
+    notes = Notes((pine, oak, winner))
+    before = _answer_evidence(notes)
+    notes.add(winner.model_copy(update={"basis": (*winner.basis, fact_id(oak))}))
+    assert _answer_evidence(notes) != before
