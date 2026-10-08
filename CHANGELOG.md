@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Runs no longer stop at implicit step, Jev-call, LLM-call, dollar or time ceilings. Callers can still set explicit limits when they need them.
+
 - Complete benchmark suites can be approved and published independently. Existing published suites stay
   present, and each suite retains its coverage, evidence and regression checks.
 

@@ -100,7 +100,7 @@ the quotes behind the answer, and cost by component.
 | `--authorize` | allow submit, pay, delete and send; without it the run stops at `needs_confirmation` first |
 | `--secret NAME=ENV_VAR[@ORIGIN]` | let the agent type `$ENV_VAR` on the declared origin, or the `--start` origin if omitted; models only see `NAME`. An explicit origin needs no `--start` |
 | `--bitwarden ITEM` | match the vault login's saved URIs against `--start`, then allow its `username`, `password` and, when the item holds an authenticator key, `one_time_code` only on that start origin |
-| `--max-steps N`, `--max-dollars N` | bound steps and model spend; defaults are 60 steps and no dollar cap. Cloud browser charges are added when it stops |
+| `--max-steps N`, `--max-dollars N` | optionally bound steps and model spend; defaults are unlimited. Cloud browser charges are added when it stops |
 | `--downloads DIR` | keep downloaded files |
 | `--json` | full result instead of the answer |
 | `--record FILE` | save an MP4 of the tab, each step captioned, ending on the answer, time and cost (needs `ffmpeg`; the captions need its libass), e.g. `recordings/demo.mp4`, which git ignores; `demo.plain.mp4` beside it has no captions. It shows what the pages showed, so watch it before sharing |
@@ -456,7 +456,7 @@ The server's flags decide what a calling model may do; a call can ask for less, 
 | `--allow-authorize` | let a call pass `authorize` to go through irreversible actions; without it they always stop at `needs_confirmation` |
 | `--secret NAME=ENV_VAR@ORIGIN` | typed when a call's start page is on `ORIGIN` (`https://*.site.com` covers its hosts); the model sees `NAME` only |
 | `--bitwarden ITEM` | a vault login a call may name in `bitwarden` |
-| `--max-steps N`, `--max-dollars N`, `--max-seconds N` | ceilings per call (defaults 60, $1.00, 600s) |
+| `--max-steps N`, `--max-dollars N`, `--max-seconds N` | optional ceilings per call; defaults are unlimited |
 | `--max-concurrent N` | runs at once, default 1; more calls wait their turn |
 | `--transport http`, `--host`, `--port` | streamable HTTP at `/mcp` instead of stdio |
 

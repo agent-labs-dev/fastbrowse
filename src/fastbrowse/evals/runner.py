@@ -46,6 +46,9 @@ MOCK_LIMITS = Limits(max_steps=40)
 LOCAL_LIMITS = Limits(max_steps=25)
 """A local fixture is one page and one form, so it needs far fewer steps than a mock task does."""
 
+assert MOCK_LIMITS.max_steps is not None
+assert LOCAL_LIMITS.max_steps is not None
+
 HEADROOM = 0.6
 """The share of a step budget a task may use before the runner says so. A task at this share is one bad run from
 its cap, and reaching the cap fails a run that was doing the right thing slowly."""
@@ -128,7 +131,7 @@ async def run_task(
     )
     failure = task.check(result, recorder.snapshot())
     return {"arm": "fastbrowse", "category": "fixture", "suite": "local"} | _row(
-        result, task_id=task.id, failure=failure, seconds=seconds, lost=lost, limit=LOCAL_LIMITS.max_steps
+        result, task_id=task.id, failure=failure, seconds=seconds, lost=lost, limit=cast(int, LOCAL_LIMITS.max_steps)
     )
 
 
@@ -160,7 +163,14 @@ async def run_mock_task(
             "orders_placed": len(site.orders_placed),
         }
         return {"arm": "fastbrowse", "category": "mock", "suite": "mock", "expected_status": task.expect.value} | (
-            _row(result, task_id=task.id, failure=failure, seconds=seconds, lost=lost, limit=MOCK_LIMITS.max_steps)
+            _row(
+                result,
+                task_id=task.id,
+                failure=failure,
+                seconds=seconds,
+                lost=lost,
+                limit=cast(int, MOCK_LIMITS.max_steps),
+            )
             | extra
         )
 

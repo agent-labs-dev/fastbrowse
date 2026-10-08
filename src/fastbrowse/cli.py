@@ -172,7 +172,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         metavar="ITEM",
         help="type this vault login's username, password and authenticator code (unlocked bw CLI)",
     )
-    parser.add_argument("--max-steps", type=int, default=60)
+    parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--max-dollars", type=float, default=None)
     parser.add_argument("--downloads", type=Path, default=None, help="directory for downloaded files")
     parser.add_argument("--json", action="store_true", help="print the full result as JSON")
