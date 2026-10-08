@@ -311,3 +311,23 @@ async def test_the_checks_see_every_address_the_run_has_been_on_first_where_it_b
     llm = ScriptedLLM([{"complete": True, "missing": []}])
     await llm_verify(llm, "Open httpx", plan, _PAGE, (), Notes(), (), visited=visited)
     assert f"## Visited addresses\n- {start}\n- {_PAGE.url}\n" in llm.calls[0][1][-1].content
+
+
+def test_dense_jev_requests_have_a_safety_bound_without_squeezing_llm_evidence() -> None:
+    tokens = TokenBudget()
+    question = "q" * 2831
+    context = "x" * 64275
+    assert tokens.remaining_chars(context, [question]) > 0
+    assert tokens.remaining_chars(context, [question], jev=True) == 0
+    assert tokens.input_chars([question], jev=True) + len(question) == 48000
+    small = TokenBudget(state_plus_largest_question=1500, state_plus_all_questions=5000)
+    assert small.input_chars(["question"], jev=True) == small.input_chars(["question"])
+
+
+def test_completion_cuts_dense_page_json_before_sending_a_verdict() -> None:
+    text = 'Product "row"\n' * 5000
+    question = "q" * 2831
+    notes = Notes([Fact(reader=FactReader.LLM, requirement_id="r1", text="Total is 42", evidence=evidence())])
+    state = page_state(_PAGE.model_copy(update={"viewport_text": text}), notes, questions=[question])
+    assert len(json.dumps(state)) + len(question) <= 48000
+    assert "Total is 42" in str(state)

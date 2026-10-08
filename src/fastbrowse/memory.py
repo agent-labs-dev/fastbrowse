@@ -219,6 +219,9 @@ class Notes:
         self._facts[key] = fact
         return True
 
+    def fact_requirements(self, key: str) -> tuple[str, ...]:
+        return tuple(sorted(self._requirements.get(key, ())))
+
     def evidenced(self, requirement_id: str) -> bool:
         return any(requirement_id in requirements for requirements in self._requirements.values())
 

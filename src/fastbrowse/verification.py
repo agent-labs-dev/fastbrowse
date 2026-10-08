@@ -110,7 +110,7 @@ def page_state(
     }
 
     def room() -> int:
-        return tokens.remaining_chars(json.dumps(state), questions)
+        return tokens.remaining_chars(json.dumps(state), questions, jev=True)
 
     try:
         state["notes"] = notes.render(room(), preserve_requirements=True, json_encoded=True)

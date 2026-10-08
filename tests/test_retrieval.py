@@ -2996,7 +2996,7 @@ async def test_tallied_quotes_fit_agent_render_paths(
 ) -> None:
     from fastbrowse.verification import llm_verify
 
-    monkeypatch.setattr(TokenBudget, "remaining_chars", lambda *_: 15706)
+    monkeypatch.setattr(TokenBudget, "remaining_chars", lambda *_, **__: 15706)
     notes = author_tallies
     plan = Plan(
         requirements=tuple(

@@ -5755,3 +5755,21 @@ async def test_duplicate_read_is_visible_to_recovery_without_spending_another_st
     assert state.history[-1].outcome is StepOutcome.FAILED
     assert "already read" in (state.history[-1].effect or "")
     assert state.ledger.steps == steps and len(llm.calls) == 1
+
+
+async def test_answer_evidence_tracks_promoted_context_without_turning_paraphrases_into_read_progress() -> None:
+    from fastbrowse.agent import _answer_evidence
+
+    page = capture((BlockKind.PARAGRAPH, "Admission 12; hours 9am"))
+    fact = Fact(text="Admission 12", reader=FactReader.LLM, evidence=block_evidence(page, "s0"))
+    notes = Notes((fact,))
+    answer_before = _answer_evidence(notes)
+    read_before = _answer_evidence(notes, include_answer=False)
+    notes.add(fact.model_copy(update={"text": "Hours 9am", "requirement_id": "r"}))
+    assert _answer_evidence(notes) != answer_before
+    assert _answer_evidence(notes, include_answer=False) == read_before
+    assert notes.fact_requirements(fact_id(fact)) == ("r",)
+    promoted = _answer_evidence(notes)
+    notes.unevidence(("r",))
+    assert _answer_evidence(notes) != promoted
+    assert notes.fact_requirements(fact_id(fact)) == ()

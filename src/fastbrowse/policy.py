@@ -586,12 +586,8 @@ def build_request(
 
 
 def fits(request: _Request, config: Config) -> bool:
-    ratio = config.tokens.chars_per_token
-    state = len(json.dumps(request.state)) / ratio
-    sizes = [len(q.model_dump_json()) / ratio for q in request.questions.values()]
-    return (
-        state + max(sizes) <= config.tokens.state_plus_largest_question
-        and state + sum(sizes) <= config.tokens.state_plus_all_questions
+    return len(json.dumps(request.state)) <= config.tokens.input_chars(
+        [q.model_dump_json() for q in request.questions.values()], jev=True
     )
 
 

@@ -1864,11 +1864,8 @@ def _read_request(
 
 
 def _read_fits(state: JsonValue, questions: Mapping[str, Question], tokens: TokenBudget) -> bool:
-    state_size = len(json.dumps(state)) / tokens.chars_per_token
-    sizes = [len(question.model_dump_json()) / tokens.chars_per_token for question in questions.values()]
-    return (
-        state_size + max(sizes, default=0) <= tokens.state_plus_largest_question
-        and state_size + sum(sizes) <= tokens.state_plus_all_questions
+    return len(json.dumps(state)) <= tokens.input_chars(
+        [question.model_dump_json() for question in questions.values()], jev=True
     )
 
 
@@ -2293,7 +2290,7 @@ def transaction_check_question(
         true="Yes, the answer contradicts the pages the run committed an action on.",
         false="No, the answer agrees with the pages the run committed an action on.",
     )
-    room = tokens.remaining_chars(json.dumps({"answer": composed.answer}), [transaction.model_dump_json()])
+    room = tokens.remaining_chars(json.dumps({"answer": composed.answer}), [transaction.model_dump_json()], jev=True)
     # The latest pages are the confirmation and the review before it, so the budget keeps them first.
     kept: list[str] = []
     for line in reversed(committed):
@@ -2368,7 +2365,7 @@ def claim_check_questions(
         false="No, every requirement is answered and evidenced.",
     )
     # Independent claim questions run in separate batches; they cannot consume this question's evidence budget.
-    room = tokens.remaining_chars(json.dumps({"answer": composed.answer}), [omission.model_dump_json()])
+    room = tokens.remaining_chars(json.dumps({"answer": composed.answer}), [omission.model_dump_json()], jev=True)
     notes_text = notes.render(room, preserve_requirements=True, json_encoded=True)
     questions["requirement_omitted"] = omission.model_copy(update={"instructions": context + notes_text + question})
     return questions

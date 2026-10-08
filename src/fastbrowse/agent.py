@@ -37,7 +37,7 @@ from fastbrowse.effects import (
 )
 from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, JevClient, JevError, NoulAnswer, NoulQuestion
 from fastbrowse.llm import Generation, LLMClient, LLMError, Message
-from fastbrowse.memory import Fact, Notes, NotesTooLarge, shows
+from fastbrowse.memory import Fact, Notes, NotesTooLarge, fact_id, shows
 from fastbrowse.models import (
     SCROLLING,
     UNTRUSTED,
@@ -2162,7 +2162,7 @@ class Agent:
             )
         notice = next_page_notice(following)
         before = len(state.notes.facts)
-        known = _answer_evidence(state.notes)
+        known = _answer_evidence(state.notes, include_answer=False)
         evidenced = {r.id for r in wanted if state.notes.evidenced(r.id)}
         outcome = await read(
             self._llm,
@@ -2189,7 +2189,7 @@ class Agent:
         state.comparisons = outcome.comparisons
         # A timer changes the capture hash and a reader can paraphrase the same claim, so only a new source
         # quote or a newly evidenced requirement restores the read budget. Derived conclusions use their text.
-        progressed = bool(_answer_evidence(state.notes) - known) or (
+        progressed = bool(_answer_evidence(state.notes, include_answer=False) - known) or (
             not state.open_answer_outputs and any(state.notes.evidenced(r.id) for r in wanted if r.id not in evidenced)
         )
         continues = [key for key in outcome.continues if not state.notes.evidenced(key)]
@@ -2775,6 +2775,7 @@ class Agent:
         if state.open_answer_outputs and state.rejected_answer_evidence == _answer_evidence(state.notes):
             # Re-reading the same partial quotes must not buy another completion check or reset recovery.
             state.notes.unevidence(r.id for r in state.plan.requirements if r.kind is RequirementKind.INFORMATION)
+            state.rejected_answer_evidence = _answer_evidence(state.notes)
             reason = "DONE rejected, no new output evidence: " + "; ".join(state.open_answer_outputs)
             await self._recover(state, fresh, reason, gives_up_as=Status.UNVERIFIED)
             return None
@@ -3354,7 +3355,7 @@ def _unread(plan: Plan, notes: Notes) -> bool:
     return unresolved or (plan.page_answer_expected and not notes.facts)
 
 
-def _answer_evidence(notes: Notes) -> frozenset[tuple[str, str | None, str]]:
+def _answer_evidence(notes: Notes, *, include_answer: bool = True) -> frozenset[tuple[str, str | None, str]]:
     def source(evidence: Evidence) -> str:
         page = notes.captured_page(evidence.capture_sha256, evidence.url)
         return json.dumps(
@@ -3376,6 +3377,11 @@ def _answer_evidence(notes: Notes) -> frozenset[tuple[str, str | None, str]]:
             json.dumps(
                 {
                     "value": source(fact.evidence) if fact.evidence is not None else fact.text,
+                    **(
+                        {"text": fact.text, "requirements": notes.fact_requirements(fact_id(fact))}
+                        if include_answer
+                        else {}
+                    ),
                     "basis": sorted(
                         source(known[key]) for key in notes.expand_evidence_ids(fact.basis) if key in known
                     ),
