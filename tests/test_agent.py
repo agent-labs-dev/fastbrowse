@@ -1460,7 +1460,7 @@ async def test_an_owed_read_is_not_skipped_by_a_budget_the_page_spent_before_the
     """A filter that keeps its address and controls shares the barren budget of the page before it."""
     agent, page, state, llm = await _filtered_fares(answer_expected=True)
     here = await page.observe()
-    state.barren[here.document_key, state_key(here), ("r1",)] = agent._config.stall.barren_reads
+    state.barren[here.document_key, state_key(here), ("r1",), ()] = agent._config.stall.barren_reads
     assert "$410 nonstop" in await _finished(agent, state)
     assert len(llm.calls) == 2
     assert not state.owes_read
@@ -5557,11 +5557,17 @@ async def test_final_answer_checks_each_output_without_notes_filling_a_missing_f
         ScriptedLLM(
             [
                 {
-                    "judgments": {"output_0": "yes", "output_1": "yes", "output_2": "yes"},
+                    "judgments": {
+                        "output_0": "yes",
+                        "output_1": "yes",
+                        "output_2": "yes",
+                        "claim_only_0": "yes",
+                        "claim_only_1": "yes",
+                    },
                     "reason": "Both fields are quoted.",
                 }
             ]
-            * 6
+            * 8
         ),
     )
     held = await agent._holds(state, composed)
@@ -5593,11 +5599,17 @@ async def test_missing_answer_output_recovers_evidence_then_completes() -> None:
         [{"claims": [{"text": price.text, "evidence_ids": [fact_id(price)]}]}]
         + [
             {
-                "judgments": {"output_0": "yes", "output_1": "yes", "output_2": "yes"},
+                "judgments": {
+                    "output_0": "yes",
+                    "output_1": "yes",
+                    "output_2": "yes",
+                    "claim_only_0": "yes",
+                    "claim_only_1": "yes",
+                },
                 "reason": "Both fields are quoted.",
             }
         ]
-        * 6
+        * 8
     )
     plan = state.ready_plan
     agent, _ = await _finishing(state, llm, noul=0.0)
@@ -5687,5 +5699,24 @@ async def test_re_evidencing_partial_output_quotes_is_not_new_read_progress() ->
     assert state.notes.evidenced("r1")
     state.notes.unevidence(("r1",))
     state.open_answer_outputs = ("Report the remaining requested field.",)
-    assert await agent._read(state, page.model_copy(update={"sha256": "redraw"}), here) == (False, False)
+    assert await agent._read(state, page, here) == (False, False)
     assert "remaining requested field" in llm.calls[-1][1][-1].content
+
+
+def test_answer_evidence_tracks_identifying_context_without_unrelated_capture_changes() -> None:
+    from fastbrowse.agent import _answer_evidence
+
+    page = capture((BlockKind.PARAGRAPH, "12"))
+    fact = Fact(text="12", evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+    before = _answer_evidence(Notes((fact,)))
+    assert fact.evidence is not None
+    contextual = fact.model_copy(
+        update={"evidence": fact.evidence.model_copy(update={"heading_path": ("Admission price",)})}
+    )
+    changed = _answer_evidence(Notes((contextual,)))
+    assert changed != before
+    assert contextual.evidence is not None
+    redraw = contextual.model_copy(
+        update={"evidence": contextual.evidence.model_copy(update={"capture_sha256": "unrelated-redraw"})}
+    )
+    assert _answer_evidence(Notes((redraw,))) == changed

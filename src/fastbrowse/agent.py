@@ -156,7 +156,7 @@ logger = logging.getLogger(__name__)
 type _Prepared = ComposedAnswer | asyncio.Task[Generation[ComposedAnswer]] | None
 """An answer whose claims passed, or a composer in flight."""
 
-type ReadKey = tuple[str, str, tuple[str, ...]]
+type ReadKey = tuple[str, str, tuple[str, ...], tuple[str, ...]]
 type Signature = tuple[Operation, str | None, str | None, str]
 """One action on its targets, from one page state: the key both the cycle count and the no-op memory are kept by."""
 
@@ -2095,7 +2095,7 @@ class Agent:
             wanted_ids = tuple(r.id for r in wanted)
             # Keyed by address too: a list paged in place keeps its document and its Previous and Next, and only
             # its URL says the third page is not the two barren ones before it.
-            budget = observation.document_key, state_key(observation), wanted_ids
+            budget = observation.document_key, state_key(observation), wanted_ids, state.open_answer_outputs
             # An owed read is exempt: a filter that keeps its address and controls shares the budget of the page
             # before it, and a skip there either finished on the pre-filter fare or turned every later DONE into
             # a skipped read and recovery. It is owed at most once per interaction, so it cannot read for ever.
@@ -2107,7 +2107,7 @@ class Agent:
             # Past the barren budget this exact content is either read now or was read before, so the notes hold
             # what the last interaction drew. A barren skip read nothing, and leaves the read owed.
             state.owes_read = False
-            key = observation.document_key, capture.sha256, wanted_ids
+            key = observation.document_key, capture.sha256, wanted_ids, state.open_answer_outputs
             if key in state.reads and not transaction_pending:
                 trace("read_skipped", reason="unchanged_content_and_requirements")
                 return False, True
@@ -2148,10 +2148,7 @@ class Agent:
             )
         notice = next_page_notice(following)
         before = len(state.notes.facts)
-        known = {
-            (fact.evidence.url, fact.evidence.frame_id, fact.evidence.quote) if fact.evidence is not None else fact.text
-            for fact in state.notes.facts
-        }
+        known = _answer_evidence(state.notes)
         evidenced = {r.id for r in wanted if state.notes.evidenced(r.id)}
         outcome = await read(
             self._llm,
@@ -2178,15 +2175,7 @@ class Agent:
         state.comparisons = outcome.comparisons
         # A timer changes the capture hash and a reader can paraphrase the same claim, so only a new source
         # quote or a newly evidenced requirement restores the read budget. Derived conclusions use their text.
-        progressed = any(
-            (
-                (fact.evidence.url, fact.evidence.frame_id, fact.evidence.quote)
-                if fact.evidence is not None
-                else fact.text
-            )
-            not in known
-            for fact in state.notes.facts
-        ) or (
+        progressed = bool(_answer_evidence(state.notes) - known) or (
             not state.open_answer_outputs and any(state.notes.evidenced(r.id) for r in wanted if r.id not in evidenced)
         )
         continues = [key for key in outcome.continues if not state.notes.evidenced(key)]
@@ -2508,7 +2497,9 @@ class Agent:
                 )
             except LLMError as error:
                 state.paging_failed = True
-                state.reads.discard((observation.document_key, capture.sha256, tuple(r.id for r in wanted)))
+                state.reads.discard(
+                    (observation.document_key, capture.sha256, tuple(r.id for r in wanted), state.open_answer_outputs)
+                )
                 state.hint = self._redactor.redact(f"Pagination read failed: {error}. Read this page again.")
                 state.history.append(
                     HistoryEntry(
@@ -3351,7 +3342,20 @@ def _unread(plan: Plan, notes: Notes) -> bool:
 
 def _answer_evidence(notes: Notes) -> frozenset[tuple[str, str | None, str]]:
     return frozenset(
-        (fact.evidence.url, fact.evidence.frame_id, fact.evidence.quote)
+        (
+            fact.evidence.url,
+            fact.evidence.frame_id,
+            json.dumps(
+                {
+                    "quote": fact.evidence.quote,
+                    "source_id": fact.evidence.source_id,
+                    "heading_path": fact.evidence.heading_path,
+                    "page_title": page.title
+                    if (page := notes.captured_page(fact.evidence.capture_sha256, fact.evidence.url)) is not None
+                    else None,
+                }
+            ),
+        )
         if fact.evidence is not None
         else ("", None, fact.text)
         for fact in notes.facts

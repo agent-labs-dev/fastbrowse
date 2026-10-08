@@ -4435,3 +4435,26 @@ async def test_grouped_output_audit_checks_each_claim_against_its_own_citations(
         Jev(), AuditLLM([]), answer, notes, ("Compare capacities and recommend one.",), missing_outputs=missing
     )
     assert missing == ["Unsupported answer detail: Pine has the highest capacity."]
+
+
+async def test_expanded_tally_over_jev_state_limit_still_reaches_quoted_source_audit() -> None:
+    from fastbrowse.verification import check_answer_outputs
+
+    page = capture(*[(BlockKind.PARAGRAPH, "Record " + str(index) + " x" * 100) for index in range(100)])
+    notes = Notes(
+        Fact(text=block.source_id, reader=FactReader.LLM, evidence=block_evidence(page, block.source_id))
+        for block in page.blocks
+    )
+    total = notes.add_tally(Tally(requirement_id="r", key="Items", records=tuple(notes.evidence)))
+    answer = assemble_answer((Claim(text="There are 100 items.", evidence_ids=(fact_id(total),)),), notes, ())
+    llm = ScriptedLLM([{"judgments": {"output_0": "yes"}, "reason": "All records are quoted."}] * 2)
+    assert await check_answer_outputs(
+        _ReadJev({}),
+        llm,
+        answer,
+        notes,
+        ("Report the item count.",),
+        tokens=TokenBudget(state_plus_largest_question=100, state_plus_all_questions=100),
+    )
+    sources = json.loads(llm.calls[0][1][-1].content)["criteria"]["output_0"]["sources"]
+    assert len(sources[0]["cited_sources"]) == 100

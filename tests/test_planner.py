@@ -135,3 +135,11 @@ async def test_output_check_repair_keeps_both_receipts_and_respects_call_limits(
     with pytest.raises(BudgetExceeded):
         await make_plan(llm, "Find the price", ledger=capped)
     assert capped.llm_calls == 1 and capped.lines == [llm.cost]
+
+
+async def test_unpriced_plan_repair_retains_unknown_aggregate_dollars() -> None:
+    llm = PlannerLLM(Plan(requirements=example_plan().requirements, answer_expected=True))
+    llm.cost = llm.cost.model_copy(update={"basis": CostBasis.UNKNOWN, "dollars": None})
+    result = await make_plan(llm, "Find the price")
+    assert result.cost.basis is CostBasis.UNKNOWN and result.cost.dollars is None
+    assert len(llm.calls) == 2

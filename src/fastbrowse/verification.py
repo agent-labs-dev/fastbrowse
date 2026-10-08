@@ -520,9 +520,10 @@ async def check_answer_outputs(
     result = await evaluate_batches(
         jev, context.model_dump(mode="json"), questions, tokens=tokens, ledger=ledger, allow_failed_batches=False
     )
-    if result is None or any(not isinstance(result.answers.get(key), NoulAnswer) for key in questions):
+    if result is not None and any(not isinstance(result.answers.get(key), NoulAnswer) for key in questions):
         return False
-    scores = {key: _probability(result.answers, key) for key in questions}
+    # Expanded tally records can exceed Jev's shared-state limit; the quoted-source audit must still run.
+    scores = {key: _probability(result.answers, key) if result is not None else 0.0 for key in questions}
     trace("answer_outputs", scores=scores)
     verbatim = False
     if allow_scalar_jev and len(composed.claims) == 1:
@@ -559,21 +560,22 @@ async def check_answer_outputs(
     selected = await evaluate_batches(
         jev, {"answer": composed.answer}, selecting, tokens=tokens, ledger=ledger, allow_failed_batches=False
     )
-    if selected is None or any(not isinstance(selected.answers.get(key), ChoiceAnswer) for key in selecting):
+    if selected is not None and any(not isinstance(selected.answers.get(key), ChoiceAnswer) for key in selecting):
         return False
     fields = {}
     source_fields = {}
     covered: set[int] = set()
     for key, criterion in uncertain.items():
-        chosen = selected.answers[key]
-        if not isinstance(chosen, ChoiceAnswer):
-            return False
-        if chosen.choice == "none":
+        chosen = selected.answers.get(key) if selected is not None else None
+        choice = chosen.choice if isinstance(chosen, ChoiceAnswer) else "all"
+        if choice == "none":
             return reject((criterion,))
-        if chosen.choice == "all":
+        if choice == "all":
             claims = context.claims
-        elif chosen.choice in choices:
-            index = int(chosen.choice.removeprefix("claim_"))
+            if len(claims) == 1:
+                covered.add(0)
+        elif choice in choices:
+            index = int(choice.removeprefix("claim_"))
             claims = (context.claims[index],)
             covered.add(index)
         else:

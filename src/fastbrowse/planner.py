@@ -185,7 +185,7 @@ async def make_plan(
             cost = cost.model_copy(
                 update={
                     "basis": basis,
-                    "dollars": sum(line.dollars for line in lines if line.dollars is not None),
+                    "dollars": None if basis is CostBasis.UNKNOWN else sum(line.dollars or 0 for line in lines),
                     "input_tokens": sum(line.input_tokens for line in lines),
                     "output_tokens": sum(line.output_tokens for line in lines),
                     "seconds": None,
