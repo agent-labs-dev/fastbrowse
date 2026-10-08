@@ -4498,3 +4498,51 @@ async def test_field_audits_receive_only_the_urls_of_their_selected_citations() 
     notes = Notes(facts)
     answer = assemble_answer(tuple(Claim(text=fact.text, evidence_ids=(fact_id(fact),)) for fact in facts), notes, ())
     assert await check_answer_outputs(Jev(), AuditLLM([]), answer, notes, ("Report item 0 price.",))
+
+
+@pytest.mark.parametrize("count,reject_last", [(253, False), (254, False), (254, True)])
+async def test_long_answers_respect_choice_limit_and_still_audit_each_claim(count: int, reject_last: bool) -> None:
+    from fastbrowse.jev import MAX_CHOICE_OPTIONS
+    from fastbrowse.verification import check_answer_outputs
+
+    class Jev:
+        calls = 0
+
+        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+            self.calls += 1
+            assert all(
+                isinstance(q, ChoiceQuestion) and len(q.criteria) <= MAX_CHOICE_OPTIONS for q in questions.values()
+            )
+            return Evaluation(
+                model="test",
+                answers={key: _choice("all") for key in questions},
+                input_tokens=1,
+                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0),
+            )
+
+    class AuditLLM(ScriptedLLM):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.audited: set[str] = set()
+
+        async def generate(self, purpose, messages, schema, **kwargs):
+            key = next(iter(json.loads(messages[-1].content)["criteria"]))
+            self.audited.add(key)
+            verdict = "no" if reject_last and key == f"claim_only_{count - 1}" else "yes"
+            return Generation(
+                data=schema.model_validate({"judgments": {key: verdict}, "reason": "test"}),
+                cost=CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0, purpose=purpose),
+            )
+
+    page = capture(*((BlockKind.PARAGRAPH, f"Book {index}") for index in range(count)))
+    notes = Notes(
+        Fact(text=block.source_id, evidence=block_evidence(page, block.source_id), reader=FactReader.LLM)
+        for block in page.blocks
+    )
+    answer = assemble_answer(
+        tuple(Claim(text=source.quote, evidence_ids=(key,)) for key, source in notes.evidence.items()), notes, ()
+    )
+    jev, llm = Jev(), AuditLLM()
+    assert await check_answer_outputs(jev, llm, answer, notes, ("List every book title.",)) is (not reject_last)
+    assert jev.calls == (1 if count + 2 <= MAX_CHOICE_OPTIONS else 0)
+    assert llm.audited == {"output_0", *(f"claim_only_{index}" for index in range(count))}

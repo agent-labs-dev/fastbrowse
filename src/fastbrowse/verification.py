@@ -14,7 +14,15 @@ from pydantic import BaseModel, Field, JsonValue, ValidationError
 
 from fastbrowse.batches import evaluate_batches
 from fastbrowse.config import Config, Thresholds, TokenBudget
-from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, JevClient, NoulAnswer, NoulQuestion, Question
+from fastbrowse.jev import (
+    MAX_CHOICE_OPTIONS,
+    ChoiceAnswer,
+    ChoiceQuestion,
+    JevClient,
+    NoulAnswer,
+    NoulQuestion,
+    Question,
+)
 from fastbrowse.llm import Generation, LLMClient, Message
 from fastbrowse.memory import Notes, NotesTooLarge, fact_id
 from fastbrowse.models import UNTRUSTED, CostLine, Evidence, FactReader, Frozen, LLMPurpose
@@ -559,8 +567,13 @@ async def check_answer_outputs(
         )
         for key, criterion in uncertain.items()
     }
-    selected = await evaluate_batches(
-        jev, {"answer": composed.answer}, selecting, tokens=tokens, ledger=ledger, allow_failed_batches=False
+    # Large list answers exceed Jev's option ceiling; the source and assertion audits still check every claim.
+    selected = (
+        await evaluate_batches(
+            jev, {"answer": composed.answer}, selecting, tokens=tokens, ledger=ledger, allow_failed_batches=False
+        )
+        if len(choices) <= MAX_CHOICE_OPTIONS
+        else None
     )
     if selected is not None and any(not isinstance(selected.answers.get(key), ChoiceAnswer) for key in selecting):
         return False
