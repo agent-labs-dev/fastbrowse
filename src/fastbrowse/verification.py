@@ -417,7 +417,6 @@ class _OutputSource(Frozen):
     quote: str
     source_id: str
     frame_id: str | None
-    heading_path: tuple[str, ...]
     page_title: str | None
 
 
@@ -460,7 +459,6 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
                     quote=evidence.quote,
                     source_id=evidence.source_id,
                     frame_id=evidence.frame_id,
-                    heading_path=evidence.heading_path,
                     page_title=page.title if page and evidence.frame_id is None else None,
                 )
             )

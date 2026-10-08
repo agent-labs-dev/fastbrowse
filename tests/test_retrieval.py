@@ -4284,6 +4284,61 @@ async def test_a_table_excerpt_retains_cells_identifying_comparison_columns() ->
     assert evidence.quote == text
 
 
+@pytest.mark.parametrize("same_frame", [True, False])
+async def test_read_heading_context_becomes_a_verified_citation(same_frame: bool) -> None:
+    heading = "Member price 9"
+    page = capture(
+        (BlockKind.HEADING, heading), (BlockKind.PARAGRAPH, "Current price 12"), (BlockKind.HEADING, heading)
+    )
+    blocks = list(page.blocks)
+    blocks[0] = blocks[0].model_copy(update={"frame_id": None if same_frame else "child"})
+    blocks[1] = blocks[1].model_copy(update={"heading_path": (heading,)})
+    page = page.model_copy(update={"blocks": tuple(blocks)})
+    notes = Notes()
+    result = await read(
+        ScriptedLLM(
+            [
+                {
+                    "claims": [
+                        {
+                            "cite": {"first": "s1", "last": "s1"},
+                            "text": "Current price 12 and member price 9",
+                            "requirement_id": "r",
+                        }
+                    ],
+                    "answered": True,
+                }
+            ]
+        ),
+        page,
+        "Report the prices",
+        ["r"],
+        notes,
+    )
+    fact = next(fact for fact in result.facts if fact.requirement_id == "r")
+    answer = assemble_answer([Claim(text=fact.text, evidence_ids=(fact_id(fact),))], notes, ())
+    assert {citation.quote for citation in answer.citations} == (
+        {heading, "Current price 12"} if same_frame else {"Current price 12"}
+    )
+    assert all(citation.quote != heading or citation.url == page.url for citation in answer.citations)
+    if same_frame:
+        context = notes.evidence[fact.basis[0]]
+        assert context.source_id == "s0" and context.start == 0
+
+
+def test_output_audits_cannot_use_uncited_heading_values() -> None:
+    from fastbrowse.verification import _output_context
+
+    page = capture((BlockKind.PARAGRAPH, "Current price 12"))
+    evidence = block_evidence(page, "s0").model_copy(update={"heading_path": ("Member price 9",)})
+    fact = Fact(text="Current price 12 and member price 9", evidence=evidence, reader=FactReader.LLM)
+    notes = Notes((fact,))
+    answer = assemble_answer([Claim(text=fact.text, evidence_ids=(fact_id(fact),))], notes, ())
+    context = _output_context(answer, notes)
+    assert context is not None
+    assert "Member price 9" not in json.dumps(context.claims[0].cited_sources[0].model_dump())
+
+
 async def test_headerless_table_continuation_cites_its_displayed_identity_context() -> None:
     first = "| Feature | Alpha | Beta |"
     rows = [f"| Attribute {index} | {index} | {index + 1} |" for index in range(20)]

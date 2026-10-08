@@ -410,6 +410,32 @@ def _remember(
     if evidence is None and (claim.cite is not None or not basis):
         logger.debug("read rejected claim cite=%s basis=%d", reprlib.repr(claim.cite), len(basis))
         return None
+    if evidence is not None:
+        for heading in evidence.heading_path:
+            block = next(
+                (
+                    block
+                    for block in reversed(capture.blocks)
+                    if block.kind is BlockKind.HEADING
+                    and block.frame_id == evidence.frame_id
+                    and block.start + len(heading) <= evidence.start
+                    and block.start + len(heading) <= block.end
+                    and capture.text[block.start : block.start + len(heading)] == heading
+                ),
+                None,
+            )
+            if block is None:
+                continue
+            # Readers see heading values as context; cite their captured spans before those values reach the answer.
+            context = Fact(
+                text=heading,
+                evidence=_evidence(capture, block, block.start, block.start + len(heading)),
+                reader=FactReader.LLM,
+            )
+            notes.add(context)
+            key = fact_id(context)
+            if key not in basis:
+                basis.append(key)
     if evidence is not None and part.header:
         block = next((block for block in capture.blocks if block.start <= evidence.start < block.end), None)
         if block is not None and block.kind is BlockKind.TABLE and block.start < part.start:
