@@ -119,7 +119,10 @@ async def test_single_compound_claim_does_not_skip_subject_binding():
     assert len(writer.calls) == 1
 
 
-@pytest.mark.parametrize("title,expected", [("Adapter Beacon", True), ("Unrelated adapter", False)])
+@pytest.mark.parametrize(
+    "title,expected",
+    [("Adapter Beacon", True), ("Adapter Beacon | Adapter Beacon", True), ("Unrelated adapter", False)],
+)
 async def test_identity_can_copy_only_an_offered_captured_page_title(title, expected):
     page = capture((BlockKind.PARAGRAPH, "3 ports.")).model_copy(update={"title": title})
     fact = Fact(text="3 ports.", evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
@@ -130,4 +133,20 @@ async def test_identity_can_copy_only_an_offered_captured_page_title(title, expe
     assert (
         await check_answer_outputs(RoutingJev(), writer, answer, notes, ("Report Adapter Beacon exact port count.",))
         is expected
+    )
+
+
+async def test_repeated_literal_identity_in_bound_body_is_valid():
+    page = capture((BlockKind.PARAGRAPH, "Adapter Beacon: 3 ports. Adapter Beacon specifications.")).model_copy(
+        update={"title": "Specifications"}
+    )
+    fact = Fact(text="3 ports.", evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+    notes = Notes((fact,))
+    answer = assemble_answer((Claim(text="Adapter Beacon has 3 ports.", evidence_ids=(fact_id(fact),)),), notes, ())
+    assert await check_answer_outputs(
+        RoutingJev(),
+        IdentityWriter(ref="q0", url_ref="u0"),
+        answer,
+        notes,
+        ("Report Adapter Beacon exact port count.",),
     )

@@ -665,7 +665,7 @@ async def check_answer_outputs(
                 if (
                     source is None
                     or not binding.quote.strip()
-                    or not any(text.count(binding.quote) == 1 for text in (source.quote, source.page_title or ""))
+                    or not any(binding.quote in text for text in (source.quote, source.page_title or ""))
                 ):
                     return reject((criterion,))
                 identities[key].append({"reference": criterion, "url_ref": source.url_ref, "quote": binding.quote})
