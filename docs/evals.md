@@ -84,5 +84,7 @@ $12.50 for cache writes and $50 for output. Reasoning tokens are included in out
 rates and multiplies output rates by 1.5 for requests above 272,000 input tokens. CLI usage totals
 combine requests, so totals above that threshold yield a short-to-long-context range. Totals below
 it prove every request used short-context rates. Estimates exclude subscription charges, browser
-infrastructure and any runs without complete usage. They never satisfy the official publication
+infrastructure and runs without reported turn usage. Codex may omit startup prewarm tokens from
+turn totals, so these bounds cover only recorded tokens, not the complete run. The basis is
+`recorded-token-api-equivalent-range`. They never satisfy the official publication
 contract's requirement for recorded cost.

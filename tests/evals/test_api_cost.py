@@ -30,6 +30,11 @@ def events(path: Path, inputs: int = 200_000) -> Path:
 def test_cache_and_reasoning_are_not_charged_twice(tmp_path: Path) -> None:
     estimate = recover_api_cost(events(tmp_path / "events.jsonl"), model="gpt-6-astra", service_tier="default")
     assert estimate is not None
+    assert estimate.basis == "recorded-token-api-equivalent-range"
+    data = estimate.model_dump()
+    data["basis"] = "api-equivalent-range"
+    with pytest.raises(ValidationError):
+        ApiCostEstimate.model_validate(data)
     assert estimate.dollars_low == estimate.dollars_high == 0.7
     low, high = token_cost_range(400_000, 150_000, 0, 1000)
     assert low == 2.7 and high == 5.375

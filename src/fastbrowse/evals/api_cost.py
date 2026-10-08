@@ -14,7 +14,7 @@ class ApiCostEstimate(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     model: Literal["gpt-6-astra"] = "gpt-6-astra"
-    basis: Literal["api-equivalent-range"] = "api-equivalent-range"
+    basis: Literal["recorded-token-api-equivalent-range"] = "recorded-token-api-equivalent-range"
     rate_source: Literal["https://developers.openai.com/api/docs/models/gpt-6-astra"] = (
         "https://developers.openai.com/api/docs/models/gpt-6-astra"
     )
