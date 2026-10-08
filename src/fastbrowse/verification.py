@@ -5,6 +5,7 @@ when those answers leave completion uncertain.
 """
 
 import asyncio
+import hashlib
 import json
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from enum import StrEnum
@@ -456,6 +457,14 @@ class _OutputAssessment(Frozen):
     reason: str
 
 
+class OutputAuditVerdict(Frozen):
+    judgment: Literal["yes", "no", "uncertain"]
+    reason: str
+
+
+type OutputAuditCache = dict[str, OutputAuditVerdict]
+
+
 def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | None:
     known = notes.evidence
     based = {fact_id(fact) for fact in notes.facts if fact.basis}
@@ -507,6 +516,7 @@ async def check_answer_outputs(
     corrections: list[AnswerCorrection] | None = None,
     allow_scalar_jev: bool = False,
     task: str = "",
+    audit_cache: OutputAuditCache | None = None,
 ) -> bool:
     def reject(failed: Sequence[str]) -> bool:
         if missing_outputs is not None:
@@ -633,27 +643,46 @@ async def check_answer_outputs(
         semaphore = asyncio.Semaphore(4)
 
         async def one(key: str, field: object) -> tuple[str, str]:
+            records = field.get("reported_claims", field.get("sources", ())) if isinstance(field, dict) else ()
+            refs = {source["url_ref"] for record in records for source in record["cited_sources"]}
+            urls = {alias: url for alias, url in context.urls.items() if alias in refs}
+            request = [
+                *messages,
+                Message(role="user", content=json.dumps({"task": task, "criteria": {key: field}, "urls": urls})),
+            ]
+            fingerprint = hashlib.sha256(
+                json.dumps(
+                    {
+                        "client": id(llm),
+                        "purpose": LLMPurpose.VERIFY,
+                        "messages": [message.model_dump(mode="json") for message in request],
+                        "schema": _OutputAssessment.model_json_schema(),
+                        "max_output_tokens": 512,
+                    },
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+            if audit_cache is not None and (cached := audit_cache.get(fingerprint)) is not None:
+                reasons[key] = cached.reason
+                return key, cached.judgment
             async with semaphore:
-                records = field.get("reported_claims", field.get("sources", ())) if isinstance(field, dict) else ()
-                refs = {source["url_ref"] for record in records for source in record["cited_sources"]}
-                urls = {alias: url for alias, url in context.urls.items() if alias in refs}
                 generated = await llm.generate(
                     LLMPurpose.VERIFY,
-                    [
-                        *messages,
-                        Message(
-                            role="user",
-                            content=json.dumps({"task": task, "criteria": {key: field}, "urls": urls}),
-                        ),
-                    ],
+                    request,
                     _OutputAssessment,
                     max_output_tokens=512,
                     ledger=ledger,
                 )
                 if ledger is not None:
                     ledger.record(generated.cost)
-                reasons[key] = generated.data.reason
-                return key, generated.data.judgments.get(key, "uncertain")
+                verdict = OutputAuditVerdict(
+                    judgment=generated.data.judgments.get(key, "uncertain"), reason=generated.data.reason
+                )
+                # Repairing one assertion used to repeat audits whose exact sources and question had not changed.
+                if audit_cache is not None:
+                    audit_cache[fingerprint] = verdict
+                reasons[key] = verdict.reason
+                return key, verdict.judgment
 
         # One field's quoted value cannot answer another field; every receipt settles before an error returns.
         assessed = await asyncio.gather(*(one(key, field) for key, field in fields.items()), return_exceptions=True)
@@ -681,7 +710,9 @@ async def check_answer_outputs(
                 "partial description cannot. A total alone does not provide a component breakdown. A value scoped "
                 "to one component, mode, tier or single-item configuration does not establish an aggregate value "
                 "or another configuration. Require the source scope to match the requested scope and preserve "
-                "explicit distinctions. "
+                "explicit distinctions. Do not add independent component maxima unless quoted sources state "
+                "that they apply simultaneously and combine additively. An explicit aggregate rating need not "
+                "equal their sum. "
                 "A requested recommendation does not require the page to recommend anything: quoted facts "
                 "can provide grounds for the answer's preference. A quoted property of one option can "
                 "support a subjective preference. Do not require every compared option's values for a "
@@ -717,6 +748,8 @@ async def check_answer_outputs(
                 "members, but a total alone does not evidence a component breakdown. A value scoped to one "
                 "component, mode, tier or single-item configuration does not establish an aggregate value or "
                 "another configuration. Preserve the quoted scope and explicit distinctions in every assertion. "
+                "Do not add independent component maxima unless quoted sources state that they apply "
+                "simultaneously and combine additively. An explicit aggregate rating need not equal their sum. "
                 "Derived outputs can "
                 "calculate from quoted records only when every operand and its association is explicit. "
                 "Observed page titles provide identity "
@@ -771,6 +804,7 @@ async def check_claims(
     corrections: list[AnswerCorrection] | None = None,
     allow_scalar_jev: bool = False,
     task: str = "",
+    audit_cache: OutputAuditCache | None = None,
 ) -> ComposedAnswer | None:
     """The answer without any claim a check doubts, or None when a requirement is omitted from what is left or the
     pages where the run committed an action contradict it.
@@ -819,6 +853,7 @@ async def check_claims(
             corrections=corrections,
             allow_scalar_jev=allow_scalar_jev,
             task=task,
+            audit_cache=audit_cache,
         ),
         return_exceptions=True,
     )
@@ -882,6 +917,7 @@ async def check_claims(
                 corrections=corrections,
                 allow_scalar_jev=allow_scalar_jev,
                 task=task,
+                audit_cache=audit_cache,
             )
             else None
         )
