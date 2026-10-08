@@ -46,6 +46,8 @@ class Row(PublicModel):
 
 class Group(PublicModel):
     id: Literal["internal-hosted", "internal-ultrafast", "bu-bench", "online-mind2web"]
+    agent_sha: Sha | None = None
+    runner_sha: Sha | None = None
     metric: Literal["task-success", "weighted-rubric", "full-task-success"]
     source_sha256: Digest
     task_ids: list[Identifier]
@@ -102,6 +104,11 @@ class Candidate(PublicModel):
             raise ValueError("at least one complete, unique benchmark group is required")
         if self.schema_version == 1 and (len(self.groups) != 4 or ids != expected):
             raise ValueError("all four full benchmark groups are required")
+        for group in self.groups:
+            for field in ("agent_sha", "runner_sha"):
+                measured = getattr(group, field)
+                if (self.schema_version == 2 or measured is not None) and measured != getattr(self, field):
+                    raise ValueError("each group must identify the measured agent and runner build")
         if self.agent_sha != self.fixture.head_sha:
             raise ValueError("fixtures must pass on the measured agent build")
         return self
@@ -135,6 +142,8 @@ def check_catalog(candidate: Candidate, path: Path) -> None:
 
 
 def regressions(candidate: Candidate, baseline: Candidate) -> None:
+    if candidate.schema_version < baseline.schema_version:
+        raise ValueError("publication schema cannot downgrade the approved evidence checks")
     previous = {g.id: g for g in baseline.groups}
     if not previous.keys() <= {g.id for g in candidate.groups}:
         raise ValueError("published benchmark groups cannot disappear")

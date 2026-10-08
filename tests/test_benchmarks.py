@@ -41,6 +41,8 @@ def candidate() -> dict:
         groups.append(
             {
                 "id": name,
+                "agent_sha": "a" * 40,
+                "runner_sha": "b" * 40,
                 "metric": metric,
                 "source_sha256": digest,
                 "task_ids": ids,
@@ -91,6 +93,26 @@ def test_legacy_schema_still_requires_all_four_groups(candidate):
         Candidate.model_validate(candidate)
 
 
+def test_legacy_complete_candidate_without_group_provenance_remains_valid(candidate):
+    for group in candidate["groups"]:
+        del group["agent_sha"], group["runner_sha"]
+    Candidate.model_validate(candidate)
+
+
+def test_copied_groups_cannot_be_attributed_to_a_new_build(candidate):
+    candidate.update(schema_version=2, agent_sha="c" * 40)
+    candidate["fixture"]["head_sha"] = "c" * 40
+    with pytest.raises(ValidationError, match="measured agent and runner"):
+        Candidate.model_validate(candidate)
+
+
+def test_independent_groups_require_explicit_provenance(candidate):
+    candidate["schema_version"] = 2
+    del candidate["groups"][0]["agent_sha"]
+    with pytest.raises(ValidationError, match="measured agent and runner"):
+        Candidate.model_validate(candidate)
+
+
 @pytest.mark.parametrize("groups", [[], [2, 2]])
 def test_independent_publication_requires_unique_complete_groups(candidate, groups):
     candidate.update(schema_version=2, groups=[candidate["groups"][i] for i in groups])
@@ -109,6 +131,14 @@ def test_new_complete_suite_can_be_added_to_an_approved_campaign(candidate):
     candidate["schema_version"] = 2
     before = Candidate.model_validate({**candidate, "groups": [candidate["groups"][2]]})
     regressions(Candidate.model_validate(candidate), before)
+
+
+def test_legacy_schema_cannot_bypass_an_approved_group_provenance_check(candidate):
+    before = Candidate.model_validate({**candidate, "schema_version": 2})
+    for group in candidate["groups"]:
+        del group["agent_sha"], group["runner_sha"]
+    with pytest.raises(ValueError, match="cannot downgrade"):
+        regressions(Candidate.model_validate(candidate), before)
 
 
 @pytest.mark.parametrize(
