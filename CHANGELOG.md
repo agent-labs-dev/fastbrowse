@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Answer verification requires a response for each requested check. Structured model responses cannot
+  omit identity bindings or field judgments through empty maps.
+
 - Completion checks preserve each requested item's fields even when a draft plan lists generic field names.
   Quoted identities keep one item's value from answering another item's field, including compound claims.
   An identity can come from the quoted page body or its captured title.

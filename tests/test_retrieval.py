@@ -4001,9 +4001,7 @@ async def test_atomic_outputs_use_source_audits_instead_of_confidence_alone(
     page = capture((BlockKind.PARAGRAPH, "Price £12"))
     notes = Notes((Fact(reader=FactReader.LLM, text="£12", evidence=block_evidence(page, "s0")),))
     answer = assemble_answer((Claim(text="It costs £12.", evidence_ids=tuple(notes.evidence)),), notes, ())
-    llm = ScriptedLLM(
-        [{"judgments": {} if judgment is None else {"output_0": judgment}, "reason": "test"}] * (2 if expected else 1)
-    )
+    llm = ScriptedLLM([{"judgments": {"output_0": judgment or "uncertain"}, "reason": "test"}] * (2 if expected else 1))
     held = await check_answer_outputs(Jev(), llm, answer, notes, ("Report the price.",))
     assert held is expected
     assert len(llm.calls) == (3 if expected else 1 + int(probability is not None))
