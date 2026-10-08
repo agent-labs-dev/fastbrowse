@@ -1054,6 +1054,20 @@ class Agent:
             state.read_here = True
             state.typed_on_passed = False
             if skipped:
+                # Silent cache hits made recovery repeatedly ask to read a page whose content was already read.
+                effect_now = self._redactor.redact(
+                    "This content was already read; duplicate read skipped. " + _read_exhausted(state)
+                )
+                state.history.append(
+                    HistoryEntry(
+                        operation=Operation.READ,
+                        target=None,
+                        outcome=StepOutcome.FAILED,
+                        page_changed=False,
+                        effect=effect_now,
+                        read_progress=False,
+                    )
+                )
                 return True
             changed = False
             effect_now = "Read this content."

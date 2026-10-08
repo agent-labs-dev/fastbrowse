@@ -5739,3 +5739,19 @@ def test_answer_evidence_changes_when_a_conclusion_gains_an_existing_supporting_
     before = _answer_evidence(notes)
     notes.add(winner.model_copy(update={"basis": (*winner.basis, fact_id(oak))}))
     assert _answer_evidence(notes) != before
+
+
+async def test_duplicate_read_is_visible_to_recovery_without_spending_another_step() -> None:
+    state = await _reading_state()
+    here = _at("https://example.test/live/", _button("Next product"))
+    llm = ScriptedLLM([{"claims": [], "answered": False}])
+    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
+    page = capture((BlockKind.PARAGRAPH, "No requested fields here"))
+    decision = _code_decision(Operation.READ, None)
+    assert not await agent._step(state, here, decision, capture=page)
+    steps = state.ledger.steps
+    assert await agent._step(state, here, decision, capture=page)
+    assert state.history[-1].operation is Operation.READ
+    assert state.history[-1].outcome is StepOutcome.FAILED
+    assert "already read" in (state.history[-1].effect or "")
+    assert state.ledger.steps == steps and len(llm.calls) == 1
