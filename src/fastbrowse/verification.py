@@ -582,8 +582,11 @@ async def check_answer_outputs(
         key: ChoiceQuestion(
             instructions=(
                 f"{UNTRUSTED} Select the claim that explicitly states the requested output for the correct entity. "
+                "Preserve the original task's each-item and all-item scope. One item's value cannot discharge "
+                "a field requested for several items. A truthful statement about another item does not report "
+                "that field for the requested item. "
                 "Select all only when the criterion needs multiple claims, and none when absent or only implied. "
-                f"Criterion: {criterion}"
+                f"Task: {task}\nCriterion: {criterion}"
             ),
             criteria=choices,
         )
