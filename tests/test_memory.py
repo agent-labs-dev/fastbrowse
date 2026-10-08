@@ -323,7 +323,8 @@ def test_navigation_writes_a_shared_long_source_url_once_without_losing_product_
     notes = Notes(facts)
     rendered = notes.render_for_navigation(700)
     assert all(fact.text in rendered for fact in facts)
-    assert rendered.count(json.dumps(address)) == 1
+    assert rendered.count(json.dumps(address[:256])) == 1
+    assert "url_prefix=" in rendered
     assert "facts omitted" not in rendered
     assert len(rendered) <= 700
     assert all(fact.evidence is not None and fact.evidence.url == address for fact in notes.facts)
@@ -344,3 +345,59 @@ def test_navigation_retains_recent_progress_when_source_quotes_exceed_its_budget
     assert progress.text in notes.render_for_navigation(500)
     assert len(notes.render_for_navigation(500)) <= 500
     assert json.dumps(quote) in notes.render(20_000)
+
+
+@pytest.mark.parametrize(
+    "second_url, expected", [("https://example.test/second", 2), ("https://example.test#section", 1)]
+)
+def test_equal_spans_keep_distinct_source_records(second_url: str, expected: int) -> None:
+    first = _quoted("Row A", "same-text")
+    second = _quoted("Row A", "same-text", second_url)
+    assert first.evidence is not None
+    notes = Notes((first, second))
+    tally = notes.add_tally(Tally(requirement_id="r1", key="Rows", records=tuple(notes.evidence)))
+    assert tally.tally is not None and tally.tally.count == expected
+    assert len(notes.evidence) == expected
+    assert {source.url for source in notes.evidence.values()} == (
+        {first.evidence.url, second_url} if expected == 2 else {first.evidence.url}
+    )
+
+
+def test_navigation_tracking_addresses_do_not_hide_previously_checked_entities() -> None:
+    facts = tuple(
+        Fact(
+            text=f"Checked item {index}: title, price and specifications collected.",
+            evidence=evidence().model_copy(update={"url": f"https://shop.test/item/{index}?tracking=" + "x" * 1500}),
+            reader=FactReader.LLM,
+        )
+        for index in range(3)
+    )
+    notes = Notes(facts)
+    rendered = notes.render_for_navigation(1200)
+    assert all(fact.text in rendered for fact in facts)
+    assert "facts omitted" not in rendered
+    assert len(rendered) <= 1200
+    assert len(notes.evidence) == 3
+    assert all(fact.evidence and len(fact.evidence.url) > 1500 for fact in notes.facts)
+
+
+def test_recaptured_text_does_not_replace_the_title_of_older_quote_evidence() -> None:
+    from datetime import timedelta
+
+    from fastbrowse.page import BlockKind
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import _output_context
+    from tests.test_retrieval import block_evidence, capture
+
+    first = capture((BlockKind.PARAGRAPH, "Price: 12"))
+    first = first.model_copy(update={"title": "Atlas"})
+    second = first.model_copy(update={"title": "Beacon", "captured_at": first.captured_at + timedelta(seconds=1)})
+    fact = Fact(text="Price: 12", evidence=block_evidence(first, "s0"), reader=FactReader.JEV_CHOICE)
+    notes = Notes((fact,))
+    notes.remember_capture(first)
+    notes.remember_capture(second)
+    answer = assemble_answer((Claim(text=fact.text, evidence_ids=(fact_id(fact),)),), notes, ())
+    context = _output_context(answer, notes)
+    assert context and context.claims[0].cited_sources[0].page_title == "Atlas"
+    fresh_page = notes.captured_page(block_evidence(second, "s0"))
+    assert fresh_page and fresh_page.title == "Beacon"

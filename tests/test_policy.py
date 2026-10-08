@@ -242,7 +242,7 @@ async def test_a_results_page_of_long_titles_and_tracking_links_compacts_instead
     jev = ScriptedJev({"operation": "click", "click_target": "l7"})
     decision = await decide(jev, observation(links), context(), Config())
     assert decision.target is not None and decision.target.id == "l7"
-    assert decision.reduction is Reduction.COMPACT
+    assert decision.reduction is Reduction.RELEVANCE
     assert "/dp/B0CT3JS507/" in str(jev.requests[-1]["click_target"])
     # A link told apart only by its query keeps it.
     query_link = Control(

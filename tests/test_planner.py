@@ -8,23 +8,28 @@ from fastbrowse.models import (
     CostBasis,
     CostComponent,
     CostLine,
+    Limits,
     LLMPurpose,
 )
 from fastbrowse.planner import Plan, Requirement, RequirementKind, make_plan
-from fastbrowse.telemetry import Ledger
+from fastbrowse.telemetry import BudgetExceeded, Ledger
 
 
 def example_plan() -> Plan:
     return Plan(
         requirements=(Requirement(id="r1", text="Find the price", kind=RequirementKind.INFORMATION),),
         answer_expected=True,
+        answer_checks=("Find the price",),
     )
 
 
 class PlannerLLM:
-    def __init__(self, plan: Plan | None = None) -> None:
+    def __init__(
+        self, plan: Plan | None = None, repaired_checks: tuple[str, ...] = ("Report the requested output.",)
+    ) -> None:
         self.calls: list[tuple[LLMPurpose, tuple[Message, ...]]] = []
         self.plan = plan if plan is not None else example_plan()
+        self.repaired_checks = repaired_checks
         self.cost = CostLine(
             component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0.01, purpose=LLMPurpose.PLAN
         )
@@ -42,7 +47,12 @@ class PlannerLLM:
         if ledger is not None:
             ledger.reserve(CostComponent.LLM)
         self.calls.append((purpose, tuple(messages)))
-        return Generation(data=schema.model_validate_json(self.plan.model_dump_json()), cost=self.cost)
+        data = (
+            schema.model_validate_json(self.plan.model_dump_json())
+            if schema is Plan
+            else schema.model_validate({"checks": self.repaired_checks})
+        )
+        return Generation(data=data, cost=self.cost)
 
 
 async def test_planning_reads_only_the_task_and_start_address_and_preserves_cost() -> None:
@@ -81,4 +91,55 @@ async def test_an_empty_plan_retains_the_requested_outcome(answer_expected: bool
     requirement = result.data.requirements[0]
     assert requirement.text == task
     assert requirement.kind is (RequirementKind.INFORMATION if answer_expected else RequirementKind.ACTION)
-    assert result.cost == llm.cost
+    assert result.cost.dollars == (0.02 if answer_expected else 0.01)
+
+
+@pytest.mark.parametrize("checks", [(), (" ",)])
+async def test_omitted_answer_checks_are_decomposed_without_replanning_discovery(
+    checks: tuple[str, ...],
+) -> None:
+    plan = Plan(
+        requirements=(
+            Requirement(id="r", text="Report admission price and opening hours.", kind=RequirementKind.INFORMATION),
+        ),
+        answer_expected=True,
+        answer_checks=checks,
+    )
+    checks = ("Report admission price.", "Report opening hours.")
+    llm = PlannerLLM(plan, repaired_checks=checks)
+    result = await make_plan(llm, plan.requirements[0].text)
+    assert result.data.answer_checks == checks
+    assert result.data.requirements == plan.requirements
+    assert len(llm.calls) == 2
+    assert result.cost.dollars == 0.02
+
+
+async def test_action_only_plans_do_not_acquire_answer_checks() -> None:
+    plan = Plan(
+        requirements=(Requirement(id="r", text="Open the museum page.", kind=RequirementKind.ACTION),),
+        answer_expected=True,
+        answer_checks=("Report the museum's opening hours.",),
+    )
+    result = await make_plan(PlannerLLM(plan), plan.requirements[0].text)
+    assert result.data.answer_checks == ()
+
+
+async def test_output_check_repair_keeps_both_receipts_and_respects_call_limits() -> None:
+    plan = Plan(requirements=example_plan().requirements, answer_expected=True)
+    llm = PlannerLLM(plan, repaired_checks=("Find the price",))
+    ledger = Ledger(Limits(max_llm_calls=2))
+    result = await make_plan(llm, "Find the price", ledger=ledger)
+    ledger.record(result.cost)
+    assert ledger.llm_calls == 2 and ledger.lines == [llm.cost, llm.cost]
+    capped = Ledger(Limits(max_llm_calls=1))
+    with pytest.raises(BudgetExceeded):
+        await make_plan(llm, "Find the price", ledger=capped)
+    assert capped.llm_calls == 1 and capped.lines == [llm.cost]
+
+
+async def test_unpriced_plan_repair_retains_unknown_aggregate_dollars() -> None:
+    llm = PlannerLLM(Plan(requirements=example_plan().requirements, answer_expected=True))
+    llm.cost = llm.cost.model_copy(update={"basis": CostBasis.UNKNOWN, "dollars": None})
+    result = await make_plan(llm, "Find the price")
+    assert result.cost.basis is CostBasis.UNKNOWN and result.cost.dollars is None
+    assert len(llm.calls) == 2

@@ -134,11 +134,14 @@ async def test_verdict_prompts_keep_late_requirement_evidence_when_notes_overflo
     questions = claim_check_questions(composed.data, notes, tokens=tokens)
     for prompt in [
         json.dumps(jev.state),
-        *(call[1][-1].content for call in llm.calls),
+        llm.calls[0][1][-1].content,
         questions["requirement_omitted"].instructions,
     ]:
         assert late.text in prompt and fact_id(late) in prompt
         assert "facts omitted]" in prompt
+    composer_prompt = llm.calls[1][1][-1].content
+    assert late.text in composer_prompt and "[e20]" in composer_prompt
+    assert "facts omitted]" in composer_prompt
     checker = _Jev({key: 0.0 for key in questions})
     assert await check_claims(checker, composed.data, notes, Thresholds(), tokens=tokens) == composed.data
     for state, batch in [(jev.state, jev.questions), *checker.requests]:
@@ -308,3 +311,49 @@ async def test_the_checks_see_every_address_the_run_has_been_on_first_where_it_b
     llm = ScriptedLLM([{"complete": True, "missing": []}])
     await llm_verify(llm, "Open httpx", plan, _PAGE, (), Notes(), (), visited=visited)
     assert f"## Visited addresses\n- {start}\n- {_PAGE.url}\n" in llm.calls[0][1][-1].content
+
+
+def test_dense_jev_requests_have_a_safety_bound_without_squeezing_llm_evidence() -> None:
+    tokens = TokenBudget()
+    question = "q" * 2831
+    context = "x" * 64275
+    assert tokens.remaining_chars(context, [question]) > 0
+    assert tokens.remaining_chars(context, [question], jev=True) == 0
+    assert tokens.input_chars([question], jev=True) + len(question) == 48000
+    small = TokenBudget(state_plus_largest_question=1500, state_plus_all_questions=5000)
+    assert small.input_chars(["question"], jev=True) == small.input_chars(["question"])
+
+
+def test_completion_cuts_dense_page_json_before_sending_a_verdict() -> None:
+    text = 'Product "row"\n' * 5000
+    question = "q" * 2831
+    notes = Notes([Fact(reader=FactReader.LLM, requirement_id="r1", text="Total is 42", evidence=evidence())])
+    state = page_state(_PAGE.model_copy(update={"viewport_text": text}), notes, questions=[question])
+    assert len(json.dumps(state)) + len(question) <= 48000
+    assert "Total is 42" in str(state)
+
+
+async def test_completion_sheds_optional_draft_before_required_source_quotes() -> None:
+    from fastbrowse.retrieval import Claim, assemble_answer
+
+    quote = "Grounded source value " * 650
+    fact = Fact(
+        reader=FactReader.LLM,
+        requirement_id="r1",
+        text="Requested value",
+        evidence=evidence(end=len(quote)).model_copy(update={"quote": quote}),
+    )
+    notes = Notes((fact,))
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Report the requested value", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    draft = assemble_answer(
+        (Claim(text="Long optional prose " * 2000, evidence_ids=(fact_id(fact),)),), notes, plan.requirements
+    )
+    jev = _Jev({"complete": 0.9, "draft_needs_writing": 0.0})
+    result = await check_done(jev, "Report the requested value", plan, _PAGE, notes, Thresholds(), draft)
+    assert result.verdict is DoneVerdict.ACCEPT and result.answer is None
+    assert isinstance(jev.state, dict) and "draft" not in jev.state
+    assert quote in str(jev.state) and "draft_needs_writing" not in jev.questions
+    assert len(json.dumps(jev.state)) + max(len(q.model_dump_json()) for q in jev.questions.values()) <= 48000

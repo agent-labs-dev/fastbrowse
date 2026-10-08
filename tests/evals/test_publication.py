@@ -14,6 +14,7 @@ import pytest
 from fastbrowse.evals import catalog as live
 from fastbrowse.evals import publication, versions
 from fastbrowse.evals.publication import REFUSE, REGRESS
+from fastbrowse.models import Limits
 
 TASK = "pypi-version"
 SUITE = "core"
@@ -729,3 +730,45 @@ def test_a_renamed_result_file_fails_the_diff_check(tmp_path: Path) -> None:
     _commit(repo, "rename a baseline")
     findings = publication.validate_diff("main", root=repo)
     assert any("removed" in finding.detail for finding in findings)
+
+
+def remaining_rows() -> list[dict[str, Any]]:
+    sources = attempts(3)
+    for index, source in enumerate(sources):
+        source["run"].update(
+            budget_policy="remaining-campaign-v1",
+            max_steps=None,
+            max_seconds=None,
+            max_dollars=None,
+            concurrency=1,
+            budget_usd=10.0,
+            browser_reserve_dollars=0.0,
+            browser={"mode": "local-chrome"},
+            agent_limits=Limits(max_dollars=10.0 - index * 0.01).model_dump(mode="json"),
+        )
+    return sources
+
+
+def test_uncapped_remaining_funds_run_clears_publication_gate() -> None:
+    sources = remaining_rows()
+    assert publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY).blocking == ()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("budget_policy", None),
+        ("agent_limits", None),
+        ("agent_limits", Limits(max_steps=50, max_dollars=10).model_dump(mode="json")),
+        ("agent_limits", Limits(max_dollars=11).model_dump(mode="json")),
+        ("agent_limits", Limits(max_dollars=float("inf")).model_dump(mode="json")),
+        ("concurrency", 2),
+        ("budget_usd", 0),
+        ("browser", {"mode": "browser-use-cloud"}),
+    ],
+)
+def test_uncapped_publication_refuses_unrecorded_or_inconsistent_policy(field: str, value: object) -> None:
+    sources = remaining_rows()
+    sources[0]["run"][field] = value
+    report = publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY)
+    assert any(f.check == "protocol" for f in report.blocking)

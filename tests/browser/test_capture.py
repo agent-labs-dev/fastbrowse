@@ -4,6 +4,7 @@ import json
 import time
 
 import pytest
+from pydantic import JsonValue
 
 from fastbrowse.browser import BrowserSession, CdpPage
 from fastbrowse.page import BlockKind
@@ -71,7 +72,17 @@ async def test_each_table_row_repeats_its_header(page: CdpPage, main_site: str) 
             "<tbody><tr><td>A | B</td></tr><tr><td>C</td></tr></tbody>",
             ["| Group |\n| Name |\n| --- |\n| A \\| B |", "| Group |\n| Name |\n| --- |\n| C |"],
         ),
-        ("<tr><td>A</td><td>1</td></tr><tr><th>B</th><td>2</td></tr>", ["| A | 1 |", "| B | 2 |"]),
+        ("<tr><td>A</td><td>1</td></tr><tr><th>B</th><td>2</td></tr>", ["| A | 1 |", "| A | 1 |\n| B | 2 |"]),
+        (
+            "<tr><td>Feature</td><td>Device Alpha</td><td>Device Beta</td></tr>"
+            "<tr><td>USB-C ports</td><td>1</td><td>3</td></tr>"
+            "<tr><td>USB-A ports</td><td>2</td><td>1</td></tr>",
+            [
+                "| Feature | Device Alpha | Device Beta |",
+                "| Feature | Device Alpha | Device Beta |\n| USB-C ports | 1 | 3 |",
+                "| Feature | Device Alpha | Device Beta |\n| USB-A ports | 2 | 1 |",
+            ],
+        ),
         ("<thead><tr><th>Name</th></tr><tr><th>Person</th></tr></thead>", ["| Name |\n| Person |\n| --- |"]),
         ("<tr><th>Name | alias</th></tr>", ["| Name \\| alias |\n| --- |"]),
         (
@@ -105,6 +116,7 @@ async def test_each_table_row_repeats_its_header(page: CdpPage, main_site: str) 
     ids=[
         "multiple-header-rows",
         "no-header",
+        "headerless-comparison",
         "header-only",
         "leading-header-only",
         "hidden-rows",
@@ -471,3 +483,63 @@ async def test_a_same_origin_frame_is_read_where_it_stands(page: CdpPage, browse
     inside = capture.blocks[2]
     assert inside.frame_id and inside.heading_path == ("Frames", "Email Subscription")
     assert capture.inaccessible_frames == 0
+
+
+async def test_headerless_table_rows_remain_independent_count_records(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    from fastbrowse.memory import Notes
+    from fastbrowse.planner import Requirement, RequirementKind
+    from fastbrowse.retrieval import read
+    from tests.test_retrieval import ScriptedLLM
+
+    await page.navigate(f"{main_site}/icons.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.body.innerHTML = '<table><tr><td>Ada</td></tr><tr><td>Ben</td></tr><tr><td>Cy</td></tr></table>'",
+    )
+    capture = await page.capture()
+    notes = Notes()
+    requirement = Requirement(
+        id="r", text="Count the people listed in the table.", kind=RequirementKind.INFORMATION, count_records=True
+    )
+    response: JsonValue = {
+        "claims": [],
+        "answered": True,
+        "tallies": [
+            {
+                "requirement_id": "r",
+                "complete": True,
+                "groups": [
+                    {
+                        "key": None,
+                        "records": [{"first": block.source_id, "last": block.source_id} for block in capture.blocks],
+                    }
+                ],
+            }
+        ],
+    }
+    await read(ScriptedLLM([response]), capture, requirement.text, ["r"], notes, requirements=(requirement,))
+    assert len(notes.tallies) == 1
+    assert len(notes.tallies[0].records) == 3
+
+
+@pytest.mark.parametrize("navigation", ["nav", 'div role="navigation"'])
+async def test_navigation_headings_do_not_identify_main_content(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, navigation: str
+) -> None:
+    await page.navigate(f"{main_site}/icons.html")
+    close = navigation.split()[0]
+    markup = (
+        f"<h1>Catalog</h1><{navigation}><h2>Keyboard help</h2><p>Use arrow keys.</p></{close}>"
+        "<main><p>Atlas costs 12.</p></main>"
+    )
+    await eval_value(
+        browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
+    )
+    capture = await page.capture()
+    price = next(block for block in capture.blocks if capture.text[block.start : block.end] == "Atlas costs 12.")
+    help_text = next(block for block in capture.blocks if capture.text[block.start : block.end] == "Use arrow keys.")
+    assert price.heading_path == ("Catalog",)
+    assert help_text.heading_path == ("Catalog", "Keyboard help")

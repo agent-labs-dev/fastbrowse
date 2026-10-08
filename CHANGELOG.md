@@ -11,6 +11,31 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Older quotes retain their original page title when unchanged text is captured under a new title.
+
+- Quoted excerpts can include known source-block labels copied by the reader. Those labels are removed
+  before matching real page text, while unknown labels and ambiguous quotes remain rejected.
+
+- Navigation headings stay within their menu instead of identifying later page facts. Navigation notes
+  show an explicit prefix for long source addresses, leaving room for previously collected facts.
+
+- Answer repairs reuse quoted notes when selected citations omit available evidence. Each repair must
+  improve source coverage, or reduce assertion failures without worsening source coverage. Identical
+  audit requests are reused within a run; changed evidence, entities, claims or scope are checked again.
+  Component values cannot stand in for totals, and rewritten conclusions do not restore the read budget.
+
+- Completion checks each requested answer output against its cited sources. Missing or ambiguous outputs
+  return to recovery, so a partially answered requirement cannot finish from its other cited fields.
+- Identical captured spans on different addresses retain separate citations and counted records.
+- Headerless table rows retain the real leading cells identifying their columns and keep separate citations for counting.
+
+- Removing a doubted answer claim checks whether its requested output is missing, even when other fields
+  still cite the same requirement. Optional details can still be removed.
+- Prose reads use larger source chunks to keep navigation and following details in one read. Quote checks
+  and the smaller choice and counting budgets remain in place.
+
+- Navigation links keep their stale-attempt history when card labels or context change, so a redraw cannot
+  restore a repeatedly failing destination. Separate in-page actions retain their own retry history.
 - `run_task` and `connect_cdp` take `allowed_origins`, a list of exact `http(s)://host[:port]` origins that limits
   the documents a run may inspect and control. Navigations, redirects, frames (in or out of process) and popups
   outside the list are refused before they are sent, and a window or frame already open outside it is never read,

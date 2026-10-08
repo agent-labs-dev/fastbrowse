@@ -179,6 +179,8 @@
     let headers = rows.filter(({ row }) => row.parentElement.tagName === 'THEAD');
     if (!headers.length && rows[0].cells.every(c => c.tagName === 'TH')) headers = [rows[0]];
     const line = ({ cells }) => '| ' + cells.map(c => cellText(c).replace(/\|/g, '\\|')).join(' | ') + ' |';
+    // Headerless comparison rows need leading cells for identity and separate source spans for counting.
+    if (!headers.length) return rows.map((row, index) => (index ? [line(rows[0]), line(row)].join('\n') : line(row)));
     const prefix = headers.map(line);
     if (headers.length) prefix.push('| ' + headers[0].cells.map(() => '---').join(' | ') + ' |');
     const data = rows.filter(row => !headers.includes(row));
@@ -257,7 +259,7 @@
         continue;
       }
       if (SKIP.has(node.tagName)) continue;
-      if (!isBlock(node) && recordText(node) === null) {
+      if (!node.matches('nav,[role="navigation"]') && !isBlock(node) && recordText(node) === null) {
         run.push(node);
         continue;
       }
@@ -268,6 +270,13 @@
   }
 
   function block(el) {
+    if (el.matches('nav,[role="navigation"]')) {
+      // Navigation help headings describe their menu, not product facts in the following main content.
+      const surrounding = [...path];
+      walk(el);
+      path = surrounding;
+      return;
+    }
     const level = HEADINGS[el.tagName];
     if (level) {
       const text = textOf(el);

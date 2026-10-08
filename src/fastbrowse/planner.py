@@ -5,13 +5,14 @@ same requirements with and without the first observation, and page text is the o
 Callers redact task text before this seam; the planner has no secret resolver.
 """
 
+import json
 from enum import StrEnum
 from typing import Self
 
 from pydantic import Field, model_validator
 
 from fastbrowse.llm import Generation, LLMClient, Message
-from fastbrowse.models import Frozen, LLMPurpose
+from fastbrowse.models import CostBasis, Frozen, Limits, LLMPurpose
 from fastbrowse.telemetry import Ledger
 
 
@@ -42,6 +43,14 @@ class Requirement(Frozen):
 class Plan(Frozen):
     requirements: tuple[Requirement, ...]
     answer_expected: bool
+    answer_checks: tuple[str, ...] = Field(
+        default=(),
+        max_length=128,
+        description="Completion-only checks for requested answer outputs, separate from browsing requirements. "
+        "Split requested fields and components into individual checks for each named or numbered result. "
+        "Retain the entity, scope and constraints. For an unbounded set, check each field across all results. "
+        "Do not add outputs, actions or intermediate navigation that the user did not request.",
+    )
     inspect_access: bool = Field(
         default=False,
         description="True only when the user asks to inspect whether access is restricted, rather than to "
@@ -60,6 +69,16 @@ class Plan(Frozen):
     def validate_ids(self) -> Self:
         if len({requirement.id for requirement in self.requirements}) != len(self.requirements):
             raise ValueError("requirement ids must be unique")
+        return self
+
+
+class _AnswerChecks(Frozen):
+    checks: tuple[str, ...] = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def not_blank(self) -> Self:
+        if any(not check.strip() for check in self.checks):
+            raise ValueError("answer checks must name requested outputs")
         return self
 
 
@@ -92,6 +111,9 @@ def _instructions() -> Message:
             "reported is the order's total, not the total once the order is finished. Keep related output fields "
             "together when they identify one result. "
             "Do not create a separate requirement to find that same result again.\n\n"
+            "For an expected page answer, also fill answer_checks with individually checkable requested output "
+            "values. Separate components of a requested breakdown. These checks validate the final answer, "
+            "not the discovery plan: do not turn them into extra browsing requirements.\n\n"
             "Set count_records for a requested total number of matching entities, including items nested in "
             "groups. Preserve the requested entity and filters: group headings are not the entities they "
             "contain. Do not turn a record count into a prose estimate. Set inspect_access only for an explicit "
@@ -112,12 +134,64 @@ async def make_plan(
             Message(role="user", content=f"# Task\n{task}{site}"),
         ],
         Plan,
+        # Output checks repeat their entity and scope, so a compound task can exceed the old prose-plan budget.
+        max_output_tokens=8000,
         ledger=ledger,
     )
 
-    if generated.data.requirements or generated.data.run_reports:
-        return generated
-    # An empty plan lets a verifier accept unrelated page facts because no requested outcome remains to prove.
-    kind = RequirementKind.INFORMATION if generated.data.answer_expected else RequirementKind.ACTION
-    requirement = Requirement(id="req_1", text=task, kind=kind)
-    return generated.model_copy(update={"data": generated.data.model_copy(update={"requirements": (requirement,)})})
+    plan = generated.data
+    if not plan.requirements and not plan.run_reports:
+        # An empty plan lets a verifier accept unrelated page facts because no requested outcome remains to prove.
+        kind = RequirementKind.INFORMATION if plan.answer_expected else RequirementKind.ACTION
+        requirement = Requirement(id="req_1", text=task, kind=kind)
+        plan = plan.model_copy(update={"requirements": (requirement,)})
+    information = tuple(r.text for r in plan.requirements if r.kind is RequirementKind.INFORMATION)
+    proposed = tuple(dict.fromkeys(check.strip() for check in plan.answer_checks if check.strip()))
+    cost = generated.cost
+    if information and plan.page_answer_expected and not proposed:
+        # A grouped fallback accepted missing components; repair output checks without replanning discovery.
+        billing = ledger or Ledger(Limits())
+        billing.record(generated.cost)
+        repaired = await llm.generate(
+            LLMPurpose.PLAN,
+            [
+                Message(
+                    role="system",
+                    content=(
+                        "Decompose only the task's requested answer outputs into completion checks. Separate each "
+                        "field or component for each named or numbered result. Preserve entity, scope and "
+                        "constraints. For an unbounded result set, check each requested field across all results. "
+                        "Do not add actions, navigation or extra outputs. These checks do not change discovery."
+                    ),
+                ),
+                Message(role="user", content=json.dumps({"task": task, "information_requirements": information})),
+            ],
+            _AnswerChecks,
+            max_output_tokens=8000,
+            ledger=billing,
+        )
+        proposed = tuple(dict.fromkeys(check.strip() for check in repaired.data.checks))
+        cost = repaired.cost
+        if ledger is None:
+            # Without an external ledger the returned line accounts for both calls, rather than hiding the repair.
+            lines = (generated.cost, repaired.cost)
+            basis = (
+                CostBasis.UNKNOWN
+                if any(line.dollars is None or line.basis is CostBasis.UNKNOWN for line in lines)
+                else CostBasis.ESTIMATED
+                if any(line.basis is CostBasis.ESTIMATED for line in lines)
+                else CostBasis.METERED
+            )
+            cost = cost.model_copy(
+                update={
+                    "basis": basis,
+                    "dollars": None if basis is CostBasis.UNKNOWN else sum(line.dollars or 0 for line in lines),
+                    "input_tokens": sum(line.input_tokens for line in lines),
+                    "output_tokens": sum(line.output_tokens for line in lines),
+                    "seconds": None,
+                }
+            )
+    checks = proposed if information and plan.page_answer_expected else ()
+    if checks != plan.answer_checks:
+        plan = plan.model_copy(update={"answer_checks": checks})
+    return generated.model_copy(update={"data": plan, "cost": cost})

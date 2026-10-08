@@ -16,6 +16,7 @@ from collections.abc import Collection, Iterator, Mapping, Sequence
 from copy import deepcopy
 from datetime import date
 from decimal import Decimal, InvalidOperation
+from typing import Literal
 
 from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 from pydantic.fields import FieldInfo
@@ -38,7 +39,7 @@ from fastbrowse.jev import (
 from fastbrowse.llm import Generation, LLMClient, Message
 from fastbrowse.memory import Fact, Notes, NotesTooLarge, Tally, evidence_id, fact_id
 from fastbrowse.models import UNTRUSTED, Citation, CostComponent, CostLine, Evidence, FactReader, Frozen, LLMPurpose
-from fastbrowse.page import Block, BlockKind, Capture
+from fastbrowse.page import Block, BlockKind, Capture, cut_text
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 from fastbrowse.telemetry import Ledger, trace
 
@@ -57,6 +58,8 @@ Does this passage state, qualify or contradict anything the requirements ask for
 labels that give a nearby value its meaning? Site chrome, navigation, footers and unrelated sections do not."""
 # Twelve thousand characters leave room for source blocks, accumulated evidence and instructions per read.
 _READ_CHUNK_CHARS = 12_000
+# Navigation before the details can fill a chunk and buy a read with no claims.
+_LLM_READ_CHUNK_CHARS = 24_000
 # One repeated block carries boundary context without rereading the preceding chunk.
 _CHUNK_OVERLAP_BLOCKS = 1
 _DEFAULT_TOKENS = TokenBudget()
@@ -120,6 +123,23 @@ def _pieces(capture: Capture, max_chars: int) -> tuple[_Piece, ...]:
             continue
         if header is not None and (header.frame_id, header.heading_path) != (block.frame_id, block.heading_path):
             header = None
+        if _table_header(capture, block) is None and block.end - block.start > max_chars:
+            # Headerless comparison tables are one source; bounded reads must still retain their first row.
+            first_end = capture.text.find("\n", block.start, block.end)
+            if first_end == -1 or first_end - block.start + 1 >= max_chars:
+                result.extend(
+                    _Piece(block=block, start=start, end=end)
+                    for start, end in _lines(capture, block.start, block.end, max_chars)
+                )
+            else:
+                prefix = block.model_copy(update={"end": first_end + 1})
+                result.append(_Piece(block=block, start=block.start, end=prefix.end))
+                result.extend(
+                    _Piece(block=block, start=start, end=end, header=prefix)
+                    for start, end in _lines(capture, prefix.end, block.end, max_chars - (prefix.end - prefix.start))
+                )
+            header = None
+            continue
         own_header = _table_header(capture, block)
         header = own_header or header or block
         if own_header is None or block.end - block.start <= max_chars:
@@ -374,8 +394,22 @@ def _remember(
     if claim.excerpt is not None:
         if evidence is None or not claim.excerpt.strip():
             return None
-        matches = _loose(claim.excerpt.strip()).finditer(evidence.quote)
+        excerpt = claim.excerpt.strip()
+        matches = _loose(excerpt).finditer(evidence.quote)
         match = next(matches, None)
+        if match is None:
+            # Readers copy our block labels between paragraphs; those annotations are not captured page text.
+            markers = tuple(
+                _source_marker(block)
+                for block in _offered(capture, part)
+                if block.start < evidence.end and block.end > evidence.start
+            )
+            excerpt = "\n".join(
+                next((line.removeprefix(marker) for marker in markers if line.startswith(marker)), line)
+                for line in excerpt.splitlines()
+            )
+            matches = _loose(excerpt).finditer(evidence.quote)
+            match = next(matches, None)
         if match is None or next(matches, None) is not None:
             logger.debug("read rejected missing or ambiguous excerpt")
             return None
@@ -383,11 +417,53 @@ def _remember(
         block = next((block for block in capture.blocks if block.start <= start < block.end), None)
         if block is None:
             return None
+        # A table excerpt can select an attribute row without the preceding cells identifying its columns.
+        if block.kind is BlockKind.TABLE:
+            start = evidence.start
         evidence = _evidence(capture, block, start, end)
     # A derived claim cites nothing and rests on its basis; one that cites blocks must cite them correctly.
     if evidence is None and (claim.cite is not None or not basis):
         logger.debug("read rejected claim cite=%s basis=%d", reprlib.repr(claim.cite), len(basis))
         return None
+    if evidence is not None:
+        for heading in evidence.heading_path:
+            block = next(
+                (
+                    block
+                    for block in reversed(capture.blocks)
+                    if block.kind is BlockKind.HEADING
+                    and block.frame_id == evidence.frame_id
+                    and block.start + len(heading) <= evidence.start
+                    and block.start + len(heading) <= block.end
+                    and capture.text[block.start : block.start + len(heading)] == heading
+                ),
+                None,
+            )
+            if block is None:
+                continue
+            # Readers see heading values as context; cite their captured spans before those values reach the answer.
+            context = Fact(
+                text=heading,
+                evidence=_evidence(capture, block, block.start, block.start + len(heading)),
+                reader=FactReader.LLM,
+            )
+            notes.add(context)
+            key = fact_id(context)
+            if key not in basis:
+                basis.append(key)
+    if evidence is not None and part.header:
+        block = next((block for block in capture.blocks if block.start <= evidence.start < block.end), None)
+        if block is not None and block.kind is BlockKind.TABLE and block.start < part.start:
+            prefix_end = block.start + len(part.header)
+            if capture.text[block.start : prefix_end] == part.header and prefix_end <= evidence.start:
+                # Continuations show real leading cells separately; retain that quote as identity evidence too.
+                context = Fact(
+                    text=part.header,
+                    evidence=_evidence(capture, block, block.start, prefix_end),
+                    reader=FactReader.LLM,
+                )
+                notes.add(context)
+                basis.append(fact_id(context))
     fact = Fact(
         requirement_id=claim.requirement_id,
         text=claim.text,
@@ -678,6 +754,10 @@ def _marks(block: Block) -> str:
     return f"({', '.join(marks)}) " if marks else ""
 
 
+def _source_marker(block: Block) -> str:
+    return f"[{block.source_id}] ({block.kind.value}" + (", inside an embedded frame" if block.frame_id else "") + ") "
+
+
 def _read_message(
     capture: Capture,
     part: Chunk,
@@ -688,9 +768,7 @@ def _read_message(
     offered = _offered(capture, part)
     # A table cut mid-rows is shown under its header, which lies before the chunk, so its columns keep their names.
     sources = "\n".join(
-        f"[{block.source_id}] ({block.kind.value}"
-        + (", inside an embedded frame" if block.frame_id else "")
-        + ") "
+        _source_marker(block)
         + (f"{part.header}\n" if part.header and block.start < part.start else "")
         + capture.text[max(block.start, part.start) : min(block.end, part.end)]
         for block in offered
@@ -712,7 +790,7 @@ async def read(
     requirement_ids: Sequence[str],
     notes: Notes,
     *,
-    max_chars: int = _READ_CHUNK_CHARS,
+    max_chars: int | None = None,
     tokens: TokenBudget = _DEFAULT_TOKENS,
     ledger: Ledger | None = None,
     jev: JevClient | None = None,
@@ -728,6 +806,7 @@ async def read(
     it goes with every question the reader is asked, however the question is narrowed. `continuing` names the
     requirements an earlier page already said run past it. Neither those nor `incomplete` comparisons can be
     answered by scalar choice, so they go to the reader."""
+    notes.remember_capture(capture)
     facts: dict[tuple[str, str | None], Fact] = {}
     coverage: list[int] = []
     costs: list[CostLine] = []
@@ -746,6 +825,9 @@ async def read(
     tally_readers: list[TallyReader] = []
     comparisons: dict[str, NumericComparison] = {}
     counting = {r.id: r.text for r in requirements if r.kind is RequirementKind.INFORMATION and r.count_records}
+    if max_chars is None:
+        # Record extraction emits dense structured output; larger prose captures must not overflow that response.
+        max_chars = _READ_CHUNK_CHARS if records_only or counting else _LLM_READ_CHUNK_CHARS
     wanted = [
         r
         for r in requirements
@@ -806,9 +888,20 @@ async def read(
                     "Citations use the source id; literal field delimiters use only the record text after those "
                     "annotations. Do not copy annotation prefixes into field delimiters.\n\n"
                     "# Claims\n"
+                    "- Keep each claim to one fact or one derived conclusion. Do not summarize the whole task "
+                    "in one claim. A prior claim's prose is a hypothesis, not additional evidence: check its "
+                    "original quoted basis before carrying a value or inference forward. Preserve conditions "
+                    "such as eligibility, location and configuration in every claim that uses the value. "
+                    "A component maximum is not an aggregate maximum, and independent maxima are not "
+                    "additive unless their quoted sources explicitly allow simultaneous addition. A product "
+                    "name or nominal rating alone cannot settle an explicitly requested configuration. "
+                    "Leave an unsupported requested value open instead of inferring it from a related value.\n"
                     "- For a long block containing unrelated content, set excerpt to the smallest literal "
                     "contiguous passage supporting the claim, including record identity, field labels and "
-                    "qualifications. Split claims supported by separate passages. Code matches the excerpt "
+                    "qualifications. A pronoun or relative reference does not identify an entity on its own: "
+                    "keep the quoted antecedent alongside its value, extending the excerpt or citing a context "
+                    "claim with that literal identifying passage. Split claims supported by separate passages. "
+                    "Code matches the excerpt "
                     "uniquely inside the cited blocks and copies its original spelling; never paraphrase it. "
                     "Leave excerpt null when the complete blocks are needed.\n"
                     "- A claim cites one run of blocks. For a comparison, put every compared record from this "
@@ -1124,6 +1217,9 @@ async def read(
             if fact is None:
                 rejected_here += 1
                 continue
+            # Context retained while copying a table quote must reach the caller's notes with the claim.
+            held = {fact_id(kept) for kept in found} | {fact_id(kept) for kept in notes.facts}
+            found.extend(kept for kept in so_far.facts if fact_id(kept) in fact.basis and fact_id(kept) not in held)
             references[f"claim:{index}"] = fact_id(fact)
             requirement_id = claim.requirement_id if claim.requirement_id in requirement_ids else None
             stated_count = requirement_id in counting and _quoted_count(fact, so_far, records, capture)
@@ -1276,7 +1372,7 @@ def _context(text: str, start: int, end: int, block: Block) -> str:
     line_end = text.find("\n", end)
     row = text[line_start : len(text) if line_end == -1 else line_end]
     if _table_header_from_text(text) is None:
-        return f"{_marks(block)}row: {row}"
+        return f"{_marks(block)}leading row: {text.splitlines()[0]}\nrow: {row}"
     header_cells = [cell for _, _, cell in _cells(text.split("\n", 1)[0])]
     column = len(re.findall(r"(?<!\\)\|", text[line_start:start])) - 1
     name = header_cells[column] if 0 <= column < len(header_cells) else "?"
@@ -1796,11 +1892,8 @@ def _read_request(
 
 
 def _read_fits(state: JsonValue, questions: Mapping[str, Question], tokens: TokenBudget) -> bool:
-    state_size = len(json.dumps(state)) / tokens.chars_per_token
-    sizes = [len(question.model_dump_json()) / tokens.chars_per_token for question in questions.values()]
-    return (
-        state_size + max(sizes, default=0) <= tokens.state_plus_largest_question
-        and state_size + sum(sizes) <= tokens.state_plus_all_questions
+    return len(json.dumps(state)) <= tokens.input_chars(
+        [question.model_dump_json() for question in questions.values()], jev=True
     )
 
 
@@ -2004,6 +2097,13 @@ class Claim(Frozen):
     evidence_ids: tuple[str, ...]
 
 
+class AnswerCorrection(Frozen):
+    stage: Literal["source", "assertion"] = "assertion"
+    criterion: str
+    claims: tuple[Claim, ...]
+    reason: str
+
+
 class ComposedAnswer(Frozen):
     answer: str
     """The claims as plain text: what Jev judges. A link's percent-encoded quote read to it as more evidence
@@ -2065,7 +2165,9 @@ def _without_citation_markup(text: str) -> str:
     # The composer can echo bracketed references in prose; only its checked evidence_ids create links.
     def replace(match: re.Match[str]) -> str:
         label = match[1]
-        if label.isdecimal() or re.fullmatch(r"[\w-]+:\d+:\d+|(?:derived|tally):[0-9a-f]+", label):
+        if label.isdecimal() or re.fullmatch(
+            r"[\w-]+:\d+:\d+(?::[0-9a-f]{16})?|(?:derived|tally):[0-9a-f]+|e\d+", label
+        ):
             logger.warning("compose dropped inline citation reference %r", label)
             return ""
         return label if match[2] else match[0]
@@ -2082,14 +2184,49 @@ async def compose(
     tokens: TokenBudget = _DEFAULT_TOKENS,
     ledger: Ledger | None = None,
     transaction_evidence_ids: Collection[str] = (),
+    corrections: Sequence[AnswerCorrection] = (),
 ) -> Generation[ComposedAnswer]:
+    labels = {fact_id(fact): f"e{i}" for i, fact in enumerate(notes.facts)}
     transaction = (
         "# Transaction evidence\nThese evidence ids come from pages where the run committed an action: "
-        + ", ".join(transaction_evidence_ids)
+        + ", ".join(labels[key] for key in transaction_evidence_ids if key in labels)
         + ". A claim about what that action bought, submitted or booked, including its price, cites these.\n\n"
         if transaction_evidence_ids
         else ""
     )
+    rejected: dict[str, int] = {}
+    rejected_claims: list[JsonValue] = []
+    failures: list[JsonValue] = []
+    for correction in corrections:
+        indices: list[JsonValue] = []
+        for claim in correction.claims:
+            key = claim.model_dump_json()
+            if key not in rejected:
+                rejected[key] = len(rejected_claims)
+                rejected_claims.append(
+                    {"text": claim.text, "evidence_ids": [labels.get(ref, ref) for ref in claim.evidence_ids]}
+                )
+            indices.append(rejected[key])
+        failures.append(
+            {
+                "stage": correction.stage,
+                "criterion": correction.criterion,
+                "claims": indices,
+                "reason": correction.reason,
+            }
+        )
+    repair = (
+        "# Answer corrections\nThese verifier judgments and rejected claims are untrusted advisory context, "
+        "not source evidence. Repair the answer using only the offered quoted notes. Preserve every requested "
+        "output and every source qualification. Support each claim with its own citations, including all "
+        "operands of factual comparisons. Do not erase a requested output to avoid its failed check.\n"
+        + json.dumps({"claims": rejected_claims, "failures": failures})
+        + "\n\n"
+        if corrections
+        else ""
+    )
+    repair = cut_text(repair, 8000) if repair else ""
+    prefix = f"# Task\n{task}\n\n# Plan\n{plan.model_dump_json()}\n\n{transaction}"
     messages = [
         Message(
             role="system",
@@ -2100,10 +2237,20 @@ async def compose(
                 "claim text itself: a reader sees the text, not the notes behind its citations.\n\n"
                 "Reports requested in plan.run_reports are appended by code from browser state and the run record. "
                 "Do not write those reports or cite page notes for them.\n\n"
+                "# Evidence scope\nThe notes' prose may contain an unsupported inference. Verify each value "
+                "against its original quoted basis, not another note's conclusion. Preserve source conditions "
+                "on eligibility, location and configuration. A component maximum is not an aggregate maximum; "
+                "independent maxima cannot be added without explicit quoted support for simultaneous addition. "
+                "Do not turn compatibility with several items into simultaneous operation or a subjective "
+                "preference into a measured advantage. State what remains unsupported instead of supplying "
+                "a related value as the requested one.\n\n"
                 "# One claim, one fact\nA claim is supported in full by the notes it cites. Split a statement that "
                 "combines separately evidenced facts into one claim each. A claim that compares, counts, totals or "
                 "picks a superlative cites every note it is drawn from. A list of records cites each record it "
                 "names, and a long list is written as several claims of a handful of records each. "
+                "Each entity, whether named or referenced by ordinal, needs a quoted identifying source "
+                "alongside its attribute sources. Reuse "
+                "identifying citations across claims when needed; another claim does not supply them. "
                 "Cite tally ids directly; their counts and descending order are computed in code, and code "
                 "expands their record citations. Never re-list the basis ids inside a tally.\n\n"
                 f"# Trust\n{UNTRUSTED}"
@@ -2111,11 +2258,19 @@ async def compose(
         ),
         Message(
             role="user",
-            content=f"# Task\n{task}\n\n# Plan\n{plan.model_dump_json()}\n\n{transaction}# Notes\n",
+            content=prefix + repair + "# Notes\n",
         ),
     ]
     room = _notes_room(tokens, messages, _AnswerDraft)
-    offered = notes.render_with_ids(room, preserve_requirements=True)
+    try:
+        offered = notes.render_with_ids(room, preserve_requirements=True, labels=labels)
+    except NotesTooLarge:
+        if not repair:
+            raise
+        # Advisory corrections must not crowd out the source quotes needed to write a grounded answer.
+        messages[-1] = messages[-1].model_copy(update={"content": prefix + "# Notes\n"})
+        room = _notes_room(tokens, messages, _AnswerDraft)
+        offered = notes.render_with_ids(room, preserve_requirements=True, labels=labels)
     messages[-1] = messages[-1].model_copy(update={"content": messages[-1].content + offered.text})
     result = await llm.generate(
         LLMPurpose.COMPOSE,
@@ -2127,13 +2282,22 @@ async def compose(
     if ledger is not None:
         ledger.record(result.cost)
     known = set(offered.evidence_ids)
+    references = {labels[key]: key for key in known}
+    references.update({key: key for key in known})
     claims: list[Claim] = []
     for claim in result.data.claims:
-        unknown = set(claim.evidence_ids) - known
+        unknown = set(claim.evidence_ids) - references.keys()
         if unknown:
             logger.warning("compose dropped claim with unknown citation references: %s", sorted(unknown))
         if claim.evidence_ids and not unknown:
-            claims.append(claim.model_copy(update={"text": _without_citation_markup(claim.text)}))
+            claims.append(
+                claim.model_copy(
+                    update={
+                        "text": _without_citation_markup(claim.text),
+                        "evidence_ids": tuple(references[key] for key in claim.evidence_ids),
+                    }
+                )
+            )
     return Generation(
         data=assemble_answer(
             claims,
@@ -2213,7 +2377,7 @@ def transaction_check_question(
         true="Yes, the answer contradicts the pages the run committed an action on.",
         false="No, the answer agrees with the pages the run committed an action on.",
     )
-    room = tokens.remaining_chars(json.dumps({"answer": composed.answer}), [transaction.model_dump_json()])
+    room = tokens.remaining_chars(json.dumps({"answer": composed.answer}), [transaction.model_dump_json()], jev=True)
     # The latest pages are the confirmation and the review before it, so the budget keeps them first.
     kept: list[str] = []
     for line in reversed(committed):
@@ -2288,7 +2452,7 @@ def claim_check_questions(
         false="No, every requirement is answered and evidenced.",
     )
     # Independent claim questions run in separate batches; they cannot consume this question's evidence budget.
-    room = tokens.remaining_chars(json.dumps({"answer": composed.answer}), [omission.model_dump_json()])
+    room = tokens.remaining_chars(json.dumps({"answer": composed.answer}), [omission.model_dump_json()], jev=True)
     notes_text = notes.render(room, preserve_requirements=True, json_encoded=True)
     questions["requirement_omitted"] = omission.model_copy(update={"instructions": context + notes_text + question})
     return questions

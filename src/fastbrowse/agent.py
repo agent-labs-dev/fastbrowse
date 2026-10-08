@@ -37,7 +37,7 @@ from fastbrowse.effects import (
 )
 from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, JevClient, JevError, NoulAnswer, NoulQuestion
 from fastbrowse.llm import Generation, LLMClient, LLMError, Message
-from fastbrowse.memory import Fact, Notes, NotesTooLarge, shows
+from fastbrowse.memory import Fact, Notes, NotesTooLarge, fact_id, shows
 from fastbrowse.models import (
     SCROLLING,
     UNTRUSTED,
@@ -91,6 +91,7 @@ from fastbrowse.policy import (
     decide,
 )
 from fastbrowse.retrieval import (
+    AnswerCorrection,
     ComposedAnswer,
     ReadOutcome,
     TallyReader,
@@ -117,6 +118,7 @@ from fastbrowse.verification import (
     DoneVerdict,
     Extraction,
     LLMVerdict,
+    OutputAuditCache,
     check_claims,
     check_done,
     extract,
@@ -157,7 +159,7 @@ logger = logging.getLogger(__name__)
 type _Prepared = ComposedAnswer | asyncio.Task[Generation[ComposedAnswer]] | None
 """An answer whose claims passed, or a composer in flight."""
 
-type ReadKey = tuple[str, str, tuple[str, ...]]
+type ReadKey = tuple[str, str, tuple[str, ...], tuple[str, ...]]
 type Signature = tuple[Operation, str | None, str | None, str]
 """One action on its targets, from one page state: the key both the cycle count and the no-op memory are kept by."""
 
@@ -313,6 +315,16 @@ class _RunState:
     ledger: Ledger
     planning: asyncio.Task[Generation[Plan]]
     notes: Notes = field(default_factory=Notes)
+    missing_answer_outputs: tuple[str, ...] = ()
+    answer_corrections: tuple[AnswerCorrection, ...] = ()
+    output_audit_cache: OutputAuditCache = field(default_factory=dict)
+    open_answer_outputs: tuple[str, ...] = ()
+    rejected_answer_evidence: frozenset[tuple[str, str | None, str]] | None = None
+    answer_check_evidence: str | None = None
+    answer_check_cache: dict[
+        tuple[str, str, str, tuple[str, ...]],
+        tuple[ComposedAnswer | None, tuple[str, ...], tuple[AnswerCorrection, ...]],
+    ] = field(default_factory=dict)
     relevance_cache: RelevanceCache = field(default_factory=RelevanceCache)
     steps: list[StepResult] = field(default_factory=list[StepResult])
     would_fire: list[Tripwire] = field(default_factory=list[Tripwire])
@@ -430,6 +442,10 @@ class _RunState:
     form_rejected: set[tuple[str, str | None, str]] = field(default_factory=set)
     form_values: dict[tuple[str, str], tuple[Control, _FieldText]] = field(default_factory=dict)
 
+    def reset_answer_check(self) -> None:
+        self.missing_answer_outputs = ()
+        self.answer_corrections = ()
+
     @property
     def plan(self) -> Plan:
         """The plan, for code that only runs after `await_plan`: reading, judging DONE and answering."""
@@ -442,8 +458,8 @@ class _RunState:
             # Shielded: a caller cancelled mid-wait (a fill a redraw abandoned) must not cancel the one plan every
             # later step needs. Teardown still cancels the task itself.
             planned = await asyncio.shield(self.planning)
-            self.ledger.record(planned.cost)
             self.ready_plan = planned.data
+            self.ledger.record(planned.cost)
         return self.ready_plan
 
 
@@ -539,6 +555,7 @@ class Agent:
         ledger.started = time.monotonic()
         self._artifact_start = len(self._page.artifacts)
         state: _RunState | None = None
+        loop_returned = False
         # The ledger checks `max_seconds` between operations; only a deadline around the awaits bounds a
         # browser or provider call that never returns.
         deadline = asyncio.timeout(ledger.limits.max_seconds)
@@ -566,9 +583,10 @@ class Agent:
                     if opening is not None:
                         # A shortcut leaves the start page before the loop observes anything.
                         state.visited[opening] = None
-                    return await self._loop(state, output_schema, until)
+                    result = await self._loop(state, output_schema, until)
+                    loop_returned = True
             except _Stop as stop:
-                if stop.status is Status.STUCK and state is not None and state.notes.evidence:
+                if stop.status in {Status.STUCK, Status.UNVERIFIED} and state is not None and state.notes.evidence:
                     # What was read is still cited evidence; a caller told only "stuck" has to browse again for it.
                     result = self._partial_result(state.notes, state, ledger, stop.status, stop.error)
                 else:
@@ -618,7 +636,15 @@ class Agent:
             finally:
                 # A run can end before it ever needed the plan, and a plan still being written would bill it.
                 await head.discard()
-        return await self._ending_frame(result)
+                if (
+                    (state is None or state.ready_plan is None)
+                    and not head.planning.cancelled()
+                    and head.planning.exception() is None
+                ):
+                    # First observation can fail before the completed plan is consumed, but its receipt still bills.
+                    ledger.lines.append(head.planning.result().cost)
+        result = result.model_copy(update={"cost": ledger.breakdown()})
+        return result if loop_returned else await self._ending_frame(result)
 
     async def _ending_frame(self, result: RunResult, *, requested: bool = False) -> RunResult:
         if not (self._config.step_frames or requested):
@@ -680,6 +706,7 @@ class Agent:
                     not state.paging_failed
                     and not state.owes_read
                     and _lookup(state.plan)
+                    and not state.open_answer_outputs
                     and _answered(state.plan, state.notes)
                     and self._observed is not None
                 ):
@@ -748,7 +775,12 @@ class Agent:
             ) is not None:
                 decision, uncertain, decided_by = directed, False, Decider.LLM
             if await self._read_before_interaction(state, observation, decision, decided_by):
-                answered = (plan := state.ready_plan) is not None and _lookup(plan) and _answered(plan, state.notes)
+                answered = (
+                    (plan := state.ready_plan) is not None
+                    and _lookup(plan)
+                    and not state.open_answer_outputs
+                    and _answered(plan, state.notes)
+                )
                 if not answered:
                     continue
                 # The read answered a lookup, and deciding again on the same page only arrived at DONE: a shortlist
@@ -763,7 +795,11 @@ class Agent:
                 # A lookup has nothing left to do once it is answered: with the cheapest flight read, Jev went on to
                 # click "Select flight", which the page covered, and the recording showed a failed click after the
                 # answer. A click recovery directed stands, so a DONE the verifier refused is not asked again.
-                if (pager or (_lookup(plan) and decided_by is Decider.JEV)) and _answered(plan, state.notes):
+                if (
+                    (pager or (_lookup(plan) and decided_by is Decider.JEV))
+                    and not state.open_answer_outputs
+                    and _answered(plan, state.notes)
+                ):
                     # Everything asked to be found is evidenced, so another page is wandering: Jev, offered the pager,
                     # kept turning pages through a whole catalogue after the two the task named had been read. DONE
                     # is judged again by `_finish`, which carries on if it does not hold.
@@ -793,7 +829,12 @@ class Agent:
                     held, state.directed = state.directed, None
                     recoveries = state.recoveries
                     if not await self._step(state, observation, reading, decided_by):
-                        if not (_lookup(plan) and _answered(plan, state.notes) and state.recoveries == recoveries):
+                        if not (
+                            _lookup(plan)
+                            and not state.open_answer_outputs
+                            and _answered(plan, state.notes)
+                            and state.recoveries == recoveries
+                        ):
                             continue
                         # A read does not change the page, so observing it again and deciding only arrived at
                         # DONE, 1.5 to 2s a lookup. A tripwire that sent the read to recovery left it work to do.
@@ -1034,6 +1075,20 @@ class Agent:
             state.read_here = True
             state.typed_on_passed = False
             if skipped:
+                # Silent cache hits made recovery repeatedly ask to read a page whose content was already read.
+                effect_now = self._redactor.redact(
+                    "This content was already read; duplicate read skipped. " + _read_exhausted(state)
+                )
+                state.history.append(
+                    HistoryEntry(
+                        operation=Operation.READ,
+                        target=None,
+                        outcome=StepOutcome.FAILED,
+                        page_changed=False,
+                        effect=effect_now,
+                        read_progress=False,
+                    )
+                )
                 return True
             changed = False
             effect_now = "Read this content."
@@ -1260,7 +1315,9 @@ class Agent:
             ):
                 state.http_failure = None
             state.reached[key] = len(state.history)
-            if renews:
+            if renews and (
+                not state.open_answer_outputs or _answer_evidence(state.notes) != state.rejected_answer_evidence
+            ):
                 state.recoveries = 0
                 state.recovery_log.clear()
         left, state.left = state.left, None
@@ -2081,7 +2138,7 @@ class Agent:
             wanted_ids = tuple(r.id for r in wanted)
             # Keyed by address too: a list paged in place keeps its document and its Previous and Next, and only
             # its URL says the third page is not the two barren ones before it.
-            budget = observation.document_key, state_key(observation), wanted_ids
+            budget = observation.document_key, state_key(observation), wanted_ids, state.open_answer_outputs
             # An owed read is exempt: a filter that keeps its address and controls shares the budget of the page
             # before it, and a skip there either finished on the pre-filter fare or turned every later DONE into
             # a skipped read and recovery. It is owed at most once per interaction, so it cannot read for ever.
@@ -2093,7 +2150,7 @@ class Agent:
             # Past the barren budget this exact content is either read now or was read before, so the notes hold
             # what the last interaction drew. A barren skip read nothing, and leaves the read owed.
             state.owes_read = False
-            key = observation.document_key, capture.sha256, wanted_ids
+            key = observation.document_key, capture.sha256, wanted_ids, state.open_answer_outputs
             if key in state.reads and not transaction_pending:
                 trace("read_skipped", reason="unchanged_content_and_requirements")
                 return False, True
@@ -2124,6 +2181,8 @@ class Agent:
         following = next_page_control(observation) if observation is not None else None
         began = state.first_url if following is not None or state.pages else None
         question = read_question(state.task, wanted, began_at=None if began is None else self._redactor.redact(began))
+        if state.open_answer_outputs:
+            question += "\nStill missing or unsupported answer outputs: " + "; ".join(state.open_answer_outputs)
         needs_context = any(r.kind is RequirementKind.ACTION for r in plan.requirements)
         if needs_context:
             question += (
@@ -2132,10 +2191,7 @@ class Agent:
             )
         notice = next_page_notice(following)
         before = len(state.notes.facts)
-        known = {
-            (fact.evidence.url, fact.evidence.frame_id, fact.evidence.quote) if fact.evidence is not None else fact.text
-            for fact in state.notes.facts
-        }
+        known = _answer_evidence(state.notes, include_answer=False)
         evidenced = {r.id for r in wanted if state.notes.evidenced(r.id)}
         outcome = await read(
             self._llm,
@@ -2161,16 +2217,10 @@ class Agent:
         state.tally_readers = outcome.tally_readers
         state.comparisons = outcome.comparisons
         # A timer changes the capture hash and a reader can paraphrase the same claim, so only a new source
-        # quote or a newly evidenced requirement restores the read budget. Derived conclusions use their text.
-        progressed = any(
-            (
-                (fact.evidence.url, fact.evidence.frame_id, fact.evidence.quote)
-                if fact.evidence is not None
-                else fact.text
-            )
-            not in known
-            for fact in state.notes.facts
-        ) or any(state.notes.evidenced(r.id) for r in wanted if r.id not in evidenced)
+        # quote or a newly evidenced requirement restores the read budget.
+        progressed = bool(_answer_evidence(state.notes, include_answer=False) - known) or (
+            not state.open_answer_outputs and any(state.notes.evidenced(r.id) for r in wanted if r.id not in evidenced)
+        )
         continues = [key for key in outcome.continues if not state.notes.evidenced(key)]
         trace(
             "read",
@@ -2265,6 +2315,7 @@ class Agent:
                 )
                 return
         before = len(state.notes.facts)
+        state.notes.remember_capture(page.capture)
         outcome.merge_records(state.notes)
         state.incomplete.update(outcome.incomplete)
         state.history.append(
@@ -2489,7 +2540,9 @@ class Agent:
                 )
             except LLMError as error:
                 state.paging_failed = True
-                state.reads.discard((observation.document_key, capture.sha256, tuple(r.id for r in wanted)))
+                state.reads.discard(
+                    (observation.document_key, capture.sha256, tuple(r.id for r in wanted), state.open_answer_outputs)
+                )
                 state.hint = self._redactor.redact(f"Pagination read failed: {error}. Read this page again.")
                 state.history.append(
                     HistoryEntry(
@@ -2595,7 +2648,9 @@ class Agent:
                         "on the page and names no control. scroll moves down; scroll_up moves up. "
                         "A read takes in the whole page, so scroll only to reach a control, load more, or position "
                         "content the task explicitly asks to see in the viewport. "
-                        "When the notes already answer every open requirement, the next "
+                        "Unverified answer outputs remain open even when a requirement has other cited fields. "
+                        "Gather their missing quotes instead of finishing from the same partial notes. "
+                        "When the notes answer every open requirement and no unverified outputs remain, the next "
                         "subgoal is to finish. Recovery memory records earlier diagnoses and subgoals; "
                         "use the recent steps to judge whether to try another way. "
                         "For a covered control, dismiss the observed overlay before trying the underlying "
@@ -2634,6 +2689,7 @@ class Agent:
                         f"{_recovery_memory(state, self._config.stall.max_recoveries, self._redactor)}\n\n"
                         f"## Current date\n{observation.today}\n\n"
                         f"## Still to find\n{open_requirements or 'nothing'}\n\n"
+                        f"## Unverified answer outputs\n{'; '.join(state.open_answer_outputs) or 'none'}\n\n"
                         f"## Task\n{state.task}\n\n## Problem\n{reason}"
                     ),
                     images=await self._screenshots(),
@@ -2646,7 +2702,13 @@ class Agent:
         if generation.data.give_up:
             # Asked of the model rather than carried from the step that raised it: a missing value can surface
             # recoveries later, after an attempt to go on without it has failed for its absence.
-            status = Status.NEEDS_INPUT if generation.data.needs_input else Status.STUCK
+            status = (
+                Status.NEEDS_INPUT
+                if generation.data.needs_input
+                else Status.UNVERIFIED
+                if gives_up_as is Status.UNVERIFIED
+                else Status.STUCK
+            )
             if state.http_failure is not None and status is not Status.NEEDS_INPUT:
                 raise state.http_failure.stop()
             raise _Stop(status, generation.data.diagnosis)
@@ -2737,8 +2799,16 @@ class Agent:
             raise _HttpFailure(url=fresh.url, status=fresh.response_status).stop()
         if failed := await self._failed_submission(state):
             raise failed.stop()
-        state.ledger.reserve(CostComponent.JEV)
         await state.await_plan()
+        state.reset_answer_check()
+        if state.open_answer_outputs and state.rejected_answer_evidence == _answer_evidence(state.notes):
+            # Re-reading the same partial quotes must not buy another completion check or reset recovery.
+            state.notes.unevidence(r.id for r in state.plan.requirements if r.kind is RequirementKind.INFORMATION)
+            state.rejected_answer_evidence = _answer_evidence(state.notes)
+            reason = "DONE rejected, no new output evidence: " + "; ".join(state.open_answer_outputs)
+            await self._recover(state, fresh, reason, gives_up_as=Status.UNVERIFIED)
+            return None
+        state.ledger.reserve(CostComponent.JEV)
         draft = draft_answer(state.plan, state.notes) if state.plan.page_answer_expected else None
         checking = asyncio.create_task(
             check_done(
@@ -2754,13 +2824,20 @@ class Agent:
                 visited=_visited(state.visited, self._config.observation, self._redactor.redact),
             )
         )
-        # The draft and its quotes already exist. Checking them after DONE paid a second round trip
-        # for every short answer, although neither check needs the other's verdict.
-        claiming = asyncio.create_task(self._holds(state, draft)) if draft is not None else None
+        # Legacy claim checks use only Jev; atomic output audits must wait until the draft is actually offered.
+        claiming = (
+            asyncio.create_task(self._holds(state, draft))
+            if draft is not None and not state.plan.answer_checks
+            else None
+        )
         try:
             check = await checking
             state.ledger.record(check.cost)
-            held = await claiming if claiming is not None else None
+            held = None
+            if claiming is not None:
+                held = await claiming
+            elif check.answer is not None and check.verdict is not DoneVerdict.REJECT:
+                held = await self._holds(state, check.answer)
         finally:
             for pending in (checking, claiming):
                 if pending is not None:
@@ -2807,6 +2884,7 @@ class Agent:
                             tokens=self._config.tokens,
                             ledger=state.ledger,
                             transaction_evidence_ids=await self._transaction_evidence_ids(state),
+                            corrections=state.answer_corrections,
                         )
                     )
                 verdict = await llm_verify(
@@ -2848,7 +2926,14 @@ class Agent:
                 handed, drafting = drafting, None
                 result = await self._conclude(state, output_schema, check.answer or handed)
                 fresh = self._observed or fresh
-                if until is not None:
+                if result.status is Status.UNVERIFIED and state.missing_answer_outputs:
+                    # Cited partial notes made DONE repeat; reopen them so recovery can gather the missing outputs.
+                    state.notes.unevidence(
+                        r.id for r in state.plan.requirements if r.kind is RequirementKind.INFORMATION
+                    )
+                    state.rejected_answer_evidence = _answer_evidence(state.notes)
+                    accepted, result = False, None
+                if accepted and until is not None:
                     accepted = await until((self._raw_observation or fresh).url)
             if not accepted:
                 requirements = {r.id: r.text for r in state.plan.requirements}
@@ -2866,6 +2951,7 @@ class Agent:
                     for key in sorted(misread)
                 ]
                 state.notes.unevidence(misread)
+                unmet += [f"Answer output not verified: {output}" for output in state.missing_answer_outputs]
                 reason = self._redactor.redact(f"DONE rejected: {'; '.join(unmet) or 'completion not confirmed'}")
                 state.history.append(
                     HistoryEntry(
@@ -2879,7 +2965,10 @@ class Agent:
                 # The verifier only runs when Jev's done check doubts; otherwise Jev's verdict is the last word.
                 judge = Decider.LLM if check.verdict is DoneVerdict.VERIFY else Decider.JEV
                 await self._record_failure(state, fresh, Operation.DONE, reason, decided_by=judge)
-                await self._recover(state, fresh, reason)
+                if state.missing_answer_outputs:
+                    await self._recover(state, fresh, reason, gives_up_as=Status.UNVERIFIED)
+                else:
+                    await self._recover(state, fresh, reason)
                 return None
             return result
         finally:
@@ -2891,6 +2980,17 @@ class Agent:
         if isinstance(prepared, ComposedAnswer):
             return prepared, True
         facts = draft_answer(state.plan, state.notes)
+
+        def failed_checks() -> tuple[int, int]:
+            failures = {
+                (correction.stage, correction.criterion, tuple(claim.model_dump_json() for claim in correction.claims))
+                for correction in state.answer_corrections
+            }
+            return sum(stage == "source" for stage, _, _ in failures), sum(
+                stage == "assertion" for stage, _, _ in failures
+            )
+
+        previous_failures = failed_checks() if state.answer_corrections else None
         try:
             composed = (
                 await (
@@ -2904,6 +3004,7 @@ class Agent:
                         tokens=self._config.tokens,
                         ledger=state.ledger,
                         transaction_evidence_ids=await self._transaction_evidence_ids(state),
+                        corrections=state.answer_corrections,
                     )
                 )
             ).data
@@ -2913,9 +3014,32 @@ class Agent:
             if facts is None:
                 raise
             logger.warning("The composer failed; offering the reader's facts to the claim check", exc_info=True)
-            composed, facts = facts, None
+            composed, facts, previous_failures = facts, None, (0, 0)
         held = await self._holds(state, composed)
-        if held is None and facts is not None:
+        while held is None and state.answer_corrections:
+            failures = failed_checks()
+            # Fixing cited sources can expose assertion failures; after that, only fewer assertions buy a repair.
+            if previous_failures is not None and failures >= previous_failures:
+                break
+            previous_failures = failures
+            try:
+                corrected = await compose(
+                    self._llm,
+                    state.task,
+                    state.plan,
+                    state.notes,
+                    tokens=self._config.tokens,
+                    ledger=state.ledger,
+                    transaction_evidence_ids=await self._transaction_evidence_ids(state),
+                    corrections=state.answer_corrections,
+                )
+            except LLMError:
+                logger.warning("The answer correction failed; retaining the checked fallback", exc_info=True)
+                break
+            else:
+                composed = corrected.data
+                held = await self._holds(state, composed)
+        if held is None and facts is not None and facts != composed:
             # A list of forty records came back as one claim citing one quote, which no claim check should pass. The
             # reader's own facts each carry the quote that shows them, so they are offered to the same check.
             held = await self._holds(state, facts)
@@ -2993,15 +3117,62 @@ class Agent:
         return _HttpFailure(url=last.landed_url, status=last.landed_status)
 
     async def _holds(self, state: _RunState, answer: ComposedAnswer) -> ComposedAnswer | None:
-        return await check_claims(
-            self._jev,
-            answer,
-            state.notes,
-            self._config.thresholds,
-            tokens=self._config.tokens,
-            ledger=state.ledger,
-            transaction_evidence_ids=await self._transaction_evidence_ids(state),
-        )
+        proof = hashlib.sha256(
+            json.dumps(
+                {
+                    "facts": sorted(_answer_evidence(state.notes), key=repr),
+                    "sources": {key: source.model_dump(mode="json") for key, source in state.notes.evidence.items()},
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        if proof != state.answer_check_evidence:
+            state.answer_check_cache.clear()
+            state.answer_check_evidence = proof
+        transactions = tuple(sorted(await self._transaction_evidence_ids(state)))
+        key = state.task, state.plan.model_dump_json(), answer.model_dump_json(), transactions
+        cached = state.answer_check_cache.get(key)
+        if cached is not None:
+            held, missing, corrections = cached
+        else:
+            missing: list[str] = []
+            corrections: list[AnswerCorrection] = []
+            held = await check_claims(
+                self._jev,
+                answer,
+                state.notes,
+                self._config.thresholds,
+                tokens=self._config.tokens,
+                ledger=state.ledger,
+                transaction_evidence_ids=transactions,
+                answer_checks=tuple(
+                    dict.fromkeys(
+                        (
+                            *state.plan.answer_checks,
+                            *(r.text for r in state.plan.requirements if r.kind is RequirementKind.INFORMATION),
+                        )
+                    )
+                )
+                if state.plan.answer_checks
+                else (),
+                llm=self._llm,
+                missing_outputs=missing,
+                corrections=corrections,
+                audit_cache=state.output_audit_cache,
+                allow_scalar_jev=len(state.plan.answer_checks) == 1
+                and sum(r.kind is RequirementKind.INFORMATION for r in state.plan.requirements) == 1,
+                task=state.task,
+            )
+            # DONE and the composer fallback offered the same draft twice against unchanged proof.
+            state.answer_check_cache[key] = held, tuple(missing), tuple(corrections)
+        state.answer_corrections = tuple(corrections)
+        state.missing_answer_outputs = tuple(dict.fromkeys(missing))
+        if held is not None:
+            state.open_answer_outputs = ()
+            state.rejected_answer_evidence = None
+        elif missing:
+            state.open_answer_outputs = state.missing_answer_outputs
+        return held
 
     async def _extraction(self, state: _RunState, output_schema: type[BaseModel]) -> Extraction:
         """The caller's schema, filled from a capture taken inside this branch so it overlaps the answer."""
@@ -3059,6 +3230,17 @@ class Agent:
         cited: dict[tuple[str, str], Evidence] = {}
         for item in evidence:
             cited.setdefault((item.url, item.quote), item)
+        if not verified and state.missing_answer_outputs:
+            # Rejected answer outputs return to browsing; taking their ending frame added a discarded round trip.
+            return self._result(
+                state,
+                state.ledger,
+                status,
+                answer=answer,
+                data=data,
+                evidence=tuple(cited.values()),
+                citations=citations,
+            )
         if self._observed is not None:
             await self._observe_if_changed(self._observed)
         result = self._result(
@@ -3267,6 +3449,43 @@ def _unread(plan: Plan, notes: Notes) -> bool:
     # owes an answer with nothing read would hand the composer empty notes: one did, and ended complete on "".
     unresolved = any(r.kind is RequirementKind.INFORMATION for r in notes.unresolved(plan))
     return unresolved or (plan.page_answer_expected and not notes.facts)
+
+
+def _answer_evidence(notes: Notes, *, include_answer: bool = True) -> frozenset[tuple[str, str | None, str]]:
+    def source(evidence: Evidence) -> str:
+        page = notes.captured_page(evidence)
+        return json.dumps(
+            {
+                "url": evidence.url,
+                "frame_id": evidence.frame_id,
+                "quote": evidence.quote,
+                "source_id": evidence.source_id,
+                "heading_path": evidence.heading_path,
+                "page_title": page.title if page is not None else None,
+            }
+        )
+
+    known = notes.evidence
+    # A new summary over retained quotes cannot restore the budget for finding missing source evidence.
+    if not include_answer:
+        return frozenset((evidence.url, evidence.frame_id, source(evidence)) for evidence in known.values())
+    return frozenset(
+        (
+            fact.evidence.url if fact.evidence is not None else "",
+            fact.evidence.frame_id if fact.evidence is not None else None,
+            json.dumps(
+                {
+                    "value": source(fact.evidence) if fact.evidence is not None else fact.text,
+                    "text": fact.text,
+                    "requirements": notes.fact_requirements(fact_id(fact)),
+                    "basis": sorted(
+                        source(known[key]) for key in notes.expand_evidence_ids(fact.basis) if key in known
+                    ),
+                }
+            ),
+        )
+        for fact in notes.facts
+    )
 
 
 def _lookup(plan: Plan) -> bool:
@@ -3517,9 +3736,23 @@ def _link_key(observation: Observation, control: Control) -> tuple[str, str] | N
 def _stale_link_key(observation: Observation, control: Control) -> tuple[str, str] | None:
     if not observation.document_key or control.role != "link" or control.href is None:
         return None
-    return observation.document_key, json.dumps(
-        [observation.url, control.frame_id, control.frame_origin, control.href, control.label, control.context]
-    )
+    identity = [observation.url, control.frame_id, control.frame_origin, control.href]
+    try:
+        here = urlsplit(observation.url)
+        target = urlsplit(urljoin(observation.url, control.href))
+        navigation = (
+            control.frame_id is None
+            and bool(control.href)
+            and target.scheme in {"http", "https"}
+            and target._replace(fragment="") != here._replace(fragment="")
+        )
+    except ValueError:
+        navigation = False
+    # Related-product cards can change their captions while the same destination keeps failing freshness.
+    # Same-page links and frames without a known document address still need their separate action identity.
+    if not navigation:
+        identity.extend((control.label, control.context))
+    return observation.document_key, json.dumps(identity)
 
 
 def _without_failed_links(state: _RunState, observation: Observation) -> Observation:

@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from collections.abc import Iterable, Mapping
+from datetime import datetime
 from typing import Self
 from urllib.parse import urlsplit
 
@@ -62,7 +63,9 @@ def _address(url: str) -> str:
 
 
 def evidence_id(evidence: Evidence) -> str:
-    return f"{evidence.capture_sha256}:{evidence.start}:{evidence.end}"
+    # Equal text on different pages must not inherit the first page's citation or record identity.
+    address = hashlib.sha256(_address(evidence.url).encode()).hexdigest()[:16]
+    return f"{evidence.capture_sha256}:{evidence.start}:{evidence.end}:{address}"
 
 
 def fact_id(fact: Fact) -> str:
@@ -76,6 +79,11 @@ def fact_id(fact: Fact) -> str:
     return f"derived:{digest[:16]}"
 
 
+class CapturedPage(Frozen):
+    url: str
+    title: str
+
+
 class Notes:
     def __init__(self, facts: Iterable[Fact] = ()) -> None:
         self._facts: dict[str, Fact] = {}
@@ -83,8 +91,18 @@ class Notes:
         self._tally_records: set[str] = set()
         self._record_ids: dict[tuple[str, str, str], list[dict[str, str]]] = {}
         self._continuation_records: dict[str, set[str]] = {}
+        self._pages: dict[tuple[str, str, datetime], CapturedPage] = {}
         for fact in facts:
             self.add(fact)
+
+    def remember_capture(self, capture: Capture) -> None:
+        # A title can change while the quoted body does not; recapturing must not rename older evidence.
+        self._pages.setdefault(
+            (capture.sha256, capture.url, capture.captured_at), CapturedPage(url=capture.url, title=capture.title)
+        )
+
+    def captured_page(self, evidence: Evidence) -> CapturedPage | None:
+        return self._pages.get((evidence.capture_sha256, evidence.url, evidence.captured_at))
 
     @property
     def facts(self) -> tuple[Fact, ...]:
@@ -205,6 +223,9 @@ class Notes:
         self._facts[key] = fact
         return True
 
+    def fact_requirements(self, key: str) -> tuple[str, ...]:
+        return tuple(sorted(self._requirements.get(key, ())))
+
     def evidenced(self, requirement_id: str) -> bool:
         return any(requirement_id in requirements for requirements in self._requirements.values())
 
@@ -303,7 +324,12 @@ class Notes:
                 address = fact.evidence.url
                 source = f" source={sources.get(address, len(sources) + 1)}"
                 if address not in sources:
-                    source += f" url={json.dumps(address)}"
+                    # Tracking addresses hid previously checked entities from the action chooser.
+                    source += (
+                        f" url={json.dumps(address)}"
+                        if len(address) <= 256
+                        else f" url_prefix={json.dumps(address[:256])}"
+                    )
             line = (
                 f"{json.dumps(fact.text, ensure_ascii=False)} "
                 f"requirements={','.join(sorted(self._requirements[key])) or '-'}{source}"

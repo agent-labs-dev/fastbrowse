@@ -33,18 +33,19 @@ async def evaluate_batches(
 ) -> Answered | None:
     """None when no batch was answered; a question too large to send with the state alone goes unscored."""
     ratio = tokens.chars_per_token
-    state_size = len(json.dumps(state)) / ratio
+    state_chars = len(json.dumps(state))
+    state_size = state_chars / ratio
     batches: list[dict[str, Question]] = []
     batch: dict[str, Question] = {}
     batch_size = 0.0
     for key, question in questions.items():
         size = len(question.model_dump_json()) / ratio
-        if (
-            state_size + size > tokens.state_plus_largest_question
-            or state_size + size > tokens.state_plus_all_questions
-        ):
+        if state_chars > tokens.input_chars([question.model_dump_json()], jev=True):
             continue
-        if batch and state_size + batch_size + size > min(tokens.batch_tokens, tokens.state_plus_all_questions):
+        if batch and (
+            state_size + batch_size + size > min(tokens.batch_tokens, tokens.state_plus_all_questions)
+            or state_chars > tokens.input_chars([q.model_dump_json() for q in (*batch.values(), question)], jev=True)
+        ):
             batches.append(batch)
             batch = {}
             batch_size = 0.0
