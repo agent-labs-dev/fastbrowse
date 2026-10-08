@@ -315,6 +315,10 @@ class _RunState:
     missing_answer_outputs: tuple[str, ...] = ()
     open_answer_outputs: tuple[str, ...] = ()
     rejected_answer_evidence: frozenset[tuple[str, str | None, str]] | None = None
+    answer_check_evidence: str | None = None
+    answer_check_cache: dict[tuple[str, str, str, tuple[str, ...]], tuple[ComposedAnswer | None, tuple[str, ...]]] = (
+        field(default_factory=dict)
+    )
     relevance_cache: RelevanceCache = field(default_factory=RelevanceCache)
     steps: list[StepResult] = field(default_factory=list[StepResult])
     would_fire: list[Tripwire] = field(default_factory=list[Tripwire])
@@ -2795,13 +2799,20 @@ class Agent:
                 visited=_visited(state.visited, self._config.observation, self._redactor.redact),
             )
         )
-        # The draft and its quotes already exist. Checking them after DONE paid a second round trip
-        # for every short answer, although neither check needs the other's verdict.
-        claiming = asyncio.create_task(self._holds(state, draft)) if draft is not None else None
+        # Legacy claim checks use only Jev; atomic output audits must wait until the draft is actually offered.
+        claiming = (
+            asyncio.create_task(self._holds(state, draft))
+            if draft is not None and not state.plan.answer_checks
+            else None
+        )
         try:
             check = await checking
             state.ledger.record(check.cost)
-            held = await claiming if claiming is not None else None
+            held = None
+            if claiming is not None:
+                held = await claiming
+            elif check.answer is not None and check.verdict is not DoneVerdict.REJECT:
+                held = await self._holds(state, check.answer)
         finally:
             for pending in (checking, claiming):
                 if pending is not None:
@@ -3045,31 +3056,51 @@ class Agent:
         return _HttpFailure(url=last.landed_url, status=last.landed_status)
 
     async def _holds(self, state: _RunState, answer: ComposedAnswer) -> ComposedAnswer | None:
-        missing: list[str] = []
-        held = await check_claims(
-            self._jev,
-            answer,
-            state.notes,
-            self._config.thresholds,
-            tokens=self._config.tokens,
-            ledger=state.ledger,
-            transaction_evidence_ids=await self._transaction_evidence_ids(state),
-            answer_checks=tuple(
-                dict.fromkeys(
-                    (
-                        *state.plan.answer_checks,
-                        *(r.text for r in state.plan.requirements if r.kind is RequirementKind.INFORMATION),
+        proof = hashlib.sha256(
+            json.dumps(
+                {
+                    "facts": sorted(_answer_evidence(state.notes), key=repr),
+                    "sources": {key: source.model_dump(mode="json") for key, source in state.notes.evidence.items()},
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        if proof != state.answer_check_evidence:
+            state.answer_check_cache.clear()
+            state.answer_check_evidence = proof
+        transactions = tuple(sorted(await self._transaction_evidence_ids(state)))
+        key = state.task, state.plan.model_dump_json(), answer.model_dump_json(), transactions
+        cached = state.answer_check_cache.get(key)
+        if cached is not None:
+            held, missing = cached
+        else:
+            missing: list[str] = []
+            held = await check_claims(
+                self._jev,
+                answer,
+                state.notes,
+                self._config.thresholds,
+                tokens=self._config.tokens,
+                ledger=state.ledger,
+                transaction_evidence_ids=transactions,
+                answer_checks=tuple(
+                    dict.fromkeys(
+                        (
+                            *state.plan.answer_checks,
+                            *(r.text for r in state.plan.requirements if r.kind is RequirementKind.INFORMATION),
+                        )
                     )
                 )
+                if state.plan.answer_checks
+                else (),
+                llm=self._llm,
+                missing_outputs=missing,
+                allow_scalar_jev=len(state.plan.answer_checks) == 1
+                and sum(r.kind is RequirementKind.INFORMATION for r in state.plan.requirements) == 1,
+                task=state.task,
             )
-            if state.plan.answer_checks
-            else (),
-            llm=self._llm,
-            missing_outputs=missing,
-            allow_scalar_jev=len(state.plan.answer_checks) == 1
-            and sum(r.kind is RequirementKind.INFORMATION for r in state.plan.requirements) == 1,
-            task=state.task,
-        )
+            # DONE and the composer fallback offered the same draft twice against unchanged proof.
+            state.answer_check_cache[key] = held, tuple(missing)
         state.missing_answer_outputs = tuple(dict.fromkeys(missing))
         if held is not None:
             state.open_answer_outputs = ()

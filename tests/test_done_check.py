@@ -331,3 +331,29 @@ def test_completion_cuts_dense_page_json_before_sending_a_verdict() -> None:
     state = page_state(_PAGE.model_copy(update={"viewport_text": text}), notes, questions=[question])
     assert len(json.dumps(state)) + len(question) <= 48000
     assert "Total is 42" in str(state)
+
+
+async def test_completion_sheds_optional_draft_before_required_source_quotes() -> None:
+    from fastbrowse.retrieval import Claim, assemble_answer
+
+    quote = "Grounded source value " * 650
+    fact = Fact(
+        reader=FactReader.LLM,
+        requirement_id="r1",
+        text="Requested value",
+        evidence=evidence(end=len(quote)).model_copy(update={"quote": quote}),
+    )
+    notes = Notes((fact,))
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Report the requested value", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    draft = assemble_answer(
+        (Claim(text="Long optional prose " * 2000, evidence_ids=(fact_id(fact),)),), notes, plan.requirements
+    )
+    jev = _Jev({"complete": 0.9, "draft_needs_writing": 0.0})
+    result = await check_done(jev, "Report the requested value", plan, _PAGE, notes, Thresholds(), draft)
+    assert result.verdict is DoneVerdict.ACCEPT and result.answer is None
+    assert isinstance(jev.state, dict) and "draft" not in jev.state
+    assert quote in str(jev.state) and "draft_needs_writing" not in jev.questions
+    assert len(json.dumps(jev.state)) + max(len(q.model_dump_json()) for q in jev.questions.values()) <= 48000

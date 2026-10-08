@@ -241,12 +241,21 @@ async def check_done(
         context["visited"] = list(visited)
     if draft is not None:
         context["draft"] = draft.answer
-    evaluation = await jev.evaluate(
-        page_state(
+    try:
+        state = page_state(
             observation, notes, tokens, questions=[q.model_dump_json() for q in questions.values()], context=context
-        ),
-        questions,
-    )
+        )
+    except NotesTooLarge:
+        if draft is None:
+            raise
+        # The optional answer draft crowded out the quotes required to judge completion.
+        context.pop("draft")
+        questions.pop("draft_needs_writing")
+        draft = None
+        state = page_state(
+            observation, notes, tokens, questions=[q.model_dump_json() for q in questions.values()], context=context
+        )
+    evaluation = await jev.evaluate(state, questions)
     for requirement in plan.requirements:
         if _probability(evaluation.answers, f"unmet_{requirement.id}") > thresholds.claim_problem_above:
             unmet.append(requirement.id)

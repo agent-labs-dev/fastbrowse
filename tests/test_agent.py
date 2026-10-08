@@ -3131,7 +3131,7 @@ async def test_transaction_verdicts_are_cached_across_answer_attempts(
     assert len(jev.classifications) == 1
     ids = tuple(state.notes.evidence)[1:] if probability > Config().thresholds.irreversible_above else ()
     assert [call.kwargs["transaction_evidence_ids"] for call in composing.await_args_list] == [ids, ids]
-    assert state.ledger.jev_calls == len(jev.requests) == (5 if ids else 3)
+    assert state.ledger.jev_calls == len(jev.requests) == (3 if ids else 2)
     assert state.ledger.lines.count(FREE) == len(jev.requests)
 
 
@@ -5773,3 +5773,98 @@ async def test_answer_evidence_tracks_promoted_context_without_turning_paraphras
     notes.unevidence(("r",))
     assert _answer_evidence(notes) != promoted
     assert notes.fact_requirements(fact_id(fact)) == ()
+
+
+async def test_identical_answer_checks_reuse_verdict_until_evidence_or_scope_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastbrowse.retrieval import Claim, assemble_answer
+
+    state = await run_state()
+    fact = Fact(reader=FactReader.LLM, text="Admission 12", evidence=evidence())
+    state.notes.add(fact)
+    answer = assemble_answer((Claim(text=fact.text, evidence_ids=(fact_id(fact),)),), state.notes, ())
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    calls = 0
+
+    async def checked(*args: Any, **kwargs: Any) -> None:
+        nonlocal calls
+        calls += 1
+        kwargs["missing_outputs"].append("Report opening hours.")
+
+    monkeypatch.setattr(agent_module, "check_claims", checked)
+    assert await agent._holds(state, answer) is None
+    state.reset_answer_check()
+    assert await agent._holds(state, answer) is None
+    assert calls == 1 and state.missing_answer_outputs == ("Report opening hours.",)
+    state.notes.add(fact.model_copy(update={"text": "Admission is 12", "requirement_id": "r1"}))
+    assert await agent._holds(state, answer) is None
+    assert calls == 2
+    state.ready_plan = state.plan.model_copy(update={"answer_checks": ("Report admission.",)})
+    assert await agent._holds(state, answer) is None
+    assert calls == 3
+
+
+async def test_answer_cache_rechecks_replaced_citation_ids_even_with_identical_quotes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastbrowse.agent import _answer_evidence
+    from fastbrowse.retrieval import Claim, assemble_answer
+
+    state = await run_state()
+    fact = Fact(reader=FactReader.LLM, text="Admission 12", evidence=evidence())
+    state.notes = Notes((fact,))
+    answer = assemble_answer((Claim(text=fact.text, evidence_ids=(fact_id(fact),)),), state.notes, ())
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    calls = 0
+
+    async def checked(*args: Any, **kwargs: Any):
+        nonlocal calls
+        calls += 1
+        return (
+            answer
+            if all(key in state.notes.evidence for claim in answer.claims for key in claim.evidence_ids)
+            else None
+        )
+
+    monkeypatch.setattr(agent_module, "check_claims", checked)
+    assert await agent._holds(state, answer) == answer
+    assert await agent._holds(state, answer) == answer and calls == 1
+    semantic = _answer_evidence(state.notes)
+    assert fact.evidence is not None
+    recaptured = fact.model_copy(update={"evidence": fact.evidence.model_copy(update={"capture_sha256": "new"})})
+    state.notes = Notes((recaptured,))
+    assert _answer_evidence(state.notes) == semantic
+    assert await agent._holds(state, answer) is None and calls == 2
+
+
+async def test_rewritten_atomic_draft_does_not_pay_for_discarded_output_audits(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastbrowse.models import CostBasis, CostBreakdown, CostLine
+    from fastbrowse.verification import DoneCheck, DoneVerdict
+
+    state = await run_state()
+    agent, on = await _finishing(state, ScriptedLLM([]), noul=0.0)
+    state.ready_plan = state.plan.model_copy(update={"answer_expected": True, "answer_checks": ("Report the fare.",)})
+    state.notes.add(_fare(on.url, "fare"))
+    check = DoneCheck(
+        verdict=DoneVerdict.ACCEPT,
+        complete=1,
+        unmet=(),
+        doubted=(),
+        answer=None,
+        cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0),
+    )
+    monkeypatch.setattr(agent_module, "check_done", AsyncMock(return_value=check))
+    agent._holds = AsyncMock()
+    expected = RunResult(
+        status=Status.UNVERIFIED,
+        answer=None,
+        data=None,
+        evidence=(),
+        artifacts=(),
+        steps=(),
+        cost=CostBreakdown(lines=()),
+    )
+    agent._conclude = AsyncMock(return_value=expected)
+    assert await agent._finish(state, None, None) == expected
+    agent._holds.assert_not_awaited()
