@@ -85,6 +85,7 @@ from fastbrowse.policy import (
     ObservationTooLarge,
     ReadAssessment,
     Reduction,
+    RelevanceCache,
     StepContext,
     decide,
 )
@@ -138,6 +139,7 @@ _NOT_ACTING = frozenset({Operation.READ, Operation.DONE})
 _REPEATS_BEFORE_CYCLE = 2
 """Times one action may be taken from one page and still count as progress. Scrolling is exempt: a long page
 takes many scrolls, each of which shows something new."""
+_STALE_LINK_FAILURES = 2
 _PAGE_OPERATIONS = frozenset({Operation.READ, *SCROLLING, Operation.BACK, Operation.ESCAPE, Operation.DONE})
 """Recovery can direct page operations without a control; directed DONE still requires verification."""
 _CYCLE_SHOWN = 4
@@ -310,11 +312,14 @@ class _RunState:
     ledger: Ledger
     planning: asyncio.Task[Generation[Plan]]
     notes: Notes = field(default_factory=Notes)
+    relevance_cache: RelevanceCache = field(default_factory=RelevanceCache)
     steps: list[StepResult] = field(default_factory=list[StepResult])
     would_fire: list[Tripwire] = field(default_factory=list[Tripwire])
     history: list[HistoryEntry] = field(default_factory=list[HistoryEntry])
     http_failure: _HttpFailure | None = None
     failed_links: dict[tuple[str, str], _HttpFailure] = field(default_factory=dict)
+    stale_links: dict[tuple[str, str], int] = field(default_factory=dict)
+    """Repeated stale links survive intervening reads, which otherwise reset progress while the same click fails."""
     pending_link: tuple[str, str] | None = None
     http_seen: set[tuple[str, str, int]] = field(default_factory=set)
     hint: str | None = None
@@ -707,6 +712,7 @@ class Agent:
                     context,
                     self._config,
                     ledger=state.ledger,
+                    relevance_cache=state.relevance_cache,
                 ),
                 observation,
                 None,
@@ -1001,6 +1007,13 @@ class Agent:
             link = _link_key(observation, decision.target)
             if link is not None and (failure := state.failed_links.get(link)) is not None:
                 raise failure.stop()
+        stale_link = _stale_link_key(observation, decision.target) if decision.target is not None else None
+        if (
+            decision.operation is Operation.CLICK
+            and stale_link is not None
+            and state.stale_links.get(stale_link, 0) >= _STALE_LINK_FAILURES
+        ):
+            raise _Unsure("This link repeatedly became stale before input. Use another route to the requested page.")
         started = time.monotonic()
         state.form_continues = False
         if decision.operation not in {Operation.FILL, Operation.READ, *SCROLLING}:
@@ -1049,6 +1062,11 @@ class Agent:
             )
             if act.outcome is StepOutcome.STALE and decision.target is not None and not action.form_fill:
                 act = await self._act_on_twin(action, observation, decision.target) or act
+            if action.operation is Operation.CLICK and stale_link is not None:
+                if act.outcome is StepOutcome.STALE:
+                    state.stale_links[stale_link] = state.stale_links.get(stale_link, 0) + 1
+                elif act.outcome is StepOutcome.EXECUTED:
+                    state.stale_links.pop(stale_link, None)
             if act.outcome is StepOutcome.EXECUTED and state.authorization.irreversible_actions:
                 question = None
                 if decision.target is not None and may_be_irreversible(decision.operation, decision.target):
@@ -2105,7 +2123,10 @@ class Agent:
             )
         notice = next_page_notice(following)
         before = len(state.notes.facts)
-        known = {fact.text for fact in state.notes.facts}
+        known = {
+            (fact.evidence.url, fact.evidence.frame_id, fact.evidence.quote) if fact.evidence is not None else fact.text
+            for fact in state.notes.facts
+        }
         evidenced = {r.id for r in wanted if state.notes.evidenced(r.id)}
         outcome = await read(
             self._llm,
@@ -2130,11 +2151,17 @@ class Agent:
         state.incomplete.update(outcome.incomplete)
         state.tally_readers = outcome.tally_readers
         state.comparisons = outcome.comparisons
-        # Payout is what the notes did not already say. A fact is keyed by the capture it was read from, so a
-        # page that rewrites a line re-mints the same records as new facts, and counting them read it for ever.
-        progressed = any(fact.text not in known for fact in state.notes.facts) or any(
-            state.notes.evidenced(r.id) for r in wanted if r.id not in evidenced
-        )
+        # A timer changes the capture hash and a reader can paraphrase the same claim, so only a new source
+        # quote or a newly evidenced requirement restores the read budget. Derived conclusions use their text.
+        progressed = any(
+            (
+                (fact.evidence.url, fact.evidence.frame_id, fact.evidence.quote)
+                if fact.evidence is not None
+                else fact.text
+            )
+            not in known
+            for fact in state.notes.facts
+        ) or any(state.notes.evidenced(r.id) for r in wanted if r.id not in evidenced)
         continues = [key for key in outcome.continues if not state.notes.evidenced(key)]
         trace(
             "read",
@@ -3141,7 +3168,7 @@ class Agent:
             task=state.task,
             subgoal=state.hint,
             requirements=tuple(r.text for r in state.ready_plan.requirements) if state.ready_plan else (),
-            notes=state.notes.render(self._config.observation.working_notes_chars),
+            notes=state.notes.render_for_navigation(self._config.observation.working_notes_chars),
             history=_history(state.history, self._config.observation),
             recovery_memory=_recovery_memory(state, self._config.stall.max_recoveries, self._redactor),
             check_login=check_login,
@@ -3460,13 +3487,27 @@ def _link_key(observation: Observation, control: Control) -> tuple[str, str] | N
     return state_key(observation), json.dumps([control.href, control.label, control.context])
 
 
+def _stale_link_key(observation: Observation, control: Control) -> tuple[str, str] | None:
+    if not observation.document_key or control.role != "link" or control.href is None:
+        return None
+    return observation.document_key, json.dumps(
+        [observation.url, control.frame_id, control.frame_origin, control.href, control.label, control.context]
+    )
+
+
 def _without_failed_links(state: _RunState, observation: Observation) -> Observation:
-    if not state.failed_links:
+    if not state.failed_links and not state.stale_links:
         return observation
     return observation.model_copy(
         update={
             "controls": tuple(
-                control for control in observation.controls if _link_key(observation, control) not in state.failed_links
+                control
+                for control in observation.controls
+                if _link_key(observation, control) not in state.failed_links
+                and (
+                    (stale := _stale_link_key(observation, control)) is None
+                    or state.stale_links.get(stale, 0) < _STALE_LINK_FAILURES
+                )
             )
         }
     )

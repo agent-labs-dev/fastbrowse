@@ -2855,6 +2855,32 @@ async def test_a_read_carries_incomplete_comparisons_to_later_reads(monkeypatch:
     assert not state.notes.evidenced("r1")
 
 
+async def test_repeated_stale_links_recover_even_when_intervening_reads_add_facts() -> None:
+    state = await _reading_state()
+    target = _link("product", "Another product", "/product")
+    here = _at("https://example.test/live/", target).model_copy(update={"document_key": "same-document"})
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=here)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.STALE, page_changed=False))
+    llm = ScriptedLLM(
+        [
+            {"claims": [{"cite": {"first": "s0", "last": "s0"}, "text": f"Context {i}"}], "answered": False}
+            for i in range(2)
+        ]
+    )
+    agent = Agent(page, ScriptedJev({"r1": "synthesis"}), llm)
+    for i in range(2):
+        await agent._step(state, here, _code_decision(Operation.CLICK, target), gate=False)
+        await agent._step(state, here, _code_decision(Operation.READ, None), capture=_ticker(i))
+    assert len(state.notes.facts) == 2
+    assert not agent_module._without_failed_links(state, here).controls
+    with pytest.raises(_Unsure, match="stale"):
+        await agent._step(state, here, _code_decision(Operation.CLICK, target), gate=False)
+    assert page.act.await_count == 2
+    fresh_document = here.model_copy(update={"document_key": "new-document"})
+    assert agent_module._without_failed_links(state, fresh_document).controls == (target,)
+
+
 async def test_stale_clicks_exceed_the_step_limit_but_still_stall() -> None:
     target = _button("Continue")
     page = Mock(spec=Page)
@@ -3106,6 +3132,28 @@ async def test_a_page_that_rewrites_its_own_text_is_read_only_while_it_pays_out(
         skipped.append(was_skipped)
     assert len(llm.calls) == Config().stall.barren_reads
     assert skipped == [False, False, True, True, True]
+
+
+async def test_paraphrased_claims_from_the_same_quote_do_not_restore_the_read_budget() -> None:
+    state = await _reading_state()
+    here = _at("https://example.test/live/", _button("Refresh"))
+    responses: list[JsonValue] = [
+        {
+            "claims": [{"text": f"The total is twelve, phrasing {nth}", "cite": {"first": "s0", "last": "s0"}}],
+            "answered": False,
+        }
+        for nth in range(5)
+    ]
+    llm = ScriptedLLM(responses)
+    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
+    results = [
+        await agent._read(
+            state, capture((BlockKind.PARAGRAPH, "Total: 12"), (BlockKind.PARAGRAPH, f"Updated {nth}")), here
+        )
+        for nth in range(5)
+    ]
+    assert results == [(True, False), (False, False), (False, False), (False, True), (False, True)]
+    assert len(llm.calls) == 3
 
 
 async def test_a_read_that_pays_out_restores_the_budget_of_the_page_state_it_read() -> None:

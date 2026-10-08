@@ -11,6 +11,32 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Navigation notes write each source URL once and reference it from the remaining claims, preserving full
+  addresses while leaving more room for product details and progress.
+
+- Identical control relevance questions share one Jev score within each pass. Controls remain separate
+  action targets, with fresh selection and authorization.
+
+- Rewording an already collected source quote no longer counts as read progress, so timer redraws and
+  paraphrased claims cannot keep restoring a barren page's read budget. Newly evidenced requirements still count.
+
+- Links that repeatedly fail their freshness check leave the choices for that document, so intervening reads
+  cannot keep retrying the same stale link. Recovery can choose another route without weakening input guards.
+
+- Prose reads can cite a verified excerpt within a large source block, so later reads carry the supporting
+  passage instead of unrelated page text. Code copies the original span and rejects missing or ambiguous matches.
+
+- Independent answer claim checks run in parallel batches. Each omission check keeps its own quoted-evidence
+  budget instead of sharing it with unrelated claim questions. Missing or failed checks cannot verify an answer.
+
+- Action decisions keep recent progress claims when a source quote exceeds their notes budget, so collecting
+  a large quote does not hide which items were already checked. Reads and completion checks retain full quotes.
+
+- Page redraws retain completed Jev relevance scores for unchanged controls in the same document and task
+  context. Unfinished batches still run in parallel, and every action is chosen from the fresh page.
+
+- Collected evidence includes a verbatim source quote once when the fact text is identical, reducing repeated
+  input in later reads and checks while preserving source quotes and citation links.
 - The internal benchmark catalog includes the opt-in Codex and Cua Driver comparison arm, run by Parallax.
 - Final screenshots allow the fresh page check to finish its loading wait before capture. Loading pages
   retain their ending frame, with visible secrets still withheld.

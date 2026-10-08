@@ -19,8 +19,13 @@ gate is not a guarantee that every externally visible change is detected.
 ## Reading and citations
 
 The policy's read assessment distinguishes useful evidence from editable query previews and irrelevant
-content. Evidence is read before another interaction can remove it. Reads are deduplicated by document,
-capture hash and unresolved information requirements, so changed content can be read again.
+content. Navigation notes write each source URL once and refer to it from later claims. Evidence is read
+before another interaction can remove it. Reads are deduplicated by document,
+capture hash and unresolved information requirements, so changed content can be read again. A paraphrase
+of a collected quote does not restore the read budget; new source quotes and newly evidenced requirements
+do. Identical relevance questions share one score within a pass, while controls remain separate action
+targets. Links that fail freshness twice are excluded by document and link meaning, even when intervening reads
+add facts. A new document permits another attempt; input freshness and authorization checks still apply.
 
 For a bounded set of short quoted spans, Jev chooses a scalar fact, requests synthesis, or judges the
 requirement absent from the page. Identical values from the same page and frame share one choice with all
@@ -30,7 +35,9 @@ comparisons, partial evidence and paginated lists reach the LLM reader. `FactRea
 reader cites the capture's source blocks by id (one block, or
 consecutive blocks of one frame from the chunk it was shown). Code copies the quote from those blocks, so a
 table's escaped pipe or a record read as two lines cannot drop a fact, and a claim citing a block it was
-not shown is rejected.
+not shown is rejected. A prose claim can name a literal excerpt within its cited blocks. Code requires a
+unique match in the offered chunk and copies the original span, retaining its source hash and offsets.
+Missing or ambiguous excerpts are rejected. Complete record citations remain unchanged.
 
 When quotes from the same address are already in notes, the short-fact batch can also ask whether the full
 page adds relevant evidence. Literal diffs against matching source blocks help distinguish changed values
