@@ -426,27 +426,7 @@ def _remember(
         logger.debug("read rejected claim cite=%s basis=%d", reprlib.repr(claim.cite), len(basis))
         return None
     if evidence is not None:
-        for heading in evidence.heading_path:
-            block = next(
-                (
-                    block
-                    for block in reversed(capture.blocks)
-                    if block.kind is BlockKind.HEADING
-                    and block.frame_id == evidence.frame_id
-                    and block.start + len(heading) <= evidence.start
-                    and block.start + len(heading) <= block.end
-                    and capture.text[block.start : block.start + len(heading)] == heading
-                ),
-                None,
-            )
-            if block is None:
-                continue
-            # Readers see heading values as context; cite their captured spans before those values reach the answer.
-            context = Fact(
-                text=heading,
-                evidence=_evidence(capture, block, block.start, block.start + len(heading)),
-                reader=FactReader.LLM,
-            )
+        for context in _heading_facts(capture, evidence, FactReader.LLM):
             notes.add(context)
             key = fact_id(context)
             if key not in basis:
@@ -473,6 +453,33 @@ def _remember(
     )
     notes.add(fact)
     return fact
+
+
+def _heading_facts(capture: Capture, evidence: Evidence, reader: FactReader) -> tuple[Fact, ...]:
+    # A scalar quote can omit its subject, so both readers retain the headings that actually scoped it.
+    facts = []
+    for heading in evidence.heading_path:
+        block = next(
+            (
+                block
+                for block in reversed(capture.blocks)
+                if block.kind is BlockKind.HEADING
+                and block.frame_id == evidence.frame_id
+                and block.start + len(heading) <= evidence.start
+                and block.start + len(heading) <= block.end
+                and capture.text[block.start : block.start + len(heading)] == heading
+            ),
+            None,
+        )
+        if block is not None:
+            facts.append(
+                Fact(
+                    text=heading,
+                    evidence=_evidence(capture, block, block.start, block.start + len(heading)),
+                    reader=reader,
+                )
+            )
+    return tuple(facts)
 
 
 def _quoted_count(fact: Fact, notes: Notes, records: Mapping[str, Fact], capture: Capture) -> bool:
@@ -2075,7 +2082,12 @@ async def _read_choices(
             if len(group) > 1
             else ()
         )
-        facts.extend(context)
+        headings = tuple(
+            heading
+            for candidate in group
+            for heading in _heading_facts(capture, candidate.evidence, FactReader.JEV_CHOICE)
+        )
+        facts.extend((*context, *headings))
         logger.debug("read reader=jev_choice requirement=%s reason=scalar_candidate", requirement.id)
         # The candidate's evidence was cut from this capture by code, so it is kept as selected, not re-found.
         # The text is the value alone: the draft answer states a fact's text, and prefixed with the requirement it
@@ -2085,7 +2097,7 @@ async def _read_choices(
                 requirement_id=requirement.id,
                 text=str(selected.value),
                 evidence=None if context else selected.evidence,
-                basis=tuple(fact_id(fact) for fact in context),
+                basis=tuple(dict.fromkeys(fact_id(fact) for fact in (*context, *headings))),
                 reader=FactReader.JEV_CHOICE,
             )
         )

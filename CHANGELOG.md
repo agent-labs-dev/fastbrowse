@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Scalar reads retain cited headings that identify their values, so answer verification can bind a price
+  or count to its named subject. Heading evidence stays within its frame.
+
 - Answer verification requires a response for each requested check. Structured model responses cannot
   omit identity bindings or field judgments through empty maps.
 

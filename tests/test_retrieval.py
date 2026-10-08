@@ -4600,3 +4600,35 @@ async def test_page_text_that_looks_like_an_annotation_remains_literal() -> None
     }
     result = await read(ScriptedLLM([response]), page, "Report literal text.", ["r"], Notes())
     assert result.facts[0].evidence and result.facts[0].evidence.quote == literal
+
+
+@pytest.mark.parametrize("same_frame", [True, False])
+async def test_choice_read_preserves_cited_heading_identity(same_frame):
+    page = capture((BlockKind.HEADING, "Adapter Beacon"), (BlockKind.PARAGRAPH, "Price 12"))
+    heading, value = page.blocks
+    page = page.model_copy(
+        update={
+            "blocks": (
+                heading.model_copy(update={"frame_id": None if same_frame else "child"}),
+                value.model_copy(update={"heading_path": ("Adapter Beacon",)}),
+            )
+        }
+    )
+    candidates = read_candidates(page)
+    index = next(i for i, candidate in enumerate(candidates) if candidate.evidence.source_id == value.source_id)
+    requirement = Requirement(id="price", text="Report Adapter Beacon price", kind=RequirementKind.INFORMATION)
+    notes = Notes()
+    result = await read(
+        ScriptedLLM([]),
+        page,
+        requirement.text,
+        ["price"],
+        notes,
+        jev=_ReadJev({"price": _choice(f"c{index}")}),
+        requirements=(requirement,),
+    )
+    fact = next(fact for fact in result.facts if fact.requirement_id == "price")
+    quotes = [notes.evidence[key].quote for key in notes.expand_evidence_ids((fact_id(fact),))]
+    assert ("Adapter Beacon" in quotes) is same_frame
+    assert fact.evidence is not None and fact.reader is FactReader.JEV_CHOICE
+    assert not notes.derived(fact_id(fact))
