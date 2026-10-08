@@ -357,15 +357,15 @@ async def _hedged(
     allow_hedge: bool = True,
 ) -> httpx.Response | None:
     """The first usable response from one request, raced by a second if the first outlasts `hedge_seconds`."""
-    sent_before = usage.requests
-    requests = {asyncio.create_task(_send(http, url, body, headers, attempt_seconds, usage))}
+    dispatched: set[int] = set()
+    requests = {asyncio.create_task(_send(http, url, body, headers, attempt_seconds, usage, dispatched))}
     winner: asyncio.Task[httpx.Response | None] | None = None
     try:
         done, _ = await asyncio.wait(requests, timeout=hedge_seconds)
         if not done and allow_hedge:
             if before_hedge is not None:
                 before_hedge()
-            requests.add(asyncio.create_task(_send(http, url, body, headers, attempt_seconds, usage)))
+            requests.add(asyncio.create_task(_send(http, url, body, headers, attempt_seconds, usage, dispatched)))
         response: httpx.Response | None = None
         pending = set(requests)
         while pending:
@@ -377,19 +377,29 @@ async def _hedged(
                     return response
         return response
     finally:
-        # The losing request is still open on the provider; cancel it and wait, so nothing outlives the call.
+        # A second cancellation during transport cleanup must not abandon children or their receipts.
+        async def finish_requests() -> None:
+            for request in requests:
+                request.cancel()
+            await asyncio.gather(*requests, return_exceptions=True)
+
+        cleanup = asyncio.create_task(finish_requests())
+        cancelled = False
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                cancelled = True
+        cleanup.result()
         for request in requests:
-            request.cancel()
-        await asyncio.gather(*requests, return_exceptions=True)
-        unaccounted = 0
-        for request in requests:
-            if request is winner:
+            if id(request) not in dispatched or (request is winner and not cancelled):
                 continue
             result = None if request.cancelled() or request.exception() else request.result()
-            # Providers do not bill error statuses, so retries after those add no cost.
+            # A successful winner interrupted before delivery is unaccounted too; HTTP errors remain free.
             if result is None or result.is_success:
-                unaccounted += 1
-        usage.unaccounted_requests += min(unaccounted, usage.requests - sent_before)
+                usage.unaccounted_requests += 1
+        if cancelled:
+            raise asyncio.CancelledError
 
 
 async def _send(
@@ -399,8 +409,11 @@ async def _send(
     headers: Mapping[str, str],
     attempt_seconds: float,
     usage: RequestUsage,
+    dispatched: set[int] | None = None,
 ) -> httpx.Response | None:
     usage.requests += 1
+    if dispatched is not None:
+        dispatched.add(id(asyncio.current_task()))
     try:
         response = await http.post(url, json=body, headers=headers, timeout=attempt_seconds)
     except httpx.TimeoutException as error:

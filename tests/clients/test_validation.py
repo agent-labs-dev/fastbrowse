@@ -359,3 +359,43 @@ async def test_split_cancellation_retains_answered_and_cancelled_costs_once():
     assert costs[0] == metered
     assert costs[1].basis == CostBasis.ESTIMATED
     assert costs[1].dollars == validation.JEV_DOLLARS_PER_INPUT_TOKEN
+
+
+@pytest.mark.parametrize("status", [200, 400])
+@pytest.mark.parametrize("cancellations", [1, 2])
+async def test_cancellation_during_winner_cleanup_settles_every_dispatched_request(monkeypatch, status, cancellations):
+    monkeypatch.setattr(validation, "JEV_HEDGE_SECONDS", 0.001)
+    paired, cleaning, release, stopped = (asyncio.Event() for _ in range(4))
+    costs = []
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await paired.wait()
+            return httpx.Response(status)
+        paired.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaning.set()
+            await release.wait()
+            stopped.set()
+        raise AssertionError("Cancelled request returned")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with validation.jev_spend(costs):
+            task = asyncio.create_task(post(http, "https://jev.test/v1", "test", {}))
+            await cleaning.wait()
+            for _ in range(cancellations):
+                task.cancel()
+                await asyncio.sleep(0)
+            assert not stopped.is_set()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert stopped.is_set()
+    assert calls == 2
+    assert len(costs) == (2 if status == 200 else 1)
+    assert all(cost.basis is CostBasis.ESTIMATED and cost.dollars is not None for cost in costs)
