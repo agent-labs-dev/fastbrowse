@@ -128,7 +128,7 @@ async def run_task(
     )
     failure = task.check(result, recorder.snapshot())
     return {"arm": "fastbrowse", "category": "fixture", "suite": "local"} | _row(
-        result, task_id=task.id, failure=failure, seconds=seconds, lost=lost, limit=LOCAL_LIMITS.max_steps
+        result, task_id=task.id, failure=failure, seconds=seconds, lost=lost, limit=LOCAL_LIMITS.max_steps or 25
     )
 
 
@@ -160,7 +160,9 @@ async def run_mock_task(
             "orders_placed": len(site.orders_placed),
         }
         return {"arm": "fastbrowse", "category": "mock", "suite": "mock", "expected_status": task.expect.value} | (
-            _row(result, task_id=task.id, failure=failure, seconds=seconds, lost=lost, limit=MOCK_LIMITS.max_steps)
+            _row(
+                result, task_id=task.id, failure=failure, seconds=seconds, lost=lost, limit=MOCK_LIMITS.max_steps or 40
+            )
             | extra
         )
 

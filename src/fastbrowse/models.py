@@ -309,7 +309,7 @@ class Attachment(Frozen):
 
 
 class Limits(Frozen):
-    max_steps: int = Field(default=60, gt=0)
+    max_steps: int | None = Field(default=None, gt=0)
     """Steps that reached the page. A click whose element was redrawn before it landed dispatched nothing and is
     not counted; the stall budget ends a page that keeps redrawing."""
     max_jev_calls: int = Field(default=150, gt=0)

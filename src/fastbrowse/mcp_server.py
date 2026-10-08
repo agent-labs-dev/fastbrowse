@@ -398,7 +398,9 @@ def build_server(
                 return
             step = event.step
             await ctx.report_progress(
-                step.index + 1, limits.max_steps, f"{options.step_label(step)} -> {step.outcome.value}"
+                step.index + 1,
+                limits.max_steps or 60,
+                f"{options.step_label(step)} -> {step.outcome.value}",
             )
 
         if slots.locked() and ctx is not None:
@@ -518,9 +520,9 @@ def parse(argv: list[str]) -> argparse.Namespace:
         "--secret", action="append", default=[], type=_secret, metavar="NAME=ENV_VAR@ORIGIN", help="repeatable"
     )
     parser.add_argument("--bitwarden", action="append", default=[], metavar="ITEM", help="repeatable")
-    parser.add_argument("--max-steps", type=int, default=60, help="ceiling per call")
-    parser.add_argument("--max-dollars", type=float, default=1.0, help="ceiling per call, in USD")
-    parser.add_argument("--max-seconds", type=float, default=600.0, help="ceiling per call")
+    parser.add_argument("--max-steps", type=int, default=None, help="optional ceiling per call")
+    parser.add_argument("--max-dollars", type=float, default=None, help="optional ceiling per call, in USD")
+    parser.add_argument("--max-seconds", type=float, default=None, help="optional ceiling per call")
     parser.add_argument("--max-concurrent", type=int, default=1, help="runs at once; more wait")
     parser.add_argument("--downloads", type=Path, default=None, help="directory to keep downloaded files in")
     return parser.parse_args(argv)
@@ -529,10 +531,10 @@ def parse(argv: list[str]) -> argparse.Namespace:
 async def configure(args: argparse.Namespace, settings: Settings, environ: Mapping[str, str]) -> ServerConfig:
     """Everything that can be wrong with the setup, found before the first call rather than during it."""
     for flag, value in (("--max-steps", args.max_steps), ("--max-concurrent", args.max_concurrent)):
-        if value < 1:
+        if value is not None and value < 1:
             raise ConfigurationError(f"{flag} must be at least 1")
     for flag, value in (("--max-dollars", args.max_dollars), ("--max-seconds", args.max_seconds)):
-        if value <= 0:
+        if value is not None and value <= 0:
             raise ConfigurationError(f"{flag} must be above 0")
     chrome = options.chrome(settings, args.headed, args.profile)
     cloud = options.cloud(args.local, chrome, args.cloud_profile)

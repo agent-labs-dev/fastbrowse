@@ -84,7 +84,7 @@ class Ledger:
                     f"spend limit ${_dollars(limits.max_dollars)} reached",
                     budget=BudgetStop(resource="dollars", limit=limits.max_dollars),
                 )
-        if self.steps >= limits.max_steps:
+        if limits.max_steps is not None and self.steps >= limits.max_steps:
             raise BudgetExceeded(
                 f"step limit {limits.max_steps} reached", budget=BudgetStop(resource="steps", limit=limits.max_steps)
             )

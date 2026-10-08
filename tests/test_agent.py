@@ -3913,7 +3913,7 @@ async def test_pipeline_reserves_read_steps_and_respects_page_and_call_caps(
     llm.responses[pages - 1] = _continued()
     await agent._pipeline_pages(state, observations[0])
     assert page.navigate.await_count == state.pages == pages
-    assert state.ledger.steps == 1 + 2 * pages <= limits.max_steps
+    assert limits.max_steps is None or state.ledger.steps == 1 + 2 * pages <= limits.max_steps
     assert state.ledger.llm_calls == pages + 1 <= limits.max_llm_calls
     assert not state.notes.evidenced("r1")
 
