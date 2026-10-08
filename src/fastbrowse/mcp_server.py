@@ -394,9 +394,6 @@ def build_server(
                     await ctx.info(f"watch live: {live_url}")
                 return
             step = event.step
-            if limits.max_steps is None:
-                await ctx.info(f"{options.step_label(step)} -> {step.outcome.value}")
-                return
             await ctx.report_progress(
                 step.index + 1,
                 limits.max_steps,
