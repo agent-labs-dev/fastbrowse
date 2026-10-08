@@ -4205,3 +4205,14 @@ async def test_headerless_table_continuation_cites_its_displayed_identity_contex
     assert first in quoted
     assert any(rows[-1] in quote for quote in quoted)
     assert not notes.derived(fact_id(fact))
+
+
+def test_inline_citation_stripping_accepts_address_qualified_evidence_ids() -> None:
+    from fastbrowse.retrieval import _without_citation_markup
+
+    page = capture((BlockKind.PARAGRAPH, "Price £12"))
+    key = evidence_id(block_evidence(page, "s0"))
+    assert _without_citation_markup(f"Price £12 [{key}]") == "Price £12"
+    assert _without_citation_markup(f"Price £12 [{key}](https://example.test)") == "Price £12"
+    assert _without_citation_markup("Value [sha:1:2], [derived:abc], [tally:abc]") == "Value , ,"
+    assert _without_citation_markup("Use [optional] fields") == "Use [optional] fields"

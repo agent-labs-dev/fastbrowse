@@ -168,8 +168,8 @@
     let headers = rows.filter(({ row }) => row.parentElement.tagName === 'THEAD');
     if (!headers.length && rows[0].cells.every(c => c.tagName === 'TH')) headers = [rows[0]];
     const line = ({ cells }) => '| ' + cells.map(c => cellText(c).replace(/\|/g, '\\|')).join(' | ') + ' |';
-    // Without declared headers, splitting rows discards the cells that identify comparison columns.
-    if (!headers.length) return [rows.map(line).join('\n')];
+    // Headerless comparison rows need leading cells for identity and separate source spans for counting.
+    if (!headers.length) return rows.map((row, index) => (index ? [line(rows[0]), line(row)].join('\n') : line(row)));
     const prefix = headers.map(line);
     if (headers.length) prefix.push('| ' + headers[0].cells.map(() => '---').join(' | ') + ' |');
     const data = rows.filter(row => !headers.includes(row));

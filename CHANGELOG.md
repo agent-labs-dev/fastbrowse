@@ -14,7 +14,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Completion checks each requested answer output against its cited sources. Missing or ambiguous outputs
   return to recovery, so a partially answered requirement cannot finish from its other cited fields.
 - Identical captured spans on different addresses retain separate citations and counted records.
-- Headerless tables retain their rows together so a cited value keeps the cells identifying its column.
+- Headerless table rows retain the real leading cells identifying their columns and keep separate citations for counting.
 
 - Removing a doubted answer claim checks whether its requested output is missing, even when other fields
   still cite the same requirement. Optional details can still be removed.

@@ -2107,7 +2107,7 @@ def _without_citation_markup(text: str) -> str:
     # The composer can echo bracketed references in prose; only its checked evidence_ids create links.
     def replace(match: re.Match[str]) -> str:
         label = match[1]
-        if label.isdecimal() or re.fullmatch(r"[\w-]+:\d+:\d+|(?:derived|tally):[0-9a-f]+", label):
+        if label.isdecimal() or re.fullmatch(r"[\w-]+:\d+:\d+(?::[0-9a-f]{16})?|(?:derived|tally):[0-9a-f]+", label):
             logger.warning("compose dropped inline citation reference %r", label)
             return ""
         return label if match[2] else match[0]
