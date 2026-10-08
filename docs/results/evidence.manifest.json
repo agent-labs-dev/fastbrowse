@@ -5,10 +5,10 @@
   "campaigns": [
     {
       "id": "cua-full",
-      "sha256": "f961908b95e88bb9b58c1ca3dabbd0b9b4af8cd5a3cc047b6708a1b653a99e76",
-      "trace_id": "f961908b95e88bb9b58c1ca3dabbd0b9",
-      "observation_id": "ea2f827873fc64ae",
-      "stored_at": "2026-10-08T11:33:39.125644Z",
+      "sha256": "3782e11a44bce139f9f55598a12aa36101e78f1cba07388e4232f00752a1c8a5",
+      "trace_id": "3782e11a44bce139f9f55598a12aa361",
+      "observation_id": "85d5eab12058ac89",
+      "stored_at": "2026-10-08T17:28:15.664340Z",
       "attempts": 476
     },
     {

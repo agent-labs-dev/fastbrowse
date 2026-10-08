@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Rejected answer assertions receive one composition repair using the verifier's reasons and the same
+  quoted evidence. Component values cannot stand in for totals, and rewritten conclusions do not restore
+  the budget for reading missing evidence.
+
 - Completion checks each requested answer output against its cited sources. Missing or ambiguous outputs
   return to recovery, so a partially answered requirement cannot finish from its other cited fields.
 - Identical captured spans on different addresses retain separate citations and counted records.
@@ -23,6 +27,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Navigation links keep their stale-attempt history when card labels or context change, so a redraw cannot
   restore a repeatedly failing destination. Separate in-page actions retain their own retry history.
+- Evaluation evidence can carry token-based API-equivalent cost ranges separately from recorded spend.
+
 - Runs no longer stop at implicit step, Jev-call, LLM-call, dollar or time ceilings. Callers can still set explicit limits when they need them.
 
 - Complete benchmark suites can be approved and published independently. Existing published suites stay
