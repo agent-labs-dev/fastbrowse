@@ -320,7 +320,12 @@ class Notes:
                 address = fact.evidence.url
                 source = f" source={sources.get(address, len(sources) + 1)}"
                 if address not in sources:
-                    source += f" url={json.dumps(address)}"
+                    # Tracking addresses hid previously checked entities from the action chooser.
+                    source += (
+                        f" url={json.dumps(address)}"
+                        if len(address) <= 256
+                        else f" url_prefix={json.dumps(address[:256])}"
+                    )
             line = (
                 f"{json.dumps(fact.text, ensure_ascii=False)} "
                 f"requirements={','.join(sorted(self._requirements[key])) or '-'}{source}"

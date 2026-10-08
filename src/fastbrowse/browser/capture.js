@@ -259,7 +259,7 @@
         continue;
       }
       if (SKIP.has(node.tagName)) continue;
-      if (!isBlock(node) && recordText(node) === null) {
+      if (!node.matches('nav,[role="navigation"]') && !isBlock(node) && recordText(node) === null) {
         run.push(node);
         continue;
       }
@@ -270,6 +270,13 @@
   }
 
   function block(el) {
+    if (el.matches('nav,[role="navigation"]')) {
+      // Navigation help headings describe their menu, not product facts in the following main content.
+      const surrounding = [...path];
+      walk(el);
+      path = surrounding;
+      return;
+    }
     const level = HEADINGS[el.tagName];
     if (level) {
       const text = textOf(el);

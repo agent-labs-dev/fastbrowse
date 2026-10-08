@@ -523,3 +523,23 @@ async def test_headerless_table_rows_remain_independent_count_records(
     await read(ScriptedLLM([response]), capture, requirement.text, ["r"], notes, requirements=(requirement,))
     assert len(notes.tallies) == 1
     assert len(notes.tallies[0].records) == 3
+
+
+@pytest.mark.parametrize("navigation", ["nav", 'div role="navigation"'])
+async def test_navigation_headings_do_not_identify_main_content(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, navigation: str
+) -> None:
+    await page.navigate(f"{main_site}/icons.html")
+    close = navigation.split()[0]
+    markup = (
+        f"<h1>Catalog</h1><{navigation}><h2>Keyboard help</h2><p>Use arrow keys.</p></{close}>"
+        "<main><p>Atlas costs 12.</p></main>"
+    )
+    await eval_value(
+        browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
+    )
+    capture = await page.capture()
+    price = next(block for block in capture.blocks if capture.text[block.start : block.end] == "Atlas costs 12.")
+    help_text = next(block for block in capture.blocks if capture.text[block.start : block.end] == "Use arrow keys.")
+    assert price.heading_path == ("Catalog",)
+    assert help_text.heading_path == ("Catalog", "Keyboard help")

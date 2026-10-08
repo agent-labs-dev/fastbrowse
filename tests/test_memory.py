@@ -323,7 +323,8 @@ def test_navigation_writes_a_shared_long_source_url_once_without_losing_product_
     notes = Notes(facts)
     rendered = notes.render_for_navigation(700)
     assert all(fact.text in rendered for fact in facts)
-    assert rendered.count(json.dumps(address)) == 1
+    assert rendered.count(json.dumps(address[:256])) == 1
+    assert "url_prefix=" in rendered
     assert "facts omitted" not in rendered
     assert len(rendered) <= 700
     assert all(fact.evidence is not None and fact.evidence.url == address for fact in notes.facts)
@@ -360,3 +361,21 @@ def test_equal_spans_keep_distinct_source_records(second_url: str, expected: int
     assert {source.url for source in notes.evidence.values()} == (
         {first.evidence.url, second_url} if expected == 2 else {first.evidence.url}
     )
+
+
+def test_navigation_tracking_addresses_do_not_hide_previously_checked_entities() -> None:
+    facts = tuple(
+        Fact(
+            text=f"Checked item {index}: title, price and specifications collected.",
+            evidence=evidence().model_copy(update={"url": f"https://shop.test/item/{index}?tracking=" + "x" * 1500}),
+            reader=FactReader.LLM,
+        )
+        for index in range(3)
+    )
+    notes = Notes(facts)
+    rendered = notes.render_for_navigation(1200)
+    assert all(fact.text in rendered for fact in facts)
+    assert "facts omitted" not in rendered
+    assert len(rendered) <= 1200
+    assert len(notes.evidence) == 3
+    assert all(fact.evidence and len(fact.evidence.url) > 1500 for fact in notes.facts)

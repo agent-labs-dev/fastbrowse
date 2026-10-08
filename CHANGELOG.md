@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Navigation headings stay within their menu instead of identifying later page facts. Navigation notes
+  show an explicit prefix for long source addresses, leaving room for previously collected facts.
+
 - Answer repairs reuse quoted notes when selected citations omit available evidence. Each repair must
   improve source coverage, or reduce assertion failures without worsening source coverage. Identical
   audit requests are reused within a run; changed evidence, entities, claims or scope are checked again.
