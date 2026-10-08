@@ -35,12 +35,13 @@ import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeGuard
 
 from pydantic import BaseModel, ConfigDict
 
 from fastbrowse.evals import baseline, versions
 from fastbrowse.evals.storage import ArchiveReceipt, read_archive
+from fastbrowse.models import Limits
 
 REFUSE: Literal["refuse"] = "refuse"
 """A deterministic integrity failure: the rows cannot be published."""
@@ -298,7 +299,7 @@ def validate_diff(base: str, root: Path = versions.ROOT) -> list[Finding]:
     return findings
 
 
-def _number(value: object) -> bool:
+def _number(value: object) -> TypeGuard[int | float]:
     return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
 
 
@@ -340,6 +341,30 @@ def _shape(row: Mapping[str, Any]) -> list[Finding]:
     if row.get("passed") is True and row.get("correct") is not True:
         problems.append(_finding(REFUSE, "grade", f"{where}: passed a row whose grade is not correct"))
     return problems
+
+
+def _remaining_budget(run: Mapping[str, Any]) -> bool:
+    try:
+        limits = Limits.model_validate(run.get("agent_limits"), strict=True)
+    except ValueError:
+        return False
+    budget, reserve = run.get("budget_usd"), run.get("browser_reserve_dollars")
+    if not _number(budget) or not _number(reserve) or budget <= 0 or reserve < 0:
+        return False
+    browser = run.get("browser")
+    return (
+        run.get("concurrency") == 1
+        and type(run.get("concurrency")) is int
+        and all(run.get(name) is None for name in ("max_steps", "max_seconds", "max_dollars"))
+        and run.get("agent_limits") == limits.model_dump(mode="json")
+        and all(
+            getattr(limits, name) is None for name in ("max_steps", "max_seconds", "max_llm_calls", "max_jev_calls")
+        )
+        and limits.max_dollars is not None
+        and math.isfinite(limits.max_dollars)
+        and limits.max_dollars + reserve <= budget
+        and (reserve > 0 or (isinstance(browser, Mapping) and browser.get("mode") == "local-chrome"))
+    )
 
 
 def _provenance(row: Mapping[str, Any], *, release: str | None, require_clean: bool, live: bool) -> list[Finding]:
@@ -385,7 +410,10 @@ def _provenance(row: Mapping[str, Any], *, release: str | None, require_clean: b
             problems.append(_finding(REFUSE, "provenance", f"{where}: arm is not pinned in the run"))
         elif not isinstance((arms[row["arm"]] or {}).get("pin"), str) or not arms[row["arm"]]["pin"]:
             problems.append(_finding(REFUSE, "provenance", f"{where}: arm has no pin"))
-        if not isinstance(run.get("max_steps"), int) or run["max_steps"] <= 0:
+        if run.get("budget_policy") == "remaining-campaign-v1":
+            if not _remaining_budget(run):
+                problems.append(_finding(REFUSE, "protocol", f"{where}: invalid remaining-campaign limits"))
+        elif not isinstance(run.get("max_steps"), int) or run["max_steps"] <= 0:
             problems.append(_finding(REFUSE, "protocol", f"{where}: no positive step limit"))
         if not isinstance(run.get("concurrency"), int) or run["concurrency"] <= 0:
             problems.append(_finding(REFUSE, "protocol", f"{where}: no positive concurrency"))
