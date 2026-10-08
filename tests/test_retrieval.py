@@ -581,7 +581,7 @@ async def test_a_large_block_claim_keeps_only_its_literal_supporting_excerpt() -
     assert evidence.capture_sha256 == page.sha256
 
 
-@pytest.mark.parametrize("excerpt", ["Missing price", "Price: $12", "   "])
+@pytest.mark.parametrize("excerpt", ["Missing price", "Price: $12", "[s0] (paragraph) Price: $12", "   "])
 async def test_an_excerpt_must_match_one_unique_source_passage(excerpt: str) -> None:
     page = capture((BlockKind.PARAGRAPH, "Price: $12. Another record: Price: $12."))
     response: JsonValue = {
@@ -4546,3 +4546,38 @@ async def test_long_answers_respect_choice_limit_and_still_audit_each_claim(coun
     assert await check_answer_outputs(jev, llm, answer, notes, ("List every book title.",)) is (not reject_last)
     assert jev.calls == (1 if count + 2 <= MAX_CHOICE_OPTIONS else 0)
     assert llm.audited == {"output_0", *(f"claim_only_{index}" for index in range(count))}
+
+
+@pytest.mark.parametrize("marker,accepted", [("[s1] (paragraph) ", True), ("[unknown] (paragraph) ", False)])
+async def test_excerpt_annotations_are_not_mistaken_for_page_text(marker: str, accepted: bool) -> None:
+    page = capture((BlockKind.PARAGRAPH, "Atlas rating: 63."), (BlockKind.PARAGRAPH, "Delivery: Friday."))
+    response: JsonValue = {
+        "claims": [
+            {
+                "cite": {"first": "s0", "last": "s1"},
+                "excerpt": "Atlas rating: 63.\n" + marker + "Delivery: Friday.",
+                "text": "Atlas has rating 63 and delivery Friday.",
+                "requirement_id": "r",
+            }
+        ],
+        "answered": True,
+    }
+    result = await read(ScriptedLLM([response]), page, "Report Atlas details.", ["r"], Notes())
+    assert bool(result.facts) is accepted
+    if accepted:
+        fact = next(fact for fact in result.facts if fact.requirement_id == "r")
+        assert fact.evidence and fact.evidence.quote == page.text
+        assert "[s1]" not in fact.evidence.quote
+    else:
+        assert result.rejected_claims == 1
+
+
+async def test_page_text_that_looks_like_an_annotation_remains_literal() -> None:
+    literal = "[s0] (paragraph) Atlas rating: 63."
+    page = capture((BlockKind.PARAGRAPH, literal))
+    response: JsonValue = {
+        "claims": [{"cite": {"first": "s0", "last": "s0"}, "excerpt": literal, "text": literal, "requirement_id": "r"}],
+        "answered": True,
+    }
+    result = await read(ScriptedLLM([response]), page, "Report literal text.", ["r"], Notes())
+    assert result.facts[0].evidence and result.facts[0].evidence.quote == literal

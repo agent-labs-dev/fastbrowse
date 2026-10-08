@@ -394,8 +394,22 @@ def _remember(
     if claim.excerpt is not None:
         if evidence is None or not claim.excerpt.strip():
             return None
-        matches = _loose(claim.excerpt.strip()).finditer(evidence.quote)
+        excerpt = claim.excerpt.strip()
+        matches = _loose(excerpt).finditer(evidence.quote)
         match = next(matches, None)
+        if match is None:
+            # Readers copy our block labels between paragraphs; those annotations are not captured page text.
+            markers = tuple(
+                _source_marker(block)
+                for block in _offered(capture, part)
+                if block.start < evidence.end and block.end > evidence.start
+            )
+            excerpt = "\n".join(
+                next((line.removeprefix(marker) for marker in markers if line.startswith(marker)), line)
+                for line in excerpt.splitlines()
+            )
+            matches = _loose(excerpt).finditer(evidence.quote)
+            match = next(matches, None)
         if match is None or next(matches, None) is not None:
             logger.debug("read rejected missing or ambiguous excerpt")
             return None
@@ -740,6 +754,10 @@ def _marks(block: Block) -> str:
     return f"({', '.join(marks)}) " if marks else ""
 
 
+def _source_marker(block: Block) -> str:
+    return f"[{block.source_id}] ({block.kind.value}" + (", inside an embedded frame" if block.frame_id else "") + ") "
+
+
 def _read_message(
     capture: Capture,
     part: Chunk,
@@ -750,9 +768,7 @@ def _read_message(
     offered = _offered(capture, part)
     # A table cut mid-rows is shown under its header, which lies before the chunk, so its columns keep their names.
     sources = "\n".join(
-        f"[{block.source_id}] ({block.kind.value}"
-        + (", inside an embedded frame" if block.frame_id else "")
-        + ") "
+        _source_marker(block)
         + (f"{part.header}\n" if part.header and block.start < part.start else "")
         + capture.text[max(block.start, part.start) : min(block.end, part.end)]
         for block in offered
