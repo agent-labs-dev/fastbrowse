@@ -155,7 +155,7 @@ export interface Limits {
    * Steps that reached the page. A click whose element was redrawn before it landed dispatched nothing and is
    * not counted; the stall budget ends a page that keeps redrawing.
    */
-  max_steps?: number;
+  max_steps?: number | null;
   /**
    * Logical Jev evaluations. A hedged or retried request adds cost but not a call.
    */
