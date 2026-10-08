@@ -15,7 +15,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "f082b3865ac6c497",
@@ -26,7 +27,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "6f2e9d6fdc17c9ef",
@@ -37,7 +39,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "22d226397996fdfe",
@@ -48,7 +51,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "af2133290d01960d",
@@ -59,7 +63,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "428a55863b39c9bf",
@@ -70,7 +75,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "523371efdc8b624d",
@@ -81,7 +87,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "f7600f020d792b84",
@@ -157,7 +164,8 @@
         "category": "widget",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "c7e94e8328f84822",
@@ -168,7 +176,8 @@
         "category": "navigate",
         "arms": [
           "fastbrowse",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "f030aaed28518af6",
@@ -179,7 +188,8 @@
         "category": "navigate",
         "arms": [
           "fastbrowse",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "85188f1a21157e8b",
@@ -190,7 +200,8 @@
         "category": "navigate",
         "arms": [
           "fastbrowse",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "eaab86b26f889379",
@@ -201,7 +212,8 @@
         "category": "navigate",
         "arms": [
           "fastbrowse",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "a131701dc432663c",
@@ -212,7 +224,8 @@
         "category": "navigate",
         "arms": [
           "fastbrowse",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "2d000b7dcacd1b64",
@@ -223,7 +236,8 @@
         "category": "navigate",
         "arms": [
           "fastbrowse",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "c6d39f65709fe56a",
@@ -236,7 +250,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "7346e375b230ed70",
@@ -247,7 +262,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "cbcaaadaf64d8a3c",
@@ -258,7 +274,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "34089d28cd723bca",
@@ -269,7 +286,8 @@
         "category": "widget",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "7cd731724fe362dd",
@@ -280,7 +298,8 @@
         "category": "widget",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "8bdeabb8809e521c",
@@ -291,7 +310,8 @@
         "category": "widget",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "0601b9cd9c2d307a",
@@ -302,7 +322,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "7e78f195989e9563",
@@ -313,7 +334,8 @@
         "category": "checkout",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "ac0970e11f50dfc5",
@@ -324,7 +346,8 @@
         "category": "widget",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "684ce012462d2eb1",
@@ -335,7 +358,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "163d4fdbb56932e6",
@@ -346,7 +370,8 @@
         "category": "widget",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "6fb9021727b5cd63",
@@ -357,7 +382,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "541e7f078f3cd8b0",
@@ -368,7 +394,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "7018897e7b8edfc2",
@@ -381,7 +408,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "915c2d8954051ca2",
@@ -392,7 +420,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "ad2d7a24c3174568",
@@ -403,7 +432,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "8bfbd4c04f7f3058",
@@ -414,7 +444,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "9a0f2cf19cbb7ce4",
@@ -425,7 +456,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "43dd0b1d19f6905f",
@@ -436,7 +468,8 @@
         "category": "widget",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "a722b9e069c3635c",
@@ -447,7 +480,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "9e71d0ebbdb5b8a9",
@@ -458,7 +492,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "3f72b4886300e4d3",
@@ -469,7 +504,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "167a9ac22a4d2b5e",
@@ -482,7 +518,8 @@
         "category": "checkout",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "3cb69f4cca7a0a8f",
@@ -493,7 +530,8 @@
         "category": "widget",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "8e95c92bf66332fc",
@@ -504,7 +542,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "1fb42fae24121a93",
@@ -515,7 +554,8 @@
         "category": "widget",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "cd7a6d69941f0acd",
@@ -526,7 +566,8 @@
         "category": "checkout",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "2dc76be2b1f49207",
@@ -537,7 +578,8 @@
         "category": "widget",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "a19f2c321120f96c",
@@ -548,7 +590,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "03de37005dd92ef9",
@@ -559,7 +602,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "229527ffedbeb4ed",
@@ -570,7 +614,8 @@
         "category": "widget",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "fb98974ee75f2c0d",
@@ -583,7 +628,8 @@
         "category": "widget",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "f4f090b26286cfe4",
@@ -594,7 +640,8 @@
         "category": "widget",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "7b8df76175c2e6a3",
@@ -605,7 +652,8 @@
         "category": "lookup",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "cua-codex"
         ],
         "expect": "complete",
         "source_fingerprint": "33a5efb78a02cf46",
@@ -632,6 +680,11 @@
     "browser-use-oss": {
       "pin": "browser-use==0.13.10",
       "tier": "A",
+      "default": false
+    },
+    "cua-codex": {
+      "pin": "cua-driver==0.34.0; codex-cli==0.160.1",
+      "tier": "local",
       "default": false
     }
   },

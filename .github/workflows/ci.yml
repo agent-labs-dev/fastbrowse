@@ -21,7 +21,7 @@ jobs:
         # Checkout fetches other branches too; scan this build's complete ancestry, not unrelated branch content.
         run: gitleaks detect --source . --no-banner --redact --log-opts=HEAD
   gate:
-    permissions: {contents: read}
+    permissions: {contents: read, actions: read}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -56,6 +56,11 @@ jobs:
       # A published row cannot be hand-edited past `--publish`: the added or changed docs/results files are
       # gated against the trusted rows at the base branch, and a new results file with no ledger is refused.
       # This is deterministic, so it needs no model key and runs on a pull request.
+      - name: Check benchmark candidates and owner approval
+        env:
+          BASE: "${{ github.base_ref || github.event.repository.default_branch }}"
+          GH_TOKEN: "${{ github.token }}"
+        run: uv run python -m fastbrowse.evals.benchmarks --check-diff "origin/$BASE"
       - name: Check changed published eval rows
         env: {BASE: "${{ github.base_ref || github.event.repository.default_branch }}"}
         run: uv run python -m fastbrowse.evals.publication --check-diff "origin/$BASE"

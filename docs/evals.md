@@ -45,3 +45,13 @@ approves publication. Approved figures are generated from the result feed on the
 not copied into the README or generated Markdown tables.
 
 Read [the eval workflow](agents/evals.md) before changing agent behavior or running paid checks.
+
+## Codex with Cua Driver
+
+The internal comparison catalog includes the opt-in `cua-codex` arm, using Codex CLI 0.160.1
+and Cua Driver 0.34.0. Parallax runs it through browser MCP tools on a private Linux desktop,
+with the existing source task graders. Credential and safe-stop tasks are excluded.
+
+Rows record the local browser environment, and billed spend remains unknown. Local timings
+are not a controlled comparison with cloud arms. Adding the arm publishes no new figures.
+See Parallax's browser benchmark documentation for setup and retained attempt traces.
