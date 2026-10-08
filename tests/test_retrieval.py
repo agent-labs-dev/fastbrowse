@@ -4075,7 +4075,9 @@ async def test_output_audits_isolate_fields_and_check_extra_answer_claims(separa
         saw_extra = False
 
         async def generate(self, purpose, messages, schema, **kwargs):
-            fields = json.loads(messages[-1].content)["criteria"]
+            payload = json.loads(messages[-1].content)
+            assert payload["task"] == "Report the current price of the selected item."
+            fields = payload["criteria"]
             assert len(fields) == 1
             key, field = next(iter(fields.items()))
             self.active += 1
@@ -4103,7 +4105,9 @@ async def test_output_audits_isolate_fields_and_check_extra_answer_claims(separa
     llm = AuditLLM([])
     checks = tuple(f"Report the current price, criterion {index}" for index in range(7))
     ledger = Ledger(Limits())
-    assert not await check_answer_outputs(Jev(), llm, answer, notes, checks, ledger=ledger)
+    assert not await check_answer_outputs(
+        Jev(), llm, answer, notes, checks, ledger=ledger, task="Report the current price of the selected item."
+    )
     assert llm.saw_extra and llm.peak == 4
     assert sum(line.component is CostComponent.LLM for line in ledger.lines) == 14 + int(separate)
 

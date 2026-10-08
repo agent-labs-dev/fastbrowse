@@ -488,6 +488,7 @@ async def check_answer_outputs(
     ledger: Ledger | None = None,
     missing_outputs: list[str] | None = None,
     allow_scalar_jev: bool = False,
+    task: str = "",
 ) -> bool:
     def reject(failed: Sequence[str]) -> bool:
         if missing_outputs is not None:
@@ -598,7 +599,10 @@ async def check_answer_outputs(
                     LLMPurpose.VERIFY,
                     [
                         *messages,
-                        Message(role="user", content=json.dumps({"criteria": {key: field}, "urls": context.urls})),
+                        Message(
+                            role="user",
+                            content=json.dumps({"task": task, "criteria": {key: field}, "urls": context.urls}),
+                        ),
                     ],
                     _OutputAssessment,
                     max_output_tokens=512,
@@ -626,13 +630,15 @@ async def check_answer_outputs(
                 "requested value or its association with the entity is absent or ambiguous. Eligibility "
                 "qualifiers identify the entity; unrelated fields need not appear in each field's quote. "
                 "Entity ordinals label the compared answer entities, not search rankings, unless a ranking "
-                "is explicitly requested. Claim selection has routed the sources for that answer entity. "
+                "is explicitly requested by the task. The task defines scope, not evidence; criteria cannot add "
+                "requirements the task did not ask for. Claim selection has routed the sources for that answer entity. "
                 "An explicitly labeled value remains available alongside an eligibility-dependent alternative; "
                 "preserve those conditions rather than assuming one value supersedes the other. "
                 "An explicit exhaustive description can establish that no other members exist; absence from a "
                 "partial description cannot. A total alone does not provide a component breakdown. "
-                "Only marked derived claims may calculate "
-                "from cited source records. Observed page titles provide identity context, not missing field "
+                "Derived outputs can calculate from quoted records only when every operand and its association "
+                "is explicit; the source need not state the conclusion literally. Observed page titles provide "
+                "identity context, not missing field "
                 "evidence. Never reconstruct missing table column labels from prior knowledge. Return "
                 "yes/no/uncertain per field and explain missing source values."
             ),
@@ -653,11 +659,13 @@ async def check_answer_outputs(
                 "breakdowns, incomplete exact strings, ambiguous sources and claims for another entity fail. "
                 "Eligibility qualifiers identify the entity and are checked across the answer, not demanded "
                 "in every individual quote. Entity ordinals label compared answer entities, not search rankings "
-                "unless explicitly requested. Preserve explicitly stated conditions on alternative values; "
+                "unless explicitly requested by the task. The task defines scope, not evidence; do not add "
+                "requirements beyond it. Preserve explicitly stated conditions on alternative values; "
                 "do not assume an eligibility-dependent alternative supersedes an unrestricted value. "
                 "An explicit exhaustive description can establish absence of other "
-                "members, but a total alone does not evidence a component breakdown. Only marked "
-                "derived claims may calculate from source records. Observed page titles provide identity "
+                "members, but a total alone does not evidence a component breakdown. Derived outputs can "
+                "calculate from quoted records only when every operand and its association is explicit. "
+                "Observed page titles provide identity "
                 "context, not missing field evidence. Return yes only if every part of the requested output "
                 "is stated and evidenced by its own cited sources. Every factual assertion in every selected "
                 "claim must also be supported, including extra details the user did not request. One supported "
@@ -697,6 +705,7 @@ async def check_claims(
     llm: LLMClient | None = None,
     missing_outputs: list[str] | None = None,
     allow_scalar_jev: bool = False,
+    task: str = "",
 ) -> ComposedAnswer | None:
     """The answer without any claim a check doubts, or None when a requirement is omitted from what is left or the
     pages where the run committed an action contradict it.
@@ -743,6 +752,7 @@ async def check_claims(
             ledger=ledger,
             missing_outputs=missing_outputs,
             allow_scalar_jev=allow_scalar_jev,
+            task=task,
         ),
         return_exceptions=True,
     )
@@ -804,6 +814,7 @@ async def check_claims(
                 ledger=ledger,
                 missing_outputs=missing_outputs,
                 allow_scalar_jev=allow_scalar_jev,
+                task=task,
             )
             else None
         )

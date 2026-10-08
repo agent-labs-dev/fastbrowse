@@ -3062,6 +3062,7 @@ class Agent:
             missing_outputs=missing,
             allow_scalar_jev=len(state.plan.answer_checks) == 1
             and sum(r.kind is RequirementKind.INFORMATION for r in state.plan.requirements) == 1,
+            task=state.task,
         )
         state.missing_answer_outputs = tuple(dict.fromkeys(missing))
         if held is not None:
