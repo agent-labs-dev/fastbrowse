@@ -480,7 +480,7 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
         sources = []
         for key in keys:
             evidence = known[key]
-            page = notes.captured_page(evidence.capture_sha256, evidence.url)
+            page = notes.captured_page(evidence)
             sources.append(
                 _OutputSource(
                     url_ref=urls.setdefault(evidence.url, f"u{len(urls)}"),

@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from collections.abc import Iterable, Mapping
+from datetime import datetime
 from typing import Self
 from urllib.parse import urlsplit
 
@@ -90,15 +91,18 @@ class Notes:
         self._tally_records: set[str] = set()
         self._record_ids: dict[tuple[str, str, str], list[dict[str, str]]] = {}
         self._continuation_records: dict[str, set[str]] = {}
-        self._pages: dict[tuple[str, str], CapturedPage] = {}
+        self._pages: dict[tuple[str, str, datetime], CapturedPage] = {}
         for fact in facts:
             self.add(fact)
 
     def remember_capture(self, capture: Capture) -> None:
-        self._pages[(capture.sha256, capture.url)] = CapturedPage(url=capture.url, title=capture.title)
+        # A title can change while the quoted body does not; recapturing must not rename older evidence.
+        self._pages.setdefault(
+            (capture.sha256, capture.url, capture.captured_at), CapturedPage(url=capture.url, title=capture.title)
+        )
 
-    def captured_page(self, capture_sha256: str, url: str) -> CapturedPage | None:
-        return self._pages.get((capture_sha256, url))
+    def captured_page(self, evidence: Evidence) -> CapturedPage | None:
+        return self._pages.get((evidence.capture_sha256, evidence.url, evidence.captured_at))
 
     @property
     def facts(self) -> tuple[Fact, ...]:

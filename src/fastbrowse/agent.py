@@ -3453,7 +3453,7 @@ def _unread(plan: Plan, notes: Notes) -> bool:
 
 def _answer_evidence(notes: Notes, *, include_answer: bool = True) -> frozenset[tuple[str, str | None, str]]:
     def source(evidence: Evidence) -> str:
-        page = notes.captured_page(evidence.capture_sha256, evidence.url)
+        page = notes.captured_page(evidence)
         return json.dumps(
             {
                 "url": evidence.url,

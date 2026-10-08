@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Older quotes retain their original page title when unchanged text is captured under a new title.
+
 - Quoted excerpts can include known source-block labels copied by the reader. Those labels are removed
   before matching real page text, while unknown labels and ambiguous quotes remain rejected.
 

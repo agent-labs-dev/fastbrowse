@@ -379,3 +379,25 @@ def test_navigation_tracking_addresses_do_not_hide_previously_checked_entities()
     assert len(rendered) <= 1200
     assert len(notes.evidence) == 3
     assert all(fact.evidence and len(fact.evidence.url) > 1500 for fact in notes.facts)
+
+
+def test_recaptured_text_does_not_replace_the_title_of_older_quote_evidence() -> None:
+    from datetime import timedelta
+
+    from fastbrowse.page import BlockKind
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import _output_context
+    from tests.test_retrieval import block_evidence, capture
+
+    first = capture((BlockKind.PARAGRAPH, "Price: 12"))
+    first = first.model_copy(update={"title": "Atlas"})
+    second = first.model_copy(update={"title": "Beacon", "captured_at": first.captured_at + timedelta(seconds=1)})
+    fact = Fact(text="Price: 12", evidence=block_evidence(first, "s0"), reader=FactReader.JEV_CHOICE)
+    notes = Notes((fact,))
+    notes.remember_capture(first)
+    notes.remember_capture(second)
+    answer = assemble_answer((Claim(text=fact.text, evidence_ids=(fact_id(fact),)),), notes, ())
+    context = _output_context(answer, notes)
+    assert context and context.claims[0].cited_sources[0].page_title == "Atlas"
+    fresh_page = notes.captured_page(block_evidence(second, "s0"))
+    assert fresh_page and fresh_page.title == "Beacon"
