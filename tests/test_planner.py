@@ -18,6 +18,7 @@ def example_plan() -> Plan:
     return Plan(
         requirements=(Requirement(id="r1", text="Find the price", kind=RequirementKind.INFORMATION),),
         answer_expected=True,
+        answer_checks=("Find the price",),
     )
 
 
@@ -82,3 +83,28 @@ async def test_an_empty_plan_retains_the_requested_outcome(answer_expected: bool
     assert requirement.text == task
     assert requirement.kind is (RequirementKind.INFORMATION if answer_expected else RequirementKind.ACTION)
     assert result.cost == llm.cost
+
+
+@pytest.mark.parametrize("checks", [(), (" ",)])
+async def test_omitted_answer_checks_keep_each_information_requirement_under_output_verification(
+    checks: tuple[str, ...],
+) -> None:
+    plan = Plan(
+        requirements=(
+            Requirement(id="r", text="Report admission price and opening hours.", kind=RequirementKind.INFORMATION),
+        ),
+        answer_expected=True,
+        answer_checks=checks,
+    )
+    result = await make_plan(PlannerLLM(plan), plan.requirements[0].text)
+    assert result.data.answer_checks == (plan.requirements[0].text,)
+
+
+async def test_action_only_plans_do_not_acquire_answer_checks() -> None:
+    plan = Plan(
+        requirements=(Requirement(id="r", text="Open the museum page.", kind=RequirementKind.ACTION),),
+        answer_expected=True,
+        answer_checks=("Report the museum's opening hours.",),
+    )
+    result = await make_plan(PlannerLLM(plan), plan.requirements[0].text)
+    assert result.data.answer_checks == ()

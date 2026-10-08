@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Completion checks each requested answer output against its cited sources. Missing or ambiguous outputs
+  return to recovery, so a partially answered requirement cannot finish from its other cited fields.
+- Identical captured spans on different addresses retain separate citations and counted records.
+
 - Removing a doubted answer claim checks whether its requested output is missing, even when other fields
   still cite the same requirement. Optional details can still be removed.
 - Prose reads use larger source chunks to keep navigation and following details in one read. Quote checks

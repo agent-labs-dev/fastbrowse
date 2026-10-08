@@ -1635,8 +1635,8 @@ async def test_pruning_the_only_claim_for_a_requirement_is_an_omission() -> None
         Requirement(id="r2", text="What does it cost?", kind=RequirementKind.INFORMATION),
     )
     claims = (
-        Claim(text="The most expensive is A Year in Provence.", evidence_ids=("c:0:18",)),
-        Claim(text="It costs £56.88.", evidence_ids=("c:40:46",)),
+        Claim(text="The most expensive is A Year in Provence.", evidence_ids=(fact_id(winner),)),
+        Claim(text="It costs £56.88.", evidence_ids=(fact_id(price),)),
     )
     composed = assemble_answer(claims, notes, requirements)
     assert await check_claims(Jev(), composed, notes, Thresholds()) is None
@@ -3916,3 +3916,113 @@ async def test_a_quoted_count_does_not_repair_another_requirements_missing_recor
     )
     assert notes.evidenced("count")
     assert not notes.evidenced("names")
+
+
+@pytest.mark.parametrize(
+    ("probability", "judgment", "expected"),
+    [
+        (0.99, "yes", True),
+        (0.5, "yes", True),
+        (0.5, "no", False),
+        (0.5, None, False),
+        (0.01, "yes", False),
+        (None, "yes", False),
+    ],
+)
+async def test_atomic_output_uncertainty_preserves_confident_failures_and_missing_checks(
+    probability: float | None,
+    judgment: str | None,
+    expected: bool,
+) -> None:
+    from fastbrowse.jev import Evaluation, NoulAnswer
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import check_answer_outputs
+
+    class Jev:
+        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
+            answers = {} if probability is None else {key: NoulAnswer(probability=probability) for key in questions}
+            return Evaluation(
+                model="test",
+                answers=answers,
+                input_tokens=1,
+                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
+            )
+
+    page = capture((BlockKind.PARAGRAPH, "Price £12"))
+    notes = Notes((Fact(reader=FactReader.LLM, text="£12", evidence=block_evidence(page, "s0")),))
+    answer = assemble_answer((Claim(text="It costs £12.", evidence_ids=tuple(notes.evidence)),), notes, ())
+    llm = ScriptedLLM([{"judgments": {} if judgment is None else {"output_0": judgment}, "reason": "test"}])
+    held = await check_answer_outputs(Jev(), llm, answer, notes, ("Report the price.",))
+    assert held is expected
+    assert len(llm.calls) == int(probability == 0.5)
+
+
+async def test_atomic_output_context_keeps_cited_sources_and_page_titles_without_uncited_notes() -> None:
+    from fastbrowse.jev import Evaluation, NoulAnswer
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import check_answer_outputs
+
+    shown = []
+
+    class Jev:
+        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
+            shown.append(state)
+            return Evaluation(
+                model="test",
+                answers={key: NoulAnswer(probability=0.99) for key in questions},
+                input_tokens=1,
+                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
+            )
+
+    page = capture((BlockKind.PARAGRAPH, "Price £12"), (BlockKind.PARAGRAPH, "Hours 9am"))
+    page = page.model_copy(update={"title": "Complete museum catalog title"})
+    notes = Notes()
+    notes.remember_capture(page)
+    notes.remember_capture(page.model_copy(update={"url": "https://other.test", "title": "Unrelated title"}))
+    for block in page.blocks:
+        notes.add(Fact(reader=FactReader.LLM, text=block.source_id, evidence=block_evidence(page, block.source_id)))
+    price, _ = tuple(notes.evidence)
+    answer = assemble_answer((Claim(text="It costs £12.", evidence_ids=(price,)),), notes, ())
+    assert await check_answer_outputs(Jev(), None, answer, notes, ("Report the price.",))
+    assert "Unrelated title" not in json.dumps(shown)
+    assert "9am" not in json.dumps(shown)
+    assert "Complete museum catalog title" in json.dumps(shown)
+    assert "Price £12" in json.dumps(shown, ensure_ascii=False)
+
+
+async def test_atomic_outputs_reject_an_empty_answer_instead_of_skipping_the_check() -> None:
+    from fastbrowse.jev import Evaluation, NoulAnswer
+    from fastbrowse.retrieval import assemble_answer
+    from fastbrowse.verification import check_claims
+
+    class Jev:
+        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
+            return Evaluation(
+                model="test",
+                answers={key: NoulAnswer(probability=0.01) for key in questions},
+                input_tokens=1,
+                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
+            )
+
+    requirement = Requirement(id="r", text="Report the price.", kind=RequirementKind.INFORMATION)
+    notes = Notes()
+    answer = assemble_answer((), notes, (requirement,))
+    assert await check_claims(Jev(), answer, notes, Thresholds(), answer_checks=(requirement.text,)) is None
+
+
+async def test_atomic_outputs_check_derived_counts_against_their_source_records() -> None:
+    from fastbrowse.verification import _output_context
+
+    page = capture((BlockKind.PARAGRAPH, "A"), (BlockKind.PARAGRAPH, "B"))
+    notes = Notes(
+        Fact(text=block.source_id, evidence=block_evidence(page, block.source_id), reader=FactReader.LLM)
+        for block in page.blocks
+    )
+    records = tuple(notes.evidence)
+    total = notes.add_tally(Tally(requirement_id="r", key="Items", records=records))
+    answer = assemble_answer((Claim(text="There are two items.", evidence_ids=(fact_id(total),)),), notes, ())
+    context = _output_context(answer, notes)
+    assert context is not None
+    assert context.claims[0].evidence_ids == records
+    assert tuple(context.sources) == records
+    assert {source.quote for source in context.sources.values()} == {"A", "B"}

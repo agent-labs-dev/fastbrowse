@@ -62,7 +62,9 @@ def _address(url: str) -> str:
 
 
 def evidence_id(evidence: Evidence) -> str:
-    return f"{evidence.capture_sha256}:{evidence.start}:{evidence.end}"
+    # Equal text on different pages must not inherit the first page's citation or record identity.
+    address = hashlib.sha256(_address(evidence.url).encode()).hexdigest()[:16]
+    return f"{evidence.capture_sha256}:{evidence.start}:{evidence.end}:{address}"
 
 
 def fact_id(fact: Fact) -> str:
@@ -76,6 +78,11 @@ def fact_id(fact: Fact) -> str:
     return f"derived:{digest[:16]}"
 
 
+class CapturedPage(Frozen):
+    url: str
+    title: str
+
+
 class Notes:
     def __init__(self, facts: Iterable[Fact] = ()) -> None:
         self._facts: dict[str, Fact] = {}
@@ -83,8 +90,15 @@ class Notes:
         self._tally_records: set[str] = set()
         self._record_ids: dict[tuple[str, str, str], list[dict[str, str]]] = {}
         self._continuation_records: dict[str, set[str]] = {}
+        self._pages: dict[tuple[str, str], CapturedPage] = {}
         for fact in facts:
             self.add(fact)
+
+    def remember_capture(self, capture: Capture) -> None:
+        self._pages[(capture.sha256, capture.url)] = CapturedPage(url=capture.url, title=capture.title)
+
+    def captured_page(self, capture_sha256: str, url: str) -> CapturedPage | None:
+        return self._pages.get((capture_sha256, url))
 
     @property
     def facts(self) -> tuple[Fact, ...]:

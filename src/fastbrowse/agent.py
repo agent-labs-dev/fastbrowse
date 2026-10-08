@@ -312,6 +312,7 @@ class _RunState:
     ledger: Ledger
     planning: asyncio.Task[Generation[Plan]]
     notes: Notes = field(default_factory=Notes)
+    missing_answer_outputs: tuple[str, ...] = ()
     relevance_cache: RelevanceCache = field(default_factory=RelevanceCache)
     steps: list[StepResult] = field(default_factory=list[StepResult])
     would_fire: list[Tripwire] = field(default_factory=list[Tripwire])
@@ -2256,6 +2257,7 @@ class Agent:
                 )
                 return
         before = len(state.notes.facts)
+        state.notes.remember_capture(page.capture)
         outcome.merge_records(state.notes)
         state.incomplete.update(outcome.incomplete)
         state.history.append(
@@ -2821,7 +2823,13 @@ class Agent:
                 handed, drafting = drafting, None
                 result = await self._conclude(state, output_schema, check.answer or handed)
                 fresh = self._observed or fresh
-                if until is not None:
+                if result.status is Status.UNVERIFIED and state.missing_answer_outputs:
+                    # Cited partial notes made DONE repeat; reopen them so recovery can gather the missing outputs.
+                    state.notes.unevidence(
+                        r.id for r in state.plan.requirements if r.kind is RequirementKind.INFORMATION
+                    )
+                    accepted, result = False, None
+                if accepted and until is not None:
                     accepted = await until((self._raw_observation or fresh).url)
             if not accepted:
                 requirements = {r.id: r.text for r in state.plan.requirements}
@@ -2839,6 +2847,7 @@ class Agent:
                     for key in sorted(misread)
                 ]
                 state.notes.unevidence(misread)
+                unmet += [f"Answer output not verified: {output}" for output in state.missing_answer_outputs]
                 reason = self._redactor.redact(f"DONE rejected: {'; '.join(unmet) or 'completion not confirmed'}")
                 state.history.append(
                     HistoryEntry(
@@ -2966,7 +2975,8 @@ class Agent:
         return _HttpFailure(url=last.landed_url, status=last.landed_status)
 
     async def _holds(self, state: _RunState, answer: ComposedAnswer) -> ComposedAnswer | None:
-        return await check_claims(
+        missing: list[str] = []
+        held = await check_claims(
             self._jev,
             answer,
             state.notes,
@@ -2974,7 +2984,12 @@ class Agent:
             tokens=self._config.tokens,
             ledger=state.ledger,
             transaction_evidence_ids=await self._transaction_evidence_ids(state),
+            answer_checks=state.plan.answer_checks,
+            llm=self._llm,
+            missing_outputs=missing,
         )
+        state.missing_answer_outputs = tuple(dict.fromkeys(missing))
+        return held
 
     async def _extraction(self, state: _RunState, output_schema: type[BaseModel]) -> Extraction:
         """The caller's schema, filled from a capture taken inside this branch so it overlaps the answer."""

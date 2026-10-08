@@ -344,3 +344,19 @@ def test_navigation_retains_recent_progress_when_source_quotes_exceed_its_budget
     assert progress.text in notes.render_for_navigation(500)
     assert len(notes.render_for_navigation(500)) <= 500
     assert json.dumps(quote) in notes.render(20_000)
+
+
+@pytest.mark.parametrize(
+    "second_url, expected", [("https://example.test/second", 2), ("https://example.test#section", 1)]
+)
+def test_equal_spans_keep_distinct_source_records(second_url: str, expected: int) -> None:
+    first = _quoted("Row A", "same-text")
+    second = _quoted("Row A", "same-text", second_url)
+    assert first.evidence is not None
+    notes = Notes((first, second))
+    tally = notes.add_tally(Tally(requirement_id="r1", key="Rows", records=tuple(notes.evidence)))
+    assert tally.tally is not None and tally.tally.count == expected
+    assert len(notes.evidence) == expected
+    assert {source.url for source in notes.evidence.values()} == (
+        {first.evidence.url, second_url} if expected == 2 else {first.evidence.url}
+    )

@@ -79,7 +79,7 @@ from fastbrowse.tripwires import Tripwire
 from fastbrowse.verification import DoneCheck, DoneVerdict, LLMVerdict, _grounding
 from tests.test_memory import evidence
 from tests.test_policy import FREE, ScriptedJev, _draggable, context, observation
-from tests.test_retrieval import ScriptedLLM, capture
+from tests.test_retrieval import ScriptedLLM, block_evidence, capture
 
 
 async def run_state() -> _RunState:
@@ -3778,7 +3778,7 @@ async def _pipeline_fixture(
                         "requirement_id": "r1",
                         "text": "Item 4 is cheapest at $1",
                         "cite": {"first": "s0", "last": "s0"},
-                        "draws_on": [f"{c.sha256}:0:{len(c.text)}" for c in captures[:3]],
+                        "draws_on": [evidence_id(block_evidence(c, c.blocks[0].source_id)) for c in captures[:3]],
                     }
                 ],
             },
@@ -3811,7 +3811,7 @@ async def test_pager_reads_overlap_and_final_read_sees_records_in_page_order() -
         await agent._pipeline_pages(state, observations[0])
     assert third_done.is_set()
     assert state.notes.evidenced("r1")
-    assert list(state.notes.evidence) == [f"{c.sha256}:0:{len(c.text)}" for c in captures]
+    assert list(state.notes.evidence) == [evidence_id(block_evidence(c, c.blocks[0].source_id)) for c in captures]
     final_prompt = llm.calls[-1][1][-1].content
     collected = final_prompt.split("# Capture")[0]
     for captured in captures[:3]:
@@ -5487,3 +5487,100 @@ async def test_final_frame_deadline_cancels_a_hung_page_check(monkeypatch: pytes
     assert result.status is Status.COMPLETE and result.final_frame is None
     assert cancelled.is_set()
     page.screenshot.assert_not_awaited()
+
+
+@pytest.mark.parametrize("missing", [True, False])
+async def test_final_answer_checks_each_output_without_notes_filling_a_missing_field(missing: bool) -> None:
+    from fastbrowse.retrieval import Claim, assemble_answer
+
+    class Jev(ScriptedJev):
+        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+            scores = {"output_0": 0.99, "output_1": 0.01 if missing else 0.99}
+            return Evaluation(
+                model="test",
+                answers={key: NoulAnswer(probability=scores.get(key, 0.05)) for key in questions},
+                input_tokens=1,
+                cost=FREE,
+            )
+
+    state = await run_state()
+    state.task = "Report the museum's admission price and opening hours."
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r", text=state.task, kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    ).model_copy(update={"answer_checks": ("Report the admission price.", "Report the opening hours.")})
+    price = Fact(
+        reader=FactReader.LLM,
+        requirement_id="r",
+        text="Admission is £12",
+        evidence=evidence(end=3).model_copy(update={"quote": "£12"}),
+    )
+    hours = Fact(
+        reader=FactReader.LLM,
+        requirement_id="r",
+        text="Opens at 9am",
+        evidence=evidence(start=4, end=7).model_copy(update={"quote": "9am"}),
+    )
+    state.notes = Notes((price, hours))
+    assert price.evidence is not None and hours.evidence is not None
+    claims = [Claim(text="Admission is £12.", evidence_ids=(evidence_id(price.evidence),))]
+    if not missing:
+        claims.append(Claim(text="It opens at 9am.", evidence_ids=(evidence_id(hours.evidence),)))
+    composed = assemble_answer(claims, state.notes, state.plan.requirements)
+    agent = Agent(Mock(spec=Page), Jev({}), ScriptedLLM([]))
+    held = await agent._holds(state, composed)
+    assert (held is None) is missing
+
+
+async def test_missing_answer_output_recovers_evidence_then_completes() -> None:
+    state = await run_state()
+    state.task = "Report admission and opening hours."
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r", text=state.task, kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+        answer_checks=("Report admission.", "Report opening hours."),
+    )
+    price = Fact(reader=FactReader.LLM, requirement_id="r", text="Admission is £12", evidence=evidence())
+    hours = Fact(
+        reader=FactReader.LLM,
+        requirement_id="r",
+        text="Opens at 9am",
+        evidence=evidence(start=5, end=8).model_copy(update={"quote": "9am"}),
+    )
+    state.notes.add(price)
+    llm = ScriptedLLM([{"claims": [{"text": price.text, "evidence_ids": [fact_id(price)]}]}])
+    plan = state.ready_plan
+    agent, _ = await _finishing(state, llm, noul=0.0)
+    state.ready_plan = plan
+
+    class Jev(ScriptedJev):
+        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+            assert isinstance(state, dict)
+            answered = "9am" in str(state.get("answer", ""))
+            return Evaluation(
+                model="test",
+                answers={
+                    key: NoulAnswer(
+                        probability=(
+                            0.99 if key == "complete" or key == "output_0" or (key == "output_1" and answered) else 0.01
+                        )
+                    )
+                    for key in questions
+                },
+                input_tokens=1,
+                cost=FREE,
+            )
+
+    async def gather_missing(*args: object) -> None:
+        assert not state.notes.evidenced("r")
+        assert "Report opening hours." in str(args[-1])
+        state.notes.add(price)
+        state.notes.add(hours)
+
+    agent._jev = Jev({})
+    agent._recover = AsyncMock(side_effect=gather_missing)
+    assert await agent._finish(state, None, None) is None
+    agent._recover.assert_awaited_once()
+    result = await agent._finish(state, None, None)
+    assert result is not None and result.status is Status.COMPLETE
+    assert result.answer is not None and "£12" in result.answer and "9am" in result.answer

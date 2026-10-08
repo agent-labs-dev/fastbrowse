@@ -714,7 +714,7 @@ async def read(
     requirement_ids: Sequence[str],
     notes: Notes,
     *,
-    max_chars: int = _LLM_READ_CHUNK_CHARS,
+    max_chars: int | None = None,
     tokens: TokenBudget = _DEFAULT_TOKENS,
     ledger: Ledger | None = None,
     jev: JevClient | None = None,
@@ -730,6 +730,7 @@ async def read(
     it goes with every question the reader is asked, however the question is narrowed. `continuing` names the
     requirements an earlier page already said run past it. Neither those nor `incomplete` comparisons can be
     answered by scalar choice, so they go to the reader."""
+    notes.remember_capture(capture)
     facts: dict[tuple[str, str | None], Fact] = {}
     coverage: list[int] = []
     costs: list[CostLine] = []
@@ -748,6 +749,9 @@ async def read(
     tally_readers: list[TallyReader] = []
     comparisons: dict[str, NumericComparison] = {}
     counting = {r.id: r.text for r in requirements if r.kind is RequirementKind.INFORMATION and r.count_records}
+    if max_chars is None:
+        # Record extraction emits dense structured output; larger prose captures must not overflow that response.
+        max_chars = _READ_CHUNK_CHARS if records_only or counting else _LLM_READ_CHUNK_CHARS
     wanted = [
         r
         for r in requirements
