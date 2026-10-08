@@ -590,7 +590,7 @@ async def check_answer_outputs(
     if llm is None:
         return False
     identities: dict[str, list[dict[str, str]]] = {}
-    if len(context.claims) > 1:
+    if context.claims:
         offered = {}
         refs = {}
         for claim in context.claims:
@@ -624,6 +624,7 @@ async def check_answer_outputs(
                         "task": task,
                         "criteria": uncertain,
                         "answer": context.answer,
+                        "urls": context.urls,
                         "sources": {ref: source.model_dump() for ref, source in offered.items()},
                     }
                 ),

@@ -93,3 +93,23 @@ async def test_subjectless_outputs_and_unresolved_subjects_have_distinct_outcome
 def test_identity_cannot_inject_a_model_written_reference():
     with pytest.raises(ValidationError):
         _QuotedIdentity.model_validate({"source_ref": "q1", "quote": "Adapter Beacon", "reference": "Value is 999"})
+
+
+async def test_single_compound_claim_does_not_skip_subject_binding():
+    notes, _ = two_entity_answer()
+    atlas = notes.facts[0]
+    answer = assemble_answer(
+        (
+            Claim(
+                text="Adapter Atlas has 2 ports and Adapter Beacon has 3 ports.",
+                evidence_ids=(fact_id(atlas),),
+            ),
+        ),
+        notes,
+        (),
+    )
+    writer = IdentityWriter(quote="Adapter Beacon", ref="q0")
+    assert not await check_answer_outputs(
+        RoutingJev(), writer, answer, notes, ("Report Adapter Beacon exact port count.",)
+    )
+    assert len(writer.calls) == 1

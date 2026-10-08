@@ -24,7 +24,11 @@ async def test_repair_reuses_source_audit_but_checks_changed_assertion():
         RoutingJev(), writer, rejected, notes, ("Report the price.",), audit_cache=cache
     )
     assert await check_answer_outputs(RoutingJev(), writer, corrected, notes, ("Report the price.",), audit_cache=cache)
-    sources = [json.loads(messages[-1].content) for _, messages in writer.calls]
+    sources = [
+        json.loads(messages[-1].content)
+        for _, messages in writer.calls
+        if "answer" not in json.loads(messages[-1].content)
+    ]
     assert len(sources) == 3
 
 
@@ -34,6 +38,8 @@ class AuditWriter(ScriptedLLM):
         self.verdict = verdict
 
     async def generate(self, purpose, messages, schema, **kwargs):
+        if schema.__name__ == "_OutputIdentities":
+            return await super().generate(purpose, messages, schema, **kwargs)
         fields = json.loads(messages[-1].content)["criteria"]
         self.responses.append({"judgments": {key: self.verdict for key in fields}, "reason": "Stored audit reason."})
         return await super().generate(purpose, messages, schema, **kwargs)
@@ -61,7 +67,7 @@ async def test_identical_audit_reuses_positive_and_negative_verdicts_without_bil
         results.append((result, missing, corrections))
     assert results[0] == results[1]
     assert results[0][0] is (verdict == "yes")
-    assert len(writer.calls) == (2 if verdict == "yes" else 1)
+    assert len(writer.calls) == (3 if verdict == "yes" else 2)
     assert ledger.llm_calls == len(writer.calls)
     assert sum(line.component is CostComponent.LLM for line in ledger.lines) == len(writer.calls)
 
@@ -92,7 +98,7 @@ async def test_changed_audit_context_cannot_reuse_a_previous_verdict(change):
         answer = assemble_answer((Claim(text="Member price 12", evidence_ids=(fact_id(fact),)),), notes, ())
     before = len(writer.calls)
     assert await check_answer_outputs(RoutingJev(), writer, answer, notes, checks, task=task, audit_cache=cache)
-    assert len(writer.calls) - before == 2
+    assert len(writer.calls) - before == 3
 
 
 async def test_repeated_rejected_assertion_replays_its_correction_and_reason():
@@ -107,7 +113,7 @@ async def test_repeated_rejected_assertion_replays_its_correction_and_reason():
         results.append(corrections)
     assert results[0] == results[1]
     assert results[0][0].reason == "conditions omitted or extra detail unsupported"
-    assert len(writer.calls) == 2
+    assert len(writer.calls) == 3
 
 
 async def test_claim_audit_propagates_the_same_run_scoped_memo():
@@ -130,7 +136,7 @@ async def test_claim_audit_propagates_the_same_run_scoped_memo():
             )
             is not None
         )
-    assert len(writer.calls) == 2
+    assert len(writer.calls) == 3
 
 
 async def test_cached_verdict_cannot_supply_a_quote_missing_from_current_notes():
@@ -141,4 +147,4 @@ async def test_cached_verdict_cannot_supply_a_quote_missing_from_current_notes()
     assert not await check_answer_outputs(
         RoutingJev(), writer, answer, Notes(()), ("Report the price.",), audit_cache=cache
     )
-    assert len(writer.calls) == 2
+    assert len(writer.calls) == 3

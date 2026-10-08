@@ -12,6 +12,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 ## [Unreleased]
 
 - Completion checks preserve each requested item's fields even when a draft plan lists generic field names.
+  Quoted identities keep one item's value from answering another item's field, including compound claims.
 
 - Older quotes retain their original page title when unchanged text is captured under a new title.
 

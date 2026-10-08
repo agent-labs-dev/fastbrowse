@@ -4006,7 +4006,7 @@ async def test_atomic_outputs_use_source_audits_instead_of_confidence_alone(
     )
     held = await check_answer_outputs(Jev(), llm, answer, notes, ("Report the price.",))
     assert held is expected
-    assert len(llm.calls) == (2 if expected else int(probability is not None))
+    assert len(llm.calls) == (3 if expected else 1 + int(probability is not None))
 
 
 async def test_atomic_output_context_keeps_cited_sources_without_uncited_metadata() -> None:
@@ -4042,10 +4042,10 @@ async def test_atomic_output_context_keeps_cited_sources_without_uncited_metadat
     assert await check_answer_outputs(Jev(), llm, answer, notes, ("Report the price.",))
     assert "Unrelated title" not in json.dumps(shown)
     assert "9am" not in json.dumps(shown)
-    assert "Price £12" in json.dumps(json.loads(llm.calls[0][1][-1].content), ensure_ascii=False)
+    assert "Price £12" in json.dumps(json.loads(llm.calls[1][1][-1].content), ensure_ascii=False)
 
-    assert "page_title" not in json.dumps(llm.calls[0][1][-1].content)
-    assert "member price 9" not in json.dumps(llm.calls[1][1][-1].content)
+    assert "page_title" not in json.dumps(llm.calls[1][1][-1].content)
+    assert "member price 9" not in json.dumps(llm.calls[2][1][-1].content)
 
 
 async def test_atomic_outputs_reject_an_empty_answer_instead_of_skipping_the_check() -> None:
@@ -4126,7 +4126,7 @@ async def test_output_audits_isolate_fields_and_check_extra_answer_claims(separa
         Jev(), llm, answer, notes, checks, ledger=ledger, task="Report the current price of the selected item."
     )
     assert llm.saw_extra and llm.peak == 4
-    assert sum(line.component is CostComponent.LLM for line in ledger.lines) == 14 + 2 * int(separate)
+    assert sum(line.component is CostComponent.LLM for line in ledger.lines) == 15 + int(separate)
 
 
 def test_output_audit_marks_a_quoted_comparison_with_its_basis_as_derived() -> None:
@@ -4262,13 +4262,13 @@ async def test_source_availability_audit_withholds_reported_values() -> None:
     assert not await check_answer_outputs(
         jev, llm, answer, notes, ("Report Device Beta's port count.",), missing_outputs=missing
     )
-    request = json.loads(llm.calls[0][1][-1].content)
+    request = json.loads(llm.calls[1][1][-1].content)
     assert "actual_answer" not in request
     source = request["criteria"]["output_0"]["sources"][0]
     assert "text" not in source
     assert source["cited_sources"][0]["quote"] == "| Ports | 1 | 3 |"
     assert missing == ["Report Device Beta's port count."]
-    assert len(llm.calls) == 1
+    assert len(llm.calls) == 2
 
 
 def test_large_headerless_tables_repeat_real_context_without_inventing_headers() -> None:
@@ -4475,7 +4475,7 @@ async def test_expanded_tally_over_jev_state_limit_still_reaches_quoted_source_a
         ("Report the item count.",),
         tokens=TokenBudget(state_plus_largest_question=100, state_plus_all_questions=100),
     )
-    sources = json.loads(llm.calls[0][1][-1].content)["criteria"]["output_0"]["sources"]
+    sources = json.loads(llm.calls[1][1][-1].content)["criteria"]["output_0"]["sources"]
     assert len(sources[0]["cited_sources"]) == 100
 
 
