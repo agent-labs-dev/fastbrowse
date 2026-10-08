@@ -134,11 +134,14 @@ async def test_verdict_prompts_keep_late_requirement_evidence_when_notes_overflo
     questions = claim_check_questions(composed.data, notes, tokens=tokens)
     for prompt in [
         json.dumps(jev.state),
-        *(call[1][-1].content for call in llm.calls),
+        llm.calls[0][1][-1].content,
         questions["requirement_omitted"].instructions,
     ]:
         assert late.text in prompt and fact_id(late) in prompt
         assert "facts omitted]" in prompt
+    composer_prompt = llm.calls[1][1][-1].content
+    assert late.text in composer_prompt and "[e20]" in composer_prompt
+    assert "facts omitted]" in composer_prompt
     checker = _Jev({key: 0.0 for key in questions})
     assert await check_claims(checker, composed.data, notes, Thresholds(), tokens=tokens) == composed.data
     for state, batch in [(jev.state, jev.questions), *checker.requests]:
