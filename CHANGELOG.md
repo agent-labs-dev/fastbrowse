@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Navigation links keep their stale-attempt history when card labels or context change, so a redraw cannot
+  restore a repeatedly failing destination. Separate in-page actions retain their own retry history.
+
 - Navigation notes write each source URL once and reference it from the remaining claims, preserving full
   addresses while leaving more room for product details and progress.
 

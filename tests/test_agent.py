@@ -2874,11 +2874,30 @@ async def test_repeated_stale_links_recover_even_when_intervening_reads_add_fact
         await agent._step(state, here, _code_decision(Operation.READ, None), capture=_ticker(i))
     assert len(state.notes.facts) == 2
     assert not agent_module._without_failed_links(state, here).controls
+    redrawn = target.model_copy(
+        update={"id": "replacement", "label": "Another product, recommended", "context": "Related items"}
+    )
+    here = here.model_copy(update={"controls": (redrawn,)})
+    assert not agent_module._without_failed_links(state, here).controls
     with pytest.raises(_Unsure, match="stale"):
-        await agent._step(state, here, _code_decision(Operation.CLICK, target), gate=False)
+        await agent._step(state, here, _code_decision(Operation.CLICK, redrawn), gate=False)
     assert page.act.await_count == 2
     fresh_document = here.model_copy(update={"document_key": "new-document"})
-    assert agent_module._without_failed_links(state, fresh_document).controls == (target,)
+    assert agent_module._without_failed_links(state, fresh_document).controls == (redrawn,)
+
+
+async def test_stale_placeholder_links_do_not_hide_other_in_page_actions() -> None:
+    state = await _reading_state()
+    failed = _link("details", "Details", "#")
+    other = _link("reviews", "Reviews", "#")
+    here = _at("https://example.test/product", failed, other).model_copy(update={"document_key": "same-document"})
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=here)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.STALE, page_changed=False))
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    for _ in range(2):
+        await agent._step(state, here, _code_decision(Operation.CLICK, failed), gate=False)
+    assert agent_module._without_failed_links(state, here).controls == (other,)
 
 
 async def test_stale_clicks_exceed_the_step_limit_but_still_stall() -> None:

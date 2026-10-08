@@ -24,8 +24,9 @@ before another interaction can remove it. Reads are deduplicated by document,
 capture hash and unresolved information requirements, so changed content can be read again. A paraphrase
 of a collected quote does not restore the read budget; new source quotes and newly evidenced requirements
 do. Identical relevance questions share one score within a pass, while controls remain separate action
-targets. Links that fail freshness twice are excluded by document and link meaning, even when intervening reads
-add facts. A new document permits another attempt; input freshness and authorization checks still apply.
+targets. Navigation links that fail freshness twice are excluded by document, frame and destination, even when
+card labels change or intervening reads add facts. In-page actions keep their label and context identity. A new
+document permits another attempt; input freshness and authorization checks still apply.
 
 For a bounded set of short quoted spans, Jev chooses a scalar fact, requests synthesis, or judges the
 requirement absent from the page. Identical values from the same page and frame share one choice with all

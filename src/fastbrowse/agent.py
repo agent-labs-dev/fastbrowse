@@ -3490,9 +3490,17 @@ def _link_key(observation: Observation, control: Control) -> tuple[str, str] | N
 def _stale_link_key(observation: Observation, control: Control) -> tuple[str, str] | None:
     if not observation.document_key or control.role != "link" or control.href is None:
         return None
-    return observation.document_key, json.dumps(
-        [observation.url, control.frame_id, control.frame_origin, control.href, control.label, control.context]
-    )
+    identity = [observation.url, control.frame_id, control.frame_origin, control.href]
+    try:
+        scheme = urlsplit(control.href).scheme
+        navigation = bool(control.href) and not control.href.startswith("#") and scheme in {"", "http", "https"}
+    except ValueError:
+        navigation = False
+    # Related-product cards can change their captions while the same destination keeps failing freshness.
+    # Placeholder links still need their label and context to distinguish separate in-page actions.
+    if not navigation:
+        identity.extend((control.label, control.context))
+    return observation.document_key, json.dumps(identity)
 
 
 def _without_failed_links(state: _RunState, observation: Observation) -> Observation:
