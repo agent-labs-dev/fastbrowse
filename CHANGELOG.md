@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Complete benchmark suites can be approved and published independently. Existing published suites stay
+  present, and each suite retains its coverage, evidence and regression checks.
+
 - Navigation notes write each source URL once and reference it from the remaining claims, preserving full
   addresses while leaving more room for product details and progress.
 
