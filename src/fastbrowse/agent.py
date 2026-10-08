@@ -2969,7 +2969,16 @@ class Agent:
         if isinstance(prepared, ComposedAnswer):
             return prepared, True
         facts = draft_answer(state.plan, state.notes)
-        repairing = bool(state.answer_corrections)
+
+        def failed_assertions() -> int:
+            return len(
+                {
+                    (correction.criterion, tuple(claim.model_dump_json() for claim in correction.claims))
+                    for correction in state.answer_corrections
+                }
+            )
+
+        previous_failures = failed_assertions() if state.answer_corrections else None
         try:
             composed = (
                 await (
@@ -2993,9 +3002,14 @@ class Agent:
             if facts is None:
                 raise
             logger.warning("The composer failed; offering the reader's facts to the claim check", exc_info=True)
-            composed, facts, repairing = facts, None, True
+            composed, facts, previous_failures = facts, None, 0
         held = await self._holds(state, composed)
-        if held is None and state.answer_corrections and not repairing:
+        while held is None and state.answer_corrections:
+            failures = failed_assertions()
+            # Each repair must resolve a failed assertion; unchanged or worse prose cannot buy another attempt.
+            if previous_failures is not None and failures >= previous_failures:
+                break
+            previous_failures = failures
             try:
                 corrected = await compose(
                     self._llm,
@@ -3009,6 +3023,7 @@ class Agent:
                 )
             except LLMError:
                 logger.warning("The answer correction failed; retaining the checked fallback", exc_info=True)
+                break
             else:
                 composed = corrected.data
                 held = await self._holds(state, composed)

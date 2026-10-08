@@ -11,9 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- Rejected answer assertions receive one composition repair using the verifier's reasons and the same
-  quoted evidence. Component values cannot stand in for totals, and rewritten conclusions do not restore
-  the budget for reading missing evidence.
+- Rejected answer assertions receive composition repairs only while failed checks decrease, using the
+  verifier's reasons and the same quoted evidence. Component values cannot stand in for totals, and
+  rewritten conclusions do not restore the budget for reading missing evidence.
 
 - Completion checks each requested answer output against its cited sources. Missing or ambiguous outputs
   return to recovery, so a partially answered requirement cannot finish from its other cited fields.

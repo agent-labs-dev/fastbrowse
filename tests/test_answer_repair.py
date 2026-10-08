@@ -180,3 +180,72 @@ async def test_comparison_repair_must_supply_all_operands_in_its_own_citations()
     correction_prompt = llm.calls[3][1][-1].content
     assert "Highest requires the rival" in correction_prompt
     assert "Alpha capacity 10" in correction_prompt and "Beta capacity 7" in correction_prompt
+
+
+@pytest.mark.parametrize("mode", ["improve", "worse", "omit"])
+async def test_answer_repairs_continue_only_while_failed_assertions_decrease(mode: str) -> None:
+    state = await run_state()
+    state.task = "Report the price and subscription term."
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r", text=state.task, kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+        answer_checks=("Report the price.", "Report the subscription term."),
+    )
+    page = capture((BlockKind.PARAGRAPH, "Member price 12"), (BlockKind.PARAGRAPH, "Trial term 1 year"))
+    state.notes = Notes(
+        Fact(text=text, evidence=block_evidence(page, key), reader=FactReader.LLM, requirement_id="r")
+        for key, text in [("s0", "Price 12"), ("s1", "Term 1 year")]
+    )
+
+    class AllClaimsJev(RoutingJev):
+        async def evaluate(self, state, questions):
+            result = await super().evaluate(state, questions)
+            return result.model_copy(
+                update={
+                    "answers": {
+                        key: answer.model_copy(update={"choice": "all"}) if isinstance(answer, ChoiceAnswer) else answer
+                        for key, answer in result.answers.items()
+                    }
+                }
+            )
+
+    class ImprovingWriter(ScriptedLLM):
+        composes = 0
+
+        async def generate(self, purpose, messages, schema, **kwargs):
+            response: JsonValue
+            if purpose is LLMPurpose.COMPOSE:
+                self.composes += 1
+                response = {
+                    "claims": [
+                        {
+                            "text": "Member price 12" if self.composes >= 2 and mode != "worse" else "Price 12",
+                            "evidence_ids": ["e0"],
+                        },
+                        {
+                            "text": "Trial term 1 year"
+                            if self.composes >= 3 or (mode == "worse" and self.composes == 1)
+                            else "Term 1 year",
+                            "evidence_ids": ["e1"],
+                        },
+                    ]
+                }
+                if mode == "omit" and self.composes >= 2:
+                    response["claims"] = response["claims"][:1]
+            else:
+                key, field = next(iter(json.loads(messages[-1].content)["criteria"].items()))
+                claims = field.get("reported_claims")
+                valid = claims is None or all(c["text"] in {"Member price 12", "Trial term 1 year"} for c in claims)
+                if mode == "omit" and self.composes >= 2 and "term" in field["criterion"]:
+                    valid = False
+                response = {"judgments": {key: "yes" if valid else "no"}, "reason": "Preserve the source condition."}
+            self.responses.append(response)
+            return await super().generate(purpose, messages, schema, **kwargs)
+
+    llm = ImprovingWriter([])
+    answer, verified = await Agent(Mock(spec=Page), AllClaimsJev(), llm)._answer(state, None)
+    assert verified is (mode == "improve")
+    assert llm.composes == (3 if mode == "improve" else 2)
+    if verified:
+        assert {claim.text for claim in answer.claims} == {"Member price 12", "Trial term 1 year"}
+    assert state.ledger.llm_calls == len(llm.calls)
