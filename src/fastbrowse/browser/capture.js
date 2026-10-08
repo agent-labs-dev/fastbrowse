@@ -2,8 +2,8 @@
 // Unlike snapshot.js (bounded, for Jev's action choice) this reads the whole rendered document, on screen or not,
 // so the reading path and answer-evidence quotes see everything a user could scroll to.
 // Adjacent inline content (text, <strong>, <a>, <span>...) is one block, so a value inside markup stays with its label.
-// biome-ignore format: Python embeds this IIFE inside an expression, where a semicolon is invalid.
-(() => {
+// biome-ignore format: Python embeds this function inside an expression, where a semicolon is invalid.
+((allowedOrigins = null) => {
   if (!document.body) return null;
   const HEADINGS = { H1: 1, H2: 2, H3: 3, H4: 4, H5: 5, H6: 6 };
   const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'CANVAS', 'IFRAME']);
@@ -13,6 +13,17 @@
   let sourcePath = '';
   let inaccessible = 0;
   const registry = (window.__fastbrowse ||= { ids: new WeakMap(), nodes: new Map(), next: 1 });
+  const granted = doc => {
+    if (allowedOrigins === null) return true;
+    const frame = doc.defaultView.frameElement;
+    if (frame) {
+      if (frame.hasAttribute('srcdoc') || !frame.getAttribute('src')) return false;
+      const source = new URL(frame.src);
+      if (!['http:', 'https:'].includes(source.protocol) || !allowedOrigins.includes(source.origin)) return false;
+    }
+    const url = new URL(doc.URL);
+    return ['http:', 'https:'].includes(url.protocol) && allowedOrigins.includes(url.origin);
+  };
   const identity = e => {
     if (!registry.ids.has(e)) registry.ids.set(e, registry.next++);
     return registry.ids.get(e);
@@ -305,7 +316,7 @@
     } catch {
       inner = null;
     }
-    if (!inner?.body) {
+    if (!inner?.body || !granted(inner)) {
       inaccessible++;
       return;
     }
@@ -329,4 +340,4 @@
 
   scope(document.body, null, '');
   return { url: location.href, title: document.title, blocks, inaccessible_frames: inaccessible };
-})()
+})

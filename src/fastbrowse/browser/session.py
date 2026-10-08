@@ -9,8 +9,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import json
 import logging
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Self, cast
@@ -25,6 +26,7 @@ from cdp_use.cdp.target.events import (
     TargetDestroyedEvent,
     TargetInfoChangedEvent,
 )
+from cdp_use.cdp.target.types import TargetInfo
 from cdp_use.client import CDPClient
 from websockets.exceptions import ConnectionClosed, InvalidMessage, InvalidStatus
 
@@ -32,6 +34,7 @@ from fastbrowse.clients.validation import RETRYABLE_STATUS
 from fastbrowse.datafiles import data_file
 from fastbrowse.models import Artifact, ArtifactKind, ArtifactSink, FrameHandler, Frozen, Unavailable
 from fastbrowse.models import BrowserConnection as BrowserConnectionModel
+from fastbrowse.origins import OriginGrant
 from fastbrowse.page import BrowserError, Dialog, Tab
 
 logger = logging.getLogger(__name__)
@@ -48,6 +51,23 @@ CDP_ALIVE_SECONDS = 10.0
 
 class BrowserUnresponsive(BrowserError, Unavailable):
     """The browser stopped answering: an outage the same run may not meet again, not a failed task."""
+
+
+class OriginNotAllowed(BrowserError):
+    """A document outside `allowed_origins`. The message never names it: an address can carry a credential."""
+
+    def __init__(self) -> None:
+        super().__init__("the page is outside allowed_origins")
+
+
+async def check_browser_access(check: Callable[[], Awaitable[None]] | None) -> None:
+    """Check a caller's live permission without exposing its exception details."""
+    if check is None:
+        return
+    try:
+        await check()
+    except Exception as exc:
+        raise BrowserError(f"check_access refused the browser ({type(exc).__name__}, caller supplied)") from None
 
 
 def _unreachable(cause: Exception) -> bool:
@@ -67,6 +87,9 @@ def _unreachable(cause: Exception) -> bool:
 DOWNLOAD_PATTERNS: tuple[RequestPattern, ...] = (
     {"urlPattern": "*", "resourceType": "Document", "requestStage": "Response"},
 )
+# A scoped run also pauses each document request before it is sent, to refuse one outside the grant. Redirect
+# hops, iframes and popups all pause as Documents, so one check covers them.
+SCOPE_PATTERN: RequestPattern = {"urlPattern": "*", "resourceType": "Document", "requestStage": "Request"}
 _ENABLE_DOMAINS = ("Page", "Runtime", "DOM")
 _TRACK_DOCUMENT_JS = data_file("browser", "snapshot.js").read_text(encoding="utf-8") + "('fingerprint')"
 _REFUSE_COOKIES_JS = data_file("browser", "autoconsent", "autoconsent.standalone.js").read_text(encoding="utf-8")
@@ -184,13 +207,20 @@ class BrowserSession:
         *,
         refuse_cookie_banners: bool = True,
         on_frame: FrameHandler | None = None,
+        check_access: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._connection = connection
+        self._check_access = check_access
+        self._grant = None if connection.allowed_origins is None else OriginGrant(connection.allowed_origins)
+        self.denials = 0
+        """Document requests the grant refused, so a navigation that was cut short is told from one that failed."""
         self._artifact_sink = artifact_sink
         self._max_download_bytes = max_download_bytes
-        self._new_document_scripts = (
-            (_TRACK_DOCUMENT_JS, _REFUSE_COOKIES_JS) if refuse_cookie_banners else (_TRACK_DOCUMENT_JS,)
-        )
+        track = _TRACK_DOCUMENT_JS
+        if self._grant is not None:
+            origins = json.dumps(sorted(self._grant.origins))
+            track = _TRACK_DOCUMENT_JS.removesuffix("('fingerprint')") + f"('fingerprint', {origins})"
+        self._new_document_scripts = (track, _REFUSE_COOKIES_JS) if refuse_cookie_banners else (track,)
         self._client: CDPClient | None = None
         self._tabs: dict[str, _TabState] = {}
         self._owned: set[str] = set()
@@ -199,9 +229,11 @@ class BrowserSession:
         self._popups: dict[str, tuple[str, asyncio.Future[bool]]] = {}
         """Popup target id -> (opener target id, whether it was adopted), in the order they opened."""
         self._active_target_id = ""
-        self._on_frame = on_frame
+        # A scoped run casts nothing: a frame is pixels of whatever the tab shows, and the browser's reports of
+        # where it is can trail the screen, so no ordering of events makes a delivered frame provably in the grant.
+        self._on_frame = None if self._grant is not None else on_frame
         # Set while the page may show a secret: frames are still acked, so the cast keeps pace, but not delivered.
-        self.frames_withheld = False
+        self._frames_withheld = False
         self._screencast_session_id: str | None = None
         self._screencast_lock = asyncio.Lock()
         self._pending_frame: _Frame | None = None
@@ -221,6 +253,32 @@ class BrowserSession:
         self._dialog_opened = asyncio.Event()
         self._background: set[asyncio.Task[None]] = set()
         self._closing = False
+
+    @property
+    def frames_withheld(self) -> bool:
+        """Always true in a scoped run, which delivers and records no frames at all."""
+        return self._frames_withheld or self._grant is not None
+
+    @frames_withheld.setter
+    def frames_withheld(self, withheld: bool) -> None:
+        self._frames_withheld = withheld
+
+    @property
+    def grant(self) -> OriginGrant | None:
+        return self._grant
+
+    async def check_access(self) -> None:
+        """Ask the caller whether the run may still touch the browser, failing closed on any error it raises."""
+        await check_browser_access(self._check_access)
+
+    async def assert_clear(self) -> None:
+        """Refuse revoked callers and active documents outside the exact-origin grant."""
+        await self.check_access()
+        if self._grant is None:
+            return
+        info = await self.client.send.Target.getTargetInfo(params={"targetId": self._active_target_id})
+        if not self._grant.allows(info["targetInfo"]["url"]):
+            raise OriginNotAllowed
 
     @property
     def client(self) -> CDPClient:
@@ -288,11 +346,14 @@ class BrowserSession:
         return self._frame_parents.get(session_id)
 
     def tabs(self) -> tuple[Tab, ...]:
+        def granted(t: _TabState) -> bool:
+            return self._grant is None or self._grant.allows(t.url)
+
         return tuple(
             Tab(
                 id=t.target_id,
-                url=t.url,
-                title=t.title,
+                url=t.url if granted(t) else "about:blank",
+                title=t.title if granted(t) else "",
                 active=t.target_id == self._active_target_id,
                 opener_id=t.opener_id,
             )
@@ -322,10 +383,12 @@ class BrowserSession:
             await self._dialog_opened.wait()
 
     async def __aenter__(self) -> Self:
+        await self.check_access()
         self._closing = False
         self._client = _BrowserClient(self._connection.cdp_url)
         try:
             await self._client.start()
+            await self.check_access()
             self._register_events()
             if self._connection.attach:
                 # Turning discovery on replays targetCreated for every window already open, so it waits until
@@ -338,6 +401,18 @@ class BrowserSession:
                 await _together(
                     self.client.send.Target.setDiscoverTargets(params={"discover": True}),
                     self._open_owned_tab("about:blank"),
+                )
+            if self._grant is not None:
+                # A popup's first request can leave before a session attached after targetCreated has Fetch on, so
+                # a scoped run has every new page attach paused and resumes it only once its Fetch is enabled.
+                await self.client.send_raw(
+                    "Target.setAutoAttach",
+                    {
+                        "autoAttach": True,
+                        "waitForDebuggerOnStart": True,
+                        "flatten": True,
+                        "filter": [{"type": "page", "exclude": False}, {"exclude": True}],
+                    },
                 )
         except BaseException:
             with contextlib.suppress(Exception):
@@ -364,6 +439,11 @@ class BrowserSession:
         if self._screencast_session_id is not None:
             await self._screencast_command("Page.stopScreencast", None, self._screencast_session_id)
             self._screencast_session_id = None
+        if self._grant is not None:
+            for target_id, tab in self._tabs.items():
+                if target_id not in self._owned:  # a window the user keeps gets its service workers back
+                    with contextlib.suppress(Exception):
+                        await self._bypass_service_workers(tab.session_id, False)
         for target_id in list(self._owned):
             with contextlib.suppress(Exception):  # best-effort teardown; the browser may already be gone
                 await self.client.send.Target.closeTarget(params={"targetId": target_id})
@@ -385,11 +465,16 @@ class BrowserSession:
         targets = (await self.client.send.Target.getTargets())["targetInfos"]
         self._open_before = {t["targetId"] for t in targets}
         # An Electron app or a browser with DevTools open lists the DevTools window as a page too.
-        pages = [t for t in targets if t["type"] == "page" and not t["url"].startswith("devtools://")]
+        listed = [t for t in targets if t["type"] == "page"]
+        if self._grant is not None:
+            # A window outside the grant is never matched, named or touched: it is not the run's to see.
+            listed = [t for t in listed if self._grant.allows(t["url"])]
+        # An Electron app or a browser with DevTools open lists the DevTools window as a page too.
+        pages = [t for t in listed if not t["url"].startswith("devtools://")]
         if target_match is not None:
             pages = [t for t in pages if target_match in t["url"] or target_match in t["title"]]
         if not pages:
-            seen = [f"{t['title']!r} ({t['url']})" for t in targets if t["type"] == "page"]
+            seen = [f"{t['title']!r} ({t['url']})" for t in listed]
             wanted = "no page" if target_match is None else f"no page matching {target_match!r}"
             raise BrowserError(f"{wanted} to attach to; pages: {seen}")
         target = pages[0]
@@ -444,15 +529,19 @@ class BrowserSession:
             self._spawn(self._update_screencast())
 
     async def _prepare_session(self, session_id: str) -> None:
+        await self.check_access()
+        scoped = self._grant is not None
+        patterns = [*DOWNLOAD_PATTERNS, SCOPE_PATTERN] if scoped else list(DOWNLOAD_PATTERNS)
         # These domains are independent, but all must be ready before the session can be used.
         await _together(
             *(self.client.send_raw(f"{domain}.enable", session_id=session_id) for domain in _ENABLE_DOMAINS),
             self.client.send_raw(
                 "Target.setAutoAttach",
-                {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True},
+                {"autoAttach": True, "waitForDebuggerOnStart": scoped, "flatten": True},
                 session_id=session_id,
             ),
-            self.client.send.Fetch.enable(params={"patterns": list(DOWNLOAD_PATTERNS)}, session_id=session_id),
+            self.client.send.Fetch.enable(params={"patterns": patterns}, session_id=session_id),
+            *((self._bypass_service_workers(session_id, True),) if scoped else ()),
             # Track parsing and hydration before the first post-navigation read, so an already
             # quiet document does not pay another full window just to install its observer.
             *(
@@ -460,6 +549,15 @@ class BrowserSession:
                 for source in self._new_document_scripts
             ),
         )
+        if scoped:
+            await self.client.send_raw("Runtime.runIfWaitingForDebugger", session_id=session_id)
+
+    async def _bypass_service_workers(self, session_id: str, bypass: bool) -> None:
+        # A service worker answers a navigation without the request reaching the Fetch gate, so a scoped run
+        # sends every one to the network, where `SCOPE_PATTERN` sees it. The flag is the Network agent's, and
+        # Chrome ignores it until that domain is on.
+        await self.client.send_raw("Network.enable", session_id=session_id)
+        await self.client.send_raw("Network.setBypassServiceWorker", {"bypass": bypass}, session_id=session_id)
 
     def _register_events(self) -> None:
         client = self.client
@@ -490,13 +588,36 @@ class BrowserSession:
 
     def _on_attached(self, event: AttachedToTargetEvent, session_id: str | None) -> None:
         info = event["targetInfo"]
-        if info["type"] == "iframe" and session_id is not None:
+        if session_id is None:
+            if self._grant is not None and event["waitingForDebugger"]:
+                self._on_new_page(event)
+        elif info["type"] == "iframe":
             self._frame_sessions[info["targetId"]] = event["sessionId"]
             self._frame_parents[event["sessionId"]] = session_id
             self._spawn(self._enable_frame_domains(event["sessionId"]))
+        elif self._grant is not None and event["waitingForDebugger"]:
+            self._spawn(self._resume(event["sessionId"]))  # a worker has no document to scope
 
     async def _enable_frame_domains(self, session_id: str) -> None:
         await self._prepare_session(session_id)
+
+    async def _resume(self, session_id: str) -> None:
+        await self.client.send_raw("Runtime.runIfWaitingForDebugger", session_id=session_id)
+
+    def _on_new_page(self, event: AttachedToTargetEvent) -> None:
+        """A page that opened since a scoped run asked for them paused. Sessions this run attached itself, and
+        windows open before it asked, arrive with nothing to wait on and are left as they are."""
+        info, session_id = event["targetInfo"], event["sessionId"]
+        opener = self._popup_opener(info)
+        if opener is not None:
+            self._begin_popup(info["targetId"], opener, session_id)
+        else:
+            # Not the run's page, as a tab a person opened beside an attached window: let it start, and let go.
+            self._spawn(self._release(session_id))
+
+    async def _release(self, session_id: str) -> None:
+        await self._resume(session_id)
+        await self.client.send.Target.detachFromTarget(params={"sessionId": session_id})
 
     def _on_detached(self, event: DetachedFromTargetEvent, session_id: str | None) -> None:
         self._frame_parents.pop(event["sessionId"], None)
@@ -504,30 +625,40 @@ class BrowserSession:
             del self._frame_sessions[frame_id]
 
     def _on_target_created(self, event: TargetCreatedEvent, session_id: str | None) -> None:
-        info = event["targetInfo"]
-        opener_id = info.get("openerId")
-        if not self._closing and info["type"] == "page":
-            if opener_id in self._owned:
-                self._owned.add(info["targetId"])
-                self._popups[info["targetId"]] = (opener_id, asyncio.get_running_loop().create_future())
-                self._spawn(self._adopt_popup(info["targetId"], opener_id))
-            # An attached window is not owned, so neither are its popups: they stay open with it. An Electron
-            # app's main process opens windows with no opener, which count as the active window's. A browser
-            # opens one too for every tab its user opens, so they are adopted only when a target was matched.
-            elif (
-                self._connection.attach
-                and info["targetId"] not in self._tabs
-                and info["targetId"] not in self._open_before
-                and (opener_id in self._tabs or (not opener_id and self._connection.target_match is not None))
-            ):
-                opener = opener_id or self._active_target_id
-                self._popups[info["targetId"]] = (opener, asyncio.get_running_loop().create_future())
-                self._spawn(self._adopt_popup(info["targetId"], opener))
+        # A scoped run adopts popups where they attach paused, not here, after their first request may have left.
+        if self._grant is None and (opener := self._popup_opener(event["targetInfo"])) is not None:
+            self._begin_popup(event["targetInfo"]["targetId"], opener)
 
-    async def _adopt_popup(self, target_id: str, opener_id: str) -> None:
+    def _popup_opener(self, info: TargetInfo) -> str | None:
+        """The tab a new page belongs to, when the run adopts it."""
+        opener_id = info.get("openerId")
+        if self._closing or info["type"] != "page":
+            return None
+        if opener_id in self._owned:
+            return opener_id
+        # An attached window is not owned, so neither are its popups: they stay open with it. An Electron
+        # app's main process opens windows with no opener, which count as the active window's. A browser
+        # opens one too for every tab its user opens, so they are adopted only when a target was matched.
+        if (
+            self._connection.attach
+            and info["targetId"] not in self._tabs
+            and info["targetId"] not in self._open_before
+            and (opener_id in self._tabs or (not opener_id and self._connection.target_match is not None))
+        ):
+            return opener_id or self._active_target_id
+        return None
+
+    def _begin_popup(self, target_id: str, opener_id: str, session_id: str | None = None) -> None:
+        if opener_id in self._owned:
+            self._owned.add(target_id)
+        self._popups[target_id] = (opener_id, asyncio.get_running_loop().create_future())
+        self._spawn(self._adopt_popup(target_id, opener_id, session_id))
+
+    async def _adopt_popup(self, target_id: str, opener_id: str, session_id: str | None = None) -> None:
         try:
-            attach = await self.client.send.Target.attachToTarget(params={"targetId": target_id, "flatten": True})
-            session_id = attach["sessionId"]
+            if session_id is None:
+                attach = await self.client.send.Target.attachToTarget(params={"targetId": target_id, "flatten": True})
+                session_id = attach["sessionId"]
             await _together(
                 self.client.send.Target.activateTarget(params={"targetId": target_id}),
                 self._prepare_session(session_id),
@@ -671,8 +802,29 @@ class BrowserSession:
     # -- Downloads ------------------------------------------------------------------------------------
 
     def _on_request_paused(self, event: RequestPausedEvent, session_id: str | None) -> None:
-        if session_id is not None:
-            self._spawn(self._handle_paused(event, session_id))
+        if session_id is None:
+            return
+        # A response-stage pause carries a status or an error; a request-stage one is before anything is sent.
+        if self._grant is not None and "responseStatusCode" not in event and "responseErrorReason" not in event:
+            if not self._grant.allows(event["request"]["url"]):
+                # Counted here, not in the task, so a navigation that returns next sees it. ERR_ABORTED rather
+                # than a block page, which would commit a document that names the address it refused.
+                self.denials += 1
+                self._spawn(self._refuse(event["requestId"], session_id))
+                return
+            self._spawn(self._release_request(event["requestId"], session_id))
+            return
+        self._spawn(self._handle_paused(event, session_id))
+
+    async def _refuse(self, request_id: str, session_id: str) -> None:
+        with contextlib.suppress(Exception):  # the tab may already be gone
+            await self.client.send.Fetch.failRequest(
+                params={"requestId": request_id, "errorReason": "Aborted"}, session_id=session_id
+            )
+
+    async def _release_request(self, request_id: str, session_id: str) -> None:
+        with contextlib.suppress(Exception):
+            await self.client.send.Fetch.continueRequest(params={"requestId": request_id}, session_id=session_id)
 
     async def _handle_paused(self, event: RequestPausedEvent, session_id: str) -> None:
         request_id = event["requestId"]

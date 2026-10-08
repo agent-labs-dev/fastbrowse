@@ -7,7 +7,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, PlainSerializer
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, PlainSerializer, field_validator
+
+from fastbrowse.origins import parse_origins
 
 
 class Frozen(BaseModel):
@@ -290,6 +292,14 @@ class BrowserConnection(Frozen):
     """True when attaching to an existing window (e.g. Electron or external Chrome) without creating a tab."""
     target_match: str | None = None
     """URL or title substring to match when attaching to an existing target."""
+    allowed_origins: tuple[str, ...] | None = None
+    """Exact `http(s)://host[:port]` origins whose documents the run may inspect and control, else unscoped. It
+    scopes documents, not the network: a granted page's images, scripts and requests to other hosts still load."""
+
+    @field_validator("allowed_origins")
+    @classmethod
+    def _origins(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        return None if value is None else parse_origins(value)
 
 
 class LocalChrome(Frozen):

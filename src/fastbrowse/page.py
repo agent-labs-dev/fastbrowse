@@ -229,6 +229,10 @@ class BrowserError(RuntimeError):
     """A browser failure a `Page` raises, with a message safe to put in a run result: never page text."""
 
 
+class ScreenshotsUnavailable(BrowserError):
+    """A page cannot safely attribute pixels to its permitted documents."""
+
+
 class NavigationTimeout(BrowserError):
     """`Page.navigate` gave up waiting for a document: the CDP command timed out, or the page never became ready.
 

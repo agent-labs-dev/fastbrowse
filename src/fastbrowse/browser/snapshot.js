@@ -3,7 +3,18 @@
 // Adapted to fastbrowse's Control shape (role + operation set, not per-kind actions) and to traverse
 // open shadow roots. Runs once per frame session (main frame or an OOPIF); the Python side merges frames.
 // biome-ignore format: Python appends mode arguments to this parenthesized expression.
-(mode => {
+((mode, allowedOrigins = null) => {
+  const granted = doc => {
+    if (allowedOrigins === null) return true;
+    const frame = doc.defaultView.frameElement;
+    if (frame) {
+      if (frame.hasAttribute('srcdoc') || !frame.getAttribute('src')) return false;
+      const source = new URL(frame.src);
+      if (!['http:', 'https:'].includes(source.protocol) || !allowedOrigins.includes(source.origin)) return false;
+    }
+    const url = new URL(doc.URL);
+    return ['http:', 'https:'].includes(url.protocol) && allowedOrigins.includes(url.origin);
+  };
   // Form context is repeated for each submit-capable input in safety prompts.
   const FORM_TEXT_CHARS = 2000;
   // Freshness guards bound comparison work on large cards; this text is never sent to a model.
@@ -117,7 +128,7 @@
           } catch {
             inner = null;
           }
-          if (inner?.body) include(inner);
+          if (inner?.body && granted(inner)) include(inner);
         }
       }
     };
@@ -323,7 +334,7 @@
         } catch {
           inner = null;
         }
-        if (inner && inner.body) yield* walk(inner);
+        if (inner && inner.body && granted(inner)) yield* walk(inner);
         else inaccessible++;
       }
     }
@@ -527,7 +538,7 @@
   // operation. An element whose hover rule would reveal something now hidden is offered as a hover target.
   const docs = [];
   const addDoc = doc => {
-    if (!doc?.body || docs.includes(doc)) return;
+    if (!doc?.body || !granted(doc) || docs.includes(doc)) return;
     docs.push(doc);
     for (const frame of doc.querySelectorAll('iframe,frame')) {
       try {
@@ -801,7 +812,7 @@
       } catch {
         inner = null;
       }
-      if (!inner) continue;
+      if (!inner || !granted(inner)) continue;
       const f = frame.getBoundingClientRect();
       readText(inner, dx + f.left + frame.clientLeft, dy + f.top + frame.clientTop);
     }
