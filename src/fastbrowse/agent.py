@@ -2311,9 +2311,15 @@ class Agent:
                 ) is not None and state.pages < self._config.max_pages:
                     state.ledger.check()
                     # Each queued read still owes a step. Leave room for both the next click and its read.
-                    if state.ledger.steps + len(pending) + 2 > state.ledger.limits.max_steps:
+                    if (
+                        state.ledger.limits.max_steps is not None
+                        and state.ledger.steps + len(pending) + 2 > state.ledger.limits.max_steps
+                    ):
                         break
-                    if state.ledger.llm_calls >= state.ledger.limits.max_llm_calls:
+                    if (
+                        state.ledger.limits.max_llm_calls is not None
+                        and state.ledger.llm_calls >= state.ledger.limits.max_llm_calls
+                    ):
                         break
                     if any(page.task.done() and page.task.exception() is not None for page in pending):
                         state.paging_failed = True
@@ -2369,8 +2375,14 @@ class Agent:
                             observation, following = settled, next_page_control(settled)
                     computable = {t.requirement_id for t in state.notes.tallies} | state.comparisons.keys()
                     fallback_room = not state.comparisons or (
-                        state.ledger.steps + len(pending) + 2 <= state.ledger.limits.max_steps
-                        and state.ledger.llm_calls + 2 <= state.ledger.limits.max_llm_calls
+                        (
+                            state.ledger.limits.max_steps is None
+                            or state.ledger.steps + len(pending) + 2 <= state.ledger.limits.max_steps
+                        )
+                        and (
+                            state.ledger.limits.max_llm_calls is None
+                            or state.ledger.llm_calls + 2 <= state.ledger.limits.max_llm_calls
+                        )
                     )
                     if following is None and {r.id for r in wanted} <= computable and fallback_room:
                         # Rankings and counts merge in code, so the last read need not wait for earlier pages.
@@ -2388,8 +2400,14 @@ class Agent:
                     if (
                         following is None
                         or state.pages >= self._config.max_pages
-                        or state.ledger.steps + len(pending) + 3 > state.ledger.limits.max_steps
-                        or state.ledger.llm_calls + 1 >= state.ledger.limits.max_llm_calls
+                        or (
+                            state.ledger.limits.max_steps is not None
+                            and state.ledger.steps + len(pending) + 3 > state.ledger.limits.max_steps
+                        )
+                        or (
+                            state.ledger.limits.max_llm_calls is not None
+                            and state.ledger.llm_calls + 1 >= state.ledger.limits.max_llm_calls
+                        )
                     ):
                         break
                     frame = await self._frame() if self._on_event and self._config.step_frames else None

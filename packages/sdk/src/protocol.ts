@@ -155,12 +155,12 @@ export interface Limits {
    * Steps that reached the page. A click whose element was redrawn before it landed dispatched nothing and is
    * not counted; the stall budget ends a page that keeps redrawing.
    */
-  max_steps?: number;
+  max_steps?: number | null;
   /**
    * Logical Jev evaluations. A hedged or retried request adds cost but not a call.
    */
-  max_jev_calls?: number;
-  max_llm_calls?: number;
+  max_jev_calls?: number | null;
+  max_llm_calls?: number | null;
   /**
    * Bounds Jev and LLM spend as it happens. A cloud browser bills when it stops, after the run, so its
    * cost is reported in the result but cannot stop the run that incurred it.
