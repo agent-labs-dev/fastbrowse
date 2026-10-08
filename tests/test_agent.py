@@ -5562,6 +5562,14 @@ async def test_final_frame_deadline_cancels_a_hung_page_check(monkeypatch: pytes
     page.screenshot.assert_not_awaited()
 
 
+class RequestedAuditLLM(ScriptedLLM):
+    async def generate(self, purpose, messages, schema, **kwargs):
+        if schema.__name__ == "_OutputAssessment":
+            criteria = json.loads(messages[-1].content)["criteria"]
+            self.responses.append({"judgments": {key: "yes" for key in criteria}, "reason": "Both fields are quoted."})
+        return await super().generate(purpose, messages, schema, **kwargs)
+
+
 @pytest.mark.parametrize("missing", [True, False])
 async def test_final_answer_checks_each_output_without_notes_filling_a_missing_field(missing: bool) -> None:
     from fastbrowse.retrieval import Claim, assemble_answer
@@ -5612,21 +5620,7 @@ async def test_final_answer_checks_each_output_without_notes_filling_a_missing_f
     agent = Agent(
         Mock(spec=Page),
         Jev({}),
-        ScriptedLLM(
-            [
-                {
-                    "judgments": {
-                        "output_0": "yes",
-                        "output_1": "yes",
-                        "output_2": "yes",
-                        "claim_only_0": "yes",
-                        "claim_only_1": "yes",
-                    },
-                    "reason": "Both fields are quoted.",
-                }
-            ]
-            * 8
-        ),
+        RequestedAuditLLM([]),
     )
     held = await agent._holds(state, composed)
     assert (held is None) is missing
@@ -5653,22 +5647,8 @@ async def test_missing_answer_output_recovers_evidence_then_completes() -> None:
         evidence=evidence(start=5, end=8).model_copy(update={"quote": "9am"}),
     )
     state.notes.add(price)
-    llm = ScriptedLLM(
-        [{"claims": [{"text": price.text, "evidence_ids": [fact_id(price)]}]}]
-        + [
-            {
-                "judgments": {
-                    "output_0": "yes",
-                    "output_1": "yes",
-                    "output_2": "yes",
-                    "claim_only_0": "yes",
-                    "claim_only_1": "yes",
-                },
-                "reason": "Both fields are quoted.",
-            }
-        ]
-        * 8
-    )
+    llm = RequestedAuditLLM([{"claims": [{"text": price.text, "evidence_ids": [fact_id(price)]}]}])
+
     plan = state.ready_plan
     agent, _ = await _finishing(state, llm, noul=0.0)
     state.ready_plan = plan
