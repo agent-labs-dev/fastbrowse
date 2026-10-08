@@ -455,8 +455,8 @@ class _RunState:
             # Shielded: a caller cancelled mid-wait (a fill a redraw abandoned) must not cancel the one plan every
             # later step needs. Teardown still cancels the task itself.
             planned = await asyncio.shield(self.planning)
-            self.ledger.record(planned.cost)
             self.ready_plan = planned.data
+            self.ledger.record(planned.cost)
         return self.ready_plan
 
 
@@ -552,6 +552,7 @@ class Agent:
         ledger.started = time.monotonic()
         self._artifact_start = len(self._page.artifacts)
         state: _RunState | None = None
+        loop_returned = False
         # The ledger checks `max_seconds` between operations; only a deadline around the awaits bounds a
         # browser or provider call that never returns.
         deadline = asyncio.timeout(ledger.limits.max_seconds)
@@ -579,7 +580,8 @@ class Agent:
                     if opening is not None:
                         # A shortcut leaves the start page before the loop observes anything.
                         state.visited[opening] = None
-                    return await self._loop(state, output_schema, until)
+                    result = await self._loop(state, output_schema, until)
+                    loop_returned = True
             except _Stop as stop:
                 if stop.status in {Status.STUCK, Status.UNVERIFIED} and state is not None and state.notes.evidence:
                     # What was read is still cited evidence; a caller told only "stuck" has to browse again for it.
@@ -631,7 +633,15 @@ class Agent:
             finally:
                 # A run can end before it ever needed the plan, and a plan still being written would bill it.
                 await head.discard()
-        return await self._ending_frame(result)
+                if (
+                    (state is None or state.ready_plan is None)
+                    and not head.planning.cancelled()
+                    and head.planning.exception() is None
+                ):
+                    # First observation can fail before the completed plan is consumed, but its receipt still bills.
+                    ledger.lines.append(head.planning.result().cost)
+        result = result.model_copy(update={"cost": ledger.breakdown()})
+        return result if loop_returned else await self._ending_frame(result)
 
     async def _ending_frame(self, result: RunResult, *, requested: bool = False) -> RunResult:
         if not (self._config.step_frames or requested):
