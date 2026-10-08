@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import json
 import logging
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
@@ -57,6 +58,16 @@ class OriginNotAllowed(BrowserError):
 
     def __init__(self) -> None:
         super().__init__("the page is outside allowed_origins")
+
+
+async def check_browser_access(check: Callable[[], Awaitable[None]] | None) -> None:
+    """Check a caller's live permission without exposing its exception details."""
+    if check is None:
+        return
+    try:
+        await check()
+    except Exception as exc:
+        raise BrowserError(f"check_access refused the browser ({type(exc).__name__}, caller supplied)") from None
 
 
 def _unreachable(cause: Exception) -> bool:
@@ -203,13 +214,13 @@ class BrowserSession:
         self._grant = None if connection.allowed_origins is None else OriginGrant(connection.allowed_origins)
         self.denials = 0
         """Document requests the grant refused, so a navigation that was cut short is told from one that failed."""
-        self._foreign_frames: set[str] = set()
-        """Frames whose document is outside the grant, seen as they navigate and when a session attaches."""
         self._artifact_sink = artifact_sink
         self._max_download_bytes = max_download_bytes
-        self._new_document_scripts = (
-            (_TRACK_DOCUMENT_JS, _REFUSE_COOKIES_JS) if refuse_cookie_banners else (_TRACK_DOCUMENT_JS,)
-        )
+        track = _TRACK_DOCUMENT_JS
+        if self._grant is not None:
+            origins = json.dumps(sorted(self._grant.origins))
+            track = _TRACK_DOCUMENT_JS.removesuffix("('fingerprint')") + f"('fingerprint', {origins})"
+        self._new_document_scripts = (track, _REFUSE_COOKIES_JS) if refuse_cookie_banners else (track,)
         self._client: CDPClient | None = None
         self._tabs: dict[str, _TabState] = {}
         self._owned: set[str] = set()
@@ -258,25 +269,15 @@ class BrowserSession:
 
     async def check_access(self) -> None:
         """Ask the caller whether the run may still touch the browser, failing closed on any error it raises."""
-        if self._check_access is None:
-            return
-        try:
-            await self._check_access()
-        except Exception as exc:
-            # The caller's exception can carry whatever it likes, so only its type is kept.
-            raise BrowserError(f"check_access refused the browser ({type(exc).__name__}, caller supplied)") from None
+        await check_browser_access(self._check_access)
 
-    async def assert_clear(self, *, pixels: bool = False) -> None:
-        """Raise unless the caller still allows access and the active tab's committed document is in the grant.
-
-        Text reads drop a foreign frame by its address, so they go on without it; a screenshot cannot cut one
-        out, so `pixels` also refuses while any frame seen is outside the grant.
-        """
+    async def assert_clear(self) -> None:
+        """Refuse revoked callers and active documents outside the exact-origin grant."""
         await self.check_access()
         if self._grant is None:
             return
         info = await self.client.send.Target.getTargetInfo(params={"targetId": self._active_target_id})
-        if (pixels and self._foreign_frames) or not self._grant.allows(info["targetInfo"]["url"]):
+        if not self._grant.allows(info["targetInfo"]["url"]):
             raise OriginNotAllowed
 
     @property
@@ -382,10 +383,12 @@ class BrowserSession:
             await self._dialog_opened.wait()
 
     async def __aenter__(self) -> Self:
+        await self.check_access()
         self._closing = False
         self._client = _BrowserClient(self._connection.cdp_url)
         try:
             await self._client.start()
+            await self.check_access()
             self._register_events()
             if self._connection.attach:
                 # Turning discovery on replays targetCreated for every window already open, so it waits until
@@ -526,6 +529,7 @@ class BrowserSession:
             self._spawn(self._update_screencast())
 
     async def _prepare_session(self, session_id: str) -> None:
+        await self.check_access()
         scoped = self._grant is not None
         patterns = [*DOWNLOAD_PATTERNS, SCOPE_PATTERN] if scoped else list(DOWNLOAD_PATTERNS)
         # These domains are independent, but all must be ready before the session can be used.
@@ -537,7 +541,7 @@ class BrowserSession:
                 session_id=session_id,
             ),
             self.client.send.Fetch.enable(params={"patterns": patterns}, session_id=session_id),
-            *((self._seed_frames(session_id), self._bypass_service_workers(session_id, True)) if scoped else ()),
+            *((self._bypass_service_workers(session_id, True),) if scoped else ()),
             # Track parsing and hydration before the first post-navigation read, so an already
             # quiet document does not pay another full window just to install its observer.
             *(
@@ -555,23 +559,6 @@ class BrowserSession:
         await self.client.send_raw("Network.enable", session_id=session_id)
         await self.client.send_raw("Network.setBypassServiceWorker", {"bypass": bypass}, session_id=session_id)
 
-    async def _seed_frames(self, session_id: str) -> None:
-        """Frames already in a window when it attached, which no navigation event will report."""
-        tree = (await self.client.send.Page.getFrameTree(session_id=session_id))["frameTree"]
-        pending = [tree]
-        while pending:
-            node = pending.pop()
-            self._note_frame(node["frame"])
-            pending.extend(node.get("childFrames", []))
-
-    def _note_frame(self, frame: Any) -> None:
-        assert self._grant is not None
-        # A tab's own document is judged where it is read; a frame has its own, and a blocked one stays empty.
-        if self._grant.allows(frame["url"]):
-            self._foreign_frames.discard(frame["id"])
-        else:
-            self._foreign_frames.add(frame["id"])
-
     def _register_events(self) -> None:
         client = self.client
         client.register.Target.attachedToTarget(self._on_attached)
@@ -583,9 +570,6 @@ class BrowserSession:
         if self._on_frame is not None:
             client.register.Page.screencastFrame(self._on_screencast_frame)
         client.register.Fetch.requestPaused(self._on_request_paused)
-        if self._grant is not None:
-            client.register.Page.frameNavigated(lambda event, _session: self._note_frame(event["frame"]))
-            client.register.Page.frameDetached(lambda event, _session: self._foreign_frames.discard(event["frameId"]))
 
     def _spawn(self, coro: Coroutine[None, None, None]) -> None:
         if self._closing:

@@ -29,7 +29,7 @@ from fastbrowse.models import (
     StepOutcome,
 )
 from fastbrowse.origins import OriginGrant
-from fastbrowse.page import Action, BrowserError
+from fastbrowse.page import Action, BrowserError, ScreenshotsUnavailable
 from tests.browser.conftest import RecordingArtifactSink
 from tests.browser.test_browser import eval_value, find, observe_until, wait_until
 from tests.test_policy import ScriptedJev
@@ -480,7 +480,8 @@ async def test_frames_of_a_foreign_origin_never_load(
         await settle()
         assert sites.hits == []
         assert SECRET_TEXT not in (await page.capture()).text
-        assert await page.screenshot()
+        with pytest.raises(ScreenshotsUnavailable):
+            await page.screenshot()
 
 
 @pytest.mark.parametrize("opened", ["foreign", "redirect", "granted"])
@@ -517,7 +518,7 @@ async def test_an_attached_window_keeps_its_foreign_frames_and_other_windows_out
     async with scoped(chrome_connection, sites.granted, attach=True, target_match="Granted frame") as (_session, page):
         assert SECRET_TEXT not in (await page.capture()).text
         assert SECRET_TEXT not in (await page.observe()).viewport_text
-        with pytest.raises(OriginNotAllowed):
+        with pytest.raises(ScreenshotsUnavailable):
             await page.screenshot()
     # A window that is not the grant's is neither matched nor named, and nothing navigates the person's window.
     await owner.navigate(f"{sites.foreign()}/page")
@@ -656,3 +657,50 @@ async def test_a_blank_popup_inherits_no_foreign_document_grant(
     with pytest.raises(BrowserError):
         async with scoped(chrome_connection, sites.granted, attach=True, target_match="Inherited foreign document"):
             pytest.fail("A blank popup must not inherit a grant from its foreign opener")
+
+
+@pytest.mark.parametrize("source", ["blank", "srcdoc", "blob"])
+async def test_opaque_child_documents_never_enter_a_scoped_read(
+    chrome_connection: BrowserConnection, browser_session: BrowserSession, sites: OriginSites, source: str
+) -> None:
+    owner = CdpPage(browser_session, Config())
+    await owner.navigate(f"{sites.granted}/ok")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "(kind => { const frame = document.createElement('iframe'); "
+        f"const html = '<p>{SECRET_TEXT}</p><button>Opaque child action</button>'; "
+        "if (kind === 'srcdoc') frame.srcdoc = html; "
+        "if (kind === 'blob') frame.src = URL.createObjectURL(new Blob([html], {type:'text/html'})); "
+        "document.body.append(frame); if (kind === 'blank') frame.contentDocument.write(html); return true; })("
+        + json.dumps(source)
+        + ")",
+    )
+    await settle()
+    assert SECRET_TEXT in (await owner.capture()).text
+    async with scoped(chrome_connection, sites.granted, attach=True, target_match="/ok") as (_session, page):
+        assert SECRET_TEXT not in (await page.capture()).text
+        observed = await page.observe()
+        assert SECRET_TEXT not in observed.viewport_text
+        assert all(control.label != "Opaque child action" for control in observed.controls)
+
+
+async def test_access_is_checked_before_connecting_to_a_browser() -> None:
+    async def refused() -> None:
+        raise PermissionError("private caller detail")
+
+    from fastbrowse.run import connect_cdp
+
+    with pytest.raises(BrowserError, match="caller supplied") as failure:
+        async with connect_cdp(cdp_url="ws://127.0.0.1:1", check_access=refused):
+            pytest.fail("Revoked callers must not enter a browser session")
+    assert "private caller detail" not in str(failure.value)
+
+
+async def test_scoped_screenshots_are_refused_even_on_a_clean_page(
+    chrome_connection: BrowserConnection, sites: OriginSites
+) -> None:
+    async with scoped(chrome_connection, sites.granted) as (_session, page):
+        await page.navigate(f"{sites.granted}/ok")
+        with pytest.raises(BrowserError, match="screenshots are unavailable"):
+            await page.screenshot()

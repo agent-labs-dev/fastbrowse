@@ -16,9 +16,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   outside the list are refused before they are sent, and a window or frame already open outside it is never read,
   captured or screenshotted. It scopes documents, not the network: images, scripts and requests a granted page makes
   to other hosts still load. Service workers are bypassed so every navigation meets the check, a scoped run delivers
-  no live frames, and `record` is refused with it. Without it nothing changes.
+  no live frames or screenshots, and `record` is refused with it. Opaque child documents are excluded from text and controls. Without it nothing changes.
 
-- `run_task` and `connect_cdp` take `check_access`, an async callback awaited before every observation, capture,
+- `run_task` and `connect_cdp` take `check_access`, an async callback awaited before browser startup and every observation, capture,
   screenshot, address, navigation and action. If it raises, the run stops with a `BrowserError` that keeps only the
   exception's type.
 

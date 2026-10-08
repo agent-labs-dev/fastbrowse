@@ -20,6 +20,7 @@ from fastbrowse.agent import Agent, HeadStart
 from fastbrowse.artifacts import DirectorySink
 from fastbrowse.browser import BrowserSession, CdpPage
 from fastbrowse.browser.recording import Recording
+from fastbrowse.browser.session import check_browser_access
 from fastbrowse.clients.environment import load_settings
 from fastbrowse.config import Config
 from fastbrowse.jev import JevClient
@@ -85,6 +86,7 @@ async def connect_cdp(
     awaited before every browser read and action (both described on `run_task`). Downloads go to `artifact_sink`,
     else to `downloads`, else to a scratch directory removed on exit.
     """
+    await check_browser_access(check_access)
     if port is not None and cdp_url is not None:
         raise BrowserError("port and cdp_url both name a browser to attach to; pass one")
     if cdp_url is None:
@@ -238,10 +240,10 @@ async def run_task(
     them is never read, captured or screenshotted. It is a document grant, not network egress: images, scripts and
     requests a granted page makes to other hosts still load, and a sign-in that redirects through another origin
     needs that origin listed too. Service workers are bypassed so every navigation meets the gate. A scoped run
-    delivers no live frames and cannot `record`, since pixels cannot be attributed to a document.
+    delivers no live frames or screenshots and cannot `record`, since pixels cannot be attributed to a document.
 
-    `check_access` is awaited before every observation, capture, screenshot, address, navigation and action,
-    scoped or not. If it raises, the run stops with a `BrowserError` and the exception's text is not kept.
+    `check_access` is awaited before browser startup and every observation, capture, screenshot, address, navigation
+    and action, scoped or not. If it raises, the run stops with a `BrowserError` and the exception's text is not kept.
 
     Files the run downloads are discarded unless `downloads` names a directory to keep them in. `record` saves
     an MP4 of the tab, ending on the answer; it needs ffmpeg, and shows whatever the pages showed.
@@ -268,6 +270,7 @@ async def run_task(
             # ready to open when the tab is.
             head = HeadStart.begin(llm, task, start=start, limits=limits)
             try:
+                await check_browser_access(check_access)
                 async with _browser(
                     browser_api_key,
                     chrome or settings.local_chrome(),

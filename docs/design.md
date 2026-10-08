@@ -121,14 +121,14 @@ browser for each tab a person opens by hand.
 could name the address. Redirect hops, iframes and popups all pause as documents, so one check covers each. Pages and
 child targets attach paused (`waitForDebuggerOnStart`) and resume only once their Fetch is on, so a popup or
 out-of-process frame cannot send its first request unchecked. Reads check the address each text was read from, the
-committed address of the active tab, and every frame seen, so a document that Fetch cannot see (a `data:` page, a
-page restored from the back-forward cache) is refused rather than read; screenshots also refuse while any frame is
-outside the grant. A window already open outside the grant is never matched, and no window is navigated to enforce
+committed address of the active tab, and nested document addresses, so an opaque document (`about:blank`,
+`srcdoc`, `blob:` or `data:`) or a foreign page restored from the back-forward cache is refused rather than read.
+Nested blank documents remain refused even when `document.write` gives them their parent's address. A window already open outside the grant is never matched, and no window is navigated to enforce
 anything. Service workers are bypassed on every scoped session (`Network.setBypassServiceWorker`, undone on an
 attached window at close), so no navigation is answered without meeting the gate. A scoped run delivers no live
-frames and refuses to record, because pixels cannot be matched to a document. The grant covers documents, not
+frames, screenshots or recordings, because pixels cannot be matched to a document. The grant covers documents, not
 network egress: subresources and requests a granted page makes are not scoped, and neither are workers.
-`check_access`, when given, is awaited before every browser read and action, scoped or not.
+`check_access`, when given, is awaited before browser startup and every browser read and action, scoped or not.
 
 Before a pointer press, the browser waits for a stable target and rechecks its guard and hit-test. A
 replacement control must match the original semantics and receiving document; ambiguous matches are

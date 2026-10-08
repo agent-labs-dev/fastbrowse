@@ -40,6 +40,7 @@ from fastbrowse.page import (
     NavigationTimeout,
     Observation,
     Page,
+    ScreenshotsUnavailable,
     SiteUnreachable,
     cut_marker,
     loads_more,
@@ -47,9 +48,7 @@ from fastbrowse.page import (
 )
 
 _PAGE_JS = data_file("browser", "snapshot.js").read_text(encoding="utf-8")
-_SNAPSHOT_JS = _PAGE_JS + "('snapshot')"
 _CAPTURE_JS = data_file("browser", "capture.js").read_text(encoding="utf-8")
-_FINGERPRINT_JS = _PAGE_JS + "('fingerprint').fingerprint"
 _SELECT_TEXT_JS = (
     "if (typeof e.select === 'function') e.select(); else { const range = e.ownerDocument.createRange(); "
     "range.selectNodeContents(e); const selection = e.ownerDocument.getSelection(); "
@@ -334,6 +333,10 @@ def _capped(controls: list[Control], limit: int) -> list[Control]:
 
 class CdpPage(Page):
     def __init__(self, session: BrowserSession, config: Config) -> None:
+        origins = "null" if session.grant is None else json.dumps(sorted(session.grant.origins))
+        self._page_js = f"(mode => ({_PAGE_JS})(mode, {origins}))"
+        self._capture_js = f"({_CAPTURE_JS})({origins})"
+        self._fingerprint_js = self._page_js + "('fingerprint').fingerprint"
         self._session = session
         self._config = config
         self._last: _ObservedState | None = None
@@ -453,7 +456,7 @@ class CdpPage(Page):
 
     async def _snapshot_all_frames(self) -> tuple[dict[str, _FrameObservation[_Snapshot]], int]:
         # A results page that hides its controls behind a loading indicator reads as empty until it clears.
-        result = await self._read_frames(_SNAPSHOT_JS, _Snapshot, wait_loaded=True)
+        result = await self._read_frames(self._page_js + "('snapshot')", _Snapshot, wait_loaded=True)
         coverage = {frame.session_id: frame.raw.inaccessible_frames for frame in result.values()}
         return result, self._inaccessible_frames(coverage)
 
@@ -530,7 +533,7 @@ class CdpPage(Page):
         blocks: list[Block] = []
         offset = 0
         coverage: dict[str, int] = {}
-        frames = await self._read_frames(_CAPTURE_JS, _CaptureSnapshot, wait_loaded=True)
+        frames = await self._read_frames(self._capture_js, _CaptureSnapshot, wait_loaded=True)
         main = frames.get(_MAIN)
         title = main.raw.title if main else ""
         url = main.raw.url if main else await self.origin()
@@ -651,7 +654,7 @@ class CdpPage(Page):
         with suppress(BrowserError):
             return (
                 await self._until_dialog(
-                    self._evaluate(target[0], f"({_PAGE_JS})({json.dumps({'id': target[2], 'text': text})})")
+                    self._evaluate(target[0], f"({self._page_js})({json.dumps({'id': target[2], 'text': text})})")
                 )
                 is True
             )
@@ -1338,7 +1341,9 @@ class CdpPage(Page):
         compositor-level nudges proved unreliable, while activating always yields a frame at once. Screenshots
         are rare (recovery and uncertain completion), so focus moves only when it has to.
         """
-        await self._session.assert_clear(pixels=True)
+        await self._session.assert_clear()
+        if self._session.grant is not None:
+            raise ScreenshotsUnavailable("screenshots are unavailable for scoped documents")
         client, session_id = self._session.client, self._session.active_session_id
         params: CaptureScreenshotParameters = {"format": "png"}
         capture = asyncio.ensure_future(client.send.Page.captureScreenshot(params=params, session_id=session_id))
@@ -1530,7 +1535,7 @@ class CdpPage(Page):
         return bool(result)
 
     async def _fingerprint(self) -> str:
-        result = await self._evaluate(self._session.active_session_id, _FINGERPRINT_JS)
+        result = await self._evaluate(self._session.active_session_id, self._fingerprint_js)
         return str(result)
 
     async def _before_action(
@@ -1559,7 +1564,7 @@ class CdpPage(Page):
                 "(async () => { "
                 + (f"await {_PRESENTED_JS}; " if after_move and same_session else "")
                 + "const r = window.__fastbrowse; "
-                f"const fingerprint = {_FINGERPRINT_JS if same_session and not after_move else "''"}; "
+                f"const fingerprint = {self._fingerprint_js if same_session and not after_move else "''"}; "
                 f"const guard = r?.guard ? r.guard(r.nodes.get({local_id})) : null; "
                 f"const point = {json.dumps(hit_test)} && JSON.stringify(guard) === "
                 f"JSON.stringify({json.dumps(guard)}) ? ({_HIT_TEST_JS})({local_id}, {json.dumps(scroll)}) : null; "
@@ -1635,7 +1640,7 @@ class CdpPage(Page):
         # Hidden tabs throttle timers, so return a single sample for the caller to poll in that case.
         result = await self._evaluate(
             self._session.active_session_id,
-            f"new Promise(resolve => {{ const sample = {_PAGE_JS}; "
+            f"new Promise(resolve => {{ const sample = {self._page_js}; "
             f"const deadline = performance.now() + {timeout_seconds * 1000}; "
             f"const spinning = performance.now() + {_SETTLE_LOADING_SECONDS * 1000}; "
             "const poll = () => { "
@@ -1655,12 +1660,11 @@ class CdpPage(Page):
         )
         return _SETTLED.validate_python(result)
 
-    @staticmethod
-    def _loaded_script(timeout_seconds: float) -> str:
+    def _loaded_script(self, timeout_seconds: float) -> str:
         """Wait, in the renderer, for a visible loading indicator to go. Only the indicator is waited on: a page
         that keeps changing, a ticker or a clock, is readable now and would never go quiet."""
         return (
-            f"new Promise(resolve => {{ const sample = {_PAGE_JS}; "
+            f"new Promise(resolve => {{ const sample = {self._page_js}; "
             f"const deadline = performance.now() + {timeout_seconds * 1000}; "
             "const poll = () => { const state = sample('fingerprint'); "
             "if (!state.loading || state.hidden || performance.now() >= deadline) { resolve(null); return; } "
