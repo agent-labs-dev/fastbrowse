@@ -762,6 +762,33 @@ def test_field_constraints_and_explicit_unsupported_records() -> None:
     assert field_candidates(capture((BlockKind.PARAGRAPH, "2026-02-30")), Fields.model_fields["when"]) == ()
 
 
+async def test_composer_maps_short_references_without_accepting_truncated_ids() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Price is $12"))
+    evidence = block_evidence(page, "s0")
+    notes = Notes((Fact(reader=FactReader.LLM, text=evidence.quote, evidence=evidence),))
+    key = evidence_id(evidence)
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {"text": "It is $12. [e0]", "evidence_ids": ["e0"]},
+                    {"text": "Invented.", "evidence_ids": [key.rsplit(":", 1)[-1]]},
+                    {"text": "Absent.", "evidence_ids": ["e1"]},
+                ]
+            }
+        ]
+    )
+    result = await compose(
+        llm, "Find price", Plan(requirements=(), answer_expected=True), notes, transaction_evidence_ids=(key,)
+    )
+    prompt = llm.calls[0][1][-1].content
+    assert "[e0]" in prompt and key not in prompt
+    assert "action: e0." in prompt
+    assert result.data.answer == "It is $12."
+    assert result.data.claims[0].evidence_ids == (key,)
+    assert result.data.dropped_claims == 2
+
+
 async def test_compose_drops_uncited_and_unknown_claims_including_answer_text(caplog: pytest.LogCaptureFixture) -> None:
     page = capture((BlockKind.PARAGRAPH, "Price is $12"))
     evidence = block_evidence(page, "s0")
@@ -821,7 +848,7 @@ async def test_composer_cannot_cite_a_note_omitted_from_its_input(caplog: pytest
         notes,
         tokens=TokenBudget(state_plus_largest_question=2000),
     )
-    assert key in llm.calls[0][1][-1].content and omitted not in llm.calls[0][1][-1].content
+    assert "[e0]" in llm.calls[0][1][-1].content and "[e1]" not in llm.calls[0][1][-1].content
     assert result.data.dropped_claims == 1
     assert len(result.data.citations) == 1 and result.data.citations[0].quote == "Price is $12"
     assert omitted in caplog.text
@@ -858,7 +885,7 @@ async def test_committed_action_evidence_is_named_to_the_composer_and_contradict
     )
     prompt = "\n".join(message.content for message in llm.calls[0][1])
     transaction = prompt.split("# Transaction evidence\n", 1)[1].split("# Notes", 1)[0]
-    assert committed in transaction and listed not in transaction
+    assert "action: e1." in transaction and "e0" not in transaction
     assert "cites" in transaction and "committed" in transaction
 
 

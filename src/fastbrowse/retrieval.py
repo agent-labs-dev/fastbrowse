@@ -2107,7 +2107,9 @@ def _without_citation_markup(text: str) -> str:
     # The composer can echo bracketed references in prose; only its checked evidence_ids create links.
     def replace(match: re.Match[str]) -> str:
         label = match[1]
-        if label.isdecimal() or re.fullmatch(r"[\w-]+:\d+:\d+(?::[0-9a-f]{16})?|(?:derived|tally):[0-9a-f]+", label):
+        if label.isdecimal() or re.fullmatch(
+            r"[\w-]+:\d+:\d+(?::[0-9a-f]{16})?|(?:derived|tally):[0-9a-f]+|e\d+", label
+        ):
             logger.warning("compose dropped inline citation reference %r", label)
             return ""
         return label if match[2] else match[0]
@@ -2125,9 +2127,10 @@ async def compose(
     ledger: Ledger | None = None,
     transaction_evidence_ids: Collection[str] = (),
 ) -> Generation[ComposedAnswer]:
+    labels = {fact_id(fact): f"e{i}" for i, fact in enumerate(notes.facts)}
     transaction = (
         "# Transaction evidence\nThese evidence ids come from pages where the run committed an action: "
-        + ", ".join(transaction_evidence_ids)
+        + ", ".join(labels[key] for key in transaction_evidence_ids if key in labels)
         + ". A claim about what that action bought, submitted or booked, including its price, cites these.\n\n"
         if transaction_evidence_ids
         else ""
@@ -2157,7 +2160,7 @@ async def compose(
         ),
     ]
     room = _notes_room(tokens, messages, _AnswerDraft)
-    offered = notes.render_with_ids(room, preserve_requirements=True)
+    offered = notes.render_with_ids(room, preserve_requirements=True, labels=labels)
     messages[-1] = messages[-1].model_copy(update={"content": messages[-1].content + offered.text})
     result = await llm.generate(
         LLMPurpose.COMPOSE,
@@ -2169,13 +2172,22 @@ async def compose(
     if ledger is not None:
         ledger.record(result.cost)
     known = set(offered.evidence_ids)
+    references = {labels[key]: key for key in known}
+    references.update({key: key for key in known})
     claims: list[Claim] = []
     for claim in result.data.claims:
-        unknown = set(claim.evidence_ids) - known
+        unknown = set(claim.evidence_ids) - references.keys()
         if unknown:
             logger.warning("compose dropped claim with unknown citation references: %s", sorted(unknown))
         if claim.evidence_ids and not unknown:
-            claims.append(claim.model_copy(update={"text": _without_citation_markup(claim.text)}))
+            claims.append(
+                claim.model_copy(
+                    update={
+                        "text": _without_citation_markup(claim.text),
+                        "evidence_ids": tuple(references[key] for key in claim.evidence_ids),
+                    }
+                )
+            )
     return Generation(
         data=assemble_answer(
             claims,
