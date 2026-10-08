@@ -1,5 +1,6 @@
 """Structured chat completions with one schema repair and complete usage accounting."""
 
+import asyncio
 import base64
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
@@ -317,7 +318,7 @@ class OpenAICompatibleLLM:
                 else:
                     cost = _total_cost(costs, purpose).model_copy(update={"seconds": monotonic() - started})
                     return Generation(data=data, cost=cost)
-        except (LLMError, BudgetExceeded):
+        except (LLMError, BudgetExceeded, asyncio.CancelledError):
             _charge(ledger, costs)
             raise
         raise AssertionError("unreachable")

@@ -16,6 +16,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   An identity can come from the quoted page body or its captured title.
 
 - Cancelled Jev requests retain estimated input costs instead of disappearing from the spend ledger.
+  Cancelled LLM requests keep reported earlier charges and mark missing billing as unknown.
 
 - Older quotes retain their original page title when unchanged text is captured under a new title.
 
