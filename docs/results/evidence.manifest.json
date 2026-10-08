@@ -4,6 +4,30 @@
   "base_url": "https://us.cloud.langfuse.com",
   "campaigns": [
     {
+      "id": "cua-full",
+      "sha256": "f961908b95e88bb9b58c1ca3dabbd0b9b4af8cd5a3cc047b6708a1b653a99e76",
+      "trace_id": "f961908b95e88bb9b58c1ca3dabbd0b9",
+      "observation_id": "ea2f827873fc64ae",
+      "stored_at": "2026-10-08T11:33:39.125644Z",
+      "attempts": 476
+    },
+    {
+      "id": "fastbrowse",
+      "sha256": "41b18d4082943d3921b30b1ffc42be7e02a5acdf0d6b9a2bdc43c6ab363c0726",
+      "trace_id": "41b18d4082943d3921b30b1ffc42be7e",
+      "observation_id": "67bd3b77ec6468df",
+      "stored_at": "2026-10-08T11:33:39.126621Z",
+      "attempts": 144
+    },
+    {
+      "id": "dev",
+      "sha256": "1b72693e37c1e46fd0334b7a9a5102db8ba2c31120fea14e6f3cd85b376fb3fd",
+      "trace_id": "1b72693e37c1e46fd0334b7a9a5102db",
+      "observation_id": "12aabe50f5dfedae",
+      "stored_at": "2026-10-08T11:33:39.126827Z",
+      "attempts": 9
+    },
+    {
       "id": "0.5.14",
       "sha256": "b96f9ac3bc6c404b6fdf39ecde5c4eb05bce5741f932755b572b97d25fd18b5d",
       "trace_id": "b96f9ac3bc6c404b6fdf39ecde5c4eb0",

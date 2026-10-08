@@ -40,9 +40,13 @@ Fastbrowse build and provider route. The publication gate checks task coverage, 
 physical-run ledger, known costs and matched regressions before accepting compact result rows. Full logs,
 recordings, answers and page content stay out of Git and the public feed.
 
-Results remain private until failures are resolved, full runs are reviewed and the maintainer explicitly
-approves publication. Approved figures are generated from the result feed on the benchmark page. They are
-not copied into the README or generated Markdown tables.
+Benchmark headlines require the full publication gate and maintainer approval. The maintainer can also
+approve recorded diagnostic campaigns for [the eval browser](https://fastbrowse.ai/evals), with their
+coverage and limitations visible. These campaigns do not satisfy the benchmark headline gate.
+
+`docs/results/evidence.public.json` contains the approved sanitized projection, with exact content hashes
+pinned by `evidence.manifest.json`. The site validates both files at one commit before rendering. Detailed
+traces remain private in Langfuse; archive receipts retain source identities without their contents.
 
 Read [the eval workflow](agents/evals.md) before changing agent behavior or running paid checks.
 
@@ -53,5 +57,7 @@ and Cua Driver 0.34.0. Parallax runs it through browser MCP tools on a private L
 with the existing source task graders. Credential and safe-stop tasks are excluded.
 
 Rows record the local browser environment, and billed spend remains unknown. Local timings
-are not a controlled comparison with cloud arms. Adding the arm publishes no new figures.
+are not a controlled comparison with cloud arms. The eval browser keeps the historical full round,
+the later Fastbrowse round and the focused dev regression checks separate. Source grades, completion,
+physical attempts and known costs are reported independently; unknown cost is never treated as zero.
 See Parallax's browser benchmark documentation for setup and retained attempt traces.
