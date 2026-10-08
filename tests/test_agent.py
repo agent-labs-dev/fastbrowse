@@ -5356,3 +5356,63 @@ async def test_failed_submission_survives_navigation_but_not_a_successful_submis
     agent._classify = AsyncMock()
     failure = await agent._failed_submission(state)
     assert (failure.status if failure else None) == expected
+
+
+@pytest.mark.parametrize("visible_secret", [False, True])
+@pytest.mark.parametrize("status", [Status.BLOCKED, Status.UNAVAILABLE, Status.BUDGET_EXCEEDED])
+@pytest.mark.parametrize("frames", [False, True])
+async def test_stopped_run_carries_safe_final_frame_and_preserves_status(status, visible_secret, frames):
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    page.observe = AsyncMock(
+        return_value=observation(()).model_copy(
+            update={"viewport_text": "hunter2" if visible_secret else "Blocked page"}
+        )
+    )
+    page.screenshot = AsyncMock(return_value=b"ending png")
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]), config=Config(step_frames=frames))
+    agent._redactor.register("password", "hunter2")
+    agent._loop = AsyncMock(side_effect=_Stop(status, "stopped"))
+    result = await agent.run("Read the page")
+    assert result.status is status
+    assert result.final_frame == (b"ending png" if frames and not visible_secret else None)
+    assert page.screenshot.await_count == int(frames and not visible_secret)
+
+
+@pytest.mark.parametrize("error", [BrowserError("closed"), TimeoutError(), asyncio.CancelledError()])
+async def test_stopped_run_frame_error_preserves_failure_or_cancellation(error):
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    page.observe = AsyncMock(side_effect=error)
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]), config=Config(step_frames=True))
+    agent._loop = AsyncMock(side_effect=_Stop(Status.BLOCKED, "blocked"))
+    if isinstance(error, asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError):
+            await agent.run("Read the page")
+    else:
+        result = await agent.run("Read the page")
+        assert result.status is Status.BLOCKED
+        assert result.final_frame is None
+
+
+async def test_final_frame_deadline_cancels_a_hung_page_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastbrowse import agent as agent_module
+
+    cancelled = asyncio.Event()
+
+    async def hung_observation():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    page.observe = AsyncMock(side_effect=hung_observation)
+    page.screenshot = AsyncMock(return_value=b"unexpected")
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]), config=Config(step_frames=True))
+    monkeypatch.setattr(agent_module, "_ENDING_FRAME_SECONDS", 0.01)
+    result = await agent._conclude(await run_state(), None)
+    assert result.status is Status.COMPLETE and result.final_frame is None
+    assert cancelled.is_set()
+    page.screenshot.assert_not_awaited()
