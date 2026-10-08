@@ -159,8 +159,8 @@ export interface Limits {
   /**
    * Logical Jev evaluations. A hedged or retried request adds cost but not a call.
    */
-  max_jev_calls?: number;
-  max_llm_calls?: number;
+  max_jev_calls?: number | null;
+  max_llm_calls?: number | null;
   /**
    * Bounds Jev and LLM spend as it happens. A cloud browser bills when it stops, after the run, so its
    * cost is reported in the result but cannot stop the run that incurred it.
