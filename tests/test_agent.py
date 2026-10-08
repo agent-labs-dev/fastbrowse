@@ -5703,6 +5703,41 @@ async def test_re_evidencing_partial_output_quotes_is_not_new_read_progress() ->
     assert "remaining requested field" in llm.calls[-1][1][-1].content
 
 
+def test_derived_paraphrases_do_not_create_new_read_evidence() -> None:
+    from fastbrowse.agent import _answer_evidence
+
+    page = capture((BlockKind.PARAGRAPH, "Pine capacity 10"), (BlockKind.PARAGRAPH, "Oak capacity 7"))
+    pine = Fact(text="Pine capacity 10", reader=FactReader.LLM, evidence=block_evidence(page, "s0"))
+    oak = Fact(text="Oak capacity 7", reader=FactReader.LLM, evidence=block_evidence(page, "s1"))
+    notes = Notes((pine, oak))
+    before = _answer_evidence(notes, include_answer=False)
+    completion = _answer_evidence(notes)
+    notes.add(
+        Fact(
+            text="Pine has greater capacity.", evidence=None, reader=FactReader.LLM, basis=(fact_id(pine), fact_id(oak))
+        )
+    )
+    assert _answer_evidence(notes, include_answer=False) == before
+    assert _answer_evidence(notes) != completion
+    notes.add(
+        Fact(
+            text="Pine is the capacity winner.",
+            evidence=None,
+            reader=FactReader.LLM,
+            basis=(fact_id(pine), fact_id(oak)),
+        )
+    )
+    assert _answer_evidence(notes, include_answer=False) == before
+    notes.add(
+        Fact(
+            text="Third capacity 12",
+            reader=FactReader.LLM,
+            evidence=block_evidence(capture((BlockKind.PARAGRAPH, "Third capacity 12")), "s0"),
+        )
+    )
+    assert _answer_evidence(notes, include_answer=False) != before
+
+
 def test_answer_evidence_tracks_identifying_context_without_unrelated_capture_changes() -> None:
     from fastbrowse.agent import _answer_evidence
 

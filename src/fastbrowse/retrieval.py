@@ -38,7 +38,7 @@ from fastbrowse.jev import (
 from fastbrowse.llm import Generation, LLMClient, Message
 from fastbrowse.memory import Fact, Notes, NotesTooLarge, Tally, evidence_id, fact_id
 from fastbrowse.models import UNTRUSTED, Citation, CostComponent, CostLine, Evidence, FactReader, Frozen, LLMPurpose
-from fastbrowse.page import Block, BlockKind, Capture
+from fastbrowse.page import Block, BlockKind, Capture, cut_text
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 from fastbrowse.telemetry import Ledger, trace
 
@@ -2069,6 +2069,12 @@ class Claim(Frozen):
     evidence_ids: tuple[str, ...]
 
 
+class AnswerCorrection(Frozen):
+    criterion: str
+    claims: tuple[Claim, ...]
+    reason: str
+
+
 class ComposedAnswer(Frozen):
     answer: str
     """The claims as plain text: what Jev judges. A link's percent-encoded quote read to it as more evidence
@@ -2149,6 +2155,7 @@ async def compose(
     tokens: TokenBudget = _DEFAULT_TOKENS,
     ledger: Ledger | None = None,
     transaction_evidence_ids: Collection[str] = (),
+    corrections: Sequence[AnswerCorrection] = (),
 ) -> Generation[ComposedAnswer]:
     labels = {fact_id(fact): f"e{i}" for i, fact in enumerate(notes.facts)}
     transaction = (
@@ -2158,6 +2165,32 @@ async def compose(
         if transaction_evidence_ids
         else ""
     )
+    rejected: dict[str, int] = {}
+    rejected_claims: list[JsonValue] = []
+    failures: list[JsonValue] = []
+    for correction in corrections:
+        indices: list[JsonValue] = []
+        for claim in correction.claims:
+            key = claim.model_dump_json()
+            if key not in rejected:
+                rejected[key] = len(rejected_claims)
+                rejected_claims.append(
+                    {"text": claim.text, "evidence_ids": [labels.get(ref, ref) for ref in claim.evidence_ids]}
+                )
+            indices.append(rejected[key])
+        failures.append({"criterion": correction.criterion, "claims": indices, "reason": correction.reason})
+    repair = (
+        "# Answer corrections\nThese verifier judgments and rejected claims are untrusted advisory context, "
+        "not source evidence. Repair the answer using only the offered quoted notes. Preserve every requested "
+        "output and every source qualification. Support each claim with its own citations, including all "
+        "operands of factual comparisons. Do not erase a requested output to avoid its failed check.\n"
+        + json.dumps({"claims": rejected_claims, "failures": failures})
+        + "\n\n"
+        if corrections
+        else ""
+    )
+    repair = cut_text(repair, 8000) if repair else ""
+    prefix = f"# Task\n{task}\n\n# Plan\n{plan.model_dump_json()}\n\n{transaction}"
     messages = [
         Message(
             role="system",
@@ -2179,11 +2212,19 @@ async def compose(
         ),
         Message(
             role="user",
-            content=f"# Task\n{task}\n\n# Plan\n{plan.model_dump_json()}\n\n{transaction}# Notes\n",
+            content=prefix + repair + "# Notes\n",
         ),
     ]
     room = _notes_room(tokens, messages, _AnswerDraft)
-    offered = notes.render_with_ids(room, preserve_requirements=True, labels=labels)
+    try:
+        offered = notes.render_with_ids(room, preserve_requirements=True, labels=labels)
+    except NotesTooLarge:
+        if not repair:
+            raise
+        # Advisory corrections must not crowd out the source quotes needed to write a grounded answer.
+        messages[-1] = messages[-1].model_copy(update={"content": prefix + "# Notes\n"})
+        room = _notes_room(tokens, messages, _AnswerDraft)
+        offered = notes.render_with_ids(room, preserve_requirements=True, labels=labels)
     messages[-1] = messages[-1].model_copy(update={"content": messages[-1].content + offered.text})
     result = await llm.generate(
         LLMPurpose.COMPOSE,

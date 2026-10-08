@@ -31,6 +31,8 @@ from fastbrowse.planner import Plan, RequirementKind
 from fastbrowse.policy import HistoryEntry
 from fastbrowse.retrieval import (
     TRANSACTION_CONTRADICTED,
+    AnswerCorrection,
+    Claim,
     ComposedAnswer,
     UnsupportedField,
     assemble_answer,
@@ -502,6 +504,7 @@ async def check_answer_outputs(
     tokens: TokenBudget = _DEFAULT_CONFIG.tokens,
     ledger: Ledger | None = None,
     missing_outputs: list[str] | None = None,
+    corrections: list[AnswerCorrection] | None = None,
     allow_scalar_jev: bool = False,
     task: str = "",
 ) -> bool:
@@ -589,18 +592,21 @@ async def check_answer_outputs(
     fields = {}
     source_fields = {}
     covered: set[int] = set()
+    selected_claims: dict[str, tuple[Claim, ...]] = {}
     for key, criterion in uncertain.items():
         chosen = selected.answers.get(key) if selected is not None else None
         choice = chosen.choice if isinstance(chosen, ChoiceAnswer) else "all"
         if choice == "none":
             return reject((criterion,))
         if choice == "all":
+            selected_claims[key] = composed.claims
             claims = context.claims
             if len(claims) == 1:
                 covered.add(0)
         elif choice in choices:
             index = int(choice.removeprefix("claim_"))
             claims = (context.claims[index],)
+            selected_claims[key] = (composed.claims[index],)
             covered.add(index)
         else:
             return False
@@ -620,6 +626,8 @@ async def check_answer_outputs(
                 for claim in claims
             ],
         }
+
+    reasons: dict[str, str] = {}
 
     async def audit(messages: list[Message], fields: Mapping[str, object]) -> dict[str, str]:
         semaphore = asyncio.Semaphore(4)
@@ -644,6 +652,7 @@ async def check_answer_outputs(
                 )
                 if ledger is not None:
                     ledger.record(generated.cost)
+                reasons[key] = generated.data.reason
                 return key, generated.data.judgments.get(key, "uncertain")
 
         # One field's quoted value cannot answer another field; every receipt settles before an error returns.
@@ -669,7 +678,10 @@ async def check_answer_outputs(
                 "An explicitly labeled value remains available alongside an eligibility-dependent alternative; "
                 "preserve those conditions rather than assuming one value supersedes the other. "
                 "An explicit exhaustive description can establish that no other members exist; absence from a "
-                "partial description cannot. A total alone does not provide a component breakdown. "
+                "partial description cannot. A total alone does not provide a component breakdown. A value scoped "
+                "to one component, mode, tier or single-item configuration does not establish an aggregate value "
+                "or another configuration. Require the source scope to match the requested scope and preserve "
+                "explicit distinctions. "
                 "A requested recommendation does not require the page to recommend anything: quoted facts "
                 "can provide grounds for the answer's preference. A quoted property of one option can "
                 "support a subjective preference. Do not require every compared option's values for a "
@@ -702,7 +714,10 @@ async def check_answer_outputs(
                 "requirements beyond it. Preserve explicitly stated conditions on alternative values; "
                 "do not assume an eligibility-dependent alternative supersedes an unrestricted value. "
                 "An explicit exhaustive description can establish absence of other "
-                "members, but a total alone does not evidence a component breakdown. Derived outputs can "
+                "members, but a total alone does not evidence a component breakdown. A value scoped to one "
+                "component, mode, tier or single-item configuration does not establish an aggregate value or "
+                "another configuration. Preserve the quoted scope and explicit distinctions in every assertion. "
+                "Derived outputs can "
                 "calculate from quoted records only when every operand and its association is explicit. "
                 "Observed page titles provide identity "
                 "context, not missing field evidence. Return yes only if every part of the requested output "
@@ -719,6 +734,7 @@ async def check_answer_outputs(
     for index, claim in enumerate(context.claims):
         if index not in covered:
             key = f"claim_only_{index}"
+            selected_claims[key] = (composed.claims[index],)
             fields[key] = {
                 "criterion": "Every factual assertion is supported by its own cited sources.",
                 "reported_claims": [claim.model_dump(exclude={"cited_sources": {"__all__": {"page_title"}}})],
@@ -731,6 +747,12 @@ async def check_answer_outputs(
         for key in fields
         if generated.get(key) != "yes"
     ]
+    if failed and corrections is not None:
+        corrections.extend(
+            AnswerCorrection(criterion=str(fields[key]["criterion"]), claims=selected_claims[key], reason=reasons[key])
+            for key in fields
+            if generated.get(key) != "yes"
+        )
     return reject(failed) if failed else True
 
 
@@ -746,6 +768,7 @@ async def check_claims(
     answer_checks: Sequence[str] = (),
     llm: LLMClient | None = None,
     missing_outputs: list[str] | None = None,
+    corrections: list[AnswerCorrection] | None = None,
     allow_scalar_jev: bool = False,
     task: str = "",
 ) -> ComposedAnswer | None:
@@ -793,6 +816,7 @@ async def check_claims(
             tokens=tokens,
             ledger=ledger,
             missing_outputs=missing_outputs,
+            corrections=corrections,
             allow_scalar_jev=allow_scalar_jev,
             task=task,
         ),
@@ -855,6 +879,7 @@ async def check_claims(
                 tokens=tokens,
                 ledger=ledger,
                 missing_outputs=missing_outputs,
+                corrections=corrections,
                 allow_scalar_jev=allow_scalar_jev,
                 task=task,
             )

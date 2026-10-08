@@ -90,6 +90,7 @@ from fastbrowse.policy import (
     decide,
 )
 from fastbrowse.retrieval import (
+    AnswerCorrection,
     ComposedAnswer,
     ReadOutcome,
     TallyReader,
@@ -313,12 +314,14 @@ class _RunState:
     planning: asyncio.Task[Generation[Plan]]
     notes: Notes = field(default_factory=Notes)
     missing_answer_outputs: tuple[str, ...] = ()
+    answer_corrections: tuple[AnswerCorrection, ...] = ()
     open_answer_outputs: tuple[str, ...] = ()
     rejected_answer_evidence: frozenset[tuple[str, str | None, str]] | None = None
     answer_check_evidence: str | None = None
-    answer_check_cache: dict[tuple[str, str, str, tuple[str, ...]], tuple[ComposedAnswer | None, tuple[str, ...]]] = (
-        field(default_factory=dict)
-    )
+    answer_check_cache: dict[
+        tuple[str, str, str, tuple[str, ...]],
+        tuple[ComposedAnswer | None, tuple[str, ...], tuple[AnswerCorrection, ...]],
+    ] = field(default_factory=dict)
     relevance_cache: RelevanceCache = field(default_factory=RelevanceCache)
     steps: list[StepResult] = field(default_factory=list[StepResult])
     would_fire: list[Tripwire] = field(default_factory=list[Tripwire])
@@ -438,6 +441,7 @@ class _RunState:
 
     def reset_answer_check(self) -> None:
         self.missing_answer_outputs = ()
+        self.answer_corrections = ()
 
     @property
     def plan(self) -> Plan:
@@ -2192,7 +2196,7 @@ class Agent:
         state.tally_readers = outcome.tally_readers
         state.comparisons = outcome.comparisons
         # A timer changes the capture hash and a reader can paraphrase the same claim, so only a new source
-        # quote or a newly evidenced requirement restores the read budget. Derived conclusions use their text.
+        # quote or a newly evidenced requirement restores the read budget.
         progressed = bool(_answer_evidence(state.notes, include_answer=False) - known) or (
             not state.open_answer_outputs and any(state.notes.evidenced(r.id) for r in wanted if r.id not in evidenced)
         )
@@ -2859,6 +2863,7 @@ class Agent:
                             tokens=self._config.tokens,
                             ledger=state.ledger,
                             transaction_evidence_ids=await self._transaction_evidence_ids(state),
+                            corrections=state.answer_corrections,
                         )
                     )
                 verdict = await llm_verify(
@@ -2954,6 +2959,7 @@ class Agent:
         if isinstance(prepared, ComposedAnswer):
             return prepared, True
         facts = draft_answer(state.plan, state.notes)
+        repairing = bool(state.answer_corrections)
         try:
             composed = (
                 await (
@@ -2967,6 +2973,7 @@ class Agent:
                         tokens=self._config.tokens,
                         ledger=state.ledger,
                         transaction_evidence_ids=await self._transaction_evidence_ids(state),
+                        corrections=state.answer_corrections,
                     )
                 )
             ).data
@@ -2976,8 +2983,25 @@ class Agent:
             if facts is None:
                 raise
             logger.warning("The composer failed; offering the reader's facts to the claim check", exc_info=True)
-            composed, facts = facts, None
+            composed, facts, repairing = facts, None, True
         held = await self._holds(state, composed)
+        if held is None and state.answer_corrections and not repairing:
+            try:
+                corrected = await compose(
+                    self._llm,
+                    state.task,
+                    state.plan,
+                    state.notes,
+                    tokens=self._config.tokens,
+                    ledger=state.ledger,
+                    transaction_evidence_ids=await self._transaction_evidence_ids(state),
+                    corrections=state.answer_corrections,
+                )
+            except LLMError:
+                logger.warning("The answer correction failed; retaining the checked fallback", exc_info=True)
+            else:
+                composed = corrected.data
+                held = await self._holds(state, composed)
         if held is None and facts is not None and facts != composed:
             # A list of forty records came back as one claim citing one quote, which no claim check should pass. The
             # reader's own facts each carry the quote that shows them, so they are offered to the same check.
@@ -3072,9 +3096,10 @@ class Agent:
         key = state.task, state.plan.model_dump_json(), answer.model_dump_json(), transactions
         cached = state.answer_check_cache.get(key)
         if cached is not None:
-            held, missing = cached
+            held, missing, corrections = cached
         else:
             missing: list[str] = []
+            corrections: list[AnswerCorrection] = []
             held = await check_claims(
                 self._jev,
                 answer,
@@ -3095,12 +3120,14 @@ class Agent:
                 else (),
                 llm=self._llm,
                 missing_outputs=missing,
+                corrections=corrections,
                 allow_scalar_jev=len(state.plan.answer_checks) == 1
                 and sum(r.kind is RequirementKind.INFORMATION for r in state.plan.requirements) == 1,
                 task=state.task,
             )
             # DONE and the composer fallback offered the same draft twice against unchanged proof.
-            state.answer_check_cache[key] = held, tuple(missing)
+            state.answer_check_cache[key] = held, tuple(missing), tuple(corrections)
+        state.answer_corrections = tuple(corrections)
         state.missing_answer_outputs = tuple(dict.fromkeys(missing))
         if held is not None:
             state.open_answer_outputs = ()
@@ -3401,6 +3428,9 @@ def _answer_evidence(notes: Notes, *, include_answer: bool = True) -> frozenset[
         )
 
     known = notes.evidence
+    # A new summary over retained quotes cannot restore the budget for finding missing source evidence.
+    if not include_answer:
+        return frozenset((evidence.url, evidence.frame_id, source(evidence)) for evidence in known.values())
     return frozenset(
         (
             fact.evidence.url if fact.evidence is not None else "",
@@ -3408,11 +3438,8 @@ def _answer_evidence(notes: Notes, *, include_answer: bool = True) -> frozenset[
             json.dumps(
                 {
                     "value": source(fact.evidence) if fact.evidence is not None else fact.text,
-                    **(
-                        {"text": fact.text, "requirements": notes.fact_requirements(fact_id(fact))}
-                        if include_answer
-                        else {}
-                    ),
+                    "text": fact.text,
+                    "requirements": notes.fact_requirements(fact_id(fact)),
                     "basis": sorted(
                         source(known[key]) for key in notes.expand_evidence_ids(fact.basis) if key in known
                     ),
