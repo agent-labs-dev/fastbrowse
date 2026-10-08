@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Evaluation evidence can carry token-based API-equivalent cost ranges separately from recorded spend.
+
 - Runs no longer stop at implicit step, Jev-call, LLM-call, dollar or time ceilings. Callers can still set explicit limits when they need them.
 
 - Complete benchmark suites can be approved and published independently. Existing published suites stay

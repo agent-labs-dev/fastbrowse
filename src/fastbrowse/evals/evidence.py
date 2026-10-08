@@ -13,7 +13,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    StringConstraints,
+    TypeAdapter,
+    model_serializer,
+    model_validator,
+)
+
+from fastbrowse.evals.api_cost import ApiCostEstimate
 
 Identifier = Annotated[str, StringConstraints(pattern=r"^[a-zA-Z0-9_.:+-]{1,160}$")]
 Digest = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
@@ -48,6 +59,7 @@ class Attempt(EvidenceModel):
     seconds: Number | None
     dollars: Number | None
     unknown_cost: bool
+    estimated_api_cost: ApiCostEstimate | None = None
     git_sha: Commit | None
     git_dirty: bool | None
     model: Annotated[str, StringConstraints(pattern=r"^[a-zA-Z0-9_./,:+() -]{1,160}$")] | None
@@ -56,10 +68,19 @@ class Attempt(EvidenceModel):
         | None
     )
 
+    @model_serializer(mode="wrap")
+    def serialize_estimate(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if self.estimated_api_cost is None:
+            data.pop("estimated_api_cost", None)
+        return data
+
     @model_validator(mode="after")
     def cost_is_known(self) -> "Attempt":
         if self.started_at is not None:
             datetime.fromisoformat(self.started_at)
+        if self.estimated_api_cost is not None and (not self.started or self.model != self.estimated_api_cost.model):
+            raise ValueError("estimated usage must name the model of a started run")
         if self.unknown_cost != (self.dollars is None):
             raise ValueError("unknown cost must be null, known cost must be recorded")
         return self
@@ -131,6 +152,7 @@ def _project(row: Mapping[str, Any], source: Source, index: int, selected: bool)
         seconds=data.get("seconds"),
         dollars=None if unknown else data.get("dollars"),
         unknown_cost=bool(unknown or data.get("dollars") is None),
+        estimated_api_cost=data.get("estimated_api_cost"),
         git_sha=run.get("git_sha") or data.get("git_sha"),
         git_dirty=run.get("git_dirty", data.get("git_dirty")),
         model=data.get("model") or row.get("model"),
