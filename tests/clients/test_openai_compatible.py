@@ -413,10 +413,11 @@ def test_a_strict_schema_leaves_array_caps_to_validation() -> None:
 
 
 @pytest.mark.parametrize("paid_retry", [False, True])
-async def test_cancelled_generation_records_dispatched_costs_and_paid_retries_once(paid_retry):
+@pytest.mark.parametrize("max_dollars", [None, 1.0])
+async def test_cancelled_generation_records_dispatched_costs_and_paid_retries_once(paid_retry, max_dollars):
     waiting = asyncio.Event()
     calls = 0
-    ledger = Ledger(Limits())
+    ledger = Ledger(Limits(max_dollars=max_dollars))
 
     async def handler(request: httpx.Request) -> httpx.Response:
         nonlocal calls
@@ -442,6 +443,9 @@ async def test_cancelled_generation_records_dispatched_costs_and_paid_retries_on
     assert ledger.lines[-1].dollars is None
     if paid_retry:
         assert ledger.lines[0].dollars == 0.01
+    if max_dollars is not None:
+        with pytest.raises(BudgetExceeded, match="reported no cost"):
+            ledger.check()
 
 
 async def test_abandoned_head_start_keeps_cancelled_normalization_receipt():

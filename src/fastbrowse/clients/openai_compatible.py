@@ -318,7 +318,12 @@ class OpenAICompatibleLLM:
                 else:
                     cost = _total_cost(costs, purpose).model_copy(update={"seconds": monotonic() - started})
                     return Generation(data=data, cost=cost)
-        except (LLMError, BudgetExceeded, asyncio.CancelledError):
+        except asyncio.CancelledError:
+            if ledger is not None:
+                # An unknown receipt must not replace cancellation with a new budget failure.
+                ledger.lines.extend(costs)
+            raise
+        except (LLMError, BudgetExceeded):
             _charge(ledger, costs)
             raise
         raise AssertionError("unreachable")
