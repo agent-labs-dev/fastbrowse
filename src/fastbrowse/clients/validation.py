@@ -357,6 +357,7 @@ async def _hedged(
     allow_hedge: bool = True,
 ) -> httpx.Response | None:
     """The first usable response from one request, raced by a second if the first outlasts `hedge_seconds`."""
+    sent_before = usage.requests
     requests = {asyncio.create_task(_send(http, url, body, headers, attempt_seconds, usage))}
     winner: asyncio.Task[httpx.Response | None] | None = None
     try:
@@ -380,13 +381,15 @@ async def _hedged(
         for request in requests:
             request.cancel()
         await asyncio.gather(*requests, return_exceptions=True)
+        unaccounted = 0
         for request in requests:
             if request is winner:
                 continue
             result = None if request.cancelled() or request.exception() else request.result()
             # Providers do not bill error statuses, so retries after those add no cost.
             if result is None or result.is_success:
-                usage.unaccounted_requests += 1
+                unaccounted += 1
+        usage.unaccounted_requests += min(unaccounted, usage.requests - sent_before)
 
 
 async def _send(
@@ -447,6 +450,19 @@ async def post(
             start_attempt=start_attempt,
             split_batch=split_batch,
         )
+    except asyncio.CancelledError:
+        # Cancellation loses reported usage, so retain the dispatched input estimate rather than a free call.
+        tokens = math.ceil(len(json.dumps(body)) / TokenBudget().chars_per_token)
+        record_jev_spend([estimated_cost(tokens)] * usage.unaccounted_requests)
+        if usage.unaccounted_requests:
+            trace(
+                "cancelled_request_cost",
+                call="jev",
+                requests=usage.unaccounted_requests,
+                estimated_input_tokens=tokens,
+                dollars_per_input_token=JEV_DOLLARS_PER_INPUT_TOKEN,
+            )
+        raise
     except httpx.HTTPError as error:
         raise JevError(f"Jev request could not be sent ({type(error).__name__})") from None
     seconds = monotonic() - started

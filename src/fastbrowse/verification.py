@@ -607,7 +607,7 @@ async def check_answer_outputs(
                     f"{UNTRUSTED} Resolve each requested output's subjects to literal identifying quotes. "
                     "The answer declares which named entities correspond to its numbered results. It cannot "
                     "supply identity evidence. For each criterion return scope entities and every requested "
-                    "subject's offered source_ref and exact identifying quote from that source. "
+                    "subject's offered source_ref and exact identifying quote from its body or captured page title. "
                     "Copy only the entity name or identifying description, not the reported field value. "
                     "Do not infer identity from a URL, shared page, item count or a neighboring table column. "
                     "A numbered subject must bind to the entity the answer actually labels with that number. "
@@ -662,7 +662,11 @@ async def check_answer_outputs(
             identities[key] = []
             for binding in bindings:
                 source = offered.get(binding.source_ref)
-                if source is None or not binding.quote.strip() or source.quote.count(binding.quote) != 1:
+                if (
+                    source is None
+                    or not binding.quote.strip()
+                    or not any(text.count(binding.quote) == 1 for text in (source.quote, source.page_title or ""))
+                ):
                     return reject((criterion,))
                 identities[key].append({"reference": criterion, "url_ref": source.url_ref, "quote": binding.quote})
     choices = {f"claim_{index}": claim.text for index, claim in enumerate(context.claims)}

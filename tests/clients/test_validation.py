@@ -273,3 +273,89 @@ def test_nested_gateway_reason_redacts_before_truncating() -> None:
     )
     assert "gateway-se" not in validation.describe(response)
     assert "[api key]" in validation.describe(response)
+
+
+@pytest.mark.parametrize("physical_requests", [1, 2])
+async def test_cancelled_dispatched_request_retains_estimated_input_cost(monkeypatch, physical_requests):
+    sent = asyncio.Event()
+    costs = []
+    calls = 0
+    monkeypatch.setattr(validation, "JEV_HEDGE_SECONDS", 0.001 if physical_requests == 2 else 5)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == physical_requests:
+            sent.set()
+        await asyncio.Event().wait()
+        raise AssertionError("Cancelled request returned")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with validation.jev_spend(costs):
+            task = asyncio.create_task(post(http, "https://jev.test/v1", "test", {}))
+            await sent.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+    assert len(costs) == physical_requests
+    assert costs[0].component == CostComponent.JEV
+    assert costs[0].basis == CostBasis.ESTIMATED
+    assert costs[0].input_tokens == 1
+    assert costs[0].dollars == validation.JEV_DOLLARS_PER_INPUT_TOKEN
+
+
+async def test_cancellation_before_dispatch_does_not_record_spend(monkeypatch):
+    entered = asyncio.Event()
+    costs = []
+
+    async def unsent(*args, **kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(validation, "_send", unsent)
+    async with httpx.AsyncClient() as http:
+        with validation.jev_spend(costs):
+            task = asyncio.create_task(post(http, "https://jev.test/v1", "test", {}))
+            await entered.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+    assert costs == []
+
+
+async def test_split_cancellation_retains_answered_and_cancelled_costs_once():
+    sent = asyncio.Event()
+    costs = []
+    metered = CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.01)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        sent.set()
+        await asyncio.Event().wait()
+        raise AssertionError("Cancelled request returned")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+
+        async def ask(questions, attempt, split):
+            if split:
+                raise validation._SplitBatch(start_attempt=0, usage=RequestUsage())
+            if "first" in questions:
+                from fastbrowse.jev import Evaluation
+
+                return Evaluation(model="test", answers={}, input_tokens=1, cost=metered, requests=1)
+            await post(http, "https://jev.test/v1", "test", {})
+            raise AssertionError("Cancelled request returned")
+
+        with validation.jev_spend(costs):
+            task = asyncio.create_task(
+                validation.asking_split(
+                    {"first": NoulQuestion(instructions="First"), "second": NoulQuestion(instructions="Second")}, ask
+                )
+            )
+            await sent.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+    assert len(costs) == 2
+    assert costs[0] == metered
+    assert costs[1].basis == CostBasis.ESTIMATED
+    assert costs[1].dollars == validation.JEV_DOLLARS_PER_INPUT_TOKEN

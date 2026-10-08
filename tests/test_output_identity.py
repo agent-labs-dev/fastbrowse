@@ -13,9 +13,9 @@ from tests.test_retrieval import ScriptedLLM, block_evidence, capture
 
 
 class IdentityWriter(ScriptedLLM):
-    def __init__(self, scope="entities", quote="Adapter Beacon", ref="q1"):
+    def __init__(self, scope="entities", quote="Adapter Beacon", ref="q1", url_ref="u1"):
         super().__init__([])
-        self.scope, self.quote, self.ref = scope, quote, ref
+        self.scope, self.quote, self.ref, self.url_ref = scope, quote, ref, url_ref
 
     async def generate(self, purpose, messages, schema, **kwargs):
         payload = json.loads(messages[-1].content)
@@ -45,7 +45,11 @@ class IdentityWriter(ScriptedLLM):
         field = next(iter(payload["criteria"].values()))
         if self.scope == "entities" and "requested_entities" in field:
             assert field["requested_entities"] == [
-                {"reference": "Report Adapter Beacon exact port count.", "url_ref": "u1", "quote": "Adapter Beacon"}
+                {
+                    "reference": "Report Adapter Beacon exact port count.",
+                    "url_ref": self.url_ref,
+                    "quote": "Adapter Beacon",
+                }
             ]
             assert "Actual reported value 999" not in json.dumps(field.get("requested_entities"))
         self.responses.append({"judgments": {key: "yes" for key in payload["criteria"]}, "reason": "Test verdict."})
@@ -113,3 +117,17 @@ async def test_single_compound_claim_does_not_skip_subject_binding():
         RoutingJev(), writer, answer, notes, ("Report Adapter Beacon exact port count.",)
     )
     assert len(writer.calls) == 1
+
+
+@pytest.mark.parametrize("title,expected", [("Adapter Beacon", True), ("Unrelated adapter", False)])
+async def test_identity_can_copy_only_an_offered_captured_page_title(title, expected):
+    page = capture((BlockKind.PARAGRAPH, "3 ports.")).model_copy(update={"title": title})
+    fact = Fact(text="3 ports.", evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+    notes = Notes((fact,))
+    notes.remember_capture(page)
+    answer = assemble_answer((Claim(text="Adapter Beacon has 3 ports.", evidence_ids=(fact_id(fact),)),), notes, ())
+    writer = IdentityWriter(ref="q0", url_ref="u0")
+    assert (
+        await check_answer_outputs(RoutingJev(), writer, answer, notes, ("Report Adapter Beacon exact port count.",))
+        is expected
+    )
