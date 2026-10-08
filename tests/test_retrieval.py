@@ -526,6 +526,82 @@ async def test_absent_after_focus_still_reaches_the_reader() -> None:
     assert len(jev.requests) == 2 and llm.calls
 
 
+async def test_a_large_block_claim_keeps_only_its_literal_supporting_excerpt() -> None:
+    text = "Site navigation. " * 100 + "Charger Example: $12, 40W, two USB-C ports." + " Other products. " * 100
+    page = capture((BlockKind.PARAGRAPH, text))
+    response: JsonValue = {
+        "claims": [
+            {
+                "cite": {"first": "s0", "last": "s0"},
+                "excerpt": "Charger Example: $12, 40W, two USB-C ports.",
+                "text": "The charger costs $12 and has 40W total power with two USB-C ports.",
+                "requirement_id": "r",
+            }
+        ],
+        "answered": True,
+    }
+    result = await read(ScriptedLLM([response]), page, "Report charger details", ["r"], Notes())
+    assert len(result.facts) == 1
+    evidence = result.facts[0].evidence
+    assert evidence is not None
+    assert evidence.quote == page.text[evidence.start : evidence.end] == "Charger Example: $12, 40W, two USB-C ports."
+    assert evidence.capture_sha256 == page.sha256
+
+
+@pytest.mark.parametrize("excerpt", ["Missing price", "Price: $12", "   "])
+async def test_an_excerpt_must_match_one_unique_source_passage(excerpt: str) -> None:
+    page = capture((BlockKind.PARAGRAPH, "Price: $12. Another record: Price: $12."))
+    response: JsonValue = {
+        "claims": [
+            {"cite": {"first": "s0", "last": "s0"}, "excerpt": excerpt, "text": "Price is $12", "requirement_id": "r"}
+        ],
+        "answered": True,
+    }
+    notes = Notes()
+    result = await read(ScriptedLLM([response]), page, "Find price", ["r"], notes)
+    assert not result.facts and not notes.evidenced("r")
+    assert result.rejected_claims == 1
+
+
+async def test_excerpt_matching_copies_original_punctuation_and_whitespace() -> None:
+    passage = "Ada" + chr(0x2019) + "s charger\nPrice: $12"
+    page = capture((BlockKind.PARAGRAPH, "Navigation. " + passage + " Footer."))
+    response: JsonValue = {
+        "claims": [
+            {
+                "cite": {"first": "s0", "last": "s0"},
+                "excerpt": "Ada's charger Price: $12",
+                "text": "Ada's charger costs $12",
+                "requirement_id": "r",
+            }
+        ],
+        "answered": True,
+    }
+    result = await read(ScriptedLLM([response]), page, "Find price", ["r"], Notes())
+    evidence = result.facts[0].evidence
+    assert evidence is not None
+    assert evidence.quote == passage == page.text[evidence.start : evidence.end]
+
+
+async def test_excerpt_cannot_reach_a_part_of_the_block_not_shown_in_this_chunk() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Unrelated. " * 100 + "Price: $12"))
+    response: JsonValue = {
+        "claims": [
+            {
+                "cite": {"first": "s0", "last": "s0"},
+                "excerpt": "Price: $12",
+                "text": "Price is $12",
+                "requirement_id": "r",
+            }
+        ],
+        "answered": True,
+    }
+    result = await read(
+        ScriptedLLM([response, {"claims": [], "answered": False}]), page, "Find price", ["r"], Notes(), max_chars=1000
+    )
+    assert not result.facts and result.rejected_claims == 1
+
+
 async def test_a_failed_focus_pass_falls_back_to_the_reader() -> None:
     requirement = Requirement(id="r", text="Find the price", kind=RequirementKind.INFORMATION)
     jev = _FocusJev("Price", "Price: $12", fail_focus=True)
@@ -815,8 +891,10 @@ async def test_transaction_evidence_does_not_spend_the_omission_notes_budget() -
 
     assert await check_claims(jev, answer, notes, Thresholds(), ledger=ledger, transaction_evidence_ids=ids) == answer
 
-    assert len(jev.requests) == ledger.jev_calls == len(ledger.lines) == 2
-    claims = next(q for q in jev.requests if "requirement_omitted" in q)
+    assert len(jev.requests) == ledger.jev_calls == len(ledger.lines) == 3
+    claims = {
+        key: question for batch in jev.requests for key, question in batch.items() if key != TRANSACTION_CONTRADICTED
+    }
     assert claims == ordinary
     omission = claims["requirement_omitted"].instructions
     assert all(fact.text in omission for fact in notes.facts)
@@ -3150,7 +3228,7 @@ async def test_final_page_refuses_to_drop_earlier_records_to_fit_prompt() -> Non
     evidence = block_evidence(earlier, "s0")
     notes = Notes([Fact(text=evidence.quote, evidence=evidence, reader=FactReader.LLM)])
     llm = ScriptedLLM([])
-    with pytest.raises(NotesTooLarge, match="every earlier record"):
+    with pytest.raises(NotesTooLarge, match=r"notes budget|every earlier record"):
         await read(
             llm,
             capture((BlockKind.RECORD, "last")),
@@ -3674,6 +3752,73 @@ async def test_reopened_requirement_reads_earlier_quotes_again() -> None:
     llm = ScriptedLLM([{"claims": [], "answered": False}])
     await read(llm, page, requirement.text, ["r"], notes, jev=jev, requirements=(requirement,))
     assert len(llm.calls) == 1 and "novelty" not in jev.requests[0][1]
+
+
+async def test_independent_claim_checks_fit_separate_parallel_batches() -> None:
+    from fastbrowse.verification import check_claims
+
+    class SmallRequests:
+        active = 0
+        peak = 0
+        calls = 0
+
+        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+            if len(questions) > 1:
+                raise JevInputTooLarge("individual checks fit, the combined request does not")
+            self.calls += 1
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            await asyncio.sleep(0)
+            self.active -= 1
+            return Evaluation(
+                model="test",
+                answers={key: NoulAnswer(probability=0.0) for key in questions},
+                input_tokens=1,
+                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.001),
+            )
+
+    page = capture((BlockKind.PARAGRAPH, "Black pen GBP7"))
+    fact = Fact(text=page.text, evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+    notes = Notes((fact,))
+    composed = assemble_answer((Claim(text=fact.text, evidence_ids=(fact_id(fact),)),), notes, ())
+    jev, ledger = SmallRequests(), Ledger(Limits())
+    held = await check_claims(jev, composed, notes, Thresholds(), tokens=TokenBudget(batch_tokens=1), ledger=ledger)
+    assert held is composed and jev.calls == 2 and jev.peak == 2
+    assert ledger.jev_calls == 2 and ledger.breakdown().known_dollars == pytest.approx(0.002)
+
+
+async def test_a_claim_check_that_cannot_fit_cannot_verify_an_answer() -> None:
+    from fastbrowse.verification import check_claims
+    from tests.test_policy import ScriptedJev
+
+    page = capture((BlockKind.PARAGRAPH, "Black pen GBP7"))
+    fact = Fact(text=page.text, evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+    notes = Notes((fact,))
+    composed = assemble_answer((Claim(text=fact.text, evidence_ids=(fact_id(fact),)),), notes, ())
+    jev = ScriptedJev({}, noul=0.0)
+    held = await check_claims(jev, composed, notes, Thresholds(), tokens=TokenBudget(state_plus_largest_question=1))
+    assert held is None and jev.requests == []
+
+
+async def test_omission_evidence_fits_when_unrelated_claim_questions_need_other_batches() -> None:
+    from fastbrowse.verification import check_claims
+    from tests.test_policy import ScriptedJev
+
+    page = capture((BlockKind.PARAGRAPH, "Black pen GBP7. " + "description " * 300))
+    requirement = Requirement(id="r1", text="Describe the item and its price", kind=RequirementKind.INFORMATION)
+    fact = Fact(requirement_id="r1", text="Black pen GBP7", evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+    notes = Notes((fact,))
+    claims = tuple(
+        Claim(text=text, evidence_ids=(fact_id(fact),))
+        for text in ("The pen is black.", "It costs GBP7.", "The item is a pen.")
+    )
+    composed = assemble_answer(claims, notes, (requirement,))
+    tokens = TokenBudget(state_plus_largest_question=5000, state_plus_all_questions=5000, batch_tokens=1000)
+    jev = ScriptedJev({}, noul=0.0)
+    assert await check_claims(jev, composed, notes, Thresholds(), tokens=tokens) is composed
+    omission = next(q["requirement_omitted"] for q in jev.requests if "requirement_omitted" in q)
+    assert page.text in omission.instructions
+    assert len(jev.requests) > 1
 
 
 async def test_a_quoted_count_does_not_repair_another_requirements_missing_records() -> None:

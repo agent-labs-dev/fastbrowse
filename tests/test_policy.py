@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Mapping
 from datetime import UTC, datetime
 
@@ -23,6 +24,7 @@ from fastbrowse.policy import (
     ObservationTooLarge,
     ReadAssessment,
     Reduction,
+    RelevanceCache,
     StepContext,
     _element,
     build_request,
@@ -483,3 +485,92 @@ def test_drag_is_not_offered_when_nothing_is_draggable() -> None:
     request = build_request(page, (button(1),), context(), Config())
     assert "drag_target" not in request.questions
     assert "drag_destination" not in request.questions
+
+
+async def test_identical_relevance_questions_share_one_score_but_keep_distinct_controls() -> None:
+    config = Config(observation=ObservationLimits(max_offered_controls=5))
+    controls = tuple(button(0).model_copy(update={"id": f"b{i}"}) for i in range(10))
+    jev = RelevanceJev({"operation": "click", "click_target": "b3"}, {"Button 0"})
+    result = await decide(jev, observation(controls), context(), config)
+    relevance = [questions for questions in jev.requests if "operation" not in questions]
+    assert sum(len(questions) for questions in relevance) == 1
+    assert result.target == controls[3]
+
+
+async def test_redraw_reuses_completed_relevance_without_reusing_the_action() -> None:
+    config = Config(observation=ObservationLimits(max_offered_controls=5))
+    jev = RelevanceJev({"operation": "click", "click_target": "b9"}, {"Button 9"})
+    page = observation(_dense(10))
+    cache = RelevanceCache()
+    await decide(jev, page, context(), config, relevance_cache=cache)
+    fresh = page.model_copy(update={"page_key": "redrawn"})
+    await decide(jev, fresh, context(), config, relevance_cache=cache)
+    relevance = [questions for questions in jev.requests if "operation" not in questions]
+    assert len(relevance) == 1
+    assert len([q for q in jev.requests if "operation" in q]) == 2
+
+
+async def test_redraw_keeps_answered_batches_and_retries_unfinished_batches_in_parallel() -> None:
+    waiting = asyncio.Event()
+
+    class Interrupted(RelevanceJev):
+        retry = False
+
+        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+            if "operation" not in questions and "r0" not in questions and not self.retry:
+                self.requests.append(questions)
+                waiting.set()
+                await asyncio.Event().wait()
+            return await super().evaluate(state, questions)
+
+    config = Config(observation=ObservationLimits(max_offered_controls=2), tokens=TokenBudget(batch_tokens=1))
+    cache = RelevanceCache()
+    jev = Interrupted({"operation": "click"}, {"Button 0"})
+    page = observation(_dense(5))
+    decision = asyncio.create_task(decide(jev, page, context(), config, relevance_cache=cache))
+    await asyncio.wait_for(waiting.wait(), timeout=1)
+    assert len(jev.requests) == 5
+    decision.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await decision
+    jev.retry = True
+    before = len(jev.requests)
+    # The new indices and element ids belong to the redraw, so reuse is by question rather than old target id.
+    controls = tuple(c.model_copy(update={"id": "fresh-" + c.id}) for c in reversed(page.controls))
+    fresh = page.model_copy(update={"page_key": "redrawn", "controls": controls})
+    result = await decide(jev, fresh, context(), config, relevance_cache=cache)
+    retries = [q for q in jev.requests[before:] if "operation" not in q]
+    assert len(retries) == 4
+    assert not any('"Button 0"' in q.instructions for request in retries for q in request.values())
+    assert result.target is not None and result.target.id.startswith("fresh-")
+
+
+@pytest.mark.parametrize("change", ["document", "url", "task", "requirements", "unread", "subgoal", "control"])
+async def test_relevance_cache_reasks_changed_questions_or_context(change: str) -> None:
+    config = Config(observation=ObservationLimits(max_offered_controls=2))
+    cache = RelevanceCache()
+    jev = RelevanceJev({"operation": "click"}, {"Button 4"})
+    page, step = observation(_dense(5)), context()
+    await decide(jev, page, step, config, relevance_cache=cache)
+    match change:
+        case "document":
+            page = page.model_copy(update={"document_key": "new-document"})
+        case "url":
+            page = page.model_copy(update={"url": "https://example.test/other"})
+        case "task":
+            step = step.model_copy(update={"task": "another task"})
+        case "requirements":
+            step = step.model_copy(update={"requirements": ("another requirement",)})
+        case "unread":
+            step = step.model_copy(update={"unread_requirements": ()})
+        case "subgoal":
+            step = step.model_copy(update={"subgoal": "different obstacle"})
+        case "control":
+            page = page.model_copy(
+                update={"controls": (*page.controls[:-1], button(4).model_copy(update={"label": "changed"}))}
+            )
+    before = len(jev.requests)
+    await decide(jev, page, step, config, relevance_cache=cache)
+    requests = [q for q in jev.requests[before:] if "operation" not in q]
+    assert len(requests) == 1
+    assert len(requests[0]) == (1 if change == "control" else 5)

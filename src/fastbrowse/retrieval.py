@@ -272,6 +272,14 @@ class _ReadClaim(Frozen):
         description="The run of source blocks the claim reads, first to last. Null for a count, total or winner "
         "the page does not state, which rests on draws_on alone."
     )
+    excerpt: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=2000,
+        description="An optional literal contiguous passage within cite, including record identity, field labels "
+        "and qualifications. Use for a long block holding unrelated content; code must find it uniquely and "
+        "copies the original source spelling. Null when the complete cited blocks are needed.",
+    )
     draws_on: tuple[str, ...] = Field(
         default=(),
         description=(
@@ -363,6 +371,19 @@ def _remember(
         elif key not in basis:
             basis.append(key)
     evidence = None if claim.cite is None else _cited(capture, part, claim.cite)
+    if claim.excerpt is not None:
+        if evidence is None or not claim.excerpt.strip():
+            return None
+        matches = _loose(claim.excerpt.strip()).finditer(evidence.quote)
+        match = next(matches, None)
+        if match is None or next(matches, None) is not None:
+            logger.debug("read rejected missing or ambiguous excerpt")
+            return None
+        start, end = evidence.start + match.start(), evidence.start + match.end()
+        block = next((block for block in capture.blocks if block.start <= start < block.end), None)
+        if block is None:
+            return None
+        evidence = _evidence(capture, block, start, end)
     # A derived claim cites nothing and rests on its basis; one that cites blocks must cite them correctly.
     if evidence is None and (claim.cite is not None or not basis):
         logger.debug("read rejected claim cite=%s basis=%d", reprlib.repr(claim.cite), len(basis))
@@ -785,6 +806,11 @@ async def read(
                     "Citations use the source id; literal field delimiters use only the record text after those "
                     "annotations. Do not copy annotation prefixes into field delimiters.\n\n"
                     "# Claims\n"
+                    "- For a long block containing unrelated content, set excerpt to the smallest literal "
+                    "contiguous passage supporting the claim, including record identity, field labels and "
+                    "qualifications. Split claims supported by separate passages. Code matches the excerpt "
+                    "uniquely inside the cited blocks and copies its original spelling; never paraphrase it. "
+                    "Leave excerpt null when the complete blocks are needed.\n"
                     "- A claim cites one run of blocks. For a comparison, put every compared record from this "
                     "chunk in the conclusion's records as block ranges only. Code copies their quotes into its "
                     "basis; never write a prose claim for each compared record. Use draws_on for earlier "
@@ -2261,10 +2287,8 @@ def claim_check_questions(
         true="Yes, at least one requirement is unanswered or unevidenced.",
         false="No, every requirement is answered and evidenced.",
     )
-    room = tokens.remaining_chars(
-        json.dumps({"answer": composed.answer}),
-        [q.model_dump_json() for q in (*questions.values(), omission)],
-    )
+    # Independent claim questions run in separate batches; they cannot consume this question's evidence budget.
+    room = tokens.remaining_chars(json.dumps({"answer": composed.answer}), [omission.model_dump_json()])
     notes_text = notes.render(room, preserve_requirements=True, json_encoded=True)
     questions["requirement_omitted"] = omission.model_copy(update={"instructions": context + notes_text + question})
     return questions

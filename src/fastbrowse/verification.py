@@ -12,11 +12,12 @@ from typing import assert_never
 
 from pydantic import BaseModel, Field, JsonValue, ValidationError
 
+from fastbrowse.batches import evaluate_batches
 from fastbrowse.config import Config, Thresholds, TokenBudget
 from fastbrowse.jev import JevClient, NoulAnswer, NoulQuestion, Question
 from fastbrowse.llm import Generation, LLMClient, Message
 from fastbrowse.memory import Notes, NotesTooLarge
-from fastbrowse.models import UNTRUSTED, CostComponent, CostLine, Evidence, Frozen, LLMPurpose
+from fastbrowse.models import UNTRUSTED, CostLine, Evidence, Frozen, LLMPurpose
 from fastbrowse.page import Capture, Control, Observation, cut_text
 from fastbrowse.planner import Plan, RequirementKind
 from fastbrowse.policy import HistoryEntry
@@ -435,13 +436,15 @@ async def check_claims(
         return composed if not composed.answer and composed.dropped_claims == 0 else None
     transaction = transaction_check_question(composed, notes, transaction_evidence_ids, tokens=tokens)
     if transaction is None:
-        answers = await _ask(jev, composed, questions, ledger)
+        answers = await _ask(jev, composed, questions, ledger, tokens)
     else:
         # Asked apart so the committed pages cannot take the omission check's notes budget.
         checked = {TRANSACTION_CONTRADICTED: transaction}
         # Both asks finish before either failure propagates, so neither is billed after the check has returned.
         claimed, committed = await asyncio.gather(
-            _ask(jev, composed, questions, ledger), _ask(jev, composed, checked, ledger), return_exceptions=True
+            _ask(jev, composed, questions, ledger, tokens),
+            _ask(jev, composed, checked, ledger, tokens),
+            return_exceptions=True,
         )
         if isinstance(claimed, BaseException):
             raise claimed
@@ -449,6 +452,8 @@ async def check_claims(
             raise committed
         answers = {**claimed, **committed}
         questions = {**questions, **checked}
+    if any(not isinstance(answers.get(key), NoulAnswer) for key in questions):
+        return None
     limit = thresholds.claim_problem_above
     trace(
         "claims",
@@ -484,20 +489,24 @@ async def check_claims(
             return None
     pruned = assemble_answer(kept, notes, composed.requirements)
     omission = {key: q for key, q in claim_check_questions(pruned, notes, tokens=tokens).items() if key == _OMITTED}
-    if omission and _probability(await _ask(jev, pruned, omission, ledger), _OMITTED) > limit:
-        return None
+    if omission:
+        answer = (await _ask(jev, pruned, omission, ledger, tokens)).get(_OMITTED)
+        if not isinstance(answer, NoulAnswer) or answer.probability > limit:
+            return None
     return pruned
 
 
 async def _ask(
-    jev: JevClient, composed: ComposedAnswer, questions: Mapping[str, NoulQuestion], ledger: Ledger | None
+    jev: JevClient,
+    composed: ComposedAnswer,
+    questions: Mapping[str, NoulQuestion],
+    ledger: Ledger | None,
+    tokens: TokenBudget,
 ) -> Mapping[str, object]:
-    if ledger is not None:
-        ledger.reserve(CostComponent.JEV)
-    evaluation = await jev.evaluate({"answer": composed.answer}, questions)
-    if ledger is not None:
-        ledger.record(evaluation.cost)
-    return evaluation.answers
+    answered = await evaluate_batches(
+        jev, {"answer": composed.answer}, questions, tokens=tokens, ledger=ledger, allow_failed_batches=False
+    )
+    return {} if answered is None else answered.answers
 
 
 async def extract(
