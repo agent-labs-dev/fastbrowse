@@ -3,7 +3,8 @@ import json
 import pytest
 
 from fastbrowse.browser.page import _capped, _same_http_origin
-from fastbrowse.models import Operation
+from fastbrowse.models import BrowserConnection, Operation
+from fastbrowse.origins import OriginGrant, parse_origin, parse_origins
 from fastbrowse.page import Control, cut_text, pager_link, pages_forward
 
 
@@ -104,3 +105,85 @@ def test_escaped_text_keeps_every_character_that_fits() -> None:
     size = len(json.dumps(cut)) - 2
     assert size <= 6000
     assert cut.startswith("東京" * 450) and "characters omitted" in cut
+
+
+@pytest.mark.parametrize(
+    ("entry", "origin"),
+    [
+        ("https://Example.COM", "https://example.com"),
+        ("https://example.com:443/", "https://example.com"),
+        ("http://example.com:80", "http://example.com"),
+        ("http://127.0.0.1:8080", "http://127.0.0.1:8080"),
+        ("http://[::1]:3000", "http://[::1]:3000"),
+        ("https://b\u00fccher.example", "https://xn--bcher-kva.example"),
+    ],
+)
+def test_a_grant_entry_is_normalized_to_one_exact_origin(entry: str, origin: str) -> None:
+    assert parse_origin(entry) == origin
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "",
+        "example.com",
+        "*",
+        "https://*.example.com",
+        "ftp://example.com",
+        "file:///tmp",
+        "blob:https://example.com/id",
+        "https://good@evil.example",
+        "https://user:pw@example.com",
+        "https://example.com/app",
+        "https://example.com?x=1",
+        "https://example.com#frag",
+        "https://example.com:notaport",
+        "https://exam ple.com",
+        "https://good\\@evil.example",
+    ],
+)
+def test_a_grant_entry_that_is_not_a_bare_origin_is_refused(entry: str) -> None:
+    with pytest.raises(ValueError, match="allowed_origins"):
+        parse_origin(entry)
+
+
+def test_a_grant_needs_an_origin_and_a_connection_validates_it() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        parse_origins([])
+    connection = BrowserConnection(
+        cdp_url="ws://x", remote=True, allowed_origins=("https://A.example", "https://a.example:443")
+    )
+    assert connection.allowed_origins == ("https://a.example",)
+    with pytest.raises(ValueError, match="allowed_origins"):
+        BrowserConnection(cdp_url="ws://x", remote=True, allowed_origins=("https://a.example/path",))
+    assert BrowserConnection(cdp_url="ws://x", remote=True).allowed_origins is None
+
+
+@pytest.mark.parametrize(
+    ("url", "allowed"),
+    [
+        ("https://a.example/page?token=1#x", True),
+        ("https://a.example:443/", True),
+        ("about:blank", False),
+        ("https://a.example:8443/", False),
+        ("http://a.example/", False),
+        ("https://a.example.evil.example/", False),
+        ("https://evil.example/https://a.example/", False),
+        ("https://a.example@evil.example/", False),
+        ("https://a.example\\@evil.example/", False),
+        ("https://a.example.:443/", False),
+        ("https://a.example\t@evil.example/", False),
+        ("https://a.exam%70le/", False),
+        ("https:a.example/", False),
+        ("about:blank#x", False),
+        ("data:text/html,hi", False),
+        ("blob:https://a.example/id", False),
+        ("javascript:alert(1)", False),
+        ("view-source:https://a.example/", False),
+        ("chrome-error://chromewebdata/", False),
+        ("about:srcdoc", False),
+        ("", False),
+    ],
+)
+def test_a_grant_allows_only_exact_origins(url: str, allowed: bool) -> None:
+    assert OriginGrant(["https://a.example"]).allows(url) is allowed

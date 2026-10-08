@@ -24,7 +24,7 @@ from cdp_use.cdp.page.commands import CaptureScreenshotParameters, GetNavigation
 from cdp_use.cdp.runtime.commands import EvaluateParameters
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
-from fastbrowse.browser.session import BrowserSession
+from fastbrowse.browser.session import BrowserSession, OriginNotAllowed
 from fastbrowse.config import Config
 from fastbrowse.datafiles import data_file
 from fastbrowse.models import TARGETED, Artifact, Attachment, Frozen, Operation, StepOutcome
@@ -349,6 +349,7 @@ class CdpPage(Page):
     # -- observe / capture -------------------------------------------------------------------------
 
     async def observe(self) -> Observation:
+        await self._session.assert_clear()
         dialog = self._session.pending_dialog()
         if dialog is not None:
             # A JavaScript dialog blocks the renderer, so any page evaluate would hang until it is handled.
@@ -487,6 +488,11 @@ class CdpPage(Page):
             except ValidationError as exc:
                 # Our own page script produced this, so a mismatch is a bug in one side of the contract.
                 raise BrowserError(f"page script returned an unexpected {shape.__name__}: {exc}") from exc
+            # The text and the address it came from were read in one evaluation, so this cannot be raced.
+            if (grant := self._session.grant) and not grant.allows(parsed.url):
+                if frame_key == _MAIN:
+                    raise OriginNotAllowed
+                return None
             return _FrameObservation(None if frame_key == _MAIN else frame_key, session_id, parsed)
 
         if wait_loaded:
@@ -519,6 +525,7 @@ class CdpPage(Page):
         return missing
 
     async def capture(self) -> Capture:
+        await self._session.assert_clear()
         text_parts: list[str] = []
         blocks: list[Block] = []
         offset = 0
@@ -580,6 +587,7 @@ class CdpPage(Page):
     # -- act ----------------------------------------------------------------------------------------
 
     async def act(self, action: Action, observation: Observation) -> ActResult:
+        await self._session.assert_clear()
         if self._last is None or self._last.page_key != observation.page_key:
             return ActResult(outcome=StepOutcome.STALE, page_changed=False, detail="observation is out of date")
         target = None
@@ -1061,12 +1069,15 @@ class CdpPage(Page):
             return StepOutcome.STALE, "target disconnected"
         if point == "covered":
             return StepOutcome.COVERED, None
+        # Atomic with the write: the script checks the origin it runs in, so a document that replaced the
+        # observed one between the check in `act` and here still gets no file.
+        allowed = sorted(self._session.grant.origins) if self._session.grant else None
         payload = json.dumps(
             [{"name": f.name, "type": f.mime_type, "data": base64.b64encode(f.content).decode()} for f in files]
         )
         script = (
-            "((id, files) => { const e = window.__fastbrowse?.nodes.get(id); "
-            "if (!e?.isConnected) return null; "
+            "((id, files, allowed) => { const e = window.__fastbrowse?.nodes.get(id); "
+            "if (!e?.isConnected || (allowed && !allowed.includes(location.origin))) return null; "
             "const dt = new DataTransfer(); "
             "for (const f of files) { const bin = atob(f.data); "
             "const bytes = Uint8Array.from(bin, c => c.charCodeAt(0)); "
@@ -1074,7 +1085,7 @@ class CdpPage(Page):
             "e.files = dt.files; "
             "e.dispatchEvent(new Event('input', {bubbles: true})); "
             "e.dispatchEvent(new Event('change', {bubbles: true})); return true; })"
-            f"({local_id}, {payload})"
+            f"({local_id}, {payload}, {json.dumps(allowed)})"
         )
         result = await self._evaluate(session_id, script)
         if result is None:
@@ -1286,6 +1297,7 @@ class CdpPage(Page):
             await asyncio.gather(task, dialog, return_exceptions=True)
 
     async def redrawn(self, observation: Observation, timeout_seconds: float, *, target_id: str | None = None) -> bool:
+        await self._session.check_access()
         last = self._last
         if last is None or last.page_key != observation.page_key or self._session.pending_dialog() is not None:
             return False
@@ -1326,6 +1338,7 @@ class CdpPage(Page):
         compositor-level nudges proved unreliable, while activating always yields a frame at once. Screenshots
         are rare (recovery and uncertain completion), so focus moves only when it has to.
         """
+        await self._session.assert_clear(pixels=True)
         client, session_id = self._session.client, self._session.active_session_id
         params: CaptureScreenshotParameters = {"format": "png"}
         capture = asyncio.ensure_future(client.send.Page.captureScreenshot(params=params, session_id=session_id))
@@ -1339,14 +1352,23 @@ class CdpPage(Page):
             await asyncio.gather(capture, return_exceptions=True)
 
     async def origin(self) -> str:
+        await self._address()  # refuses a document outside the grant before its origin is read
         raw = await self._evaluate(self._session.active_session_id, "location.origin")
         return str(raw) if raw is not None else ""
 
     async def address(self) -> str:
+        return await self._address()
+
+    async def _address(self) -> str:
+        await self._session.check_access()
         raw = await self._evaluate(self._session.active_session_id, "location.href")
-        return str(raw) if raw is not None else ""
+        address = str(raw) if raw is not None else ""
+        if (grant := self._session.grant) and address and not grant.allows(address):
+            raise OriginNotAllowed
+        return address
 
     async def document_changed(self, observation: Observation) -> bool:
+        await self._session.check_access()
         dialog = self._session.pending_dialog()
         if dialog is not None or observation.dialog is not None:
             return dialog != observation.dialog
@@ -1376,6 +1398,7 @@ class CdpPage(Page):
         return _DocumentResponse.model_validate(raw)
 
     async def response_status(self) -> int | None:
+        await self._session.assert_clear()
         return (await self._document_response()).response_status
 
     async def navigate(self, url: str, load_timeout_seconds: float = 15.0, *, back_to: str | None = None) -> None:
@@ -1387,6 +1410,9 @@ class CdpPage(Page):
         after the first observation, so the run's first click was refused as stale, and a read of a results page
         still "Loading results" had to be taken twice.
         """
+        await self._session.check_access()
+        if (grant := self._session.grant) and not grant.allows(url):
+            raise OriginNotAllowed
         session_id = self._session.active_session_id
         if back_to is None:
             self._back_to.pop(session_id, None)
@@ -1401,7 +1427,10 @@ class CdpPage(Page):
             if attempt:
                 await asyncio.sleep(_NAVIGATE_RETRY_SECONDS * 2 ** (attempt - 1))
             downloads_before = self._session.downloads_captured
+            denials_before = self._session.denials
             result = await self._session.client.send.Page.navigate(params={"url": url}, session_id=session_id)
+            if self._session.denials != denials_before:
+                raise OriginNotAllowed  # a redirect left the grant; retrying would only repeat it
             if error := result.get("errorText"):
                 # A link whose target is a file downloads it instead of navigating: Chrome aborts the document
                 # navigation with ERR_ABORTED, but the intercept has already taken the bytes into the artifact

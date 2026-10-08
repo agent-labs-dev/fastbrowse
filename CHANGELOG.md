@@ -11,6 +11,17 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- `run_task` and `connect_cdp` take `allowed_origins`, a list of exact `http(s)://host[:port]` origins that limits
+  the documents a run may inspect and control. Navigations, redirects, frames (in or out of process) and popups
+  outside the list are refused before they are sent, and a window or frame already open outside it is never read,
+  captured or screenshotted. It scopes documents, not the network: images, scripts and requests a granted page makes
+  to other hosts still load. Service workers are bypassed so every navigation meets the check, a scoped run delivers
+  no live frames, and `record` is refused with it. Without it nothing changes.
+
+- `run_task` and `connect_cdp` take `check_access`, an async callback awaited before every observation, capture,
+  screenshot, address, navigation and action. If it raises, the run stops with a `BrowserError` that keeps only the
+  exception's type.
+
 - Runs no longer stop at implicit step, Jev-call, LLM-call, dollar or time ceilings. Callers can still set explicit limits when they need them.
 
 - Complete benchmark suites can be approved and published independently. Existing published suites stay

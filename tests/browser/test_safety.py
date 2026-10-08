@@ -1,13 +1,36 @@
 """Safety boundaries exercised through real Chrome, with only model responses scripted."""
 
+import asyncio
+import contextlib
+import json
+import threading
+from collections.abc import AsyncIterator, Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, quote
+
 import pytest
 from pydantic import JsonValue
 
+from fastbrowse.adapters.local_chrome import free_port
 from fastbrowse.agent import Agent
 from fastbrowse.browser import BrowserSession, CdpPage
+from fastbrowse.browser.recording import Recording, RecordingError
+from fastbrowse.browser.session import OriginNotAllowed
 from fastbrowse.config import Config, Thresholds
-from fastbrowse.models import Attachment, Authorization, Limits, Operation, SecretRef, Status, StepOutcome
-from fastbrowse.page import Action
+from fastbrowse.models import (
+    Attachment,
+    Authorization,
+    BrowserConnection,
+    Limits,
+    Operation,
+    SecretRef,
+    Status,
+    StepOutcome,
+)
+from fastbrowse.origins import OriginGrant
+from fastbrowse.page import Action, BrowserError
+from tests.browser.conftest import RecordingArtifactSink
 from tests.browser.test_browser import eval_value, find, observe_until, wait_until
 from tests.test_policy import ScriptedJev
 from tests.test_retrieval import ScriptedLLM
@@ -300,3 +323,336 @@ async def test_fill_does_not_claim_execution_when_page_rejects_value(
         Action(operation=Operation.FILL, target_id=find(obs, "Other field").id, text="rejected"), obs
     )
     assert result.outcome is StepOutcome.FAILED
+
+
+# -- allowed_origins: documents outside the grant never load, are never read, and never leak ----------------
+
+SECRET_TEXT = "FOREIGN-SECRET-TEXT"
+SECRET_QUERY = "token=hunter2"
+
+
+class OriginSites:
+    """A granted site and a foreign one that counts every request it gets: the foreign log is the arbiter."""
+
+    def __init__(self, granted: str, foreign_port: int, hits: list[str]) -> None:
+        self.granted, self.foreign_port, self.hits = granted, foreign_port, hits
+
+    def foreign(self, host: str = "127.0.0.1") -> str:
+        return f"http://{host}:{self.foreign_port}"
+
+
+@pytest.fixture
+def sites() -> Iterator[OriginSites]:
+    hits: list[str] = []
+    foreign_port = free_port()
+
+    class Foreign(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+        def do_GET(self) -> None:
+            hits.append(self.path)
+            body = f"<title>Foreign title</title><h1>{SECRET_TEXT}</h1>".encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    class Granted(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+        def do_GET(self) -> None:
+            path, _, query = self.path.partition("?")
+            to = parse_qs(query).get("to", [""])[0]
+            if path == "/sw.js":
+                # Answers /swtarget itself, so without a bypass the request never reaches the network or Fetch.
+                script = "\n".join(
+                    [
+                        "self.addEventListener('install', () => self.skipWaiting());",
+                        "self.addEventListener('activate', e => e.waitUntil(clients.claim()));",
+                        "self.addEventListener('fetch', e => { const u = new URL(e.request.url);",
+                        "  if (u.pathname === '/swtarget')",
+                        "    e.respondWith(Response.redirect(u.searchParams.get('to'), 302)); });",
+                    ]
+                ).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/javascript")
+                self.send_header("Content-Length", str(len(script)))
+                self.end_headers()
+                self.wfile.write(script)
+                return
+            if path == "/redirect":
+                self.send_response(302)
+                self.send_header("Location", to)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            page = {
+                "/": "<title>Granted home</title><h1>Granted home</h1><input type=file aria-label=Resume>",
+                "/sw": "<h1>Granted worker</h1><script>navigator.serviceWorker.register('/sw.js')</script>",
+                "/swtarget": "<title>Granted real page</title><h1>Granted real page</h1>",
+                "/ok": "<title>Granted popup</title><h1>Granted popup</h1>",
+                "/refresh": f"<meta http-equiv=refresh content='0;url={to}'><h1>Granted refresh</h1>",
+                "/script": f"<h1>Granted script</h1><script>location = {json.dumps(to)}</script>",
+                "/frame": f"<title>Granted frame page</title><h1>Granted frame page</h1><iframe src='{to}'></iframe>",
+            }.get(path, "")
+            body = page.encode()
+            self.send_response(200 if page else 404)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    servers = [
+        ThreadingHTTPServer(("127.0.0.1", foreign_port), Foreign),
+        ThreadingHTTPServer(("127.0.0.1", 0), Granted),
+    ]
+    for server in servers:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield OriginSites(f"http://127.0.0.1:{servers[1].server_port}", foreign_port, hits)
+    finally:
+        for server in servers:
+            server.shutdown()
+
+
+@contextlib.asynccontextmanager
+async def scoped(
+    connection: BrowserConnection, origin: str, **changes: object
+) -> AsyncIterator[tuple[BrowserSession, CdpPage]]:
+    scoped_connection = connection.model_copy(update={"allowed_origins": (origin,), **changes})
+    async with BrowserSession(scoped_connection, RecordingArtifactSink()) as session:
+        yield session, CdpPage(session, Config())
+
+
+async def until_refused(session: BrowserSession, seconds: float = 5.0) -> None:
+    """Wait for the browser's report of a foreign document to reach the guard."""
+    async with asyncio.timeout(seconds):
+        while True:
+            try:
+                await session.assert_clear()
+            except OriginNotAllowed:
+                return
+            await asyncio.sleep(0.05)
+
+
+async def settle() -> None:
+    await asyncio.sleep(1.0)  # long enough for a request that was going to leave to have left
+
+
+@pytest.mark.parametrize("route", ["direct", "redirect", "refresh", "script"])
+async def test_navigation_and_redirects_never_reach_a_foreign_origin(
+    chrome_connection: BrowserConnection, sites: OriginSites, route: str
+) -> None:
+    foreign = f"{sites.foreign()}/page?{SECRET_QUERY}"
+    async with scoped(chrome_connection, sites.granted) as (session, page):
+        if route == "direct":
+            start = foreign
+        else:
+            start = f"{sites.granted}/{'redirect' if route == 'redirect' else route}?to={quote(foreign)}"
+        if route in {"direct", "redirect"}:
+            with pytest.raises(OriginNotAllowed) as refused:
+                await page.navigate(start)
+            assert SECRET_QUERY not in str(refused.value) and str(sites.foreign_port) not in str(refused.value)
+        else:
+            await page.navigate(start)
+        await settle()
+        assert sites.hits == []
+        if route in {"direct", "redirect"}:
+            with pytest.raises(OriginNotAllowed):
+                await page.capture()
+            with pytest.raises(OriginNotAllowed):
+                await page.observe()
+        else:
+            assert SECRET_TEXT not in (await page.capture()).text
+            assert SECRET_TEXT not in (await page.observe()).viewport_text
+        assert SECRET_QUERY not in "".join(f"{t.url}{t.title}" for t in session.tabs())
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost"], ids=["same-process", "out-of-process"])
+async def test_frames_of_a_foreign_origin_never_load(
+    chrome_connection: BrowserConnection, sites: OriginSites, host: str
+) -> None:
+    async with scoped(chrome_connection, sites.granted) as (_session, page):
+        await page.navigate(f"{sites.granted}/frame?to={quote(sites.foreign(host) + '/page')}")
+        await settle()
+        assert sites.hits == []
+        assert SECRET_TEXT not in (await page.capture()).text
+        assert await page.screenshot()
+
+
+@pytest.mark.parametrize("opened", ["foreign", "redirect", "granted"])
+async def test_popups_are_adopted_only_inside_the_grant(
+    chrome_connection: BrowserConnection, sites: OriginSites, opened: str
+) -> None:
+    foreign = f"{sites.foreign()}/page?{SECRET_QUERY}"
+    url = {
+        "foreign": foreign,
+        "redirect": f"{sites.granted}/redirect?to={quote(foreign)}",
+        "granted": f"{sites.granted}/ok",
+    }[opened]
+    async with scoped(chrome_connection, sites.granted) as (session, page):
+        await page.navigate(f"{sites.granted}/")
+        await session.client.send.Runtime.evaluate(
+            params={"expression": f"window.open({json.dumps(url)})", "userGesture": True},
+            session_id=session.active_session_id,
+        )
+        await settle()
+        assert sites.hits == []
+        urls = [t.url for t in session.tabs()]
+        assert (f"{sites.granted}/ok" in urls) is (opened == "granted")
+        assert SECRET_QUERY not in "".join(urls)
+
+
+async def test_an_attached_window_keeps_its_foreign_frames_and_other_windows_out(
+    chrome_connection: BrowserConnection, browser_session: BrowserSession, sites: OriginSites
+) -> None:
+    # The window is the person's, already open with a foreign OOPIF in it before the run attaches.
+    owner = CdpPage(browser_session, Config())
+    await owner.navigate(f"{sites.granted}/frame?to={quote(sites.foreign('localhost') + '/page')}")
+    await wait_until(lambda: bool(sites.hits))
+    before = await eval_value(browser_session, browser_session.active_session_id, "location.href")
+    async with scoped(chrome_connection, sites.granted, attach=True, target_match="Granted frame") as (_session, page):
+        assert SECRET_TEXT not in (await page.capture()).text
+        assert SECRET_TEXT not in (await page.observe()).viewport_text
+        with pytest.raises(OriginNotAllowed):
+            await page.screenshot()
+    # A window that is not the grant's is neither matched nor named, and nothing navigates the person's window.
+    await owner.navigate(f"{sites.foreign()}/page")
+    with pytest.raises(BrowserError, match="no page matching") as missing:
+        async with scoped(chrome_connection, sites.granted, attach=True, target_match="/page"):
+            pass
+    assert "Foreign title" not in str(missing.value) and str(sites.foreign_port) not in str(missing.value)
+    await owner.navigate(before)
+
+
+async def test_a_document_the_network_never_saw_is_not_read_or_controlled(
+    chrome_connection: BrowserConnection, sites: OriginSites
+) -> None:
+    async with scoped(chrome_connection, sites.granted) as (session, page):
+        await page.navigate(f"{sites.granted}/")
+        observed = await page.observe()
+        # A data: document is not a request, so Fetch cannot refuse it; every read and mutation must.
+        await session.client.send.Page.navigate(
+            params={"url": f"data:text/html,<h1>{SECRET_TEXT}</h1>"}, session_id=session.active_session_id
+        )
+        await until_refused(session)
+        assert SECRET_TEXT not in "".join(f"{t.url}{t.title}" for t in session.tabs())
+        for read in (page.observe, page.capture, page.screenshot, page.address, page.origin):
+            with pytest.raises(OriginNotAllowed):
+                await read()
+        with pytest.raises(OriginNotAllowed):
+            await page.act(Action(operation=Operation.SCROLL), observed)
+
+
+async def test_an_upload_script_checks_the_origin_it_runs_in(
+    chrome_connection: BrowserConnection, sites: OriginSites
+) -> None:
+    async with scoped(chrome_connection, sites.granted) as (session, page):
+        await page.navigate(f"{sites.granted}/")
+        control = find(await page.observe(), "Resume")
+        assert page._last is not None
+        target = page._last.controls[control.id]
+        files = (Attachment(name="cv.txt", mime_type="text/plain", content=b"cv"),)
+        assert (await page._upload(target, files, (1.0, 1.0)))[0] is StepOutcome.EXECUTED
+        # The document changed between the check in `act` and the write: the grant no longer names this origin.
+        session._grant = OriginGrant([sites.foreign()])
+        assert (await page._upload(target, files, (1.0, 1.0)))[0] is StepOutcome.STALE
+
+
+async def test_a_service_worker_cannot_answer_a_navigation_past_the_gate(
+    chrome_connection: BrowserConnection, sites: OriginSites
+) -> None:
+    foreign = f"{sites.foreign()}/page?{SECRET_QUERY}"
+    async with scoped(chrome_connection, sites.granted) as (session, page):
+        await page.navigate(f"{sites.granted}/sw")
+        # The worker is registered by the page itself, from the granted origin, which is allowed.
+        await session.client.send.Runtime.evaluate(
+            params={"expression": "navigator.serviceWorker.ready.then(() => true)", "awaitPromise": True},
+            session_id=session.active_session_id,
+        )
+        # The page is controlled by the worker, which would redirect this navigation to a foreign origin. Bypassed,
+        # the request reaches the server, which has a page there, and the worker never answers it.
+        await page.navigate(f"{sites.granted}/swtarget?to={quote(foreign)}")
+        await settle()
+        assert session.denials == 0 and sites.hits == []
+        assert (await page.address()).startswith(f"{sites.granted}/swtarget")
+        assert SECRET_TEXT not in (await page.capture()).text
+
+
+async def test_a_scoped_run_delivers_no_live_frames(chrome_connection: BrowserConnection, sites: OriginSites) -> None:
+    frames: list[bytes] = []
+
+    async def receive(frame: bytes) -> None:
+        frames.append(frame)
+
+    connection = chrome_connection.model_copy(update={"allowed_origins": (sites.granted,)})
+    async with BrowserSession(connection, RecordingArtifactSink(), on_frame=receive) as session:
+        page = CdpPage(session, Config())
+        await page.navigate(f"{sites.granted}/")
+        await settle()
+        assert session.frames_withheld and frames == []
+
+
+async def test_a_scoped_session_refuses_to_record(chrome_connection: BrowserConnection, sites: OriginSites) -> None:
+    async with scoped(chrome_connection, sites.granted) as (session, _page):
+        with pytest.raises(RecordingError, match="allowed_origins"):
+            async with Recording(session, Path("unused.mp4")):
+                pass
+
+
+@pytest.mark.parametrize("scope", [False, True], ids=["unscoped", "scoped"])
+async def test_check_access_runs_before_every_browser_touch(
+    chrome_connection: BrowserConnection, sites: OriginSites, scope: bool
+) -> None:
+    calls = 0
+    allowed = True
+
+    async def check() -> None:
+        nonlocal calls
+        calls += 1
+        if not allowed:
+            raise RuntimeError("secret detail the caller put in its error")
+
+    connection = chrome_connection.model_copy(update={"allowed_origins": (sites.granted,) if scope else None})
+    async with BrowserSession(connection, RecordingArtifactSink(), check_access=check) as session:
+        page = CdpPage(session, Config())
+        await page.navigate(f"{sites.granted}/")
+        observed = await page.observe()
+        touches = (
+            page.observe,
+            page.capture,
+            page.screenshot,
+            page.address,
+            page.origin,
+            page.response_status,
+            lambda: page.navigate(f"{sites.granted}/ok"),
+            lambda: page.act(Action(operation=Operation.SCROLL), observed),
+            lambda: page.document_changed(observed),
+            lambda: page.redrawn(observed, 0.1),
+        )
+        allowed = False
+        for touch in touches:
+            before = calls
+            with pytest.raises(BrowserError, match="caller supplied") as refused:
+                await touch()
+            assert calls == before + 1 and "secret detail" not in str(refused.value)
+
+
+async def test_a_blank_popup_inherits_no_foreign_document_grant(
+    chrome_connection: BrowserConnection, browser_session: BrowserSession, sites: OriginSites
+) -> None:
+    owner = CdpPage(browser_session, Config())
+    await owner.navigate(f"{sites.foreign()}/page")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "(() => { const popup = window.open('about:blank'); "
+        "popup.document.write('<title>Inherited foreign document</title>outside-grant-secret'); return true; })()",
+    )
+    await settle()
+    with pytest.raises(BrowserError):
+        async with scoped(chrome_connection, sites.granted, attach=True, target_match="Inherited foreign document"):
+            pytest.fail("A blank popup must not inherit a grant from its foreign opener")

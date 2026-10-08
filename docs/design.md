@@ -116,6 +116,20 @@ tracked window join without being owned. Windows with no
 opener join only when `target_match` is set: an Electron main process opens its windows that way, and so does a
 browser for each tab a person opens by hand.
 
+`allowed_origins` scopes documents with the same Fetch hook downloads use. A scoped session also pauses every
+`Document` request before it is sent and fails one outside the grant with `ERR_ABORTED`, which commits no page that
+could name the address. Redirect hops, iframes and popups all pause as documents, so one check covers each. Pages and
+child targets attach paused (`waitForDebuggerOnStart`) and resume only once their Fetch is on, so a popup or
+out-of-process frame cannot send its first request unchecked. Reads check the address each text was read from, the
+committed address of the active tab, and every frame seen, so a document that Fetch cannot see (a `data:` page, a
+page restored from the back-forward cache) is refused rather than read; screenshots also refuse while any frame is
+outside the grant. A window already open outside the grant is never matched, and no window is navigated to enforce
+anything. Service workers are bypassed on every scoped session (`Network.setBypassServiceWorker`, undone on an
+attached window at close), so no navigation is answered without meeting the gate. A scoped run delivers no live
+frames and refuses to record, because pixels cannot be matched to a document. The grant covers documents, not
+network egress: subresources and requests a granted page makes are not scoped, and neither are workers.
+`check_access`, when given, is awaited before every browser read and action, scoped or not.
+
 Before a pointer press, the browser waits for a stable target and rechecks its guard and hit-test. A
 replacement control must match the original semantics and receiving document; ambiguous matches are
 refused. Focus and the receiving field are checked before typing. Settling waits for an interactive
