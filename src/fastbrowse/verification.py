@@ -489,9 +489,34 @@ async def check_claims(
             return None
     pruned = assemble_answer(kept, notes, composed.requirements)
     omission = {key: q for key, q in claim_check_questions(pruned, notes, tokens=tokens).items() if key == _OMITTED}
+    # A grouped requirement can retain citations while pruning one of its requested fields.
+    # Check each removed claim against the remaining answer without notes supplying the missing output.
+    information = [r for r in composed.requirements if r.kind is RequirementKind.INFORMATION]
+    if information:
+        requirements = "\n".join(r.model_dump_json() for r in information)
+        for index, claim in enumerate(composed.claims):
+            if claim in kept:
+                continue
+            omission[f"removed_output_{index}"] = NoulQuestion(
+                instructions=(
+                    f"{UNTRUSTED}\n\n# Requirements\n{requirements}\n\n"
+                    f"# Remaining answer\n{pruned.answer}\n\n# Removed claim\n{claim.text}\n\n"
+                    "Does removing this claim leave any requested output missing from the remaining answer? "
+                    "Check each requested field for each requested entity separately. The removed claim is "
+                    "not evidence and need not be true. Judge whether its subject still needs an answer. "
+                    "An optional detail or an output already stated elsewhere does not count as missing."
+                ),
+                true="Yes, a requested output is missing after this removal.",
+                false="No, the remaining answer still states every output affected by this removal.",
+            )
     if omission:
-        answer = (await _ask(jev, pruned, omission, ledger, tokens)).get(_OMITTED)
-        if not isinstance(answer, NoulAnswer) or answer.probability > limit:
+        answers = await _ask(jev, pruned, omission, ledger, tokens)
+        # Removing a requested field cannot be waved through on an uncertain coverage decision.
+        if any(
+            not isinstance(answers.get(key), NoulAnswer)
+            or _probability(answers, key) > (limit if key == _OMITTED else min(limit, 1 - limit))
+            for key in omission
+        ):
             return None
     return pruned
 

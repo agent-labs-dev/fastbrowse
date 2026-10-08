@@ -57,6 +57,8 @@ Does this passage state, qualify or contradict anything the requirements ask for
 labels that give a nearby value its meaning? Site chrome, navigation, footers and unrelated sections do not."""
 # Twelve thousand characters leave room for source blocks, accumulated evidence and instructions per read.
 _READ_CHUNK_CHARS = 12_000
+# Navigation before the details can fill a chunk and buy a read with no claims.
+_LLM_READ_CHUNK_CHARS = 24_000
 # One repeated block carries boundary context without rereading the preceding chunk.
 _CHUNK_OVERLAP_BLOCKS = 1
 _DEFAULT_TOKENS = TokenBudget()
@@ -712,7 +714,7 @@ async def read(
     requirement_ids: Sequence[str],
     notes: Notes,
     *,
-    max_chars: int = _READ_CHUNK_CHARS,
+    max_chars: int = _LLM_READ_CHUNK_CHARS,
     tokens: TokenBudget = _DEFAULT_TOKENS,
     ledger: Ledger | None = None,
     jev: JevClient | None = None,

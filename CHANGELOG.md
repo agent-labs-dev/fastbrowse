@@ -11,6 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Removing a doubted answer claim checks whether its requested output is missing, even when other fields
+  still cite the same requirement. Optional details can still be removed.
+- Prose reads use larger source chunks to keep navigation and following details in one read. Quote checks
+  and the smaller choice and counting budgets remain in place.
+
 - Navigation links keep their stale-attempt history when card labels or context change, so a redraw cannot
   restore a repeatedly failing destination. Separate in-page actions retain their own retry history.
 - Complete benchmark suites can be approved and published independently. Existing published suites stay

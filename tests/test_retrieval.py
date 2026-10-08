@@ -526,6 +526,39 @@ async def test_absent_after_focus_still_reaches_the_reader() -> None:
     assert len(jev.requests) == 2 and llm.calls
 
 
+async def test_a_page_with_navigation_and_details_uses_one_read() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Site navigation.\n" * 1250 + "Answer: 42"))
+
+    class Reader(ScriptedLLM):
+        async def generate[T: BaseModel](
+            self, purpose: LLMPurpose, messages: Sequence[Message], schema: type[T], **kwargs
+        ) -> Generation[T]:
+            found = "Answer: 42" in messages[-1].content
+            self.responses = [
+                {
+                    "claims": [
+                        {
+                            "text": "The answer is 42",
+                            "cite": {"first": "s0", "last": "s0"},
+                            "excerpt": "Answer: 42",
+                            "requirement_id": "r",
+                        }
+                    ]
+                    if found
+                    else [],
+                    "answered": found,
+                }
+            ]
+            return await super().generate(purpose, messages, schema, **kwargs)
+
+    llm = Reader([])
+    notes = Notes()
+    await read(llm, page, "What is the answer?", ["r"], notes)
+    assert len(llm.calls) == 1
+    assert notes.evidenced("r")
+    assert notes.facts[0].evidence is not None and notes.facts[0].evidence.quote == "Answer: 42"
+
+
 async def test_a_large_block_claim_keeps_only_its_literal_supporting_excerpt() -> None:
     text = "Site navigation. " * 100 + "Charger Example: $12, 40W, two USB-C ports." + " Other products. " * 100
     page = capture((BlockKind.PARAGRAPH, text))
@@ -1609,6 +1642,47 @@ async def test_pruning_the_only_claim_for_a_requirement_is_an_omission() -> None
     assert await check_claims(Jev(), composed, notes, Thresholds()) is None
 
 
+@pytest.mark.parametrize(("required", "missing"), [(True, 0.9), (True, 0.5), (False, 0.05)])
+async def test_pruning_part_of_a_grouped_requirement_checks_the_missing_output(required: bool, missing: float) -> None:
+    from fastbrowse.jev import Evaluation, NoulAnswer
+    from fastbrowse.models import CostBasis, CostComponent, CostLine
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import check_claims
+
+    class Jev:
+        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
+            scores = {"unsupported_1": 0.9, "removed_output_1": missing}
+            answers = {key: NoulAnswer(probability=scores.get(key, 0.05)) for key in questions}
+            free = CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0)
+            return Evaluation(model="test", answers=answers, input_tokens=1, cost=free)
+
+    page = capture((BlockKind.PARAGRAPH, "Museum: admission £12"), (BlockKind.PARAGRAPH, "Opening hours vary"))
+    notes = Notes()
+    for block in page.blocks:
+        notes.add(
+            Fact(
+                reader=FactReader.LLM,
+                requirement_id="r1",
+                text=block_evidence(page, block.source_id).quote,
+                evidence=block_evidence(page, block.source_id),
+            )
+        )
+    first, second = tuple(notes.evidence)
+    requirement = Requirement(
+        id="r1",
+        text="Report the museum's admission price and opening hours."
+        if required
+        else "Report the museum's admission price.",
+        kind=RequirementKind.INFORMATION,
+    )
+    claims = (
+        Claim(text="Admission costs £12.", evidence_ids=(first,)),
+        Claim(text="It opens at 9am.", evidence_ids=(second,)),
+    )
+    held = await check_claims(Jev(), assemble_answer(claims, notes, (requirement,)), notes, Thresholds())
+    assert (held is None) is required
+
+
 async def test_a_winner_from_part_of_a_list_is_kept_but_does_not_answer() -> None:
     page = capture((BlockKind.PARAGRAPH, "Sharp Objects £47.82"), (BlockKind.PARAGRAPH, "Page 1 of 2"))
     notes = Notes()
@@ -2011,7 +2085,7 @@ async def test_a_later_chunk_saying_the_list_goes_on_reopens_an_earlier_chunks_c
     # The pager sits at the foot of a long listing, so the chunk that names it is read after the winner.
     page = capture(
         (BlockKind.PARAGRAPH, "Sharp Objects £47.82"),
-        (BlockKind.PARAGRAPH, "a" * 13000),
+        (BlockKind.PARAGRAPH, "a" * 25000),
         (BlockKind.PARAGRAPH, "Page 1 of 2"),
     )
     notes = Notes()
@@ -2044,7 +2118,7 @@ async def test_only_the_last_chunk_names_the_control_that_shows_the_rest() -> No
     # opening it on the strength of the last chunk's "the list goes on" clicks the wrong thing.
     page = capture(
         (BlockKind.PARAGRAPH, "Virgin $1,200"),
-        (BlockKind.PARAGRAPH, "a" * 13000),
+        (BlockKind.PARAGRAPH, "a" * 25000),
         (BlockKind.PARAGRAPH, "Page 1 of 2"),
     )
     carried: dict[str, JsonValue] = {"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}]}
@@ -2066,7 +2140,7 @@ async def test_a_list_that_runs_on_into_the_next_chunk_is_settled_by_the_last_on
     # holding the rest and the earlier records, names the winner. The first chunk's word must not outlive it.
     page = capture(
         (BlockKind.PARAGRAPH, "Virgin $1,200"),
-        (BlockKind.PARAGRAPH, "a" * 13000),
+        (BlockKind.PARAGRAPH, "a" * 25000),
         (BlockKind.PARAGRAPH, "JetBlue $1,061"),
     )
     notes = Notes()
@@ -2100,7 +2174,7 @@ async def test_a_later_chunk_is_read_against_what_earlier_chunks_of_the_page_fou
     """The notes are written once the page is read, so the read carries its own findings between chunks."""
     page = capture(
         (BlockKind.PARAGRAPH, "Einstein: the world as we have created it"),
-        (BlockKind.PARAGRAPH, "b" * 13000),
+        (BlockKind.PARAGRAPH, "b" * 25000),
         (BlockKind.PARAGRAPH, "Einstein: there are two ways to live"),
     )
     llm = ScriptedLLM(
