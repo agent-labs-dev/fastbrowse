@@ -3492,12 +3492,18 @@ def _stale_link_key(observation: Observation, control: Control) -> tuple[str, st
         return None
     identity = [observation.url, control.frame_id, control.frame_origin, control.href]
     try:
-        scheme = urlsplit(control.href).scheme
-        navigation = bool(control.href) and not control.href.startswith("#") and scheme in {"", "http", "https"}
+        here = urlsplit(observation.url)
+        target = urlsplit(urljoin(observation.url, control.href))
+        navigation = (
+            control.frame_id is None
+            and bool(control.href)
+            and target.scheme in {"http", "https"}
+            and target._replace(fragment="") != here._replace(fragment="")
+        )
     except ValueError:
         navigation = False
     # Related-product cards can change their captions while the same destination keeps failing freshness.
-    # Placeholder links still need their label and context to distinguish separate in-page actions.
+    # Same-page links and frames without a known document address still need their separate action identity.
     if not navigation:
         identity.extend((control.label, control.context))
     return observation.document_key, json.dumps(identity)

@@ -2886,10 +2886,14 @@ async def test_repeated_stale_links_recover_even_when_intervening_reads_add_fact
     assert agent_module._without_failed_links(state, fresh_document).controls == (redrawn,)
 
 
-async def test_stale_placeholder_links_do_not_hide_other_in_page_actions() -> None:
+@pytest.mark.parametrize(
+    ("href", "frame_id"),
+    [("#", None), ("/product", None), ("https://example.test/product#details", None), ("/frame", "child")],
+)
+async def test_stale_placeholder_links_do_not_hide_other_in_page_actions(href: str, frame_id: str | None) -> None:
     state = await _reading_state()
-    failed = _link("details", "Details", "#")
-    other = _link("reviews", "Reviews", "#")
+    failed = _link("details", "Details", href).model_copy(update={"frame_id": frame_id})
+    other = _link("reviews", "Reviews", href).model_copy(update={"frame_id": frame_id})
     here = _at("https://example.test/product", failed, other).model_copy(update={"document_key": "same-document"})
     page = Mock(spec=Page)
     page.observe = AsyncMock(return_value=here)
