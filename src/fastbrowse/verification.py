@@ -565,6 +565,7 @@ async def check_answer_outputs(
     if selected is None or any(not isinstance(selected.answers.get(key), ChoiceAnswer) for key in selecting):
         return False
     fields = {}
+    source_fields = {}
     for key, criterion in uncertain.items():
         chosen = selected.answers[key]
         if not isinstance(chosen, ChoiceAnswer):
@@ -578,6 +579,41 @@ async def check_answer_outputs(
         else:
             return False
         fields[key] = {"criterion": criterion, "reported_claims": [claim.model_dump() for claim in claims]}
+        source_fields[key] = {
+            "criterion": criterion,
+            "sources": [
+                {"cited_sources": [source.model_dump() for source in claim.cited_sources], "derived": claim.derived}
+                for claim in claims
+            ],
+        }
+    # Seeing the reported value let the audit fill gaps in ambiguous quotes; check sources with assertions withheld.
+    available = await llm.generate(
+        LLMPurpose.VERIFY,
+        [
+            Message(
+                role="system",
+                content=(
+                    f"{UNTRUSTED} Check source availability separately for each criterion. Judge whether its "
+                    "selected quoted sources provide every requested output value for the correct entity. "
+                    "Answer assertions are withheld and cannot fill missing source values. Return no when a "
+                    "requested value or its association with the entity is absent or ambiguous. Eligibility "
+                    "qualifiers identify the entity; unrelated fields need not appear in each field's quote. "
+                    "A total does not provide a component breakdown. Only marked derived claims may calculate "
+                    "from cited source records. Observed page titles provide identity context, not missing field "
+                    "evidence. Never reconstruct missing table column labels from prior knowledge. Return "
+                    "yes/no/uncertain per field and explain missing source values."
+                ),
+            ),
+            Message(role="user", content=json.dumps({"criteria": source_fields, "urls": context.urls})),
+        ],
+        _OutputAssessment,
+        ledger=ledger,
+    )
+    if ledger is not None:
+        ledger.record(available.cost)
+    absent = [criterion for key, criterion in uncertain.items() if available.data.judgments.get(key) != "yes"]
+    if absent:
+        return reject(absent)
     generated = await llm.generate(
         LLMPurpose.VERIFY,
         [

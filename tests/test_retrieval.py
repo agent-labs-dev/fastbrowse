@@ -3961,10 +3961,12 @@ async def test_atomic_output_uncertainty_preserves_confident_failures_and_missin
     page = capture((BlockKind.PARAGRAPH, "Price £12"))
     notes = Notes((Fact(reader=FactReader.LLM, text="£12", evidence=block_evidence(page, "s0")),))
     answer = assemble_answer((Claim(text="It costs £12.", evidence_ids=tuple(notes.evidence)),), notes, ())
-    llm = ScriptedLLM([{"judgments": {} if judgment is None else {"output_0": judgment}, "reason": "test"}])
+    llm = ScriptedLLM(
+        [{"judgments": {} if judgment is None else {"output_0": judgment}, "reason": "test"}] * (2 if expected else 1)
+    )
     held = await check_answer_outputs(Jev(), llm, answer, notes, ("Report the price.",))
     assert held is expected
-    assert len(llm.calls) == int(probability in {0.5, 0.99})
+    assert len(llm.calls) == (2 if expected else int(probability in {0.5, 0.99}))
 
 
 async def test_atomic_output_context_keeps_cited_sources_and_page_titles_without_uncited_notes() -> None:
@@ -3996,7 +3998,7 @@ async def test_atomic_output_context_keeps_cited_sources_and_page_titles_without
         notes.add(Fact(reader=FactReader.LLM, text=block.source_id, evidence=block_evidence(page, block.source_id)))
     price, _ = tuple(notes.evidence)
     answer = assemble_answer((Claim(text="It costs £12.", evidence_ids=(price,)),), notes, ())
-    llm = ScriptedLLM([{"judgments": {"output_0": "yes"}, "reason": "The price is quoted."}])
+    llm = ScriptedLLM([{"judgments": {"output_0": "yes"}, "reason": "The price is quoted."}] * 2)
     assert await check_answer_outputs(Jev(), llm, answer, notes, ("Report the price.",))
     assert "Unrelated title" not in json.dumps(shown)
     assert "9am" not in json.dumps(shown)
@@ -4080,9 +4082,9 @@ async def test_output_checks_can_bind_an_unbounded_field_to_multiple_claims() ->
     answer = assemble_answer(
         tuple(Claim(text=source.quote, evidence_ids=(key,)) for key, source in notes.evidence.items()), notes, ()
     )
-    llm = ScriptedLLM([{"judgments": {"output_0": "yes"}, "reason": "Both titles are quoted."}])
+    llm = ScriptedLLM([{"judgments": {"output_0": "yes"}, "reason": "Both titles are quoted."}] * 2)
     assert await check_answer_outputs(Jev(), llm, answer, notes, ("List the title of each matching book.",))
-    claims = json.loads(llm.calls[0][1][-1].content)["criteria"]["output_0"]["reported_claims"]
+    claims = json.loads(llm.calls[1][1][-1].content)["criteria"]["output_0"]["reported_claims"]
     assert len(claims) == 2
     assert [claim["cited_sources"][0]["quote"] for claim in claims] == ["Book A", "Book B"]
 
@@ -4100,3 +4102,39 @@ async def test_only_verbatim_scalar_jev_facts_can_skip_the_llm_source_audit(rewr
     assert await check_answer_outputs(jev, None, answer, notes, ("Report the price.",), allow_scalar_jev=True) is (
         not rewritten
     )
+
+
+async def test_source_availability_audit_withholds_reported_values() -> None:
+    from fastbrowse.verification import check_answer_outputs
+
+    page = capture((BlockKind.TABLE, "| Ports | 1 | 3 |"))
+    notes = Notes((Fact(text="Three ports", evidence=block_evidence(page, "s0"), reader=FactReader.LLM),))
+    answer = assemble_answer(
+        (Claim(text="Device Beta has three ports.", evidence_ids=tuple(notes.evidence)),), notes, ()
+    )
+
+    class Jev:
+        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+            return Evaluation(
+                model="test",
+                answers={
+                    key: _choice("claim_0") if isinstance(question, ChoiceQuestion) else NoulAnswer(probability=0.99)
+                    for key, question in questions.items()
+                },
+                input_tokens=1,
+                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
+            )
+
+    jev = Jev()
+    llm = ScriptedLLM([{"judgments": {"output_0": "no"}, "reason": "The column identity is absent."}])
+    missing: list[str] = []
+    assert not await check_answer_outputs(
+        jev, llm, answer, notes, ("Report Device Beta's port count.",), missing_outputs=missing
+    )
+    request = json.loads(llm.calls[0][1][-1].content)
+    assert "actual_answer" not in request
+    source = request["criteria"]["output_0"]["sources"][0]
+    assert "text" not in source
+    assert source["cited_sources"][0]["quote"] == "| Ports | 1 | 3 |"
+    assert missing == ["Report Device Beta's port count."]
+    assert len(llm.calls) == 1

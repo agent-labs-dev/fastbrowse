@@ -71,7 +71,13 @@ async def test_each_table_row_repeats_its_header(page: CdpPage, main_site: str) 
             "<tbody><tr><td>A | B</td></tr><tr><td>C</td></tr></tbody>",
             ["| Group |\n| Name |\n| --- |\n| A \\| B |", "| Group |\n| Name |\n| --- |\n| C |"],
         ),
-        ("<tr><td>A</td><td>1</td></tr><tr><th>B</th><td>2</td></tr>", ["| A | 1 |", "| B | 2 |"]),
+        ("<tr><td>A</td><td>1</td></tr><tr><th>B</th><td>2</td></tr>", ["| A | 1 |\n| B | 2 |"]),
+        (
+            "<tr><td>Feature</td><td>Device Alpha</td><td>Device Beta</td></tr>"
+            "<tr><td>USB-C ports</td><td>1</td><td>3</td></tr>"
+            "<tr><td>USB-A ports</td><td>2</td><td>1</td></tr>",
+            ["| Feature | Device Alpha | Device Beta |\n| USB-C ports | 1 | 3 |\n| USB-A ports | 2 | 1 |"],
+        ),
         ("<thead><tr><th>Name</th></tr><tr><th>Person</th></tr></thead>", ["| Name |\n| Person |\n| --- |"]),
         ("<tr><th>Name | alias</th></tr>", ["| Name \\| alias |\n| --- |"]),
         (
@@ -105,6 +111,7 @@ async def test_each_table_row_repeats_its_header(page: CdpPage, main_site: str) 
     ids=[
         "multiple-header-rows",
         "no-header",
+        "headerless-comparison",
         "header-only",
         "leading-header-only",
         "hidden-rows",

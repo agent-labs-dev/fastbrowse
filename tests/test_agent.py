@@ -5557,6 +5557,7 @@ async def test_final_answer_checks_each_output_without_notes_filling_a_missing_f
                     "reason": "Both fields are quoted.",
                 }
             ]
+            * 2
         ),
     )
     held = await agent._holds(state, composed)
@@ -5571,7 +5572,12 @@ async def test_missing_answer_output_recovers_evidence_then_completes() -> None:
         answer_expected=True,
         answer_checks=("Report admission.", "Report opening hours."),
     )
-    price = Fact(reader=FactReader.LLM, requirement_id="r", text="Admission is £12", evidence=evidence())
+    price = Fact(
+        reader=FactReader.LLM,
+        requirement_id="r",
+        text="Admission is £12",
+        evidence=evidence(end=3).model_copy(update={"quote": "£12"}),
+    )
     hours = Fact(
         reader=FactReader.LLM,
         requirement_id="r",
@@ -5582,6 +5588,10 @@ async def test_missing_answer_output_recovers_evidence_then_completes() -> None:
     llm = ScriptedLLM(
         [
             {"claims": [{"text": price.text, "evidence_ids": [fact_id(price)]}]},
+            {
+                "judgments": {"output_0": "yes", "output_1": "yes", "output_2": "yes"},
+                "reason": "Both fields are quoted.",
+            },
             {
                 "judgments": {"output_0": "yes", "output_1": "yes", "output_2": "yes"},
                 "reason": "Both fields are quoted.",
