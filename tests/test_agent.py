@@ -5514,7 +5514,11 @@ async def test_final_answer_checks_each_output_without_notes_filling_a_missing_f
             return Evaluation(
                 model="test",
                 answers={
-                    key: ChoiceAnswer(choice="all", probabilities={"all": 1.0}, confidence=1.0)
+                    key: ChoiceAnswer(
+                        choice="none" if missing and key in {"output_1", "output_2"} else "all",
+                        probabilities={"all": 1.0},
+                        confidence=1.0,
+                    )
                     if isinstance(question, ChoiceQuestion)
                     else NoulAnswer(probability=scores.get(key, 0.05))
                     for key, question in questions.items()
@@ -5557,7 +5561,7 @@ async def test_final_answer_checks_each_output_without_notes_filling_a_missing_f
                     "reason": "Both fields are quoted.",
                 }
             ]
-            * 2
+            * 6
         ),
     )
     held = await agent._holds(state, composed)
@@ -5586,17 +5590,14 @@ async def test_missing_answer_output_recovers_evidence_then_completes() -> None:
     )
     state.notes.add(price)
     llm = ScriptedLLM(
-        [
-            {"claims": [{"text": price.text, "evidence_ids": [fact_id(price)]}]},
+        [{"claims": [{"text": price.text, "evidence_ids": [fact_id(price)]}]}]
+        + [
             {
                 "judgments": {"output_0": "yes", "output_1": "yes", "output_2": "yes"},
                 "reason": "Both fields are quoted.",
-            },
-            {
-                "judgments": {"output_0": "yes", "output_1": "yes", "output_2": "yes"},
-                "reason": "Both fields are quoted.",
-            },
+            }
         ]
+        * 6
     )
     plan = state.ready_plan
     agent, _ = await _finishing(state, llm, noul=0.0)
@@ -5609,7 +5610,11 @@ async def test_missing_answer_output_recovers_evidence_then_completes() -> None:
             return Evaluation(
                 model="test",
                 answers={
-                    key: ChoiceAnswer(choice="all", probabilities={"all": 1.0}, confidence=1.0)
+                    key: ChoiceAnswer(
+                        choice="none" if not answered and key in {"output_1", "output_2"} else "all",
+                        probabilities={"all": 1.0},
+                        confidence=1.0,
+                    )
                     if isinstance(question, ChoiceQuestion)
                     else NoulAnswer(
                         probability=(

@@ -525,9 +525,6 @@ async def check_answer_outputs(
         return False
     scores = {key: _probability(result.answers, key) for key in questions}
     trace("answer_outputs", scores=scores)
-    # A single aggregate vote accepted a missing breakdown; confident failures cannot be excused by other fields.
-    if any(probability <= 0.2 for probability in scores.values()):
-        return reject([criteria[key] for key, probability in scores.items() if probability < 0.8])
     verbatim = False
     if allow_scalar_jev and len(composed.claims) == 1:
         claim = composed.claims[0]
@@ -567,6 +564,7 @@ async def check_answer_outputs(
         return False
     fields = {}
     source_fields = {}
+    covered: set[int] = set()
     for key, criterion in uncertain.items():
         chosen = selected.answers[key]
         if not isinstance(chosen, ChoiceAnswer):
@@ -575,8 +573,11 @@ async def check_answer_outputs(
             return reject((criterion,))
         if chosen.choice == "all":
             claims = context.claims
+            covered.update(range(len(claims)))
         elif chosen.choice in choices:
-            claims = (context.claims[int(chosen.choice.removeprefix("claim_"))],)
+            index = int(chosen.choice.removeprefix("claim_"))
+            claims = (context.claims[index],)
+            covered.add(index)
         else:
             return False
         fields[key] = {"criterion": criterion, "reported_claims": [claim.model_dump() for claim in claims]}
@@ -587,66 +588,92 @@ async def check_answer_outputs(
                 for claim in claims
             ],
         }
+
+    async def audit(messages: list[Message], fields: Mapping[str, object]) -> dict[str, str]:
+        semaphore = asyncio.Semaphore(4)
+
+        async def one(key: str, field: object) -> tuple[str, str]:
+            async with semaphore:
+                generated = await llm.generate(
+                    LLMPurpose.VERIFY,
+                    [
+                        *messages,
+                        Message(role="user", content=json.dumps({"criteria": {key: field}, "urls": context.urls})),
+                    ],
+                    _OutputAssessment,
+                    max_output_tokens=512,
+                    ledger=ledger,
+                )
+                if ledger is not None:
+                    ledger.record(generated.cost)
+                return key, generated.data.judgments.get(key, "uncertain")
+
+        # One field's quoted value cannot answer another field; every receipt settles before an error returns.
+        assessed = await asyncio.gather(*(one(key, field) for key, field in fields.items()), return_exceptions=True)
+        for result in assessed:
+            if isinstance(result, BaseException):
+                raise result
+        return dict(result for result in assessed if not isinstance(result, BaseException))
+
     # Seeing the reported value let the audit fill gaps in ambiguous quotes; check sources with assertions withheld.
-    available = await llm.generate(
-        LLMPurpose.VERIFY,
-        [
-            Message(
-                role="system",
-                content=(
-                    f"{UNTRUSTED} Check source availability separately for each criterion. Judge whether its "
-                    "selected quoted sources provide every requested output value for the correct entity. "
-                    "Answer assertions are withheld and cannot fill missing source values. Return no when a "
-                    "requested value or its association with the entity is absent or ambiguous. Eligibility "
-                    "qualifiers identify the entity; unrelated fields need not appear in each field's quote. "
-                    "An explicit exhaustive description can establish that no other members exist; absence from a "
-                    "partial description cannot. A total alone does not provide a component breakdown. "
-                    "Only marked derived claims may calculate "
-                    "from cited source records. Observed page titles provide identity context, not missing field "
-                    "evidence. Never reconstruct missing table column labels from prior knowledge. Return "
-                    "yes/no/uncertain per field and explain missing source values."
-                ),
+    source_messages = [
+        Message(
+            role="system",
+            content=(
+                f"{UNTRUSTED} Check source availability separately for each criterion. Judge whether its "
+                "selected quoted sources provide every requested output value for the correct entity. "
+                "Answer assertions are withheld and cannot fill missing source values. Return no when a "
+                "requested value or its association with the entity is absent or ambiguous. Eligibility "
+                "qualifiers identify the entity; unrelated fields need not appear in each field's quote. "
+                "An explicit exhaustive description can establish that no other members exist; absence from a "
+                "partial description cannot. A total alone does not provide a component breakdown. "
+                "Only marked derived claims may calculate "
+                "from cited source records. Observed page titles provide identity context, not missing field "
+                "evidence. Never reconstruct missing table column labels from prior knowledge. Return "
+                "yes/no/uncertain per field and explain missing source values."
             ),
-            Message(role="user", content=json.dumps({"criteria": source_fields, "urls": context.urls})),
-        ],
-        _OutputAssessment,
-        ledger=ledger,
-    )
-    if ledger is not None:
-        ledger.record(available.cost)
-    absent = [criterion for key, criterion in uncertain.items() if available.data.judgments.get(key) != "yes"]
+        ),
+    ]
+    available = await audit(source_messages, source_fields)
+    absent = [criterion for key, criterion in uncertain.items() if available.get(key) != "yes"]
     if absent:
         return reject(absent)
-    generated = await llm.generate(
-        LLMPurpose.VERIFY,
-        [
-            Message(
-                role="system",
-                content=(
-                    f"{UNTRUSTED} Judge each requested output independently. First determine its value from each "
-                    "selected claim's cited quotes alone, without using the reported claim or prior knowledge to "
-                    "fill missing information. Then check that the claim explicitly states that value for the "
-                    "correct requested entity in the actual answer. Missing fields, unsupported component "
-                    "breakdowns, incomplete exact strings, ambiguous sources and claims for another entity fail. "
-                    "Eligibility qualifiers identify the entity and are checked across the answer, not demanded "
-                    "in every individual quote. An explicit exhaustive description can establish absence of other "
-                    "members, but a total alone does not evidence a component breakdown. Only marked "
-                    "derived claims may calculate from source records. Observed page titles provide identity "
-                    "context, not missing field evidence. Return yes only if every part of the requested output "
-                    "is stated and evidenced by its own cited sources. Preserve uncertainty and explain failures."
-                ),
+    assertion_messages = [
+        Message(
+            role="system",
+            content=(
+                f"{UNTRUSTED} Judge each requested output independently. First determine its value from each "
+                "selected claim's cited quotes alone, without using the reported claim or prior knowledge to "
+                "fill missing information. Then check that the claim explicitly states that value for the "
+                "correct requested entity in the actual answer. Missing fields, unsupported component "
+                "breakdowns, incomplete exact strings, ambiguous sources and claims for another entity fail. "
+                "Eligibility qualifiers identify the entity and are checked across the answer, not demanded "
+                "in every individual quote. An explicit exhaustive description can establish absence of other "
+                "members, but a total alone does not evidence a component breakdown. Only marked "
+                "derived claims may calculate from source records. Observed page titles provide identity "
+                "context, not missing field evidence. Return yes only if every part of the requested output "
+                "is stated and evidenced by its own cited sources. Every factual assertion in every selected "
+                "claim must also be supported, including extra details the user did not request. One supported "
+                "value cannot excuse another unsupported value in the same claim. "
+                "Preserve uncertainty and explain failures."
             ),
-            Message(
-                role="user",
-                content=json.dumps({"actual_answer": composed.answer, "criteria": fields, "urls": context.urls}),
-            ),
-        ],
-        _OutputAssessment,
-        ledger=ledger,
-    )
-    if ledger is not None:
-        ledger.record(generated.cost)
-    failed = [criterion for key, criterion in uncertain.items() if generated.data.judgments.get(key) != "yes"]
+        ),
+    ]
+    for index, claim in enumerate(context.claims):
+        if index not in covered:
+            key = f"claim_only_{index}"
+            fields[key] = {
+                "criterion": "Every factual assertion is supported by its own cited sources.",
+                "reported_claims": [claim.model_dump()],
+            }
+    generated = await audit(assertion_messages, fields)
+    failed = [
+        uncertain[key]
+        if key in uncertain
+        else "Unsupported answer detail: " + context.claims[int(key.removeprefix("claim_only_"))].text
+        for key in fields
+        if generated.get(key) != "yes"
+    ]
     return reject(failed) if failed else True
 
 

@@ -3953,11 +3953,11 @@ async def test_a_quoted_count_does_not_repair_another_requirements_missing_recor
         (0.5, "yes", True),
         (0.5, "no", False),
         (0.5, None, False),
-        (0.01, "yes", False),
+        (0.01, "yes", True),
         (None, "yes", False),
     ],
 )
-async def test_atomic_output_uncertainty_preserves_confident_failures_and_missing_checks(
+async def test_atomic_outputs_use_source_audits_instead_of_confidence_alone(
     probability: float | None,
     judgment: str | None,
     expected: bool,
@@ -3993,7 +3993,7 @@ async def test_atomic_output_uncertainty_preserves_confident_failures_and_missin
     )
     held = await check_answer_outputs(Jev(), llm, answer, notes, ("Report the price.",))
     assert held is expected
-    assert len(llm.calls) == (2 if expected else int(probability in {0.5, 0.99}))
+    assert len(llm.calls) == (2 if expected else int(probability is not None))
 
 
 async def test_atomic_output_context_keeps_cited_sources_and_page_titles_without_uncited_notes() -> None:
@@ -4051,6 +4051,61 @@ async def test_atomic_outputs_reject_an_empty_answer_instead_of_skipping_the_che
     notes = Notes()
     answer = assemble_answer((), notes, (requirement,))
     assert await check_claims(Jev(), answer, notes, Thresholds(), answer_checks=(requirement.text,)) is None
+
+
+@pytest.mark.parametrize("separate", [False, True])
+async def test_output_audits_isolate_fields_and_check_extra_answer_claims(separate: bool) -> None:
+    from fastbrowse.verification import check_answer_outputs
+
+    class Jev:
+        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
+            return Evaluation(
+                model="test",
+                input_tokens=1,
+                answers={
+                    key: _choice("claim_0") if isinstance(question, ChoiceQuestion) else NoulAnswer(probability=0.99)
+                    for key, question in questions.items()
+                },
+                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
+            )
+
+    class AuditLLM(ScriptedLLM):
+        active = 0
+        peak = 0
+        saw_extra = False
+
+        async def generate(self, purpose, messages, schema, **kwargs):
+            fields = json.loads(messages[-1].content)["criteria"]
+            assert len(fields) == 1
+            key, field = next(iter(fields.items()))
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            await asyncio.sleep(0)
+            self.active -= 1
+            actual = field.get("reported_claims", [])
+            self.saw_extra |= any("member price 9" in claim["text"] for claim in actual)
+            judgment = "no" if actual and "member price 9" in json.dumps(actual) else "yes"
+            assert kwargs["max_output_tokens"] == 512
+            return Generation(
+                data=schema.model_validate({"judgments": {key: judgment}, "reason": "test"}),
+                cost=CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0.001, purpose=purpose),
+            )
+
+    page = capture((BlockKind.PARAGRAPH, "Current price 12"))
+    fact = Fact(text=page.text, evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+    notes = Notes((fact,))
+    claims = [
+        Claim(text="Current price 12" + ("; member price 9" if not separate else ""), evidence_ids=(fact_id(fact),))
+    ]
+    if separate:
+        claims.append(Claim(text="A member price 9 is available", evidence_ids=(fact_id(fact),)))
+    answer = assemble_answer(claims, notes, ())
+    llm = AuditLLM([])
+    checks = tuple(f"Report the current price, criterion {index}" for index in range(7))
+    ledger = Ledger(Limits())
+    assert not await check_answer_outputs(Jev(), llm, answer, notes, checks, ledger=ledger)
+    assert llm.saw_extra and llm.peak == 4
+    assert sum(line.component is CostComponent.LLM for line in ledger.lines) == 14 + int(separate)
 
 
 def test_output_audit_marks_a_quoted_comparison_with_its_basis_as_derived() -> None:
