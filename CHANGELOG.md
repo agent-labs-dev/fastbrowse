@@ -14,6 +14,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Complete benchmark suites can be approved and published independently. Existing published suites stay
   present, and each suite retains its coverage, evidence and regression checks.
 
+- The internal benchmark catalog includes the opt-in Codex and Cua Driver comparison arm, run by Parallax.
 - Final screenshots allow the fresh page check to finish its loading wait before capture. Loading pages
   retain their ending frame, with visible secrets still withheld.
 
@@ -26,8 +27,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Jev chooses repeated short facts as one value, retaining every source quote and context. Duplicate locations
   no longer split its confidence and send an otherwise clear lookup to the prose reader. Headerless tables
   describe values by their row rather than inventing column headers.
-
-
 
 - A run whose form submission the server answered with an error no longer ends `complete` because a later page
   loaded cleanly. A message form that answered 503 with a page still saying "your message has been sent" was
