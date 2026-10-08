@@ -501,30 +501,6 @@ async def check_answer_outputs(
     if context is None:
         return False
     criteria = {f"output_{index}": check for index, check in enumerate(checks)}
-    questions = {
-        key: NoulQuestion(
-            instructions=(
-                f"{UNTRUSTED} Does the actual answer satisfy this criterion completely, with every requested "
-                "output explicitly stated and directly supported by its own cited sources? Judge every requested "
-                "entity separately. Related items, implied values and ambiguous source associations do not "
-                "satisfy it. A derived count or comparison can rest on the cited source records that support its "
-                "calculation; the sources need not state the derived result. Observed page titles can reveal "
-                "shortened exact strings but cannot replace a missing "
-                f"citation. Criterion: {criterion}"
-            ),
-            true="Yes, every part is answered and directly evidenced.",
-            false="No, a requested output is missing, unsupported, ambiguous or uncertain.",
-        )
-        for key, criterion in criteria.items()
-    }
-    result = await evaluate_batches(
-        jev, context.model_dump(mode="json"), questions, tokens=tokens, ledger=ledger, allow_failed_batches=False
-    )
-    if result is not None and any(not isinstance(result.answers.get(key), NoulAnswer) for key in questions):
-        return False
-    # Expanded tally records can exceed Jev's shared-state limit; the quoted-source audit must still run.
-    scores = {key: _probability(result.answers, key) if result is not None else 0.0 for key in questions}
-    trace("answer_outputs", scores=scores)
     verbatim = False
     if allow_scalar_jev and len(composed.claims) == 1:
         claim = composed.claims[0]
@@ -535,6 +511,32 @@ async def check_answer_outputs(
             and claim.text == fact.text
             for fact in notes.facts
         )
+    scores = {}
+    if verbatim:
+        questions = {
+            key: NoulQuestion(
+                instructions=(
+                    f"{UNTRUSTED} Does the actual answer satisfy this criterion completely, with every requested "
+                    "output explicitly stated and directly supported by its own cited sources? Judge every requested "
+                    "entity separately. Related items, implied values and ambiguous source associations do not "
+                    "satisfy it. A derived count or comparison can rest on the cited source records that support its "
+                    "calculation; the sources need not state the derived result. Observed page titles can reveal "
+                    "shortened exact strings but cannot replace a missing "
+                    f"citation. Criterion: {criterion}"
+                ),
+                true="Yes, every part is answered and directly evidenced.",
+                false="No, a requested output is missing, unsupported, ambiguous or uncertain.",
+            )
+            for key, criterion in criteria.items()
+        }
+        result = await evaluate_batches(
+            jev, context.model_dump(mode="json"), questions, tokens=tokens, ledger=ledger, allow_failed_batches=False
+        )
+        if result is not None and any(not isinstance(result.answers.get(key), NoulAnswer) for key in questions):
+            return False
+        # An oversized scalar still reaches the source audit when Jev cannot score it.
+        scores = {key: _probability(result.answers, key) if result is not None else 0.0 for key in questions}
+        trace("answer_outputs", scores=scores)
     # Confident votes excused prose's unsupported components; only code-copied scalar claims bypass the source audit.
     uncertain = (
         criteria if not verbatim else {key: criteria[key] for key, probability in scores.items() if probability < 0.8}

@@ -3996,7 +3996,7 @@ async def test_atomic_outputs_use_source_audits_instead_of_confidence_alone(
     assert len(llm.calls) == (2 if expected else int(probability is not None))
 
 
-async def test_atomic_output_context_keeps_cited_sources_and_page_titles_without_uncited_notes() -> None:
+async def test_atomic_output_context_keeps_cited_sources_without_uncited_metadata() -> None:
     from fastbrowse.jev import Evaluation, NoulAnswer
     from fastbrowse.retrieval import Claim, assemble_answer
     from fastbrowse.verification import check_answer_outputs
@@ -4029,8 +4029,7 @@ async def test_atomic_output_context_keeps_cited_sources_and_page_titles_without
     assert await check_answer_outputs(Jev(), llm, answer, notes, ("Report the price.",))
     assert "Unrelated title" not in json.dumps(shown)
     assert "9am" not in json.dumps(shown)
-    assert "Complete museum catalog title" in json.dumps(shown)
-    assert "Price £12" in json.dumps(shown, ensure_ascii=False)
+    assert "Price £12" in json.dumps(json.loads(llm.calls[0][1][-1].content), ensure_ascii=False)
 
     assert "page_title" not in json.dumps(llm.calls[0][1][-1].content)
     assert "member price 9" not in json.dumps(llm.calls[1][1][-1].content)
@@ -4468,6 +4467,7 @@ async def test_field_audits_receive_only_the_urls_of_their_selected_citations() 
 
     class Jev:
         async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
+            assert all(isinstance(question, ChoiceQuestion) for question in questions.values())
             return Evaluation(
                 model="test",
                 input_tokens=1,
