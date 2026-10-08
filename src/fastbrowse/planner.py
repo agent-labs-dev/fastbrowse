@@ -166,13 +166,20 @@ async def make_plan(
                         "field checks. Preserve every, each, all and exact-count requirements. For an unbounded "
                         "result set, check each requested field across all results. Each check must state its "
                         "entity and scope explicitly, not just a field label. "
+                        "Exclude the supplied run_reports: code reports those directly from browser state after "
+                        "page-answer verification. Keep requested page facts and action outcomes. "
                         "Do not add actions, navigation or extra outputs. These checks do not change discovery."
                     ),
                 ),
                 Message(
                     role="user",
                     content=json.dumps(
-                        {"task": task, "information_requirements": information, "draft_checks": proposed}
+                        {
+                            "task": task,
+                            "information_requirements": information,
+                            "draft_checks": proposed,
+                            "run_reports": plan.run_reports,
+                        }
                     ),
                 ),
             ],

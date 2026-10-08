@@ -157,3 +157,29 @@ async def test_nonempty_output_checks_retain_every_requested_entity() -> None:
     assert result.data.requirements == draft.requirements
     assert len(llm.calls) == 2
     assert result.cost.dollars == 0.02
+
+
+async def test_mixed_page_answer_excludes_code_reported_outputs() -> None:
+    import json
+
+    from fastbrowse.planner import RunReport
+
+    plan = example_plan().model_copy(update={"run_reports": (RunReport.FINAL_URL,)})
+    llm = PlannerLLM(plan)
+    result = await make_plan(llm, "Report the price and final URL.")
+    prompt = llm.calls[1][1]
+    assert json.loads(prompt[-1].content)["run_reports"] == ["final_url"]
+    assert "Exclude the supplied run_reports" in prompt[0].content
+    assert result.data.answer_checks == ("Find the price",)
+    assert result.data.run_reports == (RunReport.FINAL_URL,)
+
+
+async def test_code_report_only_plan_needs_no_output_normalization() -> None:
+    from fastbrowse.planner import RunReport
+
+    plan = Plan(requirements=(), answer_expected=True, run_reports=(RunReport.FINAL_URL,))
+    llm = PlannerLLM(plan)
+    result = await make_plan(llm, "Report the final URL.")
+    assert result.data.answer_checks == ()
+    assert result.data.run_reports == plan.run_reports
+    assert len(llm.calls) == 1

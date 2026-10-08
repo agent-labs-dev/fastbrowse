@@ -214,6 +214,8 @@ async def test_answer_repairs_continue_only_while_failed_assertions_decrease(mod
         composes = 0
 
         async def generate(self, purpose, messages, schema, **kwargs):
+            if schema.__name__ == "_OutputIdentities":
+                return await super().generate(purpose, messages, schema, **kwargs)
             response: JsonValue
             if purpose is LLMPurpose.COMPOSE:
                 self.composes += 1

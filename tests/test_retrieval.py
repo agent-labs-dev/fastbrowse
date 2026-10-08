@@ -69,6 +69,17 @@ def capture(*parts: tuple[BlockKind, str], url: str = "https://example.test") ->
     )
 
 
+def scripted_identities(messages):
+    payload = json.loads(messages[-1].content)
+    reference, source = next(iter(payload["sources"].items()))
+    return {
+        "bindings": {
+            key: {"scope": "entities", "identities": [{"source_ref": reference, "quote": source["quote"]}]}
+            for key, criterion in payload["criteria"].items()
+        }
+    }
+
+
 class ScriptedLLM:
     def __init__(self, responses: Sequence[JsonValue]) -> None:
         self.responses = list(responses)
@@ -90,7 +101,9 @@ class ScriptedLLM:
         self.calls.append((purpose, tuple(messages)))
         self.output_caps.append(max_output_tokens)
         return Generation(
-            data=schema.model_validate(self.responses.pop(0)),
+            data=schema.model_validate(
+                scripted_identities(messages) if schema.__name__ == "_OutputIdentities" else self.responses.pop(0)
+            ),
             cost=CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0.001, purpose=purpose),
         )
 
@@ -4077,6 +4090,8 @@ async def test_output_audits_isolate_fields_and_check_extra_answer_claims(separa
         saw_extra = False
 
         async def generate(self, purpose, messages, schema, **kwargs):
+            if schema.__name__ == "_OutputIdentities":
+                return await super().generate(purpose, messages, schema, **kwargs)
             payload = json.loads(messages[-1].content)
             assert payload["task"] == "Report the current price of the selected item."
             fields = payload["criteria"]
@@ -4111,7 +4126,7 @@ async def test_output_audits_isolate_fields_and_check_extra_answer_claims(separa
         Jev(), llm, answer, notes, checks, ledger=ledger, task="Report the current price of the selected item."
     )
     assert llm.saw_extra and llm.peak == 4
-    assert sum(line.component is CostComponent.LLM for line in ledger.lines) == 14 + int(separate)
+    assert sum(line.component is CostComponent.LLM for line in ledger.lines) == 14 + 2 * int(separate)
 
 
 def test_output_audit_marks_a_quoted_comparison_with_its_basis_as_derived() -> None:
@@ -4200,7 +4215,7 @@ async def test_output_checks_can_bind_an_unbounded_field_to_multiple_claims() ->
         ]
     )
     assert await check_answer_outputs(Jev(), llm, answer, notes, ("List the title of each matching book.",))
-    claims = json.loads(llm.calls[1][1][-1].content)["criteria"]["output_0"]["reported_claims"]
+    claims = json.loads(llm.calls[2][1][-1].content)["criteria"]["output_0"]["reported_claims"]
     assert len(claims) == 2
     assert [claim["cited_sources"][0]["quote"] for claim in claims] == ["Book A", "Book B"]
 
@@ -4406,6 +4421,8 @@ async def test_grouped_output_audit_checks_each_claim_against_its_own_citations(
 
     class AuditLLM(ScriptedLLM):
         async def generate(self, purpose, messages, schema, **kwargs):
+            if schema.__name__ == "_OutputIdentities":
+                return await super().generate(purpose, messages, schema, **kwargs)
             key, field = next(iter(json.loads(messages[-1].content)["criteria"].items()))
             judgment = "yes"
             if key.startswith("claim_only_"):
@@ -4480,6 +4497,8 @@ async def test_field_audits_receive_only_the_urls_of_their_selected_citations() 
 
     class AuditLLM(ScriptedLLM):
         async def generate(self, purpose, messages, schema, **kwargs):
+            if schema.__name__ == "_OutputIdentities":
+                return await super().generate(purpose, messages, schema, **kwargs)
             payload = json.loads(messages[-1].content)
             key, field = next(iter(payload["criteria"].items()))
             records = field.get("reported_claims", field.get("sources", []))
@@ -4526,6 +4545,8 @@ async def test_long_answers_respect_choice_limit_and_still_audit_each_claim(coun
             self.audited: set[str] = set()
 
         async def generate(self, purpose, messages, schema, **kwargs):
+            if schema.__name__ == "_OutputIdentities":
+                return await super().generate(purpose, messages, schema, **kwargs)
             key = next(iter(json.loads(messages[-1].content)["criteria"]))
             self.audited.add(key)
             verdict = "no" if reject_last and key == f"claim_only_{count - 1}" else "yes"
