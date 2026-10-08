@@ -2652,7 +2652,12 @@ async def test_a_shortcut_begun_before_the_browser_is_opened_without_being_asked
 async def test_a_head_start_a_run_never_took_bills_what_finished_and_cancels_the_rest() -> None:
     """A browser that fails to start ends the run before it begins; a plan already written was still paid for."""
     head = HeadStart.begin(
-        ScriptedLLM([{"requirements": [], "answer_expected": True, "answer_checks": ["Report the top story."]}]),
+        ScriptedLLM(
+            [
+                {"requirements": [], "answer_expected": True, "answer_checks": ["Report the top story."]},
+                {"checks": ["Report the top story."]},
+            ]
+        ),
         "What is the top story?",
     )
     await head.planning
@@ -2660,12 +2665,17 @@ async def test_a_head_start_a_run_never_took_bills_what_finished_and_cancels_the
 
     lines = await head.abandon()
 
-    assert len(lines) == 1 and proposing.cancelled()
+    assert len(lines) == 2 and proposing.cancelled()
 
 
 async def test_completed_unconsumed_plan_is_billed_when_first_observation_fails() -> None:
     head = HeadStart.begin(
-        ScriptedLLM([{"requirements": [], "answer_expected": True, "answer_checks": ["Report the top story."]}]),
+        ScriptedLLM(
+            [
+                {"requirements": [], "answer_expected": True, "answer_checks": ["Report the top story."]},
+                {"checks": ["Report the top story."]},
+            ]
+        ),
         "What is the top story?",
     )
     planned = await head.planning
@@ -2674,17 +2684,22 @@ async def test_completed_unconsumed_plan_is_billed_when_first_observation_fails(
     page.observe = AsyncMock(side_effect=BrowserError("Runtime.evaluate failed (CDP -32000)"))
     result = await Agent(page, ScriptedJev({}), ScriptedLLM([])).run(head.task, head_start=head)
     assert result.status is Status.ERROR
-    assert result.cost.lines == (planned.cost,)
-    assert head.ledger.lines == [planned.cost]
+    assert result.cost.lines == (planned.cost, planned.cost)
+    assert head.ledger.lines == [planned.cost, planned.cost]
 
 
 async def test_plan_receipt_is_not_billed_twice_when_recording_exceeds_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     head = HeadStart.begin(
-        ScriptedLLM([{"requirements": [], "answer_expected": True, "answer_checks": ["Report the top story."]}]),
+        ScriptedLLM(
+            [
+                {"requirements": [], "answer_expected": True, "answer_checks": ["Report the top story."]},
+                {"checks": ["Report the top story."]},
+            ]
+        ),
         "What is the top story?",
-        limits=Limits(max_dollars=0.0001),
+        limits=Limits(max_dollars=0.0015),
     )
     planned = await head.planning
     page = Mock(spec=Page)
@@ -2698,13 +2713,18 @@ async def test_plan_receipt_is_not_billed_twice_when_recording_exceeds_budget(
     monkeypatch.setattr(agent, "_loop", consume)
     result = await agent.run(head.task, head_start=head)
     assert result.status is Status.BUDGET_EXCEEDED
-    assert result.cost.lines == (planned.cost,)
+    assert result.cost.lines == (planned.cost, planned.cost)
 
 
 async def test_a_head_start_is_not_timed_until_the_run_takes_it_over() -> None:
     """A shortcut can finish after `max_seconds` of browser startup; that time is not the run's."""
     head = HeadStart.begin(
-        ScriptedLLM([{"requirements": [], "answer_expected": True, "answer_checks": ["Report the top story."]}]),
+        ScriptedLLM(
+            [
+                {"requirements": [], "answer_expected": True, "answer_checks": ["Report the top story."]},
+                {"checks": ["Report the top story."]},
+            ]
+        ),
         "What is the top story?",
         limits=Limits(max_seconds=0.01),
     )

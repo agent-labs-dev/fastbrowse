@@ -45,7 +45,10 @@ input tokens, uses Jev's list-price estimate. Direct TypeSafe responses without 
 
 The call's time includes both providers. HTTP errors add no charge; unanswered requests that may have been
 billed are estimated from the successful answer's input tokens at Jev's input price, without multiplying
-the backup's own retries or hedges. All three routes reach Typesafe, so an outage there can affect all three.
+the backup's own retries or hedges. Cancelled requests without usage retain an input estimate from the
+serialized request length divided by `TokenBudget.chars_per_token`, rounded up, at Jev's input price.
+This is estimated spend, not provider-reported billing; output is free. Cancellation before dispatch adds
+no charge. All three routes reach Typesafe, so an outage there can affect all three.
 
 ## Confidence is not correctness
 

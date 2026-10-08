@@ -679,7 +679,11 @@ async def test_split_batch_keeps_paid_singles_on_cancellation_and_failover(cance
                 with pytest.raises(asyncio.CancelledError):
                     await task
                 assert stopped.is_set()
-                assert sum(line.input_tokens for line in paid) == 100
+                assert len(paid) == 2
+                assert paid[0].input_tokens == 100
+                assert paid[1].basis is CostBasis.ESTIMATED
+                assert paid[1].input_tokens > 0
+                assert paid[1].dollars == paid[1].input_tokens * JEV_DOLLARS_PER_INPUT_TOKEN
             else:
                 result = await task
                 assert result.answers == {key: NoulAnswer(probability=1) for key in ("a", "b")}

@@ -148,8 +148,8 @@ async def make_plan(
     information = tuple(r.text for r in plan.requirements if r.kind is RequirementKind.INFORMATION)
     proposed = tuple(dict.fromkeys(check.strip() for check in plan.answer_checks if check.strip()))
     cost = generated.cost
-    if information and plan.page_answer_expected and not proposed:
-        # A grouped fallback accepted missing components; repair output checks without replanning discovery.
+    if information and plan.page_answer_expected:
+        # Nonempty field labels lost the task's every-item scope; normalize checks without replanning discovery.
         billing = ledger or Ledger(Limits())
         billing.record(generated.cost)
         repaired = await llm.generate(
@@ -158,13 +158,30 @@ async def make_plan(
                 Message(
                     role="system",
                     content=(
-                        "Decompose only the task's requested answer outputs into completion checks. Separate each "
+                        "Normalize the draft checks against the original task's requested answer outputs. "
+                        "Draft checks can omit entities, quantifiers or fields and are not authoritative. "
+                        "Separate each "
                         "field or component for each named or numbered result. Preserve entity, scope and "
-                        "constraints. For an unbounded result set, check each requested field across all results. "
+                        "constraints. For a fixed number of unnamed results, give each numbered result its own "
+                        "field checks. Preserve every, each, all and exact-count requirements. For an unbounded "
+                        "result set, check each requested field across all results. Each check must state its "
+                        "entity and scope explicitly, not just a field label. "
+                        "Exclude the supplied run_reports: code reports those directly from browser state after "
+                        "page-answer verification. Keep requested page facts and action outcomes. "
                         "Do not add actions, navigation or extra outputs. These checks do not change discovery."
                     ),
                 ),
-                Message(role="user", content=json.dumps({"task": task, "information_requirements": information})),
+                Message(
+                    role="user",
+                    content=json.dumps(
+                        {
+                            "task": task,
+                            "information_requirements": information,
+                            "draft_checks": proposed,
+                            "run_reports": plan.run_reports,
+                        }
+                    ),
+                ),
             ],
             _AnswerChecks,
             max_output_tokens=8000,

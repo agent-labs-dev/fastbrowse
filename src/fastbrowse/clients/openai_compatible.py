@@ -1,5 +1,6 @@
 """Structured chat completions with one schema repair and complete usage accounting."""
 
+import asyncio
 import base64
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
@@ -317,6 +318,11 @@ class OpenAICompatibleLLM:
                 else:
                     cost = _total_cost(costs, purpose).model_copy(update={"seconds": monotonic() - started})
                     return Generation(data=data, cost=cost)
+        except asyncio.CancelledError:
+            if ledger is not None:
+                # An unknown receipt must not replace cancellation with a new budget failure.
+                ledger.lines.extend(costs)
+            raise
         except (LLMError, BudgetExceeded):
             _charge(ledger, costs)
             raise

@@ -462,7 +462,21 @@ class OutputAuditVerdict(Frozen):
     reason: str
 
 
-type OutputAuditCache = dict[str, OutputAuditVerdict]
+class _QuotedIdentity(Frozen):
+    source_ref: str
+    quote: str
+
+
+class _IdentityScope(Frozen):
+    scope: Literal["entities", "subjectless", "unresolved"]
+    identities: tuple[_QuotedIdentity, ...] = ()
+
+
+class _OutputIdentities(Frozen):
+    bindings: dict[str, _IdentityScope]
+
+
+type OutputAuditCache = dict[str, OutputAuditVerdict | _OutputIdentities]
 
 
 def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | None:
@@ -575,6 +589,86 @@ async def check_answer_outputs(
         return True
     if llm is None:
         return False
+    identities: dict[str, list[dict[str, str]]] = {}
+    if context.claims:
+        offered = {}
+        refs = {}
+        for claim in context.claims:
+            for source in claim.cited_sources:
+                serialized = source.model_dump_json()
+                if serialized not in refs:
+                    ref = f"q{len(refs)}"
+                    refs[serialized] = ref
+                    offered[ref] = source
+        messages = [
+            Message(
+                role="system",
+                content=(
+                    f"{UNTRUSTED} Resolve each requested output's subjects to literal identifying quotes. "
+                    "The answer declares which named entities correspond to its numbered results. It cannot "
+                    "supply identity evidence. For each criterion return scope entities and every requested "
+                    "subject's offered source_ref and exact identifying quote from its body or captured page title. "
+                    "Copy only the entity name or identifying description, not the reported field value. "
+                    "Do not infer identity from a URL, shared page, item count or a neighboring table column. "
+                    "A numbered subject must bind to the entity the answer actually labels with that number. "
+                    "Comparisons can require several subjects. Use scope subjectless only for a criterion "
+                    "with no individual entity identity to establish, such as answer format or an aggregate "
+                    "zero-record result. Missing identity evidence is scope unresolved, never subjectless. "
+                    "Do not change requested entities or omit subjects."
+                ),
+            ),
+            Message(
+                role="user",
+                content=json.dumps(
+                    {
+                        "task": task,
+                        "criteria": uncertain,
+                        "answer": context.answer,
+                        "urls": context.urls,
+                        "sources": {ref: source.model_dump() for ref, source in offered.items()},
+                    }
+                ),
+            ),
+        ]
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {"client": id(llm), "messages": [message.model_dump() for message in messages], "kind": "identities"},
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        cached = audit_cache.get(fingerprint) if audit_cache is not None else None
+        if isinstance(cached, _OutputIdentities):
+            resolved = cached
+        else:
+            generated = await llm.generate(
+                LLMPurpose.VERIFY, messages, _OutputIdentities, max_output_tokens=8000, ledger=ledger
+            )
+            if ledger is not None:
+                ledger.record(generated.cost)
+            resolved = generated.data
+            if audit_cache is not None:
+                audit_cache[fingerprint] = resolved
+        for key, criterion in uncertain.items():
+            scope = resolved.bindings.get(key)
+            if scope is None or scope.scope == "unresolved":
+                return reject((criterion,))
+            if scope.scope == "subjectless":
+                if scope.identities:
+                    return reject((criterion,))
+                continue
+            bindings = scope.identities
+            if not bindings:
+                return reject((criterion,))
+            identities[key] = []
+            for binding in bindings:
+                source = offered.get(binding.source_ref)
+                if (
+                    source is None
+                    or not binding.quote.strip()
+                    or not any(binding.quote in text for text in (source.quote, source.page_title or ""))
+                ):
+                    return reject((criterion,))
+                identities[key].append({"reference": criterion, "url_ref": source.url_ref, "quote": binding.quote})
     choices = {f"claim_{index}": claim.text for index, claim in enumerate(context.claims)}
     choices["all"] = "The requested output spans multiple claims; no single claim states all of it."
     choices["none"] = "The requested output is missing from the actual answer."
@@ -582,8 +676,11 @@ async def check_answer_outputs(
         key: ChoiceQuestion(
             instructions=(
                 f"{UNTRUSTED} Select the claim that explicitly states the requested output for the correct entity. "
+                "Preserve the original task's each-item and all-item scope. One item's value cannot discharge "
+                "a field requested for several items. A truthful statement about another item does not report "
+                "that field for the requested item. "
                 "Select all only when the criterion needs multiple claims, and none when absent or only implied. "
-                f"Criterion: {criterion}"
+                f"Task: {task}\nCriterion: {criterion}"
             ),
             criteria=choices,
         )
@@ -622,12 +719,14 @@ async def check_answer_outputs(
             return False
         fields[key] = {
             "criterion": criterion,
+            "requested_entities": identities.get(key, []),
             "reported_claims": [
                 claim.model_dump(exclude={"cited_sources": {"__all__": {"page_title"}}}) for claim in claims
             ],
         }
         source_fields[key] = {
             "criterion": criterion,
+            "requested_entities": identities.get(key, []),
             "sources": [
                 {
                     "cited_sources": [source.model_dump(exclude={"page_title"}) for source in claim.cited_sources],
@@ -645,6 +744,8 @@ async def check_answer_outputs(
         async def one(key: str, field: object) -> tuple[str, str]:
             records = field.get("reported_claims", field.get("sources", ())) if isinstance(field, dict) else ()
             refs = {source["url_ref"] for record in records for source in record["cited_sources"]}
+            if isinstance(field, dict):
+                refs.update(identity["url_ref"] for identity in field.get("requested_entities", ()))
             urls = {alias: url for alias, url in context.urls.items() if alias in refs}
             request = [
                 *messages,
@@ -662,7 +763,8 @@ async def check_answer_outputs(
                     sort_keys=True,
                 ).encode()
             ).hexdigest()
-            if audit_cache is not None and (cached := audit_cache.get(fingerprint)) is not None:
+            cached = audit_cache.get(fingerprint) if audit_cache is not None else None
+            if isinstance(cached, OutputAuditVerdict):
                 reasons[key] = cached.reason
                 return key, cached.judgment
             async with semaphore:
@@ -703,7 +805,10 @@ async def check_answer_outputs(
                 "qualifiers identify the entity; unrelated fields need not appear in each field's quote. "
                 "Entity ordinals label the compared answer entities, not search rankings, unless a ranking "
                 "is explicitly requested by the task. The task defines scope, not evidence; criteria cannot add "
-                "requirements the task did not ask for. Claim selection has routed the sources for that answer entity. "
+                "requirements the task did not ask for. Claim selection is provisional: independently prove "
+                "the field belongs to each requested entity identified by its literal quote. A quote for one "
+                "subject cannot answer another subject's field. A shared page, title, collection or total count "
+                "does not bind a comparison-table column or related model to the requested subject. "
                 "An explicitly labeled value remains available alongside an eligibility-dependent alternative; "
                 "preserve those conditions rather than assuming one value supersedes the other. "
                 "An explicit exhaustive description can establish that no other members exist; absence from a "
@@ -743,7 +848,10 @@ async def check_answer_outputs(
             content=(
                 f"{UNTRUSTED} Judge each requested output independently. First determine its value from each "
                 "selected claim's cited quotes alone, without using the reported claim or prior knowledge to "
-                "fill missing information. Then check that the claim explicitly states that value for the "
+                "fill missing subject associations. Literal requested-entity quotes identify the subjects, "
+                "but their URL alone does not bind a field in a related model's table column. Never transfer "
+                "a field value from one subject to another. Determine the evidenced value without filling "
+                "missing information. Then check that the claim explicitly states that value for the "
                 "correct requested entity in the actual answer. Missing fields, unsupported component "
                 "breakdowns, incomplete exact strings, ambiguous sources and claims for another entity fail. "
                 "Eligibility qualifiers identify the entity and are checked across the answer, not demanded "

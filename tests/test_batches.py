@@ -169,4 +169,8 @@ async def test_a_split_budget_stop_cancels_other_batches_and_keeps_their_spend(
         with pytest.raises(BudgetExceeded):
             await evaluate_batches(TypeSafeJevClient("key", http=http), {}, questions, tokens=tokens, ledger=ledger)
         assert stopped.is_set()
-    assert ledger.breakdown().known_dollars == pytest.approx(0.000084)
+    costs = ledger.breakdown()
+    assert len(costs.lines) == 3
+    assert sorted(line.input_tokens for line in costs.lines) == [32, 1000, 1000]
+    assert all(line.basis is CostBasis.ESTIMATED for line in costs.lines)
+    assert costs.known_dollars == pytest.approx(0.000085344)

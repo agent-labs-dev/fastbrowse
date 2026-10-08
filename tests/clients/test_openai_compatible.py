@@ -410,3 +410,81 @@ def test_a_strict_schema_leaves_array_caps_to_validation() -> None:
     assert "maxItems" not in schema and "default" not in schema
     with pytest.raises(ValidationError):
         Capped.model_validate({"items": ["x"] * 61})
+
+
+@pytest.mark.parametrize("paid_retry", [False, True])
+@pytest.mark.parametrize("max_dollars", [None, 1.0])
+async def test_cancelled_generation_records_dispatched_costs_and_paid_retries_once(paid_retry, max_dollars):
+    waiting = asyncio.Event()
+    calls = 0
+    ledger = Ledger(Limits(max_dollars=max_dollars))
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if paid_retry and calls == 1:
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"count":"wrong"}'}}], "usage": {"cost": 0.01}},
+            )
+        waiting.set()
+        await asyncio.Event().wait()
+        raise AssertionError("Cancelled generation returned")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OpenAICompatibleLLM("key", http=http, base_url="https://llm.test", models={LLMPurpose.PLAN: "planner"})
+        task = asyncio.create_task(client.generate(LLMPurpose.PLAN, [], Result, ledger=ledger))
+        await waiting.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert len(ledger.lines) == (2 if paid_retry else 1)
+    assert ledger.lines[-1].basis is CostBasis.UNKNOWN
+    assert ledger.lines[-1].dollars is None
+    if paid_retry:
+        assert ledger.lines[0].dollars == 0.01
+    if max_dollars is not None:
+        with pytest.raises(BudgetExceeded, match="reported no cost"):
+            ledger.check()
+
+
+async def test_abandoned_head_start_keeps_cancelled_normalization_receipt():
+    from fastbrowse.agent import HeadStart
+
+    waiting = asyncio.Event()
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    '{"requirements": [], "answer_expected": true, '
+                                    '"answer_checks": ["Report the price"]}'
+                                )
+                            }
+                        }
+                    ],
+                    "usage": {"cost": 0.01},
+                },
+            )
+        waiting.set()
+        await asyncio.Event().wait()
+        raise AssertionError("Cancelled normalization returned")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OpenAICompatibleLLM("key", http=http, base_url="https://llm.test", models={LLMPurpose.PLAN: "planner"})
+        head = HeadStart.begin(client, "Report the price")
+        await waiting.wait()
+        costs = await head.abandon()
+    assert head.planning.cancelled()
+    assert len(costs) == 2
+    assert costs[0].dollars == 0.01
+    assert costs[1].basis is CostBasis.UNKNOWN
+    assert costs[1].dollars is None

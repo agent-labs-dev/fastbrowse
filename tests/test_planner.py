@@ -24,9 +24,7 @@ def example_plan() -> Plan:
 
 
 class PlannerLLM:
-    def __init__(
-        self, plan: Plan | None = None, repaired_checks: tuple[str, ...] = ("Report the requested output.",)
-    ) -> None:
+    def __init__(self, plan: Plan | None = None, repaired_checks: tuple[str, ...] = ("Find the price",)) -> None:
         self.calls: list[tuple[LLMPurpose, tuple[Message, ...]]] = []
         self.plan = plan if plan is not None else example_plan()
         self.repaired_checks = repaired_checks
@@ -61,7 +59,7 @@ async def test_planning_reads_only_the_task_and_start_address_and_preserves_cost
     purpose, messages = llm.calls[0]
     prompt = "\n".join(message.content for message in messages)
     assert purpose is LLMPurpose.PLAN
-    assert result.data == example_plan() and result.cost == llm.cost
+    assert result.data == example_plan() and result.cost.dollars == 0.02
     assert "# Task\nFind the price" in prompt and "# Start page\nhttps://shop.test/" in prompt
     assert "individually checkable" in prompt
 
@@ -143,3 +141,45 @@ async def test_unpriced_plan_repair_retains_unknown_aggregate_dollars() -> None:
     result = await make_plan(llm, "Find the price")
     assert result.cost.basis is CostBasis.UNKNOWN and result.cost.dollars is None
     assert len(llm.calls) == 2
+
+
+async def test_nonempty_output_checks_retain_every_requested_entity() -> None:
+    task = "Compare Adapter Atlas and Adapter Beacon. Report the exact port count of each adapter."
+    draft = Plan(
+        requirements=(Requirement(id="r", text=task, kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+        answer_checks=("exact port count",),
+    )
+    scoped = ("Report Adapter Atlas exact port count.", "Report Adapter Beacon exact port count.")
+    llm = PlannerLLM(draft, repaired_checks=scoped)
+    result = await make_plan(llm, task)
+    assert result.data.answer_checks == scoped
+    assert result.data.requirements == draft.requirements
+    assert len(llm.calls) == 2
+    assert result.cost.dollars == 0.02
+
+
+async def test_mixed_page_answer_excludes_code_reported_outputs() -> None:
+    import json
+
+    from fastbrowse.planner import RunReport
+
+    plan = example_plan().model_copy(update={"run_reports": (RunReport.FINAL_URL,)})
+    llm = PlannerLLM(plan)
+    result = await make_plan(llm, "Report the price and final URL.")
+    prompt = llm.calls[1][1]
+    assert json.loads(prompt[-1].content)["run_reports"] == ["final_url"]
+    assert "Exclude the supplied run_reports" in prompt[0].content
+    assert result.data.answer_checks == ("Find the price",)
+    assert result.data.run_reports == (RunReport.FINAL_URL,)
+
+
+async def test_code_report_only_plan_needs_no_output_normalization() -> None:
+    from fastbrowse.planner import RunReport
+
+    plan = Plan(requirements=(), answer_expected=True, run_reports=(RunReport.FINAL_URL,))
+    llm = PlannerLLM(plan)
+    result = await make_plan(llm, "Report the final URL.")
+    assert result.data.answer_checks == ()
+    assert result.data.run_reports == plan.run_reports
+    assert len(llm.calls) == 1
