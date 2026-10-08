@@ -4138,3 +4138,70 @@ async def test_source_availability_audit_withholds_reported_values() -> None:
     assert source["cited_sources"][0]["quote"] == "| Ports | 1 | 3 |"
     assert missing == ["Report Device Beta's port count."]
     assert len(llm.calls) == 1
+
+
+def test_large_headerless_tables_repeat_real_context_without_inventing_headers() -> None:
+    first = "| Feature | Alpha | Beta |"
+    rows = [f"| Attribute {index} | {index} | {index + 1} |" for index in range(20)]
+    page = capture((BlockKind.TABLE, first + "\n" + "\n".join(rows)))
+    parts = chunk(page, 100, overlap_blocks=0)
+    assert len(parts) > 1
+    assert all(len(part.text) <= 100 for part in parts)
+    assert all(part.text.startswith(first) for part in parts)
+    assert all("---" not in part.text for part in parts)
+    assert all(any(row in part.text for part in parts) for row in rows)
+    candidate = next(candidate for candidate in read_candidates(page) if candidate.value == "Attribute 19")
+    assert first in candidate.context
+    assert first in candidate.evidence.quote
+
+
+async def test_a_table_excerpt_retains_cells_identifying_comparison_columns() -> None:
+    text = "| Feature | Device Alpha | Device Beta |\n| USB-C ports | 1 | 3 |"
+    page = capture((BlockKind.TABLE, text))
+    response: JsonValue = {
+        "claims": [
+            {
+                "cite": {"first": "s0", "last": "s0"},
+                "excerpt": "| USB-C ports | 1 | 3 |",
+                "text": "Device Beta has three USB-C ports.",
+                "requirement_id": "r",
+            }
+        ],
+        "answered": True,
+    }
+    result = await read(ScriptedLLM([response]), page, "Report Device Beta's USB-C ports", ["r"], Notes())
+    assert len(result.facts) == 1
+    evidence = result.facts[0].evidence
+    assert evidence is not None
+    assert evidence.quote == text
+
+
+async def test_headerless_table_continuation_cites_its_displayed_identity_context() -> None:
+    first = "| Feature | Alpha | Beta |"
+    rows = [f"| Attribute {index} | {index} | {index + 1} |" for index in range(20)]
+    page = capture((BlockKind.TABLE, first + "\n" + "\n".join(rows)))
+    parts = chunk(page, 100)
+    target = next(part for part in parts if rows[-1] in part.text)
+    responses: list[JsonValue] = [
+        {"claims": [], "answered": False}
+        if part is not target
+        else {
+            "claims": [
+                {
+                    "cite": {"first": "s0", "last": "s0"},
+                    "excerpt": rows[-1],
+                    "text": "Beta's Attribute 19 is 20.",
+                    "requirement_id": "r",
+                }
+            ],
+            "answered": True,
+        }
+        for part in parts
+    ]
+    notes = Notes()
+    result = await read(ScriptedLLM(responses), page, "Report Beta's Attribute 19", ["r"], notes, max_chars=100)
+    fact = next(fact for fact in result.facts if fact.requirement_id == "r")
+    quoted = [notes.evidence[key].quote for key in notes.expand_evidence_ids((fact_id(fact),))]
+    assert first in quoted
+    assert any(rows[-1] in quote for quote in quoted)
+    assert not notes.derived(fact_id(fact))

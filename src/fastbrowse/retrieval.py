@@ -122,6 +122,23 @@ def _pieces(capture: Capture, max_chars: int) -> tuple[_Piece, ...]:
             continue
         if header is not None and (header.frame_id, header.heading_path) != (block.frame_id, block.heading_path):
             header = None
+        if _table_header(capture, block) is None and block.end - block.start > max_chars:
+            # Headerless comparison tables are one source; bounded reads must still retain their first row.
+            first_end = capture.text.find("\n", block.start, block.end)
+            if first_end == -1 or first_end - block.start + 1 >= max_chars:
+                result.extend(
+                    _Piece(block=block, start=start, end=end)
+                    for start, end in _lines(capture, block.start, block.end, max_chars)
+                )
+            else:
+                prefix = block.model_copy(update={"end": first_end + 1})
+                result.append(_Piece(block=block, start=block.start, end=prefix.end))
+                result.extend(
+                    _Piece(block=block, start=start, end=end, header=prefix)
+                    for start, end in _lines(capture, prefix.end, block.end, max_chars - (prefix.end - prefix.start))
+                )
+            header = None
+            continue
         own_header = _table_header(capture, block)
         header = own_header or header or block
         if own_header is None or block.end - block.start <= max_chars:
@@ -385,11 +402,27 @@ def _remember(
         block = next((block for block in capture.blocks if block.start <= start < block.end), None)
         if block is None:
             return None
+        # A table excerpt can select an attribute row without the preceding cells identifying its columns.
+        if block.kind is BlockKind.TABLE:
+            start = evidence.start
         evidence = _evidence(capture, block, start, end)
     # A derived claim cites nothing and rests on its basis; one that cites blocks must cite them correctly.
     if evidence is None and (claim.cite is not None or not basis):
         logger.debug("read rejected claim cite=%s basis=%d", reprlib.repr(claim.cite), len(basis))
         return None
+    if evidence is not None and part.header:
+        block = next((block for block in capture.blocks if block.start <= evidence.start < block.end), None)
+        if block is not None and block.kind is BlockKind.TABLE and block.start < part.start:
+            prefix_end = block.start + len(part.header)
+            if capture.text[block.start : prefix_end] == part.header and prefix_end <= evidence.start:
+                # Continuations show real leading cells separately; retain that quote as identity evidence too.
+                context = Fact(
+                    text=part.header,
+                    evidence=_evidence(capture, block, block.start, prefix_end),
+                    reader=FactReader.LLM,
+                )
+                notes.add(context)
+                basis.append(fact_id(context))
     fact = Fact(
         requirement_id=claim.requirement_id,
         text=claim.text,
@@ -1130,6 +1163,9 @@ async def read(
             if fact is None:
                 rejected_here += 1
                 continue
+            # Context retained while copying a table quote must reach the caller's notes with the claim.
+            held = {fact_id(kept) for kept in found} | {fact_id(kept) for kept in notes.facts}
+            found.extend(kept for kept in so_far.facts if fact_id(kept) in fact.basis and fact_id(kept) not in held)
             references[f"claim:{index}"] = fact_id(fact)
             requirement_id = claim.requirement_id if claim.requirement_id in requirement_ids else None
             stated_count = requirement_id in counting and _quoted_count(fact, so_far, records, capture)
@@ -1282,7 +1318,7 @@ def _context(text: str, start: int, end: int, block: Block) -> str:
     line_end = text.find("\n", end)
     row = text[line_start : len(text) if line_end == -1 else line_end]
     if _table_header_from_text(text) is None:
-        return f"{_marks(block)}row: {row}"
+        return f"{_marks(block)}table: {text}\nrow: {row}"
     header_cells = [cell for _, _, cell in _cells(text.split("\n", 1)[0])]
     column = len(re.findall(r"(?<!\\)\|", text[line_start:start])) - 1
     name = header_cells[column] if 0 <= column < len(header_cells) else "?"
