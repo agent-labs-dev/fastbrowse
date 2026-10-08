@@ -4017,7 +4017,7 @@ async def test_atomic_output_context_keeps_cited_sources_and_page_titles_without
             )
 
     page = capture((BlockKind.PARAGRAPH, "Price £12"), (BlockKind.PARAGRAPH, "Hours 9am"))
-    page = page.model_copy(update={"title": "Complete museum catalog title"})
+    page = page.model_copy(update={"title": "Complete museum catalog title, member price 9"})
     notes = Notes()
     notes.remember_capture(page)
     notes.remember_capture(page.model_copy(update={"url": "https://other.test", "title": "Unrelated title"}))
@@ -4031,6 +4031,9 @@ async def test_atomic_output_context_keeps_cited_sources_and_page_titles_without
     assert "9am" not in json.dumps(shown)
     assert "Complete museum catalog title" in json.dumps(shown)
     assert "Price £12" in json.dumps(shown, ensure_ascii=False)
+
+    assert "page_title" not in json.dumps(llm.calls[0][1][-1].content)
+    assert "member price 9" not in json.dumps(llm.calls[1][1][-1].content)
 
 
 async def test_atomic_outputs_reject_an_empty_answer_instead_of_skipping_the_check() -> None:
@@ -4458,3 +4461,40 @@ async def test_expanded_tally_over_jev_state_limit_still_reaches_quoted_source_a
     )
     sources = json.loads(llm.calls[0][1][-1].content)["criteria"]["output_0"]["sources"]
     assert len(sources[0]["cited_sources"]) == 100
+
+
+async def test_field_audits_receive_only_the_urls_of_their_selected_citations() -> None:
+    from fastbrowse.verification import check_answer_outputs
+
+    class Jev:
+        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
+            return Evaluation(
+                model="test",
+                input_tokens=1,
+                answers={
+                    key: _choice("claim_0") if isinstance(question, ChoiceQuestion) else NoulAnswer(probability=0.99)
+                    for key, question in questions.items()
+                },
+                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
+            )
+
+    class AuditLLM(ScriptedLLM):
+        async def generate(self, purpose, messages, schema, **kwargs):
+            payload = json.loads(messages[-1].content)
+            key, field = next(iter(payload["criteria"].items()))
+            records = field.get("reported_claims", field.get("sources", []))
+            refs = {source["url_ref"] for record in records for source in record["cited_sources"]}
+            assert set(payload["urls"]) == refs and len(refs) == 1
+            return Generation(
+                data=schema.model_validate({"judgments": {key: "yes"}, "reason": "test"}),
+                cost=CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0, purpose=purpose),
+            )
+
+    facts = []
+    for index in range(2):
+        page = capture((BlockKind.PARAGRAPH, f"Item {index} price 12"))
+        source = block_evidence(page, "s0").model_copy(update={"url": f"https://item{index}.test"})
+        facts.append(Fact(text=source.quote, reader=FactReader.LLM, evidence=source))
+    notes = Notes(facts)
+    answer = assemble_answer(tuple(Claim(text=fact.text, evidence_ids=(fact_id(fact),)) for fact in facts), notes, ())
+    assert await check_answer_outputs(Jev(), AuditLLM([]), answer, notes, ("Report item 0 price.",))

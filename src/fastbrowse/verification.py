@@ -580,11 +580,19 @@ async def check_answer_outputs(
             covered.add(index)
         else:
             return False
-        fields[key] = {"criterion": criterion, "reported_claims": [claim.model_dump() for claim in claims]}
+        fields[key] = {
+            "criterion": criterion,
+            "reported_claims": [
+                claim.model_dump(exclude={"cited_sources": {"__all__": {"page_title"}}}) for claim in claims
+            ],
+        }
         source_fields[key] = {
             "criterion": criterion,
             "sources": [
-                {"cited_sources": [source.model_dump() for source in claim.cited_sources], "derived": claim.derived}
+                {
+                    "cited_sources": [source.model_dump(exclude={"page_title"}) for source in claim.cited_sources],
+                    "derived": claim.derived,
+                }
                 for claim in claims
             ],
         }
@@ -594,13 +602,16 @@ async def check_answer_outputs(
 
         async def one(key: str, field: object) -> tuple[str, str]:
             async with semaphore:
+                records = field.get("reported_claims", field.get("sources", ())) if isinstance(field, dict) else ()
+                refs = {source["url_ref"] for record in records for source in record["cited_sources"]}
+                urls = {alias: url for alias, url in context.urls.items() if alias in refs}
                 generated = await llm.generate(
                     LLMPurpose.VERIFY,
                     [
                         *messages,
                         Message(
                             role="user",
-                            content=json.dumps({"task": task, "criteria": {key: field}, "urls": context.urls}),
+                            content=json.dumps({"task": task, "criteria": {key: field}, "urls": urls}),
                         ),
                     ],
                     _OutputAssessment,
@@ -684,7 +695,7 @@ async def check_answer_outputs(
             key = f"claim_only_{index}"
             fields[key] = {
                 "criterion": "Every factual assertion is supported by its own cited sources.",
-                "reported_claims": [claim.model_dump()],
+                "reported_claims": [claim.model_dump(exclude={"cited_sources": {"__all__": {"page_title"}}})],
             }
     generated = await audit(assertion_messages, fields)
     failed = [
