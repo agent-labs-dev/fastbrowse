@@ -14,16 +14,15 @@ from pydantic import BaseModel, Field, JsonValue, ValidationError
 
 from fastbrowse.batches import evaluate_batches
 from fastbrowse.config import Config, Thresholds, TokenBudget
-from fastbrowse.jev import JevClient, NoulAnswer, NoulQuestion, Question
+from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, JevClient, NoulAnswer, NoulQuestion, Question
 from fastbrowse.llm import Generation, LLMClient, Message
-from fastbrowse.memory import Notes, NotesTooLarge
-from fastbrowse.models import UNTRUSTED, CostLine, Evidence, Frozen, LLMPurpose
+from fastbrowse.memory import Notes, NotesTooLarge, fact_id
+from fastbrowse.models import UNTRUSTED, CostLine, Evidence, FactReader, Frozen, LLMPurpose
 from fastbrowse.page import Capture, Control, Observation, cut_text
 from fastbrowse.planner import Plan, RequirementKind
 from fastbrowse.policy import HistoryEntry
 from fastbrowse.retrieval import (
     TRANSACTION_CONTRADICTED,
-    Claim,
     ComposedAnswer,
     UnsupportedField,
     assemble_answer,
@@ -422,11 +421,16 @@ class _OutputSource(Frozen):
     page_title: str | None
 
 
+class _OutputClaim(Frozen):
+    text: str
+    cited_sources: tuple[_OutputSource, ...]
+    derived: bool
+
+
 class _OutputContext(Frozen):
     answer: str
-    claims: tuple[Claim, ...]
+    claims: tuple[_OutputClaim, ...]
     urls: dict[str, str]
-    sources: dict[str, _OutputSource]
 
 
 class _OutputAssessment(Frozen):
@@ -437,7 +441,6 @@ class _OutputAssessment(Frozen):
 def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | None:
     known = notes.evidence
     urls: dict[str, str] = {}
-    sources: dict[str, _OutputSource] = {}
     claims = []
     for claim in composed.claims:
         expanded = notes.expand_evidence_ids(claim.evidence_ids)
@@ -446,21 +449,30 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
         keys = tuple(key for key in expanded if key in known)
         if not keys:
             return None
-        claims.append(claim.model_copy(update={"evidence_ids": tuple(keys)}))
+        sources = []
         for key in keys:
             evidence = known[key]
-            reference = urls.setdefault(evidence.url, f"u{len(urls)}")
             page = notes.captured_page(evidence.capture_sha256, evidence.url)
-            sources[key] = _OutputSource(
-                url_ref=reference,
-                quote=evidence.quote,
-                source_id=evidence.source_id,
-                frame_id=evidence.frame_id,
-                heading_path=evidence.heading_path,
-                page_title=page.title if page and page.url == evidence.url and evidence.frame_id is None else None,
+            sources.append(
+                _OutputSource(
+                    url_ref=urls.setdefault(evidence.url, f"u{len(urls)}"),
+                    quote=evidence.quote,
+                    source_id=evidence.source_id,
+                    frame_id=evidence.frame_id,
+                    heading_path=evidence.heading_path,
+                    page_title=page.title if page and evidence.frame_id is None else None,
+                )
             )
+        # Looking up a remote source map let an assertion stand in for its quote; keep each claim beside its sources.
+        claims.append(
+            _OutputClaim(
+                text=claim.text,
+                cited_sources=tuple(sources),
+                derived=any(notes.derived(key) for key in claim.evidence_ids),
+            )
+        )
     return _OutputContext(
-        answer=composed.answer, claims=tuple(claims), urls={alias: url for url, alias in urls.items()}, sources=sources
+        answer=composed.answer, claims=tuple(claims), urls={alias: url for url, alias in urls.items()}
     )
 
 
@@ -474,6 +486,7 @@ async def check_answer_outputs(
     tokens: TokenBudget = _DEFAULT_CONFIG.tokens,
     ledger: Ledger | None = None,
     missing_outputs: list[str] | None = None,
+    allow_scalar_jev: bool = False,
 ) -> bool:
     def reject(failed: Sequence[str]) -> bool:
         if missing_outputs is not None:
@@ -483,10 +496,10 @@ async def check_answer_outputs(
     if not checks:
         return True
     if any(not check.strip() for check in checks):
-        return reject(checks)
+        return False
     context = _output_context(composed, notes)
     if context is None:
-        return reject(checks)
+        return False
     criteria = {f"output_{index}": check for index, check in enumerate(checks)}
     questions = {
         key: NoulQuestion(
@@ -508,32 +521,85 @@ async def check_answer_outputs(
         jev, context.model_dump(mode="json"), questions, tokens=tokens, ledger=ledger, allow_failed_batches=False
     )
     if result is None or any(not isinstance(result.answers.get(key), NoulAnswer) for key in questions):
-        return reject(checks)
+        return False
     scores = {key: _probability(result.answers, key) for key in questions}
     trace("answer_outputs", scores=scores)
     # A single aggregate vote accepted a missing breakdown; confident failures cannot be excused by other fields.
     if any(probability <= 0.2 for probability in scores.values()):
         return reject([criteria[key] for key, probability in scores.items() if probability < 0.8])
-    uncertain = {key: criteria[key] for key, probability in scores.items() if probability < 0.8}
+    verbatim = False
+    if allow_scalar_jev and len(composed.claims) == 1:
+        claim = composed.claims[0]
+        verbatim = any(
+            fact.reader is FactReader.JEV_CHOICE
+            and fact.evidence is not None
+            and claim.evidence_ids == (fact_id(fact),)
+            and claim.text == fact.text
+            for fact in notes.facts
+        )
+    # Confident votes excused prose's unsupported components; only code-copied scalar claims bypass the source audit.
+    uncertain = (
+        criteria if not verbatim else {key: criteria[key] for key, probability in scores.items() if probability < 0.8}
+    )
     if not uncertain:
         return True
     if llm is None:
-        return reject(checks)
+        return False
+    choices = {f"claim_{index}": claim.text for index, claim in enumerate(context.claims)}
+    choices["all"] = "The requested output spans multiple claims; no single claim states all of it."
+    choices["none"] = "The requested output is missing from the actual answer."
+    selecting = {
+        key: ChoiceQuestion(
+            instructions=(
+                f"{UNTRUSTED} Select the claim that explicitly states the requested output for the correct entity. "
+                "Select all only when the criterion needs multiple claims, and none when absent or only implied. "
+                f"Criterion: {criterion}"
+            ),
+            criteria=choices,
+        )
+        for key, criterion in uncertain.items()
+    }
+    selected = await evaluate_batches(
+        jev, {"answer": composed.answer}, selecting, tokens=tokens, ledger=ledger, allow_failed_batches=False
+    )
+    if selected is None or any(not isinstance(selected.answers.get(key), ChoiceAnswer) for key in selecting):
+        return False
+    fields = {}
+    for key, criterion in uncertain.items():
+        chosen = selected.answers[key]
+        if not isinstance(chosen, ChoiceAnswer):
+            return False
+        if chosen.choice == "none":
+            return reject((criterion,))
+        if chosen.choice == "all":
+            claims = context.claims
+        elif chosen.choice in choices:
+            claims = (context.claims[int(chosen.choice.removeprefix("claim_"))],)
+        else:
+            return False
+        fields[key] = {"criterion": criterion, "reported_claims": [claim.model_dump() for claim in claims]}
     generated = await llm.generate(
         LLMPurpose.VERIFY,
         [
             Message(
                 role="system",
                 content=(
-                    f"{UNTRUSTED} Judge each supplied criterion against the actual answer and only its cited "
-                    "sources. Check every requested field for every entity. Missing outputs, incomplete exact "
-                    "strings and ambiguous source associations fail. Derived counts and comparisons can be calculated "
-                    "from cited source records, without a source stating the derived result. Return yes only if fully "
-                    "answered and "
-                    "directly supported. Preserve uncertainty."
+                    f"{UNTRUSTED} Judge each requested output independently. First determine its value from each "
+                    "selected claim's cited quotes alone, without using the reported claim or prior knowledge to "
+                    "fill missing information. Then check that the claim explicitly states that value for the "
+                    "correct requested entity in the actual answer. Missing fields, unsupported component "
+                    "breakdowns, incomplete exact strings, ambiguous sources and claims for another entity fail. "
+                    "Eligibility qualifiers identify the entity and are checked across the answer, not demanded "
+                    "in every individual quote. A total does not evidence a component breakdown. Only marked "
+                    "derived claims may calculate from source records. Observed page titles provide identity "
+                    "context, not missing field evidence. Return yes only if every part of the requested output "
+                    "is stated and evidenced by its own cited sources. Preserve uncertainty and explain failures."
                 ),
             ),
-            Message(role="user", content=json.dumps({"criteria": uncertain, "observed": context.model_dump()})),
+            Message(
+                role="user",
+                content=json.dumps({"actual_answer": composed.answer, "criteria": fields, "urls": context.urls}),
+            ),
         ],
         _OutputAssessment,
         ledger=ledger,
@@ -556,6 +622,7 @@ async def check_claims(
     answer_checks: Sequence[str] = (),
     llm: LLMClient | None = None,
     missing_outputs: list[str] | None = None,
+    allow_scalar_jev: bool = False,
 ) -> ComposedAnswer | None:
     """The answer without any claim a check doubts, or None when a requirement is omitted from what is left or the
     pages where the run committed an action contradict it.
@@ -593,7 +660,15 @@ async def check_claims(
     checked, outputs_supported = await asyncio.gather(
         claims(),
         check_answer_outputs(
-            jev, llm, composed, notes, answer_checks, tokens=tokens, ledger=ledger, missing_outputs=missing_outputs
+            jev,
+            llm,
+            composed,
+            notes,
+            answer_checks,
+            tokens=tokens,
+            ledger=ledger,
+            missing_outputs=missing_outputs,
+            allow_scalar_jev=allow_scalar_jev,
         ),
         return_exceptions=True,
     )
@@ -646,7 +721,15 @@ async def check_claims(
         return (
             pruned
             if await check_answer_outputs(
-                jev, llm, pruned, notes, answer_checks, tokens=tokens, ledger=ledger, missing_outputs=missing_outputs
+                jev,
+                llm,
+                pruned,
+                notes,
+                answer_checks,
+                tokens=tokens,
+                ledger=ledger,
+                missing_outputs=missing_outputs,
+                allow_scalar_jev=allow_scalar_jev,
             )
             else None
         )

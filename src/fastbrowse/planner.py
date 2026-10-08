@@ -5,13 +5,14 @@ same requirements with and without the first observation, and page text is the o
 Callers redact task text before this seam; the planner has no secret resolver.
 """
 
+import json
 from enum import StrEnum
 from typing import Self
 
 from pydantic import Field, model_validator
 
 from fastbrowse.llm import Generation, LLMClient, Message
-from fastbrowse.models import Frozen, LLMPurpose
+from fastbrowse.models import CostBasis, Frozen, Limits, LLMPurpose
 from fastbrowse.telemetry import Ledger
 
 
@@ -68,6 +69,16 @@ class Plan(Frozen):
     def validate_ids(self) -> Self:
         if len({requirement.id for requirement in self.requirements}) != len(self.requirements):
             raise ValueError("requirement ids must be unique")
+        return self
+
+
+class _AnswerChecks(Frozen):
+    checks: tuple[str, ...] = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def not_blank(self) -> Self:
+        if any(not check.strip() for check in self.checks):
+            raise ValueError("answer checks must name requested outputs")
         return self
 
 
@@ -135,9 +146,52 @@ async def make_plan(
         requirement = Requirement(id="req_1", text=task, kind=kind)
         plan = plan.model_copy(update={"requirements": (requirement,)})
     information = tuple(r.text for r in plan.requirements if r.kind is RequirementKind.INFORMATION)
-    # An omitted output list must not restore the aggregate check that let notes supply missing answer fields.
     proposed = tuple(dict.fromkeys(check.strip() for check in plan.answer_checks if check.strip()))
-    checks = (proposed or information) if information and plan.page_answer_expected else ()
+    cost = generated.cost
+    if information and plan.page_answer_expected and not proposed:
+        # A grouped fallback accepted missing components; repair output checks without replanning discovery.
+        billing = ledger or Ledger(Limits())
+        billing.record(generated.cost)
+        repaired = await llm.generate(
+            LLMPurpose.PLAN,
+            [
+                Message(
+                    role="system",
+                    content=(
+                        "Decompose only the task's requested answer outputs into completion checks. Separate each "
+                        "field or component for each named or numbered result. Preserve entity, scope and "
+                        "constraints. For an unbounded result set, check each requested field across all results. "
+                        "Do not add actions, navigation or extra outputs. These checks do not change discovery."
+                    ),
+                ),
+                Message(role="user", content=json.dumps({"task": task, "information_requirements": information})),
+            ],
+            _AnswerChecks,
+            max_output_tokens=8000,
+            ledger=billing,
+        )
+        proposed = tuple(dict.fromkeys(check.strip() for check in repaired.data.checks))
+        cost = repaired.cost
+        if ledger is None:
+            # Without an external ledger the returned line accounts for both calls, rather than hiding the repair.
+            lines = (generated.cost, repaired.cost)
+            basis = (
+                CostBasis.UNKNOWN
+                if any(line.dollars is None or line.basis is CostBasis.UNKNOWN for line in lines)
+                else CostBasis.ESTIMATED
+                if any(line.basis is CostBasis.ESTIMATED for line in lines)
+                else CostBasis.METERED
+            )
+            cost = cost.model_copy(
+                update={
+                    "basis": basis,
+                    "dollars": sum(line.dollars for line in lines if line.dollars is not None),
+                    "input_tokens": sum(line.input_tokens for line in lines),
+                    "output_tokens": sum(line.output_tokens for line in lines),
+                    "seconds": None,
+                }
+            )
+    checks = proposed if information and plan.page_answer_expected else ()
     if checks != plan.answer_checks:
         plan = plan.model_copy(update={"answer_checks": checks})
-    return generated.model_copy(update={"data": plan})
+    return generated.model_copy(update={"data": plan, "cost": cost})

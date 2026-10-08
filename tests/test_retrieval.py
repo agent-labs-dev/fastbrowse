@@ -3922,6 +3922,7 @@ async def test_a_quoted_count_does_not_repair_another_requirements_missing_recor
     ("probability", "judgment", "expected"),
     [
         (0.99, "yes", True),
+        (0.99, "no", False),
         (0.5, "yes", True),
         (0.5, "no", False),
         (0.5, None, False),
@@ -3940,7 +3941,16 @@ async def test_atomic_output_uncertainty_preserves_confident_failures_and_missin
 
     class Jev:
         async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
-            answers = {} if probability is None else {key: NoulAnswer(probability=probability) for key in questions}
+            answers = (
+                {}
+                if probability is None
+                else {
+                    key: ChoiceAnswer(choice="claim_0", probabilities={"claim_0": 1.0}, confidence=1.0)
+                    if isinstance(question, ChoiceQuestion)
+                    else NoulAnswer(probability=probability)
+                    for key, question in questions.items()
+                }
+            )
             return Evaluation(
                 model="test",
                 answers=answers,
@@ -3954,7 +3964,7 @@ async def test_atomic_output_uncertainty_preserves_confident_failures_and_missin
     llm = ScriptedLLM([{"judgments": {} if judgment is None else {"output_0": judgment}, "reason": "test"}])
     held = await check_answer_outputs(Jev(), llm, answer, notes, ("Report the price.",))
     assert held is expected
-    assert len(llm.calls) == int(probability == 0.5)
+    assert len(llm.calls) == int(probability in {0.5, 0.99})
 
 
 async def test_atomic_output_context_keeps_cited_sources_and_page_titles_without_uncited_notes() -> None:
@@ -3969,7 +3979,10 @@ async def test_atomic_output_context_keeps_cited_sources_and_page_titles_without
             shown.append(state)
             return Evaluation(
                 model="test",
-                answers={key: NoulAnswer(probability=0.99) for key in questions},
+                answers={
+                    key: _choice("claim_0") if isinstance(question, ChoiceQuestion) else NoulAnswer(probability=0.99)
+                    for key, question in questions.items()
+                },
                 input_tokens=1,
                 cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
             )
@@ -3983,7 +3996,8 @@ async def test_atomic_output_context_keeps_cited_sources_and_page_titles_without
         notes.add(Fact(reader=FactReader.LLM, text=block.source_id, evidence=block_evidence(page, block.source_id)))
     price, _ = tuple(notes.evidence)
     answer = assemble_answer((Claim(text="It costs £12.", evidence_ids=(price,)),), notes, ())
-    assert await check_answer_outputs(Jev(), None, answer, notes, ("Report the price.",))
+    llm = ScriptedLLM([{"judgments": {"output_0": "yes"}, "reason": "The price is quoted."}])
+    assert await check_answer_outputs(Jev(), llm, answer, notes, ("Report the price.",))
     assert "Unrelated title" not in json.dumps(shown)
     assert "9am" not in json.dumps(shown)
     assert "Complete museum catalog title" in json.dumps(shown)
@@ -4023,6 +4037,66 @@ async def test_atomic_outputs_check_derived_counts_against_their_source_records(
     answer = assemble_answer((Claim(text="There are two items.", evidence_ids=(fact_id(total),)),), notes, ())
     context = _output_context(answer, notes)
     assert context is not None
-    assert context.claims[0].evidence_ids == records
-    assert tuple(context.sources) == records
-    assert {source.quote for source in context.sources.values()} == {"A", "B"}
+    assert context.claims[0].derived
+    assert {source.quote for source in context.claims[0].cited_sources} == {"A", "B"}
+
+
+async def test_malformed_output_sources_fail_without_navigation_feedback() -> None:
+    from fastbrowse.retrieval import ComposedAnswer
+    from fastbrowse.verification import check_answer_outputs
+
+    answer = ComposedAnswer(
+        answer="It costs £12.",
+        linked_answer="It costs £12.",
+        claims=(Claim(text="It costs £12.", evidence_ids=("unknown",)),),
+    )
+    missing: list[str] = []
+    assert not await check_answer_outputs(
+        _ReadJev({}), ScriptedLLM([]), answer, Notes(), ("Report the price.",), missing_outputs=missing
+    )
+    assert missing == []
+
+
+async def test_output_checks_can_bind_an_unbounded_field_to_multiple_claims() -> None:
+    from fastbrowse.verification import check_answer_outputs
+
+    class Jev:
+        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+            return Evaluation(
+                model="test",
+                answers={
+                    key: _choice("all") if isinstance(question, ChoiceQuestion) else NoulAnswer(probability=0.5)
+                    for key, question in questions.items()
+                },
+                input_tokens=1,
+                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
+            )
+
+    page = capture((BlockKind.PARAGRAPH, "Book A"), (BlockKind.PARAGRAPH, "Book B"))
+    notes = Notes(
+        Fact(text=block.source_id, evidence=block_evidence(page, block.source_id), reader=FactReader.LLM)
+        for block in page.blocks
+    )
+    answer = assemble_answer(
+        tuple(Claim(text=source.quote, evidence_ids=(key,)) for key, source in notes.evidence.items()), notes, ()
+    )
+    llm = ScriptedLLM([{"judgments": {"output_0": "yes"}, "reason": "Both titles are quoted."}])
+    assert await check_answer_outputs(Jev(), llm, answer, notes, ("List the title of each matching book.",))
+    claims = json.loads(llm.calls[0][1][-1].content)["criteria"]["output_0"]["reported_claims"]
+    assert len(claims) == 2
+    assert [claim["cited_sources"][0]["quote"] for claim in claims] == ["Book A", "Book B"]
+
+
+@pytest.mark.parametrize("rewritten", [False, True])
+async def test_only_verbatim_scalar_jev_facts_can_skip_the_llm_source_audit(rewritten: bool) -> None:
+    from fastbrowse.verification import check_answer_outputs
+
+    page = capture((BlockKind.PARAGRAPH, "Price £12"))
+    fact = Fact(text="£12", evidence=block_evidence(page, "s0"), reader=FactReader.JEV_CHOICE)
+    notes = Notes((fact,))
+    text = "£12 and it opens at 9am" if rewritten else fact.text
+    answer = assemble_answer((Claim(text=text, evidence_ids=(fact_id(fact),)),), notes, ())
+    jev = _ReadJev({"output_0": NoulAnswer(probability=0.99)})
+    assert await check_answer_outputs(jev, None, answer, notes, ("Report the price.",), allow_scalar_jev=True) is (
+        not rewritten
+    )

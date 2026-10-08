@@ -37,7 +37,17 @@ from fastbrowse.citations import text_fragment
 from fastbrowse.clients.typesafe import TypeSafeJevClient
 from fastbrowse.config import Config, ObservationLimits, StallRules, Thresholds
 from fastbrowse.effects import state_key
-from fastbrowse.jev import Answer, Evaluation, JevError, JevRetriesExhausted, NoulAnswer, NoulQuestion, Question
+from fastbrowse.jev import (
+    Answer,
+    ChoiceAnswer,
+    ChoiceQuestion,
+    Evaluation,
+    JevError,
+    JevRetriesExhausted,
+    NoulAnswer,
+    NoulQuestion,
+    Question,
+)
 from fastbrowse.llm import Generation
 from fastbrowse.memory import Fact, Notes, NotesTooLarge, Tally, evidence_id, fact_id
 from fastbrowse.models import (
@@ -2641,7 +2651,10 @@ async def test_a_shortcut_begun_before_the_browser_is_opened_without_being_asked
 
 async def test_a_head_start_a_run_never_took_bills_what_finished_and_cancels_the_rest() -> None:
     """A browser that fails to start ends the run before it begins; a plan already written was still paid for."""
-    head = HeadStart.begin(ScriptedLLM([{"requirements": [], "answer_expected": True}]), "What is the top story?")
+    head = HeadStart.begin(
+        ScriptedLLM([{"requirements": [], "answer_expected": True, "answer_checks": ["Report the top story."]}]),
+        "What is the top story?",
+    )
     await head.planning
     proposing = head.proposing = asyncio.create_task(asyncio.Event().wait())  # ty: ignore[invalid-assignment]
 
@@ -2653,7 +2666,7 @@ async def test_a_head_start_a_run_never_took_bills_what_finished_and_cancels_the
 async def test_a_head_start_is_not_timed_until_the_run_takes_it_over() -> None:
     """A shortcut can finish after `max_seconds` of browser startup; that time is not the run's."""
     head = HeadStart.begin(
-        ScriptedLLM([{"requirements": [], "answer_expected": True}]),
+        ScriptedLLM([{"requirements": [], "answer_expected": True, "answer_checks": ["Report the top story."]}]),
         "What is the top story?",
         limits=Limits(max_seconds=0.01),
     )
@@ -2675,7 +2688,9 @@ async def test_a_head_start_begun_for_another_run_is_refused(
 ) -> None:
     """Its plan would be followed, and its limits enforced, without complaint."""
     head = HeadStart.begin(
-        ScriptedLLM([{"requirements": [], "answer_expected": True}, {"url": None}]),
+        ScriptedLLM(
+            [{"requirements": [], "answer_expected": True, "answer_checks": ["Report the top story."]}, {"url": None}]
+        ),
         "What is the top story?",
         start="https://news.test/",
     )
@@ -5495,10 +5510,15 @@ async def test_final_answer_checks_each_output_without_notes_filling_a_missing_f
 
     class Jev(ScriptedJev):
         async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
-            scores = {"output_0": 0.99, "output_1": 0.01 if missing else 0.99}
+            scores = {"output_0": 0.99, "output_1": 0.01 if missing else 0.99, "output_2": 0.01 if missing else 0.99}
             return Evaluation(
                 model="test",
-                answers={key: NoulAnswer(probability=scores.get(key, 0.05)) for key in questions},
+                answers={
+                    key: ChoiceAnswer(choice="all", probabilities={"all": 1.0}, confidence=1.0)
+                    if isinstance(question, ChoiceQuestion)
+                    else NoulAnswer(probability=scores.get(key, 0.05))
+                    for key, question in questions.items()
+                },
                 input_tokens=1,
                 cost=FREE,
             )
@@ -5527,7 +5547,18 @@ async def test_final_answer_checks_each_output_without_notes_filling_a_missing_f
     if not missing:
         claims.append(Claim(text="It opens at 9am.", evidence_ids=(evidence_id(hours.evidence),)))
     composed = assemble_answer(claims, state.notes, state.plan.requirements)
-    agent = Agent(Mock(spec=Page), Jev({}), ScriptedLLM([]))
+    agent = Agent(
+        Mock(spec=Page),
+        Jev({}),
+        ScriptedLLM(
+            [
+                {
+                    "judgments": {"output_0": "yes", "output_1": "yes", "output_2": "yes"},
+                    "reason": "Both fields are quoted.",
+                }
+            ]
+        ),
+    )
     held = await agent._holds(state, composed)
     assert (held is None) is missing
 
@@ -5548,7 +5579,15 @@ async def test_missing_answer_output_recovers_evidence_then_completes() -> None:
         evidence=evidence(start=5, end=8).model_copy(update={"quote": "9am"}),
     )
     state.notes.add(price)
-    llm = ScriptedLLM([{"claims": [{"text": price.text, "evidence_ids": [fact_id(price)]}]}])
+    llm = ScriptedLLM(
+        [
+            {"claims": [{"text": price.text, "evidence_ids": [fact_id(price)]}]},
+            {
+                "judgments": {"output_0": "yes", "output_1": "yes", "output_2": "yes"},
+                "reason": "Both fields are quoted.",
+            },
+        ]
+    )
     plan = state.ready_plan
     agent, _ = await _finishing(state, llm, noul=0.0)
     state.ready_plan = plan
@@ -5560,27 +5599,78 @@ async def test_missing_answer_output_recovers_evidence_then_completes() -> None:
             return Evaluation(
                 model="test",
                 answers={
-                    key: NoulAnswer(
+                    key: ChoiceAnswer(choice="all", probabilities={"all": 1.0}, confidence=1.0)
+                    if isinstance(question, ChoiceQuestion)
+                    else NoulAnswer(
                         probability=(
-                            0.99 if key == "complete" or key == "output_0" or (key == "output_1" and answered) else 0.01
+                            0.99
+                            if key == "complete" or key == "output_0" or (key in {"output_1", "output_2"} and answered)
+                            else 0.01
                         )
                     )
-                    for key in questions
+                    for key, question in questions.items()
                 },
                 input_tokens=1,
                 cost=FREE,
             )
 
-    async def gather_missing(*args: object) -> None:
+    async def gather_missing(*args: object, **kwargs: object) -> None:
+        assert kwargs == {"gives_up_as": Status.UNVERIFIED}
         assert not state.notes.evidenced("r")
         assert "Report opening hours." in str(args[-1])
         state.notes.add(price)
         state.notes.add(hours)
 
     agent._jev = Jev({})
+    until = AsyncMock(return_value=True)
+    agent._ending_frame = AsyncMock(side_effect=lambda result, **kwargs: result)
     agent._recover = AsyncMock(side_effect=gather_missing)
-    assert await agent._finish(state, None, None) is None
+    assert await agent._finish(state, None, until) is None
     agent._recover.assert_awaited_once()
-    result = await agent._finish(state, None, None)
+    agent._ending_frame.assert_not_awaited()
+    until.assert_not_awaited()
+    result = await agent._finish(state, None, until)
+    agent._ending_frame.assert_awaited_once()
+    until.assert_awaited_once()
     assert result is not None and result.status is Status.COMPLETE
     assert result.answer is not None and "£12" in result.answer and "9am" in result.answer
+
+
+async def test_unchanged_failed_output_evidence_cannot_reset_or_repeat_completion_checks() -> None:
+    from fastbrowse.agent import _answer_evidence
+
+    state = await run_state()
+    llm = ScriptedLLM([{"diagnosis": "Hours are missing", "next_subgoal": "Read the hours", "give_up": False}])
+    agent, on = await _finishing(state, llm, noul=0.0)
+    agent._config = Config(stall=StallRules(max_recoveries=1))
+    state.notes.add(_fare(on.url, "fare"))
+    state.open_answer_outputs = ("Report opening hours.",)
+    state.rejected_answer_evidence = _answer_evidence(state.notes)
+    assert await agent._finish(state, None, None) is None
+    assert state.ledger.jev_calls == 0 and state.ledger.llm_calls == 1
+    assert "Unverified answer outputs" in llm.calls[0][1][-1].content
+    assert state.recoveries == 1
+    agent._settle(state, _at("https://example.test/new-view"))
+    assert state.recoveries == 1
+    with pytest.raises(_Stop) as stopped:
+        await agent._finish(state, None, None)
+    assert stopped.value.status is Status.UNVERIFIED
+    assert state.ledger.jev_calls == 0 and state.ledger.llm_calls == 1
+
+
+async def test_re_evidencing_partial_output_quotes_is_not_new_read_progress() -> None:
+    state = await _reading_state()
+    here = _at("https://example.test/live/", _button("Refresh"))
+    response: JsonValue = {
+        "claims": [{"text": "Total: 12", "requirement_id": "r1", "cite": {"first": "s0", "last": "s0"}}],
+        "answered": True,
+    }
+    llm = ScriptedLLM([response, response])
+    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
+    page = capture((BlockKind.PARAGRAPH, "Total: 12"))
+    assert await agent._read(state, page, here) == (True, False)
+    assert state.notes.evidenced("r1")
+    state.notes.unevidence(("r1",))
+    state.open_answer_outputs = ("Report the remaining requested field.",)
+    assert await agent._read(state, page.model_copy(update={"sha256": "redraw"}), here) == (False, False)
+    assert "remaining requested field" in llm.calls[-1][1][-1].content
