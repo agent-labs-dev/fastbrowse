@@ -572,7 +572,6 @@ async def check_answer_outputs(
             return reject((criterion,))
         if chosen.choice == "all":
             claims = context.claims
-            covered.update(range(len(claims)))
         elif chosen.choice in choices:
             index = int(chosen.choice.removeprefix("claim_"))
             claims = (context.claims[index],)
@@ -634,6 +633,9 @@ async def check_answer_outputs(
                 "preserve those conditions rather than assuming one value supersedes the other. "
                 "An explicit exhaustive description can establish that no other members exist; absence from a "
                 "partial description cannot. A total alone does not provide a component breakdown. "
+                "A requested recommendation does not require the page to recommend anything: quoted facts "
+                "can provide grounds for the answer's preference. Do not demand a comparison advantage "
+                "unless the task requests one; the assertion audit checks any advantage the answer claims. "
                 "Derived outputs can calculate from quoted records only when every operand and its association "
                 "is explicit; the source need not state the conclusion literally. Observed page titles provide "
                 "identity context, not missing field "
@@ -667,7 +669,10 @@ async def check_answer_outputs(
                 "context, not missing field evidence. Return yes only if every part of the requested output "
                 "is stated and evidenced by its own cited sources. Every factual assertion in every selected "
                 "claim must also be supported, including extra details the user did not request. One supported "
-                "value cannot excuse another unsupported value in the same claim. "
+                "value cannot excuse another unsupported value in the same claim. A subjective recommendation "
+                "may rest on a quoted property. A factual comparative advantage, including highest, lowest "
+                "or best on a measured property, requires all compared operands in that claim's own citations. "
+                "Quotes cited only by another claim cannot supply missing operands or support. "
                 "Preserve uncertainty and explain failures."
             ),
         ),

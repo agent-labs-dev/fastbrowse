@@ -4190,7 +4190,13 @@ async def test_output_checks_can_bind_an_unbounded_field_to_multiple_claims() ->
     answer = assemble_answer(
         tuple(Claim(text=source.quote, evidence_ids=(key,)) for key, source in notes.evidence.items()), notes, ()
     )
-    llm = ScriptedLLM([{"judgments": {"output_0": "yes"}, "reason": "Both titles are quoted."}] * 2)
+    llm = ScriptedLLM(
+        [{"judgments": {"output_0": "yes"}, "reason": "Both titles are quoted."}] * 2
+        + [
+            {"judgments": {f"claim_only_{index}": "yes"}, "reason": "The individual title is quoted."}
+            for index in range(2)
+        ]
+    )
     assert await check_answer_outputs(Jev(), llm, answer, notes, ("List the title of each matching book.",))
     claims = json.loads(llm.calls[1][1][-1].content)["criteria"]["output_0"]["reported_claims"]
     assert len(claims) == 2
@@ -4379,3 +4385,53 @@ def test_inline_citation_stripping_accepts_address_qualified_evidence_ids() -> N
     assert _without_citation_markup(f"Price £12 [{key}](https://example.test)") == "Price £12"
     assert _without_citation_markup("Value [sha:1:2], [derived:abc], [tally:abc]") == "Value , ,"
     assert _without_citation_markup("Use [optional] fields") == "Use [optional] fields"
+
+
+async def test_grouped_output_audit_checks_each_claim_against_its_own_citations() -> None:
+    from fastbrowse.verification import check_answer_outputs
+
+    class Jev:
+        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
+            return Evaluation(
+                model="test",
+                input_tokens=1,
+                answers={
+                    key: _choice("all") if isinstance(question, ChoiceQuestion) else NoulAnswer(probability=0.99)
+                    for key, question in questions.items()
+                },
+                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
+            )
+
+    class AuditLLM(ScriptedLLM):
+        async def generate(self, purpose, messages, schema, **kwargs):
+            key, field = next(iter(json.loads(messages[-1].content)["criteria"].items()))
+            judgment = "yes"
+            if key.startswith("claim_only_"):
+                claim = field["reported_claims"][0]
+                quotes = " ".join(source["quote"] for source in claim["cited_sources"])
+                if "highest" in claim["text"] and "Oak" not in quotes:
+                    judgment = "no"
+            return Generation(
+                data=schema.model_validate({"judgments": {key: judgment}, "reason": "test"}),
+                cost=CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0, purpose=purpose),
+            )
+
+    page = capture((BlockKind.PARAGRAPH, "Pine capacity 10"), (BlockKind.PARAGRAPH, "Oak capacity 7"))
+    facts = [
+        Fact(text=block.source_id, reader=FactReader.LLM, evidence=block_evidence(page, block.source_id))
+        for block in page.blocks
+    ]
+    notes = Notes(facts)
+    answer = assemble_answer(
+        (
+            Claim(text="Pine has the highest capacity.", evidence_ids=(fact_id(facts[0]),)),
+            Claim(text="Oak capacity 7", evidence_ids=(fact_id(facts[1]),)),
+        ),
+        notes,
+        (),
+    )
+    missing: list[str] = []
+    assert not await check_answer_outputs(
+        Jev(), AuditLLM([]), answer, notes, ("Compare capacities and recommend one.",), missing_outputs=missing
+    )
+    assert missing == ["Unsupported answer detail: Pine has the highest capacity."]
