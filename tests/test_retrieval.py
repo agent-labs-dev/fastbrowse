@@ -4053,6 +4053,28 @@ async def test_atomic_outputs_reject_an_empty_answer_instead_of_skipping_the_che
     assert await check_claims(Jev(), answer, notes, Thresholds(), answer_checks=(requirement.text,)) is None
 
 
+def test_output_audit_marks_a_quoted_comparison_with_its_basis_as_derived() -> None:
+    from fastbrowse.verification import _output_context
+
+    page = capture((BlockKind.PARAGRAPH, "Pine costs 4"), (BlockKind.PARAGRAPH, "Oak costs 7"))
+    notes = Notes(
+        Fact(
+            text=block_evidence(page, block.source_id).quote,
+            evidence=block_evidence(page, block.source_id),
+            reader=FactReader.LLM,
+        )
+        for block in page.blocks
+    )
+    pine, oak = notes.facts
+    winner = pine.model_copy(update={"text": "Pine is cheapest", "basis": (fact_id(oak),)})
+    notes.add(winner)
+    answer = assemble_answer((Claim(text=winner.text, evidence_ids=(fact_id(winner),)),), notes, ())
+    context = _output_context(answer, notes)
+    assert context is not None and context.claims[0].derived
+    assert {source.quote for source in context.claims[0].cited_sources} == {"Pine costs 4", "Oak costs 7"}
+    assert not notes.derived(fact_id(winner))
+
+
 async def test_atomic_outputs_check_derived_counts_against_their_source_records() -> None:
     from fastbrowse.verification import _output_context
 

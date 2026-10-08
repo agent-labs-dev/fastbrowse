@@ -440,6 +440,7 @@ class _OutputAssessment(Frozen):
 
 def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | None:
     known = notes.evidence
+    based = {fact_id(fact) for fact in notes.facts if fact.basis}
     urls: dict[str, str] = {}
     claims = []
     for claim in composed.claims:
@@ -468,7 +469,7 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
             _OutputClaim(
                 text=claim.text,
                 cited_sources=tuple(sources),
-                derived=any(notes.derived(key) for key in claim.evidence_ids),
+                derived=any(notes.derived(key) or key in based for key in claim.evidence_ids),
             )
         )
     return _OutputContext(
