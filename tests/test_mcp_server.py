@@ -170,7 +170,7 @@ async def test_a_run_returns_structured_output_with_citations_and_reports_each_s
     assert structured["next_step"] is None
     assert isinstance(result.content[0], TextContent)
     assert "Add to cart" in " ".join(notices)
-    assert "1/60 click Add to cart -> executed" in notices
+    assert "1/0 click Add to cart -> executed" in notices
     assert any("watch live" in notice for notice in notices)
 
 

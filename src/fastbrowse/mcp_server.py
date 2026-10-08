@@ -5,7 +5,7 @@
 
 The operator sets on the command line what a calling model may do, and the model sets the rest per call:
 - The browser (`--local`, `--headed`, `--profile`) and where downloads are kept are fixed for the server.
-- `--max-steps`, `--max-dollars` and `--max-seconds` are ceilings: a call may ask for less, never more.
+- `--max-steps`, `--max-dollars` and `--max-seconds` are optional ceilings: a call may ask for less, never more.
 - An irreversible action stops the run at `needs_confirmation`. Only a server started with `--allow-authorize`
   lets a call pass `authorize` to go through it, so a model cannot grant itself the right to pay or send.
 - Secrets are declared here with the one origin each belongs to (`--secret NAME=ENV_VAR@ORIGIN`) or as
@@ -183,10 +183,7 @@ def next_step(status: Status, *, allow_authorize: bool) -> str | None:
                 "Add missing text to the task and call again. This tool cannot supply file attachments."
             )
         case Status.BUDGET_EXCEEDED:
-            return (
-                "A limit was reached. Call again with a higher max_steps, max_dollars or max_seconds (up to the "
-                "server's ceilings), or split the task."
-            )
+            return "A limit was reached. Call again with a higher explicit limit or split the task."
         case Status.STUCK | Status.OBSERVATION_LIMIT:
             return "Try a start URL closer to the goal, or a narrower task."
         case Status.UNAVAILABLE:
@@ -399,7 +396,7 @@ def build_server(
             step = event.step
             await ctx.report_progress(
                 step.index + 1,
-                limits.max_steps or 60,
+                limits.max_steps or 0,
                 f"{options.step_label(step)} -> {step.outcome.value}",
             )
 

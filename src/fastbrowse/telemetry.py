@@ -39,13 +39,13 @@ class Ledger:
         """
         match component:
             case CostComponent.JEV:
-                if self.jev_calls + calls > self.limits.max_jev_calls:
+                if self.limits.max_jev_calls is not None and self.jev_calls + calls > self.limits.max_jev_calls:
                     raise BudgetExceeded(
                         f"Jev call limit {self.limits.max_jev_calls} reached",
                         budget=BudgetStop(resource="jev_calls", limit=self.limits.max_jev_calls),
                     )
             case CostComponent.LLM:
-                if self.llm_calls + calls > self.limits.max_llm_calls:
+                if self.limits.max_llm_calls is not None and self.llm_calls + calls > self.limits.max_llm_calls:
                     raise BudgetExceeded(
                         f"LLM call limit {self.limits.max_llm_calls} reached",
                         budget=BudgetStop(resource="llm_calls", limit=self.limits.max_llm_calls),
