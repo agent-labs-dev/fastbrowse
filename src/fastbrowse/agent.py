@@ -658,6 +658,7 @@ class Agent:
                 str(error),
                 budget=error.budget,
             )
+            loop_returned = False
         result = result.model_copy(update={"cost": ledger.breakdown()})
         return result if loop_returned else await self._ending_frame(result)
 

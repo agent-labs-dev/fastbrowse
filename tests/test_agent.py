@@ -5991,6 +5991,7 @@ async def test_chosen_start_owns_shortcut_after_bounded_navigation_wait(monkeypa
     agent = Agent(page, ScriptedJev({}), llm)
     agent._first_page = AsyncMock(return_value=start)
     agent._front_page_if_blank = AsyncMock()
+    agent._ending_frame = AsyncMock(side_effect=lambda result: result)
     monkeypatch.setattr(agent_module, "_SHORTCUT_WAIT_SECONDS", 0.001)
 
     async def finish(state, output_schema, until):
@@ -6006,3 +6007,4 @@ async def test_chosen_start_owns_shortcut_after_bounded_navigation_wait(monkeypa
     assert result.status is (Status.COMPLETE if max_dollars is None else Status.BUDGET_EXCEEDED)
     assert len(head.ledger.lines) == 1 and not result.cost.has_unknown
     assert head.proposing is not None and head.proposing.done()
+    assert agent._ending_frame.await_count == (0 if max_dollars is None else 1)
