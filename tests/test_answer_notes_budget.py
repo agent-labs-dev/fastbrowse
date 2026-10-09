@@ -1,4 +1,4 @@
-"""Answers spanning several sources retain full quotes through output verification."""
+"""Answers spanning five sources retain full quotes through output verification."""
 
 import json
 

@@ -86,6 +86,8 @@ async def test_multi_project_reads_survive_bounded_action_context(last_step: int
     elif consumer == "field":
         field_context = await agent._field_context(state, obs, target)
         shown = field_context["notes"]
+        # The writer copies values, so it sees what the page said and not only the reader's wording of it.
+        assert isinstance(shown, str) and 'quote="Report ' in shown
     else:
         await agent._recover(state, obs, "uncertain next step (0.35)")
         prompt = llm.calls[0][1][1].content

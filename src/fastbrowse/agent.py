@@ -1963,7 +1963,7 @@ class Agent:
                 entry.model_dump(mode="json", exclude_none=True)
                 for entry in _record(state.history, self._config.observation)
             ],
-            "notes": state.notes.render_for_navigation(self._config.observation.working_notes_chars),
+            "notes": state.notes.render_for_navigation(self._config.observation.working_notes_chars, quotes=True),
         }
 
     async def _fill_form(self, state: _RunState, observation: Observation, decision: Decision) -> bool:

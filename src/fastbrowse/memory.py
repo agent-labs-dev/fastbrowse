@@ -320,8 +320,11 @@ class Notes:
     def unresolved(self, plan: Plan) -> tuple[Requirement, ...]:
         return tuple(requirement for requirement in plan.requirements if not self.evidenced(requirement.id))
 
-    def render_for_navigation(self, max_chars: int) -> str:
-        """Claims across read sources for picking the next action; completion checks use full quoted evidence."""
+    def render_for_navigation(self, max_chars: int, *, quotes: bool = False) -> str:
+        """Claims across read sources for picking the next action; completion checks use full quoted evidence.
+
+        `quotes` adds each claim's literal source text where it fits, for a writer that must copy a value exactly.
+        """
         if max_chars < 0:
             raise ValueError("max_chars must be nonnegative")
         marker = f"[{len(self._facts)} facts omitted]"
@@ -354,6 +357,11 @@ class Notes:
                 f"{json.dumps(fact.text, ensure_ascii=False)} "
                 f"requirements={','.join(sorted(self._requirements[key])) or '-'}{source}"
             )
+            if quotes and fact.evidence is not None:
+                # A claim is model prose and can normalize a code or a name; the quote is what the page said.
+                quoted = f"{line} quote={json.dumps(fact.evidence.quote, ensure_ascii=False)}"
+                if used + len(quoted) + 1 <= max_chars:
+                    line = quoted
             if used + len(line) + 1 <= max_chars:
                 lines.append(line)
                 used += len(line) + 1
