@@ -574,3 +574,32 @@ async def test_relevance_cache_reasks_changed_questions_or_context(change: str) 
     requests = [q for q in jev.requests[before:] if "operation" not in q]
     assert len(requests) == 1
     assert len(requests[0]) == (1 if change == "control" else 5)
+
+
+async def test_redirected_start_is_not_an_implicit_navigation_destination() -> None:
+    jev = ScriptedJev({"operation": "fill"})
+    field = button(1).model_copy(update={"role": "textbox", "operations": frozenset({Operation.FILL}), "value": "kept"})
+    page = observation((field,)).model_copy(update={"url": "https://example.com/form/"})
+    await decide(jev, page, context(task="Fill the form", start_url="https://example.com/"), Config())
+    operation = jev.requests[0]["operation"]
+    assert isinstance(operation, ChoiceQuestion)
+    assert "navigate" not in operation.criteria
+    assert "navigate_target" not in jev.requests[0]
+
+
+async def test_explicit_start_redirect_is_normalized_to_its_landing_page() -> None:
+    jev = ScriptedJev({"operation": "click"})
+    page = observation((button(1),)).model_copy(update={"url": "https://example.com/form/"})
+    await decide(
+        jev,
+        page,
+        context(
+            task="Inspect https://example.com/",
+            start_url="https://example.com/",
+            start_landing_url="https://example.com/form/",
+        ),
+        Config(),
+    )
+    operation = jev.requests[0]["operation"]
+    assert isinstance(operation, ChoiceQuestion)
+    assert "navigate" not in operation.criteria

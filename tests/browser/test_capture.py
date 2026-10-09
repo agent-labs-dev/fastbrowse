@@ -7,13 +7,21 @@ import pytest
 from pydantic import JsonValue
 
 from fastbrowse.browser import BrowserSession, CdpPage
-from fastbrowse.page import BlockKind
+from fastbrowse.page import BlockKind, Capture
 from tests.browser.test_browser import eval_value, wait_until
+
+
+async def content_capture(page: CdpPage) -> Capture:
+    """These checks cover rendered content; DOM observations have their own browser regressions."""
+    capture = await page.capture()
+    return capture.model_copy(
+        update={"blocks": tuple(b for b in capture.blocks if b.kind is not BlockKind.OBSERVATION)}
+    )
 
 
 async def test_quote_cards_are_whole_records_with_local_titles(page: CdpPage, main_site: str) -> None:
     await page.navigate(main_site)
-    capture = await page.capture()
+    capture = await content_capture(page)
     records = [
         block
         for block in capture.blocks
@@ -45,7 +53,7 @@ async def test_quote_cards_are_whole_records_with_local_titles(page: CdpPage, ma
 
 async def test_each_table_row_repeats_its_header(page: CdpPage, main_site: str) -> None:
     await page.navigate(main_site)
-    capture = await page.capture()
+    capture = await content_capture(page)
     tables = [block for block in capture.blocks if block.kind is BlockKind.TABLE]
     assert [capture.text[block.start : block.end] for block in tables] == [
         "| Name | Score |\n| --- | --- |\n| Ada | 10 |",
@@ -136,7 +144,7 @@ async def test_table_header_variants(
         browser_session.active_session_id,
         f"document.body.innerHTML = {json.dumps(f'<table>{rows}</table>')}",
     )
-    capture = await page.capture()
+    capture = await content_capture(page)
     assert [capture.text[block.start : block.end] for block in capture.blocks] == expected
     assert all(block.kind is BlockKind.TABLE for block in capture.blocks)
 
@@ -154,9 +162,9 @@ async def test_table_rows_below_the_viewport_are_captured(
         browser_session.active_session_id,
         "document.querySelector('tr').getBoundingClientRect().top > innerHeight",
     )
-    capture = await page.capture()
+    capture = await content_capture(page)
     assert [capture.text[block.start : block.end] for block in capture.blocks] == ["| Below the viewport |"]
-    assert capture.text == "| Below the viewport |\n\n"
+    assert "\n\n".join(capture.text[b.start : b.end] for b in capture.blocks) == "| Below the viewport |"
     assert all(block.kind is BlockKind.TABLE for block in capture.blocks)
 
 
@@ -174,7 +182,7 @@ async def test_records_keep_single_links_and_a_page_sized_card_is_not_one_record
         browser_session.active_session_id,
         f"document.body.innerHTML = {json.dumps(f'<ul>{cards}</ul>')}",
     )
-    capture = await page.capture()
+    capture = await content_capture(page)
     assert [block.kind for block in capture.blocks] == [kind, kind, BlockKind.PARAGRAPH, BlockKind.LINK]
     assert all(block.href == "/author" for block in capture.blocks[:2])
 
@@ -212,7 +220,7 @@ async def test_non_records_fall_back_to_the_walk(
     await eval_value(
         browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(cards)}"
     )
-    capture = await page.capture()
+    capture = await content_capture(page)
     assert capture.blocks
     assert all(block.kind is not BlockKind.RECORD for block in capture.blocks)
 
@@ -236,7 +244,7 @@ async def test_two_item_styled_sections_keep_child_records_and_parent_headings(
     await eval_value(
         browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
     )
-    capture = await page.capture()
+    capture = await content_capture(page)
     records = [block for block in capture.blocks if block.kind is BlockKind.RECORD]
     assert [capture.text[block.start : block.end] for block in records] == [
         f"Item {group}.{item}\n\nDetail {group}.{item}" for group in range(groups) for item in range(2)
@@ -259,7 +267,7 @@ async def test_two_linked_cards_inside_unlabelled_wrappers_remain_separate_recor
     await eval_value(
         browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
     )
-    capture = await page.capture()
+    capture = await content_capture(page)
     records = [block for block in capture.blocks if block.kind is BlockKind.RECORD]
     assert len(records) == 2
     assert [capture.text[block.start : block.end] for block in records] == ["First item\n\nType", "Second item\n\nType"]
@@ -280,7 +288,7 @@ async def test_a_class_only_star_rating_reaches_the_record(
     await eval_value(
         browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
     )
-    capture = await page.capture()
+    capture = await content_capture(page)
     records = [block for block in capture.blocks if block.kind is BlockKind.RECORD]
     assert len(records) == 3
     texts = [capture.text[block.start : block.end] for block in records]
@@ -297,7 +305,7 @@ async def test_an_accessible_rating_label_reaches_the_text(
     await eval_value(
         browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
     )
-    capture = await page.capture()
+    capture = await content_capture(page)
     assert any("4 out of 5 stars" in capture.text[block.start : block.end] for block in capture.blocks)
 
 
@@ -309,7 +317,7 @@ async def test_a_hidden_rating_widget_adds_nothing(
     await eval_value(
         browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
     )
-    capture = await page.capture()
+    capture = await content_capture(page)
     assert not any("stars" in capture.text[block.start : block.end] for block in capture.blocks)
 
 
@@ -332,7 +340,7 @@ async def test_a_rating_hidden_by_an_ancestor_is_ignored(
     await eval_value(
         browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
     )
-    capture = await page.capture()
+    capture = await content_capture(page)
     records = [block for block in capture.blocks if block.kind is BlockKind.RECORD]
     assert len(records) == 3
     first = capture.text[records[0].start : records[0].end]
@@ -359,7 +367,7 @@ async def test_a_rating_hidden_by_ancestor_visibility_is_ignored(
     await eval_value(
         browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
     )
-    capture = await page.capture()
+    capture = await content_capture(page)
     records = [block for block in capture.blocks if block.kind is BlockKind.RECORD]
     assert len(records) == 3
     first = capture.text[records[0].start : records[0].end]
@@ -377,7 +385,7 @@ async def test_an_arbitrary_class_naming_a_number_is_not_read_as_a_rating(
     await eval_value(
         browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
     )
-    capture = await page.capture()
+    capture = await content_capture(page)
     assert not any("stars" in capture.text[block.start : block.end] for block in capture.blocks)
 
 
@@ -388,7 +396,7 @@ async def test_nested_record_lists_keep_the_inner_records(page: CdpPage, browser
     await eval_value(
         browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
     )
-    capture = await page.capture()
+    capture = await content_capture(page)
     records = [block for block in capture.blocks if block.kind is BlockKind.RECORD]
     assert len(records) == 9
     assert all(capture.text[block.start : block.end] == "Quotation\n\nby Author" for block in records)
@@ -428,7 +436,7 @@ async def test_record_candidates_preserve_frame_and_shadow_boundaries(
         )
 
     await wait_until(frames_loaded)
-    capture = await page.capture()
+    capture = await content_capture(page)
     assert capture.inaccessible_frames == 0
     assert all(block.kind is BlockKind.PARAGRAPH for block in capture.blocks)
     inner = [block for block in capture.blocks if capture.text[block.start : block.end] == "Inner first"]
@@ -444,7 +452,7 @@ async def test_record_candidates_preserve_frame_and_shadow_boundaries(
 async def test_a_capture_waits_for_a_loading_indicator_an_action_gave_up_on(page: CdpPage, main_site: str) -> None:
     """A read of "Loading..." costs an LLM call and a second read once the page has drawn what it was loading."""
     await page.navigate(f"{main_site}/loading.html")
-    capture = await page.capture()
+    capture = await content_capture(page)
     assert "Hello World!" in capture.text
     assert "Loading..." not in capture.text
 
@@ -453,7 +461,7 @@ async def test_a_capture_does_not_wait_on_an_indicator_off_screen(page: CdpPage,
     """GitHub's empty progress bar and lazy skeletons below the fold cost every GitHub read the full wait."""
     await page.navigate(f"{main_site}/offscreen-loading.html")
     started = time.monotonic()
-    capture = await page.capture()
+    capture = await content_capture(page)
     assert "BSD-3-Clause" in capture.text
     assert time.monotonic() - started < 1.0
 
@@ -477,7 +485,7 @@ async def test_a_same_origin_frame_is_read_where_it_stands(page: CdpPage, browse
         )
 
     await wait_until(frame_loaded)
-    capture = await page.capture()
+    capture = await content_capture(page)
     texts = [capture.text[block.start : block.end] for block in capture.blocks]
     assert texts == ["Frames", "Email Subscription", "Send updates to my inbox", "Footer"]
     inside = capture.blocks[2]
@@ -499,7 +507,7 @@ async def test_headerless_table_rows_remain_independent_count_records(
         browser_session.active_session_id,
         "document.body.innerHTML = '<table><tr><td>Ada</td></tr><tr><td>Ben</td></tr><tr><td>Cy</td></tr></table>'",
     )
-    capture = await page.capture()
+    capture = await content_capture(page)
     notes = Notes()
     requirement = Requirement(
         id="r", text="Count the people listed in the table.", kind=RequirementKind.INFORMATION, count_records=True
@@ -538,7 +546,7 @@ async def test_navigation_headings_do_not_identify_main_content(
     await eval_value(
         browser_session, browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}"
     )
-    capture = await page.capture()
+    capture = await content_capture(page)
     price = next(block for block in capture.blocks if capture.text[block.start : block.end] == "Atlas costs 12.")
     help_text = next(block for block in capture.blocks if capture.text[block.start : block.end] == "Use arrow keys.")
     assert price.heading_path == ("Catalog",)

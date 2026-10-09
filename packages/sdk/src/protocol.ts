@@ -37,7 +37,8 @@ export type Operation =
   | 'dialog'
   | 'read'
   | 'done'
-  | 'escalate';
+  | 'escalate'
+  | 'navigate';
 export type StepOutcome = 'executed' | 'covered' | 'stale' | 'failed';
 export type Status =
   | 'complete'
@@ -133,6 +134,10 @@ export interface Evidence {
   end: number;
   quote: string;
   control_context: SourceControl | null;
+  /**
+   * False for typed DOM observations whose quote is not literal rendered page text.
+   */
+  rendered_text: boolean;
   /**
    * The headings the quote sits under on the page: which record a bare "£10.69" is the price of.
    */
@@ -321,6 +326,7 @@ export interface RunParams {
   until?: boolean;
   downloads?: string | null;
   record?: string | null;
+  cursor?: boolean;
   local?: boolean;
   chrome?: LocalChrome | null;
   cloud_profile?: string | null;

@@ -75,6 +75,8 @@ export interface RunOptions extends PerRun<BrowserOptions> {
   downloads?: string;
   /** Where to write a video of the run. The server needs ffmpeg for it. */
   record?: string;
+  /** Draw visual cursor feedback for visible local Chrome on Linux X11 with Cua Driver. */
+  cursor?: boolean;
   secrets?: Secrets;
   /** Called with the address the run ended on. Anything but true keeps the run from `complete`. */
   until?: (url: string) => MaybePromise<boolean>;
@@ -151,6 +153,7 @@ export function runParams(runId: string, task: string, defaults: Partial<RunPara
       output_schema: options.output && wireSchema(options.output),
       downloads: options.downloads,
       record: options.record,
+      cursor: options.cursor,
       secrets: options.secrets?.refs,
       // The wire carries whether a callback is held, and the callback stays here.
       frames: options.onFrame && true,

@@ -239,6 +239,9 @@ def _evidence(capture: Capture, block: Block, start: int, end: int) -> Evidence:
         start=start,
         end=end,
         quote=capture.text[start:end],
+        rendered_text=not any(
+            item.kind is BlockKind.OBSERVATION and item.start < end and item.end > start for item in capture.blocks
+        ),
         heading_path=block.heading_path,
         control_context=block.control_context,
     )
@@ -2080,7 +2083,9 @@ def _read_request(
         questions[requirement.id] = ChoiceQuestion(
             instructions=(
                 f"{UNTRUSTED}\n\nRequirement: {requirement.text}\nHow does this page answer the requirement? "
-                "Select absent when the page holds no evidence for it, not even partial. Select a candidate "
+                "Select absent when the page holds no evidence for it, not even partial. Observed DOM "
+                "metadata can evidence absence within its stated scope, such as zero visible h1 "
+                "headings. Select synthesis for that answerable evidence. Select a candidate "
                 "when that candidate alone states one short scalar fact that fully answers it, with no "
                 "inference; a total the page states is a scalar, counting items is not. Otherwise select "
                 "synthesis: lists, comparisons, summaries, explanations, counts, calculations, several facts, "
@@ -2399,7 +2404,7 @@ def assemble_answer(
             requirement_id=fact.requirement_id,
             url=evidence.url,
             quote=evidence.quote,
-            deep_link=text_fragment(evidence.url, evidence.quote),
+            deep_link=text_fragment(evidence.url, evidence.quote) if evidence.rendered_text else evidence.url,
         )
         for index, (key, fact, evidence) in enumerate(
             ((fact_id(fact), fact, fact.evidence) for fact in notes.facts if fact.evidence is not None), 1

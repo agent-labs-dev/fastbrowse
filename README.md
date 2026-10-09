@@ -104,6 +104,7 @@ the quotes behind the answer, and cost by component.
 | `--downloads DIR` | keep downloaded files |
 | `--json` | full result instead of the answer |
 | `--record FILE` | save an MP4 of the tab, each step captioned, ending on the answer, time and cost (needs `ffmpeg`; the captions need its libass), e.g. `recordings/demo.mp4`, which git ignores; `demo.plain.mp4` beside it has no captions. It shows what the pages showed, so watch it before sharing |
+| `--cursor` | draw the agent's cursor over a visible Chrome (`--headed`, or one you attach to) with [Cua Driver](https://github.com/trycua/cua), so you can watch where it acts. Off by default. It needs `cua-driver` on `PATH` and an X11 display on Linux, and does nothing without them |
 
 ```sh
 export SAUCE_PASSWORD=secret_sauce
@@ -188,14 +189,26 @@ Programs that only check zero versus nonzero continue to work.
 | `blocked` | 6 | a bot check (a CAPTCHA) that did not clear; not a sign-in, so no secret passes it |
 | `needs_input` | 5 | a required value or file is missing, or an upload exceeds the configured size limit |
 | `stuck` | 9 | recovery ran out without reaching a page state the run had not seen |
-| `budget_exceeded` | 7 | a step, call, time or dollar limit was reached |
+| `budget_exceeded` | 7 | a resource limit was reached, or a missing cost prevents enforcing the dollar cap |
 | `observation_limit` | 11 | the page or required evidence cannot fit the configured prompt budget |
 | `unavailable` | 8 | a model or browser provider stayed unavailable through every retry; the same run later may pass |
 | `error` | 1 | a model or browser failure |
 
 A `budget_exceeded` JSON result includes `budget.resource` (`steps`, `seconds`, `dollars`, `jev_calls` or
 `llm_calls`) and `budget.limit`. Other results have `budget: null`. The embedding and MCP APIs carry the same
-optional object, so callers can identify the exhausted limit without parsing an error message.
+optional object, so callers can identify the affected limit without parsing an error message.
+
+A bot check can block a cloud browser before any task steps execute. Retry with an attached local browser
+or choose another source for the research. Credentials do not resolve a CAPTCHA.
+
+If a model completion omits its cost, fastbrowse looks up the matching OpenRouter or Vercel generation
+receipt. If that receipt is still unavailable, a run with a dollar cap stops with `budget_exceeded`;
+this does not mean the known charges reached the cap. Supplied `inputs` can provide exact field text
+without a field-writing generation.
+
+A browser command that remains unanswered for 120 seconds returns `unavailable`, even if the browser
+still answers health checks. Step and dollar limits do not bound total elapsed time. Set `Limits(max_seconds=...)` for a run deadline.
+When investigating a stalled run, enable trace logging and retain the last event alongside the result.
 
 ## How it works
 
@@ -451,7 +464,7 @@ The server's flags decide what a calling model may do; a call can ask for less, 
 
 | Flag | Effect |
 |:--|:--|
-| `--local`, `--headed`, `--profile DIR`, `--downloads DIR` | as for the CLI, fixed for every call |
+| `--local`, `--headed`, `--profile DIR`, `--downloads DIR`, `--cursor` | as for the CLI, fixed for every call |
 | `--cloud-profile ID` | every call runs signed in as that cloud profile; a calling model cannot choose it |
 | `--allow-authorize` | let a call pass `authorize` to go through irreversible actions; without it they always stop at `needs_confirmation` |
 | `--secret NAME=ENV_VAR@ORIGIN` | typed when a call's start page is on `ORIGIN` (`https://*.site.com` covers its hosts); the model sees `NAME` only |

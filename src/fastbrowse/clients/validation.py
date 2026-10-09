@@ -415,8 +415,10 @@ async def _send(
     if dispatched is not None:
         dispatched.add(id(asyncio.current_task()))
     try:
-        response = await http.post(url, json=body, headers=headers, timeout=attempt_seconds)
-    except httpx.TimeoutException as error:
+        # HTTP read timeouts reset on each chunk, so a trickling body needs an elapsed deadline too.
+        async with asyncio.timeout(attempt_seconds):
+            response = await http.post(url, json=body, headers=headers, timeout=attempt_seconds)
+    except (httpx.TimeoutException, TimeoutError) as error:
         failure = f"no response within {attempt_seconds:.0f}s ({type(error).__name__})"
         response = None
     except TRANSIENT_TRANSPORT as error:
