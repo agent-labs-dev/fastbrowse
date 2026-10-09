@@ -12,6 +12,7 @@
   let framePath = null;
   let sourcePath = '';
   let inaccessible = 0;
+  let visibleH1 = false;
   const registry = (window.__fastbrowse ||= { ids: new WeakMap(), nodes: new Map(), next: 1 });
   const granted = doc => {
     if (allowedOrigins === null) return true;
@@ -339,6 +340,21 @@
     framePath = frame;
     sourcePath = source;
     walk(root);
+    path = [...headings];
+    const visible = e => e.checkVisibility ? e.checkVisibility({ visibilityProperty: true }) : !hidden(e);
+    for (const e of [...root.querySelectorAll('input,select,textarea,button,[role="button"]')].filter(visible)) {
+      const name = nameOf(e) || clean(e.innerText ?? '');
+      if (!name || e.dataset?.fastbrowseSecret === '1') continue;
+      if (CONTROLS.has(e.tagName) && !UNFILLED.has(e.type) && !fieldValue(e))
+        push('observation', `${name}: [empty]`);
+      if (e.matches(':disabled,[aria-disabled="true"]')) push('observation', `${name}: disabled`);
+    }
+    const h1 = [...root.querySelectorAll('h1,[role="heading"][aria-level="1"]')].filter(visible);
+    visibleH1 ||= h1.length > 0;
+    if (root === document.body) {
+      const doc = document.documentElement;
+      push('observation', `Observed viewport: Horizontal overflow: ${doc.scrollWidth > doc.clientWidth ? 'yes' : 'no'}`);
+    }
     for (const e of root.querySelectorAll('*')) {
       if (e.shadowRoot) scope(e.shadowRoot, frame, `${source}/shadow:${identity(e)}`);
       // A frame the walk never reached (hidden, or inside a record or table read as one block) is still read.
@@ -348,5 +364,6 @@
   }
 
   scope(document.body, null, '');
-  return { url: location.href, title: document.title, blocks, inaccessible_frames: inaccessible };
+  if (!visibleH1) push('observation', 'Observed accessible DOM: Visible h1 headings: 0');
+  return { url: location.href, title: document.title, blocks, inaccessible_frames: inaccessible, visible_h1: visibleH1 };
 })

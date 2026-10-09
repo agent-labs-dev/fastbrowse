@@ -543,10 +543,10 @@ async def test_jev_still_unsure_after_recovery_takes_the_action_recovery_named()
     assert state.steps[-1].confidence is None
 
 
-async def test_an_unsure_pick_is_acted_on_once_per_page_state() -> None:
+async def test_an_unsure_observation_move_is_acted_on_once_per_page_state() -> None:
     state = await run_state()
     first, second = observation((_button("Done"),)), observation((_button("Close dialog"),))
-    done, close = _code_decision(Operation.CLICK, _button("Done")), _code_decision(Operation.CLICK, _button("Close"))
+    done, close = _code_decision(Operation.HOVER, _button("Done")), _code_decision(Operation.HOVER, _button("Close"))
     assert _try_unsure(state, first, done)
     assert not _try_unsure(state, first, done)
     assert _try_unsure(state, second, close)
@@ -563,7 +563,14 @@ async def test_an_unsure_pick_the_run_already_took_from_this_state_recovers() ->
     following = _code_decision(Operation.CLICK, _button("Next"))
     await agent._step(state, step, following)
     assert not _try_unsure(state, step, following)
-    assert _try_unsure(state, step, _code_decision(Operation.CLICK, _button("Back")))
+    assert not _try_unsure(state, step, _code_decision(Operation.CLICK, _button("Back")))
+
+
+@pytest.mark.parametrize("label", ["Sign out", "Continue with Google", "Unrelated action"])
+async def test_an_unsure_state_changing_action_needs_a_second_opinion(label: str) -> None:
+    state = await run_state()
+    obs = observation((_button(label),))
+    assert not _try_unsure(state, obs, _code_decision(Operation.CLICK, obs.controls[0]))
 
 
 @pytest.mark.parametrize(("confidence", "raised"), [(0.3, _Unsure), (0.9, _Stop)])

@@ -83,6 +83,7 @@ class Operation(StrEnum):
     READ = "read"
     DONE = "done"
     ESCALATE = "escalate"
+    NAVIGATE = "navigate"
 
 
 SCROLLING = frozenset({Operation.SCROLL, Operation.SCROLL_UP})

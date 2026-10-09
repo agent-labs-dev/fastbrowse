@@ -68,7 +68,7 @@ class Control(Frozen):
     input_name: str | None = None
     autocomplete: str | None = None
     submit_semantics: str | None = None
-    """The enclosing form's implicit submission, if Enter in this control can submit it."""
+    """The form submission triggered by Enter in a field or clicking a submit button."""
     checked: bool | None = None
     selected: bool | None = None
     expanded: bool | None = None
@@ -182,6 +182,7 @@ class BlockKind(StrEnum):
     RECORD = "record"
     CODE = "code"
     LINK = "link"
+    OBSERVATION = "observation"
 
 
 class Block(Frozen):
@@ -209,6 +210,7 @@ class Capture(Frozen):
 
 class Action(Frozen):
     operation: Operation
+    url: str | None = None
     target_id: str | None = None
     destination_id: str | None = None
     """Drop target of a drag: the control the dragged element is released onto."""

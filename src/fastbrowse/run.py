@@ -315,7 +315,9 @@ async def run_task(
                                 until=until,
                                 head_start=head,
                             )
-                            if recording is not None:
+                            # The card is a data: document navigated into the tab, which would replace the
+                            # caller's own app page; an attached window is theirs and stays where it is.
+                            if recording is not None and not connection.attach:
                                 await recording.show_result(task, result)
             except (BrowserError, Unavailable) as exc:
                 # A cloud browser that cannot be started is an outage, not a failed run.

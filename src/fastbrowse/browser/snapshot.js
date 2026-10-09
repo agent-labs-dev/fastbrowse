@@ -282,6 +282,7 @@
 
   const submitSemantics = e => {
     const form = e.form;
+    const explicit = ['BUTTON', 'INPUT'].includes(e.tagName) && ['submit', 'image'].includes(e.type);
     const implicit = [
       'text',
       'search',
@@ -296,8 +297,8 @@
       'datetime-local',
       'number',
     ];
-    if (!form || e.tagName !== 'INPUT' || !implicit.includes(e.type)) return null;
-    const submit = [...form.getRootNode().querySelectorAll('button,input')].find(
+    if (!form || (!explicit && (e.tagName !== 'INPUT' || !implicit.includes(e.type)))) return null;
+    const submit = explicit ? e : [...form.getRootNode().querySelectorAll('button,input')].find(
       c => c.form === form && (c.type === 'submit' || c.type === 'image'),
     );
     if (submit?.matches(':disabled')) return null;

@@ -224,6 +224,7 @@ class _CaptureSnapshot(_FrameText):
     """capture.js output for one frame."""
 
     blocks: tuple[_SnapshotBlock, ...]
+    visible_h1: bool = False
 
 
 _SETTLE_SECONDS = 5.0
@@ -537,10 +538,23 @@ class CdpPage(Page):
         main = frames.get(_MAIN)
         title = main.raw.title if main else ""
         url = main.raw.url if main else await self.origin()
+        has_h1 = any(frame.raw.visible_h1 for frame in frames.values())
+        unreadable = self._inaccessible_frames(
+            {frame.session_id: frame.raw.inaccessible_frames for frame in frames.values()}
+        )
+        absence_seen = False
         for frame in frames.values():
             frame_id, session_id, raw = frame.frame_id, frame.session_id, frame.raw
             coverage[session_id] = raw.inaccessible_frames
             for block in raw.blocks:
+                # A cross-origin frame is captured separately; its h1 disproves document-wide absence too.
+                if (
+                    block.kind is BlockKind.OBSERVATION
+                    and block.text == "Observed accessible DOM: Visible h1 headings: 0"
+                ):
+                    if has_h1 or unreadable or absence_seen:
+                        continue
+                    absence_seen = True
                 text = block.text
                 start = offset
                 text_parts.append(text)
@@ -669,6 +683,11 @@ class CdpPage(Page):
         self, action: Action, target: tuple[str, str, int, list[object] | None] | None, point: _Point
     ) -> tuple[StepOutcome, str | None]:
         match action.operation:
+            case Operation.NAVIGATE:
+                if action.url is None or urlsplit(action.url).scheme not in {"http", "https"}:
+                    return StepOutcome.FAILED, "navigate requires an HTTP(S) address"
+                await self.navigate(action.url)
+                return StepOutcome.EXECUTED, None
             case Operation.CLICK:
                 return await self._click(target, point)
             case Operation.HOVER:

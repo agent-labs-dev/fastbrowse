@@ -37,7 +37,8 @@ export type Operation =
   | 'dialog'
   | 'read'
   | 'done'
-  | 'escalate';
+  | 'escalate'
+  | 'navigate';
 export type StepOutcome = 'executed' | 'covered' | 'stale' | 'failed';
 export type Status =
   | 'complete'
