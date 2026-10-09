@@ -451,3 +451,38 @@ def test_replaced_shared_quote_cannot_survive_through_another_requirement(other_
     answer = assemble_answer((Claim(text=old.text, evidence_ids=(fact_id(old),)),), notes, ())
     assert (_output_context(answer, notes) is not None) is other_address
     assert notes.evidenced("r2") is other_address
+
+
+@pytest.mark.parametrize("other_address", [False, True])
+def test_unchanged_value_does_not_keep_replaced_subject_context_current(other_address: bool) -> None:
+    from fastbrowse.page import BlockKind
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import _output_context
+    from tests.test_retrieval import block_evidence, capture
+
+    old_page = capture(
+        (BlockKind.PARAGRAPH, "Participants: Atlas and Beacon"), (BlockKind.PARAGRAPH, "Total mass: 20 kg")
+    )
+    new_page = capture(
+        (BlockKind.PARAGRAPH, "Participants: Atlas and Cobalt"),
+        (BlockKind.PARAGRAPH, "Total mass: 20 kg"),
+        url="https://example.test/another" if other_address else old_page.url,
+    )
+    context = Fact(text="Atlas and Beacon", evidence=block_evidence(old_page, "s0"), reader=FactReader.LLM)
+    old = Fact(
+        requirement_id="r",
+        text="Atlas and Beacon total 20 kg",
+        evidence=block_evidence(old_page, "s1"),
+        basis=(fact_id(context),),
+        reader=FactReader.LLM,
+    )
+    fresh = Fact(
+        requirement_id="r",
+        text="Atlas and Cobalt total 20 kg",
+        evidence=block_evidence(new_page, "s1"),
+        reader=FactReader.LLM,
+    )
+    notes = Notes((context, old, fresh))
+    notes.supersede("r", new_page.url, new_page.sha256, new_page.text)
+    answer = assemble_answer((Claim(text=old.text, evidence_ids=(fact_id(old),)),), notes, ())
+    assert (_output_context(answer, notes) is not None) is other_address

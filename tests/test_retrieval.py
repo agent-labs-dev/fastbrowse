@@ -4841,3 +4841,34 @@ def test_shared_records_keep_each_claims_cited_tally_scope() -> None:
     assert requirements[0].text in first_prompt and requirements[1].text not in first_prompt
     assert '"count": 1' in second_prompt and '"complete": false' in second_prompt
     assert requirements[1].text in second_prompt and requirements[0].text not in second_prompt
+
+
+async def test_aggregate_excerpt_retains_subjects_from_its_selected_blocks() -> None:
+    page = capture(
+        (BlockKind.HEADING, "Delivery manifest"),
+        (BlockKind.PARAGRAPH, "Crate Atlas: 12 kg"),
+        (BlockKind.PARAGRAPH, "Crate Beacon: 8 kg"),
+        (BlockKind.PARAGRAPH, "Total mass: 20 kg"),
+    )
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "cite": {"first": "s0", "last": "s3"},
+                        "excerpt": "Total mass: 20 kg",
+                        "text": "Atlas and Beacon have a total mass of 20 kg.",
+                        "requirement_id": "r",
+                    }
+                ],
+                "answered": True,
+            }
+        ]
+    )
+    notes = Notes()
+    result = await read(llm, page, "Find the total mass of Atlas and Beacon", ["r"], notes)
+    fact = next(f for f in result.facts if f.requirement_id == "r")
+    assert fact.evidence is not None and fact.evidence.quote == "Total mass: 20 kg"
+    quotes = [notes.evidence[key].quote for key in notes.expand_evidence_ids((fact_id(fact),))]
+    assert page.text in quotes
+    assert all(page.text[e.start : e.end] == e.quote for e in notes.evidence.values())

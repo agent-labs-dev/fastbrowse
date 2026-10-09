@@ -260,7 +260,7 @@ class Notes:
         for key, fact in supporting:
             sources = (
                 (evidence.get(source) for source in self.expand_evidence_ids((key,)))
-                if fact.reader is FactReader.JEV_CHOICE and fact.basis
+                if fact.basis and fact.tally is None
                 else (fact.evidence,)
             )
             if any(

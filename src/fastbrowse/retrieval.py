@@ -425,6 +425,15 @@ def _remember(
         # A table excerpt can select an attribute row without the preceding cells identifying its columns.
         if block.kind is BlockKind.TABLE:
             start = evidence.start
+        if (
+            claim.cite is not None
+            and claim.cite.first != claim.cite.last
+            and (start, end) != (evidence.start, evidence.end)
+        ):
+            # Narrowing a total to its value can discard the subjects in the reader's selected blocks.
+            context = _quoted(evidence)
+            notes.add(context)
+            basis.append(fact_id(context))
         evidence = _evidence(capture, block, start, end)
     # A derived claim cites nothing and rests on its basis; one that cites blocks must cite them correctly.
     if evidence is None and (claim.cite is not None or not basis):
