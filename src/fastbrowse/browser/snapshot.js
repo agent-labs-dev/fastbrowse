@@ -532,6 +532,8 @@
     for (let e = element.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
       if (twins.some(twin => twin !== element && e.contains(twin))) break;
       scope = e;
+      // A lone open reply has no form twin nearby; crossing its record picks a different commenter's name.
+      if (e.matches('article,li,tr,[role="row"],[role="listitem"]')) break;
     }
     return scope ? excerpt(nameOf(scope, element, label, nearest), CONTROL_CONTEXT_CHARS) : '';
   };

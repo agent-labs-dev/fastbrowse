@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Reply controls retain their own comment record as context when only one reply form is open.
+
 - Provider attempt deadlines bound total response time, including responses that keep sending occasional bytes.
 - Browser commands that remain unanswered for 120 seconds return `unavailable` even if health checks succeed.
 - Closing the last owned browser tab returns `unavailable` with retained run evidence instead of a Python error.
