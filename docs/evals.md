@@ -4,7 +4,7 @@ Fastbrowse keeps browser fixture tests and release gates in this repository. Mai
 Parallax, under the `browser-use` family. Detailed runs, grades, costs and validation belong in the private
 [fastbrowse-evals Langfuse project](https://us.cloud.langfuse.com/project/cmuwjxra401iyad0cymgswes5).
 
-The [benchmark page](https://fastbrowse.ai/benchmarks) describes three separate measurements:
+The [benchmark page](https://fastbrowse.ai/benchmarks) describes these measurements:
 
 | Set | Agents | Measurement |
 |---|---|---|
@@ -41,7 +41,7 @@ physical-run ledger, known costs and matched regressions before accepting compac
 recordings, answers and page content stay out of Git and the public feed.
 
 Benchmark headlines require the full publication gate and maintainer approval. The maintainer can also
-approve recorded diagnostic campaigns for [the eval browser](https://fastbrowse.ai/evals), with their
+approve recorded diagnostic campaigns for [the benchmark page](https://fastbrowse.ai/benchmarks), with their
 coverage and limitations visible. These campaigns do not satisfy the benchmark headline gate.
 
 `docs/results/evidence.public.json` contains the approved sanitized projection, with exact content hashes
@@ -57,8 +57,7 @@ and Cua Driver 0.34.0. Parallax runs it through browser MCP tools on a private L
 with the existing source task graders. Credential and safe-stop tasks are excluded.
 
 Rows record the local browser environment, and billed spend remains unknown. Local timings
-are not a controlled comparison with cloud arms. The eval browser keeps the historical full round,
-the later Fastbrowse round and the focused dev regression checks separate. Source grades, completion,
+are not a controlled comparison with cloud arms. The recorded-results view shows each campaign separately. Source grades, completion,
 physical attempts and known costs are reported independently; unknown cost is never treated as zero.
 See Parallax's browser benchmark documentation for setup and retained attempt traces.
 

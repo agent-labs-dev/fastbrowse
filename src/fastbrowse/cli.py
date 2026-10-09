@@ -78,7 +78,7 @@ def _secrets(
     if start is None:
         if unscoped:
             problems.append(
-                f"--secret {', '.join(unscoped)} needs an origin: give --start, or NAME=ENV_VAR@https://host"
+                f"--secret needs an origin for {', '.join(unscoped)}: give --start, or NAME=ENV_VAR@https://host"
             )
         if bitwarden is not None:
             problems.append("--bitwarden needs --start: the vault item is matched against its origin")
@@ -166,14 +166,17 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         default=[],
         type=options.scoped_secret,
         metavar="NAME=ENV_VAR[@ORIGIN]",
+        help="secret from an environment variable, scoped to ORIGIN or the --start origin (repeatable)",
     )
     parser.add_argument(
         "--bitwarden",
         metavar="ITEM",
         help="type this vault login's username, password and authenticator code (unlocked bw CLI)",
     )
-    parser.add_argument("--max-steps", type=int, default=None)
-    parser.add_argument("--max-dollars", type=float, default=None)
+    parser.add_argument("--max-steps", type=int, default=None, help="optional step limit (default: no step limit)")
+    parser.add_argument(
+        "--max-dollars", type=float, default=None, help="optional model-spend limit in USD, excluding browser charges"
+    )
     parser.add_argument("--downloads", type=Path, default=None, help="directory for downloaded files")
     parser.add_argument("--json", action="store_true", help="print the full result as JSON")
     parser.add_argument(

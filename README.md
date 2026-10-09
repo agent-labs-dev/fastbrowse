@@ -22,7 +22,7 @@ cited answers or schema-validated data. Code controls credentials, authorization
 ## Why
 
 fastbrowse indexes the page into candidates and has [Jev](https://typesafe.ai), a choice model, **pick one**, so it cannot click
-something that was never on the page. Every claim in an answer cites a verbatim quote from the page.
+something that was never on the page. Factual claims in a complete answer cite verbatim quotes from the page.
 
 ![fastbrowse signing in to a shop, adding two products, filling the shipping form and placing the order](docs/assets/demo.gif)
 
@@ -33,12 +33,12 @@ Recorded on local Chrome: 13 steps, 20.9s and $0.0034 in model calls. Playback i
 Benchmark methods and approved results belong on the [benchmark page](https://fastbrowse.ai/benchmarks).
 Detailed runs remain private until reviewed and approved for publication.
 
-Compare rows only at matching task versions. See [eval results and workflow](docs/evals.md).
+Rows are comparable only at matching task versions. See [eval results and workflow](docs/evals.md).
 
 ### Why fastbrowse, against each kind of agent
 
 - **LLM agents that generate actions** (the hosted Browser Use agent and similar): Jev picks each action from the controls
-  that are on the page, so there is no invented selector to retry. Every claim in the answer links to the page text it came from.
+  that are on the page, so there is no invented selector to retry. Factual claims in a complete answer link to the page text they came from.
 - **Choice-model navigators** ([Browser Use Ultrafast](https://github.com/browser-use/jev-ultrafast), the
   `jev-ultrafast` package and eval arm): both choose actions with Jev. fastbrowse adds cited answers, schema-validated
   data, scoped credentials and an authorization gate. Navigation tasks compare the page each run ended on.
@@ -479,9 +479,9 @@ seconds to minutes, so raise the client's tool timeout if it has one (`MCP_TOOL_
 
 ## Evals and development
 
-The [eval workflow](docs/evals.md#workflow) has the run, publish and regeneration commands. Final page checks
+[Eval commands](docs/evals.md) cover running suites, publishing results and regenerating evidence. Final page checks
 require evidence read by the harness, and a pass also requires the task's expected ending. Published rows carry
-build and task versions; the [site feed](docs/results/summary.json) is generated from them.
+build and task versions; the [compact results feed](docs/results/summary.json) is generated from them.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and checks, [docs/design.md](docs/design.md) for the browser
 layer, and [docs/jev.md](docs/jev.md) for the Jev assumptions checked against Typesafe's documentation.

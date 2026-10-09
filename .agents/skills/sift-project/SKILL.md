@@ -72,14 +72,15 @@ gitleaks detect --source . --no-banner --redact
 - `src/fastbrowse/browser/page.py` loads snapshot and capture JavaScript by file path; both are wheel assets.
 - CDP event registrations, context-manager methods, pytest fixtures and test discovery call symbols indirectly.
 - Evals and audit modules have `python -m` entry points; scripts are also called from CI and the justfile.
-- `docs/results/summary.json`, README and changelog content are consumed by fastbrowse.ai outside this repository.
+- Approved benchmark rows, sanitized evidence projections, README and changelog content are consumed by
+  fastbrowse.ai outside this repository.
 
 ## Model-read text
 
 Prompts in agent, planner, policy, retrieval, verification, safety and shortcut modules, MCP tool descriptions,
 LLM response schemas, Jev questions and task text are behavior. Never shorten them as cleanup.
 Validate behavior changes against dev evals; heldout runs are before and after a round and are not debugged.
-See [the evaluation workflow](../../../docs/evals.md#workflow) for paid-run prerequisites.
+See [the evaluation workflow](../../../docs/agents/evals.md) for paid-run prerequisites.
 
 ## Zones
 
