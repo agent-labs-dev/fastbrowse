@@ -1,0 +1,40 @@
+name: AUR
+# The Arch package in packaging/aur, built from PyPI in a clean Arch container and run. Arch moves its Python
+# packages without asking, so this is the only place a PKGBUILD that no longer builds, or a dependency that
+# has left the range fastbrowse accepts, is seen before a user sees it.
+#
+# CI calls this when a change touches the package, and the required `check` waits for it. A release calls it
+# with its version once PyPI holds it, which builds the package that version will be.
+# Nothing here publishes: pushing to aur.archlinux.org needs the maintainer's key.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: The PyPI release to package in place of the committed one.
+        type: string
+        required: false
+  workflow_dispatch:
+permissions: {}
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      # PyPI can take a moment to list what was uploaded to it, and the job before this one uploaded it.
+      - name: Move the package to the release
+        if: inputs.version != ''
+        env: {VERSION: "${{ inputs.version }}"}
+        run: python3 scripts/aur_package.py "$VERSION" --write --wait 300
+      - name: Build, install and run in a clean Arch container
+        run: docker run --rm -v "$PWD:/repo:ro" archlinux:base-devel bash /repo/packaging/aur/build.sh
+      # What the maintainer pushes to the AUR for this release, when the release moved it.
+      - if: inputs.version != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aur
+          path: |
+            packaging/aur/PKGBUILD
+            packaging/aur/.SRCINFO
+          include-hidden-files: true

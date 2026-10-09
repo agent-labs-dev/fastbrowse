@@ -119,6 +119,7 @@ jobs:
     permissions: {contents: read}
     outputs:
       binaries: ${{ steps.frozen.outputs.binaries }}
+      aur: ${{ steps.aur.outputs.aur }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # A pull request is checked out as its merge into the base, whose first parent is the base.
@@ -127,12 +128,22 @@ jobs:
         env: {EVENT: "${{ github.event_name }}"}
         run: |
           if [ "$EVENT" != pull_request ] || ! git diff --quiet HEAD^1 HEAD -- \
-            src/fastbrowse ':!src/fastbrowse/evals' ':!src/fastbrowse/audit' pyproject.toml uv.lock packaging \
+            src/fastbrowse ':!src/fastbrowse/evals' ':!src/fastbrowse/audit' pyproject.toml uv.lock \
+            packaging ':!packaging/aur' \
             scripts/smoke_binary.py .github/workflows/binaries.yml .github/workflows/ci.yml \
             scripts/npm_platform_package.py scripts/smoke_npm_install.py scripts/macos_signatures.py \
             packages/sdk/package.json packages/sdk/tsconfig.json packages/sdk/tsconfig.build.json packages/sdk/src
           then echo "binaries=true" >> "$GITHUB_OUTPUT"
           else echo "binaries=false" >> "$GITHUB_OUTPUT"
+          fi
+      # The Arch package builds sources PyPI already holds, so only its own files and the workflows that
+      # build it can change what it does.
+      - id: aur
+        run: |
+          if git diff --quiet HEAD^1 HEAD -- packaging/aur scripts/aur_package.py \
+            .github/workflows/aur.yml .github/workflows/ci.yml .github/workflows/release.yml
+          then echo "aur=false" >> "$GITHUB_OUTPUT"
+          else echo "aur=true" >> "$GITHUB_OUTPUT"
           fi
 
   binaries:
@@ -141,12 +152,18 @@ jobs:
     permissions: {contents: read}
     uses: ./.github/workflows/binaries.yml
 
+  aur:
+    needs: changes
+    if: needs.changes.outputs.aur == 'true'
+    permissions: {contents: read}
+    uses: ./.github/workflows/aur.yml
+
   # `check` is the required status check, so its name must not move when the matrix gains a version.
-  # It passes only when the Python matrix, secret scan, sift and SDK checks pass, and the binaries either
-  # passed or were left unbuilt by a change that could not alter them.
+  # It passes only when the Python matrix, secret scan, sift and SDK checks pass, and the binaries and the
+  # Arch package each either passed or were left unbuilt by a change that could not alter them.
   check:
     runs-on: ubuntu-latest
-    needs: [gate, sift, sdk, secrets, changes, binaries]
+    needs: [gate, sift, sdk, secrets, changes, binaries, aur]
     if: always()
     steps:
       - env:
@@ -156,6 +173,7 @@ jobs:
           SECRETS_RESULT: ${{ needs.secrets.result }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           BINARIES_RESULT: ${{ needs.binaries.result }}
+          AUR_RESULT: ${{ needs.aur.result }}
         run: |
           test "$GATE_RESULT" = success
           test "$SIFT_RESULT" = success
@@ -163,3 +181,4 @@ jobs:
           test "$SECRETS_RESULT" = success
           test "$CHANGES_RESULT" = success
           test "$BINARIES_RESULT" = success || test "$BINARIES_RESULT" = skipped
+          test "$AUR_RESULT" = success || test "$AUR_RESULT" = skipped

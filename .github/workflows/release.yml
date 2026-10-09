@@ -20,6 +20,8 @@ jobs:
       contents: read
       # The eval guard reads workflow results for this build.
       actions: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -36,6 +38,8 @@ jobs:
       # a tag pushed on a branch or a stray local commit stops here.
       - if: github.event_name == 'push'
         run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - id: version
+        run: echo "version=$(uv version --short)" >> "$GITHUB_OUTPUT"
       # The tag is the Python version, and every npm version is published from it.
       - run: uv run python scripts/npm_versions.py
       - run: uv build
@@ -172,6 +176,15 @@ jobs:
             # With `./`, or npm reads the argument as a GitHub repository.
             npm publish ./packages/sdk --access public
           fi
+
+  # The Arch package for this release, built from the sources PyPI now holds and run in a clean Arch container.
+  # Its PKGBUILD and .SRCINFO are this run's `aur` artifact. Nothing is pushed to the AUR from here.
+  aur:
+    needs: [build, pypi]
+    permissions: {contents: read}
+    uses: ./.github/workflows/aur.yml
+    with:
+      version: ${{ needs.build.outputs.version }}
 
   # The site shows this release only once it builds again after the version is on PyPI, when its
   # "runs exactly the release below it" is true; site.yml asks it to.

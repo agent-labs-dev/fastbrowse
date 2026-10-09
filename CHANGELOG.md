@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Arch Linux has a `fastbrowse` package for the AUR, kept in `packaging/aur`. It installs `fastbrowse` and
+  `fastbrowse-mcp` from the PyPI release and takes every dependency Arch packages from Arch's repositories.
+
 ## [0.5.20] - 2026-10-09
 
 - Captured hover captions retain their DOM container and sibling position as source metadata.

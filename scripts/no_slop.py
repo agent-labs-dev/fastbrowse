@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 
 SUFFIXES = frozenset({".py", ".md", ".toml", ".yml", ".yaml", ".html", ".sh", ".txt", ".json", ".cfg"})
+# The Arch package's two files, which have no suffix to be known by.
+NAMES = frozenset({"PKGBUILD", ".SRCINFO"})
 
 # Built from code points so this table is not itself a line of the punctuation it bans.
 CHARACTERS = {
@@ -32,7 +34,8 @@ ALLOW = re.compile(r"slop-ok:\s*\S")
 
 def tracked(roots: list[str]) -> list[Path]:
     listing = subprocess.run(["git", "ls-files", "-z", *roots], capture_output=True, text=True, check=True)
-    return [path for name in listing.stdout.split("\0") if name and (path := Path(name)).suffix in SUFFIXES]
+    paths = [Path(name) for name in listing.stdout.split("\0") if name]
+    return [path for path in paths if path.suffix in SUFFIXES or path.name in NAMES]
 
 
 def offences(path: Path) -> list[str]:
