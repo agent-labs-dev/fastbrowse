@@ -12,8 +12,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from fastbrowse.models import BrowserEvent, CostBreakdown, RunResult, Status
+import pytest
+
+from fastbrowse.models import BrowserEvent, CostBreakdown, RunResult, Status, StepEvent
 from tests.serve_client import FakeClient, serving
+from tests.serve_scripts import browse_until_cancelled
 from tests.test_serve_run import Recorder, _run, _settings
 from tests.test_serve_secrets import PASSWORD, SHOP, Typist
 
@@ -235,6 +238,22 @@ async def test_shutdown_straight_after_the_run_still_cancels_it() -> None:
 
     assert reply["error"]["code"] == CANCELLED
     assert browsing.started == browsing.closed
+
+
+async def test_command_runner_closes_when_cancelled_during_its_first_event(tmp_path: Path) -> None:
+    marker = tmp_path / "closed"
+    started = asyncio.Event()
+
+    async def on_event(_: StepEvent | BrowserEvent) -> None:
+        started.set()
+        await asyncio.Future()
+
+    running = asyncio.create_task(browse_until_cancelled(str(marker), on_event=on_event))
+    await started.wait()
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert marker.read_text() == "closed"
 
 
 def _command(*arguments: str) -> list[str]:
