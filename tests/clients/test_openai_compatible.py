@@ -686,3 +686,16 @@ async def test_receipt_does_not_double_count_normal_provider_spend(base_url, byo
         assert result.cost.dollars is None
     else:
         assert result.cost.dollars == pytest.approx(amount)
+
+
+def test_a_strict_schema_refuses_an_object_with_free_keys() -> None:
+    # One provider route answered such a map empty, which read as a model that had found nothing.
+    class Keyed(Frozen):
+        entries: dict[str, str]
+
+    class Listed(Frozen):
+        entries: tuple[str, ...]
+
+    with pytest.raises(ValueError, match="free keys"):
+        strict_schema(Keyed.model_json_schema())
+    strict_schema(Listed.model_json_schema())

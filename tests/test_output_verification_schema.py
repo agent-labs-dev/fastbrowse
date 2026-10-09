@@ -8,16 +8,24 @@ from fastbrowse.verification import _assessment_schema, _identity_schema
 def test_identity_response_requires_each_requested_key(key):
     schema = _identity_schema((key, "other"))
     with pytest.raises(ValidationError):
-        schema.model_validate({"identities": {}, "bindings": {}})
+        schema.model_validate({"identities": [], "bindings": {}})
     with pytest.raises(ValidationError):
-        schema.model_validate({"identities": {}, "bindings": {key: {"scope": "unresolved"}}})
+        schema.model_validate({"identities": [], "bindings": {key: {"scope": "unresolved"}}})
     response = schema.model_validate(
-        {"identities": {}, "bindings": {key: {"scope": "unresolved"}, "other": {"scope": "subjectless"}}}
+        {"identities": [], "bindings": {key: {"scope": "unresolved"}, "other": {"scope": "subjectless"}}}
     )
     assert set(response.model_dump()["bindings"]) == {key, "other"}
     contract = schema.model_json_schema()["$defs"]["_RequiredBindings"]
     assert set(contract["required"]) == {key, "other"}
     assert contract["additionalProperties"] is False
+
+
+def test_identity_response_has_no_open_dictionary():
+    # A provider route returned the shared identities empty while they were a map with free keys.
+    schema = _identity_schema(("output_0",)).model_json_schema()
+    objects = [schema, *schema["$defs"].values()]
+    assert all(contract["additionalProperties"] is False for contract in objects)
+    assert schema["properties"]["identities"]["type"] == "array"
 
 
 @pytest.mark.parametrize("judgment", ["yes", "no", "uncertain"])

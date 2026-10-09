@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Answer checks complete on the Vercel AI Gateway model route, where a finished task could end `stuck` or
+  `unverified` with its evidence already read.
 - Reply controls retain their own comment record as context when only one reply form is open.
 
 - Provider attempt deadlines bound total response time, including responses that keep sending occasional bytes.
