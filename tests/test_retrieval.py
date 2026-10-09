@@ -4120,6 +4120,37 @@ async def test_atomic_output_context_keeps_cited_sources_without_uncited_metadat
     assert "member price 9" not in json.dumps(llm.calls[2][1][-1].content)
 
 
+@pytest.mark.parametrize("complete", [False, True])
+def test_atomic_output_context_retains_count_scope_and_cited_record_positions(complete: bool) -> None:
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import _output_context
+
+    requirement = Requirement(id="r", text="Count every open record owned by Ada", kind=RequirementKind.INFORMATION)
+    page = capture((BlockKind.RECORD, "Record A - Ada - open"), (BlockKind.RECORD, "Record B - Ada - open"))
+    notes = Notes()
+    for block in page.blocks:
+        notes.add(Fact(reader=FactReader.LLM, text=block.source_id, evidence=block_evidence(page, block.source_id)))
+    records = tuple(notes.evidence)
+    tally = notes.add_tally(Tally(requirement_id="r", key="Ada", records=records))
+    notes.add_tally(Tally(requirement_id="other", key="Unrelated scope", records=records[:1]))
+    if complete:
+        notes.complete_tallies("r")
+    answer = assemble_answer(
+        (Claim(text="Ada has 2 open records", evidence_ids=(fact_id(tally),)),), notes, (requirement,)
+    )
+
+    context = _output_context(answer, notes)
+
+    assert context is not None
+    assert context.model_dump()["claims"][0]["counted_records"] == (
+        {"scope": requirement.text, "group": "Ada", "count": 2, "complete": complete, "record_indices": (0, 1)},
+    )
+    assert [source.quote for source in context.claims[0].cited_sources] == [
+        "Record A - Ada - open",
+        "Record B - Ada - open",
+    ]
+
+
 async def test_atomic_outputs_reject_an_empty_answer_instead_of_skipping_the_check() -> None:
     from fastbrowse.jev import Evaluation, NoulAnswer
     from fastbrowse.retrieval import assemble_answer

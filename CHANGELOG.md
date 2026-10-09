@@ -28,6 +28,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - The agent skill uses uncapped resource defaults, with limits supplied by the caller's task budget.
   It no longer imposes a 30-step limit or a $0.25 model-spend cap on each delegated task.
 
+- Final answer audits retain count scope, collection completeness and the quoted records behind each tally.
+
 - Recovery checks whether a changed page satisfies the task before stopping for lack of further actions.
   The completion verifier still rejects unfinished work.
 
