@@ -247,6 +247,9 @@ _SETTLE_LOADING_SECONDS = 1.5
 # 2 to 3 second LLM call and a second read after it, where the-internet's dynamic loading needs about 5 seconds.
 _CAPTURE_LOADING_SECONDS = 3.0
 _SCREENSHOT_WAIT_SECONDS = 1.0
+_SCREENSHOT_STALL_SECONDS = 5.0
+"""How long a background tab gets to paint a frame once its cast is restarted. Nothing else can make it paint
+without bringing its window forward, so past this the run goes on without the image."""
 # How long a click that opened a tab waits for it to be attached before the run carries on in the opener.
 _POPUP_ADOPT_SECONDS = 2.0
 _OPENS_TABS = frozenset({Operation.CLICK, Operation.ENTER})
@@ -1441,11 +1444,12 @@ class CdpPage(Page):
         return False
 
     async def screenshot(self) -> bytes:
-        """Capture the active tab, activating it only if a background tab produces no frame to capture.
+        """Capture the active tab, bringing it to the front only if a tab behind another produces no frame.
 
-        An idle background tab composites nothing new, so a capture can wait many seconds; focus emulation and
-        compositor-level nudges proved unreliable, while activating always yields a frame at once. Screenshots
-        are rare (recovery and uncertain completion), so focus moves only when it has to.
+        An idle tab behind another composites nothing new, so a capture can wait many seconds, while activating
+        always yields a frame at once. Screenshots are rare (recovery and uncertain completion), so a foreground
+        run moves focus only when it has to. A background run never does: its tab is kept painting by a cast,
+        which is restarted if a capture stalls, and a tab that still paints nothing has no screenshot.
         """
         await self._session.assert_clear()
         if self._session.grant is not None:
@@ -1455,8 +1459,10 @@ class CdpPage(Page):
         capture = asyncio.ensure_future(client.send.Page.captureScreenshot(params=params, session_id=session_id))
         try:
             done, _ = await asyncio.wait({capture}, timeout=_SCREENSHOT_WAIT_SECONDS)
-            if not done:
-                await client.send.Target.activateTarget(params={"targetId": self._session.active_target_id})
+            if not done and not await self._session.wake():
+                done, _ = await asyncio.wait({capture}, timeout=_SCREENSHOT_STALL_SECONDS)
+                if not done:
+                    raise ScreenshotsUnavailable("the tab painted no frame to capture")
             return base64.b64decode((await capture)["data"])
         finally:
             capture.cancel()
@@ -1633,10 +1639,10 @@ class CdpPage(Page):
         # A pointer click normally focused the document already; background tabs still need activation.
         script = self._focus_script(prepare_fill=prepare_fill, secret=secret)
         if activate:
-            await self._session.client.send.Target.activateTarget(params={"targetId": self._session.active_target_id})
+            await self._session.bring_to_front()
         result = await self._evaluate(session_id, f"{script}({local_id}, {json.dumps(activate)})")
         if result is None:
-            await self._session.client.send.Target.activateTarget(params={"targetId": self._session.active_target_id})
+            await self._session.bring_to_front()
             result = await self._evaluate(session_id, f"{script}({local_id}, true)")
         return bool(result)
 

@@ -38,13 +38,14 @@ from fastbrowse.models import (
     StepOutcome,
     Unavailable,
 )
-from fastbrowse.page import BrowserError, NavigationTimeout, SiteUnreachable
+from fastbrowse.page import BrowserError, NavigationTimeout, ScreenshotsUnavailable, SiteUnreachable
 from fastbrowse.run import _browser, connect_cdp, resolve_cdp_port, run_task
 from tests.browser.conftest import RecordingArtifactSink
 from tests.test_policy import ScriptedJev
 from tests.test_retrieval import ScriptedLLM
 
-CONNECTION = BrowserConnection(cdp_url="ws://localhost:9222", remote=False)
+# What headless local Chrome yields: no window follows the tab, so the run activates it.
+CONNECTION = BrowserConnection(cdp_url="ws://localhost:9222", remote=False, foreground=True)
 chrome_adapter = importlib.import_module("fastbrowse.adapters.local_chrome")
 page_module = importlib.import_module("fastbrowse.browser.page")
 
@@ -82,6 +83,84 @@ class CdpTransport:
             "Target.attachToTarget": {"sessionId": "session"},
             "Runtime.evaluate": {"result": {"value": "loading"}},
         }.get(method, {})
+
+
+BACKGROUND = CONNECTION.model_copy(update={"foreground": False})
+
+
+@pytest.mark.parametrize("attach", [False, True], ids=["its own tab", "an attached window"])
+async def test_a_run_in_a_visible_window_never_activates_its_target(
+    monkeypatch: pytest.MonkeyPatch, attach: bool
+) -> None:
+    """Chrome raises and focuses the whole window of a tab that is activated or opened in front."""
+    transport = CdpTransport(monkeypatch)
+    transport.results["Target.getTargets"] = [
+        {"targetInfos": [{"targetId": "owned", "type": "page", "url": "https://example.com/", "title": "Open"}]}
+    ]
+    transport.results["Target.getTargetInfo"] = [{"targetInfo": {"url": "https://example.com/pop", "title": "Popup"}}]
+    async with BrowserSession(BACKGROUND.model_copy(update={"attach": attach}), RecordingArtifactSink()) as session:
+        session._popups["popup"] = ("owned", asyncio.get_running_loop().create_future())
+        await session._adopt_popup("popup", "owned")
+        await session.switch_tab("popup")
+        await session.bring_to_front()
+    assert not {"Target.activateTarget", "Page.bringToFront"} & set(transport.calls)
+    created = [params for method, params, _ in transport.requests if method == "Target.createTarget"]
+    assert created == ([] if attach else [{"url": "about:blank", "background": True}])
+    # Both tabs render and take typing where they are instead: focus emulation, and a cast that keeps them painting.
+    for method, params in (
+        ("Emulation.setFocusEmulationEnabled", {"enabled": True}),
+        ("Page.startScreencast", browser_session._KEEP_PAINTING),
+    ):
+        assert transport.requests.count((method, params, "session")) == 2
+
+
+async def test_a_run_nobody_sits_in_front_of_activates_its_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = CdpTransport(monkeypatch)
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+        await session.switch_tab("owned")
+    assert transport.calls.count("Target.activateTarget") == 2
+    assert ("Target.createTarget", {"url": "about:blank"}, None) in transport.requests
+    assert not {"Emulation.setFocusEmulationEnabled", "Page.startScreencast"} & set(transport.calls)
+
+
+@pytest.mark.parametrize(
+    ("chrome", "foreground", "expected"),
+    [
+        (LocalChrome(), False, True),
+        (LocalChrome(headed=True), False, False),
+        (LocalChrome(headed=True), True, True),
+    ],
+    ids=["headless", "a visible window", "a visible window asked to the front"],
+)
+async def test_local_chrome_comes_forward_only_headless_or_when_asked(
+    monkeypatch: pytest.MonkeyPatch, chrome: LocalChrome, foreground: bool, expected: bool
+) -> None:
+    launched: list[list[str]] = []
+
+    class Chrome:
+        def __init__(self, command: list[str], **_: object) -> None:
+            launched.append(command)
+
+        def terminate(self) -> None:
+            pass
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    monkeypatch.setattr(chrome_adapter, "find_chrome", lambda _: "chrome")
+    monkeypatch.setattr(chrome_adapter.subprocess, "Popen", Chrome)
+    monkeypatch.setattr(chrome_adapter, "_wait_for_ws", lambda *_: "ws://127.0.0.1:1/devtools/browser/x")
+    async with httpx.AsyncClient() as http, _browser(None, chrome, http, [], foreground=foreground) as connection:
+        assert connection.foreground is expected
+    assert ("--headless=new" in launched[0]) is not chrome.headed
+
+
+async def test_a_handed_over_browser_stays_in_the_background_unless_asked() -> None:
+    async with httpx.AsyncClient() as http:
+        async with _browser(None, LocalChrome(), http, [], cdp_url="ws://x") as connection:
+            assert not connection.foreground
+        async with _browser(None, LocalChrome(), http, [], cdp_url="ws://x", foreground=True) as connection:
+            assert connection.foreground
 
 
 async def test_session_setup_sends_independent_commands_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -364,6 +443,20 @@ async def test_cancelling_page_wait_drains_cdp_task(monkeypatch: pytest.MonkeyPa
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_a_background_tab_that_paints_nothing_has_no_screenshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only bringing the window forward forces a frame, so a capture that stalls there ends instead of hanging."""
+    transport = CdpTransport(monkeypatch)
+    transport.blocked["Page.captureScreenshot"] = asyncio.Event()
+    monkeypatch.setattr(page_module, "_SCREENSHOT_WAIT_SECONDS", 0.01)
+    monkeypatch.setattr(page_module, "_SCREENSHOT_STALL_SECONDS", 0.01)
+    async with BrowserSession(BACKGROUND, RecordingArtifactSink()) as session:
+        with pytest.raises(ScreenshotsUnavailable):
+            await CdpPage(session, Config()).screenshot()
+    assert "Target.activateTarget" not in transport.calls
+    assert transport.requests.count(("Page.startScreencast", browser_session._KEEP_PAINTING, "session")) == 2
+    assert "Page.captureScreenshot" in transport.finished
 
 
 async def test_initial_navigation_error_returns_error_result(monkeypatch: pytest.MonkeyPatch) -> None:

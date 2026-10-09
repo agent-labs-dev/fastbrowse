@@ -104,7 +104,10 @@ def local_chrome(options: LocalChrome) -> Generator[BrowserConnection]:
             env=system_environment(),
         )
         try:
-            yield BrowserConnection(cdp_url=_wait_for_ws(active, proc, log), live_url=None, remote=False)
+            # Headless Chrome has no window for an activated tab to raise, so it keeps the foreground path.
+            yield BrowserConnection(
+                cdp_url=_wait_for_ws(active, proc, log), live_url=None, remote=False, foreground=not options.headed
+            )
         finally:
             proc.terminate()
             try:

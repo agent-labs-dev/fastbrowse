@@ -173,6 +173,8 @@ async def test_fields_left_out_leave_run_task_its_own_defaults() -> None:
     assert call["limits"] is None and call["authorization"] is None
     assert call["downloads"] is None and call["record"] is None and call["viewport"] is None
     assert call["cloud_allow_resizing"] is False and call["attach"] is False
+    # A run in a visible window stays behind it unless the caller asks to watch.
+    assert call["foreground"] is False and (await _received(foreground=True))["foreground"] is True
 
 
 async def test_the_browser_is_the_cloud_one_unless_the_run_asks_for_another() -> None:

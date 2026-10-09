@@ -74,6 +74,7 @@ async def connect_cdp(
     host: str = "127.0.0.1",
     target_match: str | None = None,
     attach: bool = True,
+    foreground: bool = False,
     allowed_origins: Sequence[str] | None = None,
     check_access: Callable[[], Awaitable[None]] | None = None,
     config: Config | None = None,
@@ -84,9 +85,11 @@ async def connect_cdp(
 
     Pass `port` to look the websocket URL up from `http://<host>:<port>/json/version`, or `cdp_url` directly.
     By default the page is an existing window (the first whose title or URL contains `target_match`, if given),
-    and it is left open on exit. `allowed_origins` limits the page to those exact origins and `check_access` is
-    awaited before every browser read and action (both described on `run_task`). Downloads go to `artifact_sink`,
-    else to `downloads`, else to a scratch directory removed on exit.
+    and it is left open on exit. The window is neither raised nor focused unless `foreground` is set, though
+    Chrome itself activates a visible window whose front tab receives a pointer press. `allowed_origins` limits
+    the page to those exact origins and `check_access` is awaited before every browser read and action (both
+    described on `run_task`). Downloads go to `artifact_sink`, else to `downloads`, else to a scratch directory
+    removed on exit.
     """
     await check_browser_access(check_access)
     if port is not None and cdp_url is not None:
@@ -101,6 +104,7 @@ async def connect_cdp(
         remote=True,
         attach=attach or target_match is not None,
         target_match=target_match,
+        foreground=foreground,
         allowed_origins=None if allowed_origins is None else tuple(allowed_origins),
     )
     config = config or Config()
@@ -124,6 +128,7 @@ async def _browser(
     cdp_port: int | None = None,
     attach: bool = False,
     target_match: str | None = None,
+    foreground: bool = False,
     proxy_country: str | None = "us",
     viewport: tuple[int, int] | None = None,
     allow_resizing: bool = False,
@@ -150,6 +155,7 @@ async def _browser(
             remote=True,
             attach=attach or (target_match is not None),
             target_match=target_match,
+            foreground=foreground,
         )
         return
     if attach or target_match is not None:
@@ -158,7 +164,7 @@ async def _browser(
         if profile is not None:
             raise BrowserError("cloud_profile names a Browser Use Cloud profile, which needs a cloud browser")
         async with async_local_chrome(chrome) as connection:
-            yield connection
+            yield connection.model_copy(update={"foreground": connection.foreground or foreground})
         return
     remote = BrowserUseCloudBrowser(
         key,
@@ -188,6 +194,7 @@ async def run_task(
     cdp_port: int | None = None,
     attach: bool = False,
     target_match: str | None = None,
+    foreground: bool = False,
     allowed_origins: Sequence[str] | None = None,
     check_access: Callable[[], Awaitable[None]] | None = None,
     proxy_country: str | None = "us",
@@ -225,6 +232,9 @@ async def run_task(
     URL contains `target_match`, or else the first page. It leaves that window open, and with no `start` it begins
     on whatever the window shows. New windows that no page opened, as an Electron app's main process opens them,
     join the run only with `target_match`; without it they could be tabs a person opened in the same browser.
+    A run in a visible window (a handed-over browser, or local Chrome with `LocalChrome.headed`) works in the
+    background: its tab opens behind the window's current one and the window is neither raised nor focused.
+    `foreground` brings the tab and its window to the front instead, to watch the run.
     Otherwise `browser_api_key` runs on a Browser Use Cloud browser, and with neither,
     local Chrome as `chrome` describes (default: from `Settings`, headless with a throwaway profile).
     `cloud_profile` names a profile on that cloud account, so a site someone signed into once in that
@@ -257,7 +267,8 @@ async def run_task(
 
     `cursor` draws the agent's cursor over a visible local or attached Chrome through the Cua Driver, on Linux
     with X11; it never moves the real pointer or changes focus, and does nothing where it cannot place the cursor
-    exactly, including with no `cua-driver` installed, no display, a headless or cloud browser.
+    exactly, including with no `cua-driver` installed, no display, a headless or cloud browser. It implies
+    `foreground`, since the cursor lies over the window's front tab.
     """
     config = config or Config()
     settings = load_settings()
@@ -289,6 +300,8 @@ async def run_task(
                     cdp_port=cdp_port,
                     attach=attach,
                     target_match=target_match,
+                    # The cursor is drawn over the window's front tab, so the run's tab has to be that one.
+                    foreground=foreground or cursor,
                     proxy_country=proxy_country,
                     viewport=viewport,
                     allow_resizing=cloud_allow_resizing,

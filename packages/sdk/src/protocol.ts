@@ -334,6 +334,7 @@ export interface RunParams {
   cdp_port?: number | null;
   attach?: boolean;
   target_match?: string | null;
+  foreground?: boolean;
   proxy_country?: string | null;
   viewport?: [number, number] | null;
   cloud_allow_resizing?: boolean;

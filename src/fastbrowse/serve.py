@@ -473,6 +473,7 @@ class Server:
             "cdp_port": params.cdp_port,
             "attach": params.attach,
             "target_match": params.target_match,
+            "foreground": params.foreground,
             "proxy_country": options.proxy_country(proxy_country),
             "viewport": params.viewport,
             "cloud_allow_resizing": params.cloud_allow_resizing,

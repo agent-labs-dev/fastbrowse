@@ -96,6 +96,7 @@ the quotes behind the answer, and cost by component.
 | `--cdp-port PORT` | the same, for a browser or Electron app listening on `127.0.0.1:PORT`; the URL is read from its `/json/version` |
 | `--attach` | with `--cdp-url` or `--cdp-port`, drive a window already open instead of opening a tab, and leave it open after the run |
 | `--target-match TEXT` | attach to the first window whose title or URL contains `TEXT` (implies `--attach`) |
+| `--foreground` | bring the run's tab and its browser window to the front, to watch it. Without it a run in a visible window works behind the window's current tab; see [working in the background](#working-in-the-background) for what Chrome still brings forward |
 | `--proxy-country CC` | browse from that country (Browser Use's codes: `uk`, `de`, ...; default `us`), so a shop shows its local delivery and prices |
 | `--authorize` | allow submit, pay, delete and send; without it the run stops at `needs_confirmation` first |
 | `--secret NAME=ENV_VAR[@ORIGIN]` | let the agent type `$ENV_VAR` on the declared origin, or the `--start` origin if omitted; models only see `NAME`. An explicit origin needs no `--start` |
@@ -104,7 +105,7 @@ the quotes behind the answer, and cost by component.
 | `--downloads DIR` | keep downloaded files |
 | `--json` | full result instead of the answer |
 | `--record FILE` | save an MP4 of the tab, each step captioned, ending on the answer, time and cost (needs `ffmpeg`; the captions need its libass), e.g. `recordings/demo.mp4`, which git ignores; `demo.plain.mp4` beside it has no captions. It shows what the pages showed, so watch it before sharing |
-| `--cursor` | draw the agent's cursor over a visible Chrome (`--headed`, or one you attach to) with [Cua Driver](https://github.com/trycua/cua), so you can watch where it acts. Off by default. It needs `cua-driver` on `PATH` and an X11 display on Linux, and does nothing without them |
+| `--cursor` | draw the agent's cursor over a visible Chrome (`--headed`, or one you attach to) with [Cua Driver](https://github.com/trycua/cua), so you can watch where it acts. Off by default. It needs `cua-driver` on `PATH` and an X11 display on Linux, and does nothing without them It brings the run's tab to the front as `--foreground` does, since the cursor lies over the window's front tab |
 
 ```sh
 export SAUCE_PASSWORD=secret_sauce
@@ -121,6 +122,9 @@ google-chrome --user-data-dir="$HOME/.fastbrowse/amazon" https://www.amazon.com/
 uv run fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
   --start https://www.amazon.com/ --profile ~/.fastbrowse/amazon --headed
 ```
+
+`--headed` is not needed once the profile is signed in: without it the run is headless and opens no window. A
+headed run opens one window when Chrome starts and then works in a tab behind it.
 
 On a cloud browser the profile lives on the [Browser Use Cloud](https://cloud.browser-use.com) account
 rather than on disk, and `--cloud-profile ID` runs as it. Whoever signed that profile in did so once, in a
@@ -163,6 +167,26 @@ and the window stays open when the run ends. `--target-match` picks the first wi
 the text; `--attach` alone takes the first window, skipping DevTools. Popups the window opens join the run.
 Windows that nothing opened, as an Electron app's main process opens them, join only with `--target-match`,
 because in a browser such a window could equally be a tab you opened yourself.
+
+### Working in the background
+
+A run in a visible window, whether `--headed` or a browser you handed over, opens its tab behind the window's
+current tab and renders it there under focus emulation. Nothing the run sends raises or focuses the window. `--foreground` brings the tab and its window to the front instead, to watch the run. Three things
+are Chrome's own and still bring a window forward: a headed Chrome showing its window as it starts, a popup a
+page opens, and, with `--attach`, a click in a window's front tab.
+
+For a signed-in browser that stays open and asks for nothing, start a Chrome of its own once, sign in, and leave
+it running. Each run then opens and closes a background tab in it:
+
+```sh
+google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.fastbrowse/chrome"
+uv run fastbrowse "Report my open orders." --start https://www.amazon.com/ --cdp-port 9222
+```
+
+Chrome ignores `--remote-debugging-port` on its default data directory, so the directory of its own is required.
+Your everyday Chrome can instead offer an endpoint from `chrome://inspect/#remote-debugging`, but it then stops
+every connection on an "Allow remote debugging?" prompt that takes focus and waits for a click, once per run.
+Any program on the machine can drive a browser that listens on a debugging port.
 
 A DevTools port gives any program on the machine full control of the app, including its signed-in sessions.
 Close the app, or restart it without the flag, when you are done.
@@ -274,7 +298,8 @@ asyncio.run(main())
 the run opens its own tab and closes the tabs it owns. It leaves the browser and pre-existing tabs open;
 cookies and other changes made by the task can persist. `cdp_port=` finds the same browser from its DevTools
 port on `127.0.0.1`. `attach=True` and `target_match=` drive a window already open and leave it open, as
-`--attach` and `--target-match` do. Pass `browser_api_key=` to start a cloud browser;
+`--attach` and `--target-match` do, and `foreground=True` brings the run's tab to the front as `--foreground`
+does. Pass `browser_api_key=` to start a cloud browser;
 with neither argument, it runs local Chrome. Passing both is an error. `cloud_extensions=[...]` loads up to
 three of your account's ready Browser Use Cloud extensions, by ID, into that cloud browser; it is an error with
 local or attached browsers.
@@ -411,7 +436,7 @@ value leaves your vault at that moment and a one-time code is fresh. `until` get
 and anything but `true` keeps the run from `complete`. `onFrame` receives JPEG frames of the active tab;
 without it no frame is sent. A callback that throws ends the run with status `error`. The other options are
 the command line's: `inputs`, `attachments` as bytes, `downloads`, `record`, and the browser choices
-`chrome`, `cloudProfile`, `cdpUrl`, `cdpPort`, `attach`, `targetMatch` and `proxyCountry`, which
+`chrome`, `cloudProfile`, `cdpUrl`, `cdpPort`, `attach`, `targetMatch`, `foreground` and `proxyCountry`, which
 `Fastbrowse.start` also takes as defaults for every run. A run passes `null` for one of them to go without
 that default.
 
@@ -464,7 +489,7 @@ The server's flags decide what a calling model may do; a call can ask for less, 
 
 | Flag | Effect |
 |:--|:--|
-| `--local`, `--headed`, `--profile DIR`, `--downloads DIR`, `--cursor` | as for the CLI, fixed for every call |
+| `--local`, `--headed`, `--profile DIR`, `--foreground`, `--downloads DIR`, `--cursor` | as for the CLI, fixed for every call |
 | `--cloud-profile ID` | every call runs signed in as that cloud profile; a calling model cannot choose it |
 | `--allow-authorize` | let a call pass `authorize` to go through irreversible actions; without it they always stop at `needs_confirmation` |
 | `--secret NAME=ENV_VAR@ORIGIN` | typed when a call's start page is on `ORIGIN` (`https://*.site.com` covers its hosts); the model sees `NAME` only |

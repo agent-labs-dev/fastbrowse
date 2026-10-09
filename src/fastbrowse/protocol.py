@@ -153,6 +153,9 @@ class RunParams(Params):
     cdp_port: int | None = None
     attach: bool = False
     target_match: str | None = None
+    foreground: bool = False
+    """Bring the run's tab and its browser window to the front, to watch it. Otherwise a visible window stays in
+    the background."""
     proxy_country: str | None = None
     viewport: tuple[int, int] | None = None
     cloud_allow_resizing: bool = False
