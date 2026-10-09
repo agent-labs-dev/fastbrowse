@@ -233,6 +233,25 @@ async def test_a_step_abandoned_while_waiting_for_the_plan_leaves_the_plan_to_th
     assert await state.await_plan() is plan
 
 
+async def test_plan_trace_retains_counting_mode_without_requirement_text() -> None:
+    from fastbrowse.telemetry import traced
+
+    state = await run_state()
+    requirement = Requirement(id="r", text="Private task wording", kind=RequirementKind.INFORMATION, count_records=True)
+    plan = Plan(requirements=(requirement,), answer_expected=True)
+
+    async def planned() -> Generation[Plan]:
+        return Generation(data=plan, cost=FREE)
+
+    state.ready_plan, state.planning = None, asyncio.create_task(planned())
+    with traced() as events:
+        await state.await_plan()
+        await state.await_plan()
+    assert events == [
+        {"event": "plan_shape", "requirements": [{"id": "r", "kind": "information", "count_records": True}]}
+    ]
+
+
 async def test_missing_personal_information_stops_once_recovery_returns_to_it() -> None:
     """The first missing verdict is recovery's to route around, since most such fields are optional; a field
     recovery sends the run back to is required, and ends it."""
