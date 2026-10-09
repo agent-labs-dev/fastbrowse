@@ -4,7 +4,7 @@ Thanks for looking at fastbrowse. Bug reports, eval failures and pull requests a
 covers what a change needs to be merged; [AGENTS.md](AGENTS.md) has the architecture, invariants and house
 style in full.
 
-fastbrowse is pre-alpha. Interfaces change without deprecation, and a change that makes the agent simpler or
+fastbrowse is in beta. Interfaces change without deprecation, and a change that makes the agent simpler or
 more accurate beats one that keeps an old behaviour working.
 
 ## Before you start

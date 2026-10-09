@@ -13,7 +13,7 @@ cited answers or schema-validated data. Code controls credentials, authorization
 [![pypi](https://img.shields.io/pypi/v/fastbrowse?style=flat-square&color=6366F1)](https://pypi.org/project/fastbrowse/)
 ![python](https://img.shields.io/badge/python-3.13%20%7C%203.14-475569?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-475569?style=flat-square)
-![status](https://img.shields.io/badge/status-pre--alpha-6366F1?style=flat-square)
+![status](https://img.shields.io/badge/status-beta-6366F1?style=flat-square)
 
 </div>
 
