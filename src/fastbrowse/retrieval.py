@@ -2153,7 +2153,7 @@ async def _read_choices(
     if not requirements:
         return _ChoiceRead()
     previous: list[JsonValue] = []
-    seen: set[tuple[str, str, str | None, str | None]] = set()
+    seen: set[tuple[str, str, str | None, str | None, tuple[str, ...]]] = set()
     blocks = {(block.source_id, block.frame_id): block for block in capture.blocks}
     for fact in notes.facts if notes is not None else ():
         evidence = fact.evidence
@@ -2172,12 +2172,21 @@ async def _read_choices(
             if block is not None
             else None
         )
-        identity = (fact.text, evidence.quote, evidence.frame_id, changes)
+        identity = (fact.text, evidence.quote, evidence.frame_id, changes, evidence.heading_path)
         if identity in seen:
             continue
         # Recaptures mint citation ids, but repeating identical context can crowd the novelty check out of its budget.
         seen.add(identity)
-        previous.append({"text": fact.text, "quote": evidence.quote, "frame_id": evidence.frame_id, "changes": changes})
+        packet: dict[str, JsonValue] = {
+            "text": fact.text,
+            "quote": evidence.quote,
+            "frame_id": evidence.frame_id,
+            "changes": changes,
+        }
+        # Equal field values under different headings can belong to different records.
+        if evidence.heading_path:
+            packet["heading_path"] = list(evidence.heading_path)
+        previous.append(packet)
     candidates = read_candidates(capture)
     if not candidates and not previous and next(_iter_read_candidates(capture, capture.blocks), None) is None:
         logger.debug("read reader=llm reason=no_bounded_candidate_set")

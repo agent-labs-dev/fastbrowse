@@ -3917,7 +3917,13 @@ async def test_duplicate_prior_packets_do_not_displace_the_novelty_check() -> No
 
 @pytest.mark.parametrize(
     "field,value",
-    [("text", "Member price"), ("quote", "Price: GBP29.99"), ("frame_id", "child"), ("source_id", "removed")],
+    [
+        ("text", "Member price"),
+        ("quote", "Price: GBP29.99"),
+        ("frame_id", "child"),
+        ("source_id", "removed"),
+        ("heading_path", "Member price"),
+    ],
 )
 async def test_distinct_prior_packet_context_is_retained(field: str, value: str) -> None:
     page = capture((BlockKind.PARAGRAPH, "Price: GBP25.99"))
@@ -3927,7 +3933,10 @@ async def test_distinct_prior_packet_context_is_retained(field: str, value: str)
         update={
             "text": value if field == "text" else first.text,
             "evidence": evidence.model_copy(
-                update={"capture_sha256": "0" * 64, **({field: value} if field != "text" else {})}
+                update={
+                    "capture_sha256": "0" * 64,
+                    **({field: (value,) if field == "heading_path" else value} if field != "text" else {}),
+                }
             ),
         }
     )
@@ -3939,6 +3948,9 @@ async def test_distinct_prior_packet_context_is_retained(field: str, value: str)
     state, questions = jev.requests[0]
     assert isinstance(state, dict) and isinstance(state["previous"], list)
     assert len(state["previous"]) == 2 and "novelty" in questions
+    if field == "heading_path":
+        second_packet = state["previous"][1]
+        assert isinstance(second_packet, dict) and second_packet["heading_path"] == [value]
     assert len(llm.calls) == 1 and notes.facts == (first, second)
 
 

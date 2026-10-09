@@ -22,7 +22,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   Long referral addresses no longer repeat for every fact, leaving more room for required quotes and their basis.
 
 - Repeated reads keep one copy of each identical prior-evidence packet in the novelty check. Distinct
-  quotes, summaries, frames and changes remain separate, and every stored fact and citation is retained.
+  quotes, summaries, frames, headings and changes remain separate, and every stored fact and citation is retained.
   Duplicate context no longer crowds this check out of its input budget.
 
 - The agent skill uses uncapped resource defaults, with limits supplied by the caller's task budget.
