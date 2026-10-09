@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.20] - 2026-10-09
+
 - Captured hover captions retain their DOM container and sibling position as source metadata.
   Answer checks can bind positional subjects without treating that context as a quoted value.
 
