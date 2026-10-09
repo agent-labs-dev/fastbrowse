@@ -4433,6 +4433,33 @@ async def test_a_table_excerpt_retains_cells_identifying_comparison_columns() ->
     assert evidence.quote == text
 
 
+@pytest.mark.parametrize("excerpt", ["A,12", "B,7"])
+async def test_download_excerpt_proves_completeness_only_when_it_covers_the_file(excerpt: str) -> None:
+    from fastbrowse.verification import _output_context
+
+    page = capture((BlockKind.TABLE, "item,total\nA,12\nB,7\n"))
+    page = page.model_copy(update={"blocks": (page.blocks[0].model_copy(update={"complete_source": True}),)})
+    notes = Notes()
+    result = await read(
+        ScriptedLLM(
+            [
+                {
+                    "claims": [{"cite": {"first": "s0", "last": "s0"}, "excerpt": excerpt, "text": excerpt}],
+                    "answered": False,
+                }
+            ]
+        ),
+        page,
+        "Read the item totals",
+        ["r"],
+        notes,
+    )
+    answer = assemble_answer((Claim(text=excerpt, evidence_ids=(fact_id(result.facts[0]),)),), notes, ())
+    context = _output_context(answer, notes)
+    assert context is not None
+    assert context.claims[0].cited_sources[0].complete_source is (excerpt == "B,7")
+
+
 @pytest.mark.parametrize("same_frame", [True, False])
 async def test_read_heading_context_becomes_a_verified_citation(same_frame: bool) -> None:
     heading = "Member price 9"

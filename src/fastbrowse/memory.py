@@ -96,6 +96,7 @@ class Notes:
     def __init__(self, facts: Iterable[Fact] = ()) -> None:
         self._facts: dict[str, Fact] = {}
         self._requirements: dict[str, set[str]] = {}
+        self._retired: set[str] = set()
         self._tally_records: set[str] = set()
         self._record_ids: dict[tuple[str, str, str], list[dict[str, str]]] = {}
         self._continuation_records: dict[str, set[str]] = {}
@@ -143,7 +144,11 @@ class Notes:
     def current(self, key: str) -> bool:
         """Retired facts remain history, including derived facts whose original quotes remain in context."""
         fact = self._facts.get(key)
-        return fact is not None and (fact.requirement_id is None or bool(self._requirements[key]))
+        return (
+            fact is not None
+            and key not in self._retired
+            and (fact.requirement_id is None or bool(self._requirements[key]))
+        )
 
     @property
     def tallies(self) -> tuple[Tally, ...]:
@@ -216,6 +221,7 @@ class Notes:
     def add(self, fact: Fact) -> bool:
         """Return whether a new span was added; reused spans still evidence other requirements."""
         key = fact_id(fact)
+        self._retired.discard(key)
         requirements = self._requirements.setdefault(key, set())
         if fact.requirement_id is not None:
             requirements.add(fact.requirement_id)
@@ -256,7 +262,6 @@ class Notes:
 
         After a date picker's choice was corrected from 31/10 to 28/11, a new read quoted the new date, but the
         answer still quoted the old one, since both facts evidenced the requirement."""
-        supporting = self.supporting(requirement_id)
         fresh = tuple(
             evidence for evidence in self.supporting_evidence(requirement_id) if evidence.capture_sha256 == sha256
         )
@@ -265,7 +270,11 @@ class Notes:
         # A capture includes child frames whose quotes belong to their own addresses, not the parent page's.
         addresses = {_address(url)} | {_address(span.url) for span in fresh}
         evidence = self.evidence
-        for key, fact in supporting:
+        # Virtualized lists replace visible rows while a tally or comparison still depends on those already read.
+        kept = self._tally_records | set(self.comparison_records())
+        for key, fact in self._facts.items():
+            if key in kept:
+                continue
             sources = (
                 (evidence.get(source) for source in self.expand_evidence_ids((key,)))
                 if fact.basis and fact.tally is None
@@ -278,7 +287,8 @@ class Notes:
                 and not shows(text, source.quote)
                 for source in sources
             ):
-                # A vanished quote cannot remain a current value through another requirement sharing its span.
+                # Context quotes can contradict a later value even when they never evidenced a requirement.
+                self._retired.add(key)
                 self._requirements[key].clear()
 
     def read_for(self, requirement_id: str) -> tuple[Evidence, ...]:

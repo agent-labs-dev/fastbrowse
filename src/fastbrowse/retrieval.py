@@ -239,6 +239,12 @@ def _evidence(capture: Capture, block: Block, start: int, end: int) -> Evidence:
         start=start,
         end=end,
         quote=capture.text[start:end],
+        complete_source=(
+            block.complete_source
+            and block.start <= start < end <= block.end
+            and not capture.text[block.start : start].strip()
+            and not capture.text[end : block.end].strip()
+        ),
         rendered_text=not any(
             item.kind is BlockKind.OBSERVATION and item.start < end and item.end > start for item in capture.blocks
         ),

@@ -435,6 +435,7 @@ async def llm_verify(
 class _OutputSource(Frozen):
     url_ref: str
     quote: str
+    complete_source: bool = False
     source_id: str
     frame_id: str | None
     page_title: str | None
@@ -536,6 +537,7 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
                 _OutputSource(
                     url_ref=urls.setdefault(evidence.url, f"u{len(urls)}"),
                     quote=evidence.quote,
+                    complete_source=evidence.complete_source,
                     control_context=evidence.control_context,
                     source_id=evidence.source_id,
                     frame_id=evidence.frame_id,
@@ -803,6 +805,7 @@ async def check_answer_outputs(
             source = _OutputSource(
                 url_ref=alias,
                 quote=evidence.quote,
+                complete_source=evidence.complete_source,
                 control_context=evidence.control_context,
                 source_id=evidence.source_id,
                 frame_id=evidence.frame_id,
@@ -948,7 +951,10 @@ async def check_answer_outputs(
                 "Control context identifies the quoted content's actual DOM container and sibling position, "
                 "not an absent field value. Derived outputs can calculate from quoted records only when "
                 "every operand and its association "
-                "is explicit; the source need not state the conclusion literally. Counted-record metadata gives "
+                "is explicit; the source need not state the conclusion literally. A quote marked complete_source "
+                "contains the entire downloaded text file. "
+                "This proves coverage of that file only, not a wider collection or missing operand associations. "
+                "Counted-record metadata gives "
                 "code-maintained distinct counts, their scope, cited record indices and collection completeness. "
                 "A complete count can rest on its matching quoted records without a page stating the total. "
                 "An incomplete or differently scoped count cannot establish the requested whole-list total. "
@@ -999,6 +1005,8 @@ async def check_answer_outputs(
                 "treat different entities or explicitly different configurations as contradictions. "
                 "Derived outputs can "
                 "calculate from quoted records only when every operand and its association is explicit. "
+                "A quote marked complete_source contains the entire downloaded text file and establishes coverage "
+                "of that file only. Partial excerpts and truncated downloads do not establish whole-file totals. "
                 "Control context binds quoted content to its actual DOM container and sibling position, "
                 "but cannot replace a missing quoted value. Counted-record metadata supplies code-maintained "
                 "counts and collection completeness, with "

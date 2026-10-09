@@ -4104,13 +4104,13 @@ def _without_missing(observation: Observation, missing: Set[tuple[str, str | Non
 def _follow_recovery(
     state: _RunState, observation: Observation, decision: Decision, *, uncertain: bool
 ) -> Decision | None:
-    """The action recovery named, when Jev is unsure or repeats a failed read and the control still offers it.
+    """The action recovery named, when Jev cannot act or repeats a failed read and the control still offers it.
 
     Recovery names one action on one control, or on the page itself. Handed back to Jev only as a hint, it left
     Jev choosing between two Search buttons at 0.49 until the recovery budget ran out, the named action never taken.
     """
     directed, state.directed = state.directed, None
-    if not uncertain or directed is None:
+    if directed is None or (not uncertain and decision.operation is not Operation.ESCALATE):
         return None
     operation, control_id = directed
     if operation is Operation.NAVIGATE:
