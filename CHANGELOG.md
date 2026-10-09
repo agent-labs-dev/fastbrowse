@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Recovery checks whether a changed page satisfies the task before stopping for lack of further actions.
+  The completion verifier still rejects unfinished work.
+
 - Requests to expand or load content until a stopping condition keep that page change as an action
   requirement. A displayed total no longer replaces the requested work in the plan. The feed fixture
   also checks that every remaining batch was loaded, and advances to task version 6.

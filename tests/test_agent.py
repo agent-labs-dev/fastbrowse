@@ -308,6 +308,48 @@ async def test_recovery_giving_up_on_a_missing_value_ends_the_run_needing_input(
     page.act.assert_not_called()
 
 
+@pytest.mark.parametrize("fulfilled", [False, True])
+async def test_recovery_with_no_more_actions_still_verifies_a_finished_goal(fulfilled: bool) -> None:
+    state = await run_state()
+    state.task = "Select the requested option."
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r", text="Select the requested option", kind=RequirementKind.ACTION),),
+        answer_expected=False,
+    )
+    state.history.append(
+        HistoryEntry(
+            operation=Operation.CLICK, target="Requested option", outcome=StepOutcome.EXECUTED, page_changed=True
+        )
+    )
+    obs = observation(()).model_copy(
+        update={"viewport_text": "Requested option selected" if fulfilled else "Different option selected"}
+    )
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=obs)
+    page.screenshot = AsyncMock(return_value=b"")
+    page.artifacts = ()
+    recovery: JsonValue = {
+        "diagnosis": "The requested option is already selected",
+        "next_subgoal": "No further action",
+        "give_up": True,
+    }
+    llm = ScriptedLLM([recovery, {"missing": [] if fulfilled else ["r"], "complete": fulfilled}, recovery])
+    agent = Agent(page, ScriptedJev({}, noul=0.0), llm)
+
+    await agent._recover(state, obs, "uncertain next step")
+
+    assert state.directed == (Operation.DONE, None)
+    if fulfilled:
+        result = await agent._finish(state, None, None)
+        assert result is not None and result.status is Status.COMPLETE
+    else:
+        with pytest.raises(_Stop) as stopped:
+            await agent._finish(state, None, None)
+        assert stopped.value.status is Status.STUCK
+    assert sum(purpose is LLMPurpose.VERIFY for purpose, _ in llm.calls) == 1
+    page.act.assert_not_called()
+
+
 @pytest.mark.parametrize("outcome", [StepOutcome.EXECUTED, StepOutcome.STALE])
 async def test_recovery_hint_is_consumed_only_when_action_progresses(outcome: StepOutcome) -> None:
     target = field()

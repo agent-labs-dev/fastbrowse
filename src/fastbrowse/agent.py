@@ -348,6 +348,7 @@ class _RunState:
     """Controls a fill or select has written, by document, so only a field's first new value counts as progress by
     itself. A new document restarts control ids, and its fields would otherwise inherit the last page's writes."""
     recoveries: int = 0
+    terminal_verification_attempted: bool = False
     blank_opening_checked: bool = False
     recovery_log: deque[str] = field(default_factory=lambda: deque(maxlen=_RECOVERY_RECORDS))
     recovered_at: int = 0
@@ -2743,6 +2744,36 @@ class Agent:
             ledger=state.ledger,
         )
         state.ledger.record(generation.cost)
+        if (
+            generation.data.give_up
+            and not generation.data.needs_input
+            and state.http_failure is None
+            and gives_up_as is Status.STUCK
+            and not state.terminal_verification_attempted
+            and state.ready_plan is not None
+            and bool(state.ready_plan.requirements)
+            and not _unread(state.ready_plan, state.notes)
+            and not state.open_answer_outputs
+            and any(
+                entry.operation is not None and entry.outcome is StepOutcome.EXECUTED and entry.page_changed
+                for entry in state.history
+            )
+        ):
+            # Recovery can find no further action after a goal is reached. The completion verifier, rather
+            # than that diagnosis, decides whether the changed page actually satisfies the requested outcomes.
+            state.terminal_verification_attempted = True
+            generation = generation.model_copy(
+                update={
+                    "data": generation.data.model_copy(
+                        update={
+                            "give_up": False,
+                            "operation": Operation.DONE,
+                            "control": None,
+                            "next_subgoal": "Verify the requested outcomes against the current page.",
+                        }
+                    )
+                }
+            )
         if generation.data.give_up:
             # Asked of the model rather than carried from the step that raised it: a missing value can surface
             # recoveries later, after an attempt to go on without it has failed for its absence.
