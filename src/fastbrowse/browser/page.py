@@ -568,7 +568,11 @@ class CdpPage(Page):
                     source_id=f"download/{download_index}",
                     source_url=download.url,
                     # CSV rows lose their column meanings when treated as unrelated prose excerpts.
-                    kind=BlockKind.TABLE if download.mime in {"text/csv", "application/csv"} else BlockKind.PARAGRAPH,
+                    kind=(
+                        BlockKind.TABLE
+                        if download.mime in {"text/csv", "application/csv"} or download.name.lower().endswith(".csv")
+                        else BlockKind.PARAGRAPH
+                    ),
                     frame_id=None,
                     start=start,
                     end=offset,
