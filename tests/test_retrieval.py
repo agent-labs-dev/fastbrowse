@@ -4872,3 +4872,79 @@ async def test_aggregate_excerpt_retains_subjects_from_its_selected_blocks() -> 
     quotes = [notes.evidence[key].quote for key in notes.expand_evidence_ids((fact_id(fact),))]
     assert page.text in quotes
     assert all(page.text[e.start : e.end] == e.quote for e in notes.evidence.values())
+
+
+@pytest.mark.parametrize("value", ["Valve Atlas", "Valve Ghost"])
+async def test_a_derived_field_can_copy_an_unnamed_subject_from_its_current_quote(value: str) -> None:
+    page = capture(
+        (BlockKind.PARAGRAPH, "Valve Atlas supports 70 bar"), (BlockKind.PARAGRAPH, "Valve Beacon supports 40 bar")
+    )
+    records = [
+        Fact(text=b.source_id, reader=FactReader.LLM, evidence=block_evidence(page, b.source_id)) for b in page.blocks
+    ]
+    notes = Notes(records)
+    winner = Fact(
+        text="Valve Atlas supports the highest pressure.",
+        evidence=None,
+        basis=tuple(notes.evidence),
+        reader=FactReader.LLM,
+    )
+    notes.add(winner)
+    proposal: dict[str, JsonValue] = {"field": "label", "value": value, "source_id": fact_id(winner)}
+    found = await propose_text_fields_from_notes(
+        ScriptedLLM([{"fields": [proposal]}]),
+        "Which valve supports the highest pressure? Give its name.",
+        notes,
+        {"label": Fields.model_fields["label"]},
+    )
+    assert found == ({"label": (value, records[0].evidence)} if value == "Valve Atlas" else {})
+
+
+@pytest.mark.parametrize("second_record", ["Valve Atlas, plastic, 40 bar", "Valve Atlas, brass, 70 bar"])
+async def test_a_derived_field_rejects_distinct_records_with_the_same_name(second_record: str) -> None:
+    page = capture((BlockKind.PARAGRAPH, "Valve Atlas, brass, 70 bar"), (BlockKind.PARAGRAPH, second_record))
+    notes = Notes(
+        Fact(text=b.source_id, reader=FactReader.LLM, evidence=block_evidence(page, b.source_id)) for b in page.blocks
+    )
+    winner = Fact(
+        text="The brass valve has the highest pressure.",
+        evidence=None,
+        basis=tuple(notes.evidence),
+        reader=FactReader.LLM,
+    )
+    notes.add(winner)
+    proposal: dict[str, JsonValue] = {"field": "label", "value": "Valve Atlas", "source_id": fact_id(winner)}
+    assert not await propose_text_fields_from_notes(
+        ScriptedLLM([{"fields": [proposal]}]),
+        "Which valve supports the highest pressure?",
+        notes,
+        {"label": Fields.model_fields["label"]},
+    )
+
+
+async def test_a_retired_derived_field_cannot_reuse_its_old_source_quote() -> None:
+    old_page = capture((BlockKind.PARAGRAPH, "Valve Atlas supports 70 bar"))
+    new_page = capture((BlockKind.PARAGRAPH, "Valve Beacon supports 80 bar"))
+    source = Fact(text="Valve Atlas", reader=FactReader.LLM, evidence=block_evidence(old_page, "s0"))
+    winner = Fact(
+        requirement_id="r",
+        text="Valve Atlas is strongest.",
+        evidence=None,
+        basis=(fact_id(source),),
+        reader=FactReader.LLM,
+    )
+    fresh = Fact(
+        requirement_id="r",
+        text="Valve Beacon is strongest.",
+        reader=FactReader.LLM,
+        evidence=block_evidence(new_page, "s0"),
+    )
+    notes = Notes((source, winner, fresh))
+    notes.supersede("r", new_page.url, new_page.sha256, new_page.text)
+    proposal: dict[str, JsonValue] = {"field": "label", "value": "Valve Atlas", "source_id": fact_id(winner)}
+    assert not await propose_text_fields_from_notes(
+        ScriptedLLM([{"fields": [proposal]}]),
+        "Which of Valve Atlas and Valve Beacon supports the highest pressure?",
+        notes,
+        {"label": Fields.model_fields["label"]},
+    )

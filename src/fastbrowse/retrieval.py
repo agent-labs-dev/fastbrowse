@@ -1795,14 +1795,10 @@ async def propose_text_fields_from_notes(
     tokens: TokenBudget = _DEFAULT_TOKENS,
     ledger: Ledger | None = None,
 ) -> dict[str, tuple[str, Evidence]]:
-    """Text fields from what the run read, which spans every page it compared rather than the one it ended on.
+    """Read text fields from the compared pages rather than only the page the run ended on.
 
-    A comparison ends on one of the pages it compared: pypi-newer answered "requests" correctly three runs in
-    three and returned no data, because it ended on httpx's results, and taken from that page the field came
-    back "httpx". A value is kept only when the note it cites quotes it, up to its punctuation's shape, or when
-    it is a name the task itself gives: a choice between the task's own entities ("httpx or requests"), made on a
-    cited note whose quote is a date, invents nothing. Cited on the derived comparison itself, which quotes
-    nothing, such a name is evidenced by the record the comparison read for it.
+    A derived selection quotes nothing itself, so resolve it to its current quoted basis. A literal value
+    needs one unambiguous record context; a name the task supplies can use the record compared for that name.
     """
     if not notes.facts:
         return {}
@@ -1812,7 +1808,8 @@ async def propose_text_fields_from_notes(
             role="system",
             content=(
                 "# Field extraction\nFor each requested field, give only that field's value, as source_id the "
-                "[id] of the note whose quote contains it. A field that picks one of the "
+                "[id] of the note whose quote contains it. Derived conclusions choose records but do not "
+                "supply quotes: cite an original quoted basis note. A field that picks one of the "
                 "things the task names (which is newer, cheaper, larger) takes that name as the task writes "
                 "it, citing the note that decides it. Omit any other field no note's quote contains; never "
                 "infer it.\n\n"
@@ -1839,8 +1836,8 @@ async def propose_text_fields_from_notes(
     for proposal in result.data.fields:
         value = " ".join(proposal.value.split())
         evidence = cited.get(proposal.source_id)
-        if evidence is None and notes.derived(proposal.source_id) and _names(task, value):
-            evidence = _compared(notes, proposal.source_id, value)
+        if evidence is None and notes.derived(proposal.source_id) and notes.current(proposal.source_id):
+            evidence = _compared(notes, proposal.source_id, value, cited, given=bool(_names(task, value)))
         if proposal.field not in fields or proposal.field in found or not value or evidence is None:
             continue
         if written := _found(evidence.quote, value) or _names(task, value):
@@ -1848,12 +1845,19 @@ async def propose_text_fields_from_notes(
     return found
 
 
-def _compared(notes: Notes, key: str, name: str) -> Evidence | None:
-    """The evidence for a name a derived conclusion picks, which quotes nothing itself: the record it compared that
-    was read for that name. A record read for another name does not evidence this one."""
+def _compared(notes: Notes, key: str, name: str, current: Mapping[str, Evidence], *, given: bool) -> Evidence | None:
+    """A derived field must resolve to its current quoted basis, not to the conclusion's prose."""
     facts = {fact_id(fact): fact for fact in notes.facts}
-    records = (facts[k] for k in notes.expand_evidence_ids((key,)) if k in facts)
-    return next((fact.evidence for fact in records if fact.evidence is not None and _names(fact.text, name)), None)
+    records = [(facts[k], current[k]) for k in notes.expand_evidence_ids((key,)) if k in facts and k in current]
+    matches = [(fact, evidence) for fact, evidence in records if _found(evidence.quote, name)]
+    if not matches and given:
+        matches = [(fact, evidence) for fact, evidence in records if _names(fact.text, name)]
+    # Repeated captures of an unchanged quote agree; distinct record contexts must not inherit each other's field.
+    unique = {
+        (evidence.url, evidence.frame_id, evidence.source_id, evidence.start, evidence.end, evidence.quote): evidence
+        for _, evidence in matches
+    }
+    return next(iter(unique.values())) if len(unique) == 1 else None
 
 
 def _names(task: str, value: str) -> str | None:
