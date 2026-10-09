@@ -28,8 +28,8 @@ async def echo(task: str, *, on_event: EventHandler, **_: Any) -> RunResult:
 
 async def browse_until_cancelled(task: str, *, on_event: EventHandler, **_: Any) -> RunResult:
     """A run that never finishes. Its task is a path, and it writes that file once its browser has closed."""
-    await on_event(BrowserEvent(live_url=None))
     try:
+        await on_event(BrowserEvent(live_url=None))
         return await asyncio.Future()
     finally:
         # A real browser takes a moment to close, and the server has to wait for it.
