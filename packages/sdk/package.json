@@ -1,6 +1,6 @@
 {
   "name": "fastbrowse",
-  "version": "0.5.19",
+  "version": "0.5.20",
   "description": "Browser automation with cited answers, structured output and code-controlled credentials and authorization.",
   "license": "MIT",
   "repository": {
@@ -27,10 +27,10 @@
     "test": "npm run build && node --test \"test/*.test.ts\""
   },
   "optionalDependencies": {
-    "@fastbrowse/darwin-arm64": "0.5.19",
-    "@fastbrowse/darwin-x64": "0.5.19",
-    "@fastbrowse/linux-arm64": "0.5.19",
-    "@fastbrowse/linux-x64": "0.5.19",
-    "@fastbrowse/win32-x64": "0.5.19"
+    "@fastbrowse/darwin-arm64": "0.5.20",
+    "@fastbrowse/darwin-x64": "0.5.20",
+    "@fastbrowse/linux-arm64": "0.5.20",
+    "@fastbrowse/linux-x64": "0.5.20",
+    "@fastbrowse/win32-x64": "0.5.20"
   }
 }

@@ -30,6 +30,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Recordings of attached windows leave the caller's page in place. Explicit submit buttons expose the form's
   destination to the authorization check, while focusing a field does not claim to submit it.
+
+## [0.5.20] - 2026-10-09
+
 - Captured hover captions retain their DOM container and sibling position as source metadata.
   Answer checks can bind positional subjects without treating that context as a quoted value.
 
@@ -49,16 +52,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - The agent skill uses uncapped resource defaults, with limits supplied by the caller's task budget.
   It no longer imposes a 30-step limit or a $0.25 model-spend cap on each delegated task.
+
 - Revealed hover targets keep their labels and sibling positions while their captions are visible.
 
 - Final answer audits retain count scope, collection completeness and the quoted records behind each tally.
 
 - Recovery checks whether a changed page satisfies the task before stopping for lack of further actions.
   The completion verifier still rejects unfinished work.
-
-- Multi-site tasks can open HTTP(S) addresses supplied by the caller even when the current page has no
-  link to the next site. Search choices distinguish entering a query from opening its field. Navigation
-  keeps origin and authorization checks, and dismissed dialogs no longer follow it to the next page.
 
 - Requests to expand or load content until a stopping condition keep that page change as an action
   requirement. A displayed total no longer replaces the requested work in the plan. The feed fixture
@@ -1139,7 +1139,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.19...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.20...HEAD
+[0.5.20]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.20
 [0.5.19]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.19
 [0.5.18]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.18
 [0.5.17]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.17

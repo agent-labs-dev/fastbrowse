@@ -1,6 +1,6 @@
 [project]
 name = "fastbrowse"
-version = "0.5.19"
+version = "0.5.20"
 description = "Browser automation with cited answers, structured output and code-controlled credentials and authorization."
 readme = "README.md"
 license = "MIT"
