@@ -13,16 +13,19 @@ from tests.test_retrieval import ScriptedLLM, block_evidence, capture
 
 
 class IdentityWriter(ScriptedLLM):
-    def __init__(self, scope="entities", quote="Adapter Beacon", ref="q1", url_ref="u1", identity_ids=None):
+    def __init__(
+        self, scope="entities", quote="Adapter Beacon", ref="q1", url_ref="u1", identity_ids=None, extra_identities=()
+    ):
         super().__init__([])
         self.scope, self.quote, self.ref, self.url_ref = scope, quote, ref, url_ref
         self.identity_ids = identity_ids
+        self.extra_identities = list(extra_identities)
 
     async def generate(self, purpose, messages, schema, **kwargs):
         payload = json.loads(messages[-1].content)
         if schema.__name__ == "_OutputIdentities":
             response = {
-                "identities": {"i0": {"source_ref": self.ref, "quote": self.quote}},
+                "identities": [{"id": "i0", "source_ref": self.ref, "quote": self.quote}, *self.extra_identities],
                 "bindings": {
                     key: {
                         "scope": self.scope,
@@ -170,3 +173,12 @@ async def test_duplicate_identity_references_do_not_duplicate_requested_subjects
     notes, answer = two_entity_answer()
     writer = IdentityWriter(identity_ids=["i0", "i0"])
     assert await check_answer_outputs(RoutingJev(), writer, answer, notes, ("Report Adapter Beacon exact port count.",))
+
+
+async def test_an_identity_id_naming_two_quotes_fails_closed():
+    notes, answer = two_entity_answer()
+    writer = IdentityWriter(extra_identities=[{"id": "i0", "source_ref": "q0", "quote": "Adapter Atlas"}])
+    assert not await check_answer_outputs(
+        RoutingJev(), writer, answer, notes, ("Report Adapter Beacon exact port count.",)
+    )
+    assert len(writer.calls) == 1
