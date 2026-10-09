@@ -5973,7 +5973,8 @@ async def test_shortcut_wait_expiry_keeps_dispatched_request_owned_and_billed(mo
         await agent_module._discard(proposing)
 
 
-async def test_chosen_start_owns_shortcut_after_bounded_navigation_wait(monkeypatch) -> None:
+@pytest.mark.parametrize("max_dollars", [None, 0.0005])
+async def test_chosen_start_owns_shortcut_after_bounded_navigation_wait(monkeypatch, max_dollars) -> None:
     start = "https://catalog.test/"
     page = Mock(spec=Page)
     page.artifacts = ()
@@ -5986,7 +5987,7 @@ async def test_chosen_start_owns_shortcut_after_bounded_navigation_wait(monkeypa
             return await super().generate(purpose, messages, schema, **kwargs)
 
     llm = DeferredLLM([{"url": start}])
-    head = HeadStart.begin(llm, "Read the catalogue")
+    head = HeadStart.begin(llm, "Read the catalogue", limits=Limits(max_dollars=max_dollars))
     agent = Agent(page, ScriptedJev({}), llm)
     agent._first_page = AsyncMock(return_value=start)
     agent._front_page_if_blank = AsyncMock()
@@ -5997,11 +5998,11 @@ async def test_chosen_start_owns_shortcut_after_bounded_navigation_wait(monkeypa
         assert head.proposing is not None and not head.proposing.done()
         head.planning.cancel()
         released.set()
-        await head.proposing
+        await asyncio.gather(head.proposing, return_exceptions=True)
         return agent._result(state, head.ledger, Status.COMPLETE)
 
     monkeypatch.setattr(agent, "_loop", finish)
     result = await asyncio.wait_for(agent.run("Read the catalogue", choose_start=True, head_start=head), 1)
-    assert result.status is Status.COMPLETE
+    assert result.status is (Status.COMPLETE if max_dollars is None else Status.BUDGET_EXCEEDED)
     assert len(head.ledger.lines) == 1 and not result.cost.has_unknown
     assert head.proposing is not None and head.proposing.done()

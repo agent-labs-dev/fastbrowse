@@ -646,6 +646,18 @@ class Agent:
                 ):
                     # First observation can fail before the completed plan is consumed, but its receipt still bills.
                     ledger.lines.append(head.planning.result().cost)
+        # Startup calls can settle during teardown, after the loop has made its last budget check.
+        try:
+            ledger.check_spend()
+        except BudgetExceeded as error:
+            result = self._partial_result(
+                state.notes if state else Notes(),
+                state,
+                ledger,
+                Status.BUDGET_EXCEEDED,
+                str(error),
+                budget=error.budget,
+            )
         result = result.model_copy(update={"cost": ledger.breakdown()})
         return result if loop_returned else await self._ending_frame(result)
 
