@@ -3923,9 +3923,17 @@ async def test_duplicate_prior_packets_do_not_displace_the_novelty_check() -> No
         ("frame_id", "child"),
         ("source_id", "removed"),
         ("heading_path", "Member price"),
+        ("control_context", "2 of 3"),
     ],
 )
 async def test_distinct_prior_packet_context_is_retained(field: str, value: str) -> None:
+    from fastbrowse.models import SourceControl
+
+    changed = {
+        "text": {},
+        "heading_path": {"heading_path": (value,)},
+        "control_context": {"control_context": SourceControl(role="figure", label="Avatar", context=value)},
+    }.get(field, {field: value})
     page = capture((BlockKind.PARAGRAPH, "Price: GBP25.99"))
     evidence = block_evidence(page, "s0")
     first = Fact(text="Price", evidence=evidence, reader=FactReader.LLM)
@@ -3935,7 +3943,7 @@ async def test_distinct_prior_packet_context_is_retained(field: str, value: str)
             "evidence": evidence.model_copy(
                 update={
                     "capture_sha256": "0" * 64,
-                    **({field: (value,) if field == "heading_path" else value} if field != "text" else {}),
+                    **changed,
                 }
             ),
         }
@@ -3951,6 +3959,10 @@ async def test_distinct_prior_packet_context_is_retained(field: str, value: str)
     if field == "heading_path":
         second_packet = state["previous"][1]
         assert isinstance(second_packet, dict) and second_packet["heading_path"] == [value]
+    if field == "control_context":
+        second_packet = state["previous"][1]
+        assert isinstance(second_packet, dict)
+        assert second_packet["control_context"] == {"role": "figure", "label": "Avatar", "context": value}
     assert len(llm.calls) == 1 and notes.facts == (first, second)
 
 

@@ -38,7 +38,17 @@ from fastbrowse.jev import (
 )
 from fastbrowse.llm import Generation, LLMClient, Message
 from fastbrowse.memory import Fact, Notes, NotesTooLarge, Tally, evidence_id, fact_id
-from fastbrowse.models import UNTRUSTED, Citation, CostComponent, CostLine, Evidence, FactReader, Frozen, LLMPurpose
+from fastbrowse.models import (
+    UNTRUSTED,
+    Citation,
+    CostComponent,
+    CostLine,
+    Evidence,
+    FactReader,
+    Frozen,
+    LLMPurpose,
+    SourceControl,
+)
 from fastbrowse.page import Block, BlockKind, Capture, cut_text
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 from fastbrowse.telemetry import Ledger, trace
@@ -2181,7 +2191,7 @@ async def _read_choices(
     if not requirements:
         return _ChoiceRead()
     previous: list[JsonValue] = []
-    seen: set[tuple[str, str, str | None, str | None, tuple[str, ...]]] = set()
+    seen: set[tuple[str, str, str | None, str | None, tuple[str, ...], SourceControl | None]] = set()
     blocks = {(block.source_id, block.frame_id): block for block in capture.blocks}
     for fact in notes.facts if notes is not None else ():
         evidence = fact.evidence
@@ -2200,7 +2210,14 @@ async def _read_choices(
             if block is not None
             else None
         )
-        identity = (fact.text, evidence.quote, evidence.frame_id, changes, evidence.heading_path)
+        identity = (
+            fact.text,
+            evidence.quote,
+            evidence.frame_id,
+            changes,
+            evidence.heading_path,
+            evidence.control_context,
+        )
         if identity in seen:
             continue
         # Recaptures mint citation ids, but repeating identical context can crowd the novelty check out of its budget.
@@ -2214,6 +2231,9 @@ async def _read_choices(
         # Equal field values under different headings can belong to different records.
         if evidence.heading_path:
             packet["heading_path"] = list(evidence.heading_path)
+        # Equal captions under different hovered controls belong to different positional subjects.
+        if evidence.control_context is not None:
+            packet["control_context"] = evidence.control_context.model_dump(mode="json")
         previous.append(packet)
     candidates = read_candidates(capture)
     if not candidates and not previous and next(_iter_read_candidates(capture, capture.blocks), None) is None:
