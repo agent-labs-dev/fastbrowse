@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A slow shortcut can finish reporting its model cost while browsing continues from the start page.
+  Falling back no longer cancels a dispatched request and interrupts a run with a dollar limit.
+
+- Answer checks judge calculated results from their quoted operands. Reader lineage no longer blocks
+  a calculation when its complete source records support it.
+
 - Scalar reads retain cited headings that identify their values, so answer verification can bind a price
   or count to its named subject. Heading evidence stays within its frame.
 

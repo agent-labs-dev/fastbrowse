@@ -970,11 +970,12 @@ class Agent:
         leave it cost 1 to 4 seconds of every shortcut run. The start page stays one BACK away all the same.
         `proposing` is the proposal a head start already asked for, and a run without one asks now.
         """
-        if proposing is None:
-            proposing = asyncio.create_task(_propose(self._llm, task, start, ledger))
         try:
-            # A proposal still being written when the wait ends is cancelled, so it bills nothing.
-            proposal = await asyncio.wait_for(proposing, _SHORTCUT_WAIT_SECONDS)
+            if proposing is None:
+                proposal = await _propose(self._llm, task, start, ledger)
+            else:
+                # Cancelling a dispatched shortcut loses its bill and stops capped runs; the head start owns cleanup.
+                proposal = await asyncio.wait_for(asyncio.shield(proposing), _SHORTCUT_WAIT_SECONDS)
         except (TimeoutError, LLMError):
             proposal = None
         shortcut = None if proposal is None else accept(proposal.url, start)

@@ -443,7 +443,6 @@ class _OutputSource(Frozen):
 class _OutputClaim(Frozen):
     text: str
     cited_sources: tuple[_OutputSource, ...]
-    derived: bool
 
 
 class _OutputContext(Frozen):
@@ -494,7 +493,6 @@ type OutputAuditCache = dict[str, OutputAuditVerdict | _OutputIdentities]
 
 def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | None:
     known = notes.evidence
-    based = {fact_id(fact) for fact in notes.facts if fact.basis}
     urls: dict[str, str] = {}
     claims = []
     for claim in composed.claims:
@@ -522,7 +520,6 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
             _OutputClaim(
                 text=claim.text,
                 cited_sources=tuple(sources),
-                derived=any(notes.derived(key) or key in based for key in claim.evidence_ids),
             )
         )
     return _OutputContext(
@@ -743,7 +740,6 @@ async def check_answer_outputs(
             "sources": [
                 {
                     "cited_sources": [source.model_dump(exclude={"page_title"}) for source in claim.cited_sources],
-                    "derived": claim.derived,
                 }
                 for claim in claims
             ],

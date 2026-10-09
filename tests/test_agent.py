@@ -5941,3 +5941,33 @@ async def test_rewritten_atomic_draft_does_not_pay_for_discarded_output_audits(m
     agent._conclude = AsyncMock(return_value=expected)
     assert await agent._finish(state, None, None) == expected
     agent._holds.assert_not_awaited()
+
+
+async def test_shortcut_wait_expiry_keeps_dispatched_request_owned_and_billed(monkeypatch) -> None:
+    start = "https://catalog.test/"
+    page = Mock(spec=Page)
+    page.navigate = AsyncMock()
+    released = asyncio.Event()
+
+    class DeferredLLM(ScriptedLLM):
+        async def generate(self, purpose, messages, schema, **kwargs):
+            await released.wait()
+            return await super().generate(purpose, messages, schema, **kwargs)
+
+    llm = DeferredLLM([{"url": start}])
+    ledger = Ledger(Limits(max_dollars=1))
+    proposing = asyncio.create_task(agent_module._propose(llm, "Read the catalogue", start, ledger))
+    monkeypatch.setattr(agent_module, "_SHORTCUT_WAIT_SECONDS", 0.001)
+    try:
+        history, invented = await Agent(page, ScriptedJev({}), llm)._open(
+            "Read the catalogue", start, ledger, proposing
+        )
+        assert not history and not invented
+        page.navigate.assert_awaited_once_with(start)
+        assert not proposing.done()
+        released.set()
+        await proposing
+        ledger.check()
+        assert len(ledger.lines) == 1 and not ledger.breakdown().has_unknown
+    finally:
+        await agent_module._discard(proposing)
