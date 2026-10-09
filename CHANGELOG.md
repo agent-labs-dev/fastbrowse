@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Captured hover captions retain their DOM container and sibling position as source metadata.
+  Answer checks can bind positional subjects without treating that context as a quoted value.
+
 - Revealed hover targets keep their labels and sibling positions while their captions are visible.
 
 - Final answer audits retain count scope, collection completeness and the quoted records behind each tally.

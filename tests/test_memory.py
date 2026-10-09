@@ -486,3 +486,16 @@ def test_unchanged_value_does_not_keep_replaced_subject_context_current(other_ad
     notes.supersede("r", new_page.url, new_page.sha256, new_page.text)
     answer = assemble_answer((Claim(text=old.text, evidence_ids=(fact_id(old),)),), notes, ())
     assert (_output_context(answer, notes) is not None) is other_address
+
+
+def test_equal_quoted_values_from_different_controls_keep_separate_evidence() -> None:
+    from fastbrowse.models import SourceControl
+
+    notes = Notes()
+    for position in ("1 of 2", "2 of 2"):
+        source = evidence().model_copy(
+            update={"control_context": SourceControl(role="figure", label="Avatar", context=position)}
+        )
+        assert notes.add(Fact(text="fact", evidence=source, reader=FactReader.LLM))
+    assert len(notes.facts) == 2
+    assert len({fact_id(fact) for fact in notes.facts}) == 2
