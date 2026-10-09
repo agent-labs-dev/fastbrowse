@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Planning uses the default reading model and separates sign-in identities from requested data filters.
+  A prerequisite account name no longer becomes an extra field in an exported report's answer checks.
+
+- Answer verification rejects superseded facts from the same page, including calculated facts that
+  remain in browsing history after their requirement evidence is replaced.
+
 - A slow shortcut can finish reporting its model cost while browsing continues from the start page.
   Falling back no longer cancels a dispatched request and interrupts a run with a dollar limit.
 

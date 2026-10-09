@@ -111,6 +111,9 @@ def _instructions() -> Message:
             "reported is the order's total, not the total once the order is finished. Keep related output fields "
             "together when they identify one result. "
             "Do not create a separate requirement to find that same result again.\n\n"
+            "Keep a prerequisite action's actor identity and supplied inputs with that action. They are not "
+            "requested record identities or answer fields. Retain named entities and identity filters when "
+            "the user asks for information about those entities.\n\n"
             "For an expected page answer, also fill answer_checks with individually checkable requested output "
             "values. Separate components of a requested breakdown. These checks validate the final answer, "
             "not the discovery plan: do not turn them into extra browsing requirements.\n\n"
@@ -169,6 +172,10 @@ async def make_plan(
                         "Exclude the supplied run_reports: code reports those directly from browser state after "
                         "page-answer verification. Keep requested page facts and action outcomes. "
                         "Do not add actions, navigation or extra outputs. These checks do not change discovery."
+                        " Supplied action_requirements are checked separately against browser state and executed "
+                        "actions. An actor name or login identity supplied for a prerequisite action is not an "
+                        "identity to quote in the answer or bind to each reported data value. Preserve identities "
+                        "that the user explicitly requests as record subjects or data filters."
                     ),
                 ),
                 Message(
@@ -177,6 +184,9 @@ async def make_plan(
                         {
                             "task": task,
                             "information_requirements": information,
+                            "action_requirements": tuple(
+                                r.text for r in plan.requirements if r.kind is RequirementKind.ACTION
+                            ),
                             "draft_checks": proposed,
                             "run_reports": plan.run_reports,
                         }

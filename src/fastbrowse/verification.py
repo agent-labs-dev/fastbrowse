@@ -492,12 +492,12 @@ type OutputAuditCache = dict[str, OutputAuditVerdict | _OutputIdentities]
 
 
 def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | None:
-    known = notes.evidence
+    known = notes.current_evidence()
     urls: dict[str, str] = {}
     claims = []
     for claim in composed.claims:
         expanded = notes.expand_evidence_ids(claim.evidence_ids)
-        if any(key not in known and not notes.derived(key) for key in expanded):
+        if any(not notes.current(key) for key in expanded):
             return None
         keys = tuple(key for key in expanded if key in known)
         if not keys:

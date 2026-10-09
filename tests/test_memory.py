@@ -401,3 +401,31 @@ def test_recaptured_text_does_not_replace_the_title_of_older_quote_evidence() ->
     assert context and context.claims[0].cited_sources[0].page_title == "Atlas"
     fresh_page = notes.captured_page(block_evidence(second, "s0"))
     assert fresh_page and fresh_page.title == "Beacon"
+
+
+@pytest.mark.parametrize("other_address", [False, True])
+def test_output_audit_keeps_other_pages_but_rejects_retired_values(other_address: bool) -> None:
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import _output_context
+
+    old = _quoted("SelectedDate: 03/04/2026", "before")
+    url = "https://example.test/another" if other_address else "https://example.test"
+    fresh = _quoted("SelectedDate: 09/04/2026", "after", url)
+    notes = Notes((old, fresh))
+    notes.supersede("r1", url, "after", fresh.text)
+    answer = assemble_answer((Claim(text=old.text, evidence_ids=(fact_id(old),)),), notes, ())
+    assert (_output_context(answer, notes) is not None) is other_address
+
+
+def test_output_audit_rejects_retired_choice_with_unassigned_basis_quotes() -> None:
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import _output_context
+
+    basis = _quoted("Availability: 18", "before").model_copy(update={"requirement_id": None})
+    old = Fact(requirement_id="r1", text="18", evidence=None, reader=FactReader.JEV_CHOICE, basis=(fact_id(basis),))
+    fresh = _quoted("Availability: 23", "after")
+    notes = Notes((basis, old, fresh))
+    assert fresh.evidence is not None
+    notes.supersede("r1", fresh.evidence.url, "after", fresh.text)
+    answer = assemble_answer((Claim(text=old.text, evidence_ids=(fact_id(old),)),), notes, ())
+    assert _output_context(answer, notes) is None
