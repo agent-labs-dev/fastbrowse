@@ -1923,7 +1923,8 @@ async def test_a_stated_order_settles_a_winner_despite_a_lost_continuation_recor
                 ],
                 "answered": True,
                 "continues": [{"requirement_id": "r1", "records": [{"first": "s9", "last": "s9"}]}],
-            }
+            },
+            {"confirmed": True},
         ]
     )
     notes = Notes()
@@ -2015,7 +2016,8 @@ async def test_a_page_that_states_its_own_order_settles_a_superlative_on_the_lea
                     }
                 ],
                 "answered": True,
-            }
+            },
+            {"confirmed": True},
         ]
     )
     notes = Notes()
@@ -2053,7 +2055,8 @@ async def test_an_order_the_page_does_not_state_cannot_settle_a_superlative(said
                 ]
                 if said_it_continues
                 else [],
-            }
+            },
+            {"continues": [{"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}]}]},
         ]
     )
     notes = Notes()
@@ -2061,7 +2064,8 @@ async def test_an_order_the_page_does_not_state_cannot_settle_a_superlative(said
         llm, page, "Cheapest nonstop?", ["r1"], notes, jev=ScriptedJev({"r1": "none"}), requirements=[requirement]
     )
     assert not notes.evidenced("r1")
-    assert outcome.continues == (("r1",) if said_it_continues else ())
+    assert outcome.continues == ("r1",)
+    assert outcome.incomplete == ()
 
 
 async def test_a_read_that_settles_a_list_carries_no_records() -> None:
@@ -4678,3 +4682,73 @@ async def test_csv_row_excerpts_retain_column_names() -> None:
     assert fact.evidence is not None
     assert fact.evidence.quote == text
     assert page.text[fact.evidence.start : fact.evidence.end] == text
+
+
+async def test_offered_sort_options_do_not_prove_the_active_order() -> None:
+    page = capture(
+        (BlockKind.PARAGRAPH, "Sort by weight or weight descending."),
+        (BlockKind.PARAGRAPH, "Parcel A - 8 kg"),
+    )
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "cite": {"first": "s1", "last": "s1"},
+                        "orders_list": {"first": "s0", "last": "s0"},
+                        "text": "Parcel A is the heaviest parcel at 8 kg.",
+                        "requirement_id": "r",
+                    }
+                ],
+                "answered": True,
+            },
+            {"confirmed": False},
+            {"continues": [{"requirement_id": "r", "records": [{"first": "s1", "last": "s1"}]}]},
+        ]
+    )
+    notes = Notes()
+    result = await read(llm, page, "Find the heaviest parcel", ["r"], notes)
+    assert not notes.evidenced("r")
+    assert result.incomplete == ()
+    assert result.continues == ("r",)
+    assert len(result.continuation_records["r"]) == 1
+    assert len(result.cost_lines) == 3
+    assert result.through_end == ("r",)
+
+
+@pytest.mark.parametrize("carried_state", [True, False])
+async def test_a_continuing_list_cannot_close_on_a_winner_without_order_evidence(carried_state: bool) -> None:
+    page = capture((BlockKind.PARAGRAPH, "Parcel A - 8 kg"))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "cite": {"first": "s0", "last": "s0"},
+                        "text": "Parcel A is the heaviest parcel at 8 kg.",
+                        "requirement_id": "r",
+                    }
+                ],
+                "answered": True,
+            },
+            {"continues": [{"requirement_id": "r", "records": [{"first": "s0", "last": "s0"}]}]},
+        ]
+    )
+    notes = Notes()
+    if not carried_state:
+        prior = Fact(text="Earlier parcel", evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+        notes.add(prior)
+        notes.add_continuation("r", fact_id(prior))
+    result = await read(
+        llm,
+        page,
+        "Find the heaviest parcel",
+        ["r"],
+        notes,
+        continuing=("r",) if carried_state else (),
+        notice="This list has a next-page control.",
+    )
+    assert not notes.evidenced("r")
+    assert result.continues == ("r",)
+    assert result.through_end == ("r",)
+    assert result.incomplete == ()

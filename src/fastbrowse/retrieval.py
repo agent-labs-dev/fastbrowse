@@ -286,6 +286,10 @@ class _Cite(Frozen):
     """The last source block it reads: the same label for one block, a later one for a run of blocks."""
 
 
+class _ListOrder(Frozen):
+    confirmed: bool
+
+
 class _ReadClaim(Frozen):
     # Keys are written in schema order: what the claim rests on comes before what it concludes.
     cite: _Cite | None = Field(
@@ -318,7 +322,8 @@ class _ReadClaim(Frozen):
             "For a superlative the page itself settles: the source blocks where the page states how the list is "
             "ordered or filtered, by the very quantity being compared (a sort control reading 'price, low to "
             "high', a heading naming the filter in force). Only when the page says it; never inferred from the "
-            "order the records happen to appear in. With this, the leading record answers even though the list "
+            "order the records happen to appear in. Offered sorting links are not an active sorting state. "
+            "With this, the leading record answers even though the list "
             "goes on, so it settles only a claim that cites that record and draws on nothing."
         ),
     )
@@ -823,6 +828,7 @@ async def read(
     rejected = 0
     uncovered = 0
     ordered: set[str] = set()
+    unconfirmed_orders: set[str] = set()
     stated_counts: set[tuple[str, str]] = set()
     expands: str | None = None
     tally_complete: set[str] = set()
@@ -1033,7 +1039,11 @@ async def read(
                     claims=tuple(context),
                     answered=False,
                     continues=tuple(
-                        _Continuation(requirement_id=c.requirement_id, records=c.records, tallies=c.tallies)
+                        _Continuation(
+                            requirement_id=c.requirement_id,
+                            records=c.records,
+                            tallies=c.tallies,
+                        )
                         for c in collected.data.continues
                     ),
                 ),
@@ -1242,16 +1252,49 @@ async def read(
             # the part of a list one page shows does not settle it however the site sorts it.
             if requirement_id is not None and claim.orders_list is not None and not claim.draws_on:
                 ordering = _cited(capture, part, claim.orders_list)
-                if ordering is None:
-                    # The reader cites the order instead of saying the list goes on, so an order that resolves to
-                    # no block leaves the leading row settling "cheapest" on nothing the page said.
+                confirmed = False
+                if ordering is not None:
+                    # Offering a sort link does not establish which order is active on the current list.
+                    assessed = await llm.generate(
+                        LLMPurpose.READ,
+                        [
+                            Message(
+                                role="system",
+                                content=f"{UNTRUSTED} Confirm only when the quoted source explicitly states the "
+                                "current list is ordered or filtered by the quantity and direction needed for "
+                                "the requested superlative. Available sort options, navigation links, a URL and "
+                                "the reader's assertion do not establish active ordering. Do not infer sorting "
+                                "from the order of the shown records. Return false when uncertain.",
+                            ),
+                            Message(role="user", content=json.dumps({"question": question, "quote": ordering.quote})),
+                        ],
+                        _ListOrder,
+                        max_output_tokens=tokens.read_output_tokens,
+                        ledger=ledger,
+                    )
+                    if ledger is not None:
+                        ledger.record(assessed.cost)
+                    costs.append(assessed.cost)
+                    confirmed = assessed.data.confirmed
+                if not confirmed:
+                    unconfirmed_orders.add(requirement_id)
                     requirement_id = None
                 else:
+                    assert ordering is not None
                     stated = _quoted(ordering)
                     so_far.add(stated)
                     found.append(stated)
                     fact = fact.model_copy(update={"basis": (*fact.basis, fact_id(stated))})
                     ordered.add(requirement_id)
+            if (
+                requirement_id is not None
+                and (requirement_id in continuing or so_far.comparison_records(requirement_id))
+                and notice
+                and requirement_id not in ordered
+            ):
+                # A reader can omit orders_list while still claiming a winner on a continuing list.
+                unconfirmed_orders.add(requirement_id)
+                requirement_id = None
             found.append(fact.model_copy(update={"requirement_id": requirement_id}))
             accepted += 1
         # The records a continuing page compared, kept as facts so a later page's winner can show what it beat.
@@ -1323,7 +1366,7 @@ async def read(
         facts[(fact_id(fact), fact.requirement_id)] = fact
     for requirement_id in tally_complete - continues.keys() - blocked:
         notes.complete_tallies(requirement_id)
-    return ReadOutcome(
+    outcome = ReadOutcome(
         facts=tuple(facts.values()),
         coverage=tuple(coverage),
         rejected_claims=rejected,
@@ -1338,6 +1381,39 @@ async def read(
         tally_readers=tuple(reader for reader in tally_readers if reader.requirement_id not in lost),
         comparisons={key: value for key, value in comparisons.items() if key not in lost},
     )
+    unconfirmed_orders.difference_update(ordered)
+    if unconfirmed_orders:
+        # A rejected sorting shortcut has uncollected records, not permanently missing records.
+        collected = await read(
+            llm,
+            capture,
+            question,
+            sorted(unconfirmed_orders),
+            notes,
+            max_chars=max_chars,
+            tokens=tokens,
+            ledger=ledger,
+            requirements=tuple(r for r in requirements if r.id in unconfirmed_orders),
+            records_only=True,
+        )
+        outcome = outcome.model_copy(
+            update={
+                "facts": (*outcome.facts, *collected.facts),
+                "cost_lines": (*outcome.cost_lines, *collected.cost_lines),
+                "coverage": tuple(dict.fromkeys((*outcome.coverage, *collected.coverage))),
+                "rejected_claims": outcome.rejected_claims + collected.rejected_claims,
+                "through_end": tuple(dict.fromkeys((*outcome.through_end, *sorted(unconfirmed_orders)))),
+                "tally_readers": (*outcome.tally_readers, *collected.tally_readers),
+                "comparisons": {**outcome.comparisons, **collected.comparisons},
+                "continues": tuple(dict.fromkeys((*outcome.continues, *collected.continues))),
+                "incomplete": tuple(dict.fromkeys((*outcome.incomplete, *collected.incomplete))),
+                "uncovered": outcome.uncovered + collected.uncovered,
+                "expands": collected.expands or outcome.expands,
+                "continuation_records": {**outcome.continuation_records, **collected.continuation_records},
+                "ended": tuple(dict.fromkeys((*outcome.ended, *collected.ended))),
+            }
+        )
+    return outcome
 
 
 type ScalarValue = str | int | float | Decimal | date | bool

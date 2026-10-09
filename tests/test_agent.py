@@ -6014,3 +6014,35 @@ async def test_chosen_start_owns_shortcut_after_bounded_navigation_wait(monkeypa
     assert agent._ending_frame.await_count == (0 if max_dollars is None else 1)
     assert result.answer == "Verified result" and result.data == {"value": 7}
     assert result.evidence == (quoted,) and result.citations == (cited,)
+
+
+@pytest.mark.parametrize("parameter", ["page", "pageno", "page_number"])
+async def test_numeric_next_page_preserves_the_current_filters(parameter: str) -> None:
+    controls = (
+        _link("previous", "1", f"/list?{parameter}=1&sort=weight"),
+        _link("next", "3", f"/list?{parameter}=3&sort=weight"),
+        _link("later", "4", f"/list?{parameter}=4&sort=weight"),
+        _link("other_filter", "3", f"/list?{parameter}=3&sort=name"),
+    )
+    found = agent_module.next_page_control(_at(f"https://example.test/list?{parameter}=2&sort=weight", *controls))
+    assert found is not None and found.id == "next"
+
+
+@pytest.mark.parametrize(
+    "current,target,label",
+    [
+        ("/list?page=2", "/list?page=4", "4"),
+        ("/list?page=2", "/list?page=3", "4"),
+        ("/list", "/list?page=2", "2"),
+        ("/list?page=2", "/other?page=3", "3"),
+        ("/list?page=2", "https://other.test/list?page=3", "3"),
+        ("/list?page=2&filter=", "/list?page=3", "3"),
+        ("/list?page=2&page=8", "/list?page=3", "3"),
+        ("/list?page=2", "/list?page=3", "\u00b2"),
+        ("/list?page=" + "9" * 5000, "/list?page=3", "3"),
+    ],
+)
+async def test_numeric_next_page_rejects_ambiguous_or_changed_scope(current: str, target: str, label: str) -> None:
+    assert (
+        agent_module.next_page_control(_at(f"https://example.test{current}", _link("candidate", label, target))) is None
+    )

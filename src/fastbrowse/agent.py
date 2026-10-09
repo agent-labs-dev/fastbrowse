@@ -16,7 +16,7 @@ from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence, Se
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Self
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit
 
 from pydantic import BaseModel, Field, JsonValue
 
@@ -3785,6 +3785,31 @@ def _without_failed_links(state: _RunState, observation: Observation) -> Observa
     )
 
 
+def _numbered_next_page(current: str, target: str, label: str) -> bool:
+    here, there = urlsplit(current), urlsplit(target)
+    if here.path != there.path or not label.strip().isdigit():
+        return False
+    before = parse_qsl(here.query, keep_blank_values=True)
+    after = parse_qsl(there.query, keep_blank_values=True)
+    for parameter in ("page", "pageno", "page_number"):
+        old = [value for key, value in before if key == parameter]
+        new = [value for key, value in after if key == parameter]
+        if len(old) != 1 or len(new) != 1 or not old[0].isdigit() or not new[0].isdigit():
+            continue
+        try:
+            previous, following, displayed = int(old[0]), int(new[0]), int(label.strip())
+        except ValueError:
+            continue
+        if (
+            following == previous + 1
+            and displayed == following
+            and sorted(pair for pair in before if pair[0] != parameter)
+            == sorted(pair for pair in after if pair[0] != parameter)
+        ):
+            return True
+    return False
+
+
 def next_page_control(observation: Observation) -> Control | None:
     """The one control that opens the next page of a list on this page, or None when there is none or doubt.
 
@@ -3794,13 +3819,16 @@ def next_page_control(observation: Observation) -> Control | None:
     here = urlsplit(observation.url)
     found: dict[str, Control] = {}
     for control in observation.controls:
-        if not pager_link(control) or control.href is None:
+        if control.role != "link" or Operation.CLICK not in control.operations or control.href is None:
             continue
         # The snapshot gives a same-origin link as a path; a bare host/path denotes another site.
         if not control.href.startswith(("/", "http://", "https://")):
             continue
         target = urlsplit(urljoin(observation.url, control.href))
         if origin_of(target.geturl()) != origin_of(observation.url):
+            continue
+        # A numbered pager may omit Next; only an observed consecutive page with the same filters qualifies.
+        if not pager_link(control) and not _numbered_next_page(observation.url, target.geturl(), control.label):
             continue
         if (target.path, target.query) == (here.path, here.query):
             continue

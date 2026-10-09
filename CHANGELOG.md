@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A ranking shortcut requires a quoted statement of the active list order. Offered sort links no
+  longer close a comparison; rejected shortcuts collect the current records before paging onward.
+  Numbered links to the next page use the same paging path when their address preserves the list filters.
+
 - Downloaded CSV files retain table structure, so row citations keep the column names needed to
   interpret their values. Bounded downloads still report omitted file content.
 
