@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Provider attempt deadlines bound total response time, including responses that keep sending occasional bytes.
 - Browser commands that remain unanswered for 120 seconds return `unavailable` even if health checks succeed.
 - Closing the last owned browser tab returns `unavailable` with retained run evidence instead of a Python error.
 - Styled upload labels expose their hidden file inputs as upload targets and receive supplied attachments.

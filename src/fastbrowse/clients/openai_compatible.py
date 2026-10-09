@@ -239,12 +239,13 @@ class OpenAICompatibleLLM:
             if attempt:
                 await asyncio.sleep(1)
             try:
-                response = await self._http.get(
-                    f"{self._base_url}/generation",
-                    params={"id": generation_id},
-                    headers={"Authorization": f"Bearer {self._api_key}"},
-                    timeout=2.0,
-                )
+                async with asyncio.timeout(2.0):
+                    response = await self._http.get(
+                        f"{self._base_url}/generation",
+                        params={"id": generation_id},
+                        headers={"Authorization": f"Bearer {self._api_key}"},
+                        timeout=2.0,
+                    )
                 if not response.is_success:
                     continue
                 receipt = object_value(json_object(response).get("data"))
@@ -253,7 +254,7 @@ class OpenAICompatibleLLM:
                 amount = receipt.get("total_cost")
                 if amount is not None:
                     return cost.model_copy(update={"basis": CostBasis.METERED, "dollars": dollars(amount)})
-            except (httpx.HTTPError, ValueError, TypeError, OverflowError):
+            except (httpx.HTTPError, TimeoutError, ValueError, TypeError, OverflowError):
                 continue
         return cost
 
