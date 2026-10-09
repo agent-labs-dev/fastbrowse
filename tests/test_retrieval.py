@@ -4976,3 +4976,54 @@ async def test_a_retired_derived_field_cannot_reuse_its_old_source_quote() -> No
         notes,
         {"label": Fields.model_fields["label"]},
     )
+
+
+@pytest.mark.parametrize("scope_complete", [False, True])
+async def test_rejected_order_finishes_requested_scope_before_another_pager(scope_complete: bool) -> None:
+    page = capture((BlockKind.PARAGRAPH, "Sort by weight. Next page 3"), (BlockKind.RECORD, "Beacon: 8"))
+    responses: list[JsonValue] = [
+        {
+            "claims": [
+                {
+                    "text": "Beacon is heaviest",
+                    "requirement_id": "r",
+                    "cite": {"first": "s1", "last": "s1"},
+                    "orders_list": {"first": "s0", "last": "s0"},
+                }
+            ],
+            "answered": True,
+        },
+        {"confirmed": False},
+        {
+            "continues": [{"requirement_id": "r", "through_end": False, "records": [{"first": "s1", "last": "s1"}]}],
+            "requested_scope_complete": ["r"] if scope_complete else [],
+        },
+    ]
+    if scope_complete:
+        responses.append(
+            {
+                "claims": [
+                    {
+                        "text": "Beacon: 8",
+                        "requirement_id": "r",
+                        "cite": {"first": "s1", "last": "s1"},
+                        "orders_list": {"first": "s0", "last": "s0"},
+                    }
+                ],
+                "answered": True,
+            }
+        )
+    llm = ScriptedLLM(responses)
+    notes = Notes()
+    result = await read(
+        llm,
+        page,
+        "Find the heaviest parcel on this page and the next",
+        ["r"],
+        notes,
+        notice="A third page remains after the two requested pages.",
+    )
+    assert notes.evidenced("r") is scope_complete
+    assert result.continues == (() if scope_complete else ("r",))
+    assert result.through_end == ()
+    assert len(result.cost_lines) == (4 if scope_complete else 3)

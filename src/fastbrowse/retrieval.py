@@ -662,6 +662,13 @@ class _RecordSet(Frozen):
 class _RecordsResponse(Frozen):
     continues: tuple[_RecordSet, ...]
     context: tuple[_Cite, ...] = ()
+    requested_scope_complete: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Requirement ids whose requested bounded page scope is complete, even if another pager remains. "
+            "Do not use for physical list exhaustion."
+        ),
+    )
     ended: tuple[str, ...] = Field(
         default=(),
         description="Requirement ids whose requested list this capture shows reaching its end. Empty for a "
@@ -702,6 +709,7 @@ class ReadOutcome(Frozen):
     through_end: tuple[str, ...] = ()
     continuation_records: dict[str, tuple[str, ...]] = Field(default_factory=dict)
     ended: tuple[str, ...] = ()
+    requested_scope_complete: tuple[str, ...] = ()
     tally_readers: tuple[TallyReader, ...] = ()
     comparisons: dict[str, NumericComparison] = Field(default_factory=dict)
 
@@ -826,6 +834,7 @@ async def read(
     records_only: bool = False,
     require_all_evidence: bool = False,
     revalidate: bool = False,
+    _skip_order_shortcuts: Collection[str] = (),
 ) -> ReadOutcome:
     """`notice` is what the caller knows about the page that its text does not say, such as its next-page control;
     it goes with every question the reader is asked, however the question is narrowed. `continuing` names the
@@ -837,6 +846,7 @@ async def read(
     costs: list[CostLine] = []
     continues: dict[str, None] = {}
     lost: dict[str, None] = {}
+    requested_scope_complete: tuple[str, ...] = ()
     found: list[Fact] = []
     rejected = 0
     uncovered = 0
@@ -1019,7 +1029,9 @@ async def read(
                     "continuation's records empty. Omit records excluded by the task's "
                     "filters, but never select only the page's winners. Earlier pages are being read separately. "
                     "Use context for source block ranges needed to interpret these records, such as filters "
-                    f"or table headers. Do not conclude comparisons.\n\n# Trust\n{UNTRUSTED}"
+                    "or table headers. If the task asks for a bounded page scope and this capture completes that "
+                    "scope, list its requirement id in requested_scope_complete even when another pager remains. "
+                    f"Do not conclude comparisons.\n\n# Trust\n{UNTRUSTED}"
                 ),
             )
         room = _notes_room(tokens, messages, _RecordsResponse if records_only else _ReadResponse)
@@ -1037,6 +1049,9 @@ async def read(
                 ledger=ledger,
             )
             ended = tuple(key for key in collected.data.ended if key in requirement_ids)
+            requested_scope_complete = tuple(
+                key for key in collected.data.requested_scope_complete if key in requirement_ids
+            )
             context: list[_ReadClaim] = []
             for cite in collected.data.context:
                 evidence = _cited(capture, part, cite)
@@ -1265,7 +1280,12 @@ async def read(
             # that statement is kept as a fact so the claim rests on it and the claim check can judge it. Only a
             # claim resting on that one record qualifies: a count or total draws on every record it counts, and
             # the part of a list one page shows does not settle it however the site sorts it.
-            if requirement_id is not None and claim.orders_list is not None and not claim.draws_on:
+            if (
+                requirement_id is not None
+                and requirement_id not in _skip_order_shortcuts
+                and claim.orders_list is not None
+                and not claim.draws_on
+            ):
                 ordering = _cited(capture, part, claim.orders_list)
                 confirmed = False
                 if ordering is not None:
@@ -1306,6 +1326,7 @@ async def read(
                 and (requirement_id in continuing or so_far.comparison_records(requirement_id))
                 and notice
                 and requirement_id not in ordered
+                and requirement_id not in _skip_order_shortcuts
             ):
                 # A reader can omit orders_list while still claiming a winner on a continuing list.
                 unconfirmed_orders.add(requirement_id)
@@ -1393,6 +1414,7 @@ async def read(
         through_end=tuple(key for key in through_end if key in continues),
         continuation_records={key: tuple(dict.fromkeys(records)) for key, records in continuation_records.items()},
         ended=tuple(key for key in ended if key not in lost),
+        requested_scope_complete=tuple(key for key in requested_scope_complete if key not in lost),
         tally_readers=tuple(reader for reader in tally_readers if reader.requirement_id not in lost),
         comparisons={key: value for key, value in comparisons.items() if key not in lost},
     )
@@ -1411,32 +1433,88 @@ async def read(
             requirements=tuple(r for r in requirements if r.id in unconfirmed_orders),
             records_only=True,
         )
+        scope_ids = tuple(
+            key
+            for key in collected.requested_scope_complete
+            if key in unconfirmed_orders and key not in collected.incomplete
+        )
+        scoped = (
+            await read(
+                llm,
+                capture,
+                question,
+                scope_ids,
+                notes,
+                max_chars=min(max_chars, _READ_CHUNK_CHARS),
+                tokens=tokens,
+                ledger=ledger,
+                requirements=tuple(r for r in requirements if r.id in scope_ids),
+                require_all_evidence=True,
+                _skip_order_shortcuts=scope_ids,
+            )
+            if scope_ids
+            else None
+        )
         outcome = outcome.model_copy(
             update={
-                "facts": (*outcome.facts, *collected.facts),
-                "cost_lines": (*outcome.cost_lines, *collected.cost_lines),
+                "facts": (*outcome.facts, *collected.facts, *(scoped.facts if scoped else ())),
+                "cost_lines": (*outcome.cost_lines, *collected.cost_lines, *(scoped.cost_lines if scoped else ())),
                 "coverage": tuple(dict.fromkeys((*outcome.coverage, *collected.coverage))),
-                "rejected_claims": outcome.rejected_claims + collected.rejected_claims,
+                "rejected_claims": outcome.rejected_claims
+                + collected.rejected_claims
+                + (scoped.rejected_claims if scoped else 0),
                 "through_end": tuple(
                     dict.fromkeys(
                         (
                             *outcome.through_end,
                             *collected.through_end,
+                            *(scoped.through_end if scoped else ()),
                         )
                     )
                 ),
-                "tally_readers": (*outcome.tally_readers, *collected.tally_readers),
-                "comparisons": {**outcome.comparisons, **collected.comparisons},
-                "continues": tuple(dict.fromkeys((*outcome.continues, *collected.continues))),
-                "incomplete": tuple(
+                "tally_readers": (
+                    *outcome.tally_readers,
+                    *collected.tally_readers,
+                    *(scoped.tally_readers if scoped else ()),
+                ),
+                "comparisons": {
+                    **outcome.comparisons,
+                    **collected.comparisons,
+                    **(scoped.comparisons if scoped else {}),
+                },
+                "continues": tuple(
                     dict.fromkeys(
-                        (*[key for key in outcome.incomplete if key not in unconfirmed_orders], *collected.incomplete)
+                        key
+                        for key in (*outcome.continues, *collected.continues, *(scoped.continues if scoped else ()))
+                        if not (scoped is not None and key in scope_ids and key not in (scoped.continues))
                     )
                 ),
-                "uncovered": outcome.uncovered + collected.uncovered,
-                "expands": collected.expands or outcome.expands,
-                "continuation_records": {**outcome.continuation_records, **collected.continuation_records},
-                "ended": tuple(dict.fromkeys((*outcome.ended, *collected.ended))),
+                "incomplete": tuple(
+                    dict.fromkeys(
+                        (
+                            *[key for key in outcome.incomplete if key not in unconfirmed_orders],
+                            *collected.incomplete,
+                            *(scoped.incomplete if scoped else ()),
+                        )
+                    )
+                ),
+                "uncovered": outcome.uncovered + collected.uncovered + (scoped.uncovered if scoped else 0),
+                "expands": (scoped.expands if scoped else None) or collected.expands or outcome.expands,
+                "continuation_records": {
+                    **outcome.continuation_records,
+                    **collected.continuation_records,
+                    **(scoped.continuation_records if scoped else {}),
+                },
+                "ended": tuple(dict.fromkeys((*outcome.ended, *collected.ended, *(scoped.ended if scoped else ())))),
+                "requested_scope_complete": tuple(
+                    dict.fromkeys(
+                        (
+                            *outcome.requested_scope_complete,
+                            *collected.requested_scope_complete,
+                            *(scoped.requested_scope_complete if scoped else ()),
+                        )
+                    )
+                ),
             }
         )
     return outcome

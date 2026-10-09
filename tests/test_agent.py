@@ -6112,3 +6112,39 @@ async def test_read_closes_ended_order_recovery_only_with_complete_records(incom
     await agent._read(state, page, _at(page.url))
     assert state.notes.evidenced("r1") is (not incomplete)
     assert state.continuing == ({"r1"} if incomplete else set())
+
+
+async def test_finished_run_waits_for_pending_shortcut_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastbrowse.models import CostLine
+
+    head = HeadStart.begin(
+        ScriptedLLM(
+            [
+                {"requirements": [], "answer_expected": False},
+            ]
+        ),
+        "Check the page",
+    )
+    await head.planning
+    finished = asyncio.Event()
+
+    async def shortcut() -> agent_module.Shortcut:
+        await finished.wait()
+        await asyncio.sleep(0)
+        head.ledger.lines.append(CostLine(component="llm", basis="metered", dollars=0.01, purpose="shortcut"))
+        return agent_module.Shortcut(url=None)
+
+    head.proposing = asyncio.create_task(shortcut())
+    page = Mock(spec=Page)
+    page.artifacts = []
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+
+    async def finish(state, output_schema, until):
+        finished.set()
+        return agent._result(state, head.ledger, Status.COMPLETE)
+
+    monkeypatch.setattr(agent, "_loop", finish)
+    result = await agent.run("Check the page", head_start=head)
+    assert result.status is Status.COMPLETE
+    assert head.proposing.done() and not head.proposing.cancelled()
+    assert any(line.purpose == "shortcut" and line.dollars == 0.01 for line in result.cost.lines)

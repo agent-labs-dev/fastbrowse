@@ -637,8 +637,13 @@ class Agent:
                 status = Status.UNAVAILABLE if unavailable else Status.ERROR
                 result = self._partial_result(state.notes if state else Notes(), state, ledger, status, message)
             finally:
-                # A run can end before it ever needed the plan, and a plan still being written would bill it.
-                await head.discard()
+                # Cancelling a paid startup call loses its receipt, so a finished run joins it before reporting cost.
+                if loop_returned:
+                    await asyncio.gather(
+                        head.planning, *([head.proposing] if head.proposing is not None else []), return_exceptions=True
+                    )
+                else:
+                    await head.discard()
                 if (
                     (state is None or state.ready_plan is None)
                     and not head.planning.cancelled()
