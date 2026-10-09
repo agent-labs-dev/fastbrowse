@@ -141,6 +141,9 @@ class RunParams(Params):
     it with `run/until`."""
     downloads: Path | None = None
     record: Path | None = None
+    cursor: bool = False
+    """Draw the agent's cursor over a visible local or attached Chrome with the Cua Driver. It is skipped, with
+    the run unchanged, where the driver or an X11 display is missing or the window cannot be placed exactly."""
     local: bool = False
     """Local Chrome instead of a Browser Use Cloud browser."""
     chrome: LocalChrome | None = None

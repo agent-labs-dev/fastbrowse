@@ -83,6 +83,7 @@ class Operation(StrEnum):
     READ = "read"
     DONE = "done"
     ESCALATE = "escalate"
+    NAVIGATE = "navigate"
 
 
 SCROLLING = frozenset({Operation.SCROLL, Operation.SCROLL_UP})
@@ -134,6 +135,8 @@ class Evidence(Frozen):
     end: int = Field(ge=0)
     quote: str
     control_context: SourceControl | None = None
+    rendered_text: bool = True
+    """False for typed DOM observations whose quote is not literal rendered page text."""
     heading_path: tuple[str, ...] = ()
     """The headings the quote sits under on the page: which record a bare "£10.69" is the price of."""
 

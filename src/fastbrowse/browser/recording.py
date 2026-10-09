@@ -289,6 +289,7 @@ def _describe(step: StepResult) -> str:
             return "check the answer"
         case (
             Operation.CLICK
+            | Operation.NAVIGATE
             | Operation.HOVER
             | Operation.DRAG
             | Operation.FILL

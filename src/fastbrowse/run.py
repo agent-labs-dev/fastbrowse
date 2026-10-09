@@ -10,6 +10,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequen
 from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel
@@ -19,6 +20,7 @@ from fastbrowse.adapters.local_chrome import async_local_chrome
 from fastbrowse.agent import Agent, HeadStart
 from fastbrowse.artifacts import DirectorySink
 from fastbrowse.browser import BrowserSession, CdpPage
+from fastbrowse.browser.cursor import cursor_feedback
 from fastbrowse.browser.recording import Recording
 from fastbrowse.browser.session import check_browser_access
 from fastbrowse.clients.environment import load_settings
@@ -214,6 +216,7 @@ async def run_task(
     config: Config | None = None,
     http: httpx.AsyncClient | None = None,
     record: Path | None = None,
+    cursor: bool = False,
 ) -> RunResult:
     """Open `start`, pursue `task`, and return what the run could prove.
 
@@ -261,10 +264,16 @@ async def run_task(
     frame rate; only the latest pending frame is kept. Handler failures are logged without interrupting the run.
     Live frames and recordings are held back while a resolved secret shows on the page, as PNG step frames are.
     No handler means no live capture.
+
+    `cursor` draws the agent's cursor over a visible local or attached Chrome through the Cua Driver, on Linux
+    with X11; it never moves the real pointer or changes focus, and does nothing where it cannot place the cursor
+    exactly, including with no `cua-driver` installed, no display, a headless or cloud browser. It implies
+    `foreground`, since the cursor lies over the window's front tab.
     """
     config = config or Config()
     settings = load_settings()
     origins = None if allowed_origins is None else parse_origins(allowed_origins)
+    handed_over = cdp_url is not None or cdp_port is not None
     if origins is not None and record is not None:
         raise ValueError("record shows whatever the tab shows, so it cannot be combined with allowed_origins")
     browser_cost: list[CostLine] = []
@@ -291,7 +300,8 @@ async def run_task(
                     cdp_port=cdp_port,
                     attach=attach,
                     target_match=target_match,
-                    foreground=foreground,
+                    # The cursor is drawn over the window's front tab, so the run's tab has to be that one.
+                    foreground=foreground or cursor,
                     proxy_country=proxy_country,
                     viewport=viewport,
                     allow_resizing=cloud_allow_resizing,
@@ -307,8 +317,15 @@ async def run_task(
                         on_frame=on_frame,
                         check_access=check_access,
                     )
-                    async with session:
-                        page = CdpPage(session, config)
+                    # A cloud or headless browser has no window on this machine to draw over.
+                    shown = (
+                        cursor
+                        and browser_api_key is None
+                        and urlsplit(connection.cdp_url).hostname in {"localhost", "127.0.0.1", "::1"}
+                        and (handed_over or (chrome or settings.local_chrome()).headed)
+                    )
+                    async with session, cursor_feedback(shown) as feedback:
+                        page = CdpPage(session, config, cursor=feedback)
                         async with nullcontext() if record is None else Recording(session, record) as recording:
                             agent = Agent(
                                 page, jev, llm, config=config, secrets=secrets, on_event=_captioned(on_event, recording)
@@ -326,7 +343,9 @@ async def run_task(
                                 until=until,
                                 head_start=head,
                             )
-                            if recording is not None:
+                            # The card is a data: document navigated into the tab, which would replace the
+                            # caller's own app page; an attached window is theirs and stays where it is.
+                            if recording is not None and not connection.attach:
                                 await recording.show_result(task, result)
             except (BrowserError, Unavailable) as exc:
                 # A cloud browser that cannot be started is an outage, not a failed run.

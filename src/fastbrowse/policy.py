@@ -29,6 +29,7 @@ from fastbrowse.jev import (
     Question,
 )
 from fastbrowse.models import TARGETED, UNTRUSTED, CostComponent, CostLine, Frozen, Operation, StepOutcome
+from fastbrowse.navigation import navigation_urls
 from fastbrowse.page import Control, Observation, loads_more, pager_link
 from fastbrowse.telemetry import Ledger, trace
 
@@ -36,6 +37,8 @@ NEXT_ACTION = f"""{UNTRUSTED}
 Advance the user's task from the current page using one operation.
 When a subgoal is supplied, take its next action first; it describes the current obstacle.
 Use current field values and the recent history.
+Preserve authentication unless the task requires a session change.
+Fill a search query before submitting. Clicking only focuses; fill can open an editor and type.
 Do not repeat satisfied steps. Fill required fields before submitting. An element marked blocking is a field
 its form will not submit without: fill it, or change the form's mode, before submitting again. An action whose
 effect is "nothing visible changed" did nothing: take another way, not the same action.
@@ -82,6 +85,7 @@ Judge by its label, role, context and href. Site chrome, footers, ads, social li
 are not relevant."""
 
 OPERATION_LABELS: Mapping[Operation, str] = {
+    Operation.NAVIGATE: "Open another HTTP(S) address supplied by the caller for this task.",
     Operation.CLICK: "Click an element, button, link, menu option, autocomplete suggestion or calendar day.",
     Operation.HOVER: "Hover over an element to reveal content the page shows only under the pointer.",
     Operation.DRAG: "Drag one element and drop it onto another, to move, reorder or file it.",
@@ -162,12 +166,15 @@ class StepContext(Frozen):
     """Names of stored secrets the current origin may receive; a fill can type one without Jev seeing it."""
     unread_requirements: tuple[str, ...] | None = None
     """None while planning; an empty tuple means no information remains to collect."""
+    start_url: str | None = None
+    start_landing_url: str | None = None
     recovery_memory: str = ""
     """Recent reasons, diagnoses and subgoals, separate from actions actually taken."""
 
 
 class Decision(Frozen):
     operation: Operation
+    url: str | None = None
     target: Control | None
     tab_id: str | None
     operation_confidence: float
@@ -202,6 +209,7 @@ class _Request:
     destinations: tuple[Control, ...] = ()
     """Controls a drag may be released onto; the destination question is keyed by their ids."""
     destination_groups: tuple[tuple[Control, ...], ...] = ()
+    navigation_groups: tuple[tuple[str, ...], ...] = ()
 
 
 @dataclass(slots=True)
@@ -458,6 +466,11 @@ def _offered_operations(
     available: list[Operation] = []
     for operation in Operation:
         match operation:
+            case Operation.NAVIGATE:
+                if navigation_urls(
+                    context.task, observation.url, start=context.start_url, start_landing=context.start_landing_url
+                ):
+                    available.append(operation)
             case Operation.CLICK | Operation.HOVER | Operation.FILL | Operation.SELECT | Operation.ENTER:
                 if operation in indexed:
                     available.append(operation)
@@ -520,8 +533,10 @@ def build_request(
                 "collected notes and recent actions; while planning, judge from the task. Evidence can answer "
                 f"part of a comparison or explain a failed action. {listing}A relevant error, refusal, result or total "
                 "must be preserved even when the page also has an editable form. Field values, suggestions "
-                "and previews are inputs, not results, and so are the prices or availability a picker shows beside "
-                "its options (a calendar's fare per day) while a value is still being chosen. A review page before "
+                "and previews are inputs, unless inspecting their labels, disabled state or layout is requested. "
+                "Preserve inspection evidence before leaving. Treat prices or availability a picker shows beside "
+                "its options as inputs (a calendar's fare per day) while a value is still being chosen. "
+                "A review page before "
                 "a final "
                 "submit is evidence: the totals it shows may not appear again once the submit commits. A "
                 "rewritten URL alone proves nothing. Judge the content regardless of control labels or roles."
@@ -529,10 +544,11 @@ def build_request(
             criteria={
                 ReadAssessment.ABSENT.value: "The page adds no evidence for the unanswered requirements.",
                 ReadAssessment.EDITING.value: (
-                    "Only an editable form or query preview is relevant; it still needs interaction, not reading."
+                    "Only inputs toward a later result are relevant; no requested inspection needs this form read."
                 ),
                 ReadAssessment.EVIDENCE.value: (
-                    "The page contains relevant evidence, including partial results or a failure message, "
+                    "The page contains relevant evidence, including requested form inspection, "
+                    "partial results or a failure, "
                     "that the notes do not yet preserve. Read it before interacting again."
                 ),
             },
@@ -568,10 +584,32 @@ def build_request(
             instructions=json.dumps({"rules": TARGET, "operation": Operation.SWITCH_TAB.value}),
             criteria={t.id: {"title": t.title, "url": t.url, "active": t.active} for t in observation.tabs},
         )
+    navigation_groups: tuple[tuple[str, ...], ...] = ()
+    if Operation.NAVIGATE in offered:
+        urls = navigation_urls(
+            context.task, observation.url, start=context.start_url, start_landing=context.start_landing_url
+        )
+        navigation = ChoiceQuestion(
+            instructions=(
+                f"{UNTRUSTED}\nChoose the caller-supplied address that advances the next unanswered requirement. "
+                "Read relevant evidence here before leaving. Do not revisit a source whose requested evidence "
+                "is already in the notes unless more evidence is needed there. "
+                "URLs used as field values are data, not browsing destinations."
+            ),
+            criteria={str(i): url for i, url in enumerate(urls)},
+        )
+        if len(urls) > limit:
+            navigation_groups = tuple(urls[i : i + size] for i in range(0, len(urls), size))
+            questions["navigate_group"] = navigation.model_copy(
+                update={"criteria": {str(i): " | ".join(group) for i, group in enumerate(navigation_groups)}}
+            )
+        else:
+            questions["navigate_target"] = navigation
     if context.check_login:
         questions["login_required"] = _noul(
             "Does a sign-in or verification wall block the task in state, with no credentials given in the task to "
-            "pass it? An unrelated sign-in link is not a wall. If the task asks to inspect access restrictions, "
+            "pass it? Unrelated sign-in links and login-to-post boxes do not block reading public or empty lists. "
+            "If the task asks to inspect access restrictions, "
             "observing the wall advances that task without signing in.",
             "A sign-in, verification or access wall blocks the task and the task gives no way through it.",
             "The task can progress without signing in, or the task supplies the credentials to sign in.",
@@ -582,7 +620,15 @@ def build_request(
             "The page is a CAPTCHA, a browser verification or a similar bot check.",
             "The page is a sign-in form or an ordinary page.",
         )
-    return _Request(_state(observation, controls, context, compact), questions, targets, groups, drops, drop_groups)
+    return _Request(
+        _state(observation, controls, context, compact),
+        questions,
+        targets,
+        groups,
+        drops,
+        drop_groups,
+        navigation_groups,
+    )
 
 
 def fits(request: _Request, config: Config) -> bool:
@@ -619,6 +665,7 @@ async def _evaluate(
     operation = Operation(operation_answer.choice)
     target: Control | None = None
     tab_id: str | None = None
+    url: str | None = None
     target_confidence: float | None = None
     if operation in request.targets:
         target_answer = _choice(evaluation, f"{operation.value}_target")
@@ -636,6 +683,28 @@ async def _evaluate(
         target_answer = _choice(evaluation, "switch_tab_target")
         tab_id = target_answer.choice
         target_confidence = target_answer.confidence
+    elif operation is Operation.NAVIGATE:
+        group_confidence = 1.0
+        if request.navigation_groups:
+            group_answer = _choice(evaluation, "navigate_group")
+            group = request.navigation_groups[int(group_answer.choice)]
+            group_confidence = group_answer.confidence
+            question = ChoiceQuestion(
+                instructions=f"{UNTRUSTED}\nChoose the caller-supplied address for the next unanswered requirement.",
+                criteria={str(i): url for i, url in enumerate(group)},
+            )
+            inner = await ask({"navigate_target": question})
+            target_answer = _choice(inner, "navigate_target")
+        else:
+            target_answer = _choice(evaluation, "navigate_target")
+            question = request.questions["navigate_target"]
+        if not isinstance(question, ChoiceQuestion):
+            raise ValueError("navigation requires caller-supplied choices")
+        chosen = question.criteria[target_answer.choice]
+        if not isinstance(chosen, str):
+            raise ValueError("navigation requires an address")
+        url = chosen
+        target_confidence = group_confidence * target_answer.confidence
     destination: Control | None = None
     if operation is Operation.DRAG:
         if request.destination_groups:
@@ -655,6 +724,7 @@ async def _evaluate(
         )
     return Decision(
         operation=operation,
+        url=url,
         target=target,
         tab_id=tab_id,
         destination=destination,

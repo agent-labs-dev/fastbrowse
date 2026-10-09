@@ -18,7 +18,7 @@ from typing import Any, Self, cast
 
 from cdp_use.cdp.fetch.events import RequestPausedEvent
 from cdp_use.cdp.fetch.types import RequestPattern
-from cdp_use.cdp.page.events import JavascriptDialogOpeningEvent, ScreencastFrameEvent
+from cdp_use.cdp.page.events import JavascriptDialogClosedEvent, JavascriptDialogOpeningEvent, ScreencastFrameEvent
 from cdp_use.cdp.target.commands import CreateTargetParameters
 from cdp_use.cdp.target.events import (
     AttachedToTargetEvent,
@@ -36,7 +36,7 @@ from fastbrowse.datafiles import data_file
 from fastbrowse.models import Artifact, ArtifactKind, ArtifactSink, FrameHandler, Frozen, Unavailable
 from fastbrowse.models import BrowserConnection as BrowserConnectionModel
 from fastbrowse.origins import OriginGrant
-from fastbrowse.page import BrowserError, Dialog, Tab
+from fastbrowse.page import BrowserError, BrowserUnavailable, Dialog, Tab
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,9 @@ CDP_REPLY_SECONDS = 60.0
 """How long a CDP command waits before the browser is asked whether it is still there. A cloud browser's proxy can
 keep the socket open, answering pings, after losing the browser behind it, and a run with no wall-clock limit would
 otherwise wait on that reply forever. A slow reply is not a lost one: `Page.navigate` waits for a slow server's
-headers, so the command keeps waiting for as long as the browser answers."""
+headers, so a live browser can keep waiting until CDP_COMMAND_SECONDS."""
+CDP_COMMAND_SECONDS = 120.0
+"""A responsive browser can still leave one document command pending forever."""
 CDP_ALIVE_SECONDS = 10.0
 """`Browser.getVersion` is answered at once by any browser that is there."""
 
@@ -139,7 +141,11 @@ class _BrowserClient(CDPClient):
             await super().start()
         except Exception as exc:
             if _unreachable(exc):
-                raise BrowserUnresponsive(f"CDP.start failed ({type(exc).__name__})") from exc
+                raise BrowserUnresponsive(
+                    f"CDP.start failed ({type(exc).__name__}): the browser did not complete the DevTools handshake. "
+                    "If this is a Chrome you started yourself, it may be waiting for you to approve remote debugging, "
+                    "or the address may be stale; check the browser window and the address, then retry."
+                ) from exc
             raise _browser_error("CDP.start", exc) from exc
 
     async def stop(self) -> None:
@@ -151,11 +157,15 @@ class _BrowserClient(CDPClient):
     async def send_raw(self, method: str, params: Any = None, session_id: str | None = None) -> dict[str, Any]:
         reply = asyncio.ensure_future(super().send_raw(method, params, session_id))
         try:
-            while not (await asyncio.wait({reply}, timeout=CDP_REPLY_SECONDS))[0]:
-                # A reply that landed while the probe waited still counts, however the probe ended.
-                if not await self._alive() and not reply.done():
-                    raise BrowserUnresponsive(f"{method} got no reply, and the browser stopped answering")
-            return reply.result()
+            try:
+                async with asyncio.timeout(CDP_COMMAND_SECONDS):
+                    while not (await asyncio.wait({reply}, timeout=CDP_REPLY_SECONDS))[0]:
+                        # A reply that landed while the probe waited still counts, however the probe ended.
+                        if not await self._alive() and not reply.done():
+                            raise BrowserUnresponsive(f"{method} got no reply, and the browser stopped answering")
+                    return reply.result()
+            except TimeoutError:
+                raise BrowserUnresponsive(f"{method} exceeded its command deadline; the page did not answer") from None
         except BrowserUnresponsive:
             raise
         except Exception as exc:
@@ -301,7 +311,10 @@ class BrowserSession:
 
     @property
     def active_session_id(self) -> str:
-        return self._tabs[self._active_target_id].session_id
+        tab = self._tabs.get(self._active_target_id)
+        if tab is None:
+            raise BrowserUnavailable("active browser tab closed; no owned tab remains")
+        return tab.session_id
 
     def frame_sessions(self) -> dict[str, str]:
         """Only frame sessions descended from the active tab may contribute observations."""
@@ -605,6 +618,7 @@ class BrowserSession:
         client.register.Target.targetInfoChanged(self._on_target_info_changed)
         client.register.Target.targetDestroyed(self._on_target_destroyed)
         client.register.Page.javascriptDialogOpening(self._on_dialog)
+        client.register.Page.javascriptDialogClosed(self._on_dialog_closed)
         # A background run casts without a frame handler too, and a frame nobody acks stalls the cast that sent it.
         if self._on_frame is not None or not self._connection.foreground:
             client.register.Page.screencastFrame(self._on_screencast_frame)
@@ -834,6 +848,11 @@ class BrowserSession:
             params["promptText"] = prompt_text
         await self.client.send.Page.handleJavaScriptDialog(params=params, session_id=session_id)  # ty: ignore[invalid-argument-type]
         self._dialogs.pop(session_id, None)
+
+    def _on_dialog_closed(self, event: JavascriptDialogClosedEvent, session_id: str | None) -> None:
+        # Navigation can dismiss a dialog without going through handle_dialog.
+        if session_id is not None:
+            self._dialogs.pop(session_id, None)
 
     # -- Downloads ------------------------------------------------------------------------------------
 

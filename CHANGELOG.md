@@ -22,6 +22,28 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   its own data directory. It no longer has them look for a debugging endpoint in the user's everyday Chrome,
   which asks for approval on every connection.
 
+- Reply controls retain their own comment record as context when only one reply form is open.
+
+- Provider attempt deadlines bound total response time, including responses that keep sending occasional bytes.
+- Browser commands that remain unanswered for 120 seconds return `unavailable` even if health checks succeed.
+- Closing the last owned browser tab returns `unavailable` with retained run evidence instead of a Python error.
+- Styled upload labels expose their hidden file inputs as upload targets and receive supplied attachments.
+- Page captures retain visible image DOM metadata, including source and alt text.
+- Missing completion charges are recovered from matching provider generation receipts when available.
+  Dollar caps still stop the run when the charge cannot be established.
+- Optional `--cursor` feedback draws an agent overlay for visible local Chrome on Linux X11 with Cua Driver.
+  It leaves the physical pointer and focus alone, hides when its page or window changes, and skips unverified
+  window mappings. Cloud, headless, Wayland and remote Chrome connections run without it.
+
+- Read captures retain empty form fields, disabled buttons, horizontal overflow and the absence of visible h1
+  headings across accessible document and shadow roots. These DOM observations cite the source page without
+  text fragments for synthetic labels. Field values supplied as URLs are checked before navigation.
+
+- Recordings of attached windows leave the caller's page in place. Explicit submit buttons expose the form's
+  destination to the authorization check, while focusing a field does not claim to submit it.
+
+## [0.5.20] - 2026-10-09
+
 - Captured hover captions retain their DOM container and sibling position as source metadata.
   Answer checks can bind positional subjects without treating that context as a quoted value.
 
@@ -1128,7 +1150,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.19...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.20...HEAD
+[0.5.20]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.20
 [0.5.19]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.19
 [0.5.18]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.18
 [0.5.17]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.17

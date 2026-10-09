@@ -488,6 +488,7 @@ class Server:
             "secrets": self._secrets(params),
             "downloads": params.downloads,
             "record": params.record,
+            "cursor": params.cursor,
         }
 
     def _secrets(self, params: RunParams) -> ClientSecrets | None:

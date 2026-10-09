@@ -13,7 +13,7 @@ from typing import Protocol
 
 from pydantic import Field
 
-from fastbrowse.models import Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome
+from fastbrowse.models import Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome, Unavailable
 
 
 def cut_marker(omitted_chars: int) -> str:
@@ -69,7 +69,7 @@ class Control(Frozen):
     input_name: str | None = None
     autocomplete: str | None = None
     submit_semantics: str | None = None
-    """The enclosing form's implicit submission, if Enter in this control can submit it."""
+    """The form submission triggered by Enter in a field or clicking a submit button."""
     checked: bool | None = None
     selected: bool | None = None
     expanded: bool | None = None
@@ -183,6 +183,7 @@ class BlockKind(StrEnum):
     RECORD = "record"
     CODE = "code"
     LINK = "link"
+    OBSERVATION = "observation"
 
 
 class Block(Frozen):
@@ -220,6 +221,7 @@ class Capture(Frozen):
 
 class Action(Frozen):
     operation: Operation
+    url: str | None = None
     target_id: str | None = None
     destination_id: str | None = None
     """Drop target of a drag: the control the dragged element is released onto."""
@@ -240,6 +242,10 @@ class BrowserError(RuntimeError):
     """A browser failure a `Page` raises, with a message safe to put in a run result: never page text."""
 
 
+class BrowserUnavailable(BrowserError, Unavailable):
+    """The browser session no longer has a page available for this run."""
+
+
 class ScreenshotsUnavailable(BrowserError):
     """A page cannot safely attribute pixels to its permitted documents."""
 
@@ -247,8 +253,8 @@ class ScreenshotsUnavailable(BrowserError):
 class NavigationTimeout(BrowserError):
     """`Page.navigate` gave up waiting for a document: the CDP command timed out, or the page never became ready.
 
-    Before a run's first step no agent code has acted, so the run ends `unavailable`; after it, the agent's own
-    navigation timed out and the run ends `error` as any other browser failure does."""
+    Before a run's first step no agent code has acted, so the run ends `unavailable`. A navigation action reports
+    a failed step so the agent can try another destination."""
 
 
 class SiteUnreachable(BrowserError):

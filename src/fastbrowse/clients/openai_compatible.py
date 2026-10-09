@@ -227,6 +227,52 @@ class OpenAICompatibleLLM:
         except ValueError:
             raise LLMError(f"Invalid LLM response; HTTP {response.status_code}: {body_excerpt(response)}") from None
 
+    async def _settled_cost(self, payload: dict[str, JsonValue], purpose: LLMPurpose) -> CostLine:
+        cost = _cost(payload, purpose)
+        generation_id = payload.get("id")
+        if cost.dollars is not None or not isinstance(generation_id, str) or not generation_id:
+            return cost
+        host = httpx.URL(self._base_url).host
+        if host not in {"openrouter.ai", "ai-gateway.vercel.sh"}:
+            return cost
+        # Usage receipts can lag the completion; recover that exact charge without generating the text again.
+        for attempt in range(3):
+            if attempt:
+                await asyncio.sleep(1)
+            try:
+                async with asyncio.timeout(2.0):
+                    response = await self._http.get(
+                        f"{self._base_url}/generation",
+                        params={"id": generation_id},
+                        headers={"Authorization": f"Bearer {self._api_key}"},
+                        timeout=2.0,
+                    )
+                if not response.is_success:
+                    continue
+                receipt = object_value(json_object(response).get("data"))
+                if receipt.get("id") != generation_id:
+                    return cost
+                amount = receipt.get("total_cost")
+                if amount is not None:
+                    basis = CostBasis.METERED
+                    charge = dollars(amount)
+                    byok = receipt.get("is_byok")
+                    if byok is not None and not isinstance(byok, bool):
+                        return cost
+                    upstream_amount = receipt.get("upstream_inference_cost")
+                    if byok is True and upstream_amount is None:
+                        return cost
+                    # BYOK inference is billed outside the gateway; a normal receipt already includes it.
+                    if byok is not False and upstream_amount is not None:
+                        upstream = dollars(upstream_amount)
+                        if upstream:
+                            basis = CostBasis.ESTIMATED
+                            charge += upstream
+                    return cost.model_copy(update={"basis": basis, "dollars": charge})
+            except (httpx.HTTPError, TimeoutError, ValueError, TypeError, OverflowError):
+                continue
+        return cost
+
     async def generate[T: BaseModel](
         self,
         purpose: LLMPurpose,
@@ -278,6 +324,7 @@ class OpenAICompatibleLLM:
                 # carried the same prompt, so it is charged as the answer was; charging it as unknown instead
                 # made every run with one slow call stop at its dollar cap.
                 costs.append(with_discarded(_cost(payload, purpose), usage))
+                costs[-1] = with_discarded(await self._settled_cost(payload, purpose), usage)
                 if _truncated(payload):
                     _grow_cap(body, attempt, max_output_tokens, purpose)
                     continue

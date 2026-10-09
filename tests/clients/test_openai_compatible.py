@@ -488,3 +488,201 @@ async def test_abandoned_head_start_keeps_cancelled_normalization_receipt():
     assert costs[0].dollars == 0.01
     assert costs[1].basis is CostBasis.UNKNOWN
     assert costs[1].dollars is None
+
+
+async def test_missing_field_cost_recovers_matching_provider_receipt() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            assert request.url.params["id"] == "generation-1"
+            return httpx.Response(200, json={"data": {"id": "generation-1", "total_cost": 0.001}})
+        return httpx.Response(
+            200,
+            json={
+                "id": "generation-1",
+                "choices": [{"message": {"content": '{"count":3}'}}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 2},
+            },
+        )
+
+    ledger = Ledger(Limits(max_dollars=0.25))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await OpenAICompatibleLLM(
+            "key",
+            http=http,
+            base_url="https://openrouter.ai/api/v1",
+            models={LLMPurpose.FIELD_TEXT: "writer"},
+        ).generate(LLMPurpose.FIELD_TEXT, [], Result, ledger=ledger)
+    ledger.record(result.cost)
+    assert result.cost.dollars == 0.001
+    assert result.cost.basis is CostBasis.METERED
+    assert result.cost.input_tokens == 7
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        {"id": "another-generation", "total_cost": 0.0},
+        {"id": "generation-1", "total_cost": -1},
+        {"id": "generation-1", "total_cost": None},
+    ],
+)
+async def test_untrusted_or_missing_receipt_keeps_spend_guard(
+    receipt: dict[str, JsonValue], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def no_delay(_: float) -> None:
+        pass
+
+    monkeypatch.setattr("fastbrowse.clients.openai_compatible.asyncio.sleep", no_delay)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"data": receipt})
+        return httpx.Response(
+            200,
+            json={
+                "id": "generation-1",
+                "choices": [{"message": {"content": '{"count":3}'}}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 2},
+            },
+        )
+
+    ledger = Ledger(Limits(max_dollars=0.25))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await OpenAICompatibleLLM(
+            "key",
+            http=http,
+            base_url="https://openrouter.ai/api/v1",
+            models={LLMPurpose.FIELD_TEXT: "writer"},
+        ).generate(LLMPurpose.FIELD_TEXT, [], Result, ledger=ledger)
+    with pytest.raises(BudgetExceeded, match="cannot be enforced"):
+        ledger.record(result.cost)
+
+
+async def test_cancelled_receipt_lookup_retains_unknown_generation_charge() -> None:
+    looking_up = asyncio.Event()
+    ledger = Ledger(Limits(max_dollars=0.25))
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            looking_up.set()
+            await asyncio.Event().wait()
+        return httpx.Response(
+            200,
+            json={
+                "id": "generation-1",
+                "choices": [{"message": {"content": '{"count":3}'}}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 2},
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OpenAICompatibleLLM(
+            "key",
+            http=http,
+            base_url="https://openrouter.ai/api/v1",
+            models={LLMPurpose.FIELD_TEXT: "writer"},
+        )
+        task = asyncio.create_task(client.generate(LLMPurpose.FIELD_TEXT, [], Result, ledger=ledger))
+        await looking_up.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert len(ledger.lines) == 1
+    assert ledger.lines[0].basis is CostBasis.UNKNOWN
+    assert ledger.lines[0].input_tokens == 7
+    with pytest.raises(BudgetExceeded, match="cannot be enforced"):
+        ledger.check()
+
+
+@pytest.mark.parametrize("base_url", ["https://ai-gateway.vercel.sh/v1", "https://openrouter.ai/api/v1"])
+async def test_gateway_byok_receipt_includes_estimated_provider_spend(base_url: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "id": "generation-byok",
+                        "is_byok": True,
+                        "total_cost": 0.001,
+                        "upstream_inference_cost": 0.3,
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "generation-byok",
+                "choices": [{"message": {"content": '{"count":3}'}}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 2},
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await OpenAICompatibleLLM(
+            "key",
+            http=http,
+            base_url=base_url,
+            models={LLMPurpose.FIELD_TEXT: "writer"},
+        ).generate(LLMPurpose.FIELD_TEXT, [], Result)
+    assert result.cost.basis is CostBasis.ESTIMATED
+    assert result.cost.dollars == pytest.approx(0.301)
+    with pytest.raises(BudgetExceeded):
+        Ledger(Limits(max_dollars=0.25)).record(result.cost)
+
+
+@pytest.mark.parametrize(
+    "upstream",
+    [{}, {"upstream_inference_cost": None}, {"upstream_inference_cost": -1}, {"upstream_inference_cost": "invalid"}],
+)
+@pytest.mark.parametrize("base_url", ["https://ai-gateway.vercel.sh/v1", "https://openrouter.ai/api/v1"])
+async def test_byok_receipt_without_valid_upstream_keeps_unknown_cost(upstream, monkeypatch, base_url: str) -> None:
+    async def no_delay(_: float) -> None:
+        pass
+
+    monkeypatch.setattr("fastbrowse.clients.openai_compatible.asyncio.sleep", no_delay)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            receipt = {"id": "byok", "is_byok": True, "total_cost": 0}
+            receipt.update(upstream)
+            return httpx.Response(200, json={"data": receipt})
+        return httpx.Response(200, json={"id": "byok", "choices": [{"message": {"content": '{"count":3}'}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await OpenAICompatibleLLM(
+            "key", http=http, base_url=base_url, models={LLMPurpose.FIELD_TEXT: "writer"}
+        ).generate(LLMPurpose.FIELD_TEXT, [], Result)
+    assert result.cost.basis is CostBasis.UNKNOWN
+    with pytest.raises(BudgetExceeded, match="cannot be enforced"):
+        Ledger(Limits(max_dollars=0.25)).record(result.cost)
+
+
+@pytest.mark.parametrize("base_url", ["https://ai-gateway.vercel.sh/v1", "https://openrouter.ai/api/v1"])
+@pytest.mark.parametrize(
+    "byok,upstream,basis,amount",
+    [
+        (False, 0.3, CostBasis.METERED, 0.001),
+        (True, 0, CostBasis.METERED, 0.001),
+        (None, 0.3, CostBasis.ESTIMATED, 0.301),
+        ("true", 0.3, CostBasis.UNKNOWN, None),
+    ],
+)
+async def test_receipt_does_not_double_count_normal_provider_spend(base_url, byok, upstream, basis, amount) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            receipt = {"id": "generation", "total_cost": 0.001, "upstream_inference_cost": upstream}
+            if byok is not None:
+                receipt["is_byok"] = byok
+            return httpx.Response(200, json={"data": receipt})
+        return httpx.Response(200, json={"id": "generation", "choices": [{"message": {"content": '{"count":3}'}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await OpenAICompatibleLLM(
+            "key", http=http, base_url=base_url, models={LLMPurpose.FIELD_TEXT: "writer"}
+        ).generate(LLMPurpose.FIELD_TEXT, [], Result)
+    assert result.cost.basis is basis
+    if amount is None:
+        assert result.cost.dollars is None
+    else:
+        assert result.cost.dollars == pytest.approx(amount)

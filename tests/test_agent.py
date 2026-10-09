@@ -71,6 +71,7 @@ from fastbrowse.page import (
     ActResult,
     BlockKind,
     BrowserError,
+    BrowserUnavailable,
     Capture,
     Control,
     Dialog,
@@ -543,10 +544,10 @@ async def test_jev_still_unsure_after_recovery_takes_the_action_recovery_named()
     assert state.steps[-1].confidence is None
 
 
-async def test_an_unsure_pick_is_acted_on_once_per_page_state() -> None:
+async def test_an_unsure_observation_move_is_acted_on_once_per_page_state() -> None:
     state = await run_state()
     first, second = observation((_button("Done"),)), observation((_button("Close dialog"),))
-    done, close = _code_decision(Operation.CLICK, _button("Done")), _code_decision(Operation.CLICK, _button("Close"))
+    done, close = _code_decision(Operation.HOVER, _button("Done")), _code_decision(Operation.HOVER, _button("Close"))
     assert _try_unsure(state, first, done)
     assert not _try_unsure(state, first, done)
     assert _try_unsure(state, second, close)
@@ -563,7 +564,14 @@ async def test_an_unsure_pick_the_run_already_took_from_this_state_recovers() ->
     following = _code_decision(Operation.CLICK, _button("Next"))
     await agent._step(state, step, following)
     assert not _try_unsure(state, step, following)
-    assert _try_unsure(state, step, _code_decision(Operation.CLICK, _button("Back")))
+    assert not _try_unsure(state, step, _code_decision(Operation.CLICK, _button("Back")))
+
+
+@pytest.mark.parametrize("label", ["Sign out", "Continue with Google", "Unrelated action"])
+async def test_an_unsure_state_changing_action_needs_a_second_opinion(label: str) -> None:
+    state = await run_state()
+    obs = observation((_button(label),))
+    assert not _try_unsure(state, obs, _code_decision(Operation.CLICK, obs.controls[0]))
 
 
 @pytest.mark.parametrize(("confidence", "raised"), [(0.3, _Unsure), (0.9, _Stop)])
@@ -3635,7 +3643,7 @@ async def test_a_page_nobody_read_is_read_before_it_is_scrolled() -> None:
     assert not await agent._read_before_interaction(state, obs, decision)
 
 
-@pytest.mark.parametrize("failed", [NavigationTimeout, SiteUnreachable])
+@pytest.mark.parametrize("failed", [NavigationTimeout, SiteUnreachable, BrowserUnavailable])
 @pytest.mark.parametrize("opening", [True, False])
 async def test_navigation_timeout_is_unavailable_only_while_opening(
     monkeypatch: pytest.MonkeyPatch, opening: bool, failed: type[BrowserError]
@@ -3663,7 +3671,7 @@ async def test_navigation_timeout_is_unavailable_only_while_opening(
 
     monkeypatch.setattr(agent, "_loop", loop)
     result = await agent.run("Open the page", start="https://example.test" if opening else None)
-    assert result.status is (Status.UNAVAILABLE if opening else Status.ERROR)
+    assert result.status is (Status.UNAVAILABLE if opening or failed is BrowserUnavailable else Status.ERROR)
     assert result.error == "navigation timed out"
     assert len(result.steps) == (0 if opening else 1)
 
@@ -6345,3 +6353,23 @@ async def test_capture_masks_secrets_inside_structural_control_context() -> None
     assert captured.blocks[0].control_context is not None
     assert block.control_context is not None
     assert captured.blocks[0].control_context.label != block.control_context.label
+
+
+def test_public_dom_observation_citations_keep_the_plain_redacted_source_address() -> None:
+    from fastbrowse.retrieval import Claim, _evidence, assemble_answer
+
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    agent._redactor.register("token", "private-token")
+    page = capture((BlockKind.OBSERVATION, "Sign in: disabled")).model_copy(
+        update={"url": "https://example.test/form?token=private-token"}
+    )
+    evidence = _evidence(page, page.blocks[0], 0, len(page.text))
+    fact = Fact(text="Sign in is disabled.", evidence=evidence, reader=FactReader.LLM)
+    step = agent._public_fact(fact)
+    assert step.deep_link == "https://example.test/form?token=[secret:token]"
+    composed = assemble_answer((Claim(text=fact.text, evidence_ids=(fact_id(fact),)),), Notes([fact]), ())
+    answer, (citation,) = agent._public_answer(composed)
+    assert citation.deep_link == step.deep_link
+    assert "#:~:text=" not in answer
+    assert "private-token" not in answer
+    assert citation.quote == "Sign in: disabled"
