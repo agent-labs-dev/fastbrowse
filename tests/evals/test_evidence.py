@@ -124,7 +124,8 @@ def test_started_attempt_without_final_status_is_interrupted(tmp_path: Path) -> 
     assert attempt.unknown_cost is True
 
 
-def test_remaining_campaign_projection_binds_the_exact_budget_journal(tmp_path: Path) -> None:
+@pytest.mark.parametrize("suffix", [".budget.jsonl", ".budget.json"])
+def test_remaining_campaign_projection_binds_the_exact_budget_journal(tmp_path: Path, suffix: str) -> None:
     import hashlib
 
     directory = tmp_path / "docs/validation"
@@ -135,8 +136,8 @@ def test_remaining_campaign_projection_binds_the_exact_budget_journal(tmp_path: 
     )
     with pytest.raises(FileNotFoundError):
         campaign(path, tmp_path)
-    journal = path.with_suffix(".budget.jsonl")
+    journal = path.with_suffix(suffix)
     journal.write_text('{"committed": 0.1}\n')
     result = campaign(path, tmp_path)
-    assert result.sources[-1].path == "docs/validation/campaign.budget.jsonl"
+    assert result.sources[-1].path == "docs/validation/campaign" + suffix
     assert result.sources[-1].sha256 == hashlib.sha256(journal.read_bytes()).hexdigest()
