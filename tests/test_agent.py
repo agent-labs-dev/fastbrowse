@@ -5803,7 +5803,11 @@ async def test_unchanged_failed_output_evidence_cannot_reset_or_repeat_completio
     assert state.ledger.jev_calls == 0 and state.ledger.llm_calls == 1
 
 
-async def test_re_evidencing_partial_output_quotes_is_not_new_read_progress() -> None:
+@pytest.mark.parametrize("novelty", [0.0, 0.95])
+@pytest.mark.parametrize("rebound_requirements", [False, True])
+async def test_re_evidencing_partial_output_quotes_is_not_new_read_progress(
+    novelty: float, rebound_requirements: bool
+) -> None:
     state = await _reading_state()
     here = _at("https://example.test/live/", _button("Refresh"))
     response: JsonValue = {
@@ -5811,14 +5815,21 @@ async def test_re_evidencing_partial_output_quotes_is_not_new_read_progress() ->
         "answered": True,
     }
     llm = ScriptedLLM([response, response])
-    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
+    jev = ScriptedJev({"r1": "synthesis"}, noul=novelty)
+    agent = Agent(Mock(spec=Page), jev, llm)
     page = capture((BlockKind.PARAGRAPH, "Total: 12"))
     assert await agent._read(state, page, here) == (True, False)
     assert state.notes.evidenced("r1")
-    state.notes.unevidence(("r1",))
+    if not rebound_requirements:
+        state.notes.unevidence(("r1",))
+    state.owes_read = rebound_requirements
     state.open_answer_outputs = ("Report the remaining requested field.",)
-    assert await agent._read(state, page, here) == (False, False)
-    assert "remaining requested field" in llm.calls[-1][1][-1].content
+    recaptured = capture((BlockKind.PARAGRAPH, "Total: 12"), (BlockKind.PARAGRAPH, "Updated a moment ago"))
+    assert await agent._read(state, recaptured, here) == (False, False)
+    assert "novelty" in jev.requests[-1]
+    assert len(llm.calls) == len(state.notes.facts) == (1 if novelty == 0 else 2)
+    if novelty:
+        assert "remaining requested field" in llm.calls[-1][1][-1].content
 
 
 def test_derived_paraphrases_do_not_create_new_read_evidence() -> None:

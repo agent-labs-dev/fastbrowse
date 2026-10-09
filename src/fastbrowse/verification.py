@@ -579,9 +579,15 @@ async def check_answer_outputs(
     task: str = "",
     audit_cache: OutputAuditCache | None = None,
 ) -> bool:
-    def reject(failed: Sequence[str]) -> bool:
+    def reject(failed: Sequence[str], *, repair: str | None = None) -> bool:
         if missing_outputs is not None:
             missing_outputs.extend(failed)
+        if repair is not None and corrections is not None:
+            # Missing identities or outputs can be repaired from uncited notes before browsing again.
+            corrections.extend(
+                AnswerCorrection(stage="source", criterion=criterion, claims=composed.claims, reason=repair)
+                for criterion in failed
+            )
         return False
 
     if not checks:
@@ -704,7 +710,7 @@ async def check_answer_outputs(
             for key, value in payload["bindings"].items():
                 refs = value["identity_ids"]
                 if any(ref not in shared for ref in refs):
-                    return reject((uncertain[key],))
+                    return reject((uncertain[key],), repair="The requested subject has no valid quoted identity.")
                 scopes[key] = _IdentityScope(
                     scope=value["scope"], identities=tuple(dict.fromkeys(shared[ref] for ref in refs))
                 )
@@ -714,14 +720,14 @@ async def check_answer_outputs(
         for key, criterion in uncertain.items():
             scope = resolved.bindings.get(key)
             if scope is None or scope.scope == "unresolved":
-                return reject((criterion,))
+                return reject((criterion,), repair="Cite a literal identifying quote for every requested subject.")
             if scope.scope == "subjectless":
                 if scope.identities:
-                    return reject((criterion,))
+                    return reject((criterion,), repair="The subject binding contradicts its quoted identities.")
                 continue
             bindings = scope.identities
             if not bindings:
-                return reject((criterion,))
+                return reject((criterion,), repair="Cite a literal identifying quote for every requested subject.")
             identities[key] = []
             for binding in bindings:
                 source = offered.get(binding.source_ref)
@@ -730,7 +736,7 @@ async def check_answer_outputs(
                     or not binding.quote.strip()
                     or not any(binding.quote in text for text in (source.quote, source.page_title or ""))
                 ):
-                    return reject((criterion,))
+                    return reject((criterion,), repair="The requested subject's identity is not in its cited sources.")
                 identity: dict[str, JsonValue] = {
                     "reference": criterion,
                     "url_ref": source.url_ref,
@@ -804,7 +810,10 @@ async def check_answer_outputs(
         chosen = selected.answers.get(key) if selected is not None else None
         choice = chosen.choice if isinstance(chosen, ChoiceAnswer) else "all"
         if choice == "none":
-            return reject((criterion,))
+            return reject(
+                (criterion,),
+                repair="The answer does not state this requested output. Use retained quotes to answer it.",
+            )
         if choice == "all":
             selected_claims[key] = composed.claims
             claims = context.claims
@@ -914,7 +923,9 @@ async def check_answer_outputs(
                 "An explicitly labeled value remains available alongside an eligibility-dependent alternative; "
                 "preserve those conditions rather than assuming one value supersedes the other. "
                 "An explicit exhaustive description can establish that no other members exist; absence from a "
-                "partial description cannot. A total alone does not provide a component breakdown. A value scoped "
+                "partial description cannot. An explicit empty-result quote can answer a request to find records "
+                "with a finding of none within its stated scope. Missing or unread content cannot. "
+                "A total alone does not provide a component breakdown. A value scoped "
                 "to one component, mode, tier or single-item configuration does not establish an aggregate value "
                 "or another configuration. Require the source scope to match the requested scope and preserve "
                 "explicit distinctions. Do not add independent component maxima unless quoted sources state "
@@ -975,7 +986,9 @@ async def check_answer_outputs(
                 "requirements beyond it. Preserve explicitly stated conditions on alternative values; "
                 "do not assume an eligibility-dependent alternative supersedes an unrestricted value. "
                 "An explicit exhaustive description can establish absence of other "
-                "members, but a total alone does not evidence a component breakdown. A value scoped to one "
+                "members. A quoted empty-result message supports reporting no records within that page's scope, "
+                "not an unbounded claim that none exist elsewhere. Missing or unread content cannot prove absence. "
+                "A total alone does not evidence a component breakdown. A value scoped to one "
                 "component, mode, tier or single-item configuration does not establish an aggregate value or "
                 "another configuration. Preserve the quoted scope and explicit distinctions in every assertion. "
                 "Do not add independent component maxima unless quoted sources state that they apply "

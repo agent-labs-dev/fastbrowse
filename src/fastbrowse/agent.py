@@ -2303,7 +2303,9 @@ class Agent:
             ledger=state.ledger,
             jev=None if needs_context else self._jev,
             requirements=wanted,
-            revalidate=owed,
+            # Rebinding old quotes during output recovery does not make revisiting their page a fresh source.
+            revalidate=owed and (transaction_pending or not state.open_answer_outputs),
+            recovering_outputs=bool(state.open_answer_outputs),
             notice=notice,
             continuing=state.continuing,
             incomplete=state.incomplete,
@@ -3206,7 +3208,11 @@ class Agent:
         if held is None and facts is not None and facts != composed:
             # A list of forty records came back as one claim citing one quote, which no claim check should pass. The
             # reader's own facts each carry the quote that shows them, so they are offered to the same check.
+            failure = state.missing_answer_outputs, state.open_answer_outputs, state.answer_corrections
             held = await self._holds(state, facts)
+            if held is None:
+                # Recovery follows the returned answer's failure, not a sparser fallback's missing fields.
+                state.missing_answer_outputs, state.open_answer_outputs, state.answer_corrections = failure
         return held or composed, held is not None
 
     async def _transaction_evidence_ids(self, state: _RunState) -> tuple[str, ...]:

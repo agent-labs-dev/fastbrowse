@@ -11,6 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Missing answer outputs and subject citations can be repaired from retained quotes before browsing again.
+  Recovery keeps the returned answer's failure reason, checks whether a page adds evidence, and reads new
+  pages with bounded prior notes.
+  Explicit empty-result messages support findings of no records within the quoted page's scope.
+
 - Multi-project tasks retain earlier sources for navigation and verify answers with explicit output checks
   without requiring an unused whole-notes check to fit the evidence budget.
 - Independent named targets have separate reading requirements. Newly evidenced targets renew recovery on

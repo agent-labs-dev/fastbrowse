@@ -1,7 +1,7 @@
 """An answer repair receives failed assertions, retains quotes, and goes through the same full audits."""
 
 import json
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from pydantic import JsonValue
@@ -32,6 +32,63 @@ class RoutingJev:
             input_tokens=1,
             cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0),
         )
+
+
+@pytest.mark.parametrize("retained_report", [True, False])
+async def test_missing_player_reports_are_repaired_from_notes_or_remain_unverified(retained_report: bool) -> None:
+    state = await run_state()
+    state.task = "Report player bugs and author replies for Project Quartz."
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="project", text=state.task, kind=RequirementKind.INFORMATION),),
+        answer_checks=("Player bug reports for Project Quartz",),
+        answer_expected=True,
+    )
+    page = capture(
+        (BlockKind.PARAGRAPH, "Project Quartz: Player reports a controller crash."),
+        (BlockKind.PARAGRAPH, "Project Quartz: Author says the fix will ship next release."),
+    )
+    report = Fact(text=page.text[: page.blocks[0].end], evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+    reply = Fact(
+        text="Project Quartz: Author says the fix will ship next release.",
+        requirement_id="project",
+        evidence=block_evidence(page, "s1"),
+        reader=FactReader.LLM,
+    )
+    state.notes = Notes((report, reply) if retained_report else (reply,))
+    initial: JsonValue = {"claims": [{"text": reply.text, "evidence_ids": [fact_id(reply)]}]}
+    repaired: JsonValue = {"claims": [{"text": page.text, "evidence_ids": [fact_id(report), fact_id(reply)]}]}
+    responses: list[JsonValue] = [initial, repaired if retained_report else initial]
+    if retained_report:
+        responses.extend(
+            {"judgments": {f"output_{index}": "yes"}, "reason": "Both player report and author reply are quoted."}
+            for _ in range(2)
+            for index in range(2)
+        )
+    llm = ScriptedLLM(responses)
+
+    class ReportSelector(RoutingJev):
+        async def evaluate(self, state, questions):
+            result = await super().evaluate(state, questions)
+            return result.model_copy(
+                update={
+                    "answers": {
+                        key: answer.model_copy(
+                            update={"choice": "all" if "controller crash" in state["answer"] else "none"}
+                        )
+                        for key, answer in result.answers.items()
+                    }
+                }
+            )
+
+    answer, verified = await Agent(Mock(spec=Page), ReportSelector(), llm)._answer(state, None)
+    assert verified is retained_report
+    composing = [messages[-1].content for purpose, messages in llm.calls if purpose is LLMPurpose.COMPOSE]
+    assert len(composing) == 2 and "# Answer corrections" in composing[1]
+    if retained_report:
+        assert "controller crash" in answer.answer
+        assert {citation.quote for citation in answer.citations} == {report.text, reply.text}
+    else:
+        assert state.missing_answer_outputs
 
 
 class RepairWriter(ScriptedLLM):
@@ -69,6 +126,39 @@ def price_notes():
     page = capture((BlockKind.PARAGRAPH, "Member price 12"))
     fact = Fact(text="Price 12", evidence=block_evidence(page, "s0"), reader=FactReader.LLM, requirement_id="r")
     return Notes((fact,)), fact
+
+
+async def test_failed_reader_fallback_keeps_the_composed_answers_missing_outputs() -> None:
+    state = await run_state()
+    state.task = "Report player feedback across projects."
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r", text=state.task, kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    page = capture((BlockKind.PARAGRAPH, "Project Quartz: Player reported a crash. Author plans a fix."))
+    fact = Fact(
+        text="Project Quartz: Author plans a fix.",
+        evidence=block_evidence(page, "s0"),
+        requirement_id="r",
+        reader=FactReader.LLM,
+    )
+    state.notes = Notes((fact,))
+    llm = ScriptedLLM([{"claims": [{"text": page.text, "evidence_ids": [fact_id(fact)]}]}])
+    agent = Agent(Mock(spec=Page), RoutingJev(), llm)
+
+    async def reject(state, answer):
+        missing = (
+            "Player feedback for Project Garnet" if "crash" in answer.answer else "Player feedback for Project Quartz"
+        )
+        state.missing_answer_outputs = (missing,)
+        state.open_answer_outputs = (missing,)
+        return None
+
+    agent._holds = AsyncMock(side_effect=reject)
+    answer, verified = await agent._answer(state, None)
+    assert not verified and answer.answer == page.text
+    assert agent._holds.await_count == 2
+    assert state.missing_answer_outputs == state.open_answer_outputs == ("Player feedback for Project Garnet",)
 
 
 @pytest.mark.parametrize("source_missing", [False, True])

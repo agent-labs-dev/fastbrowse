@@ -855,6 +855,7 @@ async def read(
     records_only: bool = False,
     require_all_evidence: bool = False,
     revalidate: bool = False,
+    recovering_outputs: bool = False,
     _skip_order_shortcuts: Collection[str] = (),
 ) -> ReadOutcome:
     """`notice` is what the caller knows about the page that its text does not say, such as its next-page control;
@@ -896,7 +897,13 @@ async def read(
     # A pager notice is a caveat on what this page can answer, and the choice model picks quotes without weighing one.
     if jev is not None and wanted and not notice and not records_only:
         chosen = await _read_choices(
-            jev, capture, wanted, tokens=tokens, ledger=ledger, notes=None if revalidate else notes
+            jev,
+            capture,
+            wanted,
+            tokens=tokens,
+            ledger=ledger,
+            notes=None if revalidate else notes,
+            recovering_outputs=recovering_outputs,
         )
         costs.extend(chosen.cost_lines)
         for fact in chosen.facts:
@@ -972,6 +979,9 @@ async def read(
                     "- Give a claim a requirement id only when it answers that whole requirement with its "
                     "constraints; otherwise null. Set answered only when the collected evidence and this capture "
                     "fully answer the question.\n"
+                    "- An explicit empty-result message is a finding: quote it and state that no matching "
+                    "records are reported within that page's scope. Missing text, a loading view or an unread "
+                    "section cannot establish absence.\n"
                     "- Values typed into fields, suggestions and previews are inputs, not results.\n\n"
                     "# Tallies\nFor a count of records or a ranking by record count, return tally groups: "
                     "each key is the label stated in its records, and each record cites its own source blocks. "
@@ -1057,7 +1067,12 @@ async def read(
             )
         room = _notes_room(tokens, messages, _RecordsResponse if records_only else _ReadResponse)
         labels = {fact_id(fact): f"e{i}" for i, fact in enumerate(so_far.facts)}
-        offered = so_far.render_with_ids(room, preserve_requirements=True, labels=labels)
+        # Reading a new source does not require every earlier project's evidence in the same prompt.
+        # Comparisons that need all records and final verdicts still refuse incomplete evidence.
+        try:
+            offered = so_far.render_with_ids(room, preserve_requirements=require_all_evidence, labels=labels)
+        except ValueError as error:
+            raise NotesTooLarge(f"The {room} character reader notes budget cannot report omitted evidence") from error
         if require_all_evidence and {fact_id(fact) for fact in so_far.facts} - set(offered.evidence_ids):
             raise NotesTooLarge("The final page cannot fit every earlier record in its collected evidence")
         messages[-1] = _read_message(capture, part, question, requirement_ids, offered.text)
@@ -2085,7 +2100,8 @@ def _read_request(
                 f"{UNTRUSTED}\n\nRequirement: {requirement.text}\nHow does this page answer the requirement? "
                 "Select absent when the page holds no evidence for it, not even partial. Observed DOM "
                 "metadata can evidence absence within its stated scope, such as zero visible h1 "
-                "headings. Select synthesis for that answerable evidence. Select a candidate "
+                "headings. An explicit empty-result message also evidences absence within that page's scope; "
+                "select synthesis to record that finding. Select a candidate "
                 "when that candidate alone states one short scalar fact that fully answers it, with no "
                 "inference; a total the page states is a scalar, counting items is not. Otherwise select "
                 "synthesis: lists, comparisons, summaries, explanations, counts, calculations, several facts, "
@@ -2190,6 +2206,7 @@ async def _read_choices(
     tokens: TokenBudget,
     ledger: Ledger | None,
     notes: Notes | None = None,
+    recovering_outputs: bool = False,
 ) -> _ChoiceRead:
     # A group heading can supply a plausible scalar while the requested count needs its child records.
     requirements = tuple(requirement for requirement in requirements if not requirement.count_records)
@@ -2247,13 +2264,14 @@ async def _read_choices(
     state, questions = _read_request(capture, requirements, candidates)
     asked: dict[str, Question] = dict(questions)
     compare_previous = False
+    # A rejected answer reopens requirements without changing the quotes already held for this page.
     reopened = notes is not None and any(
         fact.requirement_id in {requirement.id for requirement in requirements}
         and not notes.evidenced(fact.requirement_id)
         for fact in notes.facts
         if fact.requirement_id is not None
     )
-    if previous and not reopened and isinstance(state, dict) and "novelty" not in asked:
+    if previous and (not reopened or recovering_outputs) and isinstance(state, dict) and "novelty" not in asked:
         compared = {**state, "previous": previous}
         novelty = NoulQuestion(
             instructions=(

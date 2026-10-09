@@ -74,10 +74,13 @@ def two_entity_answer():
 async def test_identity_must_copy_an_offered_literal_source(ref, quote):
     notes, answer = two_entity_answer()
     writer = IdentityWriter(ref=ref, quote=quote)
+    corrections = []
     assert not await check_answer_outputs(
-        RoutingJev(), writer, answer, notes, ("Report Adapter Beacon exact port count.",)
+        RoutingJev(), writer, answer, notes, ("Report Adapter Beacon exact port count.",), corrections=corrections
     )
     assert len(writer.calls) == 1
+    assert len(corrections) == 1 and corrections[0].stage == "source"
+    assert corrections[0].claims == answer.claims
 
 
 async def test_source_and_assertion_audits_share_literal_identity_without_reported_values():
