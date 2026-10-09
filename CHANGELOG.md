@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Optional `--cursor` feedback draws an agent overlay for visible local Chrome on Linux X11 with Cua Driver.
+  It leaves the physical pointer and focus alone, hides when its page or window changes, and skips unverified
+  window mappings. Cloud, headless, Wayland and remote Chrome connections run without it.
+
 - Read captures retain empty form fields, disabled buttons, horizontal overflow and the absence of visible h1
   headings across accessible document and shadow roots. These DOM observations cite the source page without
   text fragments for synthetic labels. Field values supplied as URLs are checked before navigation.

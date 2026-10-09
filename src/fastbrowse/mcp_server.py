@@ -100,6 +100,8 @@ class ServerConfig:
     bitwarden: tuple[str, ...] = ()
     downloads: Path | None = None
     max_concurrent: int = 1
+    cursor: bool = False
+    """Draw the agent's cursor over a headed Chrome with the Cua Driver; the operator's choice, not the task's."""
     mcp_token: str | None = None
     """Bearer token every HTTP request but `/healthz` must carry. `None` is allowed only on loopback."""
 
@@ -423,6 +425,7 @@ def build_server(
                         secrets=secrets,
                         downloads=config.downloads,
                         on_event=on_event,
+                        cursor=config.cursor,
                     )
             except ConfigurationError as exc:
                 raise ToolError(str(exc)) from None
@@ -522,6 +525,11 @@ def parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--max-seconds", type=float, default=None, help="optional ceiling per call")
     parser.add_argument("--max-concurrent", type=int, default=1, help="runs at once; more wait")
     parser.add_argument("--downloads", type=Path, default=None, help="directory to keep downloaded files in")
+    parser.add_argument(
+        "--cursor",
+        action="store_true",
+        help="draw the agent's cursor over a headed Chrome with the Cua Driver (Linux X11)",
+    )
     return parser.parse_args(argv)
 
 
@@ -565,6 +573,7 @@ async def configure(args: argparse.Namespace, settings: Settings, environ: Mappi
         bitwarden=tuple(dict.fromkeys(args.bitwarden)),
         downloads=args.downloads,
         max_concurrent=args.max_concurrent,
+        cursor=args.cursor,
         mcp_token=token,
     )
 

@@ -320,6 +320,7 @@ export interface RunParams {
   until?: boolean;
   downloads?: string | null;
   record?: string | null;
+  cursor?: boolean;
   local?: boolean;
   chrome?: LocalChrome | null;
   cloud_profile?: string | null;
