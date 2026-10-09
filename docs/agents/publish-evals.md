@@ -12,7 +12,7 @@ Fastbrowse suites do not require new comparator runs. Previously published compa
 as references with their task and build differences stated. Every group inside one candidate still comes
 from the same measured agent and runner build. Adding a suite must retain the published groups and their
 regression checks; results from different builds cannot be combined under one build receipt.
-Schemas 2 and 3 record each group's agent and runner commits and requires them to match the candidate's build.
+Schemas 2 and 3 record each group's agent and runner commits and require them to match the candidate's build.
 
 CI validates the candidate's exact coverage and compares matched scores, time and cost with the previous
 approved candidate. Unresolved costs, missing grades, incomplete coverage and a failed fixture workflow

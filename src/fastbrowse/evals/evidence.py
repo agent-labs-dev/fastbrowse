@@ -177,6 +177,9 @@ def campaign(path: Path, root: Path, *, kind: Literal["published", "diagnostic"]
         source = Source(path=ledger.relative_to(root).as_posix(), sha256=_digest(content))
         sources.append(source)
         rows = [json.loads(line) for line in content.splitlines() if line.strip()]
+    if any((row.get("run") or {}).get("budget_policy") == "remaining-campaign-v1" for row in rows):
+        budget = path.with_suffix(".budget.jsonl")
+        sources.append(Source(path=budget.relative_to(root).as_posix(), sha256=_digest(budget.read_bytes())))
     selected_ids = {(r.get("run") or {}).get("run_id") for r in selected_rows} - {None}
     chosen: set[int] = set()
     if rows and "attempt" in rows[0]:
