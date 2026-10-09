@@ -7,8 +7,8 @@ their source meaning. Internal hosted and Ultrafast comparisons use separate mat
 
 Schema 1 requires all four original groups. Schema 2 accepts nonempty subsets of those four groups.
 Schema 3 also supports `internal-fastbrowse`: all 54 supported internal tasks, three repeats each, with
-Fastbrowse alone. The Fastbrowse-only group does not require comparator reruns. Official
-Fastbrowse suites do not require new comparator runs. Previously published comparator figures can be linked
+fastbrowse alone. The fastbrowse-only group does not require comparator reruns. Official
+fastbrowse suites do not require new comparator runs. Previously published comparator figures can be linked
 as references with their task and build differences stated. Every group inside one candidate still comes
 from the same measured agent and runner build. Adding a suite must retain the published groups and their
 regression checks; results from different builds cannot be combined under one build receipt.
@@ -27,7 +27,7 @@ receipt and returns a `benchmark-approval` artifact. Download `benchmark-approva
 the reviewed data PR and wait for green CI before merging. An upload to Langfuse does not approve
 publication.
 
-The website reads the candidate and approval from one resolved Fastbrowse commit. It checks the exact-byte
+The website reads the candidate and approval from one resolved fastbrowse commit. It checks the exact-byte
 digest and the completed owner-dispatched workflow receipt before deriving any figure. A changed
 candidate needs a new approval. Raw answers, page content, recordings and private trace links stay in
 Langfuse and ignored local artifacts.

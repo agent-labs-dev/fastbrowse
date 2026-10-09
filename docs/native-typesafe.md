@@ -69,5 +69,5 @@ Run it with `uv run --isolated --no-project --with 'pydantic-ai-slim[typesafe]==
 
 No live A/B performance claim is made: a candidate that preserves the accounting contract was not produced,
 so the migration fails the compatibility gate before performance testing. Any future replacement must first
-preserve cost and attempt accounting, then run `--suite core dev heldout --repeat 3` on both implementations
-at equal task versions. Switch only with no regression in pass rate, latency or dollars per run.
+preserve cost and attempt accounting, then run Parallax's `core`, `dev` and `heldout` suites at three
+repeats on both implementations at equal task versions. Switch only with no regression in pass rate, latency or dollars per run.

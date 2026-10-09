@@ -1,14 +1,14 @@
-# Measuring Fastbrowse
+# Measuring fastbrowse
 
-We measure Fastbrowse with browser fixture tests and benchmark tasks run through Parallax.
+We measure fastbrowse with browser fixture tests and benchmark tasks run through Parallax.
 
 The [benchmark page](https://fastbrowse.ai/benchmarks) describes these measurements:
 
 | Set | Agents | Measurement |
 |---|---|---|
-| Fastbrowse internal | Fastbrowse, Browser Use hosted default, Jev Ultrafast | Source task success on matched tasks |
-| BU Bench | Fastbrowse, with Browser Use's published figures as a separate reference | Official weighted rubric score |
-| Online-Mind2Web | Fastbrowse, with published figures as a separate reference | Official full-task success |
+| fastbrowse internal | fastbrowse, Browser Use hosted default, Jev Ultrafast | Source task success on matched tasks |
+| BU Bench | fastbrowse, with Browser Use's published figures as a separate reference | Official weighted rubric score |
+| Online-Mind2Web | fastbrowse, with published figures as a separate reference | Official full-task success |
 
 Ultrafast coverage and hosted-default fallbacks are reported separately. An official benchmark's partial
 rubric score is not a solved-task percentage. A reported comparison needs matching task revision, scope,
@@ -22,7 +22,6 @@ and on demand. A release needs a green fixture run on its exact build.
 
 ```sh
 uv run python -m fastbrowse.evals.runner --help
-uv run python -m fastbrowse.evals.mock --help
 uv run python -m fastbrowse.evals.publication --help
 ```
 
@@ -31,9 +30,9 @@ uv run python -m fastbrowse.evals.publication --help
 Parallax owns internal prompts, truth functions and graders. Its generated metadata export,
 `src/fastbrowse/evals/benchmark-catalog.json`, contains task ids, versions, grader fingerprints, eligible
 agents and source hashes. It deliberately omits task text. Parallax checks the export against its canonical
-sources; Fastbrowse validates it against the public version lock.
+sources; fastbrowse validates it against the public version lock.
 
-Recorded results name the task catalog digest, Parallax runner, Fastbrowse build and provider route.
+Recorded results name the task catalog digest, Parallax runner, fastbrowse build and provider route.
 Comparisons report task coverage, repeat counts, physical attempts, costs and regressions. Full logs,
 recordings, answers and page content stay out of Git and the public feed.
 
