@@ -8,13 +8,22 @@ fastbrowse splits a browser agent into three owners:
 
 ## Authorization
 
-Jev judges every model-selected click, including links, every Enter press and acceptance of
+Jev judges every model-selected click, including links, navigation to a caller-supplied address, every Enter press and acceptance of
 confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. An authorized action whose
 confidence reaches `Thresholds.sensitive_act_from` proceeds without that classification.
 
 A refusal is recorded as a failed step with a reason. An unauthorized action with sufficient confidence
 stops at `needs_confirmation`; an uncertain action goes to recovery. The classifier can be wrong, so this
 gate is not a guarantee that every externally visible change is detected.
+
+## Navigation
+
+The operation choice can open another literal HTTP(S) address from the caller's task. The address is a
+closed choice, revalidated before dispatch, and uses the browser's origin grant and live access checks.
+Page instructions cannot add addresses to that choice. Recovery can select the same supplied addresses;
+addresses inferred by the startup shortcut retain their separate verification rules.
+An editable search field can be filled directly, including when focusing it opens an editor. Opening or
+focusing the field does not enter a query.
 
 ## Reading and citations
 
@@ -91,6 +100,27 @@ their reader and source links in `StepResult.facts`, and any available explanati
 there is no fixed frame rate, and only the latest pending frame is retained. Delivery runs separately from
 the agent, and handler failures are logged. Live images and MP4 recordings are held back from the moment a secret is typed, and whenever the page is read showing one, until a reading shows none;
 a recording holds its last clean frame meanwhile.
+
+## Cursor feedback
+
+`--cursor` (`run_task(cursor=True)`) shows where the agent is about to act, through the Cua Driver's synthetic
+cursor. The click itself is still sent over CDP, so the overlay cannot change what an action did and is never
+retried. The page hook is in `CdpPage.act`, where the hit-tested point is known; a secret's field is never
+marked. `browser/cursor.py` owns one `cua-driver mcp` child per run, speaking JSON-RPC over stdio, and stops it
+when the run ends, including on cancellation. The driver's `move_cursor` is sent in `window` scope only, so the
+real pointer and focus never move.
+
+The page point becomes a screen point from what the page reports: `screenX/Y`, `outerWidth/Height`,
+`innerWidth/Height` and the zoom from `Page.getLayoutMetrics`. The top inset is `outerHeight - innerHeight * zoom`.
+The cursor is drawn only when exactly one driver window matches the page's reported frame (which also shows the
+two share a scale, so a scaled display is skipped), that window is in front of every other, the tab is visible and
+the point is inside the viewport. Otherwise it is hidden. Any driver failure turns the feature off for the run.
+
+Limits: Linux X11 only; native Wayland, macOS and Windows are not verified. It needs `cua-driver`
+0.28.3 or newer with the session cursor tools. Cloud and headless browsers are skipped. The driver offers no click
+pulse through `move_cursor`, so only the glide is shown. A docked DevTools panel or a pinch zoom hides the cursor,
+and a window partly covered by another counts as covered. The overlay is a separate window, so CDP screenshots and
+recordings do not show it.
 
 ## Browser capabilities over plain CDP
 

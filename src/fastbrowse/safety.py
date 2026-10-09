@@ -23,7 +23,7 @@ def may_be_irreversible(operation: Operation, control: Control | None) -> bool:
     if control is None:
         return False
     match operation:
-        case Operation.CLICK | Operation.DRAG:
+        case Operation.CLICK | Operation.DRAG | Operation.NAVIGATE:
             return True
         # Not only a form's Enter: a chat, comment or DM box sends on Enter through its own script, with no
         # form for the page to describe.
@@ -62,7 +62,12 @@ def irreversible_question(
                 if destination is not None
                 else ""
             )
-            + (f"Enter submits this form: {control.submit_semantics}\n" if operation is Operation.ENTER else "")
+            + (
+                f"The action submits this form: {control.submit_semantics}\n"
+                if control.submit_semantics
+                and (operation is Operation.ENTER or (operation is Operation.CLICK and control.role == "button"))
+                else ""
+            )
             + "Would doing so commit something that cannot be undone, such as placing an order or spending money, "
             "sending a message, submitting an application, changing or resetting an account password or "
             "credentials, or deleting or publishing data?"

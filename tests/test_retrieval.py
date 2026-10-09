@@ -5220,3 +5220,23 @@ def test_short_fact_choice_preserves_equal_captions_control_positions() -> None:
         }
         for position in ("1 of 2", "2 of 2")
     ]
+
+
+def test_dom_observations_link_to_the_page_without_a_synthetic_text_fragment() -> None:
+    from fastbrowse.retrieval import _evidence
+
+    page = capture((BlockKind.OBSERVATION, "Sign in: disabled"))
+    evidence = _evidence(page, page.blocks[0], 0, len(page.text))
+    assert not evidence.rendered_text
+    fact = Fact(text="Sign in is disabled.", evidence=evidence, reader=FactReader.LLM)
+    answer = assemble_answer((Claim(text=fact.text, evidence_ids=(fact_id(fact),)),), Notes([fact]), ())
+    assert answer.citations[0].quote == "Sign in: disabled"
+    assert answer.citations[0].deep_link == evidence.url
+
+
+def test_a_quote_crossing_a_dom_observation_is_not_literal_page_text() -> None:
+    from fastbrowse.retrieval import _evidence
+
+    page = capture((BlockKind.PARAGRAPH, "Create agent"), (BlockKind.OBSERVATION, "Name: [empty]"))
+    assert not _evidence(page, page.blocks[0], 0, len(page.text)).rendered_text
+    assert _evidence(page, page.blocks[0], 0, page.blocks[0].end).rendered_text

@@ -176,7 +176,7 @@
   registry.visible = visible;
   // Styled checkboxes and radios often hide the native input. Its visible label is the click
   // target, but the input still owns the checked/disabled state and must participate in freshness.
-  const sourceOf = e => (e.tagName === 'LABEL' && ['checkbox', 'radio'].includes(e.control?.type) ? e.control : e);
+  const sourceOf = e => (e.tagName === 'LABEL' && ['checkbox', 'radio', 'file'].includes(e.control?.type) ? e.control : e);
 
   // Their text is code, not a name: Amazon nests a <style> inside a result card's link.
   const CODE = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
@@ -256,7 +256,7 @@
   const DATE_TYPES = ['date', 'datetime-local', 'month', 'week', 'time'];
 
   const roleOf = e => {
-    if (sourceOf(e) !== e) return sourceOf(e).type;
+    if (sourceOf(e) !== e) return sourceOf(e).type === 'file' ? 'textbox' : sourceOf(e).type;
     const explicit = e.getAttribute('role');
     if (ARIA_ROLES.includes(explicit)) return explicit;
     if (e.tagName === 'BUTTON' || e.tagName === 'SUMMARY') return 'button';
@@ -282,6 +282,7 @@
 
   const submitSemantics = e => {
     const form = e.form;
+    const explicit = ['BUTTON', 'INPUT'].includes(e.tagName) && ['submit', 'image'].includes(e.type);
     const implicit = [
       'text',
       'search',
@@ -296,8 +297,8 @@
       'datetime-local',
       'number',
     ];
-    if (!form || e.tagName !== 'INPUT' || !implicit.includes(e.type)) return null;
-    const submit = [...form.getRootNode().querySelectorAll('button,input')].find(
+    if (!form || (!explicit && (e.tagName !== 'INPUT' || !implicit.includes(e.type)))) return null;
+    const submit = explicit ? e : [...form.getRootNode().querySelectorAll('button,input')].find(
       c => c.form === form && (c.type === 'submit' || c.type === 'image'),
     );
     if (submit?.matches(':disabled')) return null;
@@ -454,7 +455,7 @@
       base.operations = ['select'];
       base.options = [...e.options].filter(o => !o.disabled && !o.closest('optgroup[disabled]')).map(o => o.label);
       base.value = [...e.selectedOptions].map(o => o.label).join(', ');
-    } else if (e.type === 'file') {
+    } else if (source.type === 'file') {
       base.operations = ['upload'];
       base.value = null;
     } else {
@@ -531,6 +532,9 @@
     for (let e = element.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
       if (twins.some(twin => twin !== element && e.contains(twin))) break;
       scope = e;
+      // A lone open reply has no form twin nearby; crossing its record picks a different commenter's name.
+      if (e.matches('article,li,[role="listitem"]') ||
+        (e.matches('tr,[role="row"]') && e.querySelector('input,textarea,select,[role="textbox"]'))) break;
     }
     return scope ? excerpt(nameOf(scope, element, label, nearest), CONTROL_CONTEXT_CHARS) : '';
   };

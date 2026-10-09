@@ -65,6 +65,7 @@ from fastbrowse.models import (
     Unavailable,
     UntilCheck,
 )
+from fastbrowse.navigation import navigation_urls, task_urls
 from fastbrowse.page import (
     Action,
     ActResult,
@@ -150,7 +151,7 @@ _CYCLE_SHOWN = 4
 _REVERSAL_WINDOW = 6
 _RECOVERY_RECORDS = 4
 _RECOVERY_CHARS = 240
-_IDLE_CHECKED = frozenset({Operation.CLICK, Operation.ENTER, Operation.DRAG})
+_IDLE_CHECKED = frozenset({Operation.CLICK, Operation.ENTER, Operation.DRAG, Operation.NAVIGATE})
 """Operations not taken twice from a page state where they changed nothing. A hover can reveal content through CSS
 alone, which leaves the DOM as it was, so it is not judged by the DOM."""
 
@@ -226,6 +227,7 @@ _FORM_WRITER = (
 
 class _Recovery(Frozen):
     diagnosis: str
+    url: str | None = Field(default=None, description="For navigate only: one exact caller-supplied address listed.")
     next_subgoal: str = Field(description="The single next thing to achieve on the page, concretely.")
     control: int | None = Field(
         default=None, description="The index of the one listed control the subgoal acts on, or null if none."
@@ -421,6 +423,8 @@ class _RunState:
     paging_failed: bool = False
     started_url: str | None = None
     """The initial address, retained even when an HTTP failure removes it from completion evidence."""
+    caller_start: str | None = None
+    start_landing_url: str | None = None
     first_url: str | None = None
     """The first page the run looked at, which is what a task's "this page" means once the run has moved on."""
     visited: dict[str, None] = field(default_factory=dict[str, None])
@@ -591,6 +595,9 @@ class Agent:
                         task, inputs or {}, tuple(attachments), authorization or Authorization(), ledger, head.planning
                     )
                     state.started_url = opening
+                    state.caller_start = start
+                    if start is not None and not history:
+                        state.start_landing_url = await self._page.address()
                     state.history.extend(history)
                     state.invented = invented
                     if opening is not None:
@@ -801,7 +808,9 @@ class Agent:
                     continue
                 if bot_check:
                     raise _Stop(
-                        Status.BLOCKED, f"bot check at {origin}; it is not a sign-in and no credential passes it"
+                        Status.BLOCKED,
+                        f"bot check at {origin}; it is not a sign-in and no credential passes it. "
+                        "Retry using an attached local browser or choose another source for this research.",
                     )
                 plan = await state.await_plan()
                 if not _access_inspection(plan):
@@ -920,7 +929,7 @@ class Agent:
                 # Done and Search clicked three times each on a form that would not submit. Recovery is told so once:
                 # a click can also do nothing because the page had not wired it up yet, and a retry it asks for stands.
                 attempted.idle = False
-                named = _describe(decision.target) if decision.target else decision.tab_id
+                named = _decision_label(decision)
                 reason = f"{decision.operation.value} {named or ''} already did nothing here".strip()
                 await self._recover(state, observation, reason)
                 continue
@@ -1105,7 +1114,7 @@ class Agent:
             state.form_values.clear()
         facts_before = len(state.notes.facts)
         reason = state.hint if decision.directed else None
-        label = _describe(decision.target) if decision.target else decision.tab_id
+        label = _decision_label(decision)
         typed: str | None = None
         effect_now: str | None = None
         setting = False
@@ -1174,6 +1183,8 @@ class Agent:
                     )
                 elif decision.operation is Operation.DIALOG and action.accept_dialog:
                     question = _dialog_question(state.task, observation.dialog)
+                elif decision.operation is Operation.NAVIGATE and decision.url is not None:
+                    question = _navigation_question(state.task, decision.url)
                 if question is not None:
                     state.transaction_candidates.append(
                         _TransactionCandidate(question=question, from_url=observation.url)
@@ -1641,6 +1652,36 @@ class Agent:
     async def _action(self, state: _RunState, observation: Observation, decision: Decision, *, gate: bool) -> Action:
         target = decision.target
         match decision.operation:
+            case Operation.NAVIGATE:
+                if decision.url is None or decision.url not in task_urls(state.task, start=state.caller_start):
+                    raise _Stop(Status.STUCK, "navigation address was not supplied by the caller")
+                if self._redactor.reveals(decision.url):
+                    raise _Stop(Status.NEEDS_INPUT, "navigation address contains a resolved secret")
+                if gate:
+                    state.ledger.reserve(CostComponent.JEV)
+                    evaluation = await self._jev.evaluate(
+                        {"task": state.task, "address": decision.url},
+                        {
+                            "destination": NoulQuestion(
+                                instructions="Does the caller ask the browser to open this address for the task?",
+                                true="The address is a browsing destination or a source to inspect.",
+                                false="The address is field data or quoted text, not a page to visit.",
+                            )
+                        },
+                    )
+                    state.ledger.record(evaluation.cost)
+                    answer = evaluation.answers.get("destination")
+                    if not isinstance(answer, NoulAnswer) or answer.probability < self._config.thresholds.recover_below:
+                        raise _Unsure("the supplied address is not confidently a browsing destination")
+                if gate:
+                    await self._gate_question(
+                        state,
+                        observation,
+                        decision,
+                        decision.url,
+                        _navigation_question(state.task, decision.url),
+                    )
+                return Action(operation=Operation.NAVIGATE, url=decision.url)
             case Operation.CLICK | Operation.ENTER:
                 # Only a pager link to another address (`next_page_control`) goes ungated: it opens a page and
                 # commits nothing, so asking Jev would buy a call per page and nothing else.
@@ -2673,6 +2714,13 @@ class Agent:
             if state.http_failure is not None and gives_up_as is not Status.NEEDS_INPUT:
                 raise state.http_failure.stop()
             raise _Stop(gives_up_as, reason)
+        destinations = navigation_urls(
+            state.task,
+            observation.url,
+            start=state.caller_start,
+            start_landing=state.start_landing_url,
+            include_start=True,
+        )
         steps = "\n".join(
             f"- {h.operation.value if h.operation else 'open'} {h.target or ''} -> {h.outcome.value}"
             + (f": {h.effect}" if h.effect else "")
@@ -2713,6 +2761,8 @@ class Agent:
                         "and history, then give one concrete next subgoal: a single operation, naming the index of "
                         "the observed control it acts on, with no alternatives. A read, scroll, back or escape acts "
                         "on the page and names no control. scroll moves down; scroll_up moves up. "
+                        "navigate opens one listed caller-supplied address: copy it into url and name no control. "
+                        "Use it when another requested site has no observed link. Never invent an address. "
                         "A read takes in the whole page, so scroll only to reach a control, load more, or position "
                         "content the task explicitly asks to see in the viewport. "
                         "Unverified answer outputs remain open even when a requirement has other cited fields. "
@@ -2747,6 +2797,8 @@ class Agent:
                         f"## Page\n{observation.url}\nHTTP status: {observation.response_status}\n"
                         f"{observation.viewport_text}{secrets}\n\n"
                         f"## Caller start page\n{self._redactor.redact(state.started_url or state.first_url or '')}\n\n"
+                        "## Caller-supplied addresses\n"
+                        f"{json.dumps(destinations)}\n\n"
                         f"## Current address was proposed\n{observation.url in state.invented}\n\n"
                         f"## HTTP failure\n{state.http_failure.message if state.http_failure else 'none'}\n\n"
                         "## Notes read so far\n"
@@ -2833,7 +2885,10 @@ class Agent:
         )
         chosen, operation = generation.data.control, generation.data.operation
         observation = _without_failed_links(state, observation)
-        if operation is not None and operation in _PAGE_OPERATIONS:
+        state.directed = None
+        if operation is Operation.NAVIGATE and generation.data.url in destinations:
+            state.directed = (operation, generation.data.url)
+        elif operation is not None and operation in _PAGE_OPERATIONS:
             state.directed = (operation, None)
         elif chosen is not None and operation is not None and 0 <= chosen < len(observation.controls):
             state.directed = (operation, observation.controls[chosen].id)
@@ -3408,7 +3463,7 @@ class Agent:
             quote=quote,
             url=url,
             reader=fact.reader,
-            deep_link=text_fragment(url, quote),
+            deep_link=text_fragment(url, quote) if fact.evidence.rendered_text else url,
         )
 
     def _public_answer(self, composed: ComposedAnswer) -> tuple[str, tuple[Citation, ...]]:
@@ -3427,7 +3482,7 @@ class Agent:
                     "text": redact(citation.text),
                     "url": url,
                     "quote": quote,
-                    "deep_link": text_fragment(url, quote),
+                    "deep_link": url if citation.deep_link == citation.url else text_fragment(url, quote),
                 }
             )
             links[citation.deep_link] = public.deep_link
@@ -3482,6 +3537,8 @@ class Agent:
             has_attachments=bool(state.attachments),
             secrets=secrets,
             unread_requirements=unread,
+            start_url=state.caller_start,
+            start_landing_url=state.start_landing_url,
         )
 
     def _partial_result(
@@ -3792,10 +3849,26 @@ def _controls_text(observation: Observation) -> str:
     )
 
 
+def _navigation_question(task: str, url: str) -> NoulQuestion:
+    link = Control(
+        id="caller-address",
+        frame_id=None,
+        role="link",
+        label=url,
+        href=url,
+        operations=frozenset({Operation.CLICK}),
+    )
+    return irreversible_question(task, Operation.CLICK, link)
+
+
 def _signature(decision: Decision, observation: Observation) -> Signature:
-    label = _describe(decision.target) if decision.target else decision.tab_id
+    label = _decision_label(decision)
     destination = _describe(decision.destination) if decision.destination else None
     return decision.operation, label, destination, state_key(observation)
+
+
+def _decision_label(decision: Decision) -> str | None:
+    return _describe(decision.target) if decision.target else decision.url or decision.tab_id
 
 
 def read_question(task: str, wanted: Sequence[Requirement], *, began_at: str | None = None) -> str:
@@ -4003,17 +4076,9 @@ def _code_decision(operation: Operation, target: Control | None) -> Decision:
 
 
 def _try_unsure(state: _RunState, observation: Observation, decision: Decision) -> bool:
-    """Whether to act on Jev's unsure pick rather than recover: once per page state, and never a pick the run
-    already took from this state.
-
-    Recovery costs about 5s, and on a flights form 9 of 12 recoveries for an unsure step named the control Jev
-    had already picked. Acting costs one step when the pick is wrong, and a wrong pick is still caught: one that
-    changes nothing leaves Jev unsure on the same state, which then recovers, one that goes round is caught by
-    the revisit check, and one that may commit something irreversible is asked about before it dispatches.
-
-    An unsure repeat is the run going back where it has been: one Back from a wizard's Review to correct its first
-    step, Jev was unsure and clicked Next to Review again, and got back only after a wrong pick and a recovery.
-    """
+    """Try uncertain observation moves once; state-changing choices need recovery's second opinion."""
+    if decision.operation not in {*SCROLLING, Operation.HOVER}:
+        return False
     key = state_key(observation)
     if key in state.tried_unsure or _signature(decision, observation) in state.attempts:
         return False
@@ -4048,6 +4113,21 @@ def _follow_recovery(
     if not uncertain or directed is None:
         return None
     operation, control_id = directed
+    if operation is Operation.NAVIGATE:
+        if (
+            observation.dialog is not None
+            or control_id is None
+            or control_id
+            not in navigation_urls(
+                state.task,
+                observation.url,
+                start=state.caller_start,
+                start_landing=state.start_landing_url,
+                include_start=True,
+            )
+        ):
+            return None
+        return decision.model_copy(update={"operation": operation, "target": None, "url": control_id, "directed": True})
     # Recovery names one control and a drag needs two, so the drop target has to be one Jev chose for a drag.
     if operation is Operation.DRAG and decision.operation is not Operation.DRAG:
         return None
