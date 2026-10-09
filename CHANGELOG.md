@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Answer checks through the Vercel AI Gateway receive each subject's identifying quote, so supported answers
+  finish as `complete` there as they do through OpenRouter. Unsupported answers stay rejected on both.
 - Reply controls retain their own comment record as context when only one reply form is open.
 
 - Provider attempt deadlines bound total response time, including responses that keep sending occasional bytes.

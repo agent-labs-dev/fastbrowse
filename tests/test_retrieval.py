@@ -73,7 +73,7 @@ def scripted_identities(messages):
     payload = json.loads(messages[-1].content)
     reference, source = next(iter(payload["sources"].items()))
     return {
-        "identities": {"i0": {"source_ref": reference, "quote": source["quote"]}},
+        "identities": [{"id": "i0", "source_ref": reference, "quote": source["quote"]}],
         "bindings": {
             key: {"scope": "entities", "identity_ids": ["i0"]} for key, criterion in payload["criteria"].items()
         },
