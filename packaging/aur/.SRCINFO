@@ -1,0 +1,26 @@
+pkgbase = fastbrowse
+	pkgdesc = Browser automation with cited answers, structured output and code-controlled credentials and authorization
+	pkgver = 0.5.19
+	pkgrel = 1
+	url = https://github.com/agent-labs-dev/fastbrowse
+	arch = any
+	license = MIT
+	makedepends = python-build
+	makedepends = python-hatchling
+	makedepends = python-installer
+	depends = python>=3.13
+	depends = python-h2
+	depends = python-httpx>=0.28.1
+	depends = python-mcp>=1.20
+	depends = python-pydantic>=2.11
+	depends = python-pydantic-settings>=2.10
+	depends = python-typing_extensions>=4.12.2
+	depends = python-websockets>=15.0.1
+	optdepends = chromium: a local browser for --local
+	optdepends = google-chrome: a local browser for --local
+	source = https://files.pythonhosted.org/packages/source/f/fastbrowse/fastbrowse-0.5.19.tar.gz
+	source = https://files.pythonhosted.org/packages/source/c/cdp-use/cdp_use-1.4.5.tar.gz
+	sha256sums = 607a97eca158d7ac5d16f9b4110f63dd85c6f2324700c1dfed32f01abf7ca354
+	sha256sums = 0da3a32df46336a03ff5a22bc6bc442cd7d2f2d50a118fd4856f29d37f6d26a0
+
+pkgname = fastbrowse

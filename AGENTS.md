@@ -163,6 +163,9 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
 3. After it merges, `gh workflow run evals.yml --ref main -f repeat=3`. Wait for a successful Evals run on the
    exact commit that will be tagged.
 4. `git tag v<x.y.z> <tested-sha> && git push origin v<x.y.z>`.
+5. Once the tag's workflow has published, `uv run python scripts/aur_package.py --write` moves the Arch package
+   to the release. Open a `build: AUR <x.y.z>` PR with it, then push the same two files to the AUR:
+   [docs/agents/aur.md](docs/agents/aur.md) has the commands and how the package is built and checked.
 
 Every release needs the fixture suites green on its exact commit on `main`; `.github/workflows/evals.yml`
 fails on any failed attempt or incomplete repeat coverage. A release that publishes a head-to-head figure also

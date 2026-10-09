@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Arch Linux has a `fastbrowse` package for the AUR, kept in `packaging/aur`. It installs `fastbrowse` and
+  `fastbrowse-mcp` from the PyPI release and takes every dependency Arch packages from Arch's repositories.
+
 - Reply controls retain their own comment record as context when only one reply form is open.
 
 - Provider attempt deadlines bound total response time, including responses that keep sending occasional bytes.

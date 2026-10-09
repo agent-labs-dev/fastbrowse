@@ -1,0 +1,76 @@
+# Maintainer: Agent Labs <https://github.com/agent-labs-dev/fastbrowse/issues>
+#
+# Written from the PyPI release by scripts/aur_package.py, which sets pkgver, _cdp_use and sha256sums.
+
+pkgname=fastbrowse
+pkgver=0.5.19
+pkgrel=1
+# fastbrowse pins cdp-use to one exact version, and neither Arch nor the AUR packages it, so it is built here
+# and installed beside fastbrowse in a private prefix where no other program's upgrade can move it.
+#
+# The prefix holds a lib/pythonX.Y directory, as every Python package on Arch does: rebuild after Arch moves
+# to a new Python minor version.
+_cdp_use=1.4.5
+pkgdesc="Browser automation with cited answers, structured output and code-controlled credentials and authorization"
+arch=('any')
+url="https://github.com/agent-labs-dev/fastbrowse"
+license=('MIT')
+# Everything else fastbrowse and cdp-use import is in the official repositories. python-mcp serves
+# fastbrowse-mcp, which the same wheel ships.
+depends=(
+  'python>=3.13'
+  'python-h2'
+  'python-httpx>=0.28.1'
+  'python-mcp>=1.20'
+  'python-pydantic>=2.11'
+  'python-pydantic-settings>=2.10'
+  'python-typing_extensions>=4.12.2'
+  'python-websockets>=15.0.1'
+)
+makedepends=('python-build' 'python-hatchling' 'python-installer')
+optdepends=(
+  'chromium: a local browser for --local'
+  'google-chrome: a local browser for --local'
+)
+_sources=("fastbrowse-$pkgver" "cdp_use-$_cdp_use")
+source=(
+  "https://files.pythonhosted.org/packages/source/f/fastbrowse/${_sources[0]}.tar.gz"
+  "https://files.pythonhosted.org/packages/source/c/cdp-use/${_sources[1]}.tar.gz"
+)
+sha256sums=('607a97eca158d7ac5d16f9b4110f63dd85c6f2324700c1dfed32f01abf7ca354'
+            '0da3a32df46336a03ff5a22bc6bc442cd7d2f2d50a118fd4856f29d37f6d26a0')
+
+build() {
+  local source
+  for source in "${_sources[@]}"; do
+    python -m build --wheel --no-isolation "$srcdir/$source"
+  done
+}
+
+package() {
+  local prefix=/opt/fastbrowse source script
+  # A virtual environment is this file and an interpreter beside it. Written by hand, because `python -m venv`
+  # records the build directory in the files it makes.
+  install -d "$pkgdir$prefix/bin" "$pkgdir/usr/bin"
+  ln -s /usr/bin/python "$pkgdir$prefix/bin/python"
+  printf 'home = /usr/bin\ninclude-system-site-packages = true\n' > "$pkgdir$prefix/pyvenv.cfg"
+
+  for source in "${_sources[@]}"; do
+    python -m installer --destdir="$pkgdir" --prefix="$prefix" "$srcdir/$source"/dist/*.whl
+  done
+
+  for script in fastbrowse fastbrowse-mcp; do
+    # The installer names the interpreter that ran it, which would start the system Python and never look in
+    # the private prefix.
+    sed -i "1s|.*|#!$prefix/bin/python|" "$pkgdir$prefix/bin/$script"
+    ln -s "$prefix/bin/$script" "$pkgdir/usr/bin/$script"
+  done
+
+  local site
+  site=$(python -c 'import sysconfig; print(sysconfig.get_path("purelib", vars={"base": "/opt/fastbrowse"}))')
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" \
+    "$pkgdir$site/fastbrowse-$pkgver.dist-info/licenses/LICENSE" \
+    "$pkgdir$site/fastbrowse-$pkgver.dist-info/licenses/NOTICE"
+  install -Dm644 "$pkgdir$site/cdp_use-$_cdp_use.dist-info/licenses/LICENSE" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE.cdp-use"
+}

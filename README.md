@@ -72,6 +72,10 @@ automatic selection; see [provider routing](docs/jev.md#provider-failover). The 
 PATH, and `uv add fastbrowse` puts it in a project. Service keys can live in a `.env` file in the working directory;
 [`.env.example`](.env.example) shows the settings. Values named by `--secret` must be in the process environment.
 
+On Arch Linux, the [`fastbrowse` AUR package](https://aur.archlinux.org/packages/fastbrowse) puts `fastbrowse` and
+`fastbrowse-mcp` on your PATH from the same PyPI release: `paru -S fastbrowse` with an AUR helper, or `makepkg -si`
+in [`packaging/aur`](packaging/aur).
+
 To work on fastbrowse itself:
 
 ```sh
