@@ -270,7 +270,8 @@ class Notes:
                 and not shows(text, source.quote)
                 for source in sources
             ):
-                self._requirements[key].discard(requirement_id)
+                # A vanished quote cannot remain a current value through another requirement sharing its span.
+                self._requirements[key].clear()
 
     def read_for(self, requirement_id: str) -> tuple[Evidence, ...]:
         """The spans read as evidence of a requirement, including those a later read superseded."""

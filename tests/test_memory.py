@@ -429,3 +429,25 @@ def test_output_audit_rejects_retired_choice_with_unassigned_basis_quotes() -> N
     notes.supersede("r1", fresh.evidence.url, "after", fresh.text)
     answer = assemble_answer((Claim(text=old.text, evidence_ids=(fact_id(old),)),), notes, ())
     assert _output_context(answer, notes) is None
+
+
+@pytest.mark.parametrize("other_address", [False, True])
+@pytest.mark.parametrize("derived", [False, True])
+def test_replaced_shared_quote_cannot_survive_through_another_requirement(other_address: bool, derived: bool) -> None:
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import _output_context
+
+    old = _quoted("SelectedDate: 03/04/2026", "before")
+    context = old.model_copy(update={"requirement_id": None})
+    if derived:
+        old = Fact(
+            requirement_id="r1", text=old.text, evidence=None, reader=FactReader.JEV_CHOICE, basis=(fact_id(context),)
+        )
+    shared = old.model_copy(update={"requirement_id": "r2"})
+    url = "https://example.test/another" if other_address else "https://example.test"
+    fresh = _quoted("SelectedDate: 09/04/2026", "after", url)
+    notes = Notes((context, old, shared, fresh))
+    notes.supersede("r1", url, "after", fresh.text)
+    answer = assemble_answer((Claim(text=old.text, evidence_ids=(fact_id(old),)),), notes, ())
+    assert (_output_context(answer, notes) is not None) is other_address
+    assert notes.evidenced("r2") is other_address
