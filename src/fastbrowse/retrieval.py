@@ -1390,7 +1390,7 @@ async def read(
             question,
             sorted(unconfirmed_orders),
             notes,
-            max_chars=max_chars,
+            max_chars=min(max_chars, _READ_CHUNK_CHARS),
             tokens=tokens,
             ledger=ledger,
             requirements=tuple(r for r in requirements if r.id in unconfirmed_orders),
@@ -1406,7 +1406,11 @@ async def read(
                 "tally_readers": (*outcome.tally_readers, *collected.tally_readers),
                 "comparisons": {**outcome.comparisons, **collected.comparisons},
                 "continues": tuple(dict.fromkeys((*outcome.continues, *collected.continues))),
-                "incomplete": tuple(dict.fromkeys((*outcome.incomplete, *collected.incomplete))),
+                "incomplete": tuple(
+                    dict.fromkeys(
+                        (*[key for key in outcome.incomplete if key not in unconfirmed_orders], *collected.incomplete)
+                    )
+                ),
                 "uncovered": outcome.uncovered + collected.uncovered,
                 "expands": collected.expands or outcome.expands,
                 "continuation_records": {**outcome.continuation_records, **collected.continuation_records},
@@ -2493,10 +2497,13 @@ def claim_check_questions(
     # counted them, and a ranking citing every record put a hundred quotes into each of its questions.
     compared = set(notes.comparison_records())
     requirements = {requirement.id: requirement.text for requirement in composed.requirements}
-    counted = {
-        record: (
-            f"TALLY: {json.dumps(fact.text, ensure_ascii=False)} "
-            + json.dumps(
+    for index, claim in enumerate(composed.claims):
+        expanded = notes.expand_evidence_ids(claim.evidence_ids)
+        counted: dict[str, list[str]] = {}
+        for fact in notes.facts:
+            if fact.tally is None or fact_id(fact) not in expanded:
+                continue
+            metadata = f"TALLY: {json.dumps(fact.text, ensure_ascii=False)} " + json.dumps(
                 {
                     "requirement": requirements.get(fact.tally.requirement_id),
                     "count": fact.tally.count,
@@ -2504,18 +2511,18 @@ def claim_check_questions(
                 },
                 ensure_ascii=False,
             )
-        )
-        for fact in notes.facts
-        if fact.tally is not None
-        for record in fact.basis
-        if record not in compared
-    }
-    for index, claim in enumerate(composed.claims):
+            for record in fact.basis:
+                if record not in compared:
+                    counted.setdefault(record, []).append(metadata)
         # A derived fact is judged from the records it expands to, never from the reader's own conclusion.
-        keys = [key for key in notes.expand_evidence_ids(claim.evidence_ids) if not notes.derived(key)]
+        keys = [key for key in expanded if not notes.derived(key)]
         evidence = "\n".join(
             dict.fromkeys(
-                counted[key] if key in counted else known[key].model_dump_json() if key in known else f"MISSING: {key}"
+                "\n".join(dict.fromkeys(counted[key]))
+                if key in counted
+                else known[key].model_dump_json()
+                if key in known
+                else f"MISSING: {key}"
                 for key in keys
             )
         )

@@ -4752,3 +4752,92 @@ async def test_a_continuing_list_cannot_close_on_a_winner_without_order_evidence
     assert result.continues == ("r",)
     assert result.through_end == ("r",)
     assert result.incomplete == ()
+
+
+@pytest.mark.parametrize("repaired", [False, True])
+async def test_rejected_order_record_recovery_replaces_repaired_loss(repaired: bool) -> None:
+    page = capture((BlockKind.PARAGRAPH, "Sort by weight."), (BlockKind.PARAGRAPH, "Parcel A - 8 kg"))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "cite": {"first": "s1", "last": "s1"},
+                        "orders_list": {"first": "s0", "last": "s0"},
+                        "text": "Parcel A is heaviest.",
+                        "requirement_id": "r",
+                    }
+                ],
+                "answered": True,
+                "continues": [{"requirement_id": "r", "records": [{"first": "s99", "last": "s99"}]}],
+            },
+            {"confirmed": False},
+            {
+                "continues": [
+                    {
+                        "requirement_id": "r",
+                        "records": [{"first": "s1" if repaired else "s99", "last": "s1" if repaired else "s99"}],
+                    }
+                ]
+            },
+        ]
+    )
+    result = await read(llm, page, "Find the heaviest parcel", ["r"], Notes())
+    assert result.incomplete == (() if repaired else ("r",))
+    assert result.continues == ("r",)
+    assert len(result.continuation_records.get("r", ())) == int(repaired)
+
+
+async def test_rejected_order_dense_records_use_smaller_response_chunks() -> None:
+    page = capture(
+        (BlockKind.PARAGRAPH, "Sort by weight."),
+        *[(BlockKind.PARAGRAPH, f"Parcel {i} " + "x" * 1000) for i in range(15)],
+    )
+    records: JsonValue = {"continues": [{"requirement_id": "r", "records": [{"first": "s1", "last": "s1"}]}]}
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "cite": {"first": "s1", "last": "s1"},
+                        "orders_list": {"first": "s0", "last": "s0"},
+                        "text": "Parcel zero is heaviest.",
+                        "requirement_id": "r",
+                    }
+                ],
+                "answered": True,
+            },
+            {"confirmed": False},
+            records,
+            {"continues": [{"requirement_id": "r", "records": [{"first": "s15", "last": "s15"}]}]},
+        ]
+    )
+    result = await read(llm, page, "Find the heaviest parcel", ["r"], Notes())
+    assert len(llm.calls) == 4
+    assert result.incomplete == ()
+
+
+def test_shared_records_keep_each_claims_cited_tally_scope() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Amber"), (BlockKind.PARAGRAPH, "Cobalt"))
+    notes = Notes(
+        Fact(text=b.source_id, evidence=block_evidence(page, b.source_id), reader=FactReader.LLM) for b in page.blocks
+    )
+    records = tuple(notes.evidence)
+    first = notes.add_tally(Tally(requirement_id="all", key="colours", records=records))
+    second = notes.add_tally(Tally(requirement_id="warm", key="colours", records=(records[0],)))
+    notes.complete_tallies("all")
+    requirements = (
+        Requirement(id="all", text="Count all colours.", kind=RequirementKind.INFORMATION),
+        Requirement(id="warm", text="Count warm colours.", kind=RequirementKind.INFORMATION),
+    )
+    claims = (
+        Claim(text="There are two colours.", evidence_ids=(fact_id(first),)),
+        Claim(text="There is one warm colour so far.", evidence_ids=(fact_id(second),)),
+    )
+    questions = claim_check_questions(assemble_answer(claims, notes, requirements), notes)
+    first_prompt = questions["unsupported_0"].instructions
+    second_prompt = questions["unsupported_1"].instructions
+    assert '"count": 2' in first_prompt and '"complete": true' in first_prompt
+    assert requirements[0].text in first_prompt and requirements[1].text not in first_prompt
+    assert '"count": 1' in second_prompt and '"complete": false' in second_prompt
+    assert requirements[1].text in second_prompt and requirements[0].text not in second_prompt
