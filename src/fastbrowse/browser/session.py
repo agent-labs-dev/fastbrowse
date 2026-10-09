@@ -243,6 +243,8 @@ class BrowserSession:
         self._client: CDPClient | None = None
         self._tabs: dict[str, _TabState] = {}
         self._owned: set[str] = set()
+        self._keepers: dict[str, str] = {}
+        """Tab target id -> the session whose cast keeps that tab painting, in a background run."""
         self._open_before: set[str] = set()
         """Targets already open when an attached session began, which never join the run."""
         self._popups: dict[str, tuple[str, asyncio.Future[bool]]] = {}
@@ -476,6 +478,7 @@ class BrowserSession:
                 self._client = None
                 self._owned.clear()
                 self._tabs.clear()
+                self._keepers.clear()
 
     async def switch_tab(self, target_id: str) -> None:
         if target_id not in self._tabs:
@@ -500,7 +503,19 @@ class BrowserSession:
         # that deliver live frames and recordings cannot replace it. A start can go unanswered while a tab swaps
         # renderer, and a tab without the cast is only slower to capture, so it is bounded and never fails the run.
         keeper = await self.client.send.Target.attachToTarget(params={"targetId": target_id, "flatten": True})
+        self._keepers[target_id] = keeper["sessionId"]
         await self._screencast_command("Page.startScreencast", _KEEP_PAINTING, keeper["sessionId"])
+
+    async def wake(self) -> bool:
+        """Get the active tab painting again when a capture of it stalls. True when the tab was brought to the
+        front, which always yields a frame; a background run restarts the cast that keeps it painting instead,
+        which may have gone unanswered or ended with the renderer it was started on."""
+        if self._connection.foreground:
+            await self.bring_to_front()
+            return True
+        if keeper := self._keepers.get(self._active_target_id):
+            await self._screencast_command("Page.startScreencast", _KEEP_PAINTING, keeper)
+        return False
 
     async def _attach_existing_tab(self, target_match: str | None) -> str:
         targets = (await self.client.send.Target.getTargets())["targetInfos"]
@@ -754,6 +769,7 @@ class BrowserSession:
     def _on_target_destroyed(self, event: TargetDestroyedEvent, session_id: str | None) -> None:
         target_id = event["targetId"]
         self._tabs.pop(target_id, None)
+        self._keepers.pop(target_id, None)
         self._owned.discard(target_id)
         if target_id == self._active_target_id:
             self._set_active_target(next(iter(self._tabs), ""))

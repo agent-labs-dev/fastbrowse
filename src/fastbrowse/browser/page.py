@@ -247,6 +247,9 @@ _SETTLE_LOADING_SECONDS = 1.5
 # 2 to 3 second LLM call and a second read after it, where the-internet's dynamic loading needs about 5 seconds.
 _CAPTURE_LOADING_SECONDS = 3.0
 _SCREENSHOT_WAIT_SECONDS = 1.0
+_SCREENSHOT_STALL_SECONDS = 5.0
+"""How long a background tab gets to paint a frame once its cast is restarted. Nothing else can make it paint
+without bringing its window forward, so past this the run goes on without the image."""
 # How long a click that opened a tab waits for it to be attached before the run carries on in the opener.
 _POPUP_ADOPT_SECONDS = 2.0
 _OPENS_TABS = frozenset({Operation.CLICK, Operation.ENTER})
@@ -1445,7 +1448,8 @@ class CdpPage(Page):
 
         An idle tab behind another composites nothing new, so a capture can wait many seconds, while activating
         always yields a frame at once. Screenshots are rare (recovery and uncertain completion), so a foreground
-        run moves focus only when it has to. A background run never does: its tab renders under focus emulation.
+        run moves focus only when it has to. A background run never does: its tab is kept painting by a cast,
+        which is restarted if a capture stalls, and a tab that still paints nothing has no screenshot.
         """
         await self._session.assert_clear()
         if self._session.grant is not None:
@@ -1455,8 +1459,10 @@ class CdpPage(Page):
         capture = asyncio.ensure_future(client.send.Page.captureScreenshot(params=params, session_id=session_id))
         try:
             done, _ = await asyncio.wait({capture}, timeout=_SCREENSHOT_WAIT_SECONDS)
-            if not done:
-                await self._session.bring_to_front()
+            if not done and not await self._session.wake():
+                done, _ = await asyncio.wait({capture}, timeout=_SCREENSHOT_STALL_SECONDS)
+                if not done:
+                    raise ScreenshotsUnavailable("the tab painted no frame to capture")
             return base64.b64decode((await capture)["data"])
         finally:
             capture.cancel()

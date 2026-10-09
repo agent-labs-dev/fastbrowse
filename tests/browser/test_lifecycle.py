@@ -38,7 +38,7 @@ from fastbrowse.models import (
     StepOutcome,
     Unavailable,
 )
-from fastbrowse.page import BrowserError, NavigationTimeout, SiteUnreachable
+from fastbrowse.page import BrowserError, NavigationTimeout, ScreenshotsUnavailable, SiteUnreachable
 from fastbrowse.run import _browser, connect_cdp, resolve_cdp_port, run_task
 from tests.browser.conftest import RecordingArtifactSink
 from tests.test_policy import ScriptedJev
@@ -443,6 +443,20 @@ async def test_cancelling_page_wait_drains_cdp_task(monkeypatch: pytest.MonkeyPa
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_a_background_tab_that_paints_nothing_has_no_screenshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only bringing the window forward forces a frame, so a capture that stalls there ends instead of hanging."""
+    transport = CdpTransport(monkeypatch)
+    transport.blocked["Page.captureScreenshot"] = asyncio.Event()
+    monkeypatch.setattr(page_module, "_SCREENSHOT_WAIT_SECONDS", 0.01)
+    monkeypatch.setattr(page_module, "_SCREENSHOT_STALL_SECONDS", 0.01)
+    async with BrowserSession(BACKGROUND, RecordingArtifactSink()) as session:
+        with pytest.raises(ScreenshotsUnavailable):
+            await CdpPage(session, Config()).screenshot()
+    assert "Target.activateTarget" not in transport.calls
+    assert transport.requests.count(("Page.startScreencast", browser_session._KEEP_PAINTING, "session")) == 2
+    assert "Page.captureScreenshot" in transport.finished
 
 
 async def test_initial_navigation_error_returns_error_result(monkeypatch: pytest.MonkeyPatch) -> None:
