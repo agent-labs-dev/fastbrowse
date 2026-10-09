@@ -3419,6 +3419,17 @@ async def test_same_text_can_be_read_for_a_new_document_or_new_requirement() -> 
     state.ready_plan = Plan(requirements=(requirement.model_copy(update={"id": "r2"}),), answer_expected=True)
     await agent._read(state, page, obs)
     assert len(llm.calls) == 3
+    from fastbrowse.models import SourceControl
+
+    for position in ("1 of 2", "2 of 2"):
+        block = page.blocks[0].model_copy(
+            update={"control_context": SourceControl(role="figure", label="Avatar", context=position)}
+        )
+        contextual = page.model_copy(update={"blocks": (block,)})
+        llm.responses.append({"claims": [], "answered": False})
+        state.barren.clear()
+        await agent._read(state, contextual, obs)
+    assert len(llm.calls) == 5
 
 
 @pytest.mark.parametrize("reader", list(FactReader))
@@ -6313,3 +6324,24 @@ async def test_numeric_next_page_accepts_implicit_first_page(parameter: str) -> 
     )
     found = agent_module.next_page_control(page)
     assert found is not None and found.id == "next"
+
+
+async def test_capture_masks_secrets_inside_structural_control_context() -> None:
+    from fastbrowse.models import SourceControl
+
+    raw = capture((BlockKind.PARAGRAPH, "Visible caption"))
+    block = raw.blocks[0].model_copy(
+        update={"control_context": SourceControl(role="hunter2", label="Avatar hunter2", context="hunter2 second")}
+    )
+    page = Mock(spec=Page)
+    page.capture = AsyncMock(return_value=raw.model_copy(update={"blocks": (block,)}))
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    agent._redactor.register("password", "hunter2")
+
+    captured = await agent._capture()
+
+    assert "hunter2" not in captured.model_dump_json()
+    assert captured.text == raw.text
+    assert captured.blocks[0].control_context is not None
+    assert block.control_context is not None
+    assert captured.blocks[0].control_context.label != block.control_context.label

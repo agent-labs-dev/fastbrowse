@@ -230,6 +230,7 @@ def _evidence(capture: Capture, block: Block, start: int, end: int) -> Evidence:
         end=end,
         quote=capture.text[start:end],
         heading_path=block.heading_path,
+        control_context=block.control_context,
     )
 
 
@@ -788,7 +789,14 @@ def _marks(block: Block) -> str:
 
 
 def _source_marker(block: Block) -> str:
-    return f"[{block.source_id}] ({block.kind.value}" + (", inside an embedded frame" if block.frame_id else "") + ") "
+    context = f" control_context={block.control_context.model_dump_json()}" if block.control_context else ""
+    return (
+        f"[{block.source_id}] ({block.kind.value}"
+        + (", inside an embedded frame" if block.frame_id else "")
+        + ")"
+        + context
+        + " "
+    )
 
 
 def _read_message(
@@ -1639,6 +1647,7 @@ def _quote_context(evidence: Evidence) -> str:
     marks = [
         *([f"headings {evidence.heading_path!r}"] if evidence.heading_path else []),
         *(["inside an embedded frame"] if evidence.frame_id else []),
+        *([f"control_context={evidence.control_context.model_dump_json()}"] if evidence.control_context else []),
     ]
     return f"({', '.join(marks)}) {evidence.quote}" if marks else evidence.quote
 
@@ -1682,7 +1691,7 @@ def merge_candidates(*groups: Sequence[Candidate]) -> tuple[Candidate, ...]:
     changed at the same offsets on one page.
     """
     merged: list[Candidate] = []
-    seen: set[tuple[str, str | None, str, str, int, int]] = set()
+    seen: set[tuple[str, str | None, str, str, int, int, str | None]] = set()
     for group in groups:
         for candidate in group:
             evidence = candidate.evidence
@@ -1693,6 +1702,7 @@ def merge_candidates(*groups: Sequence[Candidate]) -> tuple[Candidate, ...]:
                 evidence.source_id,
                 evidence.start,
                 evidence.end,
+                evidence.control_context.model_dump_json() if evidence.control_context else None,
             )
             if span in seen:
                 continue
@@ -1732,6 +1742,11 @@ def field_question(
                     "source_id": candidate.evidence.source_id,
                     "quote": candidate.evidence.quote,
                     "context": candidate.context,
+                    **(
+                        {"control_context": candidate.evidence.control_context.model_dump(mode="json")}
+                        if candidate.evidence.control_context
+                        else {}
+                    ),
                 }
                 for candidate in candidates
             },
@@ -1945,7 +1960,15 @@ def _compared(notes: Notes, key: str, name: str, current: Mapping[str, Evidence]
         matches = [(fact, evidence) for fact, evidence in records if _names(fact.text, name)]
     # Repeated captures of an unchanged quote agree; distinct record contexts must not inherit each other's field.
     unique = {
-        (evidence.url, evidence.frame_id, evidence.source_id, evidence.start, evidence.end, evidence.quote): evidence
+        (
+            evidence.url,
+            evidence.frame_id,
+            evidence.source_id,
+            evidence.start,
+            evidence.end,
+            evidence.quote,
+            evidence.control_context.model_dump_json() if evidence.control_context else None,
+        ): evidence
         for _, evidence in matches
     }
     return next(iter(unique.values())) if len(unique) == 1 else None
@@ -2027,6 +2050,11 @@ def _read_request(
                 "source_id": candidate.evidence.source_id,
                 "quote": candidate.evidence.quote,
                 "context": candidate.context,
+                **(
+                    {"control_context": candidate.evidence.control_context.model_dump(mode="json")}
+                    if candidate.evidence.control_context
+                    else {}
+                ),
             }
             for candidate in group
         ]

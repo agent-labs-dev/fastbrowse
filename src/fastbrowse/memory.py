@@ -66,7 +66,14 @@ def _address(url: str) -> str:
 def evidence_id(evidence: Evidence) -> str:
     # Equal text on different pages must not inherit the first page's citation or record identity.
     address = hashlib.sha256(_address(evidence.url).encode()).hexdigest()[:16]
-    return f"{evidence.capture_sha256}:{evidence.start}:{evidence.end}:{address}"
+    identity = f"{evidence.capture_sha256}:{evidence.start}:{evidence.end}:{address}"
+    if evidence.control_context is not None:
+        # Equal captions on different controls must not inherit one another's structural association.
+        context = hashlib.sha256(
+            json.dumps([evidence.frame_id, evidence.source_id, evidence.control_context.model_dump()]).encode()
+        ).hexdigest()[:16]
+        identity += f":{context}"
+    return identity
 
 
 def fact_id(fact: Fact) -> str:
@@ -406,6 +413,8 @@ class Notes:
                 + ("" if shared_url else f"url={json.dumps(fact.evidence.url)} ")
                 + f"quote={json.dumps(fact.evidence.quote, ensure_ascii=False)}"
             )
+            if fact.evidence is not None and fact.evidence.control_context is not None:
+                source += f" control_context={fact.evidence.control_context.model_dump_json()}"
             # Quoted basis facts use the source text as their claim; sending it twice inflates every later read.
             text = (
                 ""

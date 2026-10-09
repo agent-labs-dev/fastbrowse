@@ -1517,6 +1517,21 @@ class Agent:
                     block.model_copy(
                         update={
                             "heading_path": tuple(mask(heading) for heading in block.heading_path),
+                            "control_context": (
+                                block.control_context.model_copy(
+                                    update={
+                                        "role": mask(block.control_context.role),
+                                        "label": mask(block.control_context.label),
+                                        "context": (
+                                            None
+                                            if block.control_context.context is None
+                                            else mask(block.control_context.context)
+                                        ),
+                                    }
+                                )
+                                if block.control_context is not None
+                                else None
+                            ),
                             "href": None if block.href is None else mask(block.href),
                             "source_url": None if block.source_url is None else mask(block.source_url),
                         }
@@ -2193,7 +2208,7 @@ class Agent:
             # Past the barren budget this exact content is either read now or was read before, so the notes hold
             # what the last interaction drew. A barren skip read nothing, and leaves the read owed.
             state.owes_read = False
-            key = observation.document_key, capture.sha256, wanted_ids, state.open_answer_outputs
+            key = observation.document_key, capture.read_key, wanted_ids, state.open_answer_outputs
             if key in state.reads and not transaction_pending:
                 trace("read_skipped", reason="unchanged_content_and_requirements")
                 return False, True
@@ -2593,7 +2608,7 @@ class Agent:
             except LLMError as error:
                 state.paging_failed = True
                 state.reads.discard(
-                    (observation.document_key, capture.sha256, tuple(r.id for r in wanted), state.open_answer_outputs)
+                    (observation.document_key, capture.read_key, tuple(r.id for r in wanted), state.open_answer_outputs)
                 )
                 state.hint = self._redactor.redact(f"Pagination read failed: {error}. Read this page again.")
                 state.history.append(
