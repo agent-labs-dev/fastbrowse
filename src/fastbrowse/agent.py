@@ -3829,7 +3829,8 @@ def _numbered_next_page(current: str, target: str, label: str) -> bool:
     before = parse_qsl(here.query, keep_blank_values=True)
     after = parse_qsl(there.query, keep_blank_values=True)
     for parameter in ("page", "pageno", "page_number"):
-        old = [value for key, value in before if key == parameter]
+        # Canonical first-page URLs omit the page parameter; an observed 2 is the only consecutive target.
+        old = [value for key, value in before if key == parameter] or ["1"]
         new = [value for key, value in after if key == parameter]
         if len(old) != 1 or len(new) != 1 or not old[0].isdigit() or not new[0].isdigit():
             continue

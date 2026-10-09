@@ -6033,7 +6033,7 @@ async def test_numeric_next_page_preserves_the_current_filters(parameter: str) -
     [
         ("/list?page=2", "/list?page=4", "4"),
         ("/list?page=2", "/list?page=3", "4"),
-        ("/list", "/list?page=2", "2"),
+        ("/list", "/list?page=3", "3"),
         ("/list?page=2", "/other?page=3", "3"),
         ("/list?page=2", "https://other.test/list?page=3", "3"),
         ("/list?page=2&filter=", "/list?page=3", "3"),
@@ -6240,3 +6240,15 @@ async def test_next_page_keeps_reordered_repeated_parameters_ambiguous() -> None
         _link("other", "Next", "/list?page=3&filter=last&filter=first"),
     )
     assert agent_module.next_page_control(_at("https://example.test/list?page=2", *controls)) is None
+
+
+@pytest.mark.parametrize("parameter", ["page", "pageno", "page_number"])
+async def test_numeric_next_page_accepts_implicit_first_page(parameter: str) -> None:
+    page = _at(
+        "https://example.test/list?sort=weight",
+        _link("next", "2", f"/list?{parameter}=2&sort=weight"),
+        _link("later", "3", f"/list?{parameter}=3&sort=weight"),
+        _link("other", "2", f"/list?{parameter}=2&sort=name"),
+    )
+    found = agent_module.next_page_control(page)
+    assert found is not None and found.id == "next"
