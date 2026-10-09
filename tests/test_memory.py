@@ -63,6 +63,38 @@ def test_a_read_that_evidenced_nothing_retires_nothing() -> None:
     assert notes.evidenced("r1")
 
 
+@pytest.mark.parametrize("still_shown", [False, True])
+def test_updated_page_retires_vanished_context_quotes(still_shown: bool) -> None:
+    old = _quoted("Subtotal: GBP 34.50", "before").model_copy(update={"requirement_id": None})
+    fresh = _quoted("Subtotal: GBP 43.25", "after")
+    notes = Notes((old, fresh))
+    shown = fresh.text + ("\n" + old.text if still_shown else "")
+
+    notes.supersede("r1", "https://example.test", "after", shown)
+
+    assert (fact_id(old) in notes.current_evidence()) is still_shown
+    assert fact_id(fresh) in notes.current_evidence()
+    assert old in notes.facts
+    notes.add(old)
+    assert fact_id(old) in notes.current_evidence()
+
+
+def test_changed_visible_rows_do_not_retire_a_cumulative_tallys_records() -> None:
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import _output_context
+
+    first = _quoted("Order A: 12", "before").model_copy(update={"requirement_id": None})
+    last = _quoted("Order B: 7", "after").model_copy(update={"requirement_id": None})
+    notes = Notes((first, last))
+    tally = notes.add_tally(Tally(requirement_id="r1", key="Orders", records=(fact_id(first), fact_id(last))))
+    notes.complete_tallies("r1")
+
+    notes.supersede("r1", "https://example.test", "after", last.text)
+
+    answer = assemble_answer((Claim(text="There are two orders.", evidence_ids=(fact_id(tally),)),), notes, ())
+    assert _output_context(answer, notes) is not None
+
+
 @pytest.mark.parametrize("source_url", ["https://example.test", "https://child.test"])
 def test_repeated_choice_sources_are_kept_and_retired_when_one_changes(source_url: str) -> None:
     context = _quoted("Availability: 20", "before", source_url).model_copy(update={"requirement_id": None})

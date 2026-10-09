@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Answer checks retain whether a quote covers a complete downloaded file, so totals can be verified from all
+  its records. Partial excerpts and truncated downloads do not claim complete file coverage.
+- Updated page evidence retires vanished context quotes as well as previous answers, so an earlier subtotal
+  does not conflict with the subtotal after the basket changes. Quotes still shown remain available to checks.
+- A confident request for recovery follows the pending recovery action when it is still valid, so a run can
+  leave a page with no usable controls without exhausting recovery on the same state.
 - Answer checks through the Vercel AI Gateway receive each subject's identifying quote, so supported answers
   finish as `complete` there as they do through OpenRouter. Unsupported answers stay rejected on both.
 - Reply controls retain their own comment record as context when only one reply form is open.

@@ -134,6 +134,8 @@ class Evidence(Frozen):
     start: int = Field(ge=0)
     end: int = Field(ge=0)
     quote: str
+    complete_source: bool = False
+    """The quote covers an entire downloaded text file, apart from surrounding whitespace."""
     control_context: SourceControl | None = None
     rendered_text: bool = True
     """False for typed DOM observations whose quote is not literal rendered page text."""
