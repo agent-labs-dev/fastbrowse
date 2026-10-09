@@ -92,7 +92,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Runs no longer stop at implicit step, Jev-call, LLM-call, dollar or time ceilings. Callers can still set explicit limits when they need them.
 
-- Complete benchmark suites can be approved and published independently. Existing published suites stay
+- Complete benchmark suites can be published independently. Existing published suites stay
   present, and each suite retains its coverage, evidence and regression checks.
 
 - Navigation notes write each source URL once and reference it from the remaining claims, preserving full

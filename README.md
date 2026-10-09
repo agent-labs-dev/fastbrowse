@@ -30,8 +30,8 @@ Recorded on local Chrome: 13 steps, 20.9s and $0.0034 in model calls. Playback i
 
 ### Against Browser Use agents
 
-Benchmark methods and approved results belong on the [benchmark page](https://fastbrowse.ai/benchmarks).
-Detailed runs remain private until reviewed and approved for publication.
+The [benchmark page](https://fastbrowse.ai/benchmarks) reports task success, speed and cost,
+with methods and run summaries.
 
 Rows are comparable only at matching task versions. See [eval results and workflow](docs/evals.md).
 
