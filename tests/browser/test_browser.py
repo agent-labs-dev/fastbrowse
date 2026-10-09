@@ -593,6 +593,18 @@ async def test_content_shown_only_under_the_pointer_is_reached_by_hovering(page:
     assert "name: grace" in after.viewport_text
     assert "name: ada" not in after.viewport_text
     assert any(c.label == "View profile" for c in after.controls)
+    assert "name: grace" in (await page.capture()).text
+    assert [(c.id, c.context) for c in after.controls if c.label == "User Avatar"] == [
+        (c.id, c.context) for c in hovers if c.label == "User Avatar"
+    ]
+    first = next(c for c in after.controls if c.context == "1 of 2")
+    switched_result = await page.act(Action(operation=Operation.HOVER, target_id=first.id), after)
+    assert switched_result.outcome == StepOutcome.EXECUTED
+    switched = await page.observe()
+    assert "name: ada" in (await page.capture()).text
+    assert [(c.id, c.context) for c in switched.controls if c.label == "User Avatar"] == [
+        (c.id, c.context) for c in hovers if c.label == "User Avatar"
+    ]
 
 
 async def test_a_visible_option_is_clicked_without_scrolling_its_menu_shut(page: CdpPage, main_site: str) -> None:

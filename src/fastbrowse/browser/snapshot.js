@@ -616,12 +616,14 @@
         } catch {
           continue;
         }
-        if (!hidden) continue;
+        // Removing the active hover target renumbers its identical siblings and sends the next choice
+        // to a different element. Keep it offered while the pointer still reveals its content.
+        if (!hidden && !e.matches(':hover')) continue;
         const image = e.querySelector('img[alt]');
         const label =
-          firstLine(e.innerText) ||
           e.getAttribute('aria-label') ||
           image?.getAttribute('alt') ||
+          firstLine(e.innerText) ||
           e.getAttribute('title') ||
           e.tagName.toLowerCase();
         const role =

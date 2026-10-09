@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Revealed hover targets keep their labels and sibling positions while their captions are visible.
+
 - Final answer audits retain count scope, collection completeness and the quoted records behind each tally.
 
 - Recovery checks whether a changed page satisfies the task before stopping for lack of further actions.
