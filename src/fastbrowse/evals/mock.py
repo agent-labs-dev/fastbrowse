@@ -116,6 +116,7 @@ class Site:
         self.passwords: dict[str, str] = dict(ACCOUNTS)
         self.posts: list[tuple[str, dict[str, str]]] = []
         self.paths: list[str] = []
+        self.feed_batches: set[int] = set()
         self.sign_ins: list[str] = []
         self.failed_sign_ins: list[str] = []
         self.code_attempts: list[str] = []
@@ -131,6 +132,10 @@ class Site:
     def record(self, path: str, fields: dict[str, str]) -> None:
         with self._lock:
             self.posts.append((path, fields))
+
+    def record_feed_batch(self, after: int) -> None:
+        with self._lock:
+            self.feed_batches.add(after)
 
     def record_upload(self, field: str, name: str, content: bytes) -> None:
         """What the server actually received for one attached file, so a grader reads bytes and not a claim."""
@@ -751,6 +756,7 @@ class _Handler(BaseHTTPRequestHandler):
         after = int(query.get("after", "0") or 0)
         shown = min(FEED_TOTAL, after + FEED_BATCH)
         items = [_feed_item(n) for n in range(after + 1, shown + 1)]
+        self.site.record_feed_batch(after)
         self._send(HTTPStatus.OK, json.dumps({"items": items, "shown": shown}).encode(), "application/json")
 
     def _portal(self, _: dict[str, str]) -> None:

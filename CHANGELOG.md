@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Requests to expand or load content until a stopping condition keep that page change as an action
+  requirement. A displayed total no longer replaces the requested work in the plan. The feed fixture
+  also checks that every remaining batch was loaded, and advances to task version 6.
+
 - A ranking shortcut requires a quoted statement of the active list order. Offered sort links no
   longer close a comparison; rejected shortcuts collect the current records before paging onward.
   Numbered links to the next page use the same paging path when their address preserves the list filters.

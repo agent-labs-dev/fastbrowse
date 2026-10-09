@@ -21,7 +21,7 @@ from decimal import Decimal
 from pydantic import BaseModel
 
 from fastbrowse.evals.live_tasks import Outcome
-from fastbrowse.evals.mock import ACCOUNTS, Site, code_for
+from fastbrowse.evals.mock import ACCOUNTS, FEED_BATCH, FEED_TOTAL, Site, code_for
 from fastbrowse.models import Attachment, Authorization, RunResult, Status
 
 type MockResult = RunResult | Outcome
@@ -239,7 +239,10 @@ def _shadow_dom(result: MockResult, site: Site) -> str | None:
 
 
 def _feed_total(result: MockResult, site: Site) -> str | None:
-    return _answer_has(result, "60")
+    # The opening page states the total without performing the requested expansion.
+    if not set(range(FEED_BATCH, FEED_TOTAL, FEED_BATCH)) <= site.feed_batches:
+        return "the feed's remaining batches were not all loaded"
+    return _answer_has(result, str(FEED_TOTAL))
 
 
 def _portal_request(result: MockResult, site: Site) -> str | None:
