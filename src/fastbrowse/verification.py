@@ -440,9 +440,18 @@ class _OutputSource(Frozen):
     page_title: str | None
 
 
+class _OutputCount(Frozen):
+    scope: str | None
+    group: str
+    count: int
+    complete: bool
+    record_indices: tuple[int, ...]
+
+
 class _OutputClaim(Frozen):
     text: str
     cited_sources: tuple[_OutputSource, ...]
+    counted_records: tuple[_OutputCount, ...] = ()
 
 
 class _OutputContext(Frozen):
@@ -493,6 +502,7 @@ type OutputAuditCache = dict[str, OutputAuditVerdict | _OutputIdentities]
 
 def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | None:
     known = notes.current_evidence()
+    requirements = {requirement.id: requirement.text for requirement in composed.requirements}
     urls: dict[str, str] = {}
     claims = []
     for claim in composed.claims:
@@ -515,11 +525,29 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
                     page_title=page.title if page and evidence.frame_id is None else None,
                 )
             )
-        # Looking up a remote source map let an assertion stand in for its quote; keep each claim beside its sources.
+        positions = {key: index for index, key in enumerate(keys)}
+        counted = []
+        for fact in notes.facts:
+            if fact.tally is None or fact_id(fact) not in expanded:
+                continue
+            if any(record not in positions for record in fact.tally.records):
+                return None
+            counted.append(
+                _OutputCount(
+                    scope=requirements.get(fact.tally.requirement_id),
+                    group=fact.tally.key,
+                    count=fact.tally.count,
+                    complete=fact.tally.requirement_id in notes.fact_requirements(fact_id(fact)),
+                    record_indices=tuple(dict.fromkeys(positions[record] for record in fact.tally.records)),
+                )
+            )
+        # Expanding a count into quotes loses whether the whole list was exhausted. Keep its code-owned
+        # coverage and exact record associations beside the quotes, without borrowing an uncited tally.
         claims.append(
             _OutputClaim(
                 text=claim.text,
                 cited_sources=tuple(sources),
+                counted_records=tuple(counted),
             )
         )
     return _OutputContext(
@@ -740,6 +768,7 @@ async def check_answer_outputs(
             "sources": [
                 {
                     "cited_sources": [source.model_dump(exclude={"page_title"}) for source in claim.cited_sources],
+                    "counted_records": [count.model_dump() for count in claim.counted_records],
                 }
                 for claim in claims
             ],
@@ -833,7 +862,11 @@ async def check_answer_outputs(
                 "recommendation criterion merely because another task output compares options. The assertion "
                 "audit separately requires all operands for any factual comparative advantage the answer claims. "
                 "Derived outputs can calculate from quoted records only when every operand and its association "
-                "is explicit; the source need not state the conclusion literally. Observed page titles provide "
+                "is explicit; the source need not state the conclusion literally. Counted-record metadata gives "
+                "code-maintained distinct counts, their scope, cited record indices and collection completeness. "
+                "A complete count can rest on its matching quoted records without a page stating the total. "
+                "An incomplete or differently scoped count cannot establish the requested whole-list total. "
+                "The quoted records must still identify matching entities and filters. Observed page titles provide "
                 "identity context, not missing field "
                 "evidence. Never reconstruct missing table column labels from prior knowledge. Return "
                 "yes/no/uncertain per field and explain missing source values."
@@ -876,6 +909,9 @@ async def check_answer_outputs(
                 "simultaneously and combine additively. An explicit aggregate rating need not equal their sum. "
                 "Derived outputs can "
                 "calculate from quoted records only when every operand and its association is explicit. "
+                "Counted-record metadata supplies code-maintained counts and collection completeness, with "
+                "indices into that claim's cited sources. Check the reported count against that matching scope "
+                "and quoted record membership. An incomplete count cannot establish a whole-list total. "
                 "Observed page titles provide identity "
                 "context, not missing field evidence. Return yes only if every part of the requested output "
                 "is stated and evidenced by its own cited sources. Every factual assertion in every selected "

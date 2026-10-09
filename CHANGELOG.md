@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Final answer audits retain count scope, collection completeness and the quoted records behind each tally.
+
 - Recovery checks whether a changed page satisfies the task before stopping for lack of further actions.
   The completion verifier still rejects unfinished work.
 
