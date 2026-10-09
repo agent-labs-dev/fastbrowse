@@ -270,9 +270,10 @@ class Notes:
         # A capture includes child frames whose quotes belong to their own addresses, not the parent page's.
         addresses = {_address(url)} | {_address(span.url) for span in fresh}
         evidence = self.evidence
+        # Virtualized lists replace visible rows while a tally or comparison still depends on those already read.
+        kept = self._tally_records | set(self.comparison_records())
         for key, fact in self._facts.items():
-            # Virtualized lists replace visible rows while a tally still depends on those already read.
-            if key in self._tally_records:
+            if key in kept:
                 continue
             sources = (
                 (evidence.get(source) for source in self.expand_evidence_ids((key,)))

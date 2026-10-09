@@ -95,6 +95,17 @@ def test_changed_visible_rows_do_not_retire_a_cumulative_tallys_records() -> Non
     assert _output_context(answer, notes) is not None
 
 
+def test_changed_visible_rows_do_not_retire_a_comparisons_records() -> None:
+    first = _quoted("Order A: 12", "before").model_copy(update={"requirement_id": None})
+    last = _quoted("Order B: 7", "after")
+    notes = Notes((first, last))
+    notes.add_continuation("r1", fact_id(first))
+
+    notes.supersede("r1", "https://example.test", "after", last.text)
+
+    assert fact_id(first) in notes.current_evidence()
+
+
 @pytest.mark.parametrize("source_url", ["https://example.test", "https://child.test"])
 def test_repeated_choice_sources_are_kept_and_retired_when_one_changes(source_url: str) -> None:
     context = _quoted("Availability: 20", "before", source_url).model_copy(update={"requirement_id": None})
