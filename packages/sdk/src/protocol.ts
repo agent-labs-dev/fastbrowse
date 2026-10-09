@@ -132,10 +132,16 @@ export interface Evidence {
   start: number;
   end: number;
   quote: string;
+  control_context: SourceControl | null;
   /**
    * The headings the quote sits under on the page: which record a bare "£10.69" is the price of.
    */
   heading_path: string[];
+}
+export interface SourceControl {
+  role: string;
+  label: string;
+  context: string | null;
 }
 /**
  * The client's side of the handshake.

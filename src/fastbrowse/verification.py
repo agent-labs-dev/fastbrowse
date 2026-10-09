@@ -26,7 +26,7 @@ from fastbrowse.jev import (
 )
 from fastbrowse.llm import Generation, LLMClient, Message
 from fastbrowse.memory import Notes, NotesTooLarge, fact_id
-from fastbrowse.models import UNTRUSTED, CostLine, Evidence, FactReader, Frozen, LLMPurpose
+from fastbrowse.models import UNTRUSTED, CostLine, Evidence, FactReader, Frozen, LLMPurpose, SourceControl
 from fastbrowse.page import Capture, Control, Observation, cut_text
 from fastbrowse.planner import Plan, RequirementKind
 from fastbrowse.policy import HistoryEntry
@@ -438,6 +438,7 @@ class _OutputSource(Frozen):
     source_id: str
     frame_id: str | None
     page_title: str | None
+    control_context: SourceControl | None = None
 
 
 class _OutputCount(Frozen):
@@ -527,6 +528,7 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
                 _OutputSource(
                     url_ref=urls.setdefault(evidence.url, f"u{len(urls)}"),
                     quote=evidence.quote,
+                    control_context=evidence.control_context,
                     source_id=evidence.source_id,
                     frame_id=evidence.frame_id,
                     page_title=page.title if page and evidence.frame_id is None else None,
@@ -634,7 +636,7 @@ async def check_answer_outputs(
         return True
     if llm is None:
         return False
-    identities: dict[str, list[dict[str, str]]] = {}
+    identities: dict[str, list[dict[str, JsonValue]]] = {}
     if context.claims:
         offered = {}
         refs = {}
@@ -654,6 +656,9 @@ async def check_answer_outputs(
                     "supply identity evidence. For each criterion return scope entities and every requested "
                     "subject's offered source_ref and exact identifying quote from its body or captured page title. "
                     "Copy only the entity name or identifying description, not the reported field value. "
+                    "Code-captured control context binds a quote to its actual hovered DOM ancestor "
+                    "and sibling position; "
+                    "it can identify a positional subject but cannot supply an absent quoted value. "
                     "Do not infer identity from a URL, shared page, item count or a neighboring table column. "
                     "A numbered subject must bind to the entity the answer actually labels with that number. "
                     "Comparisons can require several subjects. Use scope subjectless only for a criterion "
@@ -726,7 +731,18 @@ async def check_answer_outputs(
                     or not any(binding.quote in text for text in (source.quote, source.page_title or ""))
                 ):
                     return reject((criterion,))
-                identities[key].append({"reference": criterion, "url_ref": source.url_ref, "quote": binding.quote})
+                identity: dict[str, JsonValue] = {
+                    "reference": criterion,
+                    "url_ref": source.url_ref,
+                    "quote": binding.quote,
+                }
+                if source.control_context is not None:
+                    identity.update(
+                        source_id=source.source_id,
+                        frame_id=source.frame_id,
+                        control_context=source.control_context.model_dump(mode="json"),
+                    )
+                identities[key].append(identity)
     choices = {f"claim_{index}": claim.text for index, claim in enumerate(context.claims)}
     choices["all"] = "The requested output spans multiple claims; no single claim states all of it."
     choices["none"] = "The requested output is missing from the actual answer."
@@ -915,7 +931,9 @@ async def check_answer_outputs(
                 "support a subjective preference. Do not require every compared option's values for a "
                 "recommendation criterion merely because another task output compares options. The assertion "
                 "audit separately requires all operands for any factual comparative advantage the answer claims. "
-                "Derived outputs can calculate from quoted records only when every operand and its association "
+                "Control context identifies the quoted content's actual DOM container and sibling position, "
+                "not an absent field value. Derived outputs can calculate from quoted records only when "
+                "every operand and its association "
                 "is explicit; the source need not state the conclusion literally. Counted-record metadata gives "
                 "code-maintained distinct counts, their scope, cited record indices and collection completeness. "
                 "A complete count can rest on its matching quoted records without a page stating the total. "
@@ -967,7 +985,9 @@ async def check_answer_outputs(
                 "treat different entities or explicitly different configurations as contradictions. "
                 "Derived outputs can "
                 "calculate from quoted records only when every operand and its association is explicit. "
-                "Counted-record metadata supplies code-maintained counts and collection completeness, with "
+                "Control context binds quoted content to its actual DOM container and sibling position, "
+                "but cannot replace a missing quoted value. Counted-record metadata supplies code-maintained "
+                "counts and collection completeness, with "
                 "indices into that claim's cited sources. Check the reported count against that matching scope "
                 "and quoted record membership. An incomplete count cannot establish a whole-list total. "
                 "Observed page titles provide identity "

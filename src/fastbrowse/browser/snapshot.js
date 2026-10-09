@@ -701,6 +701,24 @@
     }
   }
 
+  // A revealed caption needs its actual container association, not merely the most recent action.
+  registry.hoverContexts = new WeakMap();
+  for (const c of controls) {
+    if (!c.operations.includes('hover')) continue;
+    const element = registry.nodes.get(c.id);
+    registry.hoverContexts.set(element, {
+      control: {
+        role: c.role, label: c.label,
+        context: /^\d+ of \d+$/.test(c.context || '') ? c.context : null,
+      },
+      labelAttributes: [element.getAttribute('role'), element.getAttribute('aria-label'),
+        element.getAttribute('title'), element.querySelector('img[alt]')?.getAttribute('alt') || null],
+      text: element.innerText,
+      parent: element.parentNode,
+      siblings: [...(element.parentNode?.children || [])],
+    });
+  }
+
   // A date field's own label ("Start Date") rarely says which picker it belongs to when a page offers several
   // ("Date Picker 3"): unlike a colliding label, a uniquely named one never reaches the loop above, so the
   // nearest ancestor that names a section is attached here on its own, without the twin-avoidance `contextOf`

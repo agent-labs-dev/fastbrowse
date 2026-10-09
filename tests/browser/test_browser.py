@@ -593,7 +593,15 @@ async def test_content_shown_only_under_the_pointer_is_reached_by_hovering(page:
     assert "name: grace" in after.viewport_text
     assert "name: ada" not in after.viewport_text
     assert any(c.label == "View profile" for c in after.controls)
-    assert "name: grace" in (await page.capture()).text
+    captured = await page.capture()
+    assert "name: grace" in captured.text
+    revealed = next(block for block in captured.blocks if "name: grace" in captured.text[block.start : block.end])
+    assert revealed.control_context is not None
+    assert revealed.control_context.label == "User Avatar"
+    assert revealed.control_context.context == "2 of 2"
+    assert all(
+        block.control_context is None for block in captured.blocks if captured.text[block.start : block.end] == "Team"
+    )
     assert [(c.id, c.context) for c in after.controls if c.label == "User Avatar"] == [
         (c.id, c.context) for c in hovers if c.label == "User Avatar"
     ]
@@ -984,3 +992,39 @@ async def test_a_button_wrapped_in_a_link_is_offered_once(
     result = await page.act(Action(operation=Operation.CLICK, target_id=controls[0].id), observation)
     assert result.outcome is StepOutcome.EXECUTED
     assert (await page.observe()).url.endswith("/icons.html")
+
+
+@pytest.mark.parametrize("mutation", ["outside", "siblings", "mixed", "label"])
+async def test_hover_quote_context_does_not_attach_to_unrelated_or_reordered_content(
+    page: CdpPage, main_site: str, browser_session: BrowserSession, mutation: str
+) -> None:
+    await page.navigate(f"{main_site}/hovers.html")
+    if mutation == "mixed":
+        markup = (
+            "<style>.card .caption{display:none}.card:hover .caption{display:inline}</style>"
+            '<span class="card"><img alt="Avatar" width="80" height="80">'
+            '<span class="caption">Revealed name</span></span>'
+            "<span>Unrelated name</span>"
+        )
+        await page._evaluate(browser_session.active_session_id, f"document.body.innerHTML = {json.dumps(markup)}")
+    observation = await page.observe()
+    target = next(control for control in observation.controls if Operation.HOVER in control.operations)
+    await page.act(Action(operation=Operation.HOVER, target_id=target.id), observation)
+    await page.observe()
+    if mutation == "outside":
+        script = "document.body.insertAdjacentHTML('beforeend', '<p>Outside name</p>')"
+    elif mutation == "label":
+        script = "document.querySelector('.figure img').alt = 'Changed avatar'"
+    elif mutation == "siblings":
+        script = "document.querySelector('.figure').parentNode.appendChild(document.createElement('section'))"
+    else:
+        script = "undefined"
+    await page._evaluate(browser_session.active_session_id, script)
+    captured = await page.capture()
+    if mutation == "outside":
+        outside = next(block for block in captured.blocks if captured.text[block.start : block.end] == "Outside name")
+        assert outside.control_context is None
+    else:
+        assert all(block.control_context is None for block in captured.blocks)
+    if mutation == "mixed":
+        assert "Revealed name" in captured.text and "Unrelated name" in captured.text

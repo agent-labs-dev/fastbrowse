@@ -27,6 +27,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - The agent skill uses uncapped resource defaults, with limits supplied by the caller's task budget.
   It no longer imposes a 30-step limit or a $0.25 model-spend cap on each delegated task.
+- Captured hover captions retain their DOM container and sibling position as source metadata.
+  Answer checks can bind positional subjects without treating that context as a quoted value.
 
 - Revealed hover targets keep their labels and sibling positions while their captions are visible.
 
