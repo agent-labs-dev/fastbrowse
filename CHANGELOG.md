@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Count claim checks retain the requested scope and whether the accumulated tally is complete.
+  An ungrouped count no longer reaches the checker as an unlabeled number.
+
 - Planning uses the default reading model and separates sign-in identities from requested data filters.
   A prerequisite account name no longer becomes an extra field in an exported report's answer checks.
 

@@ -2992,6 +2992,27 @@ def test_tally_claim_checks_judge_counted_records_by_their_tally(author_tallies:
     }
 
 
+@pytest.mark.parametrize("complete", [False, True])
+def test_anonymous_tally_claim_check_preserves_requested_scope(complete: bool) -> None:
+    page = capture((BlockKind.PARAGRAPH, "Amber"), (BlockKind.PARAGRAPH, "Cobalt"))
+    notes = Notes(
+        Fact(text=b.source_id, evidence=block_evidence(page, b.source_id), reader=FactReader.LLM) for b in page.blocks
+    )
+    tally = notes.add_tally(Tally(requirement_id="count", key="", records=tuple(notes.evidence)))
+    if complete:
+        notes.complete_tallies("count")
+    requirement = Requirement(
+        id="count", text="Count all available paint colours.", kind=RequirementKind.INFORMATION, count_records=True
+    )
+    answer = assemble_answer(
+        (Claim(text="There are two available paint colours.", evidence_ids=(fact_id(tally),)),), notes, (requirement,)
+    )
+    question = claim_check_questions(answer, notes)["unsupported_0"].instructions
+    assert requirement.text in question
+    assert f'"complete": {json.dumps(complete)}' in question
+    assert '"count": 2' in question
+
+
 def test_a_ranking_over_every_counted_record_leaves_the_omission_check_its_notes(author_tallies: Notes) -> None:
     notes = author_tallies
     plan = tuple(Requirement(id=key, text=key, kind=RequirementKind.INFORMATION) for key in ("counts", "ranking"))

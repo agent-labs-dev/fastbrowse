@@ -2416,8 +2416,19 @@ def claim_check_questions(
     # A counted record is shown as its tally's line: code checked each quote against the group when it was read and
     # counted them, and a ranking citing every record put a hundred quotes into each of its questions.
     compared = set(notes.comparison_records())
+    requirements = {requirement.id: requirement.text for requirement in composed.requirements}
     counted = {
-        record: fact.text
+        record: (
+            f"TALLY: {json.dumps(fact.text, ensure_ascii=False)} "
+            + json.dumps(
+                {
+                    "requirement": requirements.get(fact.tally.requirement_id),
+                    "count": fact.tally.count,
+                    "complete": fact.tally.requirement_id in notes.fact_requirements(fact_id(fact)),
+                },
+                ensure_ascii=False,
+            )
+        )
         for fact in notes.facts
         if fact.tally is not None
         for record in fact.basis
@@ -2428,11 +2439,7 @@ def claim_check_questions(
         keys = [key for key in notes.expand_evidence_ids(claim.evidence_ids) if not notes.derived(key)]
         evidence = "\n".join(
             dict.fromkeys(
-                f"TALLY: {json.dumps(counted[key], ensure_ascii=False)}"
-                if key in counted
-                else known[key].model_dump_json()
-                if key in known
-                else f"MISSING: {key}"
+                counted[key] if key in counted else known[key].model_dump_json() if key in known else f"MISSING: {key}"
                 for key in keys
             )
         )
