@@ -26,6 +26,8 @@ export interface BrowserOptions {
   attach?: boolean;
   /** Part of the URL or title of the window to attach to. */
   targetMatch?: string;
+  /** Bring the run's tab and its browser window to the front, to watch it. A visible window otherwise stays in the background. */
+  foreground?: boolean;
   /** The two-letter country a cloud browser browses from. */
   proxyCountry?: string;
   viewport?: [width: number, height: number];
@@ -123,6 +125,7 @@ function browserFields(options: PerRun<BrowserOptions>): Sparse<RunParams> {
     cdp_port: options.cdpPort,
     attach: options.attach,
     target_match: options.targetMatch,
+    foreground: options.foreground,
     proxy_country: options.proxyCountry,
     viewport: options.viewport,
     cloud_allow_resizing: options.cloudAllowResizing,

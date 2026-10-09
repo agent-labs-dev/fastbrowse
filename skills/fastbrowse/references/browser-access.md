@@ -2,9 +2,13 @@
 
 ## Sign-in and secrets
 
-Prefer a browser or profile the user has already signed into. A local `--profile DIR` preserves cookies across
-runs and implies `--local`; a `--cloud-profile ID` uses a Browser Use Cloud profile. Use only a profile the user
-has selected. Profile reuse preserves sign-in, not the agent's plan or memory.
+Prefer a profile the user has already signed into for fastbrowse. A local `--profile DIR` preserves cookies
+across runs and implies `--local`; a `--cloud-profile ID` uses a Browser Use Cloud profile. Use only a profile the
+user has selected. Profile reuse preserves sign-in, not the agent's plan or memory.
+
+A kept profile is the setup that needs the user once: they sign in by hand in a Chrome started on that directory,
+close it, and every later `--profile DIR` run is signed in, headless, with no window and no prompt. Chrome opens
+a profile in one process at a time, so run one task per profile at once.
 
 For CLI credentials, have the user configure environment variables outside the conversation, then pass their
 names with an explicit origin. Do not read secret values, put them in task text, or print them in diagnostics.
@@ -25,16 +29,29 @@ The CLI also supports `--bitwarden ITEM` for a user-selected login from an unloc
 
 ## An existing browser or Electron window
 
-Look for a user-provided DevTools endpoint or an already enabled local Chrome connection. Chrome's
-`DevToolsActivePort` file in its user data directory contains the port and browser websocket path. Read
-those two lines and append the path to `ws://127.0.0.1:PORT`; do not read cookies or profile credentials. Some Chrome
-versions expose the websocket but return 404 for `/json/version`, so use `--cdp-url` in that case.
+Use a DevTools endpoint only when the user names it, with `--cdp-url URL` or `--cdp-port PORT`. Never look for
+one in the user's everyday Chrome, such as the `DevToolsActivePort` file in its user data directory: that
+endpoint exists only when remote debugging is switched on in `chrome://inspect`, and Chrome then stops every
+connection on an "Allow remote debugging?" prompt that takes the user's focus and waits for their click, once
+per run. An endpoint that answers 404 on `/json/version` is that kind.
 
-Use a discovered or user-provided DevTools endpoint with `--cdp-url URL` or `--cdp-port PORT`.
-fastbrowse opens a task tab and leaves the browser running. Add `--attach` to drive an existing window; `--target-match TEXT` selects a window
-by title or URL and implies attach. The selected window stays open after the run, but actions can change it.
-Treat cookies and other browser state as belonging to the user. Do not start or expose a debugging endpoint
-on their behalf unless the task requires it and they have authorized that access.
+The endpoint that needs no approval is a Chrome the user starts for the purpose, with a data directory of its
+own (Chrome ignores the port flag on its default one):
+
+```sh
+google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.fastbrowse/chrome"
+```
+
+They sign in there once and leave it running; each run then passes `--cdp-port 9222`. Any program on the machine
+can drive a browser listening on that port, so the choice to start it is the user's. Do not start or expose a
+debugging endpoint on their behalf unless the task requires it and they have authorized that access.
+
+fastbrowse opens a task tab and leaves the browser running. The tab opens behind the window's current tab and
+the window is neither raised nor focused, so the user can keep working; pass `--foreground` only when they ask
+to watch. Chrome itself still brings a window forward when a page opens a popup, and when a new headed window
+starts. Add `--attach` to drive an existing window; `--target-match TEXT` selects a window by title or URL and
+implies attach. The selected window stays open after the run, but actions can change it, and a click in a
+window's front tab activates that window. Treat cookies and other browser state as belonging to the user.
 
 ```sh
 uvx --from fastbrowse fastbrowse \

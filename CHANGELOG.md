@@ -11,6 +11,17 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A run in a visible browser window works in the background. With `--headed`, or in a browser handed over with
+  `--cdp-url` or `--cdp-port`, the task tab opens behind the window's current tab and the run sends nothing
+  that raises or focuses the window, where each run used to take the keyboard from whatever else was in use.
+  `--foreground` (`foreground` for `run_task`, the SDK and `serve`) brings the tab to the front to watch a run.
+  Chrome still brings a window forward on its own when a headed Chrome starts, when a page opens a popup, and,
+  with `--attach`, on a click in a window's front tab. Headless and cloud runs are unchanged.
+
+- The fastbrowse skill sends agents to `--local`, a kept `--profile`, or a Chrome started for the purpose with
+  its own data directory. It no longer has them look for a debugging endpoint in the user's everyday Chrome,
+  which asks for approval on every connection.
+
 - Captured hover captions retain their DOM container and sibling position as source metadata.
   Answer checks can bind positional subjects without treating that context as a quoted value.
 

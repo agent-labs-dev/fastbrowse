@@ -19,6 +19,7 @@ from typing import Any, Self, cast
 from cdp_use.cdp.fetch.events import RequestPausedEvent
 from cdp_use.cdp.fetch.types import RequestPattern
 from cdp_use.cdp.page.events import JavascriptDialogOpeningEvent, ScreencastFrameEvent
+from cdp_use.cdp.target.commands import CreateTargetParameters
 from cdp_use.cdp.target.events import (
     AttachedToTargetEvent,
     DetachedFromTargetEvent,
@@ -91,6 +92,13 @@ DOWNLOAD_PATTERNS: tuple[RequestPattern, ...] = (
 # hops, iframes and popups all pause as Documents, so one check covers them.
 SCOPE_PATTERN: RequestPattern = {"urlPattern": "*", "resourceType": "Document", "requestStage": "Request"}
 _ENABLE_DOMAINS = ("Page", "Runtime", "DOM")
+_KEEP_PAINTING: dict[str, object] = {
+    "format": "jpeg",
+    "quality": 1,
+    "maxWidth": 16,
+    "maxHeight": 16,
+    "everyNthFrame": 1000,
+}
 _TRACK_DOCUMENT_JS = data_file("browser", "snapshot.js").read_text(encoding="utf-8") + "('fingerprint')"
 _REFUSE_COOKIES_JS = data_file("browser", "autoconsent", "autoconsent.standalone.js").read_text(encoding="utf-8")
 """DuckDuckGo's autoconsent (MPL-2.0, unmodified): refuses consent banners on known platforms and hides them
@@ -460,7 +468,26 @@ class BrowserSession:
         if target_id not in self._tabs:
             raise ValueError(f"Unknown tab {target_id}")
         self._set_active_target(target_id)
-        await self.client.send.Target.activateTarget(params={"targetId": target_id})
+        await self.bring_to_front()
+
+    async def bring_to_front(self) -> None:
+        """Put the active tab in front where the run may. A background run sends nothing: its tabs already render
+        where they are, and Chrome raises and focuses the whole window along with an activated tab."""
+        if self._connection.foreground:
+            await self.client.send.Target.activateTarget(params={"targetId": self._active_target_id})
+
+    async def _show(self, target_id: str) -> None:
+        """Have a tab that joins the run render: in front of its window, or behind it and kept painting."""
+        if self._connection.foreground:
+            await self.client.send.Target.activateTarget(params={"targetId": target_id})
+            return
+        # Focus emulation alone leaves a tab behind another with a compositor that sleeps between repaints, where
+        # a screenshot of an idle page waits seconds for a frame. Chrome keeps a tab painting while it is being
+        # cast, so a cast too small and too sparse to cost anything runs on a session of its own, where the casts
+        # that deliver live frames and recordings cannot replace it. A start can go unanswered while a tab swaps
+        # renderer, and a tab without the cast is only slower to capture, so it is bounded and never fails the run.
+        keeper = await self.client.send.Target.attachToTarget(params={"targetId": target_id, "flatten": True})
+        await self._screencast_command("Page.startScreencast", _KEEP_PAINTING, keeper["sessionId"])
 
     async def _attach_existing_tab(self, target_match: str | None) -> str:
         targets = (await self.client.send.Target.getTargets())["targetInfos"]
@@ -482,10 +509,7 @@ class BrowserSession:
         target_id = target["targetId"]
         attach = await self.client.send.Target.attachToTarget(params={"targetId": target_id, "flatten": True})
         session_id = attach["sessionId"]
-        await _together(
-            self.client.send.Target.activateTarget(params={"targetId": target_id}),
-            self._prepare_session(session_id),
-        )
+        await _together(self._show(target_id), self._prepare_session(session_id))
         await self._run_document_scripts(session_id)
         self._tabs[target_id] = _TabState(
             target_id=target_id, session_id=session_id, url=target["url"], title=target["title"]
@@ -505,18 +529,20 @@ class BrowserSession:
         )
 
     async def _open_owned_tab(self, url: str) -> str:
-        # Every browser a session drives was started for it (a cloud browser, or a Chrome launched with its own
-        # profile), so there is no user tab to protect. A background target does not render: animation frames
-        # never fire, so menus that animate open never become visible, screenshots hang and clicks read as covered.
-        created = await self.client.send.Target.createTarget(params={"url": url})
+        # A tab that is neither in front nor focus-emulated does not render: animation frames never fire, so menus
+        # that animate open never become visible, screenshots hang and clicks read as covered. A foreground run
+        # activates its tab. A background run opens it behind the window's current tab, because Chrome focuses the
+        # window of a tab it opens in front, and `_prepare_session` turns focus emulation on instead.
+        params: CreateTargetParameters = {"url": url}
+        if not self._connection.foreground:
+            params["background"] = True
+        created = await self.client.send.Target.createTarget(params=params)
         target_id = created["targetId"]
         self._owned.add(target_id)
         attach = await self.client.send.Target.attachToTarget(params={"targetId": target_id, "flatten": True})
         session_id = attach["sessionId"]
         # Foregrounding the tab and enabling its session are independent, and both finish before the tab is used.
-        await _together(
-            self.client.send.Target.activateTarget(params={"targetId": target_id}), self._prepare_session(session_id)
-        )
+        await _together(self._show(target_id), self._prepare_session(session_id))
         self._tabs[target_id] = _TabState(target_id=target_id, session_id=session_id, url=url)
         self._set_active_target(target_id)
         return target_id
@@ -542,6 +568,17 @@ class BrowserSession:
                 session_id=session_id,
             ),
             self.client.send.Fetch.enable(params={"patterns": patterns}, session_id=session_id),
+            # A page behind another tab is hidden and unfocused, so it paints nothing and takes no typing. Focus
+            # emulation has it render and hold focus where it is, which is what lets a run leave the window alone.
+            *(
+                ()
+                if self._connection.foreground
+                else (
+                    self.client.send.Emulation.setFocusEmulationEnabled(
+                        params={"enabled": True}, session_id=session_id
+                    ),
+                )
+            ),
             *((self._bypass_service_workers(session_id, True),) if scoped else ()),
             # Track parsing and hydration before the first post-navigation read, so an already
             # quiet document does not pay another full window just to install its observer.
@@ -568,7 +605,8 @@ class BrowserSession:
         client.register.Target.targetInfoChanged(self._on_target_info_changed)
         client.register.Target.targetDestroyed(self._on_target_destroyed)
         client.register.Page.javascriptDialogOpening(self._on_dialog)
-        if self._on_frame is not None:
+        # A background run casts without a frame handler too, and a frame nobody acks stalls the cast that sent it.
+        if self._on_frame is not None or not self._connection.foreground:
             client.register.Page.screencastFrame(self._on_screencast_frame)
         client.register.Fetch.requestPaused(self._on_request_paused)
 
@@ -660,10 +698,7 @@ class BrowserSession:
             if session_id is None:
                 attach = await self.client.send.Target.attachToTarget(params={"targetId": target_id, "flatten": True})
                 session_id = attach["sessionId"]
-            await _together(
-                self.client.send.Target.activateTarget(params={"targetId": target_id}),
-                self._prepare_session(session_id),
-            )
+            await _together(self._show(target_id), self._prepare_session(session_id))
             if self._connection.attach:
                 await self._run_document_scripts(session_id)
             self._tabs[target_id] = _TabState(target_id=target_id, session_id=session_id, opener_id=opener_id)

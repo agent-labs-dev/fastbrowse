@@ -294,7 +294,12 @@ class BrowserConnection(Frozen):
     """The cloud browser's id, when a cloud browser was started for this run. A caller that has to stop it
     out of band (a user pressing cancel, a subscription ending) cannot do so without this."""
     remote: bool
-    """True when the browser runs on another host: tabs must be foregrounded and files move as bytes."""
+    """True when the browser runs on another host: files move as bytes."""
+    foreground: bool = False
+    """The run brings its tab, and with it the browser window, to the front. Right where no desktop follows the
+    window (a cloud browser, whose live view shows the front tab, or headless Chrome) and when someone asked to
+    watch. Otherwise the tab opens behind the window's current one and renders under focus emulation, so the
+    window is neither raised nor focused."""
     attach: bool = False
     """True when attaching to an existing window (e.g. Electron or external Chrome) without creating a tab."""
     target_match: str | None = None

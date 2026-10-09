@@ -228,6 +228,10 @@ class Recording:
     def _on_frame(self, event: ScreencastFrameEvent, session_id: str | None) -> None:
         # CDP keeps one subscriber per event, so recording must also forward frames to the live view.
         self._session._on_screencast_frame(event, session_id)
+        # A background run keeps each tab painting with a 16-pixel cast on a session of its own, which is no
+        # picture of the tab.
+        if session_id != self._session.active_session_id:
+            return
         self._frame_at = time.monotonic()
         # The video holds its last clean frame rather than showing a secret.
         if not self._session.frames_withheld:

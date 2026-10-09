@@ -11,10 +11,10 @@ with evidence and a status. Give it the user's goal and necessary values rather 
 ## Choose an entry point
 
 Prefer local browsing when a coding agent invokes this skill. Honor an explicit user browser choice first.
-Otherwise reuse an available local Chrome DevTools connection, opening a task tab; read
-[references/browser-access.md](references/browser-access.md) for connection discovery. If no connection is
-available, use CLI `--local` to start local Chrome. This starts a separate browser, not the user's signed-in
-Chrome. Use cloud only when the user requests it or local browsing is unavailable; explain the fallback.
+Otherwise use CLI `--local`: a separate headless Chrome with no window, which takes no focus and asks the user
+for nothing. Drive another browser only through a DevTools endpoint the user names; read
+[references/browser-access.md](references/browser-access.md) first. Use cloud only when the user requests it or
+local browsing is unavailable; explain the fallback.
 
 Use a connected fastbrowse MCP `browse` tool when its browser configuration matches that choice. Inspect its
 schema and pass `task` and `start` when known. Pass resource limits when the user supplies them or an

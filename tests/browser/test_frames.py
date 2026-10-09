@@ -92,6 +92,11 @@ async def test_live_frames_follow_tabs_ack_after_delivery_and_keep_only_the_late
         await emit_frame(session, 8, b"recorded too")
         await asyncio.gather(*session._background)
         assert frames[-1] == recording._frame == b"recorded too"
+        # A frame from another session, as the cast that keeps a background tab painting sends, is acked unseen.
+        await emit_frame(session, 80, b"no picture of the tab", "keeper")
+        await asyncio.gather(*session._background)
+        assert frames[-1] == recording._frame == b"recorded too"
+        transport.requests.remove(("Page.screencastFrameAck", {"sessionId": 80}, "keeper"))
 
         release.clear()
         delivering.clear()

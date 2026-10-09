@@ -1342,11 +1342,11 @@ class CdpPage(Page):
         return False
 
     async def screenshot(self) -> bytes:
-        """Capture the active tab, activating it only if a background tab produces no frame to capture.
+        """Capture the active tab, bringing it to the front only if a tab behind another produces no frame.
 
-        An idle background tab composites nothing new, so a capture can wait many seconds; focus emulation and
-        compositor-level nudges proved unreliable, while activating always yields a frame at once. Screenshots
-        are rare (recovery and uncertain completion), so focus moves only when it has to.
+        An idle tab behind another composites nothing new, so a capture can wait many seconds, while activating
+        always yields a frame at once. Screenshots are rare (recovery and uncertain completion), so a foreground
+        run moves focus only when it has to. A background run never does: its tab renders under focus emulation.
         """
         await self._session.assert_clear()
         if self._session.grant is not None:
@@ -1357,7 +1357,7 @@ class CdpPage(Page):
         try:
             done, _ = await asyncio.wait({capture}, timeout=_SCREENSHOT_WAIT_SECONDS)
             if not done:
-                await client.send.Target.activateTarget(params={"targetId": self._session.active_target_id})
+                await self._session.bring_to_front()
             return base64.b64decode((await capture)["data"])
         finally:
             capture.cancel()
@@ -1534,10 +1534,10 @@ class CdpPage(Page):
         # A pointer click normally focused the document already; background tabs still need activation.
         script = self._focus_script(prepare_fill=prepare_fill, secret=secret)
         if activate:
-            await self._session.client.send.Target.activateTarget(params={"targetId": self._session.active_target_id})
+            await self._session.bring_to_front()
         result = await self._evaluate(session_id, f"{script}({local_id}, {json.dumps(activate)})")
         if result is None:
-            await self._session.client.send.Target.activateTarget(params={"targetId": self._session.active_target_id})
+            await self._session.bring_to_front()
             result = await self._evaluate(session_id, f"{script}({local_id}, true)")
         return bool(result)
 
