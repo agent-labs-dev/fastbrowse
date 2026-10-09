@@ -28,6 +28,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Recordings of attached windows leave the caller's page in place. Explicit submit buttons expose the form's
   destination to the authorization check, while focusing a field does not claim to submit it.
+- Captured hover captions retain their DOM container and sibling position as source metadata.
+  Answer checks can bind positional subjects without treating that context as a quoted value.
 
 - Answer identity checks emit each literal identifying quote once and reference it across fields.
   Repeated names no longer consume output tokens for every requested value; citation and subject checks remain.
@@ -45,9 +47,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - The agent skill uses uncapped resource defaults, with limits supplied by the caller's task budget.
   It no longer imposes a 30-step limit or a $0.25 model-spend cap on each delegated task.
-- Captured hover captions retain their DOM container and sibling position as source metadata.
-  Answer checks can bind positional subjects without treating that context as a quoted value.
-
 - Revealed hover targets keep their labels and sibling positions while their captions are visible.
 
 - Final answer audits retain count scope, collection completeness and the quoted records behind each tally.

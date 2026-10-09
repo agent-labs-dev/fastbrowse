@@ -68,3 +68,31 @@ async def test_new_counterevidence_invalidates_a_previously_passing_cached_audit
     assert await check_answer_outputs(RoutingJev(), writer, answer, notes, checks, audit_cache=cache)
     notes.add(Fact(text="Combined output", evidence=block_evidence(page, "s1"), reader=FactReader.LLM))
     assert not await check_answer_outputs(RoutingJev(), writer, answer, notes, checks, audit_cache=cache)
+
+
+async def test_cited_hover_source_is_not_offered_as_its_own_counterevidence() -> None:
+    from fastbrowse.models import SourceControl
+
+    offered: list[object] = []
+
+    class Recorder(ScriptedLLM):
+        async def generate(self, purpose, messages, schema, **kwargs):
+            if schema.__name__ != "_OutputIdentities":
+                key, field = next(iter(json.loads(messages[-1].content)["criteria"].items()))
+                offered.extend(field.get("counterevidence", ()))
+                self.responses.append({"judgments": {key: "yes"}, "reason": "Quoted."})
+            return await super().generate(purpose, messages, schema, **kwargs)
+
+    page = capture((BlockKind.PARAGRAPH, "Adapter Beacon total wattage 70W Max."))
+    evidence = block_evidence(page, page.blocks[0].source_id).model_copy(
+        update={"control_context": SourceControl(role="figure", label="Adapter", context="2 of 3")}
+    )
+    fact = Fact(text="s0", evidence=evidence, reader=FactReader.LLM)
+    notes = Notes((fact,))
+    answer = assemble_answer(
+        (Claim(text="Adapter Beacon total output is 70W.", evidence_ids=(fact_id(fact),)),), notes, ()
+    )
+    assert await check_answer_outputs(
+        RoutingJev(), Recorder([]), answer, notes, ("Report Adapter Beacon total output.",)
+    )
+    assert offered == []
