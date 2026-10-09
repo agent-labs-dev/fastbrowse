@@ -4652,3 +4652,29 @@ async def test_choice_read_preserves_cited_heading_identity(same_frame):
     assert ("Adapter Beacon" in quotes) is same_frame
     assert fact.evidence is not None and fact.reader is FactReader.JEV_CHOICE
     assert not notes.derived(fact_id(fact))
+
+
+async def test_csv_row_excerpts_retain_column_names() -> None:
+    text = "reference,customer,amount\nR-7,North,12.30\nR-8,South,18.40"
+    page = capture((BlockKind.TABLE, text))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "cite": {"first": "s0", "last": "s0"},
+                        "excerpt": "R-8,South,18.40",
+                        "text": "South's amount is 18.40.",
+                        "requirement_id": "r",
+                    }
+                ],
+                "answered": True,
+            }
+        ]
+    )
+    notes = Notes()
+    result = await read(llm, page, "Find South's amount", ["r"], notes)
+    fact = next(fact for fact in result.facts if fact.requirement_id == "r")
+    assert fact.evidence is not None
+    assert fact.evidence.quote == text
+    assert page.text[fact.evidence.start : fact.evidence.end] == text

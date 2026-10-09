@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Downloaded CSV files retain table structure, so row citations keep the column names needed to
+  interpret their values. Bounded downloads still report omitted file content.
+
 - Count claim checks retain the requested scope and whether the accumulated tally is complete.
   An ungrouped count no longer reaches the checker as an unlabeled number.
 

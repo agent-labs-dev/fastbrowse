@@ -832,6 +832,7 @@ async def test_a_browser_handed_over_by_cdp_url_drives_and_survives_the_run(
 
 
 async def test_download_evidence_is_bounded_and_cites_the_response(page: CdpPage, main_site: str) -> None:
+    from fastbrowse.page import BlockKind
     from fastbrowse.retrieval import _Cite, _cited, chunk
 
     await page.navigate(main_site)
@@ -839,6 +840,7 @@ async def test_download_evidence_is_bounded_and_cites_the_response(page: CdpPage
     capture = await page.capture()
     assert len(capture.text) < 70000
     block = next(b for b in capture.blocks if b.source_id.startswith("download/"))
+    assert block.kind is BlockKind.TABLE
     part = next(p for p in chunk(capture, 200000) if block.source_id in p.block_ids)
     evidence = _cited(capture, part, _Cite(first=block.source_id, last=block.source_id))
     assert evidence is not None
