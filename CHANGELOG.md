@@ -11,6 +11,30 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Answer identity checks emit each literal identifying quote once and reference it across fields.
+  Repeated names no longer consume output tokens for every requested value; citation and subject checks remain.
+
+- Answer audits consider conflicting current quotes from the same source address and frame, including
+  uncited notes. Conflicting values must be acknowledged rather than presented as one settled value;
+  those other quotes cannot replace a claim's own citation support.
+
+- Consecutive evidence notes share their exact source URL when it makes the rendered context smaller.
+  Long referral addresses no longer repeat for every fact, leaving more room for required quotes and their basis.
+
+- Repeated reads keep one copy of each identical prior-evidence packet in the novelty check. Distinct
+  quotes, summaries, frames, headings and changes remain separate, and every stored fact and citation is retained.
+  Duplicate context no longer crowds this check out of its input budget.
+
+- The agent skill uses uncapped resource defaults, with limits supplied by the caller's task budget.
+  It no longer imposes a 30-step limit or a $0.25 model-spend cap on each delegated task.
+
+- Revealed hover targets keep their labels and sibling positions while their captions are visible.
+
+- Final answer audits retain count scope, collection completeness and the quoted records behind each tally.
+
+- Recovery checks whether a changed page satisfies the task before stopping for lack of further actions.
+  The completion verifier still rejects unfinished work.
+
 - Requests to expand or load content until a stopping condition keep that page change as an action
   requirement. A displayed total no longer replaces the requested work in the plan. The feed fixture
   also checks that every remaining batch was loaded, and advances to task version 6.

@@ -440,9 +440,18 @@ class _OutputSource(Frozen):
     page_title: str | None
 
 
+class _OutputCount(Frozen):
+    scope: str | None
+    group: str
+    count: int
+    complete: bool
+    record_indices: tuple[int, ...]
+
+
 class _OutputClaim(Frozen):
     text: str
     cited_sources: tuple[_OutputSource, ...]
+    counted_records: tuple[_OutputCount, ...] = ()
 
 
 class _OutputContext(Frozen):
@@ -475,11 +484,18 @@ class _OutputIdentities(Frozen):
     bindings: dict[str, _IdentityScope]
 
 
+class _IdentityReferenceScope(Frozen):
+    scope: Literal["entities", "subjectless", "unresolved"]
+    identity_ids: tuple[str, ...] = ()
+
+
 def _identity_schema(keys: Iterable[str]) -> type[BaseModel]:
     # An open dictionary permits an empty response even when every requested subject needs a binding.
-    fields: dict[str, Any] = {key: (_IdentityScope, ...) for key in keys}
+    fields: dict[str, Any] = {key: (_IdentityReferenceScope, ...) for key in keys}
     bindings = create_model("_RequiredBindings", __base__=Frozen, **fields)
-    return create_model("_OutputIdentities", __base__=Frozen, bindings=(bindings, ...))
+    return create_model(
+        "_OutputIdentities", __base__=Frozen, identities=(dict[str, _QuotedIdentity], ...), bindings=(bindings, ...)
+    )
 
 
 def _assessment_schema(key: str) -> type[BaseModel]:
@@ -493,6 +509,7 @@ type OutputAuditCache = dict[str, OutputAuditVerdict | _OutputIdentities]
 
 def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | None:
     known = notes.current_evidence()
+    requirements = {requirement.id: requirement.text for requirement in composed.requirements}
     urls: dict[str, str] = {}
     claims = []
     for claim in composed.claims:
@@ -515,11 +532,29 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
                     page_title=page.title if page and evidence.frame_id is None else None,
                 )
             )
-        # Looking up a remote source map let an assertion stand in for its quote; keep each claim beside its sources.
+        positions = {key: index for index, key in enumerate(keys)}
+        counted = []
+        for fact in notes.facts:
+            if fact.tally is None or fact_id(fact) not in expanded:
+                continue
+            if any(record not in positions for record in fact.tally.records):
+                return None
+            counted.append(
+                _OutputCount(
+                    scope=requirements.get(fact.tally.requirement_id),
+                    group=fact.tally.key,
+                    count=fact.tally.count,
+                    complete=fact.tally.requirement_id in notes.fact_requirements(fact_id(fact)),
+                    record_indices=tuple(dict.fromkeys(positions[record] for record in fact.tally.records)),
+                )
+            )
+        # Expanding a count into quotes loses whether the whole list was exhausted. Keep its code-owned
+        # coverage and exact record associations beside the quotes, without borrowing an uncited tally.
         claims.append(
             _OutputClaim(
                 text=claim.text,
                 cited_sources=tuple(sources),
+                counted_records=tuple(counted),
             )
         )
     return _OutputContext(
@@ -624,7 +659,10 @@ async def check_answer_outputs(
                     "Comparisons can require several subjects. Use scope subjectless only for a criterion "
                     "with no individual entity identity to establish, such as answer format or an aggregate "
                     "zero-record result. Missing identity evidence is scope unresolved, never subjectless. "
-                    "Do not change requested entities or omit subjects."
+                    "Do not change requested entities or omit subjects. Copy each distinct source_ref and literal "
+                    "identifying quote once into identities, keyed by a short id. Bind each criterion to every "
+                    "required subject through identity_ids. Scope entities requires at least one valid id; "
+                    "subjectless and unresolved have no ids."
                 ),
             ),
             Message(
@@ -655,7 +693,17 @@ async def check_answer_outputs(
             )
             if ledger is not None:
                 ledger.record(generated.cost)
-            resolved = _OutputIdentities.model_validate(generated.data.model_dump())
+            payload = generated.data.model_dump()
+            shared = {key: _QuotedIdentity.model_validate(value) for key, value in payload["identities"].items()}
+            scopes = {}
+            for key, value in payload["bindings"].items():
+                refs = value["identity_ids"]
+                if any(ref not in shared for ref in refs):
+                    return reject((uncertain[key],))
+                scopes[key] = _IdentityScope(
+                    scope=value["scope"], identities=tuple(dict.fromkeys(shared[ref] for ref in refs))
+                )
+            resolved = _OutputIdentities(bindings=scopes)
             if audit_cache is not None:
                 audit_cache[fingerprint] = resolved
         for key, criterion in uncertain.items():
@@ -710,6 +758,31 @@ async def check_answer_outputs(
     source_fields = {}
     covered: set[int] = set()
     selected_claims: dict[str, tuple[Claim, ...]] = {}
+    current_sources = notes.current_evidence()
+
+    def counterevidence(claims: Sequence[_OutputClaim]) -> list[dict[str, object]]:
+        cited = {source.model_dump_json() for claim in claims for source in claim.cited_sources}
+        locations = {(source.url_ref, source.frame_id) for claim in claims for source in claim.cited_sources}
+        refs = {url: alias for alias, url in context.urls.items()}
+        sources = {}
+        # Selecting a field's quote hid conflicting values retained in another claim or uncited note.
+        for evidence in current_sources.values():
+            alias = refs.get(evidence.url)
+            if alias is None or (alias, evidence.frame_id) not in locations:
+                continue
+            page = notes.captured_page(evidence)
+            source = _OutputSource(
+                url_ref=alias,
+                quote=evidence.quote,
+                source_id=evidence.source_id,
+                frame_id=evidence.frame_id,
+                page_title=page.title if page and evidence.frame_id is None else None,
+            )
+            serialized = source.model_dump_json()
+            if serialized not in cited:
+                sources[serialized] = source.model_dump(exclude={"page_title"})
+        return list(sources.values())
+
     for key, criterion in uncertain.items():
         chosen = selected.answers.get(key) if selected is not None else None
         choice = chosen.choice if isinstance(chosen, ChoiceAnswer) else "all"
@@ -733,6 +806,7 @@ async def check_answer_outputs(
             "reported_claims": [
                 claim.model_dump(exclude={"cited_sources": {"__all__": {"page_title"}}}) for claim in claims
             ],
+            "counterevidence": counterevidence(claims),
         }
         source_fields[key] = {
             "criterion": criterion,
@@ -740,9 +814,11 @@ async def check_answer_outputs(
             "sources": [
                 {
                     "cited_sources": [source.model_dump(exclude={"page_title"}) for source in claim.cited_sources],
+                    "counted_records": [count.model_dump() for count in claim.counted_records],
                 }
                 for claim in claims
             ],
+            "counterevidence": fields[key]["counterevidence"],
         }
 
     reasons: dict[str, str] = {}
@@ -827,13 +903,24 @@ async def check_answer_outputs(
                 "explicit distinctions. Do not add independent component maxima unless quoted sources state "
                 "that they apply simultaneously and combine additively. An explicit aggregate rating need not "
                 "equal their sum. "
+                "Counterevidence contains other retained quotes from the same exact source address and frame. "
+                "Check whether it conflicts with the requested value for the same literal entity and scope. "
+                "Conflicting explicit values remain available as alternatives, not a single settled value; "
+                "the assertion audit must require their conflict to be acknowledged. Unclear entity or scope "
+                "associations make availability uncertain. Different entities or explicitly "
+                "different configurations are not contradictions. Counterevidence cannot supply missing "
+                "support or subject bindings for the selected quotes. "
                 "A requested recommendation does not require the page to recommend anything: quoted facts "
                 "can provide grounds for the answer's preference. A quoted property of one option can "
                 "support a subjective preference. Do not require every compared option's values for a "
                 "recommendation criterion merely because another task output compares options. The assertion "
                 "audit separately requires all operands for any factual comparative advantage the answer claims. "
                 "Derived outputs can calculate from quoted records only when every operand and its association "
-                "is explicit; the source need not state the conclusion literally. Observed page titles provide "
+                "is explicit; the source need not state the conclusion literally. Counted-record metadata gives "
+                "code-maintained distinct counts, their scope, cited record indices and collection completeness. "
+                "A complete count can rest on its matching quoted records without a page stating the total. "
+                "An incomplete or differently scoped count cannot establish the requested whole-list total. "
+                "The quoted records must still identify matching entities and filters. Observed page titles provide "
                 "identity context, not missing field "
                 "evidence. Never reconstruct missing table column labels from prior knowledge. Return "
                 "yes/no/uncertain per field and explain missing source values."
@@ -874,8 +961,15 @@ async def check_answer_outputs(
                 "another configuration. Preserve the quoted scope and explicit distinctions in every assertion. "
                 "Do not add independent component maxima unless quoted sources state that they apply "
                 "simultaneously and combine additively. An explicit aggregate rating need not equal their sum. "
+                "Other retained quotes are supplied as counterevidence only: they cannot support an assertion "
+                "whose own citations do not support it. A conflicting value for the same literal entity and "
+                "scope must be acknowledged with both values and their quoted conditions, or fail. Do not "
+                "treat different entities or explicitly different configurations as contradictions. "
                 "Derived outputs can "
                 "calculate from quoted records only when every operand and its association is explicit. "
+                "Counted-record metadata supplies code-maintained counts and collection completeness, with "
+                "indices into that claim's cited sources. Check the reported count against that matching scope "
+                "and quoted record membership. An incomplete count cannot establish a whole-list total. "
                 "Observed page titles provide identity "
                 "context, not missing field evidence. Return yes only if every part of the requested output "
                 "is stated and evidenced by its own cited sources. Every factual assertion in every selected "
@@ -895,6 +989,7 @@ async def check_answer_outputs(
             fields[key] = {
                 "criterion": "Every factual assertion is supported by its own cited sources.",
                 "reported_claims": [claim.model_dump(exclude={"cited_sources": {"__all__": {"page_title"}}})],
+                "counterevidence": counterevidence((claim,)),
             }
     generated = await audit(assertion_messages, fields)
     failed = [

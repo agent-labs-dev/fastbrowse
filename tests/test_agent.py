@@ -233,6 +233,25 @@ async def test_a_step_abandoned_while_waiting_for_the_plan_leaves_the_plan_to_th
     assert await state.await_plan() is plan
 
 
+async def test_plan_trace_retains_counting_mode_without_requirement_text() -> None:
+    from fastbrowse.telemetry import traced
+
+    state = await run_state()
+    requirement = Requirement(id="r", text="Private task wording", kind=RequirementKind.INFORMATION, count_records=True)
+    plan = Plan(requirements=(requirement,), answer_expected=True)
+
+    async def planned() -> Generation[Plan]:
+        return Generation(data=plan, cost=FREE)
+
+    state.ready_plan, state.planning = None, asyncio.create_task(planned())
+    with traced() as events:
+        await state.await_plan()
+        await state.await_plan()
+    assert events == [
+        {"event": "plan_shape", "requirements": [{"id": "r", "kind": "information", "count_records": True}]}
+    ]
+
+
 async def test_missing_personal_information_stops_once_recovery_returns_to_it() -> None:
     """The first missing verdict is recovery's to route around, since most such fields are optional; a field
     recovery sends the run back to is required, and ends it."""
@@ -305,6 +324,48 @@ async def test_recovery_giving_up_on_a_missing_value_ends_the_run_needing_input(
     with pytest.raises(_Stop) as stopped:
         await agent._loop(await run_state(), None, None)
     assert stopped.value.status is Status.NEEDS_INPUT
+    page.act.assert_not_called()
+
+
+@pytest.mark.parametrize("fulfilled", [False, True])
+async def test_recovery_with_no_more_actions_still_verifies_a_finished_goal(fulfilled: bool) -> None:
+    state = await run_state()
+    state.task = "Select the requested option."
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r", text="Select the requested option", kind=RequirementKind.ACTION),),
+        answer_expected=False,
+    )
+    state.history.append(
+        HistoryEntry(
+            operation=Operation.CLICK, target="Requested option", outcome=StepOutcome.EXECUTED, page_changed=True
+        )
+    )
+    obs = observation(()).model_copy(
+        update={"viewport_text": "Requested option selected" if fulfilled else "Different option selected"}
+    )
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=obs)
+    page.screenshot = AsyncMock(return_value=b"")
+    page.artifacts = ()
+    recovery: JsonValue = {
+        "diagnosis": "The requested option is already selected",
+        "next_subgoal": "No further action",
+        "give_up": True,
+    }
+    llm = ScriptedLLM([recovery, {"missing": [] if fulfilled else ["r"], "complete": fulfilled}, recovery])
+    agent = Agent(page, ScriptedJev({}, noul=0.0), llm)
+
+    await agent._recover(state, obs, "uncertain next step")
+
+    assert state.directed == (Operation.DONE, None)
+    if fulfilled:
+        result = await agent._finish(state, None, None)
+        assert result is not None and result.status is Status.COMPLETE
+    else:
+        with pytest.raises(_Stop) as stopped:
+            await agent._finish(state, None, None)
+        assert stopped.value.status is Status.STUCK
+    assert sum(purpose is LLMPurpose.VERIFY for purpose, _ in llm.calls) == 1
     page.act.assert_not_called()
 
 

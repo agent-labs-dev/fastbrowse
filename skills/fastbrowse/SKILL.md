@@ -17,8 +17,8 @@ available, use CLI `--local` to start local Chrome. This starts a separate brows
 Chrome. Use cloud only when the user requests it or local browsing is unavailable; explain the fallback.
 
 Use a connected fastbrowse MCP `browse` tool when its browser configuration matches that choice. Inspect its
-schema and pass `task`, `start` when known, `max_steps: 30`, and `max_dollars: 0.25`. Use a user-specified
-model-spend limit instead. Server ceilings still apply. If the server's browser configuration is unknown,
+schema and pass `task` and `start` when known. Pass resource limits when the user supplies them or an
+existing task budget requires them. Server ceilings still apply. If the server's browser configuration is unknown,
 use the CLI to make the browser choice explicit. The tool returns `status`, `answer`, evidence, and
 `next_step` when the task is unfinished.
 
@@ -28,7 +28,7 @@ Otherwise use the CLI. Check `fastbrowse --help` if installed; otherwise check `
 ```sh
 uvx --from fastbrowse fastbrowse \
   'Find the Blue Kettle and report its price. Do not purchase anything.' \
-  --start https://example.com/shop --local --json --max-steps 30 --max-dollars 0.25
+  --start https://example.com/shop --local --json
 ```
 
 The URL above is illustrative. Use the actual address from the task. Quote task text as one shell argument;

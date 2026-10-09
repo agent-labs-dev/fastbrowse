@@ -13,23 +13,27 @@ from tests.test_retrieval import ScriptedLLM, block_evidence, capture
 
 
 class IdentityWriter(ScriptedLLM):
-    def __init__(self, scope="entities", quote="Adapter Beacon", ref="q1", url_ref="u1"):
+    def __init__(self, scope="entities", quote="Adapter Beacon", ref="q1", url_ref="u1", identity_ids=None):
         super().__init__([])
         self.scope, self.quote, self.ref, self.url_ref = scope, quote, ref, url_ref
+        self.identity_ids = identity_ids
 
     async def generate(self, purpose, messages, schema, **kwargs):
         payload = json.loads(messages[-1].content)
         if schema.__name__ == "_OutputIdentities":
             response = {
+                "identities": {"i0": {"source_ref": self.ref, "quote": self.quote}},
                 "bindings": {
                     key: {
                         "scope": self.scope,
-                        "identities": (
-                            [{"source_ref": self.ref, "quote": self.quote}] if self.scope == "entities" else []
+                        "identity_ids": (
+                            self.identity_ids
+                            if self.identity_ids is not None
+                            else (["i0"] if self.scope == "entities" else [])
                         ),
                     }
                     for key in payload["criteria"]
-                }
+                },
             }
             # This seam's identities are explicit test inputs, rather than the default field-audit fixture.
             self.calls.append((purpose, tuple(messages)))
@@ -150,3 +154,19 @@ async def test_repeated_literal_identity_in_bound_body_is_valid():
         notes,
         ("Report Adapter Beacon exact port count.",),
     )
+
+
+@pytest.mark.parametrize("scope,refs", [("entities", ["missing"]), ("entities", []), ("subjectless", ["i0"])])
+async def test_shared_identity_references_fail_closed(scope, refs):
+    notes, answer = two_entity_answer()
+    writer = IdentityWriter(scope=scope, identity_ids=refs)
+    assert not await check_answer_outputs(
+        RoutingJev(), writer, answer, notes, ("Report Adapter Beacon exact port count.",)
+    )
+    assert len(writer.calls) == 1
+
+
+async def test_duplicate_identity_references_do_not_duplicate_requested_subjects():
+    notes, answer = two_entity_answer()
+    writer = IdentityWriter(identity_ids=["i0", "i0"])
+    assert await check_answer_outputs(RoutingJev(), writer, answer, notes, ("Report Adapter Beacon exact port count.",))

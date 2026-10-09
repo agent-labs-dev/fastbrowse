@@ -73,10 +73,10 @@ def scripted_identities(messages):
     payload = json.loads(messages[-1].content)
     reference, source = next(iter(payload["sources"].items()))
     return {
+        "identities": {"i0": {"source_ref": reference, "quote": source["quote"]}},
         "bindings": {
-            key: {"scope": "entities", "identities": [{"source_ref": reference, "quote": source["quote"]}]}
-            for key, criterion in payload["criteria"].items()
-        }
+            key: {"scope": "entities", "identity_ids": ["i0"]} for key, criterion in payload["criteria"].items()
+        },
     }
 
 
@@ -3893,6 +3893,67 @@ async def test_reopened_requirement_reads_earlier_quotes_again() -> None:
     assert len(llm.calls) == 1 and "novelty" not in jev.requests[0][1]
 
 
+async def test_duplicate_prior_packets_do_not_displace_the_novelty_check() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Price: GBP25.99"))
+    facts = tuple(
+        Fact(
+            text="Price: GBP25.99",
+            evidence=block_evidence(page, "s0").model_copy(update={"capture_sha256": f"{i:064x}"}),
+            reader=FactReader.LLM,
+        )
+        for i in range(600)
+    )
+    notes = Notes(facts)
+    requirement = Requirement(id="r", text="Find the price", kind=RequirementKind.INFORMATION)
+    jev = _ReadJev({"r": _choice("synthesis"), "novelty": NoulAnswer(probability=0.1)})
+    llm = ScriptedLLM([{"claims": [], "answered": False}])
+    await read(llm, page, requirement.text, ["r"], notes, jev=jev, requirements=(requirement,))
+    assert not llm.calls and len(jev.requests) == 1
+    state, questions = jev.requests[0]
+    assert "novelty" in questions and isinstance(state, dict)
+    assert isinstance(state["previous"], list) and len(state["previous"]) == 1
+    assert notes.facts == facts and not notes.evidenced("r")
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("text", "Member price"),
+        ("quote", "Price: GBP29.99"),
+        ("frame_id", "child"),
+        ("source_id", "removed"),
+        ("heading_path", "Member price"),
+    ],
+)
+async def test_distinct_prior_packet_context_is_retained(field: str, value: str) -> None:
+    page = capture((BlockKind.PARAGRAPH, "Price: GBP25.99"))
+    evidence = block_evidence(page, "s0")
+    first = Fact(text="Price", evidence=evidence, reader=FactReader.LLM)
+    second = first.model_copy(
+        update={
+            "text": value if field == "text" else first.text,
+            "evidence": evidence.model_copy(
+                update={
+                    "capture_sha256": "0" * 64,
+                    **({field: (value,) if field == "heading_path" else value} if field != "text" else {}),
+                }
+            ),
+        }
+    )
+    notes = Notes((first, second))
+    requirement = Requirement(id="r", text="Find the price", kind=RequirementKind.INFORMATION)
+    jev = _ReadJev({"r": _choice("synthesis"), "novelty": NoulAnswer(probability=0.95)})
+    llm = ScriptedLLM([{"claims": [], "answered": False}])
+    await read(llm, page, requirement.text, ["r"], notes, jev=jev, requirements=(requirement,))
+    state, questions = jev.requests[0]
+    assert isinstance(state, dict) and isinstance(state["previous"], list)
+    assert len(state["previous"]) == 2 and "novelty" in questions
+    if field == "heading_path":
+        second_packet = state["previous"][1]
+        assert isinstance(second_packet, dict) and second_packet["heading_path"] == [value]
+    assert len(llm.calls) == 1 and notes.facts == (first, second)
+
+
 async def test_independent_claim_checks_fit_separate_parallel_batches() -> None:
     from fastbrowse.verification import check_claims
 
@@ -4069,6 +4130,37 @@ async def test_atomic_output_context_keeps_cited_sources_without_uncited_metadat
 
     assert "page_title" not in json.dumps(llm.calls[1][1][-1].content)
     assert "member price 9" not in json.dumps(llm.calls[2][1][-1].content)
+
+
+@pytest.mark.parametrize("complete", [False, True])
+def test_atomic_output_context_retains_count_scope_and_cited_record_positions(complete: bool) -> None:
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import _output_context
+
+    requirement = Requirement(id="r", text="Count every open record owned by Ada", kind=RequirementKind.INFORMATION)
+    page = capture((BlockKind.RECORD, "Record A - Ada - open"), (BlockKind.RECORD, "Record B - Ada - open"))
+    notes = Notes()
+    for block in page.blocks:
+        notes.add(Fact(reader=FactReader.LLM, text=block.source_id, evidence=block_evidence(page, block.source_id)))
+    records = tuple(notes.evidence)
+    tally = notes.add_tally(Tally(requirement_id="r", key="Ada", records=records))
+    notes.add_tally(Tally(requirement_id="other", key="Unrelated scope", records=records[:1]))
+    if complete:
+        notes.complete_tallies("r")
+    answer = assemble_answer(
+        (Claim(text="Ada has 2 open records", evidence_ids=(fact_id(tally),)),), notes, (requirement,)
+    )
+
+    context = _output_context(answer, notes)
+
+    assert context is not None
+    assert context.model_dump()["claims"][0]["counted_records"] == (
+        {"scope": requirement.text, "group": "Ada", "count": 2, "complete": complete, "record_indices": (0, 1)},
+    )
+    assert [source.quote for source in context.claims[0].cited_sources] == [
+        "Record A - Ada - open",
+        "Record B - Ada - open",
+    ]
 
 
 async def test_atomic_outputs_reject_an_empty_answer_instead_of_skipping_the_check() -> None:
