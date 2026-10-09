@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Answer identity checks emit each literal identifying quote once and reference it across fields.
+  Repeated names no longer consume output tokens for every requested value; citation and subject checks remain.
+
 - Answer audits consider conflicting current quotes from the same source address and frame, including
   uncited notes. Conflicting values must be acknowledged rather than presented as one settled value;
   those other quotes cannot replace a claim's own citation support.

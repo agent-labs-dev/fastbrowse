@@ -475,11 +475,18 @@ class _OutputIdentities(Frozen):
     bindings: dict[str, _IdentityScope]
 
 
+class _IdentityReferenceScope(Frozen):
+    scope: Literal["entities", "subjectless", "unresolved"]
+    identity_ids: tuple[str, ...] = ()
+
+
 def _identity_schema(keys: Iterable[str]) -> type[BaseModel]:
     # An open dictionary permits an empty response even when every requested subject needs a binding.
-    fields: dict[str, Any] = {key: (_IdentityScope, ...) for key in keys}
+    fields: dict[str, Any] = {key: (_IdentityReferenceScope, ...) for key in keys}
     bindings = create_model("_RequiredBindings", __base__=Frozen, **fields)
-    return create_model("_OutputIdentities", __base__=Frozen, bindings=(bindings, ...))
+    return create_model(
+        "_OutputIdentities", __base__=Frozen, identities=(dict[str, _QuotedIdentity], ...), bindings=(bindings, ...)
+    )
 
 
 def _assessment_schema(key: str) -> type[BaseModel]:
@@ -624,7 +631,10 @@ async def check_answer_outputs(
                     "Comparisons can require several subjects. Use scope subjectless only for a criterion "
                     "with no individual entity identity to establish, such as answer format or an aggregate "
                     "zero-record result. Missing identity evidence is scope unresolved, never subjectless. "
-                    "Do not change requested entities or omit subjects."
+                    "Do not change requested entities or omit subjects. Copy each distinct source_ref and literal "
+                    "identifying quote once into identities, keyed by a short id. Bind each criterion to every "
+                    "required subject through identity_ids. Scope entities requires at least one valid id; "
+                    "subjectless and unresolved have no ids."
                 ),
             ),
             Message(
@@ -655,7 +665,17 @@ async def check_answer_outputs(
             )
             if ledger is not None:
                 ledger.record(generated.cost)
-            resolved = _OutputIdentities.model_validate(generated.data.model_dump())
+            payload = generated.data.model_dump()
+            shared = {key: _QuotedIdentity.model_validate(value) for key, value in payload["identities"].items()}
+            scopes = {}
+            for key, value in payload["bindings"].items():
+                refs = value["identity_ids"]
+                if any(ref not in shared for ref in refs):
+                    return reject((uncertain[key],))
+                scopes[key] = _IdentityScope(
+                    scope=value["scope"], identities=tuple(dict.fromkeys(shared[ref] for ref in refs))
+                )
+            resolved = _OutputIdentities(bindings=scopes)
             if audit_cache is not None:
                 audit_cache[fingerprint] = resolved
         for key, criterion in uncertain.items():
