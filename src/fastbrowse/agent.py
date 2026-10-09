@@ -3817,6 +3817,11 @@ def _without_failed_links(state: _RunState, observation: Observation) -> Observa
     )
 
 
+def _pager_query(pairs: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
+    # A server can use the first repeated value, so only unique keys may be reordered.
+    return tuple(sorted(pairs)) if len({key for key, _ in pairs}) == len(pairs) else tuple(pairs)
+
+
 def _numbered_next_page(current: str, target: str, label: str) -> bool:
     here, there = urlsplit(current), urlsplit(target)
     if here.path != there.path or not label.strip().isdigit():
@@ -3835,8 +3840,8 @@ def _numbered_next_page(current: str, target: str, label: str) -> bool:
         if (
             following == previous + 1
             and displayed == following
-            and sorted(pair for pair in before if pair[0] != parameter)
-            == sorted(pair for pair in after if pair[0] != parameter)
+            and _pager_query([pair for pair in before if pair[0] != parameter])
+            == _pager_query([pair for pair in after if pair[0] != parameter])
         ):
             return True
     return False
@@ -3849,7 +3854,8 @@ def next_page_control(observation: Observation) -> Control | None:
     it again would count them twice. A pager drawn above and below the list is one control for this purpose.
     """
     here = urlsplit(observation.url)
-    found: dict[str, Control] = {}
+    found: dict[tuple[str, str, tuple[tuple[str, str], ...]], Control] = {}
+    current_query = _pager_query(parse_qsl(here.query, keep_blank_values=True))
     for control in observation.controls:
         if control.role != "link" or Operation.CLICK not in control.operations or control.href is None:
             continue
@@ -3862,9 +3868,10 @@ def next_page_control(observation: Observation) -> Control | None:
         # A numbered pager may omit Next; only an observed consecutive page with the same filters qualifies.
         if not pager_link(control) and not _numbered_next_page(observation.url, target.geturl(), control.label):
             continue
-        if (target.path, target.query) == (here.path, here.query):
+        query = _pager_query(parse_qsl(target.query, keep_blank_values=True))
+        if (target.path, query) == (here.path, current_query):
             continue
-        found.setdefault(target._replace(fragment="").geturl(), control)
+        found.setdefault((origin_of(target.geturl()), target.path, query), control)
     return next(iter(found.values())) if len(found) == 1 else None
 
 

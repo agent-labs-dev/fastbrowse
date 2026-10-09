@@ -6215,3 +6215,28 @@ async def test_startup_discard_cancels_every_call_before_joining_cleanup() -> No
         released.set()
         await discard
     assert head.planning.cancelled() and head.proposing is not None and head.proposing.cancelled()
+
+
+async def test_next_page_deduplicates_reordered_unique_query_pairs() -> None:
+    controls = (
+        _link("next", "Next", "/list?page=3&sort=weight"),
+        _link("number", "3", "/list?sort=weight&page=3"),
+    )
+    found = agent_module.next_page_control(_at("https://example.test/list?page=2&sort=weight", *controls))
+    assert found is not None and found.id == "next"
+
+
+async def test_numeric_next_page_preserves_repeated_filter_value_order() -> None:
+    page = _at(
+        "https://example.test/list?page=2&filter=first&filter=last",
+        _link("next", "3", "/list?page=3&filter=last&filter=first"),
+    )
+    assert agent_module.next_page_control(page) is None
+
+
+async def test_next_page_keeps_reordered_repeated_parameters_ambiguous() -> None:
+    controls = (
+        _link("next", "Next", "/list?page=3&filter=first&filter=last"),
+        _link("other", "Next", "/list?page=3&filter=last&filter=first"),
+    )
+    assert agent_module.next_page_control(_at("https://example.test/list?page=2", *controls)) is None
