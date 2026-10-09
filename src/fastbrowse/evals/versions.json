@@ -128,8 +128,8 @@
     "version": 5
   },
   "mock-infinite-scroll": {
-    "fingerprint": "5fe4b8451de56ebf",
-    "version": 5
+    "version": 6,
+    "fingerprint": "4f6827e6186142db"
   },
   "mock-invoice-export": {
     "fingerprint": "830ba1f72eb5f8e4",

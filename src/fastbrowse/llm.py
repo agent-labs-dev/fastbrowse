@@ -46,5 +46,8 @@ class LLMClient(Protocol):
 
         The client reserves against `ledger` once per HTTP request it makes, because only it knows
         how many a repair or a re-ask costs; a caller that reserved instead would undercount them.
+        Cancellation must stop owned requests, record their settled or unknown charges, and propagate
+        `CancelledError`. Clients and their transports must finish cancellation cleanup; the run joins
+        them before returning so no paid request outlives its cost result.
         """
         ...

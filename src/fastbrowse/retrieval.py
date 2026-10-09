@@ -286,6 +286,10 @@ class _Cite(Frozen):
     """The last source block it reads: the same label for one block, a later one for a run of blocks."""
 
 
+class _ListOrder(Frozen):
+    confirmed: bool
+
+
 class _ReadClaim(Frozen):
     # Keys are written in schema order: what the claim rests on comes before what it concludes.
     cite: _Cite | None = Field(
@@ -318,7 +322,8 @@ class _ReadClaim(Frozen):
             "For a superlative the page itself settles: the source blocks where the page states how the list is "
             "ordered or filtered, by the very quantity being compared (a sort control reading 'price, low to "
             "high', a heading naming the filter in force). Only when the page says it; never inferred from the "
-            "order the records happen to appear in. With this, the leading record answers even though the list "
+            "order the records happen to appear in. Offered sorting links are not an active sorting state. "
+            "With this, the leading record answers even though the list "
             "goes on, so it settles only a claim that cites that record and draws on nothing."
         ),
     )
@@ -420,33 +425,22 @@ def _remember(
         # A table excerpt can select an attribute row without the preceding cells identifying its columns.
         if block.kind is BlockKind.TABLE:
             start = evidence.start
+        if (
+            claim.cite is not None
+            and claim.cite.first != claim.cite.last
+            and (start, end) != (evidence.start, evidence.end)
+        ):
+            # Narrowing a total to its value can discard the subjects in the reader's selected blocks.
+            context = _quoted(evidence)
+            notes.add(context)
+            basis.append(fact_id(context))
         evidence = _evidence(capture, block, start, end)
     # A derived claim cites nothing and rests on its basis; one that cites blocks must cite them correctly.
     if evidence is None and (claim.cite is not None or not basis):
         logger.debug("read rejected claim cite=%s basis=%d", reprlib.repr(claim.cite), len(basis))
         return None
     if evidence is not None:
-        for heading in evidence.heading_path:
-            block = next(
-                (
-                    block
-                    for block in reversed(capture.blocks)
-                    if block.kind is BlockKind.HEADING
-                    and block.frame_id == evidence.frame_id
-                    and block.start + len(heading) <= evidence.start
-                    and block.start + len(heading) <= block.end
-                    and capture.text[block.start : block.start + len(heading)] == heading
-                ),
-                None,
-            )
-            if block is None:
-                continue
-            # Readers see heading values as context; cite their captured spans before those values reach the answer.
-            context = Fact(
-                text=heading,
-                evidence=_evidence(capture, block, block.start, block.start + len(heading)),
-                reader=FactReader.LLM,
-            )
+        for context in _heading_facts(capture, evidence, FactReader.LLM):
             notes.add(context)
             key = fact_id(context)
             if key not in basis:
@@ -473,6 +467,33 @@ def _remember(
     )
     notes.add(fact)
     return fact
+
+
+def _heading_facts(capture: Capture, evidence: Evidence, reader: FactReader) -> tuple[Fact, ...]:
+    # A scalar quote can omit its subject, so both readers retain the headings that actually scoped it.
+    facts = []
+    for heading in evidence.heading_path:
+        block = next(
+            (
+                block
+                for block in reversed(capture.blocks)
+                if block.kind is BlockKind.HEADING
+                and block.frame_id == evidence.frame_id
+                and block.start + len(heading) <= evidence.start
+                and block.start + len(heading) <= block.end
+                and capture.text[block.start : block.start + len(heading)] == heading
+            ),
+            None,
+        )
+        if block is not None:
+            facts.append(
+                Fact(
+                    text=heading,
+                    evidence=_evidence(capture, block, block.start, block.start + len(heading)),
+                    reader=reader,
+                )
+            )
+    return tuple(facts)
 
 
 def _quoted_count(fact: Fact, notes: Notes, records: Mapping[str, Fact], capture: Capture) -> bool:
@@ -621,6 +642,10 @@ class _ReadResponse(Frozen):
 
 class _RecordSet(Frozen):
     requirement_id: str
+    comparison: NumericComparison | None = Field(
+        default=None, description=_Continuation.model_fields["comparison"].description
+    )
+    through_end: bool = Field(default=False, description=_Continuation.model_fields["through_end"].description)
     tallies: tuple[_TallyGroup, ...] = Field(
         default=(),
         description="For every count of matching records, including filtered counts, or ranking by count. "
@@ -637,6 +662,13 @@ class _RecordSet(Frozen):
 class _RecordsResponse(Frozen):
     continues: tuple[_RecordSet, ...]
     context: tuple[_Cite, ...] = ()
+    requested_scope_complete: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Requirement ids whose requested bounded page scope is complete, even if another pager remains. "
+            "Do not use for physical list exhaustion."
+        ),
+    )
     ended: tuple[str, ...] = Field(
         default=(),
         description="Requirement ids whose requested list this capture shows reaching its end. Empty for a "
@@ -677,6 +709,7 @@ class ReadOutcome(Frozen):
     through_end: tuple[str, ...] = ()
     continuation_records: dict[str, tuple[str, ...]] = Field(default_factory=dict)
     ended: tuple[str, ...] = ()
+    requested_scope_complete: tuple[str, ...] = ()
     tally_readers: tuple[TallyReader, ...] = ()
     comparisons: dict[str, NumericComparison] = Field(default_factory=dict)
 
@@ -801,6 +834,7 @@ async def read(
     records_only: bool = False,
     require_all_evidence: bool = False,
     revalidate: bool = False,
+    _skip_order_shortcuts: Collection[str] = (),
 ) -> ReadOutcome:
     """`notice` is what the caller knows about the page that its text does not say, such as its next-page control;
     it goes with every question the reader is asked, however the question is narrowed. `continuing` names the
@@ -812,10 +846,12 @@ async def read(
     costs: list[CostLine] = []
     continues: dict[str, None] = {}
     lost: dict[str, None] = {}
+    requested_scope_complete: tuple[str, ...] = ()
     found: list[Fact] = []
     rejected = 0
     uncovered = 0
     ordered: set[str] = set()
+    unconfirmed_orders: set[str] = set()
     stated_counts: set[tuple[str, str]] = set()
     expands: str | None = None
     tally_complete: set[str] = set()
@@ -993,7 +1029,9 @@ async def read(
                     "continuation's records empty. Omit records excluded by the task's "
                     "filters, but never select only the page's winners. Earlier pages are being read separately. "
                     "Use context for source block ranges needed to interpret these records, such as filters "
-                    f"or table headers. Do not conclude comparisons.\n\n# Trust\n{UNTRUSTED}"
+                    "or table headers. If the task asks for a bounded page scope and this capture completes that "
+                    "scope, list its requirement id in requested_scope_complete even when another pager remains. "
+                    f"Do not conclude comparisons.\n\n# Trust\n{UNTRUSTED}"
                 ),
             )
         room = _notes_room(tokens, messages, _RecordsResponse if records_only else _ReadResponse)
@@ -1011,6 +1049,9 @@ async def read(
                 ledger=ledger,
             )
             ended = tuple(key for key in collected.data.ended if key in requirement_ids)
+            requested_scope_complete = tuple(
+                key for key in collected.data.requested_scope_complete if key in requirement_ids
+            )
             context: list[_ReadClaim] = []
             for cite in collected.data.context:
                 evidence = _cited(capture, part, cite)
@@ -1026,7 +1067,13 @@ async def read(
                     claims=tuple(context),
                     answered=False,
                     continues=tuple(
-                        _Continuation(requirement_id=c.requirement_id, records=c.records, tallies=c.tallies)
+                        _Continuation(
+                            requirement_id=c.requirement_id,
+                            comparison=c.comparison,
+                            records=c.records,
+                            tallies=c.tallies,
+                            through_end=c.through_end,
+                        )
                         for c in collected.data.continues
                     ),
                 ),
@@ -1233,18 +1280,57 @@ async def read(
             # that statement is kept as a fact so the claim rests on it and the claim check can judge it. Only a
             # claim resting on that one record qualifies: a count or total draws on every record it counts, and
             # the part of a list one page shows does not settle it however the site sorts it.
-            if requirement_id is not None and claim.orders_list is not None and not claim.draws_on:
+            if (
+                requirement_id is not None
+                and requirement_id not in _skip_order_shortcuts
+                and claim.orders_list is not None
+                and not claim.draws_on
+            ):
                 ordering = _cited(capture, part, claim.orders_list)
-                if ordering is None:
-                    # The reader cites the order instead of saying the list goes on, so an order that resolves to
-                    # no block leaves the leading row settling "cheapest" on nothing the page said.
+                confirmed = False
+                if ordering is not None:
+                    # Offering a sort link does not establish which order is active on the current list.
+                    assessed = await llm.generate(
+                        LLMPurpose.READ,
+                        [
+                            Message(
+                                role="system",
+                                content=f"{UNTRUSTED} Confirm only when the quoted source explicitly states the "
+                                "current list is ordered or filtered by the quantity and direction needed for "
+                                "the requested superlative. Available sort options, navigation links, a URL and "
+                                "the reader's assertion do not establish active ordering. Do not infer sorting "
+                                "from the order of the shown records. Return false when uncertain.",
+                            ),
+                            Message(role="user", content=json.dumps({"question": question, "quote": ordering.quote})),
+                        ],
+                        _ListOrder,
+                        max_output_tokens=tokens.read_output_tokens,
+                        ledger=ledger,
+                    )
+                    if ledger is not None:
+                        ledger.record(assessed.cost)
+                    costs.append(assessed.cost)
+                    confirmed = assessed.data.confirmed
+                if not confirmed:
+                    unconfirmed_orders.add(requirement_id)
                     requirement_id = None
                 else:
+                    assert ordering is not None
                     stated = _quoted(ordering)
                     so_far.add(stated)
                     found.append(stated)
                     fact = fact.model_copy(update={"basis": (*fact.basis, fact_id(stated))})
                     ordered.add(requirement_id)
+            if (
+                requirement_id is not None
+                and (requirement_id in continuing or so_far.comparison_records(requirement_id))
+                and notice
+                and requirement_id not in ordered
+                and requirement_id not in _skip_order_shortcuts
+            ):
+                # A reader can omit orders_list while still claiming a winner on a continuing list.
+                unconfirmed_orders.add(requirement_id)
+                requirement_id = None
             found.append(fact.model_copy(update={"requirement_id": requirement_id}))
             accepted += 1
         # The records a continuing page compared, kept as facts so a later page's winner can show what it beat.
@@ -1316,7 +1402,7 @@ async def read(
         facts[(fact_id(fact), fact.requirement_id)] = fact
     for requirement_id in tally_complete - continues.keys() - blocked:
         notes.complete_tallies(requirement_id)
-    return ReadOutcome(
+    outcome = ReadOutcome(
         facts=tuple(facts.values()),
         coverage=tuple(coverage),
         rejected_claims=rejected,
@@ -1328,9 +1414,110 @@ async def read(
         through_end=tuple(key for key in through_end if key in continues),
         continuation_records={key: tuple(dict.fromkeys(records)) for key, records in continuation_records.items()},
         ended=tuple(key for key in ended if key not in lost),
+        requested_scope_complete=tuple(key for key in requested_scope_complete if key not in lost),
         tally_readers=tuple(reader for reader in tally_readers if reader.requirement_id not in lost),
         comparisons={key: value for key, value in comparisons.items() if key not in lost},
     )
+    unconfirmed_orders.difference_update(ordered)
+    if unconfirmed_orders:
+        # A rejected sorting shortcut has uncollected records, not permanently missing records.
+        collected = await read(
+            llm,
+            capture,
+            question,
+            sorted(unconfirmed_orders),
+            notes,
+            max_chars=min(max_chars, _READ_CHUNK_CHARS),
+            tokens=tokens,
+            ledger=ledger,
+            requirements=tuple(r for r in requirements if r.id in unconfirmed_orders),
+            records_only=True,
+        )
+        scope_ids = tuple(
+            key
+            for key in collected.requested_scope_complete
+            if key in unconfirmed_orders and key not in collected.incomplete
+        )
+        scoped = (
+            await read(
+                llm,
+                capture,
+                question,
+                scope_ids,
+                notes,
+                max_chars=min(max_chars, _READ_CHUNK_CHARS),
+                tokens=tokens,
+                ledger=ledger,
+                requirements=tuple(r for r in requirements if r.id in scope_ids),
+                require_all_evidence=True,
+                _skip_order_shortcuts=scope_ids,
+            )
+            if scope_ids
+            else None
+        )
+        outcome = outcome.model_copy(
+            update={
+                "facts": (*outcome.facts, *collected.facts, *(scoped.facts if scoped else ())),
+                "cost_lines": (*outcome.cost_lines, *collected.cost_lines, *(scoped.cost_lines if scoped else ())),
+                "coverage": tuple(dict.fromkeys((*outcome.coverage, *collected.coverage))),
+                "rejected_claims": outcome.rejected_claims
+                + collected.rejected_claims
+                + (scoped.rejected_claims if scoped else 0),
+                "through_end": tuple(
+                    dict.fromkeys(
+                        (
+                            *outcome.through_end,
+                            *collected.through_end,
+                            *(scoped.through_end if scoped else ()),
+                        )
+                    )
+                ),
+                "tally_readers": (
+                    *outcome.tally_readers,
+                    *collected.tally_readers,
+                    *(scoped.tally_readers if scoped else ()),
+                ),
+                "comparisons": {
+                    **outcome.comparisons,
+                    **collected.comparisons,
+                    **(scoped.comparisons if scoped else {}),
+                },
+                "continues": tuple(
+                    dict.fromkeys(
+                        key
+                        for key in (*outcome.continues, *collected.continues, *(scoped.continues if scoped else ()))
+                        if not (scoped is not None and key in scope_ids and key not in (scoped.continues))
+                    )
+                ),
+                "incomplete": tuple(
+                    dict.fromkeys(
+                        (
+                            *[key for key in outcome.incomplete if key not in unconfirmed_orders],
+                            *collected.incomplete,
+                            *(scoped.incomplete if scoped else ()),
+                        )
+                    )
+                ),
+                "uncovered": outcome.uncovered + collected.uncovered + (scoped.uncovered if scoped else 0),
+                "expands": (scoped.expands if scoped else None) or collected.expands or outcome.expands,
+                "continuation_records": {
+                    **outcome.continuation_records,
+                    **collected.continuation_records,
+                    **(scoped.continuation_records if scoped else {}),
+                },
+                "ended": tuple(dict.fromkeys((*outcome.ended, *collected.ended, *(scoped.ended if scoped else ())))),
+                "requested_scope_complete": tuple(
+                    dict.fromkeys(
+                        (
+                            *outcome.requested_scope_complete,
+                            *collected.requested_scope_complete,
+                            *(scoped.requested_scope_complete if scoped else ()),
+                        )
+                    )
+                ),
+            }
+        )
+    return outcome
 
 
 type ScalarValue = str | int | float | Decimal | date | bool
@@ -1699,14 +1886,10 @@ async def propose_text_fields_from_notes(
     tokens: TokenBudget = _DEFAULT_TOKENS,
     ledger: Ledger | None = None,
 ) -> dict[str, tuple[str, Evidence]]:
-    """Text fields from what the run read, which spans every page it compared rather than the one it ended on.
+    """Read text fields from the compared pages rather than only the page the run ended on.
 
-    A comparison ends on one of the pages it compared: pypi-newer answered "requests" correctly three runs in
-    three and returned no data, because it ended on httpx's results, and taken from that page the field came
-    back "httpx". A value is kept only when the note it cites quotes it, up to its punctuation's shape, or when
-    it is a name the task itself gives: a choice between the task's own entities ("httpx or requests"), made on a
-    cited note whose quote is a date, invents nothing. Cited on the derived comparison itself, which quotes
-    nothing, such a name is evidenced by the record the comparison read for it.
+    A derived selection quotes nothing itself, so resolve it to its current quoted basis. A literal value
+    needs one unambiguous record context; a name the task supplies can use the record compared for that name.
     """
     if not notes.facts:
         return {}
@@ -1716,7 +1899,8 @@ async def propose_text_fields_from_notes(
             role="system",
             content=(
                 "# Field extraction\nFor each requested field, give only that field's value, as source_id the "
-                "[id] of the note whose quote contains it. A field that picks one of the "
+                "[id] of the note whose quote contains it. Derived conclusions choose records but do not "
+                "supply quotes: cite an original quoted basis note. A field that picks one of the "
                 "things the task names (which is newer, cheaper, larger) takes that name as the task writes "
                 "it, citing the note that decides it. Omit any other field no note's quote contains; never "
                 "infer it.\n\n"
@@ -1743,8 +1927,8 @@ async def propose_text_fields_from_notes(
     for proposal in result.data.fields:
         value = " ".join(proposal.value.split())
         evidence = cited.get(proposal.source_id)
-        if evidence is None and notes.derived(proposal.source_id) and _names(task, value):
-            evidence = _compared(notes, proposal.source_id, value)
+        if evidence is None and notes.derived(proposal.source_id) and notes.current(proposal.source_id):
+            evidence = _compared(notes, proposal.source_id, value, cited, given=bool(_names(task, value)))
         if proposal.field not in fields or proposal.field in found or not value or evidence is None:
             continue
         if written := _found(evidence.quote, value) or _names(task, value):
@@ -1752,12 +1936,19 @@ async def propose_text_fields_from_notes(
     return found
 
 
-def _compared(notes: Notes, key: str, name: str) -> Evidence | None:
-    """The evidence for a name a derived conclusion picks, which quotes nothing itself: the record it compared that
-    was read for that name. A record read for another name does not evidence this one."""
+def _compared(notes: Notes, key: str, name: str, current: Mapping[str, Evidence], *, given: bool) -> Evidence | None:
+    """A derived field must resolve to its current quoted basis, not to the conclusion's prose."""
     facts = {fact_id(fact): fact for fact in notes.facts}
-    records = (facts[k] for k in notes.expand_evidence_ids((key,)) if k in facts)
-    return next((fact.evidence for fact in records if fact.evidence is not None and _names(fact.text, name)), None)
+    records = [(facts[k], current[k]) for k in notes.expand_evidence_ids((key,)) if k in facts and k in current]
+    matches = [(fact, evidence) for fact, evidence in records if _found(evidence.quote, name)]
+    if not matches and given:
+        matches = [(fact, evidence) for fact, evidence in records if _names(fact.text, name)]
+    # Repeated captures of an unchanged quote agree; distinct record contexts must not inherit each other's field.
+    unique = {
+        (evidence.url, evidence.frame_id, evidence.source_id, evidence.start, evidence.end, evidence.quote): evidence
+        for _, evidence in matches
+    }
+    return next(iter(unique.values())) if len(unique) == 1 else None
 
 
 def _names(task: str, value: str) -> str | None:
@@ -2075,7 +2266,12 @@ async def _read_choices(
             if len(group) > 1
             else ()
         )
-        facts.extend(context)
+        headings = tuple(
+            heading
+            for candidate in group
+            for heading in _heading_facts(capture, candidate.evidence, FactReader.JEV_CHOICE)
+        )
+        facts.extend((*context, *headings))
         logger.debug("read reader=jev_choice requirement=%s reason=scalar_candidate", requirement.id)
         # The candidate's evidence was cut from this capture by code, so it is kept as selected, not re-found.
         # The text is the value alone: the draft answer states a fact's text, and prefixed with the requirement it
@@ -2085,7 +2281,7 @@ async def _read_choices(
                 requirement_id=requirement.id,
                 text=str(selected.value),
                 evidence=None if context else selected.evidence,
-                basis=tuple(fact_id(fact) for fact in context),
+                basis=tuple(dict.fromkeys(fact_id(fact) for fact in (*context, *headings))),
                 reader=FactReader.JEV_CHOICE,
             )
         )
@@ -2404,19 +2600,29 @@ def claim_check_questions(
     # A counted record is shown as its tally's line: code checked each quote against the group when it was read and
     # counted them, and a ranking citing every record put a hundred quotes into each of its questions.
     compared = set(notes.comparison_records())
-    counted = {
-        record: fact.text
-        for fact in notes.facts
-        if fact.tally is not None
-        for record in fact.basis
-        if record not in compared
-    }
+    requirements = {requirement.id: requirement.text for requirement in composed.requirements}
     for index, claim in enumerate(composed.claims):
+        expanded = notes.expand_evidence_ids(claim.evidence_ids)
+        counted: dict[str, list[str]] = {}
+        for fact in notes.facts:
+            if fact.tally is None or fact_id(fact) not in expanded:
+                continue
+            metadata = f"TALLY: {json.dumps(fact.text, ensure_ascii=False)} " + json.dumps(
+                {
+                    "requirement": requirements.get(fact.tally.requirement_id),
+                    "count": fact.tally.count,
+                    "complete": fact.tally.requirement_id in notes.fact_requirements(fact_id(fact)),
+                },
+                ensure_ascii=False,
+            )
+            for record in fact.basis:
+                if record not in compared:
+                    counted.setdefault(record, []).append(metadata)
         # A derived fact is judged from the records it expands to, never from the reader's own conclusion.
-        keys = [key for key in notes.expand_evidence_ids(claim.evidence_ids) if not notes.derived(key)]
+        keys = [key for key in expanded if not notes.derived(key)]
         evidence = "\n".join(
             dict.fromkeys(
-                f"TALLY: {json.dumps(counted[key], ensure_ascii=False)}"
+                "\n".join(dict.fromkeys(counted[key]))
                 if key in counted
                 else known[key].model_dump_json()
                 if key in known

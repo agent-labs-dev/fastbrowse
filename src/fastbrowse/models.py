@@ -329,6 +329,7 @@ class Limits(Frozen):
     """Bounds Jev and LLM spend as it happens. A cloud browser bills when it stops, after the run, so its
     cost is reported in the result but cannot stop the run that incurred it."""
     max_seconds: float | None = Field(default=None, gt=0)
+    """Stops active work at the time budget. Returning also waits for owned request and browser cleanup."""
 
 
 class Authorization(Frozen):

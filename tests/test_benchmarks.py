@@ -87,6 +87,63 @@ def test_official_suite_can_publish_without_new_comparator_runs(candidate):
     check_catalog(Candidate.model_validate(candidate), CATALOG)
 
 
+def test_internal_fastbrowse_group_covers_the_full_catalog_without_comparators(candidate):
+    raw = CATALOG.read_bytes()
+    catalog = json.loads(raw)
+    tasks = [task for suite in catalog["suites"].values() for task in suite]
+    ids = sorted(task["id"] for task in tasks if "fastbrowse" in task["arms"])
+    group = {
+        "id": "internal-fastbrowse",
+        "agent_sha": "a" * 40,
+        "runner_sha": "b" * 40,
+        "metric": "task-success",
+        "source_sha256": hashlib.sha256(raw).hexdigest(),
+        "task_ids": ids,
+        "repeats": 3,
+        "limits": ["Matched recorded limits"],
+        "rows": [
+            {
+                "task": task,
+                "repeat": repeat,
+                "arm": "fastbrowse",
+                "status": "complete",
+                "completed": True,
+                "score": 1.0,
+                "seconds": 10.0,
+                "dollars": 0.01,
+                "physical_runs": 1,
+            }
+            for task in ids
+            for repeat in range(3)
+        ],
+    }
+    candidate.update(schema_version=3, groups=[group])
+    check_catalog(Candidate.model_validate(candidate), CATALOG)
+    candidate["schema_version"] = 2
+    with pytest.raises(ValidationError, match="four original"):
+        Candidate.model_validate(candidate)
+
+
+def test_internal_fastbrowse_group_rejects_a_missing_catalog_slot(candidate):
+    raw = CATALOG.read_bytes()
+    catalog = json.loads(raw)
+    ids = sorted(task["id"] for suite in catalog["suites"].values() for task in suite if "fastbrowse" in task["arms"])
+    group = {
+        "id": "internal-fastbrowse",
+        "agent_sha": "a" * 40,
+        "runner_sha": "b" * 40,
+        "metric": "task-success",
+        "source_sha256": hashlib.sha256(raw).hexdigest(),
+        "task_ids": ids[:-1],
+        "repeats": 3,
+        "limits": ["Matched recorded limits"],
+        "rows": [],
+    }
+    candidate.update(schema_version=3, groups=[group])
+    with pytest.raises(ValidationError):
+        Candidate.model_validate(candidate)
+
+
 def test_legacy_schema_still_requires_all_four_groups(candidate):
     candidate["groups"] = [candidate["groups"][2]]
     with pytest.raises(ValidationError, match="all four"):

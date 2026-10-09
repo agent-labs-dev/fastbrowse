@@ -5562,6 +5562,14 @@ async def test_final_frame_deadline_cancels_a_hung_page_check(monkeypatch: pytes
     page.screenshot.assert_not_awaited()
 
 
+class RequestedAuditLLM(ScriptedLLM):
+    async def generate(self, purpose, messages, schema, **kwargs):
+        if schema.__name__ == "_OutputAssessment":
+            criteria = json.loads(messages[-1].content)["criteria"]
+            self.responses.append({"judgments": {key: "yes" for key in criteria}, "reason": "Both fields are quoted."})
+        return await super().generate(purpose, messages, schema, **kwargs)
+
+
 @pytest.mark.parametrize("missing", [True, False])
 async def test_final_answer_checks_each_output_without_notes_filling_a_missing_field(missing: bool) -> None:
     from fastbrowse.retrieval import Claim, assemble_answer
@@ -5612,21 +5620,7 @@ async def test_final_answer_checks_each_output_without_notes_filling_a_missing_f
     agent = Agent(
         Mock(spec=Page),
         Jev({}),
-        ScriptedLLM(
-            [
-                {
-                    "judgments": {
-                        "output_0": "yes",
-                        "output_1": "yes",
-                        "output_2": "yes",
-                        "claim_only_0": "yes",
-                        "claim_only_1": "yes",
-                    },
-                    "reason": "Both fields are quoted.",
-                }
-            ]
-            * 8
-        ),
+        RequestedAuditLLM([]),
     )
     held = await agent._holds(state, composed)
     assert (held is None) is missing
@@ -5653,22 +5647,8 @@ async def test_missing_answer_output_recovers_evidence_then_completes() -> None:
         evidence=evidence(start=5, end=8).model_copy(update={"quote": "9am"}),
     )
     state.notes.add(price)
-    llm = ScriptedLLM(
-        [{"claims": [{"text": price.text, "evidence_ids": [fact_id(price)]}]}]
-        + [
-            {
-                "judgments": {
-                    "output_0": "yes",
-                    "output_1": "yes",
-                    "output_2": "yes",
-                    "claim_only_0": "yes",
-                    "claim_only_1": "yes",
-                },
-                "reason": "Both fields are quoted.",
-            }
-        ]
-        * 8
-    )
+    llm = RequestedAuditLLM([{"claims": [{"text": price.text, "evidence_ids": [fact_id(price)]}]}])
+
     plan = state.ready_plan
     agent, _ = await _finishing(state, llm, noul=0.0)
     state.ready_plan = plan
@@ -5961,3 +5941,314 @@ async def test_rewritten_atomic_draft_does_not_pay_for_discarded_output_audits(m
     agent._conclude = AsyncMock(return_value=expected)
     assert await agent._finish(state, None, None) == expected
     agent._holds.assert_not_awaited()
+
+
+async def test_shortcut_wait_expiry_keeps_dispatched_request_owned_and_billed(monkeypatch) -> None:
+    start = "https://catalog.test/"
+    page = Mock(spec=Page)
+    page.navigate = AsyncMock()
+    released = asyncio.Event()
+
+    class DeferredLLM(ScriptedLLM):
+        async def generate(self, purpose, messages, schema, **kwargs):
+            await released.wait()
+            return await super().generate(purpose, messages, schema, **kwargs)
+
+    llm = DeferredLLM([{"url": start}])
+    ledger = Ledger(Limits(max_dollars=1))
+    proposing = asyncio.create_task(agent_module._propose(llm, "Read the catalogue", start, ledger))
+    monkeypatch.setattr(agent_module, "_SHORTCUT_WAIT_SECONDS", 0.001)
+    try:
+        history, invented = await Agent(page, ScriptedJev({}), llm)._open(
+            "Read the catalogue", start, ledger, proposing
+        )
+        assert not history and not invented
+        page.navigate.assert_awaited_once_with(start)
+        assert not proposing.done()
+        released.set()
+        await proposing
+        ledger.check()
+        assert len(ledger.lines) == 1 and not ledger.breakdown().has_unknown
+    finally:
+        await agent_module._discard(proposing)
+
+
+@pytest.mark.parametrize("max_dollars", [None, 0.0005])
+async def test_chosen_start_owns_shortcut_after_bounded_navigation_wait(monkeypatch, max_dollars) -> None:
+    start = "https://catalog.test/"
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    page.navigate = AsyncMock()
+    released = asyncio.Event()
+
+    class DeferredLLM(ScriptedLLM):
+        async def generate(self, purpose, messages, schema, **kwargs):
+            await released.wait()
+            return await super().generate(purpose, messages, schema, **kwargs)
+
+    llm = DeferredLLM([{"url": start}])
+    head = HeadStart.begin(llm, "Read the catalogue", limits=Limits(max_dollars=max_dollars))
+    agent = Agent(page, ScriptedJev({}), llm)
+    agent._first_page = AsyncMock(return_value=start)
+    agent._front_page_if_blank = AsyncMock()
+    agent._ending_frame = AsyncMock(side_effect=lambda result: result)
+    monkeypatch.setattr(agent_module, "_SHORTCUT_WAIT_SECONDS", 0.001)
+    quoted = evidence()
+    cited = Citation(id=1, text=quoted.quote, url=quoted.url, quote=quoted.quote, deep_link=quoted.url)
+
+    async def finish(state, output_schema, until):
+        page.navigate.assert_awaited_once_with(start)
+        assert head.proposing is not None and not head.proposing.done()
+        head.planning.cancel()
+        released.set()
+        await asyncio.gather(head.proposing, return_exceptions=True)
+        return agent._result(state, head.ledger, Status.COMPLETE).model_copy(
+            update={"answer": "Verified result", "data": {"value": 7}, "evidence": (quoted,), "citations": (cited,)}
+        )
+
+    monkeypatch.setattr(agent, "_loop", finish)
+    result = await asyncio.wait_for(agent.run("Read the catalogue", choose_start=True, head_start=head), 1)
+    assert result.status is (Status.COMPLETE if max_dollars is None else Status.BUDGET_EXCEEDED)
+    assert len(head.ledger.lines) == 1 and not result.cost.has_unknown
+    assert head.proposing is not None and head.proposing.done()
+    assert agent._ending_frame.await_count == (0 if max_dollars is None else 1)
+    assert result.answer == "Verified result" and result.data == {"value": 7}
+    assert result.evidence == (quoted,) and result.citations == (cited,)
+
+
+@pytest.mark.parametrize("parameter", ["page", "pageno", "page_number"])
+async def test_numeric_next_page_preserves_the_current_filters(parameter: str) -> None:
+    controls = (
+        _link("previous", "1", f"/list?{parameter}=1&sort=weight"),
+        _link("next", "3", f"/list?{parameter}=3&sort=weight"),
+        _link("later", "4", f"/list?{parameter}=4&sort=weight"),
+        _link("other_filter", "3", f"/list?{parameter}=3&sort=name"),
+    )
+    found = agent_module.next_page_control(_at(f"https://example.test/list?{parameter}=2&sort=weight", *controls))
+    assert found is not None and found.id == "next"
+
+
+@pytest.mark.parametrize(
+    "current,target,label",
+    [
+        ("/list?page=2", "/list?page=4", "4"),
+        ("/list?page=2", "/list?page=3", "4"),
+        ("/list", "/list?page=3", "3"),
+        ("/list?page=2", "/other?page=3", "3"),
+        ("/list?page=2", "https://other.test/list?page=3", "3"),
+        ("/list?page=2&filter=", "/list?page=3", "3"),
+        ("/list?page=2&page=8", "/list?page=3", "3"),
+        ("/list?page=2", "/list?page=3", "\u00b2"),
+        ("/list?page=" + "9" * 5000, "/list?page=3", "3"),
+    ],
+)
+async def test_numeric_next_page_rejects_ambiguous_or_changed_scope(current: str, target: str, label: str) -> None:
+    assert (
+        agent_module.next_page_control(_at(f"https://example.test{current}", _link("candidate", label, target))) is None
+    )
+
+
+@pytest.mark.parametrize("fragment", ["", "#results"])
+async def test_next_page_deduplicates_absolute_and_relative_destinations(fragment: str) -> None:
+    controls = (
+        _link("next", "Next", "https://example.test/list?page=3&sort=weight" + fragment),
+        _link("number", "3", "/list?page=3&sort=weight"),
+    )
+    found = agent_module.next_page_control(_at("https://example.test/list?page=2&sort=weight", *controls))
+    assert found is not None and found.id == "next"
+
+
+@pytest.mark.parametrize("incomplete", [False, True])
+async def test_read_closes_ended_order_recovery_only_with_complete_records(incomplete: bool) -> None:
+    state = await _reading_state()
+    state.ready_plan = Plan(
+        requirements=(
+            Requirement(
+                id="r1",
+                text="Find the heaviest parcel and its weight",
+                kind=RequirementKind.INFORMATION,
+            ),
+        ),
+        answer_expected=True,
+    )
+    if incomplete:
+        state.incomplete.add("r1")
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "text": "Atlas is heaviest",
+                        "requirement_id": "r1",
+                        "cite": {"first": "s1", "last": "s1"},
+                        "orders_list": {"first": "s0", "last": "s0"},
+                    }
+                ],
+                "answered": True,
+            },
+            {"confirmed": False},
+            {
+                "continues": [
+                    {
+                        "requirement_id": "r1",
+                        "through_end": True,
+                        "comparison": {
+                            "order": "highest",
+                            "limit": 1,
+                            "label": {"prefix": "", "suffix": ": "},
+                            "value": {"prefix": ": ", "suffix": ""},
+                        },
+                        "records": [{"first": "s1", "last": "s1"}, {"first": "s2", "last": "s2"}],
+                    }
+                ],
+                "ended": ["r1"],
+            },
+        ]
+    )
+    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
+    page = capture(
+        (BlockKind.PARAGRAPH, "Sort by weight"), (BlockKind.RECORD, "Atlas: 8"), (BlockKind.RECORD, "Beacon: 5")
+    )
+    await agent._read(state, page, _at(page.url))
+    assert state.notes.evidenced("r1") is (not incomplete)
+    assert state.continuing == ({"r1"} if incomplete else set())
+
+
+async def test_finished_run_waits_for_pending_shortcut_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastbrowse.models import CostLine
+
+    head = HeadStart.begin(
+        ScriptedLLM(
+            [
+                {"requirements": [], "answer_expected": False},
+            ]
+        ),
+        "Check the page",
+    )
+    await head.planning
+    finished = asyncio.Event()
+
+    async def shortcut() -> agent_module.Shortcut:
+        await finished.wait()
+        await asyncio.sleep(0)
+        head.ledger.lines.append(CostLine(component="llm", basis="metered", dollars=0.01, purpose="shortcut"))
+        return agent_module.Shortcut(url=None)
+
+    head.proposing = asyncio.create_task(shortcut())
+    page = Mock(spec=Page)
+    page.artifacts = []
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+
+    async def finish(state, output_schema, until):
+        finished.set()
+        return agent._result(state, head.ledger, Status.COMPLETE)
+
+    monkeypatch.setattr(agent, "_loop", finish)
+    result = await agent.run("Check the page", head_start=head)
+    assert result.status is Status.COMPLETE
+    assert head.proposing.done() and not head.proposing.cancelled()
+    assert any(line.purpose == "shortcut" and line.dollars == 0.01 for line in result.cost.lines)
+
+
+@pytest.mark.parametrize("unknown_cost", [False, True])
+async def test_startup_settlement_obeys_the_remaining_run_deadline(
+    monkeypatch: pytest.MonkeyPatch, unknown_cost: bool
+) -> None:
+    from fastbrowse.models import CostLine
+
+    head = HeadStart.begin(
+        ScriptedLLM([{"requirements": [], "answer_expected": False}]), "Check the page", limits=Limits(max_seconds=0.01)
+    )
+    await head.planning
+
+    async def pending() -> agent_module.Shortcut:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            if unknown_cost:
+                head.ledger.lines.append(CostLine(component="llm", basis="unknown", dollars=None, purpose="shortcut"))
+        return agent_module.Shortcut(url=None)
+
+    head.proposing = asyncio.create_task(pending())
+    page = Mock(spec=Page)
+    page.artifacts = []
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+
+    async def finish(state, output_schema, until):
+        return agent._result(state, head.ledger, Status.COMPLETE)
+
+    monkeypatch.setattr(agent, "_loop", finish)
+    result = await asyncio.wait_for(agent.run("Check the page", head_start=head), 0.2)
+    assert result.status is Status.BUDGET_EXCEEDED
+    assert result.budget is not None and result.budget.resource == "seconds"
+    assert head.proposing.cancelled()
+
+
+async def test_startup_discard_cancels_every_call_before_joining_cleanup() -> None:
+    cleaning, released, proposal_stopped = (asyncio.Event() for _ in range(3))
+
+    async def planning() -> Generation[Plan]:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaning.set()
+            await released.wait()
+        raise AssertionError("Cancelled planning returned")
+
+    async def proposing() -> agent_module.Shortcut:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            proposal_stopped.set()
+        raise AssertionError("Cancelled proposal returned")
+
+    head = HeadStart(
+        Ledger(Limits()), "Check the page", None, asyncio.create_task(planning()), asyncio.create_task(proposing())
+    )
+    await asyncio.sleep(0)
+    discard = asyncio.create_task(head.discard())
+    try:
+        await cleaning.wait()
+        await asyncio.wait_for(proposal_stopped.wait(), 0.1)
+        assert not discard.done()
+    finally:
+        released.set()
+        await discard
+    assert head.planning.cancelled() and head.proposing is not None and head.proposing.cancelled()
+
+
+async def test_next_page_deduplicates_reordered_unique_query_pairs() -> None:
+    controls = (
+        _link("next", "Next", "/list?page=3&sort=weight"),
+        _link("number", "3", "/list?sort=weight&page=3"),
+    )
+    found = agent_module.next_page_control(_at("https://example.test/list?page=2&sort=weight", *controls))
+    assert found is not None and found.id == "next"
+
+
+async def test_numeric_next_page_preserves_repeated_filter_value_order() -> None:
+    page = _at(
+        "https://example.test/list?page=2&filter=first&filter=last",
+        _link("next", "3", "/list?page=3&filter=last&filter=first"),
+    )
+    assert agent_module.next_page_control(page) is None
+
+
+async def test_next_page_keeps_reordered_repeated_parameters_ambiguous() -> None:
+    controls = (
+        _link("next", "Next", "/list?page=3&filter=first&filter=last"),
+        _link("other", "Next", "/list?page=3&filter=last&filter=first"),
+    )
+    assert agent_module.next_page_control(_at("https://example.test/list?page=2", *controls)) is None
+
+
+@pytest.mark.parametrize("parameter", ["page", "pageno", "page_number"])
+async def test_numeric_next_page_accepts_implicit_first_page(parameter: str) -> None:
+    page = _at(
+        "https://example.test/list?sort=weight",
+        _link("next", "2", f"/list?{parameter}=2&sort=weight"),
+        _link("later", "3", f"/list?{parameter}=3&sort=weight"),
+        _link("other", "2", f"/list?{parameter}=2&sort=name"),
+    )
+    found = agent_module.next_page_control(page)
+    assert found is not None and found.id == "next"

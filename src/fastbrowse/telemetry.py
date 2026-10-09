@@ -71,23 +71,27 @@ class Ledger:
                 f"time limit {limits.max_seconds}s reached",
                 budget=BudgetStop(resource="seconds", limit=limits.max_seconds),
             )
-        if limits.max_dollars is not None:
-            spent = self.breakdown()
-            # An unpriced call could have spent anything, so a dollar cap cannot be enforced past it.
-            if spent.has_unknown:
-                raise BudgetExceeded(
-                    f"spend limit ${_dollars(limits.max_dollars)} cannot be enforced: a call reported no cost",
-                    budget=BudgetStop(resource="dollars", limit=limits.max_dollars),
-                )
-            if spent.known_dollars + extra_dollars > limits.max_dollars:
-                raise BudgetExceeded(
-                    f"spend limit ${_dollars(limits.max_dollars)} reached",
-                    budget=BudgetStop(resource="dollars", limit=limits.max_dollars),
-                )
+        self.check_spend(extra_dollars)
         if limits.max_steps is not None and self.steps >= limits.max_steps:
             raise BudgetExceeded(
                 f"step limit {limits.max_steps} reached", budget=BudgetStop(resource="steps", limit=limits.max_steps)
             )
+
+    def check_spend(self, extra_dollars: float = 0.0) -> None:
+        """Check settled costs without treating a finished step allowance as another operation."""
+        if self.limits.max_dollars is not None:
+            spent = self.breakdown()
+            # An unpriced call could have spent anything, so a dollar cap cannot be enforced past it.
+            if spent.has_unknown:
+                raise BudgetExceeded(
+                    f"spend limit ${_dollars(self.limits.max_dollars)} cannot be enforced: a call reported no cost",
+                    budget=BudgetStop(resource="dollars", limit=self.limits.max_dollars),
+                )
+            if spent.known_dollars + extra_dollars > self.limits.max_dollars:
+                raise BudgetExceeded(
+                    f"spend limit ${_dollars(self.limits.max_dollars)} reached",
+                    budget=BudgetStop(resource="dollars", limit=self.limits.max_dollars),
+                )
 
     def record(self, *lines: CostLine) -> None:
         self.lines.extend(lines)

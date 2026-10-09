@@ -1923,7 +1923,8 @@ async def test_a_stated_order_settles_a_winner_despite_a_lost_continuation_recor
                 ],
                 "answered": True,
                 "continues": [{"requirement_id": "r1", "records": [{"first": "s9", "last": "s9"}]}],
-            }
+            },
+            {"confirmed": True},
         ]
     )
     notes = Notes()
@@ -2015,7 +2016,8 @@ async def test_a_page_that_states_its_own_order_settles_a_superlative_on_the_lea
                     }
                 ],
                 "answered": True,
-            }
+            },
+            {"confirmed": True},
         ]
     )
     notes = Notes()
@@ -2053,7 +2055,8 @@ async def test_an_order_the_page_does_not_state_cannot_settle_a_superlative(said
                 ]
                 if said_it_continues
                 else [],
-            }
+            },
+            {"continues": [{"requirement_id": "r1", "records": [{"first": "s0", "last": "s0"}]}]},
         ]
     )
     notes = Notes()
@@ -2061,7 +2064,8 @@ async def test_an_order_the_page_does_not_state_cannot_settle_a_superlative(said
         llm, page, "Cheapest nonstop?", ["r1"], notes, jev=ScriptedJev({"r1": "none"}), requirements=[requirement]
     )
     assert not notes.evidenced("r1")
-    assert outcome.continues == (("r1",) if said_it_continues else ())
+    assert outcome.continues == ("r1",)
+    assert outcome.incomplete == ()
 
 
 async def test_a_read_that_settles_a_list_carries_no_records() -> None:
@@ -2990,6 +2994,27 @@ def test_tally_claim_checks_judge_counted_records_by_their_tally(author_tallies:
         for record in notes.expand_evidence_ids((key,))
         if (item := notes.evidence.get(record)) is not None
     }
+
+
+@pytest.mark.parametrize("complete", [False, True])
+def test_anonymous_tally_claim_check_preserves_requested_scope(complete: bool) -> None:
+    page = capture((BlockKind.PARAGRAPH, "Amber"), (BlockKind.PARAGRAPH, "Cobalt"))
+    notes = Notes(
+        Fact(text=b.source_id, evidence=block_evidence(page, b.source_id), reader=FactReader.LLM) for b in page.blocks
+    )
+    tally = notes.add_tally(Tally(requirement_id="count", key="", records=tuple(notes.evidence)))
+    if complete:
+        notes.complete_tallies("count")
+    requirement = Requirement(
+        id="count", text="Count all available paint colours.", kind=RequirementKind.INFORMATION, count_records=True
+    )
+    answer = assemble_answer(
+        (Claim(text="There are two available paint colours.", evidence_ids=(fact_id(tally),)),), notes, (requirement,)
+    )
+    question = claim_check_questions(answer, notes)["unsupported_0"].instructions
+    assert requirement.text in question
+    assert f'"complete": {json.dumps(complete)}' in question
+    assert '"count": 2' in question
 
 
 def test_a_ranking_over_every_counted_record_leaves_the_omission_check_its_notes(author_tallies: Notes) -> None:
@@ -4001,9 +4026,7 @@ async def test_atomic_outputs_use_source_audits_instead_of_confidence_alone(
     page = capture((BlockKind.PARAGRAPH, "Price £12"))
     notes = Notes((Fact(reader=FactReader.LLM, text="£12", evidence=block_evidence(page, "s0")),))
     answer = assemble_answer((Claim(text="It costs £12.", evidence_ids=tuple(notes.evidence)),), notes, ())
-    llm = ScriptedLLM(
-        [{"judgments": {} if judgment is None else {"output_0": judgment}, "reason": "test"}] * (2 if expected else 1)
-    )
+    llm = ScriptedLLM([{"judgments": {"output_0": judgment or "uncertain"}, "reason": "test"}] * (2 if expected else 1))
     held = await check_answer_outputs(Jev(), llm, answer, notes, ("Report the price.",))
     assert held is expected
     assert len(llm.calls) == (3 if expected else 1 + int(probability is not None))
@@ -4129,7 +4152,7 @@ async def test_output_audits_isolate_fields_and_check_extra_answer_claims(separa
     assert sum(line.component is CostComponent.LLM for line in ledger.lines) == 15 + int(separate)
 
 
-def test_output_audit_marks_a_quoted_comparison_with_its_basis_as_derived() -> None:
+def test_output_audit_keeps_every_operand_of_a_quoted_comparison() -> None:
     from fastbrowse.verification import _output_context
 
     page = capture((BlockKind.PARAGRAPH, "Pine costs 4"), (BlockKind.PARAGRAPH, "Oak costs 7"))
@@ -4146,7 +4169,7 @@ def test_output_audit_marks_a_quoted_comparison_with_its_basis_as_derived() -> N
     notes.add(winner)
     answer = assemble_answer((Claim(text=winner.text, evidence_ids=(fact_id(winner),)),), notes, ())
     context = _output_context(answer, notes)
-    assert context is not None and context.claims[0].derived
+    assert context is not None
     assert {source.quote for source in context.claims[0].cited_sources} == {"Pine costs 4", "Oak costs 7"}
     assert not notes.derived(fact_id(winner))
 
@@ -4164,7 +4187,6 @@ async def test_atomic_outputs_check_derived_counts_against_their_source_records(
     answer = assemble_answer((Claim(text="There are two items.", evidence_ids=(fact_id(total),)),), notes, ())
     context = _output_context(answer, notes)
     assert context is not None
-    assert context.claims[0].derived
     assert {source.quote for source in context.claims[0].cited_sources} == {"A", "B"}
 
 
@@ -4602,3 +4624,406 @@ async def test_page_text_that_looks_like_an_annotation_remains_literal() -> None
     }
     result = await read(ScriptedLLM([response]), page, "Report literal text.", ["r"], Notes())
     assert result.facts[0].evidence and result.facts[0].evidence.quote == literal
+
+
+@pytest.mark.parametrize("same_frame", [True, False])
+async def test_choice_read_preserves_cited_heading_identity(same_frame):
+    page = capture((BlockKind.HEADING, "Adapter Beacon"), (BlockKind.PARAGRAPH, "Price 12"))
+    heading, value = page.blocks
+    page = page.model_copy(
+        update={
+            "blocks": (
+                heading.model_copy(update={"frame_id": None if same_frame else "child"}),
+                value.model_copy(update={"heading_path": ("Adapter Beacon",)}),
+            )
+        }
+    )
+    candidates = read_candidates(page)
+    index = next(i for i, candidate in enumerate(candidates) if candidate.evidence.source_id == value.source_id)
+    requirement = Requirement(id="price", text="Report Adapter Beacon price", kind=RequirementKind.INFORMATION)
+    notes = Notes()
+    result = await read(
+        ScriptedLLM([]),
+        page,
+        requirement.text,
+        ["price"],
+        notes,
+        jev=_ReadJev({"price": _choice(f"c{index}")}),
+        requirements=(requirement,),
+    )
+    fact = next(fact for fact in result.facts if fact.requirement_id == "price")
+    quotes = [notes.evidence[key].quote for key in notes.expand_evidence_ids((fact_id(fact),))]
+    assert ("Adapter Beacon" in quotes) is same_frame
+    assert fact.evidence is not None and fact.reader is FactReader.JEV_CHOICE
+    assert not notes.derived(fact_id(fact))
+
+
+async def test_csv_row_excerpts_retain_column_names() -> None:
+    text = "reference,customer,amount\nR-7,North,12.30\nR-8,South,18.40"
+    page = capture((BlockKind.TABLE, text))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "cite": {"first": "s0", "last": "s0"},
+                        "excerpt": "R-8,South,18.40",
+                        "text": "South's amount is 18.40.",
+                        "requirement_id": "r",
+                    }
+                ],
+                "answered": True,
+            }
+        ]
+    )
+    notes = Notes()
+    result = await read(llm, page, "Find South's amount", ["r"], notes)
+    fact = next(fact for fact in result.facts if fact.requirement_id == "r")
+    assert fact.evidence is not None
+    assert fact.evidence.quote == text
+    assert page.text[fact.evidence.start : fact.evidence.end] == text
+
+
+@pytest.mark.parametrize("through_end", [False, True])
+async def test_offered_sort_options_do_not_prove_the_active_order(through_end: bool) -> None:
+    page = capture(
+        (BlockKind.PARAGRAPH, "Sort by weight or weight descending."),
+        (BlockKind.PARAGRAPH, "Parcel A - 8 kg"),
+    )
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "cite": {"first": "s1", "last": "s1"},
+                        "orders_list": {"first": "s0", "last": "s0"},
+                        "text": "Parcel A is the heaviest parcel at 8 kg.",
+                        "requirement_id": "r",
+                    }
+                ],
+                "answered": True,
+            },
+            {"confirmed": False},
+            {
+                "continues": [
+                    {"requirement_id": "r", "through_end": through_end, "records": [{"first": "s1", "last": "s1"}]}
+                ]
+            },
+        ]
+    )
+    notes = Notes()
+    result = await read(llm, page, "Find the heaviest parcel", ["r"], notes)
+    assert not notes.evidenced("r")
+    assert result.incomplete == ()
+    assert result.continues == ("r",)
+    assert len(result.continuation_records["r"]) == 1
+    assert len(result.cost_lines) == 3
+    assert result.through_end == (("r",) if through_end else ())
+
+
+@pytest.mark.parametrize("carried_state", [True, False])
+async def test_a_continuing_list_cannot_close_on_a_winner_without_order_evidence(carried_state: bool) -> None:
+    page = capture((BlockKind.PARAGRAPH, "Parcel A - 8 kg"))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "cite": {"first": "s0", "last": "s0"},
+                        "text": "Parcel A is the heaviest parcel at 8 kg.",
+                        "requirement_id": "r",
+                    }
+                ],
+                "answered": True,
+            },
+            {"continues": [{"requirement_id": "r", "records": [{"first": "s0", "last": "s0"}]}]},
+        ]
+    )
+    notes = Notes()
+    if not carried_state:
+        prior = Fact(text="Earlier parcel", evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+        notes.add(prior)
+        notes.add_continuation("r", fact_id(prior))
+    result = await read(
+        llm,
+        page,
+        "Find the heaviest parcel",
+        ["r"],
+        notes,
+        continuing=("r",) if carried_state else (),
+        notice="This list has a next-page control.",
+    )
+    assert not notes.evidenced("r")
+    assert result.continues == ("r",)
+    assert result.through_end == ()
+    assert result.incomplete == ()
+
+
+@pytest.mark.parametrize("repaired", [False, True])
+async def test_rejected_order_record_recovery_replaces_repaired_loss(repaired: bool) -> None:
+    page = capture((BlockKind.PARAGRAPH, "Sort by weight."), (BlockKind.PARAGRAPH, "Parcel A - 8 kg"))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "cite": {"first": "s1", "last": "s1"},
+                        "orders_list": {"first": "s0", "last": "s0"},
+                        "text": "Parcel A is heaviest.",
+                        "requirement_id": "r",
+                    }
+                ],
+                "answered": True,
+                "continues": [{"requirement_id": "r", "records": [{"first": "s99", "last": "s99"}]}],
+            },
+            {"confirmed": False},
+            {
+                "continues": [
+                    {
+                        "requirement_id": "r",
+                        "records": [{"first": "s1" if repaired else "s99", "last": "s1" if repaired else "s99"}],
+                    }
+                ]
+            },
+        ]
+    )
+    result = await read(llm, page, "Find the heaviest parcel", ["r"], Notes())
+    assert result.incomplete == (() if repaired else ("r",))
+    assert result.continues == ("r",)
+    assert len(result.continuation_records.get("r", ())) == int(repaired)
+
+
+async def test_rejected_order_dense_records_use_smaller_response_chunks() -> None:
+    page = capture(
+        (BlockKind.PARAGRAPH, "Sort by weight."),
+        *[(BlockKind.PARAGRAPH, f"Parcel {i} " + "x" * 1000) for i in range(15)],
+    )
+    records: JsonValue = {"continues": [{"requirement_id": "r", "records": [{"first": "s1", "last": "s1"}]}]}
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "cite": {"first": "s1", "last": "s1"},
+                        "orders_list": {"first": "s0", "last": "s0"},
+                        "text": "Parcel zero is heaviest.",
+                        "requirement_id": "r",
+                    }
+                ],
+                "answered": True,
+            },
+            {"confirmed": False},
+            records,
+            {"continues": [{"requirement_id": "r", "records": [{"first": "s15", "last": "s15"}]}]},
+        ]
+    )
+    result = await read(llm, page, "Find the heaviest parcel", ["r"], Notes())
+    assert len(llm.calls) == 4
+    assert result.incomplete == ()
+
+
+async def test_rejected_order_does_not_claim_end_without_collector_continuation() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Sort by weight."), (BlockKind.PARAGRAPH, "Parcel A - 8 kg"))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "cite": {"first": "s1", "last": "s1"},
+                        "orders_list": {"first": "s0", "last": "s0"},
+                        "text": "Parcel A is heaviest.",
+                        "requirement_id": "r",
+                    }
+                ],
+                "answered": True,
+            },
+            {"confirmed": False},
+            {"continues": []},
+        ]
+    )
+    result = await read(llm, page, "Find the heaviest parcel", ["r"], Notes())
+    assert result.through_end == ()
+
+
+def test_shared_records_keep_each_claims_cited_tally_scope() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Amber"), (BlockKind.PARAGRAPH, "Cobalt"))
+    notes = Notes(
+        Fact(text=b.source_id, evidence=block_evidence(page, b.source_id), reader=FactReader.LLM) for b in page.blocks
+    )
+    records = tuple(notes.evidence)
+    first = notes.add_tally(Tally(requirement_id="all", key="colours", records=records))
+    second = notes.add_tally(Tally(requirement_id="warm", key="colours", records=(records[0],)))
+    notes.complete_tallies("all")
+    requirements = (
+        Requirement(id="all", text="Count all colours.", kind=RequirementKind.INFORMATION),
+        Requirement(id="warm", text="Count warm colours.", kind=RequirementKind.INFORMATION),
+    )
+    claims = (
+        Claim(text="There are two colours.", evidence_ids=(fact_id(first),)),
+        Claim(text="There is one warm colour so far.", evidence_ids=(fact_id(second),)),
+    )
+    questions = claim_check_questions(assemble_answer(claims, notes, requirements), notes)
+    first_prompt = questions["unsupported_0"].instructions
+    second_prompt = questions["unsupported_1"].instructions
+    assert '"count": 2' in first_prompt and '"complete": true' in first_prompt
+    assert requirements[0].text in first_prompt and requirements[1].text not in first_prompt
+    assert '"count": 1' in second_prompt and '"complete": false' in second_prompt
+    assert requirements[1].text in second_prompt and requirements[0].text not in second_prompt
+
+
+async def test_aggregate_excerpt_retains_subjects_from_its_selected_blocks() -> None:
+    page = capture(
+        (BlockKind.HEADING, "Delivery manifest"),
+        (BlockKind.PARAGRAPH, "Crate Atlas: 12 kg"),
+        (BlockKind.PARAGRAPH, "Crate Beacon: 8 kg"),
+        (BlockKind.PARAGRAPH, "Total mass: 20 kg"),
+    )
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "cite": {"first": "s0", "last": "s3"},
+                        "excerpt": "Total mass: 20 kg",
+                        "text": "Atlas and Beacon have a total mass of 20 kg.",
+                        "requirement_id": "r",
+                    }
+                ],
+                "answered": True,
+            }
+        ]
+    )
+    notes = Notes()
+    result = await read(llm, page, "Find the total mass of Atlas and Beacon", ["r"], notes)
+    fact = next(f for f in result.facts if f.requirement_id == "r")
+    assert fact.evidence is not None and fact.evidence.quote == "Total mass: 20 kg"
+    quotes = [notes.evidence[key].quote for key in notes.expand_evidence_ids((fact_id(fact),))]
+    assert page.text in quotes
+    assert all(page.text[e.start : e.end] == e.quote for e in notes.evidence.values())
+
+
+@pytest.mark.parametrize("value", ["Valve Atlas", "Valve Ghost"])
+async def test_a_derived_field_can_copy_an_unnamed_subject_from_its_current_quote(value: str) -> None:
+    page = capture(
+        (BlockKind.PARAGRAPH, "Valve Atlas supports 70 bar"), (BlockKind.PARAGRAPH, "Valve Beacon supports 40 bar")
+    )
+    records = [
+        Fact(text=b.source_id, reader=FactReader.LLM, evidence=block_evidence(page, b.source_id)) for b in page.blocks
+    ]
+    notes = Notes(records)
+    winner = Fact(
+        text="Valve Atlas supports the highest pressure.",
+        evidence=None,
+        basis=tuple(notes.evidence),
+        reader=FactReader.LLM,
+    )
+    notes.add(winner)
+    proposal: dict[str, JsonValue] = {"field": "label", "value": value, "source_id": fact_id(winner)}
+    found = await propose_text_fields_from_notes(
+        ScriptedLLM([{"fields": [proposal]}]),
+        "Which valve supports the highest pressure? Give its name.",
+        notes,
+        {"label": Fields.model_fields["label"]},
+    )
+    assert found == ({"label": (value, records[0].evidence)} if value == "Valve Atlas" else {})
+
+
+@pytest.mark.parametrize("second_record", ["Valve Atlas, plastic, 40 bar", "Valve Atlas, brass, 70 bar"])
+async def test_a_derived_field_rejects_distinct_records_with_the_same_name(second_record: str) -> None:
+    page = capture((BlockKind.PARAGRAPH, "Valve Atlas, brass, 70 bar"), (BlockKind.PARAGRAPH, second_record))
+    notes = Notes(
+        Fact(text=b.source_id, reader=FactReader.LLM, evidence=block_evidence(page, b.source_id)) for b in page.blocks
+    )
+    winner = Fact(
+        text="The brass valve has the highest pressure.",
+        evidence=None,
+        basis=tuple(notes.evidence),
+        reader=FactReader.LLM,
+    )
+    notes.add(winner)
+    proposal: dict[str, JsonValue] = {"field": "label", "value": "Valve Atlas", "source_id": fact_id(winner)}
+    assert not await propose_text_fields_from_notes(
+        ScriptedLLM([{"fields": [proposal]}]),
+        "Which valve supports the highest pressure?",
+        notes,
+        {"label": Fields.model_fields["label"]},
+    )
+
+
+async def test_a_retired_derived_field_cannot_reuse_its_old_source_quote() -> None:
+    old_page = capture((BlockKind.PARAGRAPH, "Valve Atlas supports 70 bar"))
+    new_page = capture((BlockKind.PARAGRAPH, "Valve Beacon supports 80 bar"))
+    source = Fact(text="Valve Atlas", reader=FactReader.LLM, evidence=block_evidence(old_page, "s0"))
+    winner = Fact(
+        requirement_id="r",
+        text="Valve Atlas is strongest.",
+        evidence=None,
+        basis=(fact_id(source),),
+        reader=FactReader.LLM,
+    )
+    fresh = Fact(
+        requirement_id="r",
+        text="Valve Beacon is strongest.",
+        reader=FactReader.LLM,
+        evidence=block_evidence(new_page, "s0"),
+    )
+    notes = Notes((source, winner, fresh))
+    notes.supersede("r", new_page.url, new_page.sha256, new_page.text)
+    proposal: dict[str, JsonValue] = {"field": "label", "value": "Valve Atlas", "source_id": fact_id(winner)}
+    assert not await propose_text_fields_from_notes(
+        ScriptedLLM([{"fields": [proposal]}]),
+        "Which of Valve Atlas and Valve Beacon supports the highest pressure?",
+        notes,
+        {"label": Fields.model_fields["label"]},
+    )
+
+
+@pytest.mark.parametrize("scope_complete", [False, True])
+async def test_rejected_order_finishes_requested_scope_before_another_pager(scope_complete: bool) -> None:
+    page = capture((BlockKind.PARAGRAPH, "Sort by weight. Next page 3"), (BlockKind.RECORD, "Beacon: 8"))
+    responses: list[JsonValue] = [
+        {
+            "claims": [
+                {
+                    "text": "Beacon is heaviest",
+                    "requirement_id": "r",
+                    "cite": {"first": "s1", "last": "s1"},
+                    "orders_list": {"first": "s0", "last": "s0"},
+                }
+            ],
+            "answered": True,
+        },
+        {"confirmed": False},
+        {
+            "continues": [{"requirement_id": "r", "through_end": False, "records": [{"first": "s1", "last": "s1"}]}],
+            "requested_scope_complete": ["r"] if scope_complete else [],
+        },
+    ]
+    if scope_complete:
+        responses.append(
+            {
+                "claims": [
+                    {
+                        "text": "Beacon: 8",
+                        "requirement_id": "r",
+                        "cite": {"first": "s1", "last": "s1"},
+                        "orders_list": {"first": "s0", "last": "s0"},
+                    }
+                ],
+                "answered": True,
+            }
+        )
+    llm = ScriptedLLM(responses)
+    notes = Notes()
+    result = await read(
+        llm,
+        page,
+        "Find the heaviest parcel on this page and the next",
+        ["r"],
+        notes,
+        notice="A third page remains after the two requested pages.",
+    )
+    assert notes.evidenced("r") is scope_complete
+    assert result.continues == (() if scope_complete else ("r",))
+    assert result.through_end == ()
+    assert len(result.cost_lines) == (4 if scope_complete else 3)

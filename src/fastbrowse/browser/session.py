@@ -183,6 +183,7 @@ class _TabState:
 
 
 class DownloadText(Frozen):
+    mime: str
     name: str
     url: str
     text: str
@@ -852,7 +853,7 @@ class BrowserSession:
         self._artifacts.append(artifact)
         self._downloads_captured += 1
         if text := _readable_text(mime, raw):
-            self._download_texts.append(DownloadText(name=name, url=url, text=text))
+            self._download_texts.append(DownloadText(mime=_response_mime(mime), name=name, url=url, text=text))
             while sum(len(item.text) for item in self._download_texts) > _DOWNLOAD_TEXT_TOTAL:
                 self._download_texts.pop(0)
                 self._download_texts_shown = max(0, self._download_texts_shown - 1)

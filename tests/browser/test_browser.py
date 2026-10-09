@@ -831,18 +831,22 @@ async def test_a_browser_handed_over_by_cdp_url_drives_and_survives_the_run(
         assert await CdpPage(after, Config()).observe() is not None
 
 
-async def test_download_evidence_is_bounded_and_cites_the_response(page: CdpPage, main_site: str) -> None:
+@pytest.mark.parametrize("path", ["/report.csv", "/export-report"])
+async def test_download_evidence_is_bounded_and_cites_the_response(page: CdpPage, main_site: str, path: str) -> None:
+    from fastbrowse.page import BlockKind
     from fastbrowse.retrieval import _Cite, _cited, chunk
 
     await page.navigate(main_site)
-    await page.navigate(f"{main_site}/report.csv")
+    await page.navigate(f"{main_site}{path}")
     capture = await page.capture()
     assert len(capture.text) < 70000
     block = next(b for b in capture.blocks if b.source_id.startswith("download/"))
+    assert block.kind is BlockKind.TABLE
     part = next(p for p in chunk(capture, 200000) if block.source_id in p.block_ids)
     evidence = _cited(capture, part, _Cite(first=block.source_id, last=block.source_id))
     assert evidence is not None
-    assert evidence.url == f"{main_site}/report.csv"
+    assert evidence.url == f"{main_site}{path}"
+    assert "name,total" in evidence.quote
     assert "139.79" in evidence.quote
     assert "omitted" in evidence.quote
     first = capture.blocks[0]

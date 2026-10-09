@@ -16,7 +16,7 @@ from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence, Se
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Self
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit
 
 from pydantic import BaseModel, Field, JsonValue
 
@@ -493,9 +493,11 @@ class HeadStart:
 
     async def discard(self) -> None:
         """Cancel what is still being written, so nothing bills a run that has already ended."""
-        await _discard(self.planning)
-        if self.proposing is not None:
-            await _discard(self.proposing)
+        tasks = (self.planning,) if self.proposing is None else (self.planning, self.proposing)
+        # One transport can take time to close, so cancel every paid call before joining any cleanup.
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def abandon(self) -> tuple[CostLine, ...]:
         """What a run that never began spent: a shortcut bills itself, and a plan that finished is billed here."""
@@ -566,7 +568,10 @@ class Agent:
                     # from a page it opened itself wants. `choose_start` is the other case: a caller with a goal
                     # and no page at all, who wants the first address worked out from the task.
                     opening = start if start is not None or not choose_start else await self._first_page(task, ledger)
-                    proposing = head.proposing if opening is not None and opening == head.start else None
+                    if opening is not None and head.proposing is None:
+                        # A chosen first address arrives after startup; its shortcut still needs owned, bounded waiting.
+                        head.proposing = asyncio.create_task(_propose(self._llm, task, opening, ledger))
+                    proposing = head.proposing
                     history, invented = (
                         ([], set[str]()) if opening is None else await self._open(task, opening, ledger, proposing)
                     )
@@ -634,8 +639,28 @@ class Agent:
                 status = Status.UNAVAILABLE if unavailable else Status.ERROR
                 result = self._partial_result(state.notes if state else Notes(), state, ledger, status, message)
             finally:
-                # A run can end before it ever needed the plan, and a plan still being written would bill it.
-                await head.discard()
+                # Cancelling a paid startup call loses its receipt, so a finished run joins it before reporting cost.
+                if loop_returned:
+                    try:
+                        async with asyncio.timeout_at(deadline.when()):
+                            await asyncio.gather(
+                                head.planning,
+                                *([head.proposing] if head.proposing is not None else []),
+                                return_exceptions=True,
+                            )
+                    except TimeoutError:
+                        assert ledger.limits.max_seconds is not None
+                        await head.discard()
+                        result = result.model_copy(
+                            update={
+                                "status": Status.BUDGET_EXCEEDED,
+                                "error": f"time limit {ledger.limits.max_seconds}s reached",
+                                "budget": BudgetStop(resource="seconds", limit=ledger.limits.max_seconds),
+                            }
+                        )
+                        loop_returned = False
+                else:
+                    await head.discard()
                 if (
                     (state is None or state.ready_plan is None)
                     and not head.planning.cancelled()
@@ -643,6 +668,15 @@ class Agent:
                 ):
                     # First observation can fail before the completed plan is consumed, but its receipt still bills.
                     ledger.lines.append(head.planning.result().cost)
+        # Startup calls can settle during teardown, after the loop has made its last budget check.
+        try:
+            ledger.check_spend()
+        except BudgetExceeded as error:
+            if result.budget is None or result.budget.resource != "seconds":
+                result = result.model_copy(
+                    update={"status": Status.BUDGET_EXCEEDED, "error": str(error), "budget": error.budget}
+                )
+            loop_returned = False
         result = result.model_copy(update={"cost": ledger.breakdown()})
         return result if loop_returned else await self._ending_frame(result)
 
@@ -970,11 +1004,12 @@ class Agent:
         leave it cost 1 to 4 seconds of every shortcut run. The start page stays one BACK away all the same.
         `proposing` is the proposal a head start already asked for, and a run without one asks now.
         """
-        if proposing is None:
-            proposing = asyncio.create_task(_propose(self._llm, task, start, ledger))
         try:
-            # A proposal still being written when the wait ends is cancelled, so it bills nothing.
-            proposal = await asyncio.wait_for(proposing, _SHORTCUT_WAIT_SECONDS)
+            if proposing is None:
+                proposal = await _propose(self._llm, task, start, ledger)
+            else:
+                # Cancelling a dispatched shortcut loses its bill and stops capped runs; the head start owns cleanup.
+                proposal = await asyncio.wait_for(asyncio.shield(proposing), _SHORTCUT_WAIT_SECONDS)
         except (TimeoutError, LLMError):
             proposal = None
         shortcut = None if proposal is None else accept(proposal.url, start)
@@ -2216,6 +2251,15 @@ class Agent:
         state.incomplete.update(outcome.incomplete)
         state.tally_readers = outcome.tally_readers
         state.comparisons = outcome.comparisons
+        # A records-only recovery can prove that a finite list ended. Apply its code-owned result here, where a
+        # normal read can finish without the paged pipeline consuming an ended marker.
+        for requirement_id in outcome.ended:
+            if requirement_id in state.incomplete:
+                continue
+            if requirement_id in state.comparisons:
+                complete_comparison(state.notes, requirement_id, state.comparisons[requirement_id])
+            if not state.notes.has_untallied_records(requirement_id):
+                state.notes.complete_tallies(requirement_id)
         # A timer changes the capture hash and a reader can paraphrase the same claim, so only a new source
         # quote or a newly evidenced requirement restores the read budget.
         progressed = bool(_answer_evidence(state.notes, include_answer=False) - known) or (
@@ -3773,6 +3817,37 @@ def _without_failed_links(state: _RunState, observation: Observation) -> Observa
     )
 
 
+def _pager_query(pairs: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
+    # A server can use the first repeated value, so only unique keys may be reordered.
+    return tuple(sorted(pairs)) if len({key for key, _ in pairs}) == len(pairs) else tuple(pairs)
+
+
+def _numbered_next_page(current: str, target: str, label: str) -> bool:
+    here, there = urlsplit(current), urlsplit(target)
+    if here.path != there.path or not label.strip().isdigit():
+        return False
+    before = parse_qsl(here.query, keep_blank_values=True)
+    after = parse_qsl(there.query, keep_blank_values=True)
+    for parameter in ("page", "pageno", "page_number"):
+        # Canonical first-page URLs omit the page parameter; an observed 2 is the only consecutive target.
+        old = [value for key, value in before if key == parameter] or ["1"]
+        new = [value for key, value in after if key == parameter]
+        if len(old) != 1 or len(new) != 1 or not old[0].isdigit() or not new[0].isdigit():
+            continue
+        try:
+            previous, following, displayed = int(old[0]), int(new[0]), int(label.strip())
+        except ValueError:
+            continue
+        if (
+            following == previous + 1
+            and displayed == following
+            and _pager_query([pair for pair in before if pair[0] != parameter])
+            == _pager_query([pair for pair in after if pair[0] != parameter])
+        ):
+            return True
+    return False
+
+
 def next_page_control(observation: Observation) -> Control | None:
     """The one control that opens the next page of a list on this page, or None when there is none or doubt.
 
@@ -3780,9 +3855,10 @@ def next_page_control(observation: Observation) -> Control | None:
     it again would count them twice. A pager drawn above and below the list is one control for this purpose.
     """
     here = urlsplit(observation.url)
-    found: dict[str, Control] = {}
+    found: dict[tuple[str, str, tuple[tuple[str, str], ...]], Control] = {}
+    current_query = _pager_query(parse_qsl(here.query, keep_blank_values=True))
     for control in observation.controls:
-        if not pager_link(control) or control.href is None:
+        if control.role != "link" or Operation.CLICK not in control.operations or control.href is None:
             continue
         # The snapshot gives a same-origin link as a path; a bare host/path denotes another site.
         if not control.href.startswith(("/", "http://", "https://")):
@@ -3790,9 +3866,13 @@ def next_page_control(observation: Observation) -> Control | None:
         target = urlsplit(urljoin(observation.url, control.href))
         if origin_of(target.geturl()) != origin_of(observation.url):
             continue
-        if (target.path, target.query) == (here.path, here.query):
+        # A numbered pager may omit Next; only an observed consecutive page with the same filters qualifies.
+        if not pager_link(control) and not _numbered_next_page(observation.url, target.geturl(), control.label):
             continue
-        found.setdefault(control.href, control)
+        query = _pager_query(parse_qsl(target.query, keep_blank_values=True))
+        if (target.path, query) == (here.path, current_query):
+            continue
+        found.setdefault((origin_of(target.geturl()), target.path, query), control)
     return next(iter(found.values())) if len(found) == 1 else None
 
 

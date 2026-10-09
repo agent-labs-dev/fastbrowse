@@ -92,7 +92,11 @@ def _instructions() -> Message:
             "Navigating, searching or opening a page is how the work gets done, not a requirement, even when the "
             "task names the search to run or the page to open before what it asks: 'search for X, open its page and "
             "tell me Y' has one requirement, to find Y. That is only searching and opening pages: a click, entry or "
-            "submission the task names is still an action requirement. But when reaching a page is all the user "
+            "submission the task names is still an action requirement. When the user explicitly asks to expand, "
+            "load or exhaust content until a stopping condition before reporting, reaching that page state is a "
+            "separate action requirement. A displayed total does not evidence that the requested expansion was "
+            "performed. Do not absorb that stopping condition into an information requirement. "
+            "But when reaching a page is all the user "
             "asked for, reaching it is the one action requirement. An address the task says to start at or go to "
             "before asking for something else is where the work begins, and the "
             "browser may already be there: it is not a requirement of its own. A search the "
@@ -111,6 +115,9 @@ def _instructions() -> Message:
             "reported is the order's total, not the total once the order is finished. Keep related output fields "
             "together when they identify one result. "
             "Do not create a separate requirement to find that same result again.\n\n"
+            "Keep a prerequisite action's actor identity and supplied inputs with that action. They are not "
+            "requested record identities or answer fields. Retain named entities and identity filters when "
+            "the user asks for information about those entities.\n\n"
             "For an expected page answer, also fill answer_checks with individually checkable requested output "
             "values. Separate components of a requested breakdown. These checks validate the final answer, "
             "not the discovery plan: do not turn them into extra browsing requirements.\n\n"
@@ -169,6 +176,10 @@ async def make_plan(
                         "Exclude the supplied run_reports: code reports those directly from browser state after "
                         "page-answer verification. Keep requested page facts and action outcomes. "
                         "Do not add actions, navigation or extra outputs. These checks do not change discovery."
+                        " Supplied action_requirements are checked separately against browser state and executed "
+                        "actions. An actor name or login identity supplied for a prerequisite action is not an "
+                        "identity to quote in the answer or bind to each reported data value. Preserve identities "
+                        "that the user explicitly requests as record subjects or data filters."
                     ),
                 ),
                 Message(
@@ -177,6 +188,9 @@ async def make_plan(
                         {
                             "task": task,
                             "information_requirements": information,
+                            "action_requirements": tuple(
+                                r.text for r in plan.requirements if r.kind is RequirementKind.ACTION
+                            ),
                             "draft_checks": proposed,
                             "run_reports": plan.run_reports,
                         }

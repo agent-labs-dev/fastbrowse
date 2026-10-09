@@ -401,3 +401,88 @@ def test_recaptured_text_does_not_replace_the_title_of_older_quote_evidence() ->
     assert context and context.claims[0].cited_sources[0].page_title == "Atlas"
     fresh_page = notes.captured_page(block_evidence(second, "s0"))
     assert fresh_page and fresh_page.title == "Beacon"
+
+
+@pytest.mark.parametrize("other_address", [False, True])
+def test_output_audit_keeps_other_pages_but_rejects_retired_values(other_address: bool) -> None:
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import _output_context
+
+    old = _quoted("SelectedDate: 03/04/2026", "before")
+    url = "https://example.test/another" if other_address else "https://example.test"
+    fresh = _quoted("SelectedDate: 09/04/2026", "after", url)
+    notes = Notes((old, fresh))
+    notes.supersede("r1", url, "after", fresh.text)
+    answer = assemble_answer((Claim(text=old.text, evidence_ids=(fact_id(old),)),), notes, ())
+    assert (_output_context(answer, notes) is not None) is other_address
+
+
+def test_output_audit_rejects_retired_choice_with_unassigned_basis_quotes() -> None:
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import _output_context
+
+    basis = _quoted("Availability: 18", "before").model_copy(update={"requirement_id": None})
+    old = Fact(requirement_id="r1", text="18", evidence=None, reader=FactReader.JEV_CHOICE, basis=(fact_id(basis),))
+    fresh = _quoted("Availability: 23", "after")
+    notes = Notes((basis, old, fresh))
+    assert fresh.evidence is not None
+    notes.supersede("r1", fresh.evidence.url, "after", fresh.text)
+    answer = assemble_answer((Claim(text=old.text, evidence_ids=(fact_id(old),)),), notes, ())
+    assert _output_context(answer, notes) is None
+
+
+@pytest.mark.parametrize("other_address", [False, True])
+@pytest.mark.parametrize("derived", [False, True])
+def test_replaced_shared_quote_cannot_survive_through_another_requirement(other_address: bool, derived: bool) -> None:
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import _output_context
+
+    old = _quoted("SelectedDate: 03/04/2026", "before")
+    context = old.model_copy(update={"requirement_id": None})
+    if derived:
+        old = Fact(
+            requirement_id="r1", text=old.text, evidence=None, reader=FactReader.JEV_CHOICE, basis=(fact_id(context),)
+        )
+    shared = old.model_copy(update={"requirement_id": "r2"})
+    url = "https://example.test/another" if other_address else "https://example.test"
+    fresh = _quoted("SelectedDate: 09/04/2026", "after", url)
+    notes = Notes((context, old, shared, fresh))
+    notes.supersede("r1", url, "after", fresh.text)
+    answer = assemble_answer((Claim(text=old.text, evidence_ids=(fact_id(old),)),), notes, ())
+    assert (_output_context(answer, notes) is not None) is other_address
+    assert notes.evidenced("r2") is other_address
+
+
+@pytest.mark.parametrize("other_address", [False, True])
+def test_unchanged_value_does_not_keep_replaced_subject_context_current(other_address: bool) -> None:
+    from fastbrowse.page import BlockKind
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import _output_context
+    from tests.test_retrieval import block_evidence, capture
+
+    old_page = capture(
+        (BlockKind.PARAGRAPH, "Participants: Atlas and Beacon"), (BlockKind.PARAGRAPH, "Total mass: 20 kg")
+    )
+    new_page = capture(
+        (BlockKind.PARAGRAPH, "Participants: Atlas and Cobalt"),
+        (BlockKind.PARAGRAPH, "Total mass: 20 kg"),
+        url="https://example.test/another" if other_address else old_page.url,
+    )
+    context = Fact(text="Atlas and Beacon", evidence=block_evidence(old_page, "s0"), reader=FactReader.LLM)
+    old = Fact(
+        requirement_id="r",
+        text="Atlas and Beacon total 20 kg",
+        evidence=block_evidence(old_page, "s1"),
+        basis=(fact_id(context),),
+        reader=FactReader.LLM,
+    )
+    fresh = Fact(
+        requirement_id="r",
+        text="Atlas and Cobalt total 20 kg",
+        evidence=block_evidence(new_page, "s1"),
+        reader=FactReader.LLM,
+    )
+    notes = Notes((context, old, fresh))
+    notes.supersede("r", new_page.url, new_page.sha256, new_page.text)
+    answer = assemble_answer((Claim(text=old.text, evidence_ids=(fact_id(old),)),), notes, ())
+    assert (_output_context(answer, notes) is not None) is other_address

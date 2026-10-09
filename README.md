@@ -169,7 +169,7 @@ Close the app, or restart it without the flag, when you are done.
 ### Models
 
 The LLM defaults to `google/gemini-3.8-flash` at low reasoning effort, with
-`google/gemini-3.5-flash-lite` for planning, proposing a direct address and typing field text.
+`google/gemini-3.5-flash-lite` for proposing a direct address and typing field text.
 Override with `FASTBROWSE_LLM_MODEL` (every purpose), `FASTBROWSE_LLM_MODEL_<PURPOSE>` (`PLAN`,
 `READ`, `FIELD_TEXT`, `SHORTCUT`, `RECOVER`, `COMPOSE`, `VERIFY`) and `FASTBROWSE_LLM_REASONING`
 (`low`, `medium`, `high`).

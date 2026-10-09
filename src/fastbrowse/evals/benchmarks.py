@@ -45,7 +45,7 @@ class Row(PublicModel):
 
 
 class Group(PublicModel):
-    id: Literal["internal-hosted", "internal-ultrafast", "bu-bench", "online-mind2web"]
+    id: Literal["internal-fastbrowse", "internal-hosted", "internal-ultrafast", "bu-bench", "online-mind2web"]
     agent_sha: Sha | None = None
     runner_sha: Sha | None = None
     metric: Literal["task-success", "weighted-rubric", "full-task-success"]
@@ -60,6 +60,7 @@ class Group(PublicModel):
     @model_validator(mode="after")
     def coverage(self) -> Self:
         spec = {
+            "internal-fastbrowse": (54, 3, "task-success", {"fastbrowse"}),
             "internal-hosted": (47, 3, "task-success", {"fastbrowse", "browser-use"}),
             "internal-ultrafast": (6, 3, "task-success", {"fastbrowse", "jev-ultrafast"}),
             "bu-bench": (200, 1, "weighted-rubric", {"fastbrowse"}),
@@ -87,7 +88,7 @@ class Fixture(PublicModel):
 
 
 class Candidate(PublicModel):
-    schema_version: Literal[1, 2]
+    schema_version: Literal[1, 2, 3]
     campaign_id: Identifier
     agent_sha: Sha
     runner_sha: Sha
@@ -104,10 +105,12 @@ class Candidate(PublicModel):
             raise ValueError("at least one complete, unique benchmark group is required")
         if self.schema_version == 1 and (len(self.groups) != 4 or ids != expected):
             raise ValueError("all four full benchmark groups are required")
+        if self.schema_version == 2 and not ids <= expected:
+            raise ValueError("schema 2 supports only the four original benchmark groups")
         for group in self.groups:
             for field in ("agent_sha", "runner_sha"):
                 measured = getattr(group, field)
-                if (self.schema_version == 2 or measured is not None) and measured != getattr(self, field):
+                if (self.schema_version >= 2 or measured is not None) and measured != getattr(self, field):
                     raise ValueError("each group must identify the measured agent and runner build")
         if self.agent_sha != self.fixture.head_sha:
             raise ValueError("fixtures must pass on the measured agent build")
@@ -139,6 +142,11 @@ def check_catalog(candidate: Candidate, path: Path) -> None:
             continue
         if set(found.task_ids) != required or found.source_sha256 != candidate.catalog_sha256:
             raise ValueError("internal rows must cover the exact matched catalog")
+    fastbrowse = next((g for g in candidate.groups if g.id == "internal-fastbrowse"), None)
+    if fastbrowse is not None:
+        required = {task["id"] for task in tasks if "fastbrowse" in task["arms"]}
+        if set(fastbrowse.task_ids) != required or fastbrowse.source_sha256 != candidate.catalog_sha256:
+            raise ValueError("internal rows must cover the exact fastbrowse catalog")
 
 
 def regressions(candidate: Candidate, baseline: Candidate) -> None:

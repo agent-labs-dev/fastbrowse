@@ -11,6 +11,39 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Requests to expand or load content until a stopping condition keep that page change as an action
+  requirement. A displayed total no longer replaces the requested work in the plan. The feed fixture
+  also checks that every remaining batch was loaded, and advances to task version 6.
+
+- A ranking shortcut requires a quoted statement of the active list order. Offered sort links no
+  longer close a comparison; rejected shortcuts collect the current records before paging onward.
+  Numbered links to the next page use the same paging path when their address preserves the list filters.
+
+- Downloaded CSV files retain table structure, so row citations keep the column names needed to
+  interpret their values. Bounded downloads still report omitted file content.
+
+- Count claim checks retain the requested scope and whether the accumulated tally is complete.
+  An ungrouped count no longer reaches the checker as an unlabeled number.
+
+- Planning uses the default reading model and separates sign-in identities from requested data filters.
+  A prerequisite account name no longer becomes an extra field in an exported report's answer checks.
+
+- Answer verification rejects superseded facts from the same page, including calculated facts that
+  remain in browsing history after their requirement evidence is replaced.
+
+- A slow shortcut can finish reporting its model cost while browsing continues from the start page.
+  Falling back no longer cancels a dispatched request and interrupts a run with a dollar limit.
+  A late cost that exceeds the limit stops the run while retaining its already verified answer and data.
+
+- Answer checks judge calculated results from their quoted operands. Reader lineage no longer blocks
+  a calculation when its complete source records support it.
+
+- Scalar reads retain cited headings that identify their values, so answer verification can bind a price
+  or count to its named subject. Heading evidence stays within its frame.
+
+- Answer verification requires a response for each requested check. Structured model responses cannot
+  omit identity bindings or field judgments through empty maps.
+
 - Completion checks preserve each requested item's fields even when a draft plan lists generic field names.
   Quoted identities keep one item's value from answering another item's field, including compound claims.
   An identity can come from the quoted page body or its captured title.

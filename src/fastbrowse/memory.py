@@ -119,9 +119,7 @@ class Notes:
         copy a price the final page corrected; a quote from another page still stands.
         """
         current = {
-            key: fact.evidence
-            for key, fact in self._facts.items()
-            if fact.evidence is not None and (fact.requirement_id is None or self._requirements[key])
+            key: fact.evidence for key, fact in self._facts.items() if fact.evidence is not None and self.current(key)
         }
         if capture is None:
             return current
@@ -133,6 +131,11 @@ class Notes:
 
     def derived(self, key: str) -> bool:
         return key in self._facts and self._facts[key].evidence is None
+
+    def current(self, key: str) -> bool:
+        """Retired facts remain history, including derived facts whose original quotes remain in context."""
+        fact = self._facts.get(key)
+        return fact is not None and (fact.requirement_id is None or bool(self._requirements[key]))
 
     @property
     def tallies(self) -> tuple[Tally, ...]:
@@ -257,7 +260,7 @@ class Notes:
         for key, fact in supporting:
             sources = (
                 (evidence.get(source) for source in self.expand_evidence_ids((key,)))
-                if fact.reader is FactReader.JEV_CHOICE and fact.basis
+                if fact.basis and fact.tally is None
                 else (fact.evidence,)
             )
             if any(
@@ -267,7 +270,8 @@ class Notes:
                 and not shows(text, source.quote)
                 for source in sources
             ):
-                self._requirements[key].discard(requirement_id)
+                # A vanished quote cannot remain a current value through another requirement sharing its span.
+                self._requirements[key].clear()
 
     def read_for(self, requirement_id: str) -> tuple[Evidence, ...]:
         """The spans read as evidence of a requirement, including those a later read superseded."""

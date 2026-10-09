@@ -9,9 +9,9 @@ import hashlib
 import json
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from enum import StrEnum
-from typing import Literal, assert_never
+from typing import Any, Literal, assert_never
 
-from pydantic import BaseModel, Field, JsonValue, ValidationError
+from pydantic import BaseModel, Field, JsonValue, ValidationError, create_model
 
 from fastbrowse.batches import evaluate_batches
 from fastbrowse.config import Config, Thresholds, TokenBudget
@@ -443,7 +443,6 @@ class _OutputSource(Frozen):
 class _OutputClaim(Frozen):
     text: str
     cited_sources: tuple[_OutputSource, ...]
-    derived: bool
 
 
 class _OutputContext(Frozen):
@@ -476,17 +475,29 @@ class _OutputIdentities(Frozen):
     bindings: dict[str, _IdentityScope]
 
 
+def _identity_schema(keys: Iterable[str]) -> type[BaseModel]:
+    # An open dictionary permits an empty response even when every requested subject needs a binding.
+    fields: dict[str, Any] = {key: (_IdentityScope, ...) for key in keys}
+    bindings = create_model("_RequiredBindings", __base__=Frozen, **fields)
+    return create_model("_OutputIdentities", __base__=Frozen, bindings=(bindings, ...))
+
+
+def _assessment_schema(key: str) -> type[BaseModel]:
+    fields: dict[str, Any] = {key: (Literal["yes", "no", "uncertain"], ...)}
+    judgments = create_model("_RequiredJudgments", __base__=Frozen, **fields)
+    return create_model("_OutputAssessment", __base__=Frozen, judgments=(judgments, ...), reason=(str, ...))
+
+
 type OutputAuditCache = dict[str, OutputAuditVerdict | _OutputIdentities]
 
 
 def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | None:
-    known = notes.evidence
-    based = {fact_id(fact) for fact in notes.facts if fact.basis}
+    known = notes.current_evidence()
     urls: dict[str, str] = {}
     claims = []
     for claim in composed.claims:
         expanded = notes.expand_evidence_ids(claim.evidence_ids)
-        if any(key not in known and not notes.derived(key) for key in expanded):
+        if any(not notes.current(key) for key in expanded):
             return None
         keys = tuple(key for key in expanded if key in known)
         if not keys:
@@ -509,7 +520,6 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
             _OutputClaim(
                 text=claim.text,
                 cited_sources=tuple(sources),
-                derived=any(notes.derived(key) or key in based for key in claim.evidence_ids),
             )
         )
     return _OutputContext(
@@ -641,11 +651,11 @@ async def check_answer_outputs(
             resolved = cached
         else:
             generated = await llm.generate(
-                LLMPurpose.VERIFY, messages, _OutputIdentities, max_output_tokens=8000, ledger=ledger
+                LLMPurpose.VERIFY, messages, _identity_schema(uncertain), max_output_tokens=8000, ledger=ledger
             )
             if ledger is not None:
                 ledger.record(generated.cost)
-            resolved = generated.data
+            resolved = _OutputIdentities.model_validate(generated.data.model_dump())
             if audit_cache is not None:
                 audit_cache[fingerprint] = resolved
         for key, criterion in uncertain.items():
@@ -730,7 +740,6 @@ async def check_answer_outputs(
             "sources": [
                 {
                     "cited_sources": [source.model_dump(exclude={"page_title"}) for source in claim.cited_sources],
-                    "derived": claim.derived,
                 }
                 for claim in claims
             ],
@@ -742,6 +751,7 @@ async def check_answer_outputs(
         semaphore = asyncio.Semaphore(4)
 
         async def one(key: str, field: object) -> tuple[str, str]:
+            schema = _assessment_schema(key)
             records = field.get("reported_claims", field.get("sources", ())) if isinstance(field, dict) else ()
             refs = {source["url_ref"] for record in records for source in record["cited_sources"]}
             if isinstance(field, dict):
@@ -757,7 +767,7 @@ async def check_answer_outputs(
                         "client": id(llm),
                         "purpose": LLMPurpose.VERIFY,
                         "messages": [message.model_dump(mode="json") for message in request],
-                        "schema": _OutputAssessment.model_json_schema(),
+                        "schema": schema.model_json_schema(),
                         "max_output_tokens": 512,
                     },
                     sort_keys=True,
@@ -771,15 +781,14 @@ async def check_answer_outputs(
                 generated = await llm.generate(
                     LLMPurpose.VERIFY,
                     request,
-                    _OutputAssessment,
+                    schema,
                     max_output_tokens=512,
                     ledger=ledger,
                 )
                 if ledger is not None:
                     ledger.record(generated.cost)
-                verdict = OutputAuditVerdict(
-                    judgment=generated.data.judgments.get(key, "uncertain"), reason=generated.data.reason
-                )
+                assessment = _OutputAssessment.model_validate(generated.data.model_dump())
+                verdict = OutputAuditVerdict(judgment=assessment.judgments[key], reason=assessment.reason)
                 # Repairing one assertion used to repeat audits whose exact sources and question had not changed.
                 if audit_cache is not None:
                     audit_cache[fingerprint] = verdict

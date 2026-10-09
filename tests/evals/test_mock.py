@@ -462,3 +462,16 @@ def test_a_row_carries_the_step_budget_it_ran_under() -> None:
     row = _row(result, task_id="x", failure=None, seconds=1.0, lost=0.0, limit=40)
     assert row["step_limit"] == 40
     assert 0 < HEADROOM < 1, "a headroom of the whole budget or none of it warns nobody"
+
+
+def test_feed_count_requires_loading_every_remaining_batch(browser: tuple[Browser, Site]) -> None:
+    client, site = browser
+    task = next(task for task in TASKS if task.id == "mock-infinite-scroll")
+    client.get("/feed")
+    answer = _run("60 items")
+    assert task.check(answer, site) is not None
+    client.get("/api/feed.json?after=20")
+    assert task.check(answer, site) is not None
+    client.get("/api/feed.json?after=40")
+    assert task.check(answer, site) is None
+    assert task.check(_run("40 items"), site) is not None
