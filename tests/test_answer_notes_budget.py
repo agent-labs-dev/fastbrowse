@@ -10,11 +10,44 @@ from fastbrowse.memory import Fact, Notes, NotesTooLarge
 from fastbrowse.models import CostBasis, CostComponent, CostLine, FactReader, LLMPurpose
 from fastbrowse.page import BlockKind
 from fastbrowse.planner import Plan, Requirement, RequirementKind
-from fastbrowse.retrieval import compose
+from fastbrowse.retrieval import compose, partial_answer
 from fastbrowse.verification import check_claims
 from tests.test_navigation_memory import PROJECTS
 from tests.test_policy import ScriptedJev
 from tests.test_retrieval import ScriptedLLM, block_evidence, capture
+
+
+def test_partial_answer_retains_later_project_findings_within_the_budget() -> None:
+    notes = Notes()
+    for index, project in enumerate((PROJECTS[0], PROJECTS[4], PROJECTS[3])):
+        reports = (
+            tuple(f"Report {n}: " + "The map overlaps the tracker. " * 12 for n in range(10))
+            if index == 0
+            else (f"{project}: no comments yet.",)
+        )
+        source = capture(
+            (BlockKind.HEADING, project),
+            *((BlockKind.PARAGRAPH, report) for report in reports),
+            url=f"https://projects.test/{index}/comments",
+        )
+        for block in source.blocks:
+            notes.add(
+                Fact(
+                    text=source.text[block.start : block.end],
+                    requirement_id=f"reports-{index}" if index and block.source_id == "s1" else None,
+                    evidence=block_evidence(source, block.source_id),
+                    reader=FactReader.LLM,
+                )
+            )
+    original = notes.facts
+    answer = partial_answer(notes, 1200)
+    assert {citation.url for citation in answer.citations} == {
+        f"https://projects.test/{index}/comments" for index in range(3)
+    }
+    assert f"{PROJECTS[3]}: no comments yet." in answer.answer
+    assert f"{PROJECTS[4]}: no comments yet." in answer.answer
+    assert len(answer.linked_answer) <= 1200
+    assert notes.facts == original
 
 
 @pytest.mark.parametrize("failure", [None, "source", "assertion", "missing", "legacy"])

@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Multi-project tasks retain earlier sources for navigation and verify answers with explicit output checks
   without requiring an unused whole-notes check to fit the evidence budget.
+- Independent named targets have separate reading requirements. Newly evidenced targets renew recovery on
+  revisited lists, remaining requirements guide action choices, and partial answers retain findings across sources.
 
 - Reply controls retain their own comment record as context when only one reply form is open.
 

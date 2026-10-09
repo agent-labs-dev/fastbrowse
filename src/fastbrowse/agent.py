@@ -350,6 +350,7 @@ class _RunState:
     """Controls a fill or select has written, by document, so only a field's first new value counts as progress by
     itself. A new document restarts control ids, and its fields would otherwise inherit the last page's writes."""
     recoveries: int = 0
+    recovered_requirements: set[str] = field(default_factory=set)
     terminal_verification_attempted: bool = False
     blank_opening_checked: bool = False
     recovery_log: deque[str] = field(default_factory=lambda: deque(maxlen=_RECOVERY_RECORDS))
@@ -363,8 +364,8 @@ class _RunState:
     """What became of each action taken from each page state, which is how a cycle is told from progress."""
     last_page: tuple[str, str] | None = None
     reached: dict[str, int] = field(default_factory=dict[str, int])
-    """Each page state the run has been in, with how many actions had been taken when it was first reached. Only
-    reaching a new one restores the recovery budget or counts an action that changed the page as progress."""
+    """Each page state and the action count when it was first reached. Revisiting a state alone cannot restore
+    recovery; newly evidenced requirements can."""
     left: str | None = None
     """The state the last action that changed the page was taken from, until the next observation judges it."""
     crossed: set[tuple[str, str, str]] = field(default_factory=set[tuple[str, str, str]])
@@ -2705,6 +2706,28 @@ class Agent:
     ) -> None:
         state.form_values.clear()
         reason = self._redactor.redact(reason)
+        remaining = state.notes.unresolved(state.ready_plan) if state.ready_plan else ()
+        evidenced = (
+            {r.id for r in state.ready_plan.requirements if r.kind is RequirementKind.INFORMATION}
+            - {r.id for r in remaining}
+            if state.ready_plan
+            else set()
+        )
+        # Reading another target advances a comparison even when its next route is a previously visited list.
+        # Reopening the same requirement after a failed answer check cannot restore recovery repeatedly.
+        if evidenced - state.recovered_requirements and not state.open_answer_outputs:
+            state.recoveries = 0
+            state.recovery_log.clear()
+        state.recovered_requirements.update(evidenced)
+        open_requirements = "\n".join(
+            f"- {r.text}"
+            + (
+                " (the reader saw the list this ranges over go on past what the page shows: load the rest first)"
+                if r.id in state.continuing
+                else ""
+            )
+            for r in remaining
+        )
         state.recoveries += 1
         # Recovery spends every tripwire's evidence so the same threshold crossing cannot trigger it again.
         state.unchanged = 0
@@ -2713,7 +2736,8 @@ class Agent:
         if state.recoveries > self._config.stall.max_recoveries:
             if state.http_failure is not None and gives_up_as is not Status.NEEDS_INPUT:
                 raise state.http_failure.stop()
-            raise _Stop(gives_up_as, reason)
+            detail = f"{reason}\nStill to find:\n{open_requirements}" if open_requirements else reason
+            raise _Stop(gives_up_as, detail)
         destinations = navigation_urls(
             state.task,
             observation.url,
@@ -2733,19 +2757,6 @@ class Agent:
         # books" three times, and stopped stuck with the answer in hand.
         # Without the reader's word that a list goes on, a note holding the best record SO FAR reads as the answer:
         # a run with the cheapest of the first few flights noted was sent to finish, and the done check refused.
-        open_requirements = (
-            "\n".join(
-                f"- {r.text}"
-                + (
-                    " (the reader saw the list this ranges over go on past what the page shows: load the rest first)"
-                    if r.id in state.continuing
-                    else ""
-                )
-                for r in state.notes.unresolved(state.ready_plan)
-            )
-            if state.ready_plan
-            else ""
-        )
         secrets = (
             f"\n\n## Stored secrets\n{', '.join(stored)}. Filling a field with one types its hidden value."
             if stored

@@ -2581,7 +2581,16 @@ def partial_answer(notes: Notes, max_chars: int) -> ComposedAnswer:
     counted: set[str] = set()
     candidates = [fact for fact in notes.facts if fact.tally is not None]
     candidates.extend(fact for fact in notes.facts if fact.evidence is not None)
+    candidates.sort(key=lambda fact: not bool(notes.fact_requirements(fact_id(fact))))
+    ranks: dict[str | None, int] = {}
+    ranked: list[tuple[int, Fact]] = []
+    # Early sources can fill the partial answer before a later target's finding gets a turn.
     for fact in candidates:
+        source = fact.evidence.url if fact.evidence is not None else None
+        rank = ranks.get(source, 0)
+        ranked.append((rank, fact))
+        ranks[source] = rank + 1
+    for _, fact in sorted(ranked, key=lambda item: item[0]):
         if fact_id(fact) in counted:
             continue
         text = fact.text if fact.tally is not None else fact.evidence.quote if fact.evidence else ""
