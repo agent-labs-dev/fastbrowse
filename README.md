@@ -104,6 +104,7 @@ the quotes behind the answer, and cost by component.
 | `--downloads DIR` | keep downloaded files |
 | `--json` | full result instead of the answer |
 | `--record FILE` | save an MP4 of the tab, each step captioned, ending on the answer, time and cost (needs `ffmpeg`; the captions need its libass), e.g. `recordings/demo.mp4`, which git ignores; `demo.plain.mp4` beside it has no captions. It shows what the pages showed, so watch it before sharing |
+| `--cursor` | draw the agent's cursor over a visible Chrome (`--headed`, or one you attach to) with [Cua Driver](https://github.com/trycua/cua), so you can watch where it acts. Off by default. It needs `cua-driver` on `PATH` and an X11 display on Linux, and does nothing without them |
 
 ```sh
 export SAUCE_PASSWORD=secret_sauce
@@ -463,7 +464,7 @@ The server's flags decide what a calling model may do; a call can ask for less, 
 
 | Flag | Effect |
 |:--|:--|
-| `--local`, `--headed`, `--profile DIR`, `--downloads DIR` | as for the CLI, fixed for every call |
+| `--local`, `--headed`, `--profile DIR`, `--downloads DIR`, `--cursor` | as for the CLI, fixed for every call |
 | `--cloud-profile ID` | every call runs signed in as that cloud profile; a calling model cannot choose it |
 | `--allow-authorize` | let a call pass `authorize` to go through irreversible actions; without it they always stop at `needs_confirmation` |
 | `--secret NAME=ENV_VAR@ORIGIN` | typed when a call's start page is on `ORIGIN` (`https://*.site.com` covers its hosts); the model sees `NAME` only |

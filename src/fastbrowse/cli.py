@@ -182,6 +182,11 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--record", type=Path, metavar="FILE", help="save a video of the run, ending on its answer (needs ffmpeg)"
     )
+    parser.add_argument(
+        "--cursor",
+        action="store_true",
+        help="draw the agent's cursor over a visible Chrome with the Cua Driver (Linux X11; skipped where unsupported)",
+    )
     return parser.parse_args(argv)
 
 
@@ -247,6 +252,7 @@ async def run(args: argparse.Namespace) -> int:
         downloads=args.downloads,
         on_event=_print_step,
         record=args.record,
+        cursor=args.cursor,
     )
     if result.status is Status.NEEDS_LOGIN:
         error = (

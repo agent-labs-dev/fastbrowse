@@ -18,6 +18,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Page captures retain visible image DOM metadata, including source, alt text and whether the image loaded.
 - Missing completion charges are recovered from matching provider generation receipts when available.
   Dollar caps still stop the run when the charge cannot be established.
+- Optional `--cursor` feedback draws an agent overlay for visible local Chrome on Linux X11 with Cua Driver.
+  It leaves the physical pointer and focus alone, hides when its page or window changes, and skips unverified
+  window mappings. Cloud, headless, Wayland and remote Chrome connections run without it.
 
 - Read captures retain empty form fields, disabled buttons, horizontal overflow and the absence of visible h1
   headings across accessible document and shadow roots. These DOM observations cite the source page without

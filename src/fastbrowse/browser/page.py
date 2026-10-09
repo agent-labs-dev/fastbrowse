@@ -16,6 +16,7 @@ import time
 from collections.abc import Coroutine
 from contextlib import suppress
 from datetime import UTC, datetime
+from functools import partial
 from typing import Literal, assert_never
 from urllib.parse import SplitResult, urlsplit
 
@@ -24,6 +25,7 @@ from cdp_use.cdp.page.commands import CaptureScreenshotParameters, GetNavigation
 from cdp_use.cdp.runtime.commands import EvaluateParameters
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
+from fastbrowse.browser.cursor import CursorFeedback, Geometry
 from fastbrowse.browser.session import BrowserSession, OriginNotAllowed
 from fastbrowse.config import Config
 from fastbrowse.datafiles import data_file
@@ -101,6 +103,12 @@ _HIT_TEST_JS = (
     "for (const r of rects) { for (const [fx, fy] of [[.5, .5], [.25, .25], [.75, .25], [.25, .75], [.75, .75]]) { "
     "const point = hitAt(r.left + (r.right - r.left) * fx, r.top + (r.bottom - r.top) * fy); "
     "if (Array.isArray(point)) return point; } } return 'covered'; })"
+)
+
+_GEOMETRY_JS = (
+    "[window.screenX, window.screenY, window.outerWidth, window.outerHeight, window.innerWidth, window.innerHeight, "
+    "window.visualViewport ? window.visualViewport.scale : 1, document.visibilityState === 'visible', "
+    "String(performance.timeOrigin)]"
 )
 
 # A deadline, not a wait: a field with no editor to open settles on the first frame.
@@ -334,7 +342,9 @@ def _capped(controls: list[Control], limit: int) -> list[Control]:
 
 
 class CdpPage(Page):
-    def __init__(self, session: BrowserSession, config: Config) -> None:
+    def __init__(self, session: BrowserSession, config: Config, cursor: CursorFeedback | None = None) -> None:
+        self._cursor = cursor
+        self._cursor_pid: int | None = None
         origins = "null" if session.grant is None else json.dumps(sorted(session.grant.origins))
         self._page_js = f"(mode => ({_PAGE_JS})(mode, {origins}))"
         self._capture_js = f"({_CAPTURE_JS})({origins})"
@@ -637,6 +647,15 @@ class CdpPage(Page):
                     outcome=StepOutcome.STALE, page_changed=False, detail="control changed since observation"
                 )
 
+        # Drawn beside the action, never in its path: a secret's field is left unmarked so nothing about it is drawn.
+        if (
+            self._cursor is not None
+            and isinstance(point, tuple)
+            and target is not None
+            and target[0] == self._session.active_session_id
+            and not action.secret
+        ):
+            self._cursor.follow(partial(self._cursor_geometry, target[0], observation.document_key), point)
         popups = self._session.popups()
         try:
             outcome, detail = await self._dispatch(action, target, point)
@@ -665,6 +684,56 @@ class CdpPage(Page):
         if action.form_fill and not changed and target is not None and not action.secret:
             unchanged = await self._form_unchanged(target, action.text or "")
         return ActResult(outcome=StepOutcome.EXECUTED, page_changed=changed, detail=detail, form_unchanged=unchanged)
+
+    async def _cursor_geometry(
+        self, expected_session: str | None = None, expected_document: str | None = None
+    ) -> Geometry | None:
+        """Where the active page's viewport sits in its window, as the page itself reports it."""
+        session_id = self._session.active_session_id
+        if expected_session is not None and expected_session != session_id:
+            return None
+        if self._cursor_pid is None:
+            processes = await self._session.client.send.SystemInfo.getProcessInfo()
+            self._cursor_pid = next(
+                (int(item["id"]) for item in processes["processInfo"] if item["type"] == "browser"), None
+            )
+        if self._cursor_pid is None:
+            return None
+        reading, metrics = await asyncio.gather(
+            self._evaluate(session_id, _GEOMETRY_JS),
+            self._session.client.send.Page.getLayoutMetrics(session_id=session_id),
+        )
+        if (
+            self._session.active_session_id != session_id
+            or not isinstance(reading, list)
+            or len(reading) != 9
+            or (expected_document is not None and reading[8] != expected_document)
+        ):
+            return None
+        # CSS pixels in the page, device-independent pixels in the window: their ratio is the page zoom.
+        css_width = metrics["cssLayoutViewport"]["clientWidth"]
+        if not css_width:
+            return None
+        names = (
+            "screen_x",
+            "screen_y",
+            "outer_width",
+            "outer_height",
+            "inner_width",
+            "inner_height",
+            "pinch_scale",
+            "visible",
+        )
+        try:
+            return Geometry.model_validate(
+                {
+                    "browser_pid": self._cursor_pid,
+                    **dict(zip(names, reading[:8], strict=True)),
+                    "zoom": metrics["layoutViewport"]["clientWidth"] / css_width,
+                }
+            )
+        except ValidationError:
+            return None
 
     async def _form_unchanged(self, target: tuple[str, str, int, list[object] | None], text: str) -> bool:
         if self._session.pending_dialog() is not None or target[0] != self._session.active_session_id:
