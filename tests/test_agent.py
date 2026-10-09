@@ -5971,3 +5971,37 @@ async def test_shortcut_wait_expiry_keeps_dispatched_request_owned_and_billed(mo
         assert len(ledger.lines) == 1 and not ledger.breakdown().has_unknown
     finally:
         await agent_module._discard(proposing)
+
+
+async def test_chosen_start_owns_shortcut_after_bounded_navigation_wait(monkeypatch) -> None:
+    start = "https://catalog.test/"
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    page.navigate = AsyncMock()
+    released = asyncio.Event()
+
+    class DeferredLLM(ScriptedLLM):
+        async def generate(self, purpose, messages, schema, **kwargs):
+            await released.wait()
+            return await super().generate(purpose, messages, schema, **kwargs)
+
+    llm = DeferredLLM([{"url": start}])
+    head = HeadStart.begin(llm, "Read the catalogue")
+    agent = Agent(page, ScriptedJev({}), llm)
+    agent._first_page = AsyncMock(return_value=start)
+    agent._front_page_if_blank = AsyncMock()
+    monkeypatch.setattr(agent_module, "_SHORTCUT_WAIT_SECONDS", 0.001)
+
+    async def finish(state, output_schema, until):
+        page.navigate.assert_awaited_once_with(start)
+        assert head.proposing is not None and not head.proposing.done()
+        head.planning.cancel()
+        released.set()
+        await head.proposing
+        return agent._result(state, head.ledger, Status.COMPLETE)
+
+    monkeypatch.setattr(agent, "_loop", finish)
+    result = await asyncio.wait_for(agent.run("Read the catalogue", choose_start=True, head_start=head), 1)
+    assert result.status is Status.COMPLETE
+    assert len(head.ledger.lines) == 1 and not result.cost.has_unknown
+    assert head.proposing is not None and head.proposing.done()

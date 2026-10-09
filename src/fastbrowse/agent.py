@@ -566,7 +566,10 @@ class Agent:
                     # from a page it opened itself wants. `choose_start` is the other case: a caller with a goal
                     # and no page at all, who wants the first address worked out from the task.
                     opening = start if start is not None or not choose_start else await self._first_page(task, ledger)
-                    proposing = head.proposing if opening is not None and opening == head.start else None
+                    if opening is not None and head.proposing is None:
+                        # A chosen first address arrives after startup; its shortcut still needs owned, bounded waiting.
+                        head.proposing = asyncio.create_task(_propose(self._llm, task, opening, ledger))
+                    proposing = head.proposing
                     history, invented = (
                         ([], set[str]()) if opening is None else await self._open(task, opening, ledger, proposing)
                     )
