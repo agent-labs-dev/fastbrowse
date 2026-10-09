@@ -556,3 +556,39 @@ async def test_untrusted_or_missing_receipt_keeps_spend_guard(
         ).generate(LLMPurpose.FIELD_TEXT, [], Result, ledger=ledger)
     with pytest.raises(BudgetExceeded, match="cannot be enforced"):
         ledger.record(result.cost)
+
+
+async def test_cancelled_receipt_lookup_retains_unknown_generation_charge() -> None:
+    looking_up = asyncio.Event()
+    ledger = Ledger(Limits(max_dollars=0.25))
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            looking_up.set()
+            await asyncio.Event().wait()
+        return httpx.Response(
+            200,
+            json={
+                "id": "generation-1",
+                "choices": [{"message": {"content": '{"count":3}'}}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 2},
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OpenAICompatibleLLM(
+            "key",
+            http=http,
+            base_url="https://openrouter.ai/api/v1",
+            models={LLMPurpose.FIELD_TEXT: "writer"},
+        )
+        task = asyncio.create_task(client.generate(LLMPurpose.FIELD_TEXT, [], Result, ledger=ledger))
+        await looking_up.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert len(ledger.lines) == 1
+    assert ledger.lines[0].basis is CostBasis.UNKNOWN
+    assert ledger.lines[0].input_tokens == 7
+    with pytest.raises(BudgetExceeded, match="cannot be enforced"):
+        ledger.check()

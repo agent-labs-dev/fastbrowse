@@ -308,7 +308,8 @@ class OpenAICompatibleLLM:
                 # dropping it would let an unaccounted request pass a dollar cap. A hedge's discarded twin
                 # carried the same prompt, so it is charged as the answer was; charging it as unknown instead
                 # made every run with one slow call stop at its dollar cap.
-                costs.append(with_discarded(await self._settled_cost(payload, purpose), usage))
+                costs.append(with_discarded(_cost(payload, purpose), usage))
+                costs[-1] = with_discarded(await self._settled_cost(payload, purpose), usage)
                 if _truncated(payload):
                     _grow_cap(body, attempt, max_output_tokens, purpose)
                     continue
