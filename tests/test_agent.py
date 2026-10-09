@@ -6046,3 +6046,13 @@ async def test_numeric_next_page_rejects_ambiguous_or_changed_scope(current: str
     assert (
         agent_module.next_page_control(_at(f"https://example.test{current}", _link("candidate", label, target))) is None
     )
+
+
+@pytest.mark.parametrize("fragment", ["", "#results"])
+async def test_next_page_deduplicates_absolute_and_relative_destinations(fragment: str) -> None:
+    controls = (
+        _link("next", "Next", "https://example.test/list?page=3&sort=weight" + fragment),
+        _link("number", "3", "/list?page=3&sort=weight"),
+    )
+    found = agent_module.next_page_control(_at("https://example.test/list?page=2&sort=weight", *controls))
+    assert found is not None and found.id == "next"

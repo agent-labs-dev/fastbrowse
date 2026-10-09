@@ -3832,7 +3832,7 @@ def next_page_control(observation: Observation) -> Control | None:
             continue
         if (target.path, target.query) == (here.path, here.query):
             continue
-        found.setdefault(control.href, control)
+        found.setdefault(target._replace(fragment="").geturl(), control)
     return next(iter(found.values())) if len(found) == 1 else None
 
 
