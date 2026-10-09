@@ -134,6 +134,10 @@ export interface Evidence {
   end: number;
   quote: string;
   /**
+   * False for typed DOM observations whose quote is not literal rendered page text.
+   */
+  rendered_text: boolean;
+  /**
    * The headings the quote sits under on the page: which record a bare "£10.69" is the price of.
    */
   heading_path: string[];

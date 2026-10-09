@@ -3435,7 +3435,7 @@ class Agent:
             quote=quote,
             url=url,
             reader=fact.reader,
-            deep_link=text_fragment(url, quote),
+            deep_link=text_fragment(url, quote) if fact.evidence.rendered_text else url,
         )
 
     def _public_answer(self, composed: ComposedAnswer) -> tuple[str, tuple[Citation, ...]]:
@@ -3454,7 +3454,7 @@ class Agent:
                     "text": redact(citation.text),
                     "url": url,
                     "quote": quote,
-                    "deep_link": text_fragment(url, quote),
+                    "deep_link": url if citation.deep_link == citation.url else text_fragment(url, quote),
                 }
             )
             links[citation.deep_link] = public.deep_link

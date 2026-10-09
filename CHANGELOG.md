@@ -12,7 +12,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 ## [Unreleased]
 
 - Read captures retain empty form fields, disabled buttons, horizontal overflow and the absence of visible h1
-  headings across accessible document and shadow roots. Field values supplied as URLs are checked before navigation.
+  headings across accessible document and shadow roots. These DOM observations cite the source page without
+  text fragments for synthetic labels. Field values supplied as URLs are checked before navigation.
 
 - Recordings of attached windows leave the caller's page in place. Explicit submit buttons expose the form's
   destination to the authorization check, while focusing a field does not claim to submit it.

@@ -229,6 +229,9 @@ def _evidence(capture: Capture, block: Block, start: int, end: int) -> Evidence:
         start=start,
         end=end,
         quote=capture.text[start:end],
+        rendered_text=not any(
+            item.kind is BlockKind.OBSERVATION and item.start < end and item.end > start for item in capture.blocks
+        ),
         heading_path=block.heading_path,
     )
 
@@ -2353,7 +2356,7 @@ def assemble_answer(
             requirement_id=fact.requirement_id,
             url=evidence.url,
             quote=evidence.quote,
-            deep_link=text_fragment(evidence.url, evidence.quote),
+            deep_link=text_fragment(evidence.url, evidence.quote) if evidence.rendered_text else evidence.url,
         )
         for index, (key, fact, evidence) in enumerate(
             ((fact_id(fact), fact, fact.evidence) for fact in notes.facts if fact.evidence is not None), 1
