@@ -2228,6 +2228,15 @@ class Agent:
         state.incomplete.update(outcome.incomplete)
         state.tally_readers = outcome.tally_readers
         state.comparisons = outcome.comparisons
+        # A records-only recovery can prove that a finite list ended. Apply its code-owned result here, where a
+        # normal read can finish without the paged pipeline consuming an ended marker.
+        for requirement_id in outcome.ended:
+            if requirement_id in state.incomplete:
+                continue
+            if requirement_id in state.comparisons:
+                complete_comparison(state.notes, requirement_id, state.comparisons[requirement_id])
+            if not state.notes.has_untallied_records(requirement_id):
+                state.notes.complete_tallies(requirement_id)
         # A timer changes the capture hash and a reader can paraphrase the same claim, so only a new source
         # quote or a newly evidenced requirement restores the read budget.
         progressed = bool(_answer_evidence(state.notes, include_answer=False) - known) or (

@@ -6056,3 +6056,59 @@ async def test_next_page_deduplicates_absolute_and_relative_destinations(fragmen
     )
     found = agent_module.next_page_control(_at("https://example.test/list?page=2&sort=weight", *controls))
     assert found is not None and found.id == "next"
+
+
+@pytest.mark.parametrize("incomplete", [False, True])
+async def test_read_closes_ended_order_recovery_only_with_complete_records(incomplete: bool) -> None:
+    state = await _reading_state()
+    state.ready_plan = Plan(
+        requirements=(
+            Requirement(
+                id="r1",
+                text="Find the heaviest parcel and its weight",
+                kind=RequirementKind.INFORMATION,
+            ),
+        ),
+        answer_expected=True,
+    )
+    if incomplete:
+        state.incomplete.add("r1")
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "text": "Atlas is heaviest",
+                        "requirement_id": "r1",
+                        "cite": {"first": "s1", "last": "s1"},
+                        "orders_list": {"first": "s0", "last": "s0"},
+                    }
+                ],
+                "answered": True,
+            },
+            {"confirmed": False},
+            {
+                "continues": [
+                    {
+                        "requirement_id": "r1",
+                        "through_end": True,
+                        "comparison": {
+                            "order": "highest",
+                            "limit": 1,
+                            "label": {"prefix": "", "suffix": ": "},
+                            "value": {"prefix": ": ", "suffix": ""},
+                        },
+                        "records": [{"first": "s1", "last": "s1"}, {"first": "s2", "last": "s2"}],
+                    }
+                ],
+                "ended": ["r1"],
+            },
+        ]
+    )
+    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
+    page = capture(
+        (BlockKind.PARAGRAPH, "Sort by weight"), (BlockKind.RECORD, "Atlas: 8"), (BlockKind.RECORD, "Beacon: 5")
+    )
+    await agent._read(state, page, _at(page.url))
+    assert state.notes.evidenced("r1") is (not incomplete)
+    assert state.continuing == ({"r1"} if incomplete else set())

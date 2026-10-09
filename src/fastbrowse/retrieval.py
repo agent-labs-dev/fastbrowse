@@ -642,6 +642,10 @@ class _ReadResponse(Frozen):
 
 class _RecordSet(Frozen):
     requirement_id: str
+    comparison: NumericComparison | None = Field(
+        default=None, description=_Continuation.model_fields["comparison"].description
+    )
+    through_end: bool = Field(default=False, description=_Continuation.model_fields["through_end"].description)
     tallies: tuple[_TallyGroup, ...] = Field(
         default=(),
         description="For every count of matching records, including filtered counts, or ranking by count. "
@@ -1050,8 +1054,10 @@ async def read(
                     continues=tuple(
                         _Continuation(
                             requirement_id=c.requirement_id,
+                            comparison=c.comparison,
                             records=c.records,
                             tallies=c.tallies,
+                            through_end=c.through_end,
                         )
                         for c in collected.data.continues
                     ),
@@ -1411,7 +1417,14 @@ async def read(
                 "cost_lines": (*outcome.cost_lines, *collected.cost_lines),
                 "coverage": tuple(dict.fromkeys((*outcome.coverage, *collected.coverage))),
                 "rejected_claims": outcome.rejected_claims + collected.rejected_claims,
-                "through_end": tuple(dict.fromkeys((*outcome.through_end, *sorted(unconfirmed_orders)))),
+                "through_end": tuple(
+                    dict.fromkeys(
+                        (
+                            *outcome.through_end,
+                            *collected.through_end,
+                        )
+                    )
+                ),
                 "tally_readers": (*outcome.tally_readers, *collected.tally_readers),
                 "comparisons": {**outcome.comparisons, **collected.comparisons},
                 "continues": tuple(dict.fromkeys((*outcome.continues, *collected.continues))),

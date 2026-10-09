@@ -4684,7 +4684,8 @@ async def test_csv_row_excerpts_retain_column_names() -> None:
     assert page.text[fact.evidence.start : fact.evidence.end] == text
 
 
-async def test_offered_sort_options_do_not_prove_the_active_order() -> None:
+@pytest.mark.parametrize("through_end", [False, True])
+async def test_offered_sort_options_do_not_prove_the_active_order(through_end: bool) -> None:
     page = capture(
         (BlockKind.PARAGRAPH, "Sort by weight or weight descending."),
         (BlockKind.PARAGRAPH, "Parcel A - 8 kg"),
@@ -4703,7 +4704,11 @@ async def test_offered_sort_options_do_not_prove_the_active_order() -> None:
                 "answered": True,
             },
             {"confirmed": False},
-            {"continues": [{"requirement_id": "r", "records": [{"first": "s1", "last": "s1"}]}]},
+            {
+                "continues": [
+                    {"requirement_id": "r", "through_end": through_end, "records": [{"first": "s1", "last": "s1"}]}
+                ]
+            },
         ]
     )
     notes = Notes()
@@ -4713,7 +4718,7 @@ async def test_offered_sort_options_do_not_prove_the_active_order() -> None:
     assert result.continues == ("r",)
     assert len(result.continuation_records["r"]) == 1
     assert len(result.cost_lines) == 3
-    assert result.through_end == ("r",)
+    assert result.through_end == (("r",) if through_end else ())
 
 
 @pytest.mark.parametrize("carried_state", [True, False])
@@ -4750,7 +4755,7 @@ async def test_a_continuing_list_cannot_close_on_a_winner_without_order_evidence
     )
     assert not notes.evidenced("r")
     assert result.continues == ("r",)
-    assert result.through_end == ("r",)
+    assert result.through_end == ()
     assert result.incomplete == ()
 
 
@@ -4815,6 +4820,29 @@ async def test_rejected_order_dense_records_use_smaller_response_chunks() -> Non
     result = await read(llm, page, "Find the heaviest parcel", ["r"], Notes())
     assert len(llm.calls) == 4
     assert result.incomplete == ()
+
+
+async def test_rejected_order_does_not_claim_end_without_collector_continuation() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Sort by weight."), (BlockKind.PARAGRAPH, "Parcel A - 8 kg"))
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "cite": {"first": "s1", "last": "s1"},
+                        "orders_list": {"first": "s0", "last": "s0"},
+                        "text": "Parcel A is heaviest.",
+                        "requirement_id": "r",
+                    }
+                ],
+                "answered": True,
+            },
+            {"confirmed": False},
+            {"continues": []},
+        ]
+    )
+    result = await read(llm, page, "Find the heaviest parcel", ["r"], Notes())
+    assert result.through_end == ()
 
 
 def test_shared_records_keep_each_claims_cited_tally_scope() -> None:
