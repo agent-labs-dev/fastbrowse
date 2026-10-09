@@ -321,16 +321,24 @@ class Notes:
         return tuple(requirement for requirement in plan.requirements if not self.evidenced(requirement.id))
 
     def render_for_navigation(self, max_chars: int) -> str:
-        """Recent claims for picking the next action; completion checks use full quoted evidence."""
+        """Claims across read sources for picking the next action; completion checks use full quoted evidence."""
         if max_chars < 0:
             raise ValueError("max_chars must be nonnegative")
         marker = f"[{len(self._facts)} facts omitted]"
         lines: list[str] = []
         sources: dict[str, int] = {}
         used = len(marker)
+        ranks: dict[str | None, int] = {}
+        ranked: list[tuple[int, str, Fact]] = []
+        # Repeated reads of one page must not push every earlier source out of the next action's memory.
+        for key, fact in reversed(self._facts.items()):
+            address = fact.evidence.url if fact.evidence is not None else None
+            rank = ranks.get(address, 0)
+            ranked.append((rank, key, fact))
+            ranks[address] = rank + 1
         # A long source quote can consume the whole action budget and hide which items were already checked.
         # Actions need progress claims; readers and verification retain their separate quoted view.
-        for key, fact in reversed(self._facts.items()):
+        for _, key, fact in sorted(ranked, key=lambda entry: entry[0]):
             source = ""
             if fact.evidence is not None:
                 address = fact.evidence.url

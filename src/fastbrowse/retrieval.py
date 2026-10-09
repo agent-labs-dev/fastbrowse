@@ -2662,6 +2662,7 @@ def claim_check_questions(
     notes: Notes,
     *,
     tokens: TokenBudget = _DEFAULT_TOKENS,
+    check_omission: bool = True,
 ) -> Mapping[str, NoulQuestion]:
     questions: dict[str, NoulQuestion] = {}
     known = notes.evidence
@@ -2709,7 +2710,7 @@ def claim_check_questions(
             )
     # Actions are evidenced by the page, which the done check already judged; quotes only evidence information.
     information = [r for r in composed.requirements if r.kind is RequirementKind.INFORMATION]
-    if not information:
+    if not information or not check_omission:
         return questions
     requirements = "\n".join(requirement.model_dump_json() for requirement in information)
     context = f"{UNTRUSTED}\n\n# Requirements\n{requirements}\n\n# Answer\n{composed.answer}\n\n# Notes\n"

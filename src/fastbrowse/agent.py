@@ -1962,7 +1962,7 @@ class Agent:
                 entry.model_dump(mode="json", exclude_none=True)
                 for entry in _record(state.history, self._config.observation)
             ],
-            "notes": state.notes.render(self._config.observation.working_notes_chars),
+            "notes": state.notes.render_for_navigation(self._config.observation.working_notes_chars),
         }
 
     async def _fill_form(self, state: _RunState, observation: Observation, decision: Decision) -> bool:
@@ -2802,7 +2802,8 @@ class Agent:
                         f"## Current address was proposed\n{observation.url in state.invented}\n\n"
                         f"## HTTP failure\n{state.http_failure.message if state.http_failure else 'none'}\n\n"
                         "## Notes read so far\n"
-                        f"{state.notes.render(self._config.observation.working_notes_chars) or 'none'}\n\n"
+                        f"{state.notes.render_for_navigation(self._config.observation.working_notes_chars) or 'none'}"
+                        "\n\n"
                         f"## Recent steps\n{steps}\n\n"
                         "## Recovery memory\n"
                         f"{_recovery_memory(state, self._config.stall.max_recoveries, self._redactor)}\n\n"

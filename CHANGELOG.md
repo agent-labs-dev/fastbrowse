@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Multi-project tasks retain earlier sources for navigation and verify answers with explicit output checks
+  without requiring an unused whole-notes check to fit the evidence budget.
+
 - Reply controls retain their own comment record as context when only one reply form is open.
 
 - Provider attempt deadlines bound total response time, including responses that keep sending occasional bytes.

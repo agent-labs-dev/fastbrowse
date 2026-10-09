@@ -1053,9 +1053,8 @@ async def check_claims(
     those failed three runs in four of a correct sign-in answer. Removing a doubted claim asserts nothing new,
     so it is honest as long as the rest still answers: the omission check is asked again of what remains.
     """
-    questions = claim_check_questions(composed, notes, tokens=tokens)
-    if answer_checks:
-        questions = {key: question for key, question in questions.items() if key != _OMITTED}
+    # Explicit output audits replace the omission question; rendering its unused notes can exceed the budget.
+    questions = claim_check_questions(composed, notes, tokens=tokens, check_omission=not answer_checks)
     # An action-only task can finish without factual claims. Its completion was checked already,
     # and Jev rejects an empty question batch; dropped or uncited answer text still cannot pass.
     if not questions and not answer_checks:
