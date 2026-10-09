@@ -28,6 +28,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - The agent skill uses uncapped resource defaults, with limits supplied by the caller's task budget.
   It no longer imposes a 30-step limit or a $0.25 model-spend cap on each delegated task.
 
+- Recovery checks whether a changed page satisfies the task before stopping for lack of further actions.
+  The completion verifier still rejects unfinished work.
+
 - Requests to expand or load content until a stopping condition keep that page change as an action
   requirement. A displayed total no longer replaces the requested work in the plan. The feed fixture
   also checks that every remaining batch was loaded, and advances to task version 6.
