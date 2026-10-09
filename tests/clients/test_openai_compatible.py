@@ -594,7 +594,8 @@ async def test_cancelled_receipt_lookup_retains_unknown_generation_charge() -> N
         ledger.check()
 
 
-async def test_gateway_byok_receipt_includes_estimated_provider_spend() -> None:
+@pytest.mark.parametrize("base_url", ["https://ai-gateway.vercel.sh/v1", "https://openrouter.ai/api/v1"])
+async def test_gateway_byok_receipt_includes_estimated_provider_spend(base_url: str) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "GET":
             return httpx.Response(
@@ -602,6 +603,7 @@ async def test_gateway_byok_receipt_includes_estimated_provider_spend() -> None:
                 json={
                     "data": {
                         "id": "generation-byok",
+                        "is_byok": True,
                         "total_cost": 0.001,
                         "upstream_inference_cost": 0.3,
                     }
@@ -620,7 +622,7 @@ async def test_gateway_byok_receipt_includes_estimated_provider_spend() -> None:
         result = await OpenAICompatibleLLM(
             "key",
             http=http,
-            base_url="https://ai-gateway.vercel.sh/v1",
+            base_url=base_url,
             models={LLMPurpose.FIELD_TEXT: "writer"},
         ).generate(LLMPurpose.FIELD_TEXT, [], Result)
     assert result.cost.basis is CostBasis.ESTIMATED
@@ -633,7 +635,8 @@ async def test_gateway_byok_receipt_includes_estimated_provider_spend() -> None:
     "upstream",
     [{}, {"upstream_inference_cost": None}, {"upstream_inference_cost": -1}, {"upstream_inference_cost": "invalid"}],
 )
-async def test_byok_receipt_without_valid_upstream_keeps_unknown_cost(upstream, monkeypatch) -> None:
+@pytest.mark.parametrize("base_url", ["https://ai-gateway.vercel.sh/v1", "https://openrouter.ai/api/v1"])
+async def test_byok_receipt_without_valid_upstream_keeps_unknown_cost(upstream, monkeypatch, base_url: str) -> None:
     async def no_delay(_: float) -> None:
         pass
 
@@ -648,8 +651,38 @@ async def test_byok_receipt_without_valid_upstream_keeps_unknown_cost(upstream, 
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         result = await OpenAICompatibleLLM(
-            "key", http=http, base_url="https://ai-gateway.vercel.sh/v1", models={LLMPurpose.FIELD_TEXT: "writer"}
+            "key", http=http, base_url=base_url, models={LLMPurpose.FIELD_TEXT: "writer"}
         ).generate(LLMPurpose.FIELD_TEXT, [], Result)
     assert result.cost.basis is CostBasis.UNKNOWN
     with pytest.raises(BudgetExceeded, match="cannot be enforced"):
         Ledger(Limits(max_dollars=0.25)).record(result.cost)
+
+
+@pytest.mark.parametrize("base_url", ["https://ai-gateway.vercel.sh/v1", "https://openrouter.ai/api/v1"])
+@pytest.mark.parametrize(
+    "byok,upstream,basis,amount",
+    [
+        (False, 0.3, CostBasis.METERED, 0.001),
+        (True, 0, CostBasis.METERED, 0.001),
+        (None, 0.3, CostBasis.ESTIMATED, 0.301),
+        ("true", 0.3, CostBasis.UNKNOWN, None),
+    ],
+)
+async def test_receipt_does_not_double_count_normal_provider_spend(base_url, byok, upstream, basis, amount) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            receipt = {"id": "generation", "total_cost": 0.001, "upstream_inference_cost": upstream}
+            if byok is not None:
+                receipt["is_byok"] = byok
+            return httpx.Response(200, json={"data": receipt})
+        return httpx.Response(200, json={"id": "generation", "choices": [{"message": {"content": '{"count":3}'}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await OpenAICompatibleLLM(
+            "key", http=http, base_url=base_url, models={LLMPurpose.FIELD_TEXT: "writer"}
+        ).generate(LLMPurpose.FIELD_TEXT, [], Result)
+    assert result.cost.basis is basis
+    if amount is None:
+        assert result.cost.dollars is None
+    else:
+        assert result.cost.dollars == pytest.approx(amount)

@@ -28,6 +28,28 @@ def task_urls(task: str, *, start: str | None = None) -> tuple[str, ...]:
     return tuple(urls)
 
 
+def navigation_urls(
+    task: str,
+    current: str,
+    *,
+    start: str | None = None,
+    start_landing: str | None = None,
+    include_start: bool = False,
+) -> tuple[str, ...]:
+    """Eligible destinations, excluding the current document and its initial redirect alias."""
+    return tuple(
+        url
+        for url in task_urls(task, start=start if include_start else None)
+        if not same_address(url, current)
+        and not (
+            start is not None
+            and start_landing is not None
+            and same_address(url, start)
+            and same_address(start_landing, current)
+        )
+    )
+
+
 def _valid_address(url: str) -> bool:
     try:
         parts = urlsplit(url)

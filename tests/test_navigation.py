@@ -262,3 +262,43 @@ def test_focusing_a_field_does_not_claim_to_submit_its_form() -> None:
 @pytest.mark.parametrize("start", [ALPHA + ".", ALPHA + ")", ALPHA + "_", ALPHA + "?q=1,2;"])
 def test_structured_start_preserves_url_punctuation(start: str) -> None:
     assert task_urls("Return to the initial page", start=start) == (start,)
+
+
+async def test_recovery_cannot_reopen_a_start_that_redirected_to_the_current_form() -> None:
+    state = await run_state()
+    state.caller_start = "https://example.test/"
+    state.start_landing_url = "https://example.test/form"
+    state.task = "Fill the form and return to https://example.test/"
+    state.directed = (Operation.NAVIGATE, state.caller_start)
+    page = observation(()).model_copy(update={"url": state.start_landing_url})
+    assert _follow_recovery(state, page, _code_decision(Operation.ESCALATE, None), uncertain=True) is None
+
+
+async def test_recovery_prompt_and_response_exclude_the_redirected_start() -> None:
+    import json
+    from unittest.mock import AsyncMock
+
+    state = await run_state()
+    state.caller_start = "https://example.test/"
+    state.start_landing_url = "https://example.test/form"
+    state.task = "Fill the form and return to https://example.test/"
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"")
+    llm = ScriptedLLM(
+        [
+            {
+                "diagnosis": "Return to the beginning",
+                "next_subgoal": "Inspect the form",
+                "give_up": False,
+                "operation": "navigate",
+                "url": state.caller_start,
+            }
+        ]
+    )
+    await Agent(page, ScriptedJev({}), llm)._recover(
+        state, observation(()).model_copy(update={"url": state.start_landing_url}), "uncertain next step"
+    )
+    assert state.directed is None
+    prompt = llm.calls[0][1][-1].content
+    destinations = prompt.split("## Caller-supplied addresses\n", 1)[1].split("\n\n", 1)[0]
+    assert json.loads(destinations) == []

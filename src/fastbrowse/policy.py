@@ -29,7 +29,7 @@ from fastbrowse.jev import (
     Question,
 )
 from fastbrowse.models import TARGETED, UNTRUSTED, CostComponent, CostLine, Frozen, Operation, StepOutcome
-from fastbrowse.navigation import same_address, task_urls
+from fastbrowse.navigation import navigation_urls
 from fastbrowse.page import Control, Observation, loads_more, pager_link
 from fastbrowse.telemetry import Ledger, trace
 
@@ -458,20 +458,6 @@ def _index_controls(controls: Sequence[Control]) -> dict[Operation, tuple[Contro
     return {operation: tuple(candidates) for operation, candidates in indexed.items()}
 
 
-def _navigation_urls(observation: Observation, context: StepContext) -> tuple[str, ...]:
-    return tuple(
-        url
-        for url in task_urls(context.task)
-        if not same_address(url, observation.url)
-        and not (
-            context.start_url is not None
-            and context.start_landing_url is not None
-            and same_address(url, context.start_url)
-            and same_address(context.start_landing_url, observation.url)
-        )
-    )
-
-
 def _offered_operations(
     observation: Observation, indexed: Mapping[Operation, tuple[Control, ...]], context: StepContext
 ) -> tuple[Operation, ...]:
@@ -481,7 +467,9 @@ def _offered_operations(
     for operation in Operation:
         match operation:
             case Operation.NAVIGATE:
-                if _navigation_urls(observation, context):
+                if navigation_urls(
+                    context.task, observation.url, start=context.start_url, start_landing=context.start_landing_url
+                ):
                     available.append(operation)
             case Operation.CLICK | Operation.HOVER | Operation.FILL | Operation.SELECT | Operation.ENTER:
                 if operation in indexed:
@@ -598,7 +586,9 @@ def build_request(
         )
     navigation_groups: tuple[tuple[str, ...], ...] = ()
     if Operation.NAVIGATE in offered:
-        urls = _navigation_urls(observation, context)
+        urls = navigation_urls(
+            context.task, observation.url, start=context.start_url, start_landing=context.start_landing_url
+        )
         navigation = ChoiceQuestion(
             instructions=(
                 f"{UNTRUSTED}\nChoose the caller-supplied address that advances the next unanswered requirement. "

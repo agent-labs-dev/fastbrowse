@@ -256,12 +256,15 @@ class OpenAICompatibleLLM:
                 if amount is not None:
                     basis = CostBasis.METERED
                     charge = dollars(amount)
-                    if host == "ai-gateway.vercel.sh":
-                        # Gateway charges exclude BYOK inference; its upstream price is an estimate, not a receipt.
-                        upstream_amount = receipt.get("upstream_inference_cost")
-                        if receipt.get("is_byok") is True and upstream_amount is None:
-                            return cost
-                        upstream = dollars(upstream_amount if upstream_amount is not None else 0)
+                    byok = receipt.get("is_byok")
+                    if byok is not None and not isinstance(byok, bool):
+                        return cost
+                    upstream_amount = receipt.get("upstream_inference_cost")
+                    if byok is True and upstream_amount is None:
+                        return cost
+                    # BYOK inference is billed outside the gateway; a normal receipt already includes it.
+                    if byok is not False and upstream_amount is not None:
+                        upstream = dollars(upstream_amount)
                         if upstream:
                             basis = CostBasis.ESTIMATED
                             charge += upstream

@@ -65,7 +65,7 @@ from fastbrowse.models import (
     Unavailable,
     UntilCheck,
 )
-from fastbrowse.navigation import same_address, task_urls
+from fastbrowse.navigation import navigation_urls, task_urls
 from fastbrowse.page import (
     Action,
     ActResult,
@@ -2714,6 +2714,13 @@ class Agent:
             if state.http_failure is not None and gives_up_as is not Status.NEEDS_INPUT:
                 raise state.http_failure.stop()
             raise _Stop(gives_up_as, reason)
+        destinations = navigation_urls(
+            state.task,
+            observation.url,
+            start=state.caller_start,
+            start_landing=state.start_landing_url,
+            include_start=True,
+        )
         steps = "\n".join(
             f"- {h.operation.value if h.operation else 'open'} {h.target or ''} -> {h.outcome.value}"
             + (f": {h.effect}" if h.effect else "")
@@ -2791,7 +2798,7 @@ class Agent:
                         f"{observation.viewport_text}{secrets}\n\n"
                         f"## Caller start page\n{self._redactor.redact(state.started_url or state.first_url or '')}\n\n"
                         "## Caller-supplied addresses\n"
-                        f"{json.dumps(task_urls(state.task, start=state.caller_start))}\n\n"
+                        f"{json.dumps(destinations)}\n\n"
                         f"## Current address was proposed\n{observation.url in state.invented}\n\n"
                         f"## HTTP failure\n{state.http_failure.message if state.http_failure else 'none'}\n\n"
                         "## Notes read so far\n"
@@ -2878,7 +2885,8 @@ class Agent:
         )
         chosen, operation = generation.data.control, generation.data.operation
         observation = _without_failed_links(state, observation)
-        if operation is Operation.NAVIGATE and generation.data.url in task_urls(state.task, start=state.caller_start):
+        state.directed = None
+        if operation is Operation.NAVIGATE and generation.data.url in destinations:
             state.directed = (operation, generation.data.url)
         elif operation is not None and operation in _PAGE_OPERATIONS:
             state.directed = (operation, None)
@@ -4109,8 +4117,14 @@ def _follow_recovery(
         if (
             observation.dialog is not None
             or control_id is None
-            or control_id not in task_urls(state.task, start=state.caller_start)
-            or same_address(control_id, observation.url)
+            or control_id
+            not in navigation_urls(
+                state.task,
+                observation.url,
+                start=state.caller_start,
+                start_landing=state.start_landing_url,
+                include_start=True,
+            )
         ):
             return None
         return decision.model_copy(update={"operation": operation, "target": None, "url": control_id, "directed": True})
