@@ -116,7 +116,7 @@ The cursor is drawn only when exactly one driver window matches the page's repor
 two share a scale, so a scaled display is skipped), that window is in front of every other, the tab is visible and
 the point is inside the viewport. Otherwise it is hidden. Any driver failure turns the feature off for the run.
 
-Limits: Linux X11 or XWayland only; native Wayland, macOS and Windows are not verified. It needs `cua-driver`
+Limits: Linux X11 only; native Wayland, macOS and Windows are not verified. It needs `cua-driver`
 0.28.3 or newer with the session cursor tools. Cloud and headless browsers are skipped. The driver offers no click
 pulse through `move_cursor`, so only the glide is shown. A docked DevTools panel or a pinch zoom hides the cursor,
 and a window partly covered by another counts as covered. The overlay is a separate window, so CDP screenshots and

@@ -253,8 +253,8 @@ class ScreenshotsUnavailable(BrowserError):
 class NavigationTimeout(BrowserError):
     """`Page.navigate` gave up waiting for a document: the CDP command timed out, or the page never became ready.
 
-    Before a run's first step no agent code has acted, so the run ends `unavailable`; after it, the agent's own
-    navigation timed out and the run ends `error` as any other browser failure does."""
+    Before a run's first step no agent code has acted, so the run ends `unavailable`. A navigation action reports
+    a failed step so the agent can try another destination."""
 
 
 class SiteUnreachable(BrowserError):

@@ -29,7 +29,7 @@ from fastbrowse.browser.cursor import CursorFeedback, Geometry
 from fastbrowse.browser.session import BrowserSession, OriginNotAllowed
 from fastbrowse.config import Config
 from fastbrowse.datafiles import data_file
-from fastbrowse.models import TARGETED, Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome
+from fastbrowse.models import TARGETED, Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome, Unavailable
 from fastbrowse.page import (
     Action,
     ActResult,
@@ -699,10 +699,14 @@ class CdpPage(Page):
             )
         if self._cursor_pid is None:
             return None
-        reading, metrics = await asyncio.gather(
-            self._evaluate(session_id, _GEOMETRY_JS),
-            self._session.client.send.Page.getLayoutMetrics(session_id=session_id),
-        )
+        try:
+            reading, metrics = await asyncio.gather(
+                self._evaluate(session_id, _GEOMETRY_JS),
+                self._session.client.send.Page.getLayoutMetrics(session_id=session_id),
+            )
+        except BrowserError:
+            # A navigating click destroys its old context; skip the drawing without disabling later feedback.
+            return None
         if (
             self._session.active_session_id != session_id
             or not isinstance(reading, list)
@@ -757,7 +761,12 @@ class CdpPage(Page):
             case Operation.NAVIGATE:
                 if action.url is None or urlsplit(action.url).scheme not in {"http", "https"}:
                     return StepOutcome.FAILED, "navigate requires an HTTP(S) address"
-                await self.navigate(action.url)
+                try:
+                    await self.navigate(action.url)
+                except (OriginNotAllowed, Unavailable):
+                    raise
+                except BrowserError as error:
+                    return StepOutcome.FAILED, str(error)
                 return StepOutcome.EXECUTED, None
             case Operation.CLICK:
                 return await self._click(target, point)

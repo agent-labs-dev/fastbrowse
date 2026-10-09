@@ -17,7 +17,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Browser commands that remain unanswered for 120 seconds return `unavailable` even if health checks succeed.
 - Closing the last owned browser tab returns `unavailable` with retained run evidence instead of a Python error.
 - Styled upload labels expose their hidden file inputs as upload targets and receive supplied attachments.
-- Page captures retain visible image DOM metadata, including source, alt text and whether the image loaded.
+- Page captures retain visible image DOM metadata, including source and alt text.
 - Missing completion charges are recovered from matching provider generation receipts when available.
   Dollar caps still stop the run when the charge cannot be established.
 - Optional `--cursor` feedback draws an agent overlay for visible local Chrome on Linux X11 with Cua Driver.

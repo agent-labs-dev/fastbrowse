@@ -218,13 +218,21 @@ def test_explicit_start_is_available_without_repeating_it_in_task() -> None:
 
 
 async def test_action_can_return_to_explicit_caller_start() -> None:
-    agent = Agent(Mock(spec=Page), ScriptedJev({}, noul=0.01), ScriptedLLM([]))
+    class ReturnJev(ScriptedJev):
+        async def evaluate(self, state, questions):
+            self.noul = 0.99 if "destination" in questions else 0.01
+            return await super().evaluate(state, questions)
+
+    jev = ReturnJev({})
+    agent = Agent(Mock(spec=Page), jev, ScriptedLLM([]))
     state = await run_state()
     state.caller_start = ALPHA
     state.task = "Fill the form and return"
     decision = _code_decision(Operation.NAVIGATE, None).model_copy(update={"url": ALPHA})
     action = await agent._action(state, observation(()), decision, gate=True)
     assert action.url == ALPHA
+    assert "destination" in jev.requests[0]
+    assert "irreversible" in jev.requests[1]
 
 
 async def test_action_does_not_visit_a_url_given_only_as_field_data() -> None:

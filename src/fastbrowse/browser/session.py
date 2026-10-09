@@ -44,7 +44,7 @@ CDP_REPLY_SECONDS = 60.0
 """How long a CDP command waits before the browser is asked whether it is still there. A cloud browser's proxy can
 keep the socket open, answering pings, after losing the browser behind it, and a run with no wall-clock limit would
 otherwise wait on that reply forever. A slow reply is not a lost one: `Page.navigate` waits for a slow server's
-headers, so the command keeps waiting for as long as the browser answers."""
+headers, so a live browser can keep waiting until CDP_COMMAND_SECONDS."""
 CDP_COMMAND_SECONDS = 120.0
 """A responsive browser can still leave one document command pending forever."""
 CDP_ALIVE_SECONDS = 10.0

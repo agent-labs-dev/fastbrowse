@@ -87,3 +87,22 @@ async def test_empty_frame_documents_emit_one_absence_observation(page: CdpPage,
     capture = await page.capture()
     assert capture.inaccessible_frames == 0
     assert capture.text.count("Visible h1 headings: 0") == 1
+
+
+async def test_control_observations_are_bounded(page: CdpPage, main_site: str) -> None:
+    await page.navigate(main_site)
+    await eval_value(
+        page._session,
+        page._session.active_session_id,
+        """
+        document.body.innerHTML = Array.from({length: 300}, (_, i) =>
+          `<label>Field ${i}<input></label><button disabled>Action ${i}</button>`).join('');
+        """,
+    )
+    capture = await page.capture()
+    observations = [
+        b
+        for b in capture.blocks
+        if "[empty]" in capture.text[b.start : b.end] or ": disabled" in capture.text[b.start : b.end]
+    ]
+    assert len(observations) == 64

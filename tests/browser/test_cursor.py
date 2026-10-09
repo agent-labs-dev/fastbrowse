@@ -53,3 +53,24 @@ async def test_driver_failure_does_not_repeat_or_change_a_browser_action(browser
     assert "Clicked 1" in (await page.capture()).text
     driver.close.assert_awaited_once()
     await feedback.close()
+
+
+async def test_navigation_context_loss_skips_only_the_cursor_read(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, monkeypatch
+) -> None:
+    from fastbrowse.page import BrowserError
+
+    await page.navigate(main_site)
+    original = page._evaluate
+    calls = 0
+
+    async def evaluate(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise BrowserError("Execution context was destroyed")
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(page, "_evaluate", evaluate)
+    assert await page._cursor_geometry() is None
+    assert await page._cursor_geometry() is not None

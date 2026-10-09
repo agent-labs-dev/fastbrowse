@@ -424,6 +424,7 @@ class _RunState:
     started_url: str | None = None
     """The initial address, retained even when an HTTP failure removes it from completion evidence."""
     caller_start: str | None = None
+    start_landing_url: str | None = None
     first_url: str | None = None
     """The first page the run looked at, which is what a task's "this page" means once the run has moved on."""
     visited: dict[str, None] = field(default_factory=dict[str, None])
@@ -595,6 +596,8 @@ class Agent:
                     )
                     state.started_url = opening
                     state.caller_start = start
+                    if start is not None and not history:
+                        state.start_landing_url = await self._page.address()
                     state.history.extend(history)
                     state.invented = invented
                     if opening is not None:
@@ -1654,7 +1657,7 @@ class Agent:
                     raise _Stop(Status.STUCK, "navigation address was not supplied by the caller")
                 if self._redactor.reveals(decision.url):
                     raise _Stop(Status.NEEDS_INPUT, "navigation address contains a resolved secret")
-                if gate and decision.url != state.caller_start:
+                if gate:
                     state.ledger.reserve(CostComponent.JEV)
                     evaluation = await self._jev.evaluate(
                         {"task": state.task, "address": decision.url},
@@ -3527,6 +3530,7 @@ class Agent:
             secrets=secrets,
             unread_requirements=unread,
             start_url=state.caller_start,
+            start_landing_url=state.start_landing_url,
         )
 
     def _partial_result(

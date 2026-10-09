@@ -179,11 +179,13 @@ class _Driver:
                 process.stdin.close()
             try:
                 await asyncio.wait_for(process.wait(), _STOP_SECONDS)
-            except (TimeoutError, asyncio.CancelledError):
+            except (TimeoutError, asyncio.CancelledError) as error:
                 with contextlib.suppress(ProcessLookupError):
                     process.kill()
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(process.wait(), _STOP_SECONDS)
+                if isinstance(error, asyncio.CancelledError):
+                    raise
 
 
 class CursorFeedback:

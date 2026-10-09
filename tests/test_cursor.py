@@ -462,3 +462,30 @@ async def test_cancelling_session_cleanup_still_reaps_the_driver(
         with pytest.raises(asyncio.CancelledError):
             await closing
         assert not feedback.running
+
+
+async def test_cancelling_driver_close_reaps_child_and_propagates_cancellation() -> None:
+    from unittest.mock import AsyncMock, Mock
+
+    process = Mock()
+    process.returncode = None
+    started = asyncio.Event()
+
+    calls = 0
+
+    async def wait():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            await asyncio.Event().wait()
+        return 0
+
+    process.wait = AsyncMock(side_effect=wait)
+    closing = asyncio.create_task(_Driver(process).close())
+    await started.wait()
+    closing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    process.kill.assert_called_once()
+    assert process.wait.await_count == 2

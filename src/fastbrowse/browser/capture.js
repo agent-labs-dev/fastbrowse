@@ -13,6 +13,19 @@
   let sourcePath = '';
   let inaccessible = 0;
   let visibleH1 = false;
+  let controlObservations = 0;
+  let imageObservations = 0;
+  let imagesOmitted = false;
+  let controlsOmitted = false;
+  const imageSource = source => {
+    if (!source) return source;
+    if (source.startsWith('data:')) {
+      const comma = source.indexOf(',');
+      return `${source.slice(0, comma < 0 ? 128 : Math.min(comma, 128))},[payload omitted]`;
+    }
+    if (source.startsWith('blob:')) return 'blob:[identifier omitted]';
+    return source.length > 1024 ? `${source.slice(0, 1024)}[truncated]` : source;
+  };
   const registry = (window.__fastbrowse ||= { ids: new WeakMap(), nodes: new Map(), next: 1 });
   const granted = doc => {
     if (allowedOrigins === null) return true;
@@ -365,16 +378,34 @@
     path = [...headings];
     const visible = e => e.checkVisibility ? e.checkVisibility({ visibilityProperty: true }) : !hidden(e);
     for (const e of [...root.querySelectorAll('input,select,textarea,button,[role="button"]')].filter(visible)) {
+      if (controlObservations >= 64) {
+        if (!controlsOmitted) push('observation', 'Additional control state observations omitted.');
+        controlsOmitted = true;
+        break;
+      }
+      // Placeholders suggest input; they do not label a value or prove an empty named field.
+      if (CONTROLS.has(e.tagName) && !e.labels?.length && !e.hasAttribute('aria-label') && !e.hasAttribute('aria-labelledby')) continue;
       const name = nameOf(e) || clean(e.innerText ?? '');
       if (!name || e.dataset?.fastbrowseSecret === '1') continue;
-      if (CONTROLS.has(e.tagName) && !UNFILLED.has(e.type) && !fieldValue(e))
-        push('observation', `${name}: [empty]`);
-      if (e.matches(':disabled,[aria-disabled="true"]')) push('observation', `${name}: disabled`);
+      if (CONTROLS.has(e.tagName) && !UNFILLED.has(e.type) && !fieldValue(e)) {
+        push('observation', `${name.slice(0, 1024)}: [empty]`);
+        controlObservations++;
+      }
+      if (controlObservations < 64 && e.matches(':disabled,[aria-disabled="true"]')) {
+        push('observation', `${name.slice(0, 1024)}: disabled`);
+        controlObservations++;
+      }
     }
     // Images carry no innerText, so a text-only capture cannot distinguish their presence from absence.
     for (const image of [...root.querySelectorAll('img')].filter(visible)) {
-      const metadata = { alt: image.getAttribute('alt'), src: image.currentSrc || image.getAttribute('src'),
-        loaded: image.complete && image.naturalWidth > 0 };
+      if (imageObservations++ >= 32) {
+        if (!imagesOmitted) push('observation', 'Additional visible image metadata omitted.');
+        imagesOmitted = true;
+        break;
+      }
+      // Loading changes without a page edit, so captures report presence rather than transient decode state.
+      const metadata = { alt: image.getAttribute('alt')?.slice(0, 1024) ?? null,
+        src: imageSource(image.getAttribute('src') ?? image.getAttribute('srcset')) };
       push('observation', `Image element DOM metadata: ${JSON.stringify(metadata)}. Pixels are not described.`);
     }
     const h1 = [...root.querySelectorAll('h1,[role="heading"][aria-level="1"]')].filter(visible);

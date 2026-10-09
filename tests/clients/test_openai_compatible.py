@@ -592,3 +592,64 @@ async def test_cancelled_receipt_lookup_retains_unknown_generation_charge() -> N
     assert ledger.lines[0].input_tokens == 7
     with pytest.raises(BudgetExceeded, match="cannot be enforced"):
         ledger.check()
+
+
+async def test_gateway_byok_receipt_includes_estimated_provider_spend() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "id": "generation-byok",
+                        "total_cost": 0.001,
+                        "upstream_inference_cost": 0.3,
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "generation-byok",
+                "choices": [{"message": {"content": '{"count":3}'}}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 2},
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await OpenAICompatibleLLM(
+            "key",
+            http=http,
+            base_url="https://ai-gateway.vercel.sh/v1",
+            models={LLMPurpose.FIELD_TEXT: "writer"},
+        ).generate(LLMPurpose.FIELD_TEXT, [], Result)
+    assert result.cost.basis is CostBasis.ESTIMATED
+    assert result.cost.dollars == pytest.approx(0.301)
+    with pytest.raises(BudgetExceeded):
+        Ledger(Limits(max_dollars=0.25)).record(result.cost)
+
+
+@pytest.mark.parametrize(
+    "upstream",
+    [{}, {"upstream_inference_cost": None}, {"upstream_inference_cost": -1}, {"upstream_inference_cost": "invalid"}],
+)
+async def test_byok_receipt_without_valid_upstream_keeps_unknown_cost(upstream, monkeypatch) -> None:
+    async def no_delay(_: float) -> None:
+        pass
+
+    monkeypatch.setattr("fastbrowse.clients.openai_compatible.asyncio.sleep", no_delay)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            receipt = {"id": "byok", "is_byok": True, "total_cost": 0}
+            receipt.update(upstream)
+            return httpx.Response(200, json={"data": receipt})
+        return httpx.Response(200, json={"id": "byok", "choices": [{"message": {"content": '{"count":3}'}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await OpenAICompatibleLLM(
+            "key", http=http, base_url="https://ai-gateway.vercel.sh/v1", models={LLMPurpose.FIELD_TEXT: "writer"}
+        ).generate(LLMPurpose.FIELD_TEXT, [], Result)
+    assert result.cost.basis is CostBasis.UNKNOWN
+    with pytest.raises(BudgetExceeded, match="cannot be enforced"):
+        Ledger(Limits(max_dollars=0.25)).record(result.cost)

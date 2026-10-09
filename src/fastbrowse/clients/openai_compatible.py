@@ -232,7 +232,8 @@ class OpenAICompatibleLLM:
         generation_id = payload.get("id")
         if cost.dollars is not None or not isinstance(generation_id, str) or not generation_id:
             return cost
-        if httpx.URL(self._base_url).host not in {"openrouter.ai", "ai-gateway.vercel.sh"}:
+        host = httpx.URL(self._base_url).host
+        if host not in {"openrouter.ai", "ai-gateway.vercel.sh"}:
             return cost
         # Usage receipts can lag the completion; recover that exact charge without generating the text again.
         for attempt in range(3):
@@ -253,7 +254,18 @@ class OpenAICompatibleLLM:
                     return cost
                 amount = receipt.get("total_cost")
                 if amount is not None:
-                    return cost.model_copy(update={"basis": CostBasis.METERED, "dollars": dollars(amount)})
+                    basis = CostBasis.METERED
+                    charge = dollars(amount)
+                    if host == "ai-gateway.vercel.sh":
+                        # Gateway charges exclude BYOK inference; its upstream price is an estimate, not a receipt.
+                        upstream_amount = receipt.get("upstream_inference_cost")
+                        if receipt.get("is_byok") is True and upstream_amount is None:
+                            return cost
+                        upstream = dollars(upstream_amount if upstream_amount is not None else 0)
+                        if upstream:
+                            basis = CostBasis.ESTIMATED
+                            charge += upstream
+                    return cost.model_copy(update={"basis": basis, "dollars": charge})
             except (httpx.HTTPError, TimeoutError, ValueError, TypeError, OverflowError):
                 continue
         return cost

@@ -167,6 +167,7 @@ class StepContext(Frozen):
     unread_requirements: tuple[str, ...] | None = None
     """None while planning; an empty tuple means no information remains to collect."""
     start_url: str | None = None
+    start_landing_url: str | None = None
     recovery_memory: str = ""
     """Recent reasons, diagnoses and subgoals, separate from actions actually taken."""
 
@@ -457,6 +458,20 @@ def _index_controls(controls: Sequence[Control]) -> dict[Operation, tuple[Contro
     return {operation: tuple(candidates) for operation, candidates in indexed.items()}
 
 
+def _navigation_urls(observation: Observation, context: StepContext) -> tuple[str, ...]:
+    return tuple(
+        url
+        for url in task_urls(context.task)
+        if not same_address(url, observation.url)
+        and not (
+            context.start_url is not None
+            and context.start_landing_url is not None
+            and same_address(url, context.start_url)
+            and same_address(context.start_landing_url, observation.url)
+        )
+    )
+
+
 def _offered_operations(
     observation: Observation, indexed: Mapping[Operation, tuple[Control, ...]], context: StepContext
 ) -> tuple[Operation, ...]:
@@ -466,9 +481,7 @@ def _offered_operations(
     for operation in Operation:
         match operation:
             case Operation.NAVIGATE:
-                if any(
-                    not same_address(url, observation.url) for url in task_urls(context.task, start=context.start_url)
-                ):
+                if _navigation_urls(observation, context):
                     available.append(operation)
             case Operation.CLICK | Operation.HOVER | Operation.FILL | Operation.SELECT | Operation.ENTER:
                 if operation in indexed:
@@ -585,9 +598,7 @@ def build_request(
         )
     navigation_groups: tuple[tuple[str, ...], ...] = ()
     if Operation.NAVIGATE in offered:
-        urls = tuple(
-            url for url in task_urls(context.task, start=context.start_url) if not same_address(url, observation.url)
-        )
+        urls = _navigation_urls(observation, context)
         navigation = ChoiceQuestion(
             instructions=(
                 f"{UNTRUSTED}\nChoose the caller-supplied address that advances the next unanswered requirement. "

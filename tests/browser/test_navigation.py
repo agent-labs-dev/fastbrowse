@@ -123,3 +123,39 @@ async def test_agent_reaches_a_second_supplied_site_without_a_link(
     assert result.status is Status.COMPLETE
     assert result.final_url == target
     assert any(step.operation is Operation.NAVIGATE and step.target == target for step in result.steps)
+
+
+@pytest.mark.parametrize("failure", ["unreachable", "timeout", "browser"])
+async def test_failed_navigation_is_a_recoverable_step(
+    page: CdpPage, main_site: str, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    from fastbrowse.page import BrowserError, NavigationTimeout, SiteUnreachable
+
+    await page.navigate(main_site)
+    before = await page.observe()
+    error = {"unreachable": SiteUnreachable, "timeout": NavigationTimeout, "browser": BrowserError}[failure]
+
+    async def broken(*args, **kwargs) -> None:
+        raise error("Page.navigate failed (net::ERR_CONNECTION_REFUSED)")
+
+    monkeypatch.setattr(page, "navigate", broken)
+    result = await page.act(Action(operation=Operation.NAVIGATE, url=f"{main_site}/missing"), before)
+    assert result.outcome is StepOutcome.FAILED
+    assert "ERR_CONNECTION_REFUSED" in (result.detail or "")
+    assert await page.address() == before.url
+
+
+async def test_navigation_does_not_swallow_a_lost_browser(
+    page: CdpPage, main_site: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastbrowse.page import BrowserUnavailable
+
+    await page.navigate(main_site)
+    before = await page.observe()
+
+    async def closed(*args, **kwargs) -> None:
+        raise BrowserUnavailable("active browser tab closed")
+
+    monkeypatch.setattr(page, "navigate", closed)
+    with pytest.raises(BrowserUnavailable):
+        await page.act(Action(operation=Operation.NAVIGATE, url=f"{main_site}/other"), before)
