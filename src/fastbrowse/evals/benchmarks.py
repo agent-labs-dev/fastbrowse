@@ -45,7 +45,7 @@ class Row(PublicModel):
 
 
 class Group(PublicModel):
-    id: Literal["internal-hosted", "internal-ultrafast", "bu-bench", "online-mind2web"]
+    id: Literal["internal-fastbrowse", "internal-hosted", "internal-ultrafast", "bu-bench", "online-mind2web"]
     agent_sha: Sha | None = None
     runner_sha: Sha | None = None
     metric: Literal["task-success", "weighted-rubric", "full-task-success"]
@@ -60,6 +60,7 @@ class Group(PublicModel):
     @model_validator(mode="after")
     def coverage(self) -> Self:
         spec = {
+            "internal-fastbrowse": (54, 3, "task-success", {"fastbrowse"}),
             "internal-hosted": (47, 3, "task-success", {"fastbrowse", "browser-use"}),
             "internal-ultrafast": (6, 3, "task-success", {"fastbrowse", "jev-ultrafast"}),
             "bu-bench": (200, 1, "weighted-rubric", {"fastbrowse"}),
@@ -139,6 +140,11 @@ def check_catalog(candidate: Candidate, path: Path) -> None:
             continue
         if set(found.task_ids) != required or found.source_sha256 != candidate.catalog_sha256:
             raise ValueError("internal rows must cover the exact matched catalog")
+    fastbrowse = next((g for g in candidate.groups if g.id == "internal-fastbrowse"), None)
+    if fastbrowse is not None:
+        required = {task["id"] for task in tasks if "fastbrowse" in task["arms"]}
+        if set(fastbrowse.task_ids) != required or fastbrowse.source_sha256 != candidate.catalog_sha256:
+            raise ValueError("internal rows must cover the exact fastbrowse catalog")
 
 
 def regressions(candidate: Candidate, baseline: Candidate) -> None:
