@@ -11,6 +11,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Browser commands that remain unanswered for 120 seconds return `unavailable` even if health checks succeed.
+- Closing the last owned browser tab returns `unavailable` with retained run evidence instead of a Python error.
+- Styled upload labels expose their hidden file inputs as upload targets and receive supplied attachments.
+- Page captures retain visible image DOM metadata, including source, alt text and whether the image loaded.
+- Missing completion charges are recovered from matching provider generation receipts when available.
+  Dollar caps still stop the run when the charge cannot be established.
+
 - Read captures retain empty form fields, disabled buttons, horizontal overflow and the absence of visible h1
   headings across accessible document and shadow roots. Field values supplied as URLs are checked before navigation.
 

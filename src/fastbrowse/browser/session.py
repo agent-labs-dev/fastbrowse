@@ -35,7 +35,7 @@ from fastbrowse.datafiles import data_file
 from fastbrowse.models import Artifact, ArtifactKind, ArtifactSink, FrameHandler, Frozen, Unavailable
 from fastbrowse.models import BrowserConnection as BrowserConnectionModel
 from fastbrowse.origins import OriginGrant
-from fastbrowse.page import BrowserError, Dialog, Tab
+from fastbrowse.page import BrowserError, BrowserUnavailable, Dialog, Tab
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,8 @@ CDP_REPLY_SECONDS = 60.0
 keep the socket open, answering pings, after losing the browser behind it, and a run with no wall-clock limit would
 otherwise wait on that reply forever. A slow reply is not a lost one: `Page.navigate` waits for a slow server's
 headers, so the command keeps waiting for as long as the browser answers."""
+CDP_COMMAND_SECONDS = 120.0
+"""A responsive browser can still leave one document command pending forever."""
 CDP_ALIVE_SECONDS = 10.0
 """`Browser.getVersion` is answered at once by any browser that is there."""
 
@@ -147,11 +149,15 @@ class _BrowserClient(CDPClient):
     async def send_raw(self, method: str, params: Any = None, session_id: str | None = None) -> dict[str, Any]:
         reply = asyncio.ensure_future(super().send_raw(method, params, session_id))
         try:
-            while not (await asyncio.wait({reply}, timeout=CDP_REPLY_SECONDS))[0]:
-                # A reply that landed while the probe waited still counts, however the probe ended.
-                if not await self._alive() and not reply.done():
-                    raise BrowserUnresponsive(f"{method} got no reply, and the browser stopped answering")
-            return reply.result()
+            try:
+                async with asyncio.timeout(CDP_COMMAND_SECONDS):
+                    while not (await asyncio.wait({reply}, timeout=CDP_REPLY_SECONDS))[0]:
+                        # A reply that landed while the probe waited still counts, however the probe ended.
+                        if not await self._alive() and not reply.done():
+                            raise BrowserUnresponsive(f"{method} got no reply, and the browser stopped answering")
+                    return reply.result()
+            except TimeoutError:
+                raise BrowserUnresponsive(f"{method} exceeded its command deadline; the page did not answer") from None
         except BrowserUnresponsive:
             raise
         except Exception as exc:
@@ -297,7 +303,10 @@ class BrowserSession:
 
     @property
     def active_session_id(self) -> str:
-        return self._tabs[self._active_target_id].session_id
+        tab = self._tabs.get(self._active_target_id)
+        if tab is None:
+            raise BrowserUnavailable("active browser tab closed; no owned tab remains")
+        return tab.session_id
 
     def frame_sessions(self) -> dict[str, str]:
         """Only frame sessions descended from the active tab may contribute observations."""

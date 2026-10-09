@@ -188,14 +188,26 @@ Programs that only check zero versus nonzero continue to work.
 | `blocked` | 6 | a bot check (a CAPTCHA) that did not clear; not a sign-in, so no secret passes it |
 | `needs_input` | 5 | a required value or file is missing, or an upload exceeds the configured size limit |
 | `stuck` | 9 | recovery ran out without reaching a page state the run had not seen |
-| `budget_exceeded` | 7 | a step, call, time or dollar limit was reached |
+| `budget_exceeded` | 7 | a resource limit was reached, or a missing cost prevents enforcing the dollar cap |
 | `observation_limit` | 11 | the page or required evidence cannot fit the configured prompt budget |
 | `unavailable` | 8 | a model or browser provider stayed unavailable through every retry; the same run later may pass |
 | `error` | 1 | a model or browser failure |
 
 A `budget_exceeded` JSON result includes `budget.resource` (`steps`, `seconds`, `dollars`, `jev_calls` or
 `llm_calls`) and `budget.limit`. Other results have `budget: null`. The embedding and MCP APIs carry the same
-optional object, so callers can identify the exhausted limit without parsing an error message.
+optional object, so callers can identify the affected limit without parsing an error message.
+
+A bot check can block a cloud browser before any task steps execute. Retry with an attached local browser
+or choose another source for the research. Credentials do not resolve a CAPTCHA.
+
+If a model completion omits its cost, fastbrowse looks up the matching OpenRouter or Vercel generation
+receipt. If that receipt is still unavailable, a run with a dollar cap stops with `budget_exceeded`;
+this does not mean the known charges reached the cap. Supplied `inputs` can provide exact field text
+without a field-writing generation.
+
+A browser command that remains unanswered for 120 seconds returns `unavailable`, even if the browser
+still answers health checks. Step and dollar limits do not bound total elapsed time. Set `Limits(max_seconds=...)` for a run deadline.
+When investigating a stalled run, enable trace logging and retain the last event alongside the result.
 
 ## How it works
 

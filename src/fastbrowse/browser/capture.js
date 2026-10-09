@@ -371,6 +371,12 @@
         push('observation', `${name}: [empty]`);
       if (e.matches(':disabled,[aria-disabled="true"]')) push('observation', `${name}: disabled`);
     }
+    // Images carry no innerText, so a text-only capture cannot distinguish their presence from absence.
+    for (const image of [...root.querySelectorAll('img')].filter(visible)) {
+      const metadata = { alt: image.getAttribute('alt'), src: image.currentSrc || image.getAttribute('src'),
+        loaded: image.complete && image.naturalWidth > 0 };
+      push('observation', `Image element DOM metadata: ${JSON.stringify(metadata)}. Pixels are not described.`);
+    }
     const h1 = [...root.querySelectorAll('h1,[role="heading"][aria-level="1"]')].filter(visible);
     visibleH1 ||= h1.length > 0;
     if (root === document.body) {

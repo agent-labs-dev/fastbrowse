@@ -13,7 +13,7 @@ from typing import Protocol
 
 from pydantic import Field
 
-from fastbrowse.models import Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome
+from fastbrowse.models import Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome, Unavailable
 
 
 def cut_marker(omitted_chars: int) -> str:
@@ -240,6 +240,10 @@ class Action(Frozen):
 
 class BrowserError(RuntimeError):
     """A browser failure a `Page` raises, with a message safe to put in a run result: never page text."""
+
+
+class BrowserUnavailable(BrowserError, Unavailable):
+    """The browser session no longer has a page available for this run."""
 
 
 class ScreenshotsUnavailable(BrowserError):

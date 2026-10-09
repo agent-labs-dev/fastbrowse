@@ -488,3 +488,71 @@ async def test_abandoned_head_start_keeps_cancelled_normalization_receipt():
     assert costs[0].dollars == 0.01
     assert costs[1].basis is CostBasis.UNKNOWN
     assert costs[1].dollars is None
+
+
+async def test_missing_field_cost_recovers_matching_provider_receipt() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            assert request.url.params["id"] == "generation-1"
+            return httpx.Response(200, json={"data": {"id": "generation-1", "total_cost": 0.001}})
+        return httpx.Response(
+            200,
+            json={
+                "id": "generation-1",
+                "choices": [{"message": {"content": '{"count":3}'}}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 2},
+            },
+        )
+
+    ledger = Ledger(Limits(max_dollars=0.25))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await OpenAICompatibleLLM(
+            "key",
+            http=http,
+            base_url="https://openrouter.ai/api/v1",
+            models={LLMPurpose.FIELD_TEXT: "writer"},
+        ).generate(LLMPurpose.FIELD_TEXT, [], Result, ledger=ledger)
+    ledger.record(result.cost)
+    assert result.cost.dollars == 0.001
+    assert result.cost.basis is CostBasis.METERED
+    assert result.cost.input_tokens == 7
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        {"id": "another-generation", "total_cost": 0.0},
+        {"id": "generation-1", "total_cost": -1},
+        {"id": "generation-1", "total_cost": None},
+    ],
+)
+async def test_untrusted_or_missing_receipt_keeps_spend_guard(
+    receipt: dict[str, JsonValue], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def no_delay(_: float) -> None:
+        pass
+
+    monkeypatch.setattr("fastbrowse.clients.openai_compatible.asyncio.sleep", no_delay)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"data": receipt})
+        return httpx.Response(
+            200,
+            json={
+                "id": "generation-1",
+                "choices": [{"message": {"content": '{"count":3}'}}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 2},
+            },
+        )
+
+    ledger = Ledger(Limits(max_dollars=0.25))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await OpenAICompatibleLLM(
+            "key",
+            http=http,
+            base_url="https://openrouter.ai/api/v1",
+            models={LLMPurpose.FIELD_TEXT: "writer"},
+        ).generate(LLMPurpose.FIELD_TEXT, [], Result, ledger=ledger)
+    with pytest.raises(BudgetExceeded, match="cannot be enforced"):
+        ledger.record(result.cost)

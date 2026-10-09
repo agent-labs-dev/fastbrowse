@@ -1105,8 +1105,10 @@ class CdpPage(Page):
             [{"name": f.name, "type": f.mime_type, "data": base64.b64encode(f.content).decode()} for f in files]
         )
         script = (
-            "((id, files, allowed) => { const e = window.__fastbrowse?.nodes.get(id); "
-            "if (!e?.isConnected || (allowed && !allowed.includes(location.origin))) return null; "
+            "((id, files, allowed) => { const node = window.__fastbrowse?.nodes.get(id); "
+            "const e = node?.tagName === 'LABEL' ? node.control : node; "
+            "if (!e?.isConnected || e.type !== 'file' || e.disabled || "
+            "(allowed && !allowed.includes(location.origin))) return null; "
             "const dt = new DataTransfer(); "
             "for (const f of files) { const bin = atob(f.data); "
             "const bytes = Uint8Array.from(bin, c => c.charCodeAt(0)); "

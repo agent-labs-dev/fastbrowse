@@ -805,7 +805,9 @@ class Agent:
                     continue
                 if bot_check:
                     raise _Stop(
-                        Status.BLOCKED, f"bot check at {origin}; it is not a sign-in and no credential passes it"
+                        Status.BLOCKED,
+                        f"bot check at {origin}; it is not a sign-in and no credential passes it. "
+                        "Retry using an attached local browser or choose another source for this research.",
                     )
                 plan = await state.await_plan()
                 if not _access_inspection(plan):

@@ -227,6 +227,36 @@ class OpenAICompatibleLLM:
         except ValueError:
             raise LLMError(f"Invalid LLM response; HTTP {response.status_code}: {body_excerpt(response)}") from None
 
+    async def _settled_cost(self, payload: dict[str, JsonValue], purpose: LLMPurpose) -> CostLine:
+        cost = _cost(payload, purpose)
+        generation_id = payload.get("id")
+        if cost.dollars is not None or not isinstance(generation_id, str) or not generation_id:
+            return cost
+        if httpx.URL(self._base_url).host not in {"openrouter.ai", "ai-gateway.vercel.sh"}:
+            return cost
+        # Usage receipts can lag the completion; recover that exact charge without generating the text again.
+        for attempt in range(3):
+            if attempt:
+                await asyncio.sleep(1)
+            try:
+                response = await self._http.get(
+                    f"{self._base_url}/generation",
+                    params={"id": generation_id},
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    timeout=2.0,
+                )
+                if not response.is_success:
+                    continue
+                receipt = object_value(json_object(response).get("data"))
+                if receipt.get("id") != generation_id:
+                    return cost
+                amount = receipt.get("total_cost")
+                if amount is not None:
+                    return cost.model_copy(update={"basis": CostBasis.METERED, "dollars": dollars(amount)})
+            except (httpx.HTTPError, ValueError, TypeError, OverflowError):
+                continue
+        return cost
+
     async def generate[T: BaseModel](
         self,
         purpose: LLMPurpose,
@@ -277,7 +307,7 @@ class OpenAICompatibleLLM:
                 # dropping it would let an unaccounted request pass a dollar cap. A hedge's discarded twin
                 # carried the same prompt, so it is charged as the answer was; charging it as unknown instead
                 # made every run with one slow call stop at its dollar cap.
-                costs.append(with_discarded(_cost(payload, purpose), usage))
+                costs.append(with_discarded(await self._settled_cost(payload, purpose), usage))
                 if _truncated(payload):
                     _grow_cap(body, attempt, max_output_tokens, purpose)
                     continue

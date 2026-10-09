@@ -790,6 +790,7 @@ async def check_answer_outputs(
             source = _OutputSource(
                 url_ref=alias,
                 quote=evidence.quote,
+                control_context=evidence.control_context,
                 source_id=evidence.source_id,
                 frame_id=evidence.frame_id,
                 page_title=page.title if page and evidence.frame_id is None else None,

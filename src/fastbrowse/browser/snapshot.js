@@ -176,7 +176,7 @@
   registry.visible = visible;
   // Styled checkboxes and radios often hide the native input. Its visible label is the click
   // target, but the input still owns the checked/disabled state and must participate in freshness.
-  const sourceOf = e => (e.tagName === 'LABEL' && ['checkbox', 'radio'].includes(e.control?.type) ? e.control : e);
+  const sourceOf = e => (e.tagName === 'LABEL' && ['checkbox', 'radio', 'file'].includes(e.control?.type) ? e.control : e);
 
   // Their text is code, not a name: Amazon nests a <style> inside a result card's link.
   const CODE = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
@@ -256,7 +256,7 @@
   const DATE_TYPES = ['date', 'datetime-local', 'month', 'week', 'time'];
 
   const roleOf = e => {
-    if (sourceOf(e) !== e) return sourceOf(e).type;
+    if (sourceOf(e) !== e) return sourceOf(e).type === 'file' ? 'textbox' : sourceOf(e).type;
     const explicit = e.getAttribute('role');
     if (ARIA_ROLES.includes(explicit)) return explicit;
     if (e.tagName === 'BUTTON' || e.tagName === 'SUMMARY') return 'button';
@@ -455,7 +455,7 @@
       base.operations = ['select'];
       base.options = [...e.options].filter(o => !o.disabled && !o.closest('optgroup[disabled]')).map(o => o.label);
       base.value = [...e.selectedOptions].map(o => o.label).join(', ');
-    } else if (e.type === 'file') {
+    } else if (source.type === 'file') {
       base.operations = ['upload'];
       base.value = null;
     } else {
