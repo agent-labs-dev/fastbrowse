@@ -70,7 +70,9 @@ completion check reduces page text first to make room for that evidence. Cut pag
 when there is room for one; an excerpt too small to carry the marker is empty.
 
 A money or time limit keeps collected facts and their citations in a partial answer. The status stays
-`budget_exceeded`, and producing the partial answer makes no additional model calls.
+`budget_exceeded`, and producing the partial answer makes no additional model calls. A time budget stops
+active work; the return also waits for owned requests and browser cleanup. Injected clients must honor
+cancellation and finish their cleanup. Returning while a paid request still runs would lose its cost receipt.
 
 Only visible effects or added evidence count as progress. Rewriting the value already in the observed
 field cannot count, even when it opens an autocomplete popup. `StallRules` checks lack of progress,

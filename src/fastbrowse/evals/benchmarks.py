@@ -88,7 +88,7 @@ class Fixture(PublicModel):
 
 
 class Candidate(PublicModel):
-    schema_version: Literal[1, 2]
+    schema_version: Literal[1, 2, 3]
     campaign_id: Identifier
     agent_sha: Sha
     runner_sha: Sha
@@ -105,10 +105,12 @@ class Candidate(PublicModel):
             raise ValueError("at least one complete, unique benchmark group is required")
         if self.schema_version == 1 and (len(self.groups) != 4 or ids != expected):
             raise ValueError("all four full benchmark groups are required")
+        if self.schema_version == 2 and not ids <= expected:
+            raise ValueError("schema 2 supports only the four original benchmark groups")
         for group in self.groups:
             for field in ("agent_sha", "runner_sha"):
                 measured = getattr(group, field)
-                if (self.schema_version == 2 or measured is not None) and measured != getattr(self, field):
+                if (self.schema_version >= 2 or measured is not None) and measured != getattr(self, field):
                     raise ValueError("each group must identify the measured agent and runner build")
         if self.agent_sha != self.fixture.head_sha:
             raise ValueError("fixtures must pass on the measured agent build")

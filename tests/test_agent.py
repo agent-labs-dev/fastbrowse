@@ -6182,3 +6182,36 @@ async def test_startup_settlement_obeys_the_remaining_run_deadline(
     assert result.status is Status.BUDGET_EXCEEDED
     assert result.budget is not None and result.budget.resource == "seconds"
     assert head.proposing.cancelled()
+
+
+async def test_startup_discard_cancels_every_call_before_joining_cleanup() -> None:
+    cleaning, released, proposal_stopped = (asyncio.Event() for _ in range(3))
+
+    async def planning() -> Generation[Plan]:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaning.set()
+            await released.wait()
+        raise AssertionError("Cancelled planning returned")
+
+    async def proposing() -> agent_module.Shortcut:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            proposal_stopped.set()
+        raise AssertionError("Cancelled proposal returned")
+
+    head = HeadStart(
+        Ledger(Limits()), "Check the page", None, asyncio.create_task(planning()), asyncio.create_task(proposing())
+    )
+    await asyncio.sleep(0)
+    discard = asyncio.create_task(head.discard())
+    try:
+        await cleaning.wait()
+        await asyncio.wait_for(proposal_stopped.wait(), 0.1)
+        assert not discard.done()
+    finally:
+        released.set()
+        await discard
+    assert head.planning.cancelled() and head.proposing is not None and head.proposing.cancelled()

@@ -493,9 +493,11 @@ class HeadStart:
 
     async def discard(self) -> None:
         """Cancel what is still being written, so nothing bills a run that has already ended."""
-        await _discard(self.planning)
-        if self.proposing is not None:
-            await _discard(self.proposing)
+        tasks = (self.planning,) if self.proposing is None else (self.planning, self.proposing)
+        # One transport can take time to close, so cancel every paid call before joining any cleanup.
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def abandon(self) -> tuple[CostLine, ...]:
         """What a run that never began spent: a shortcut bills itself, and a plan that finished is billed here."""

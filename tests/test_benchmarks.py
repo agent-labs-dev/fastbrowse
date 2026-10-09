@@ -117,8 +117,11 @@ def test_internal_fastbrowse_group_covers_the_full_catalog_without_comparators(c
             for repeat in range(3)
         ],
     }
-    candidate.update(schema_version=2, groups=[group])
+    candidate.update(schema_version=3, groups=[group])
     check_catalog(Candidate.model_validate(candidate), CATALOG)
+    candidate["schema_version"] = 2
+    with pytest.raises(ValidationError, match="four original"):
+        Candidate.model_validate(candidate)
 
 
 def test_internal_fastbrowse_group_rejects_a_missing_catalog_slot(candidate):
@@ -136,7 +139,7 @@ def test_internal_fastbrowse_group_rejects_a_missing_catalog_slot(candidate):
         "limits": ["Matched recorded limits"],
         "rows": [],
     }
-    candidate.update(schema_version=2, groups=[group])
+    candidate.update(schema_version=3, groups=[group])
     with pytest.raises(ValidationError):
         Candidate.model_validate(candidate)
 
