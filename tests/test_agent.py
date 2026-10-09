@@ -5993,6 +5993,8 @@ async def test_chosen_start_owns_shortcut_after_bounded_navigation_wait(monkeypa
     agent._front_page_if_blank = AsyncMock()
     agent._ending_frame = AsyncMock(side_effect=lambda result: result)
     monkeypatch.setattr(agent_module, "_SHORTCUT_WAIT_SECONDS", 0.001)
+    quoted = evidence()
+    cited = Citation(id=1, text=quoted.quote, url=quoted.url, quote=quoted.quote, deep_link=quoted.url)
 
     async def finish(state, output_schema, until):
         page.navigate.assert_awaited_once_with(start)
@@ -6000,7 +6002,9 @@ async def test_chosen_start_owns_shortcut_after_bounded_navigation_wait(monkeypa
         head.planning.cancel()
         released.set()
         await asyncio.gather(head.proposing, return_exceptions=True)
-        return agent._result(state, head.ledger, Status.COMPLETE)
+        return agent._result(state, head.ledger, Status.COMPLETE).model_copy(
+            update={"answer": "Verified result", "data": {"value": 7}, "evidence": (quoted,), "citations": (cited,)}
+        )
 
     monkeypatch.setattr(agent, "_loop", finish)
     result = await asyncio.wait_for(agent.run("Read the catalogue", choose_start=True, head_start=head), 1)
@@ -6008,3 +6012,5 @@ async def test_chosen_start_owns_shortcut_after_bounded_navigation_wait(monkeypa
     assert len(head.ledger.lines) == 1 and not result.cost.has_unknown
     assert head.proposing is not None and head.proposing.done()
     assert agent._ending_frame.await_count == (0 if max_dollars is None else 1)
+    assert result.answer == "Verified result" and result.data == {"value": 7}
+    assert result.evidence == (quoted,) and result.citations == (cited,)

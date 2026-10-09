@@ -22,6 +22,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - A slow shortcut can finish reporting its model cost while browsing continues from the start page.
   Falling back no longer cancels a dispatched request and interrupts a run with a dollar limit.
+  A late cost that exceeds the limit stops the run while retaining its already verified answer and data.
 
 - Answer checks judge calculated results from their quoted operands. Reader lineage no longer blocks
   a calculation when its complete source records support it.

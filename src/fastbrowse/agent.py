@@ -650,13 +650,8 @@ class Agent:
         try:
             ledger.check_spend()
         except BudgetExceeded as error:
-            result = self._partial_result(
-                state.notes if state else Notes(),
-                state,
-                ledger,
-                Status.BUDGET_EXCEEDED,
-                str(error),
-                budget=error.budget,
+            result = result.model_copy(
+                update={"status": Status.BUDGET_EXCEEDED, "error": str(error), "budget": error.budget}
             )
             loop_returned = False
         result = result.model_copy(update={"cost": ledger.breakdown()})
