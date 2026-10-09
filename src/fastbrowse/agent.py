@@ -461,6 +461,13 @@ class _RunState:
             planned = await asyncio.shield(self.planning)
             self.ready_plan = planned.data
             self.ledger.record(planned.cost)
+            trace(
+                "plan_shape",
+                requirements=[
+                    {"id": requirement.id, "kind": requirement.kind.value, "count_records": requirement.count_records}
+                    for requirement in self.ready_plan.requirements
+                ],
+            )
         return self.ready_plan
 
 
