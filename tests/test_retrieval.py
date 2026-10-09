@@ -3923,9 +3923,17 @@ async def test_duplicate_prior_packets_do_not_displace_the_novelty_check() -> No
         ("frame_id", "child"),
         ("source_id", "removed"),
         ("heading_path", "Member price"),
+        ("control_context", "2 of 3"),
     ],
 )
 async def test_distinct_prior_packet_context_is_retained(field: str, value: str) -> None:
+    from fastbrowse.models import SourceControl
+
+    changed = {
+        "text": {},
+        "heading_path": {"heading_path": (value,)},
+        "control_context": {"control_context": SourceControl(role="figure", label="Avatar", context=value)},
+    }.get(field, {field: value})
     page = capture((BlockKind.PARAGRAPH, "Price: GBP25.99"))
     evidence = block_evidence(page, "s0")
     first = Fact(text="Price", evidence=evidence, reader=FactReader.LLM)
@@ -3935,7 +3943,7 @@ async def test_distinct_prior_packet_context_is_retained(field: str, value: str)
             "evidence": evidence.model_copy(
                 update={
                     "capture_sha256": "0" * 64,
-                    **({field: (value,) if field == "heading_path" else value} if field != "text" else {}),
+                    **changed,
                 }
             ),
         }
@@ -3951,6 +3959,10 @@ async def test_distinct_prior_packet_context_is_retained(field: str, value: str)
     if field == "heading_path":
         second_packet = state["previous"][1]
         assert isinstance(second_packet, dict) and second_packet["heading_path"] == [value]
+    if field == "control_context":
+        second_packet = state["previous"][1]
+        assert isinstance(second_packet, dict)
+        assert second_packet["control_context"] == {"role": "figure", "label": "Avatar", "context": value}
     assert len(llm.calls) == 1 and notes.facts == (first, second)
 
 
@@ -5119,3 +5131,92 @@ async def test_rejected_order_finishes_requested_scope_before_another_pager(scop
     assert result.continues == (() if scope_complete else ("r",))
     assert result.through_end == ()
     assert len(result.cost_lines) == (4 if scope_complete else 3)
+
+
+def test_atomic_audit_retains_only_the_cited_controls_structural_context() -> None:
+    from fastbrowse.models import SourceControl
+    from fastbrowse.retrieval import Claim, _evidence, assemble_answer
+    from fastbrowse.verification import _output_context
+
+    original = capture((BlockKind.PARAGRAPH, "name: Grace"))
+    block = original.blocks[0].model_copy(
+        update={"control_context": SourceControl(role="figure", label="Avatar", context="2 of 3")}
+    )
+    page = original.model_copy(update={"blocks": (block,)})
+    notes = Notes()
+    source = _evidence(page, block, block.start, block.end)
+    cited = Fact(text="Grace", evidence=source, reader=FactReader.LLM)
+    notes.add(cited)
+    other = source.model_copy(
+        update={"control_context": SourceControl(role="figure", label="Avatar", context="1 of 3")}
+    )
+    notes.add(Fact(text="Grace", evidence=other, reader=FactReader.LLM))
+    answer = assemble_answer((Claim(text="Grace", evidence_ids=(fact_id(cited),)),), notes, ())
+    context = _output_context(answer, notes)
+
+    assert context is not None
+    assert len(context.claims[0].cited_sources) == 1
+    assert context.claims[0].cited_sources[0].quote == "name: Grace"
+    assert context.claims[0].cited_sources[0].control_context == block.control_context
+    assert page.read_key != original.read_key
+    assert (
+        page.read_key
+        != page.model_copy(
+            update={"blocks": (block.model_copy(update={"control_context": other.control_context}),)}
+        ).read_key
+    )
+
+
+def test_equal_captions_under_different_controls_remain_ambiguous_comparison_sources() -> None:
+    from fastbrowse.models import SourceControl
+    from fastbrowse.retrieval import Candidate, _compared
+
+    page = capture((BlockKind.PARAGRAPH, "Grace"))
+    notes = Notes()
+    candidates = []
+    for position in ("1 of 2", "2 of 2"):
+        source = block_evidence(page, "s0").model_copy(
+            update={"control_context": SourceControl(role="figure", label="Avatar", context=position)}
+        )
+        notes.add(Fact(reader=FactReader.LLM, text="Grace", evidence=source))
+        candidates.append(Candidate(id="c0", value="Grace", evidence=source))
+    derived = Fact(reader=FactReader.LLM, text="Grace", evidence=None, basis=tuple(notes.evidence))
+    notes.add(derived)
+
+    assert _compared(notes, fact_id(derived), "Grace", notes.current_evidence(), given=False) is None
+    assert len(merge_candidates(candidates, candidates)) == 2
+    rendered = notes.render(10000)
+    assert '"context":"1 of 2"' in rendered
+    assert '"context":"2 of 2"' in rendered
+
+
+def test_short_fact_choice_preserves_equal_captions_control_positions() -> None:
+    from fastbrowse.models import SourceControl
+    from fastbrowse.retrieval import Candidate, _read_request
+
+    page = capture((BlockKind.PARAGRAPH, "Grace"))
+    candidates = tuple(
+        Candidate(
+            id=f"c{index}",
+            value="Grace",
+            evidence=block_evidence(page, "s0").model_copy(
+                update={"control_context": SourceControl(role="figure", label="Avatar", context=position)}
+            ),
+        )
+        for index, position in enumerate(("1 of 2", "2 of 2"))
+    )
+    requirement = Requirement(id="r", text="Find the second avatar name", kind=RequirementKind.INFORMATION)
+    _, questions = _read_request(page, (requirement,), candidates)
+    criterion = questions["r"].criteria["c0"]
+    assert isinstance(criterion, dict)
+    sources = criterion["sources"]
+    assert isinstance(sources, list)
+    assert sources == [
+        {
+            "source_id": "s0",
+            "quote": "Grace",
+            "context": "",
+            "control_context": {"role": "figure", "label": "Avatar", "context": position},
+        }
+        for position in ("1 of 2", "2 of 2")
+    ]

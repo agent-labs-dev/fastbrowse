@@ -4,6 +4,7 @@ The browser layer produces `Observation` (bounded, for Jev's action choice) and 
 and executes `Action`s. Nothing above this seam touches CDP.
 """
 
+import hashlib
 import json
 import re
 from datetime import datetime, timedelta
@@ -12,7 +13,7 @@ from typing import Protocol
 
 from pydantic import Field
 
-from fastbrowse.models import Artifact, Attachment, Frozen, Operation, StepOutcome
+from fastbrowse.models import Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome
 
 
 def cut_marker(omitted_chars: int) -> str:
@@ -193,6 +194,7 @@ class Block(Frozen):
     end: int = Field(ge=0)
     """Offsets into `Capture.text`; `text[start:end]` is this block's rendering."""
     heading_path: tuple[str, ...] = ()
+    control_context: SourceControl | None = None
     href: str | None = None
 
 
@@ -205,6 +207,15 @@ class Capture(Frozen):
     text: str
     blocks: tuple[Block, ...]
     inaccessible_frames: int = Field(default=0, ge=0)
+
+    @property
+    def read_key(self) -> str:
+        contexts = [
+            (block.source_id, block.control_context.model_dump()) for block in self.blocks if block.control_context
+        ]
+        if not contexts:
+            return self.sha256
+        return hashlib.sha256(json.dumps([self.sha256, contexts], sort_keys=True).encode()).hexdigest()
 
 
 class Action(Frozen):

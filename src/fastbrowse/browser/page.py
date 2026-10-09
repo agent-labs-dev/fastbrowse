@@ -27,7 +27,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from fastbrowse.browser.session import BrowserSession, OriginNotAllowed
 from fastbrowse.config import Config
 from fastbrowse.datafiles import data_file
-from fastbrowse.models import TARGETED, Artifact, Attachment, Frozen, Operation, StepOutcome
+from fastbrowse.models import TARGETED, Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome
 from fastbrowse.page import (
     Action,
     ActResult,
@@ -215,6 +215,7 @@ class _SnapshotBlock(Frozen):
     kind: BlockKind
     text: str
     heading_path: tuple[str, ...] = ()
+    control_context: SourceControl | None = None
     frame_path: str | None = None
     source_path: str = ""
     href: str | None = None
@@ -552,6 +553,7 @@ class CdpPage(Page):
                     Block(
                         source_id=f"{frame_id or _MAIN}/{block.source_path}:{len(blocks)}",
                         kind=block.kind,
+                        control_context=block.control_context,
                         frame_id=f"{frame_id or _MAIN}/{block.frame_path}" if block.frame_path else frame_id,
                         start=start,
                         end=end,

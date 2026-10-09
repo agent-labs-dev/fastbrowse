@@ -45,9 +45,30 @@
     const u = new URL(a.href, location.href);
     return u.origin === location.origin ? u.pathname + u.search : u.href;
   };
-  const push = (kind, text, extra = {}) => {
+  const controlOf = nodes => {
+    let found = null;
+    for (const node of nodes) {
+      if (!clean(node.nodeType === 3 ? node.textContent : (node.innerText ?? node.textContent ?? ''))) continue;
+      let host = node.nodeType === 1 ? node : node.parentElement;
+      while (host && !registry.hoverContexts?.has(host)) host = host.parentElement;
+      if (!host?.isConnected || !host.matches(':hover')) return null;
+      const binding = registry.hoverContexts.get(host);
+      const siblings = [...(host.parentNode?.children || [])];
+      const labelAttributes = [host.getAttribute('role'), host.getAttribute('aria-label'),
+        host.getAttribute('title'), host.querySelector('img[alt]')?.getAttribute('alt') || null];
+      if (host.innerText !== binding.text ||
+          labelAttributes.some((value, index) => value !== binding.labelAttributes[index])) return null;
+      // A reordered or replaced sibling set invalidates the observed ordinal before the quote is taken.
+      if (host.parentNode !== binding.parent || siblings.length !== binding.siblings.length ||
+          siblings.some((sibling, index) => sibling !== binding.siblings[index])) return null;
+      if (found && found !== host) return null;
+      found = host;
+    }
+    return found ? registry.hoverContexts.get(found).control : null;
+  };
+  const push = (kind, text, extra = {}, nodes = []) => {
     if (text)
-      blocks.push({ kind, text, heading_path: [...path], frame_path: framePath, source_path: sourcePath, ...extra });
+      blocks.push({ kind, text, heading_path: [...path], frame_path: framePath, source_path: sourcePath, control_context: controlOf(nodes), ...extra });
   };
 
   // A cell can say what it says with an image or an icon alone: a flag marking the winner, a tick for "yes".
@@ -197,8 +218,8 @@
       elements[0].href &&
       clean(elements[0].innerText ?? '') === text;
     for (const e of elements) text = withRating(text, e);
-    if (onlyLink) push('link', text, { href: hrefOf(elements[0]) });
-    else push('paragraph', text);
+    if (onlyLink) push('link', text, { href: hrefOf(elements[0]) }, run);
+    else push('paragraph', text, {}, run);
     for (const e of elements) for (const field of fields(e)) push('paragraph', field);
     run.length = 0;
   }
@@ -282,18 +303,18 @@
       const text = textOf(el);
       while (path.length >= level) path.pop();
       if (text) {
-        push('heading', text);
+        push('heading', text, {}, [el]);
         path.push(text);
       }
       return;
     }
     if (el.tagName === 'TABLE') {
-      for (const text of renderTable(el)) push('table', text);
+      for (const text of renderTable(el)) push('table', text, {}, [el]);
       // A form laid out in a table: its cells render as text, which holds none of the controls' values.
       for (const field of fields(el)) push('paragraph', field);
       return;
     }
-    if (el.tagName === 'PRE') return push('code', textOf(el));
+    if (el.tagName === 'PRE') return push('code', textOf(el), {}, [el]);
     const record = recordText(el);
     if ((el.tagName === 'LI' && leaf(el)) || record !== null) {
       const links = el.matches('a[href]') ? [el] : el.querySelectorAll('a[href]');
@@ -301,6 +322,7 @@
         el.tagName === 'LI' ? 'list_item' : 'record',
         record ?? withRating(textOf(el), el),
         links.length === 1 ? { href: hrefOf(links[0]) } : {},
+        [el],
       );
       for (const field of fields(el)) push('paragraph', field);
       return;

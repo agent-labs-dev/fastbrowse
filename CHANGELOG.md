@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Captured hover captions retain their DOM container and sibling position as source metadata.
+  Answer checks can bind positional subjects without treating that context as a quoted value.
+
 - Answer identity checks emit each literal identifying quote once and reference it across fields.
   Repeated names no longer consume output tokens for every requested value; citation and subject checks remain.
 
