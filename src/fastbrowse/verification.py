@@ -710,6 +710,31 @@ async def check_answer_outputs(
     source_fields = {}
     covered: set[int] = set()
     selected_claims: dict[str, tuple[Claim, ...]] = {}
+    current_sources = notes.current_evidence()
+
+    def counterevidence(claims: Sequence[_OutputClaim]) -> list[dict[str, object]]:
+        cited = {source.model_dump_json() for claim in claims for source in claim.cited_sources}
+        locations = {(source.url_ref, source.frame_id) for claim in claims for source in claim.cited_sources}
+        refs = {url: alias for alias, url in context.urls.items()}
+        sources = {}
+        # Selecting a field's quote hid conflicting values retained in another claim or uncited note.
+        for evidence in current_sources.values():
+            alias = refs.get(evidence.url)
+            if alias is None or (alias, evidence.frame_id) not in locations:
+                continue
+            page = notes.captured_page(evidence)
+            source = _OutputSource(
+                url_ref=alias,
+                quote=evidence.quote,
+                source_id=evidence.source_id,
+                frame_id=evidence.frame_id,
+                page_title=page.title if page and evidence.frame_id is None else None,
+            )
+            serialized = source.model_dump_json()
+            if serialized not in cited:
+                sources[serialized] = source.model_dump(exclude={"page_title"})
+        return list(sources.values())
+
     for key, criterion in uncertain.items():
         chosen = selected.answers.get(key) if selected is not None else None
         choice = chosen.choice if isinstance(chosen, ChoiceAnswer) else "all"
@@ -733,6 +758,7 @@ async def check_answer_outputs(
             "reported_claims": [
                 claim.model_dump(exclude={"cited_sources": {"__all__": {"page_title"}}}) for claim in claims
             ],
+            "counterevidence": counterevidence(claims),
         }
         source_fields[key] = {
             "criterion": criterion,
@@ -743,6 +769,7 @@ async def check_answer_outputs(
                 }
                 for claim in claims
             ],
+            "counterevidence": fields[key]["counterevidence"],
         }
 
     reasons: dict[str, str] = {}
@@ -827,6 +854,13 @@ async def check_answer_outputs(
                 "explicit distinctions. Do not add independent component maxima unless quoted sources state "
                 "that they apply simultaneously and combine additively. An explicit aggregate rating need not "
                 "equal their sum. "
+                "Counterevidence contains other retained quotes from the same exact source address and frame. "
+                "Check whether it conflicts with the requested value for the same literal entity and scope. "
+                "Conflicting explicit values remain available as alternatives, not a single settled value; "
+                "the assertion audit must require their conflict to be acknowledged. Unclear entity or scope "
+                "associations make availability uncertain. Different entities or explicitly "
+                "different configurations are not contradictions. Counterevidence cannot supply missing "
+                "support or subject bindings for the selected quotes. "
                 "A requested recommendation does not require the page to recommend anything: quoted facts "
                 "can provide grounds for the answer's preference. A quoted property of one option can "
                 "support a subjective preference. Do not require every compared option's values for a "
@@ -874,6 +908,10 @@ async def check_answer_outputs(
                 "another configuration. Preserve the quoted scope and explicit distinctions in every assertion. "
                 "Do not add independent component maxima unless quoted sources state that they apply "
                 "simultaneously and combine additively. An explicit aggregate rating need not equal their sum. "
+                "Other retained quotes are supplied as counterevidence only: they cannot support an assertion "
+                "whose own citations do not support it. A conflicting value for the same literal entity and "
+                "scope must be acknowledged with both values and their quoted conditions, or fail. Do not "
+                "treat different entities or explicitly different configurations as contradictions. "
                 "Derived outputs can "
                 "calculate from quoted records only when every operand and its association is explicit. "
                 "Observed page titles provide identity "
@@ -895,6 +933,7 @@ async def check_answer_outputs(
             fields[key] = {
                 "criterion": "Every factual assertion is supported by its own cited sources.",
                 "reported_claims": [claim.model_dump(exclude={"cited_sources": {"__all__": {"page_title"}}})],
+                "counterevidence": counterevidence((claim,)),
             }
     generated = await audit(assertion_messages, fields)
     failed = [

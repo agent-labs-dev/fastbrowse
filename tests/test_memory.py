@@ -486,3 +486,53 @@ def test_unchanged_value_does_not_keep_replaced_subject_context_current(other_ad
     notes.supersede("r", new_page.url, new_page.sha256, new_page.text)
     answer = assemble_answer((Claim(text=old.text, evidence_ids=(fact_id(old),)),), notes, ())
     assert (_output_context(answer, notes) is not None) is other_address
+
+
+@pytest.mark.parametrize("json_encoded", [False, True])
+def test_shared_source_metadata_fits_without_dropping_required_quotes(json_encoded: bool) -> None:
+    url = "https://example.test/item?ref=" + "referral" * 180
+    facts = tuple(
+        _quoted(f"Field {index}: value {index}", str(index), url).model_copy(update={"requirement_id": f"r{index}"})
+        for index in range(8)
+    )
+    notes = Notes(facts)
+    rendered = notes.render_with_ids(4000, preserve_requirements=True, json_encoded=json_encoded)
+    assert set(rendered.evidence_ids) == {fact_id(fact) for fact in facts}
+    assert rendered.text.count(url) == 1
+    assert all(json.dumps(fact.evidence.quote) in rendered.text for fact in facts if fact.evidence is not None)
+    assert all(f"requirements=r{index}" in rendered.text for index in range(8))
+    assert notes.facts == facts
+    size = len(json.dumps(rendered.text)) - 2 if json_encoded else len(rendered.text)
+    assert size <= 4000
+    assert notes.render_with_ids(size, preserve_requirements=True, json_encoded=json_encoded) == rendered
+    with pytest.raises(NotesTooLarge):
+        notes.render_with_ids(size - 1, preserve_requirements=True, json_encoded=json_encoded)
+
+
+def test_shared_url_groups_preserve_read_order_and_derived_basis() -> None:
+    first_url = "https://first.test/?ref=" + 'quote"\\' * 100
+    second_url = "https://second.test/?ref=" + "context" * 100
+    first = _quoted("First price: 10", "first", first_url)
+    second = _quoted("First availability: yes", "second", first_url)
+    other = _quoted("Other price: 20", "other", second_url)
+    last = _quoted("Other availability: no", "last", second_url)
+    derived = Fact(
+        requirement_id="comparison",
+        text="The first price is lower",
+        evidence=None,
+        basis=(fact_id(first), fact_id(other)),
+        reader=FactReader.LLM,
+    )
+    facts = (first, second, derived, other, last)
+    notes = Notes(facts)
+    rendered = notes.render_with_ids(10000, preserve_requirements=True, json_encoded=True)
+    assert rendered.evidence_ids == tuple(fact_id(fact) for fact in facts)
+    positions = [rendered.text.index(f"[{fact_id(fact)}]") for fact in facts]
+    assert positions == sorted(positions)
+    assert rendered.text.count("# Source URL:") == 2
+    assert "# Other evidence\n" in rendered.text
+    assert rendered.text.count(json.dumps(first_url)) == 1
+    assert rendered.text.count(json.dumps(second_url)) == 1
+    assert "requirements=comparison derived basis=" in rendered.text
+    assert json.dumps(list(derived.basis)) in rendered.text
+    assert notes.facts == facts

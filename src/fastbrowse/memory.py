@@ -5,6 +5,7 @@ import json
 import re
 from collections.abc import Iterable, Mapping
 from datetime import datetime
+from itertools import groupby
 from typing import Self
 from urllib.parse import urlsplit
 
@@ -390,7 +391,7 @@ class Notes:
                 parts.append(json.dumps(other))
             return " basis=" + " + ".join(parts) if parts else ""
 
-        def line(key: str, fact: Fact) -> str:
+        def line(key: str, fact: Fact, *, shared_url: bool = False) -> str:
             if fact.tally is not None:
                 urls = tuple(dict.fromkeys(evidence[record].url for record in fact.basis))
                 return (
@@ -401,8 +402,9 @@ class Notes:
             source = (
                 "derived"
                 if fact.evidence is None
-                else f"source={json.dumps(fact.evidence.source_id)} url={json.dumps(fact.evidence.url)} "
-                f"quote={json.dumps(fact.evidence.quote, ensure_ascii=False)}"
+                else f"source={json.dumps(fact.evidence.source_id)} "
+                + ("" if shared_url else f"url={json.dumps(fact.evidence.url)} ")
+                + f"quote={json.dumps(fact.evidence.quote, ensure_ascii=False)}"
             )
             # Quoted basis facts use the source text as their claim; sending it twice inflates every later read.
             text = (
@@ -435,7 +437,24 @@ class Notes:
                 f"Tally {key}: {len(records)} distinct records in shown groups, descending counts."
                 for key, records in groups.items()
             ]
-            return "\n".join([*totals, *(line(key, fact) for key, fact in entries)])
+            rendered = list(totals)
+            previous_shared = False
+            # Referral URLs can outweigh the quotes; a consecutive source group shares its exact address.
+            for url, group in groupby(
+                entries, key=lambda entry: entry[1].evidence.url if entry[1].evidence is not None else None
+            ):
+                facts = list(group)
+                inline = "\n".join(line(key, fact) for key, fact in facts)
+                shared = "\n".join(
+                    [f"# Source URL: {json.dumps(url)}"]
+                    + ["- " + line(key, fact, shared_url=True) for key, fact in facts]
+                )
+                use_shared = url is not None and size(shared) < size(inline)
+                if previous_shared and not use_shared:
+                    inline = "# Other evidence\n" + inline
+                rendered.append(shared if use_shared else inline)
+                previous_shared = use_shared
+            return "\n".join(rendered)
 
         complete = render(ranked)
         if size(complete) <= max_chars:

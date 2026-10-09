@@ -11,6 +11,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Answer audits consider conflicting current quotes from the same source address and frame, including
+  uncited notes. Conflicting values must be acknowledged rather than presented as one settled value;
+  those other quotes cannot replace a claim's own citation support.
+
+- Consecutive evidence notes share their exact source URL when it makes the rendered context smaller.
+  Long referral addresses no longer repeat for every fact, leaving more room for required quotes and their basis.
+
 - Repeated reads keep one copy of each identical prior-evidence packet in the novelty check. Distinct
   quotes, summaries, frames and changes remain separate, and every stored fact and citation is retained.
   Duplicate context no longer crowds this check out of its input budget.
