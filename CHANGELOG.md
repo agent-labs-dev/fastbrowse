@@ -92,7 +92,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Runs no longer stop at implicit step, Jev-call, LLM-call, dollar or time ceilings. Callers can still set explicit limits when they need them.
 
-- Complete benchmark suites can be approved and published independently. Existing published suites stay
+- Complete benchmark suites can be published independently. Existing published suites stay
   present, and each suite retains its coverage, evidence and regression checks.
 
 - Navigation notes write each source URL once and reference it from the remaining claims, preserving full
@@ -142,9 +142,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Icon-only buttons use recognized SVG glyph names when other labels are missing. Button-styled links expose
   one clickable control. Empty plans retain the requested outcome, and required CI checks reject failed jobs.
 
-- Store detailed eval evidence in Langfuse, serve sanitized public campaigns, and keep compact regression baselines in Git.
-  Grades, completion, retries, unknown costs and missing coverage remain separate.
-  Cancelled competitor runs stop their child processes before another eval starts.
+- Evaluation pages report grades, completion, retries, unknown costs and missing coverage separately.
 
 - Headed sections preserve styled pairs as separate records, so counts can distinguish groups from their
   items. Covered-target recovery excludes controls belonging to the target's own fixed container.

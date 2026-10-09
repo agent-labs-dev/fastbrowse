@@ -1,10 +1,8 @@
 # Measuring Fastbrowse
 
-Fastbrowse keeps browser fixture tests and release gates in this repository. Maintainer benchmarks run in
-Parallax, under the `browser-use` family. Detailed runs, grades, costs and validation belong in the private
-[fastbrowse-evals Langfuse project](https://us.cloud.langfuse.com/project/cmuwjxra401iyad0cymgswes5).
+We measure Fastbrowse with browser fixture tests and benchmark tasks run through Parallax.
 
-The [benchmark page](https://fastbrowse.ai/benchmarks) describes three separate measurements:
+The [benchmark page](https://fastbrowse.ai/benchmarks) describes these measurements:
 
 | Set | Agents | Measurement |
 |---|---|---|
@@ -28,25 +26,21 @@ uv run python -m fastbrowse.evals.mock --help
 uv run python -m fastbrowse.evals.publication --help
 ```
 
-## Task identity and publication
+## Task identity and result evidence
 
 Parallax owns internal prompts, truth functions and graders. Its generated metadata export,
 `src/fastbrowse/evals/benchmark-catalog.json`, contains task ids, versions, grader fingerprints, eligible
 agents and source hashes. It deliberately omits task text. Parallax checks the export against its canonical
 sources; Fastbrowse validates it against the public version lock.
 
-Recorded live results must name that catalog digest and a clean committed Parallax runner, alongside the
-Fastbrowse build and provider route. The publication gate checks task coverage, repeat counts, the complete
-physical-run ledger, known costs and matched regressions before accepting compact result rows. Full logs,
+Recorded results name the task catalog digest, Parallax runner, Fastbrowse build and provider route.
+Comparisons report task coverage, repeat counts, physical attempts, costs and regressions. Full logs,
 recordings, answers and page content stay out of Git and the public feed.
 
-Benchmark headlines require the full publication gate and maintainer approval. The maintainer can also
-approve recorded diagnostic campaigns for [the eval browser](https://fastbrowse.ai/evals), with their
-coverage and limitations visible. These campaigns do not satisfy the benchmark headline gate.
+Headlines use complete suites. Diagnostic campaigns report their coverage and limitations separately.
 
-`docs/results/evidence.public.json` contains the approved sanitized projection, with exact content hashes
-pinned by `evidence.manifest.json`. The site validates both files at one commit before rendering. Detailed
-traces remain private in Langfuse; archive receipts retain source identities without their contents.
+`docs/results/evidence.public.json` contains public run summaries, with exact content hashes
+pinned by `evidence.manifest.json`. The site validates both files at one commit before rendering.
 
 Read [the eval workflow](agents/evals.md) before changing agent behavior or running paid checks.
 
@@ -57,8 +51,7 @@ and Cua Driver 0.34.0. Parallax runs it through browser MCP tools on a private L
 with the existing source task graders. Credential and safe-stop tasks are excluded.
 
 Rows record the local browser environment, and billed spend remains unknown. Local timings
-are not a controlled comparison with cloud arms. The eval browser keeps the historical full round,
-the later Fastbrowse round and the focused dev regression checks separate. Source grades, completion,
+are not a controlled comparison with cloud arms. The recorded-results view shows each campaign separately. Source grades, completion,
 physical attempts and known costs are reported independently; unknown cost is never treated as zero.
 See Parallax's browser benchmark documentation for setup and retained attempt traces.
 
@@ -86,5 +79,4 @@ combine requests, so totals above that threshold yield a short-to-long-context r
 it prove every request used short-context rates. Estimates exclude subscription charges, browser
 infrastructure and runs without reported turn usage. Codex may omit startup prewarm tokens from
 turn totals, so these bounds cover only recorded tokens, not the complete run. The basis is
-`recorded-token-api-equivalent-range`. They never satisfy the official publication
-contract's requirement for recorded cost.
+`recorded-token-api-equivalent-range`. Estimates remain separate from recorded spend.
