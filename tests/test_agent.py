@@ -6352,3 +6352,23 @@ async def test_capture_masks_secrets_inside_structural_control_context() -> None
     assert captured.blocks[0].control_context is not None
     assert block.control_context is not None
     assert captured.blocks[0].control_context.label != block.control_context.label
+
+
+def test_public_dom_observation_citations_keep_the_plain_redacted_source_address() -> None:
+    from fastbrowse.retrieval import Claim, _evidence, assemble_answer
+
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    agent._redactor.register("token", "private-token")
+    page = capture((BlockKind.OBSERVATION, "Sign in: disabled")).model_copy(
+        update={"url": "https://example.test/form?token=private-token"}
+    )
+    evidence = _evidence(page, page.blocks[0], 0, len(page.text))
+    fact = Fact(text="Sign in is disabled.", evidence=evidence, reader=FactReader.LLM)
+    step = agent._public_fact(fact)
+    assert step.deep_link == "https://example.test/form?token=[secret:token]"
+    composed = assemble_answer((Claim(text=fact.text, evidence_ids=(fact_id(fact),)),), Notes([fact]), ())
+    answer, (citation,) = agent._public_answer(composed)
+    assert citation.deep_link == step.deep_link
+    assert "#:~:text=" not in answer
+    assert "private-token" not in answer
+    assert citation.quote == "Sign in: disabled"
