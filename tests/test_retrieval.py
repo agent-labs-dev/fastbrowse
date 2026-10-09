@@ -3893,6 +3893,55 @@ async def test_reopened_requirement_reads_earlier_quotes_again() -> None:
     assert len(llm.calls) == 1 and "novelty" not in jev.requests[0][1]
 
 
+async def test_duplicate_prior_packets_do_not_displace_the_novelty_check() -> None:
+    page = capture((BlockKind.PARAGRAPH, "Price: GBP25.99"))
+    facts = tuple(
+        Fact(
+            text="Price: GBP25.99",
+            evidence=block_evidence(page, "s0").model_copy(update={"capture_sha256": f"{i:064x}"}),
+            reader=FactReader.LLM,
+        )
+        for i in range(600)
+    )
+    notes = Notes(facts)
+    requirement = Requirement(id="r", text="Find the price", kind=RequirementKind.INFORMATION)
+    jev = _ReadJev({"r": _choice("synthesis"), "novelty": NoulAnswer(probability=0.1)})
+    llm = ScriptedLLM([{"claims": [], "answered": False}])
+    await read(llm, page, requirement.text, ["r"], notes, jev=jev, requirements=(requirement,))
+    assert not llm.calls and len(jev.requests) == 1
+    state, questions = jev.requests[0]
+    assert "novelty" in questions and isinstance(state, dict)
+    assert isinstance(state["previous"], list) and len(state["previous"]) == 1
+    assert notes.facts == facts and not notes.evidenced("r")
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("text", "Member price"), ("quote", "Price: GBP29.99"), ("frame_id", "child"), ("source_id", "removed")],
+)
+async def test_distinct_prior_packet_context_is_retained(field: str, value: str) -> None:
+    page = capture((BlockKind.PARAGRAPH, "Price: GBP25.99"))
+    evidence = block_evidence(page, "s0")
+    first = Fact(text="Price", evidence=evidence, reader=FactReader.LLM)
+    second = first.model_copy(
+        update={
+            "text": value if field == "text" else first.text,
+            "evidence": evidence.model_copy(
+                update={"capture_sha256": "0" * 64, **({field: value} if field != "text" else {})}
+            ),
+        }
+    )
+    notes = Notes((first, second))
+    requirement = Requirement(id="r", text="Find the price", kind=RequirementKind.INFORMATION)
+    jev = _ReadJev({"r": _choice("synthesis"), "novelty": NoulAnswer(probability=0.95)})
+    llm = ScriptedLLM([{"claims": [], "answered": False}])
+    await read(llm, page, requirement.text, ["r"], notes, jev=jev, requirements=(requirement,))
+    state, questions = jev.requests[0]
+    assert isinstance(state, dict) and isinstance(state["previous"], list)
+    assert len(state["previous"]) == 2 and "novelty" in questions
+    assert len(llm.calls) == 1 and notes.facts == (first, second)
+
+
 async def test_independent_claim_checks_fit_separate_parallel_batches() -> None:
     from fastbrowse.verification import check_claims
 

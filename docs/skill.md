@@ -49,9 +49,9 @@ In Claude Code:
 /fastbrowse Find the top story on https://news.ycombinator.com/ and return its title with a citation.
 ```
 
-The skill also supports automatic selection from its description. Each delegated task defaults to a
-30-step limit and a $0.25 model-spend cap unless you specify a different budget. Cloud browser charges are
-added when the browser stops, and are separate from the model-spend cap.
+The skill also supports automatic selection from its description. It uses the CLI's uncapped resource
+defaults unless you supply limits or an existing task budget requires them. MCP server ceilings still apply.
+Cloud browser charges are added when the browser stops, separately from any model-spend cap.
 
 For a form, include its URL and the values to fill. State whether the agent should stop before submission or
 submit the specified content. The skill does not authorize writes on its own. A result of `complete` means

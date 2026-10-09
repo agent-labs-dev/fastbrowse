@@ -11,6 +11,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Repeated reads keep one copy of each identical prior-evidence packet in the novelty check. Distinct
+  quotes, summaries, frames and changes remain separate, and every stored fact and citation is retained.
+  Duplicate context no longer crowds this check out of its input budget.
+
+- The agent skill uses uncapped resource defaults, with limits supplied by the caller's task budget.
+  It no longer imposes a 30-step limit or a $0.25 model-spend cap on each delegated task.
+
 - Requests to expand or load content until a stopping condition keep that page change as an action
   requirement. A displayed total no longer replaces the requested work in the plan. The feed fixture
   also checks that every remaining batch was loaded, and advances to task version 6.
