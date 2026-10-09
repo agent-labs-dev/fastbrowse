@@ -13,8 +13,9 @@ from tests.test_retrieval import ScriptedLLM, block_evidence, capture
 
 
 class IdentityWriter(ScriptedLLM):
-    def __init__(self, scope="entities", quote="Adapter Beacon", ref="q1", url_ref="u1", identity_ids=None):
+    def __init__(self, scope="entities", quote="Adapter Beacon", ref="q1", url_ref="u1", identity_ids=None, extra=()):
         super().__init__([])
+        self.extra = list(extra)
         self.scope, self.quote, self.ref, self.url_ref = scope, quote, ref, url_ref
         self.identity_ids = identity_ids
 
@@ -22,7 +23,7 @@ class IdentityWriter(ScriptedLLM):
         payload = json.loads(messages[-1].content)
         if schema.__name__ == "_OutputIdentities":
             response = {
-                "identities": {"i0": {"source_ref": self.ref, "quote": self.quote}},
+                "identities": [{"id": "i0", "source_ref": self.ref, "quote": self.quote}, *self.extra],
                 "bindings": {
                     key: {
                         "scope": self.scope,
@@ -96,6 +97,15 @@ async def test_subjectless_outputs_and_unresolved_subjects_have_distinct_outcome
         )
         is expected
     )
+
+
+async def test_one_identity_id_cannot_name_two_quotes():
+    notes, answer = two_entity_answer()
+    writer = IdentityWriter(extra=[{"id": "i0", "source_ref": "q0", "quote": "Adapter Atlas"}])
+    assert not await check_answer_outputs(
+        RoutingJev(), writer, answer, notes, ("Report Adapter Beacon exact port count.",)
+    )
+    assert len(writer.calls) == 1
 
 
 def test_identity_cannot_inject_a_model_written_reference():

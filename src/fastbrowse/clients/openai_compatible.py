@@ -105,11 +105,16 @@ def strict_schema(schema: JsonValue) -> JsonValue:
     A field with a default is optional to pydantic, which strict mode rejects; the model instead writes the
     empty value, and validation accepts it as it would the default. An array's `maxItems` is left to validation
     too: a provider behind OpenRouter answered HTTP 400 to every read whose claims list carried `maxItems: 60`.
+
+    An object with free keys is refused: one provider route answers such a map empty, which reads as a model
+    that found nothing. A list of entries that each carry their key has the same content in a closed shape.
     """
     if isinstance(schema, list):
         return [strict_schema(item) for item in schema]
     if not isinstance(schema, dict):
         return schema
+    if schema.get("type") == "object" and schema.get("additionalProperties") is not False:
+        raise ValueError(f"response schema object {schema.get('title', '')!r} has free keys; use a list of entries")
     result: dict[str, JsonValue] = {}
     for key, value in schema.items():
         if key in ("default", "maxItems"):

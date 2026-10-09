@@ -476,6 +476,10 @@ class _QuotedIdentity(Frozen):
     quote: str
 
 
+class _SharedIdentity(_QuotedIdentity):
+    id: str
+
+
 class _IdentityScope(Frozen):
     scope: Literal["entities", "subjectless", "unresolved"]
     identities: tuple[_QuotedIdentity, ...] = ()
@@ -494,8 +498,9 @@ def _identity_schema(keys: Iterable[str]) -> type[BaseModel]:
     # An open dictionary permits an empty response even when every requested subject needs a binding.
     fields: dict[str, Any] = {key: (_IdentityReferenceScope, ...) for key in keys}
     bindings = create_model("_RequiredBindings", __base__=Frozen, **fields)
+    # Shared identities are a list for the same reason: one provider route returns an open dictionary empty.
     return create_model(
-        "_OutputIdentities", __base__=Frozen, identities=(dict[str, _QuotedIdentity], ...), bindings=(bindings, ...)
+        "_OutputIdentities", __base__=Frozen, identities=(tuple[_SharedIdentity, ...], ...), bindings=(bindings, ...)
     )
 
 
@@ -665,7 +670,7 @@ async def check_answer_outputs(
                     "with no individual entity identity to establish, such as answer format or an aggregate "
                     "zero-record result. Missing identity evidence is scope unresolved, never subjectless. "
                     "Do not change requested entities or omit subjects. Copy each distinct source_ref and literal "
-                    "identifying quote once into identities, keyed by a short id. Bind each criterion to every "
+                    "identifying quote once into identities, each with a short unique id. Bind each criterion to every "
                     "required subject through identity_ids. Scope entities requires at least one valid id; "
                     "subjectless and unresolved have no ids."
                 ),
@@ -699,7 +704,12 @@ async def check_answer_outputs(
             if ledger is not None:
                 ledger.record(generated.cost)
             payload = generated.data.model_dump()
-            shared = {key: _QuotedIdentity.model_validate(value) for key, value in payload["identities"].items()}
+            shared: dict[str, _QuotedIdentity] = {}
+            for item in payload["identities"]:
+                identity = _QuotedIdentity(source_ref=item["source_ref"], quote=item["quote"])
+                # One id naming two quotes leaves every binding through it ambiguous.
+                if shared.setdefault(item["id"], identity) != identity:
+                    return reject(tuple(uncertain.values()))
             scopes = {}
             for key, value in payload["bindings"].items():
                 refs = value["identity_ids"]

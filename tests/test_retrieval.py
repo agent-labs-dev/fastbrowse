@@ -8,6 +8,7 @@ from decimal import Decimal
 import pytest
 from pydantic import BaseModel, Field, JsonValue
 
+from fastbrowse.clients.openai_compatible import strict_schema
 from fastbrowse.config import Thresholds, TokenBudget
 from fastbrowse.jev import (
     MAX_CHOICE_OPTIONS,
@@ -73,7 +74,7 @@ def scripted_identities(messages):
     payload = json.loads(messages[-1].content)
     reference, source = next(iter(payload["sources"].items()))
     return {
-        "identities": {"i0": {"source_ref": reference, "quote": source["quote"]}},
+        "identities": [{"id": "i0", "source_ref": reference, "quote": source["quote"]}],
         "bindings": {
             key: {"scope": "entities", "identity_ids": ["i0"]} for key, criterion in payload["criteria"].items()
         },
@@ -100,6 +101,8 @@ class ScriptedLLM:
             ledger.reserve(CostComponent.LLM)
         self.calls.append((purpose, tuple(messages)))
         self.output_caps.append(max_output_tokens)
+        # The real client refuses a schema it cannot send strictly; a scripted reply must not hide one.
+        strict_schema(schema.model_json_schema())
         return Generation(
             data=schema.model_validate(
                 scripted_identities(messages) if schema.__name__ == "_OutputIdentities" else self.responses.pop(0)
