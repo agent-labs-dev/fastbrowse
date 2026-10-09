@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Read captures retain empty form fields, disabled buttons, horizontal overflow and the absence of visible h1
+  headings across accessible document and shadow roots. Field values supplied as URLs are checked before navigation.
+
+- Recordings of attached windows leave the caller's page in place. Explicit submit buttons expose the form's
+  destination to the authorization check, while focusing a field does not claim to submit it.
+
 - Answer identity checks emit each literal identifying quote once and reference it across fields.
   Repeated names no longer consume output tokens for every requested value; citation and subject checks remain.
 
@@ -36,6 +42,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Recovery checks whether a changed page satisfies the task before stopping for lack of further actions.
   The completion verifier still rejects unfinished work.
+
+- Multi-site tasks can open HTTP(S) addresses supplied by the caller even when the current page has no
+  link to the next site. Search choices distinguish entering a query from opening its field. Navigation
+  keeps origin and authorization checks, and dismissed dialogs no longer follow it to the next page.
 
 - Requests to expand or load content until a stopping condition keep that page change as an action
   requirement. A displayed total no longer replaces the requested work in the plan. The feed fixture

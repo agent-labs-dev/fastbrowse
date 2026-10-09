@@ -2070,7 +2070,9 @@ def _read_request(
         questions[requirement.id] = ChoiceQuestion(
             instructions=(
                 f"{UNTRUSTED}\n\nRequirement: {requirement.text}\nHow does this page answer the requirement? "
-                "Select absent when the page holds no evidence for it, not even partial. Select a candidate "
+                "Select absent when the page holds no evidence for it, not even partial. Observed DOM "
+                "metadata can evidence absence within its stated scope, such as zero visible h1 "
+                "headings. Select synthesis for that answerable evidence. Select a candidate "
                 "when that candidate alone states one short scalar fact that fully answers it, with no "
                 "inference; a total the page states is a scalar, counting items is not. Otherwise select "
                 "synthesis: lists, comparisons, summaries, explanations, counts, calculations, several facts, "

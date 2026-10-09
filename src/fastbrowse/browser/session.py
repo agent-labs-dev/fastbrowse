@@ -18,7 +18,7 @@ from typing import Any, Self, cast
 
 from cdp_use.cdp.fetch.events import RequestPausedEvent
 from cdp_use.cdp.fetch.types import RequestPattern
-from cdp_use.cdp.page.events import JavascriptDialogOpeningEvent, ScreencastFrameEvent
+from cdp_use.cdp.page.events import JavascriptDialogClosedEvent, JavascriptDialogOpeningEvent, ScreencastFrameEvent
 from cdp_use.cdp.target.events import (
     AttachedToTargetEvent,
     DetachedFromTargetEvent,
@@ -131,7 +131,11 @@ class _BrowserClient(CDPClient):
             await super().start()
         except Exception as exc:
             if _unreachable(exc):
-                raise BrowserUnresponsive(f"CDP.start failed ({type(exc).__name__})") from exc
+                raise BrowserUnresponsive(
+                    f"CDP.start failed ({type(exc).__name__}): the browser did not complete the DevTools handshake. "
+                    "If this is a Chrome you started yourself, it may be waiting for you to approve remote debugging, "
+                    "or the address may be stale; check the browser window and the address, then retry."
+                ) from exc
             raise _browser_error("CDP.start", exc) from exc
 
     async def stop(self) -> None:
@@ -568,6 +572,7 @@ class BrowserSession:
         client.register.Target.targetInfoChanged(self._on_target_info_changed)
         client.register.Target.targetDestroyed(self._on_target_destroyed)
         client.register.Page.javascriptDialogOpening(self._on_dialog)
+        client.register.Page.javascriptDialogClosed(self._on_dialog_closed)
         if self._on_frame is not None:
             client.register.Page.screencastFrame(self._on_screencast_frame)
         client.register.Fetch.requestPaused(self._on_request_paused)
@@ -799,6 +804,11 @@ class BrowserSession:
             params["promptText"] = prompt_text
         await self.client.send.Page.handleJavaScriptDialog(params=params, session_id=session_id)  # ty: ignore[invalid-argument-type]
         self._dialogs.pop(session_id, None)
+
+    def _on_dialog_closed(self, event: JavascriptDialogClosedEvent, session_id: str | None) -> None:
+        # Navigation can dismiss a dialog without going through handle_dialog.
+        if session_id is not None:
+            self._dialogs.pop(session_id, None)
 
     # -- Downloads ------------------------------------------------------------------------------------
 
