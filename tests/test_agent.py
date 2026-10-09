@@ -71,6 +71,7 @@ from fastbrowse.page import (
     ActResult,
     BlockKind,
     BrowserError,
+    BrowserUnavailable,
     Capture,
     Control,
     Dialog,
@@ -3642,7 +3643,7 @@ async def test_a_page_nobody_read_is_read_before_it_is_scrolled() -> None:
     assert not await agent._read_before_interaction(state, obs, decision)
 
 
-@pytest.mark.parametrize("failed", [NavigationTimeout, SiteUnreachable])
+@pytest.mark.parametrize("failed", [NavigationTimeout, SiteUnreachable, BrowserUnavailable])
 @pytest.mark.parametrize("opening", [True, False])
 async def test_navigation_timeout_is_unavailable_only_while_opening(
     monkeypatch: pytest.MonkeyPatch, opening: bool, failed: type[BrowserError]
@@ -3670,7 +3671,7 @@ async def test_navigation_timeout_is_unavailable_only_while_opening(
 
     monkeypatch.setattr(agent, "_loop", loop)
     result = await agent.run("Open the page", start="https://example.test" if opening else None)
-    assert result.status is (Status.UNAVAILABLE if opening else Status.ERROR)
+    assert result.status is (Status.UNAVAILABLE if opening or failed is BrowserUnavailable else Status.ERROR)
     assert result.error == "navigation timed out"
     assert len(result.steps) == (0 if opening else 1)
 
