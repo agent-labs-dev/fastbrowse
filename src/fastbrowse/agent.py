@@ -639,9 +639,24 @@ class Agent:
             finally:
                 # Cancelling a paid startup call loses its receipt, so a finished run joins it before reporting cost.
                 if loop_returned:
-                    await asyncio.gather(
-                        head.planning, *([head.proposing] if head.proposing is not None else []), return_exceptions=True
-                    )
+                    try:
+                        async with asyncio.timeout_at(deadline.when()):
+                            await asyncio.gather(
+                                head.planning,
+                                *([head.proposing] if head.proposing is not None else []),
+                                return_exceptions=True,
+                            )
+                    except TimeoutError:
+                        assert ledger.limits.max_seconds is not None
+                        await head.discard()
+                        result = result.model_copy(
+                            update={
+                                "status": Status.BUDGET_EXCEEDED,
+                                "error": f"time limit {ledger.limits.max_seconds}s reached",
+                                "budget": BudgetStop(resource="seconds", limit=ledger.limits.max_seconds),
+                            }
+                        )
+                        loop_returned = False
                 else:
                     await head.discard()
                 if (
@@ -655,9 +670,10 @@ class Agent:
         try:
             ledger.check_spend()
         except BudgetExceeded as error:
-            result = result.model_copy(
-                update={"status": Status.BUDGET_EXCEEDED, "error": str(error), "budget": error.budget}
-            )
+            if result.budget is None or result.budget.resource != "seconds":
+                result = result.model_copy(
+                    update={"status": Status.BUDGET_EXCEEDED, "error": str(error), "budget": error.budget}
+                )
             loop_returned = False
         result = result.model_copy(update={"cost": ledger.breakdown()})
         return result if loop_returned else await self._ending_frame(result)

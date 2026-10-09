@@ -6148,3 +6148,37 @@ async def test_finished_run_waits_for_pending_shortcut_cost(monkeypatch: pytest.
     assert result.status is Status.COMPLETE
     assert head.proposing.done() and not head.proposing.cancelled()
     assert any(line.purpose == "shortcut" and line.dollars == 0.01 for line in result.cost.lines)
+
+
+@pytest.mark.parametrize("unknown_cost", [False, True])
+async def test_startup_settlement_obeys_the_remaining_run_deadline(
+    monkeypatch: pytest.MonkeyPatch, unknown_cost: bool
+) -> None:
+    from fastbrowse.models import CostLine
+
+    head = HeadStart.begin(
+        ScriptedLLM([{"requirements": [], "answer_expected": False}]), "Check the page", limits=Limits(max_seconds=0.01)
+    )
+    await head.planning
+
+    async def pending() -> agent_module.Shortcut:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            if unknown_cost:
+                head.ledger.lines.append(CostLine(component="llm", basis="unknown", dollars=None, purpose="shortcut"))
+        return agent_module.Shortcut(url=None)
+
+    head.proposing = asyncio.create_task(pending())
+    page = Mock(spec=Page)
+    page.artifacts = []
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+
+    async def finish(state, output_schema, until):
+        return agent._result(state, head.ledger, Status.COMPLETE)
+
+    monkeypatch.setattr(agent, "_loop", finish)
+    result = await asyncio.wait_for(agent.run("Check the page", head_start=head), 0.2)
+    assert result.status is Status.BUDGET_EXCEEDED
+    assert result.budget is not None and result.budget.resource == "seconds"
+    assert head.proposing.cancelled()
