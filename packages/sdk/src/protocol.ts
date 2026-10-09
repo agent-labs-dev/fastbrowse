@@ -166,6 +166,9 @@ export interface Limits {
    * cost is reported in the result but cannot stop the run that incurred it.
    */
   max_dollars?: number | null;
+  /**
+   * Stops active work at the time budget. Returning also waits for owned request and browser cleanup.
+   */
   max_seconds?: number | null;
 }
 export interface LocalChrome {

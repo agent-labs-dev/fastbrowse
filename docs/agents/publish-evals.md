@@ -5,12 +5,14 @@ identity, physical ledgers and private Langfuse read-back before producing `docs
 The file contains sanitized per-run grades, completion, time and cost. Official rubric scores retain
 their source meaning. Internal hosted and Ultrafast comparisons use separate matched task groups.
 
-Schema 2 can publish any nonempty set of complete suites; schema 1 requires all four groups. Official
+Schema 1 requires all four original groups. Schema 2 accepts nonempty subsets of those four groups.
+Schema 3 also supports `internal-fastbrowse`: all 54 supported internal tasks, three repeats each, with
+Fastbrowse alone. The Fastbrowse-only group does not require comparator reruns. Official
 Fastbrowse suites do not require new comparator runs. Previously published comparator figures can be linked
 as references with their task and build differences stated. Every group inside one candidate still comes
 from the same measured agent and runner build. Adding a suite must retain the published groups and their
 regression checks; results from different builds cannot be combined under one build receipt.
-Schema 2 records each group's agent and runner commits and requires them to match the candidate's build.
+Schemas 2 and 3 record each group's agent and runner commits and requires them to match the candidate's build.
 
 CI validates the candidate's exact coverage and compares matched scores, time and cost with the previous
 approved candidate. Unresolved costs, missing grades, incomplete coverage and a failed fixture workflow
