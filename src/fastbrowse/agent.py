@@ -394,6 +394,8 @@ class _RunState:
     """Page states where an unsure pick has been acted on instead of recovering; the next one there recovers."""
     reads: set[ReadKey] = field(default_factory=set)
     """Attempted reads by document, exact content and outstanding requirements, independent of URL edits."""
+    record_read_documents: set[str] = field(default_factory=set)
+    """Documents whose pagination records were read outside the ordinary read cache."""
     barren: dict[ReadKey, int] = field(default_factory=dict[ReadKey, int])
     """Reads by document, page state and outstanding requirements that added no fact. Keyed by what can be done
     on the page rather than by its exact text, so a page rewriting itself cannot mint a fresh key for ever."""
@@ -2137,6 +2139,17 @@ class Agent:
         # A native dialog pauses JavaScript, so capture cannot run until the dialog has been handled.
         if observation.dialog is not None:
             return False
+        if (
+            decision.operation in {Operation.BACK, Operation.NAVIGATE, Operation.SWITCH_TAB}
+            and observation.document_key not in state.record_read_documents
+            and not any(key[0] == observation.document_key for key in state.reads)
+        ):
+            plan = await state.await_plan()
+            if state.notes.unresolved(plan):
+                # Leaving an unread document can lose a value needed by a pending action, even after every
+                # information requirement is answered. Keep its evidence before choosing where to go next.
+                reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
+                return not await self._step(state, observation, reading, decided_by)
         if state.ready_plan is None and any(not candidate.outcome_read for candidate in state.transaction_candidates):
             await state.await_plan()
         # A read takes in the whole page, so a scroll over one never read only spends steps: Jev judges evidence from
@@ -2425,6 +2438,7 @@ class Agent:
         before = len(state.notes.facts)
         state.notes.remember_capture(page.capture)
         outcome.merge_records(state.notes)
+        state.record_read_documents.add(page.observation.document_key)
         state.incomplete.update(outcome.incomplete)
         state.history.append(
             HistoryEntry(
