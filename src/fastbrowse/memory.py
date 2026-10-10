@@ -263,6 +263,17 @@ class Notes:
     def fact_requirements(self, key: str) -> tuple[str, ...]:
         return tuple(sorted(self._requirements.get(key, ())))
 
+    def retain_for(self, requirement_ids: Iterable[str], fact_ids: Iterable[str]) -> bool:
+        """Whether source quotes joined a requested group, without declaring any requirement answered."""
+        owners = set(requirement_ids)
+        added = False
+        for key in self.expand_evidence_ids(fact_ids):
+            if (fact := self._facts.get(key)) is not None and fact.evidence is not None:
+                held = self._owners.setdefault(key, set())
+                added |= bool(owners - held)
+                held.update(owners)
+        return added
+
     def for_requirements(self, requirement_ids: Iterable[str], *, evidence_ids: Iterable[str] = ()) -> "Notes":
         """Keep a requirement's sources, basis and same-page counterevidence without changing their validity."""
         wanted = set(requirement_ids)

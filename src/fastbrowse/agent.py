@@ -50,6 +50,7 @@ from fastbrowse.models import (
     Decider,
     EventHandler,
     Evidence,
+    FactReader,
     Frozen,
     Limits,
     LLMPurpose,
@@ -368,6 +369,9 @@ class _RunState:
     hint: str | None = None
     directed: tuple[Operation, str | None] | None = None
     """The operation and control id recovery named, taken when Jev is still unsure of the next step."""
+    section_read: bool = False
+    """An observed output section must be opened and read before another model chooses an action."""
+    recovery_sections: set[str] = field(default_factory=set)
     unsure_commit: _Commit | None = None
     """The commit an authorized run was last refused as unsure it is the one the task means."""
     confirmed_commit: _Commit | None = None
@@ -773,6 +777,34 @@ class Agent:
                         _HttpFailure(url=observation.url, status=observation.response_status).message,
                     )
                     continue
+            if state.section_read and observation.dialog is None:
+                directed, state.directed = state.directed, None
+                if directed is not None and directed[0] is Operation.NAVIGATE:
+                    decision = _code_decision(Operation.NAVIGATE, None).model_copy(
+                        update={"url": directed[1], "directed": True}
+                    )
+                    try:
+                        await self._step(state, observation, decision, Decider.LLM)
+                    except _Unsure as unsure:
+                        state.section_read = False
+                        await self._recover(state, observation, str(unsure), gives_up_as=unsure.gives_up_as)
+                else:
+                    state.section_read = False
+                    await self._step(state, observation, _code_decision(Operation.READ, None), Decider.LLM)
+                    if not state.section_read and state.directed is None and state.oversized_answer:
+                        state.directed = (Operation.DONE, None)
+                continue
+            if (
+                state.directed == (Operation.DONE, None)
+                and state.oversized_answer
+                and state.read_here
+                and _lookup(state.plan)
+            ):
+                state.directed = None
+                result = await self._finish(state, output_schema, until)
+                if result is not None:
+                    return result
+                continue
             undone, renews, put_back = self._reversal(state)
             stalled = self._settle(state, observation, renews=renews, put_back=put_back)
             if (stalled := undone or stalled) is not None:
@@ -1258,6 +1290,20 @@ class Agent:
             if act.outcome is StepOutcome.EXECUTED and edit is not None and decision.target is not None:
                 written.add(decision.target.id)
             progressed = act.outcome is StepOutcome.EXECUTED and (changed if edit is None else edit)
+            if (
+                progressed
+                and decision.operation in SCROLLING
+                and state.open_answer_outputs
+                and state.ready_plan is not None
+                and _lookup(state.ready_plan)
+                and any(key[0] == observation.document_key for key in state.reads)
+            ):
+                # A full-page read includes offscreen text, so moving its viewport adds no evidence unless
+                # the scroll loads content that the reader has not seen.
+                scrolled = await self._capture()
+                if any(key[:2] == (observation.document_key, scrolled.read_key) for key in state.reads):
+                    progressed = False
+                    effect_now = "Scroll moved the viewport over content already read in full; no new source content."
             # Moving between two pages changes the page every time, and a run went round "open the author,
             # back to the list" to its step limit with its stall budget reset at every hop. The same action
             # from the same page a third time is going round, not forward.
@@ -2441,13 +2487,20 @@ class Agent:
             # Rebinding old quotes during output recovery does not make revisiting their page a fresh source.
             revalidate=owed and (transaction_pending or not state.open_answer_outputs or not state.oversized_answer),
             recovering_outputs=state.oversized_answer and bool(state.open_answer_outputs),
-            preserve_collections=bool(state.finish_partitions or state.open_answer_outputs),
+            preserve_collections=bool(state.oversized_answer or state.finish_partitions or state.open_answer_outputs),
             field_outputs=state.oversized_answer and bool(state.finish_partitions),
             notice=notice,
             continuing=state.continuing,
             incomplete=state.incomplete,
             require_all_evidence=require_all_evidence or (state.through_end and state.pages > 0),
         )
+        context_added = False
+        if state.oversized_answer and state.open_answer_outputs:
+            # A field read can return context while another field or collection is still open. Its quotes
+            # must reach that target's audit even when the reader cannot bind the whole requirement.
+            context_added = state.notes.retain_for((r.id for r in wanted), (fact_id(fact) for fact in outcome.facts))
+            if context_added:
+                state.rejected_answer_evidence = None
         if _lookup(plan):
             previous = state.pending_collections.get(capture.url)
             retained = previous[1] if previous is not None and previous[0] == capture.sha256 else ()
@@ -2480,8 +2533,13 @@ class Agent:
                 state.notes.complete_tallies(requirement_id)
         # A timer changes the capture hash and a reader can paraphrase the same claim, so only a new source
         # quote or a newly evidenced requirement restores the read budget.
-        progressed = bool(_answer_evidence(state.notes, include_answer=False) - known) or (
-            not state.open_answer_outputs and any(state.notes.evidenced(r.id) for r in wanted if r.id not in evidenced)
+        progressed = (
+            context_added
+            or bool(_answer_evidence(state.notes, include_answer=False) - known)
+            or (
+                not state.open_answer_outputs
+                and any(state.notes.evidenced(r.id) for r in wanted if r.id not in evidenced)
+            )
         )
         continues = [key for key in outcome.continues if not state.notes.evidenced(key)]
         trace(
@@ -2861,6 +2919,15 @@ class Agent:
     ) -> None:
         state.form_values.clear()
         reason = self._redactor.redact(reason)
+        if observation.dialog is None and (section := _unread_output_section(state)) is not None:
+            state.recovery_sections.add(section)
+            state.directed = (Operation.NAVIGATE, section)
+            state.section_read = True
+            state.hint = "Read the observed section for the unverified output: " + "; ".join(state.open_answer_outputs)
+            state.unchanged = 0
+            state.recovered_at = len(state.history)
+            state.plan_marks.clear()
+            return
         remaining = state.notes.unresolved(state.ready_plan) if state.ready_plan else ()
         evidenced = (
             {r.id for r in state.ready_plan.requirements if r.kind is RequirementKind.INFORMATION}
@@ -3074,7 +3141,11 @@ class Agent:
         diagnosis = self._redactor.redact(generation.data.diagnosis)
         # An unread page is still read before a finish is judged, so only a page already read is exhausted.
         exhausted = generation.data.operation is Operation.DONE and state.ready_plan is not None and state.read_here
-        if exhausted and _unread(state.ready_plan, state.notes):
+        if (
+            exhausted
+            and _unread(state.ready_plan, state.notes)
+            and not (state.oversized_answer and _lookup(state.ready_plan) and state.notes.current_evidence())
+        ):
             # The done check refuses any finish with information nobody has read, so this subgoal cannot succeed.
             # Asked for the heading of a page that has none, a run was told to finish on every recovery it had,
             # and each one was refused.
@@ -3163,6 +3234,27 @@ class Agent:
                 )
             except LLMError as error:
                 raise _Stop(Status.UNVERIFIED, str(error)) from error
+        for group in state.finish_partitions if state.oversized_answer else ():
+            subjects = tuple(check.removesuffix(".").rpartition(" for ")[2] for check in group.answer_checks)
+            sources = (
+                key
+                for key, evidence in state.notes.current_evidence().items()
+                if any(
+                    subject
+                    and (
+                        _names_subject(urlsplit(evidence.url).path, subject)
+                        or (
+                            (page := state.notes.captured_page(evidence)) is not None
+                            and _names_subject(page.title, subject)
+                        )
+                    )
+                    for subject in subjects
+                )
+            )
+            # A description can supply one field without answering a bundled requirement. Its captured
+            # target identity keeps that source in the group before an audit can reject the missing field.
+            if state.notes.retain_for((r.id for r in group.requirements), sources):
+                state.rejected_answer_evidence = None
         return await self._finish_partitioned(state, output_schema, until)
 
     async def _finish_partitioned(
@@ -3227,7 +3319,26 @@ class Agent:
                 answer_check_cache={},
             )
             try:
-                result = await self._finish_whole(child, None, None, partition=True)
+                supported = True
+                if state.oversized_answer and _lookup(plan) and _unread(plan, notes):
+                    # Separate source reads can leave a bundled requirement unbound. Only a fully audited
+                    # field answer can bind their combined quotes before the normal completion check.
+                    answer, supported = await self._answer(child, None)
+                    if supported:
+                        for requirement in plan.requirements:
+                            notes.add(
+                                Fact(
+                                    text=answer.answer,
+                                    requirement_id=requirement.id,
+                                    evidence=None,
+                                    basis=tuple(
+                                        dict.fromkeys(ref for claim in answer.claims for ref in claim.evidence_ids)
+                                    ),
+                                    reader=FactReader.LLM,
+                                )
+                            )
+                        child.verified_answer = answer
+                result = await self._finish_whole(child, None, None, partition=True) if supported else None
             except NotesTooLarge as error:
                 oversized.append(str(error))
                 result = None
@@ -4620,6 +4731,51 @@ def _without_missing(observation: Observation, missing: Set[tuple[str, str | Non
         c for c in observation.controls if Operation.FILL not in c.operations or (c.label, c.context) not in missing
     )
     return observation if len(kept) == len(observation.controls) else observation.model_copy(update={"controls": kept})
+
+
+def _subject_words(text: str) -> tuple[str, ...]:
+    return tuple(re.findall(r"[^\W_]+", text.casefold()))
+
+
+def _names_subject(text: str, subject: str) -> bool:
+    tokens, target = _subject_words(text), _subject_words(subject)
+    return bool(target) and any(tokens[i : i + len(target)] == target for i in range(len(tokens)))
+
+
+def _unread_output_section(state: _RunState) -> str | None:
+    read = state.read_urls | state.recovery_sections | {e.url for e in state.notes.current_evidence().values()}
+    failed = {failure.url for failure in state.failed_links.values()}
+    for output in state.open_answer_outputs:
+        # Grouped checks are made by partition_plan from one field and one subject.
+        field, separator, subject = output.removeprefix("Report ").removesuffix(".").rpartition(" for ")
+        if not separator or not (target := _subject_words(subject)):
+            continue
+        roots: set[tuple[str, str]] = set()
+        for link in state.observed_links.values():
+            source, destination = urlsplit(link.source), urlsplit(link.url)
+            if _names_subject(link.label, subject):
+                roots.add((destination.netloc, destination.path.rstrip("/")))
+            if _names_subject(link.title, subject):
+                for address in (source, destination):
+                    path = address.path.rstrip("/")
+                    tail = _subject_words(path.rpartition("/")[2])
+                    if tail and set(tail) <= set(target):
+                        roots.add((address.netloc, path))
+            if _names_subject(destination.path.rpartition("/")[2], subject):
+                roots.add((destination.netloc, destination.path.rstrip("/")))
+        candidates: list[tuple[int, int, str]] = []
+        for link in state.observed_links.values():
+            if link.url in read or link.url in failed:
+                continue
+            destination = urlsplit(link.url)
+            path = destination.path.rstrip("/")
+            # A target's directory and another target beside it are not sections of that target.
+            if (destination.netloc, path) in roots or (destination.netloc, path.rpartition("/")[0]) in roots:
+                overlap = len(set(_subject_words(field)) & set(_subject_words(link.label)))
+                candidates.append((-overlap, len(path), link.url))
+        if candidates:
+            return min(candidates)[2]
+    return None
 
 
 def _recovery_routes(state: _RunState, max_chars: int) -> str:

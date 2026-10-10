@@ -1205,7 +1205,9 @@ async def read(
                     "derived conclusion with that requirement id and draws_on for every supporting claim or "
                     "prior note. A claim covering only some requested fields must leave requirement_id null. "
                     "A requested link needs its quoted destination; navigation labels without destinations do "
-                    "not answer it. Leave that field open when its destination has not been read."
+                    "not answer it. A written hostname or hostname/path is a destination without a URL scheme; "
+                    "preserve it separately from labels whose destinations are missing. Leave that field open "
+                    "when its destination has not been read."
                 }
             )
         if field_outputs:
@@ -2910,7 +2912,18 @@ async def compose(
             }
         )
     if fields and independent_fields:
-        messages[0] = messages[0].model_copy(update={"content": messages[0].content + "\n\n" + FIELD_CATEGORIES})
+        messages[0] = messages[0].model_copy(
+            update={
+                "content": messages[0].content
+                + "\n\n"
+                + FIELD_CATEGORIES
+                + " A requested link needs a quoted destination in the source evidence. A heading or "
+                "navigation label without its destination cannot fill a links field. A quoted hostname or "
+                "hostname/path is a destination even without a URL scheme. Report those written destinations "
+                "as quoted, separately from labels whose destinations are missing. Leave that output "
+                "slot empty when no destination is quoted; do not claim there are no links from missing text."
+            }
+        )
     room = _notes_room(tokens, messages, schema)
     try:
         offered = notes.render_with_ids(

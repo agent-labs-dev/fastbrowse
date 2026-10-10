@@ -38,8 +38,14 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   requested fields separately, with claims bound to their fields. Empty fields cannot borrow another
   field's evidence. Collections read to their end support explicit bounded absence findings, which survive
   answer correction and reader-fact fallback.
-- Recovery follows observed links to unread sections relevant to an open target and field. Section
-  destinations retain their source titles and read status so recovery can leave already read pages.
+- Recovery opens an observed unread section for a missing target field and reads it before choosing another
+  action. Sections already read are excluded. Scrolling fully read content without loading more does not
+  count as progress during output recovery.
+- Grouped answers audit retained quotes even when separate reads leave a bundled requirement open.
+  Verified fields bind their source evidence before the normal completion check. Readers and grouped
+  composers leave links fields open unless their sources quote a destination, including a written hostname.
+  Initial grouping and recovery
+  retain a target's quotes without treating source ownership as verified completion.
 - A rejected grouped answer keeps its current source quotes and collection scope. Missing outputs stay open,
   and unchanged evidence cannot trigger another grouped completion check. Answers that fit one prompt
   reopen their information requirements for another read and check. Changed or misread sources still lose

@@ -254,8 +254,7 @@ async def test_output_recovery_routes_to_observed_unread_section_and_keeps_autho
     agent = Agent(Mock(spec=Page), RoutingJev(), llm)
     agent._screenshots = AsyncMock(return_value=())
     await agent._recover(state, elsewhere, "Missing links.")
-    prompt = llm.calls[0][1][-1].content
-    assert '"label": "Description"' in prompt and '"read": false' in prompt
+    assert not llm.calls
     assert state.directed == (Operation.NAVIGATE, description)
     proposed = Decision(
         operation=Operation.READ,
