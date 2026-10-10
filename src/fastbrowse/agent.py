@@ -336,10 +336,14 @@ class _RunState:
     notes: Notes = field(default_factory=Notes)
     finish_partitions: tuple[Plan, ...] = ()
     oversized_answer: bool = False
+    read_source_sizes: dict[str, int] = field(default_factory=dict)
+    pending_collections: dict[str, tuple[str, tuple[Fact, ...]]] = field(default_factory=dict)
     partition_answers: dict[str, ComposedAnswer] = field(default_factory=dict)
     partial_answers: dict[str, FieldAnswer] = field(default_factory=dict)
     partition_failures: dict[str, tuple[tuple[str, ...], tuple[AnswerCorrection, ...]]] = field(default_factory=dict)
     recovered_outputs: set[str] = field(default_factory=set)
+    recovered_sources: set[str] = field(default_factory=set)
+    recovered_collections: set[tuple[str, str]] = field(default_factory=set)
     verified_answer: ComposedAnswer | None = None
     missing_answer_outputs: tuple[str, ...] = ()
     answer_corrections: tuple[AnswerCorrection, ...] = ()
@@ -2226,6 +2230,19 @@ class Agent:
         if observation.dialog is not None:
             return False
         if (
+            state.oversized_answer
+            and state.open_answer_outputs
+            and state.owes_read
+            and state.ready_plan is not None
+            and _lookup(state.ready_plan)
+            and not any(
+                key[0] == observation.document_key and key[-1] == state.open_answer_outputs for key in state.reads
+            )
+        ):
+            # Recovery selected this source to repair missing fields. Uncertainty about the next click
+            # cannot spend another recovery before its evidence is read.
+            return not await self._step(state, observation, _code_decision(Operation.READ, None), Decider.LLM)
+        if (
             decision.operation is Operation.BACK
             and observation.document_key not in state.record_read_documents
             and not any(key[0] == observation.document_key for key in state.reads)
@@ -2325,6 +2342,10 @@ class Agent:
         """Return (added evidence, skipped duplicate), since only new evidence makes a read progress."""
         capture = capture or await self._capture()
         plan = await state.await_plan()
+        if _lookup(plan):
+            # Reader-selected excerpts cannot decide whether the full sources fit together in one prompt.
+            state.read_source_sizes[capture.url] = len(capture.text)
+            state.oversized_answer |= sum(state.read_source_sizes.values()) > self._config.tokens.input_chars()
         wanted = [r for r in state.notes.unresolved(plan) if r.kind is RequirementKind.INFORMATION]
         transaction_pending = _unread_transaction(state)
         owed = transaction_pending or (not wanted and state.owes_read and plan.page_answer_expected)
@@ -2427,6 +2448,20 @@ class Agent:
             incomplete=state.incomplete,
             require_all_evidence=require_all_evidence or (state.through_end and state.pages > 0),
         )
+        if _lookup(plan):
+            previous = state.pending_collections.get(capture.url)
+            retained = previous[1] if previous is not None and previous[0] == capture.sha256 else ()
+            state.pending_collections[capture.url] = (
+                capture.sha256,
+                tuple({fact_id(fact): fact for fact in (*retained, *outcome.collection_facts)}.values()),
+            )
+            if state.oversized_answer:
+                # Earlier reads keep page-proven coverage outside ordinary notes until the sources need
+                # separate prompts. Entering recovery must not require the same collection to be read again.
+                for _, collection_facts in state.pending_collections.values():
+                    for fact in collection_facts:
+                        state.notes.add(fact)
+                state.pending_collections.clear()
         for candidate in state.transaction_candidates:
             candidate.outcome_read = True
         for requirement in wanted:
@@ -2844,13 +2879,27 @@ class Agent:
                 verified_outputs.update(plan.answer_checks)
             elif partial := state.partial_answers.get(proof):
                 verified_outputs.update(partial.output_claims)
-        if (evidenced - state.recovered_requirements and not state.open_answer_outputs) or (
-            verified_outputs - state.recovered_outputs
+        current_sources = state.notes.current_evidence() if state.oversized_answer else {}
+        sources = {source.url for source in current_sources.values()}
+        collections = {
+            (source.url, fact.scope)
+            for fact in state.notes.facts
+            if state.oversized_answer and isinstance(fact, CollectionFact) and fact.comparison.complete
+            for key in fact.basis
+            if (source := current_sources.get(key)) is not None
+        }
+        if (
+            (evidenced - state.recovered_requirements and not state.open_answer_outputs)
+            or verified_outputs - state.recovered_outputs
+            or sources - state.recovered_sources
+            or collections - state.recovered_collections
         ):
             state.recoveries = 0
             state.recovery_log.clear()
         state.recovered_requirements.update(evidenced)
         state.recovered_outputs.update(verified_outputs)
+        state.recovered_sources.update(sources)
+        state.recovered_collections.update(collections)
         open_requirements = "\n".join(
             f"- {r.text}"
             + (
@@ -3102,7 +3151,9 @@ class Agent:
         until: UntilCheck | None,
     ) -> RunResult | None:
         if not state.finish_partitions:
-            if not state.open_answer_outputs or state.rejected_answer_evidence == _answer_evidence(state.notes):
+            if not state.oversized_answer and (
+                not state.open_answer_outputs or state.rejected_answer_evidence == _answer_evidence(state.notes)
+            ):
                 try:
                     return await self._finish_whole(state, output_schema, until)
                 except NotesTooLarge:

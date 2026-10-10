@@ -110,7 +110,7 @@ async def test_collection_completeness_survives_an_unanswered_neighbor(notice):
     from fastbrowse.retrieval import read
 
     page = capture(
-        (BlockKind.HEADING, "Birch comments (2). Author: Ash."),
+        (BlockKind.HEADING, "Birch comments (2)"),
         (BlockKind.RECORD, "Player Elm: Please add a compact view."),
         (BlockKind.RECORD, "Player Oak: Thanks for the update."),
     )
@@ -123,7 +123,6 @@ async def test_collection_completeness_survives_an_unanswered_neighbor(notice):
                     {
                         "requirement_id": "r",
                         "scope": "Birch's two comments",
-                        "complete": True,
                         "records": [{"first": f"s{i}", "last": f"s{i}"} for i in range(3)],
                     }
                 ],
@@ -142,7 +141,7 @@ async def test_collection_completeness_survives_an_unanswered_neighbor(notice):
         notice=notice,
     )
     scoped = notes.for_requirements(("r",))
-    collection = next(f for f in scoped.facts if isinstance(f, CollectionFact))
+    collection = max((f for f in scoped.facts if isinstance(f, CollectionFact)), key=lambda f: f.comparison.complete)
     assert collection.comparison.complete is (not notice)
     assert not notes.evidenced("r")
     assert len(collection.comparison.records) == 3

@@ -685,14 +685,115 @@ class _ReadCollection(Frozen):
     records: tuple[_Cite, ...] = Field(
         description="The identifying boundary and EVERY member, including roles and replies."
     )
-    complete: bool = Field(
-        description="True only when this capture shows the entire collection, "
-        "with no unread members, pages or expanders."
-    )
 
 
 class _CollectionResponse(_ReadResponse):
     collections: tuple[_ReadCollection, ...] = ()
+
+
+def _counted_collections(
+    capture: Capture, requirement_ids: Sequence[str], read_end: int, requirements: Sequence[Requirement] = ()
+) -> tuple[Fact, ...]:
+    collections: list[Fact] = []
+    for index, heading in enumerate(capture.blocks):
+        if heading.kind is not BlockKind.HEADING or heading.frame_id is not None:
+            continue
+        title = capture.text[heading.start : heading.end]
+        count = re.fullmatch(r"[^\d\n()]+\s*\(\s*(\d+)\s*\)\s*", title)
+        members = []
+        for block in capture.blocks[index + 1 :]:
+            if block.frame_id != heading.frame_id or block.kind is BlockKind.HEADING:
+                break
+            if not members:
+                if block.kind not in {BlockKind.LIST_ITEM, BlockKind.RECORD} and block.list_id is None:
+                    break
+            elif members[0].list_id is not None:
+                if block.list_id != members[0].list_id:
+                    break
+            elif block.kind not in {BlockKind.LIST_ITEM, BlockKind.RECORD}:
+                break
+            members.append(block)
+        if members and members[0].list_id is not None:
+            # A member can contain headings or form fields between its text blocks. The list identity,
+            # not adjacency, keeps its entire captured text in the collection.
+            members = [block for block in capture.blocks if block.list_id == members[0].list_id]
+            if members[0].start < heading.end:
+                continue
+        if count is None:
+            following = capture.blocks[index + 1 : index + 3]
+            if following and following[0].kind is BlockKind.HEADING:
+                continue
+            empty = next(
+                (
+                    block
+                    for block in following
+                    if block.kind is BlockKind.PARAGRAPH
+                    and re.search(
+                        r"\b(?:no (?:matching )?(?:comments|reviews|results|items|records|messages|posts|entries)"
+                        r" (?:yet|found|available)|be the first to (?:post|add|write|leave) "
+                        r"(?:a|an) (?:comment|review|reply|message|post))\b",
+                        capture.text[block.start : block.end],
+                        re.IGNORECASE,
+                    )
+                ),
+                None,
+            )
+            if empty is None or members:
+                continue
+            members = [empty]
+        if not members or members[-1].end > read_end:
+            continue
+        if count is not None:
+            total = members[0].list_count
+            if total is None:
+                if any(block.kind not in {BlockKind.LIST_ITEM, BlockKind.RECORD} for block in members):
+                    continue
+                total = len(members)
+            if total != int(count[1]):
+                continue
+        context = next(
+            (
+                block
+                for block in reversed(capture.blocks[:index])
+                if block.kind is BlockKind.HEADING
+                and block.frame_id == heading.frame_id
+                and capture.text[block.start : block.end] in heading.heading_path
+            ),
+            heading,
+        )
+        boundary = _quoted(_evidence(capture, context, context.start, heading.end))
+        sources = (
+            (boundary, _quoted(_evidence(capture, members[0], members[0].start, members[-1].end)))
+            if members[0].list_id is not None
+            else (boundary, *(_quoted(_evidence(capture, b, b.start, b.end)) for b in members))
+        )
+        keys = tuple(fact_id(source) for source in sources)
+        collections.extend(sources)
+        subjects = (*heading.heading_path, capture.title.split(" - ")[0])
+        matching = {
+            requirement.id
+            for requirement in requirements
+            if any(
+                len(subject) > 3
+                and " ".join(re.findall(r"\w+", subject.casefold()))
+                in " ".join(re.findall(r"\w+", requirement.text.casefold()))
+                for subject in subjects
+            )
+        }
+        for requirement_id in requirement_ids:
+            if len(requirement_ids) > 1 and requirement_id not in matching:
+                continue
+            collections.append(
+                CollectionFact(
+                    text=f"{capture.title}: {title}",
+                    scope=f"{capture.title}: {title}",
+                    evidence=None,
+                    basis=keys,
+                    reader=FactReader.LLM,
+                    comparison=Comparison(requirement_id=requirement_id, records=keys, complete=True),
+                )
+            )
+    return tuple(collections)
 
 
 class _RecordSet(Frozen):
@@ -748,6 +849,7 @@ def _quoted(evidence: Evidence) -> Fact:
 
 class ReadOutcome(Frozen):
     facts: tuple[Fact, ...]
+    collection_facts: tuple[Fact, ...] = Field(default=(), exclude=True)
     coverage: tuple[int, ...]
     rejected_claims: int
     cost_lines: tuple[CostLine, ...]
@@ -1107,9 +1209,9 @@ async def read(
                 update={
                     "content": messages[0].content
                     + " Also fill collections independently of claims: quote the boundary and every member of "
-                    "each inspected collection, even when another section or field is still missing. Mark "
-                    "complete only when that bounded collection is fully visible in this capture, with no "
-                    "unread pages or expandable replies. A navigation link to a section is not its contents. "
+                    "each inspected collection, even when another section or field is still missing. "
+                    "Code records completeness from the page's stated total and captured list members. "
+                    "A navigation link to a section is not its contents. "
                     "If no member matches a requested field, include the entire collection and its boundary "
                     "in collections, including excluded members. Prior summaries cannot establish that absence. "
                     + FIELD_CATEGORIES
@@ -1369,7 +1471,7 @@ async def read(
                         comparison=Comparison(
                             requirement_id=collection.requirement_id,
                             records=keys,
-                            complete=collection.complete and part.total == 1,
+                            complete=False,
                         ),
                     )
                 )
@@ -1576,6 +1678,7 @@ async def read(
                             # A pager the caller knows of outranks the reader's belief that the list ended,
                             # and another requirement left open says nothing about this one's collection.
                             "complete": fact.requirement_id is not None
+                            and (not field_outputs or require_all_evidence or fact.requirement_id in ordered)
                             and (result.data.answered or len(requirement_ids) > 1)
                             and part.index == part.total - 1
                             and (not notice or fact.requirement_id in ordered)
@@ -1599,8 +1702,18 @@ async def read(
             )
         notes.add(collection)
         facts[(fact_id(collection), None)] = collection
+    collection_facts = (
+        _counted_collections(capture, [key for key in requirement_ids if key not in blocked], part.end, requirements)
+        if not notice and not capture.inaccessible_frames
+        else ()
+    )
+    if field_outputs:
+        for fact in collection_facts:
+            notes.add(fact)
+            facts[(fact_id(fact), None)] = fact
     outcome = ReadOutcome(
         facts=tuple(facts.values()),
+        collection_facts=collection_facts,
         coverage=tuple(coverage),
         rejected_claims=rejected,
         cost_lines=tuple(costs),

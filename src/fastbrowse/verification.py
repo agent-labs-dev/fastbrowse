@@ -556,7 +556,18 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
         counted = []
         compared = []
         for fact in notes.facts:
-            if fact.comparison is not None and fact_id(fact) in expanded:
+            if fact.comparison is not None and (
+                fact_id(fact) in expanded
+                or (
+                    isinstance(fact, CollectionFact)
+                    and fact.comparison.complete
+                    and fact.comparison.records
+                    and fact.basis
+                    and set(fact.basis) <= positions.keys()
+                    and notes.current(fact_id(fact))
+                    and set(fact.comparison.records) <= positions.keys()
+                )
+            ):
                 comparison = fact.comparison
                 if any(record not in positions for record in comparison.records):
                     return None
@@ -665,6 +676,37 @@ async def check_answer_outputs(
         bounded=bounded,
         independent_fields=independent_fields,
     )
+
+
+def _share_output_sources(messages: Sequence[Message]) -> list[Message]:
+    payload = json.loads(messages[-1].content)
+    sources = {}
+    refs = {}
+
+    def reference(source: dict[str, object]) -> dict[str, str]:
+        key = json.dumps(source, sort_keys=True)
+        if key not in refs:
+            refs[key] = f"shared_{len(refs)}"
+            sources[refs[key]] = source
+        return {"source_ref": refs[key]}
+
+    for criterion in payload["criteria"].values():
+        for record in criterion.get("reported_claims", criterion.get("sources", ())):
+            record["cited_sources"] = [reference(source) for source in record["cited_sources"]]
+        criterion["counterevidence"] = [reference(source) for source in criterion["counterevidence"]]
+    payload["shared_sources"] = sources
+    return [
+        messages[0].model_copy(
+            update={
+                "content": messages[0].content
+                + " Cited sources and counterevidence use source_ref entries into shared_sources. Resolve every "
+                "reference to its full source. Repeated references preserve each claim's own citation; record "
+                "indices still index that claim's cited_sources in order. Check every claim and every source."
+            }
+        ),
+        *messages[1:-1],
+        messages[-1].model_copy(update={"content": json.dumps(payload)}),
+    ]
 
 
 async def _check_answer_outputs(
@@ -1004,7 +1046,13 @@ async def _check_answer_outputs(
             ]
             if independent_fields and isinstance(composed, FieldAnswer):
                 request[0] = request[0].model_copy(update={"content": request[0].content + "\n\n" + FIELD_CATEGORIES})
-            fit(request, schema)
+            try:
+                fit(request, schema)
+            except NotesTooLarge:
+                # Answer claims can cite the same full collection. Share its bytes while preserving each
+                # claim's source membership, collection metadata and counterevidence.
+                request = _share_output_sources(request)
+                fit(request, schema)
             fingerprint = hashlib.sha256(
                 json.dumps(
                     {

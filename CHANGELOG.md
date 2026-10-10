@@ -16,10 +16,16 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Answers whose combined evidence exceeds a prompt are composed and verified in requirement groups, with
   comparisons kept together. Each verified field survives a sibling field's failure. Recovery reads only
   open fields and rechecks groups whose evidence changed; evidence that cannot fit even one group returns
-  an unverified partial answer.
+  an unverified partial answer. Captured source size selects this path before reader excerpts can shrink
+  the evidence. Newly read source pages and complete collections renew recovery once each. Oversized
+  verification requests share repeated source quotes while keeping every claim and its citations.
 - Answer recovery retains each collection's records and identifying context when a later
   conclusion combines them. Collection coverage is kept even when another requested field remains open.
-  Partial collections cannot support a finding that no members match.
+  Page totals must match the captured list members to establish complete coverage. Collection quotes
+  retain their enclosing heading and identifying context. Explicit empty states
+  retain their source quotes. Recovery reuses this coverage from earlier reads. Partial collections cannot
+  support a finding that no members match. Citing every record and its boundary preserves that proven
+  coverage even when the answer cites their quotes directly.
 - Answers split across prompts check record categories and speaker roles against literal source quotes. Reader
   paraphrases cannot supply missing names or values. Newly verified fields renew recovery once each.
 - Verified answer groups remain cached when summaries reuse the same sources. Changed evidence causes a

@@ -199,6 +199,8 @@ class Block(Frozen):
     heading_path: tuple[str, ...] = ()
     control_context: SourceControl | None = None
     href: str | None = None
+    list_id: str | None = None
+    list_count: int | None = Field(default=None, ge=0)
 
 
 class Capture(Frozen):
