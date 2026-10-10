@@ -222,6 +222,10 @@ class RequestUsage:
     """Requests that may have been billed but whose usage was not returned to the caller."""
     failures: list[str] = field(default_factory=list[str])
     """Why each request that came back unusable failed, in order: its status and reason, or its transport error."""
+    discarded_responses: list[httpx.Response] = field(default_factory=list[httpx.Response])
+    """Successful responses withheld from the caller, whose charges can still be read."""
+    cancelled_twins: int = 0
+    """Unaccounted hedge requests cancelled because their sibling had already answered."""
 
     def history(self, seconds: float) -> str:
         """How the call went before it gave up, so an error says whether it was one blip or a sustained outage."""
@@ -266,6 +270,7 @@ async def post_with_retry(
     usage: RequestUsage | None = None,
     start_attempt: int = 0,
     split_batch: bool = False,
+    settle_on_cancel: bool = False,
 ) -> httpx.Response | None:
     """Retry an overloaded or dropped request, which produced nothing and is always safe to repeat.
 
@@ -273,6 +278,8 @@ async def post_with_retry(
     because a provider's slowest calls are stalls, not work, and a fresh request tends to land on a healthy
     replica. `before_retry` runs ahead of every repeat and every hedge, so a budget counts each request
     actually sent. `usage` counts discarded or timed-out requests that may still have been billed.
+    `settle_on_cancel` lets in-flight attempts reach their deadlines so cancellation can retain their charges;
+    no further requests are sent after cancellation.
     Returns None when the transport never completed, leaving each client to name its own failure. Every retry is
     logged as a warning naming `call`, the failure and the wait, and each failure is kept on `usage`.
     """
@@ -295,6 +302,7 @@ async def post_with_retry(
             before_hedge=before_retry,
             usage=usage,
             allow_hedge=request_limit is None or usage.requests + 1 < request_limit,
+            settle_on_cancel=settle_on_cancel,
         )
         if response is not None and not retryable(response):
             if attempt:
@@ -355,11 +363,13 @@ async def _hedged(
     before_hedge: Callable[[], None] | None,
     usage: RequestUsage,
     allow_hedge: bool = True,
+    settle_on_cancel: bool = False,
 ) -> httpx.Response | None:
     """The first usable response from one request, raced by a second if the first outlasts `hedge_seconds`."""
     dispatched: set[int] = set()
     requests = {asyncio.create_task(_send(http, url, body, headers, attempt_seconds, usage, dispatched))}
     winner: asyncio.Task[httpx.Response | None] | None = None
+    abandoned = False
     try:
         done, _ = await asyncio.wait(requests, timeout=hedge_seconds)
         if not done and allow_hedge:
@@ -376,11 +386,16 @@ async def _hedged(
                     winner = request
                     return response
         return response
+    except asyncio.CancelledError:
+        abandoned = True
+        raise
     finally:
         # A second cancellation during transport cleanup must not abandon children or their receipts.
         async def finish_requests() -> None:
+            # Cancelling an LLM transport loses its charge; its attempt deadline still bounds settlement.
             for request in requests:
-                request.cancel()
+                if not (abandoned and settle_on_cancel and id(request) in dispatched):
+                    request.cancel()
             await asyncio.gather(*requests, return_exceptions=True)
 
         cleanup = asyncio.create_task(finish_requests())
@@ -398,6 +413,10 @@ async def _hedged(
             # A successful winner interrupted before delivery is unaccounted too; HTTP errors remain free.
             if result is None or result.is_success:
                 usage.unaccounted_requests += 1
+                if result is not None:
+                    usage.discarded_responses.append(result)
+                elif winner is not None and not abandoned:
+                    usage.cancelled_twins += 1
         if cancelled:
             raise asyncio.CancelledError
 
