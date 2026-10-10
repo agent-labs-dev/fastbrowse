@@ -1438,9 +1438,12 @@ async def read(
                 update={
                     "comparison": fact.comparison.model_copy(
                         update={
+                            # A pager the caller knows of outranks the reader's belief that the list ended,
+                            # and another requirement left open says nothing about this one's collection.
                             "complete": fact.requirement_id is not None
-                            and result.data.answered
+                            and (result.data.answered or len(requirement_ids) > 1)
                             and part.index == part.total - 1
+                            and (not notice or fact.requirement_id in ordered)
                         }
                     )
                 }

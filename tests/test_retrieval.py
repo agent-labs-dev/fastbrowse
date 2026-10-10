@@ -2384,7 +2384,7 @@ async def test_compact_comparison_records_keep_each_quote_once_in_the_answer_bas
     assert all(evidence.model_dump_json() in unsupported for evidence in notes.evidence.values())
 
 
-@pytest.mark.parametrize("gap", [None, "earlier_records", "unread_chunk", "more_pages"])
+@pytest.mark.parametrize("gap", [None, "other_open", "earlier_records", "unread_chunk", "more_pages", "known_pager"])
 async def test_comparison_coverage_reaches_answer_audits(gap: str | None) -> None:
     from fastbrowse.verification import _output_context, check_answer_outputs
     from tests.test_answer_repair import RoutingJev
@@ -2400,7 +2400,7 @@ async def test_comparison_coverage_reaches_answer_audits(gap: str | None) -> Non
         ScriptedLLM(
             [
                 {
-                    "answered": True,
+                    "answered": gap != "other_open",
                     "claims": [
                         {
                             "requirement_id": "r",
@@ -2415,8 +2415,9 @@ async def test_comparison_coverage_reaches_answer_audits(gap: str | None) -> Non
         ),
         page,
         requirement.text,
-        ["r"],
+        ["r", "q"] if gap == "other_open" else ["r"],
         notes,
+        notice="A Next page control is present." if gap == "known_pager" else "",
         incomplete=("r",) if gap == "earlier_records" else (),
         max_chars=15 if gap == "unread_chunk" else None,
     )
@@ -2424,7 +2425,7 @@ async def test_comparison_coverage_reaches_answer_audits(gap: str | None) -> Non
     answer = assemble_answer((Claim(text=winner.text, evidence_ids=(fact_id(winner),)),), notes, (requirement,))
     context = _output_context(answer, notes)
     assert context is not None
-    expected = [{"scope": requirement.text, "complete": gap is None, "record_indices": [0, 1]}]
+    expected = [{"scope": requirement.text, "complete": gap in (None, "other_open"), "record_indices": [0, 1]}]
     assert context.model_dump(mode="json")["claims"][0].get("compared_records") == expected
     assert all(not source.complete_source for source in context.claims[0].cited_sources)
     audit = ScriptedLLM([{"judgments": {"output_0": "yes"}, "reason": "Read coverage retained."}] * 2)
