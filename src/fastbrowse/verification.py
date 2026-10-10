@@ -25,10 +25,10 @@ from fastbrowse.jev import (
     Question,
 )
 from fastbrowse.llm import Generation, LLMClient, Message
-from fastbrowse.memory import Notes, NotesTooLarge, fact_id
+from fastbrowse.memory import CollectionFact, Notes, NotesTooLarge, fact_id
 from fastbrowse.models import UNTRUSTED, CostLine, Evidence, FactReader, Frozen, LLMPurpose, SourceControl
 from fastbrowse.page import Capture, Control, Observation, cut_text
-from fastbrowse.planner import Plan, RequirementKind
+from fastbrowse.planner import FIELD_CATEGORIES, Plan, RequirementKind
 from fastbrowse.policy import HistoryEntry
 from fastbrowse.retrieval import (
     TRANSACTION_CONTRADICTED,
@@ -562,9 +562,14 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
                     return None
                 compared.append(
                     _OutputComparison(
-                        scope=requirements.get(comparison.requirement_id),
+                        scope=fact.scope
+                        if isinstance(fact, CollectionFact)
+                        else requirements.get(comparison.requirement_id),
                         complete=comparison.complete
-                        and comparison.requirement_id in notes.fact_requirements(fact_id(fact)),
+                        and (
+                            isinstance(fact, CollectionFact)
+                            or comparison.requirement_id in notes.fact_requirements(fact_id(fact))
+                        ),
                         record_indices=tuple(dict.fromkeys(positions[record] for record in comparison.records)),
                     )
                 )
@@ -610,6 +615,74 @@ async def check_answer_outputs(
     task: str = "",
     audit_cache: OutputAuditCache | None = None,
     bounded: bool = False,
+    verified_outputs: list[str] | None = None,
+    independent_fields: bool = True,
+) -> bool:
+    if independent_fields and isinstance(composed, FieldAnswer):
+        passed = []
+        obligations = {r.text for r in composed.requirements}
+        ordered = (*[c for c in checks if c not in obligations], *[c for c in checks if c in obligations])
+        for check in ordered:
+            if check in obligations and any(c not in passed for c in checks if c not in obligations):
+                continue
+            indices = composed.output_claims.get(check, ())
+            if any(index < 0 or index >= len(composed.claims) for index in indices):
+                indices = ()
+            claims = tuple(composed.claims[index] for index in indices)
+            base = assemble_answer(claims, notes, composed.requirements)
+            field = FieldAnswer(**base.model_dump(), output_claims={check: tuple(range(len(claims)))})
+            if await _check_answer_outputs(
+                jev,
+                llm,
+                field,
+                notes,
+                (check,),
+                tokens=tokens,
+                ledger=ledger,
+                missing_outputs=missing_outputs,
+                corrections=corrections,
+                task=task,
+                audit_cache=audit_cache,
+                bounded=bounded,
+            ):
+                passed.append(check)
+        if verified_outputs is not None:
+            verified_outputs.extend(passed)
+        return len(passed) == len(checks)
+    return await _check_answer_outputs(
+        jev,
+        llm,
+        composed,
+        notes,
+        checks,
+        tokens=tokens,
+        ledger=ledger,
+        missing_outputs=missing_outputs,
+        corrections=corrections,
+        allow_scalar_jev=allow_scalar_jev,
+        task=task,
+        audit_cache=audit_cache,
+        bounded=bounded,
+        independent_fields=independent_fields,
+    )
+
+
+async def _check_answer_outputs(
+    jev: JevClient,
+    llm: LLMClient | None,
+    composed: ComposedAnswer,
+    notes: Notes,
+    checks: Sequence[str],
+    *,
+    tokens: TokenBudget,
+    ledger: Ledger | None,
+    missing_outputs: list[str] | None,
+    corrections: list[AnswerCorrection] | None,
+    allow_scalar_jev: bool = False,
+    task: str,
+    audit_cache: OutputAuditCache | None,
+    bounded: bool,
+    independent_fields: bool = True,
 ) -> bool:
     def fit(messages: Sequence[Message], schema: type[BaseModel]) -> None:
         size = sum(len(message.content) for message in messages) + len(json.dumps(schema.model_json_schema()))
@@ -929,6 +1002,8 @@ async def check_answer_outputs(
                 *messages,
                 Message(role="user", content=json.dumps({"task": task, "criteria": {key: field}, "urls": urls})),
             ]
+            if independent_fields and isinstance(composed, FieldAnswer):
+                request[0] = request[0].model_copy(update={"content": request[0].content + "\n\n" + FIELD_CATEGORIES})
             fit(request, schema)
             fingerprint = hashlib.sha256(
                 json.dumps(
@@ -1147,6 +1222,8 @@ async def check_claims(
     task: str = "",
     audit_cache: OutputAuditCache | None = None,
     bounded: bool = False,
+    verified_fields: list[FieldAnswer] | None = None,
+    independent_fields: bool = True,
 ) -> ComposedAnswer | None:
     """The answer without any claim a check doubts, or None when a requirement is omitted from what is left or the
     pages where the run committed an action contradict it.
@@ -1180,6 +1257,7 @@ async def check_claims(
             raise committed
         return {**claimed, **committed}
 
+    verified_outputs: list[str] = []
     checked, outputs_supported = await asyncio.gather(
         claims(),
         check_answer_outputs(
@@ -1196,6 +1274,8 @@ async def check_claims(
             task=task,
             audit_cache=audit_cache,
             bounded=bounded,
+            verified_outputs=verified_outputs,
+            independent_fields=independent_fields,
         ),
         return_exceptions=True,
     )
@@ -1203,8 +1283,6 @@ async def check_claims(
         raise checked
     if isinstance(outputs_supported, BaseException):
         raise outputs_supported
-    if not outputs_supported:
-        return None
     answers = checked
     if transaction is not None:
         questions = {**questions, TRANSACTION_CONTRADICTED: transaction}
@@ -1228,6 +1306,26 @@ async def check_claims(
         for index, claim in enumerate(composed.claims)
         if max(_probability(answers, f"unsupported_{index}"), _probability(answers, f"contradicted_{index}")) <= limit
     )
+    if verified_fields is not None and isinstance(composed, FieldAnswer):
+        outputs = {
+            check: indices
+            for check, indices in composed.output_claims.items()
+            if check in verified_outputs and indices and all(composed.claims[i] in kept for i in indices)
+        }
+        accepted = tuple(dict.fromkeys(composed.claims[i] for indices in outputs.values() for i in indices))
+        if accepted:
+            base = assemble_answer(accepted, notes, composed.requirements)
+            verified_fields.append(
+                FieldAnswer(
+                    **base.model_dump(),
+                    output_claims={
+                        check: tuple(accepted.index(composed.claims[i]) for i in indices)
+                        for check, indices in outputs.items()
+                    },
+                )
+            )
+    if not outputs_supported:
+        return None
     if len(kept) == len(composed.claims):
         return composed
     # An action-only task needs no answer: the done check judged its completion, so a restatement of the action
@@ -1269,6 +1367,7 @@ async def check_claims(
                 task=task,
                 audit_cache=audit_cache,
                 bounded=bounded,
+                independent_fields=independent_fields,
             )
             else None
         )

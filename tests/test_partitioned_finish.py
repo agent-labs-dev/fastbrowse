@@ -85,7 +85,7 @@ class FinishWriter(ScriptedLLM):
             )
         elif purpose is LLMPurpose.COMPOSE:
             offered = content.split("# Notes\n", 1)[1]
-            projects = re.findall(r'\[(e\d+)\] "(Project (\d+): Author says the fix is available\.)"', offered)
+            projects = re.findall(r"\[(e\d+)\][^\n]*?(Project (\d+): Author says the fix is available\.)", offered)
             assert projects
             self.composed.append(tuple(int(project) for _, _, project in projects))
             claims: list[JsonValue] = [{"text": text, "evidence_ids": [ref]} for ref, text, _ in projects]
@@ -422,3 +422,26 @@ async def test_changed_group_rechecks_its_verified_draft_before_composing_again(
     assert (await agent._finish(state, None, None)).status is Status.COMPLETE
     assert len(llm.composed) == 5
     agent._holds.assert_awaited()
+
+
+async def test_unrelated_new_evidence_does_not_retry_an_unchanged_rejected_group() -> None:
+    agent, state, _, llm = await finish_agent(unsupported=3)
+    assert await agent._finish(state, None, None) is None
+    composed = len(llm.composed)
+    page = capture((BlockKind.PARAGRAPH, "Project 2: Translations are welcome."), url="https://projects.test/2")
+    state.notes.add(Fact(text=page.text, evidence=block_evidence(page, "s0"), reader=FactReader.LLM))
+    assert await agent._finish(state, None, None) is None
+    assert all(group != (3,) for group in llm.composed[composed:])
+    assert state.open_answer_outputs == (state.plan.requirements[3].text,)
+
+
+async def test_small_answer_repair_preserves_partition_request() -> None:
+    from fastbrowse.planner import FIELD_CATEGORIES
+
+    agent, state, _, writer = await finish_agent()
+    state.ready_plan, state.notes = project_notes(10)
+    state.open_answer_outputs = (state.plan.answer_checks[0],)
+    agent._finish_partitioned = AsyncMock(return_value=None)
+    await agent._finish(state, None, None)
+    assert not state.oversized_answer
+    assert FIELD_CATEGORIES not in writer.calls[0][1][0].content

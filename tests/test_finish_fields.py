@@ -156,7 +156,7 @@ async def test_missing_field_cannot_borrow_a_neighbor_claim_even_when_selector_a
         RoutingJev(),
         ScriptedLLM(
             [
-                {"judgments": {f"output_{i}": "yes"}, "reason": "Selected claim accepted."}
+                {"judgments": {"output_0": "yes"}, "reason": "Selected claim accepted."}
                 for _ in range(2)
                 for i in range(2)
             ]

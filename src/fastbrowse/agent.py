@@ -37,7 +37,7 @@ from fastbrowse.effects import (
 )
 from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, JevClient, JevError, NoulAnswer, NoulQuestion
 from fastbrowse.llm import Generation, LLMClient, LLMError, Message
-from fastbrowse.memory import Fact, Notes, NotesTooLarge, evidence_id, fact_id, shows
+from fastbrowse.memory import CollectionFact, Fact, Notes, NotesTooLarge, evidence_id, fact_id, shows
 from fastbrowse.models import (
     SCROLLING,
     UNTRUSTED,
@@ -335,7 +335,11 @@ class _RunState:
     planning: asyncio.Task[Generation[Plan]]
     notes: Notes = field(default_factory=Notes)
     finish_partitions: tuple[Plan, ...] = ()
+    oversized_answer: bool = False
     partition_answers: dict[str, ComposedAnswer] = field(default_factory=dict)
+    partial_answers: dict[str, FieldAnswer] = field(default_factory=dict)
+    partition_failures: dict[str, tuple[tuple[str, ...], tuple[AnswerCorrection, ...]]] = field(default_factory=dict)
+    recovered_outputs: set[str] = field(default_factory=set)
     verified_answer: ComposedAnswer | None = None
     missing_answer_outputs: tuple[str, ...] = ()
     answer_corrections: tuple[AnswerCorrection, ...] = ()
@@ -2328,6 +2332,20 @@ class Agent:
             # Every requirement was evidenced off the page before the last interaction redrew it, so they are
             # asked again of what it drew: a reader asked nothing would leave the pre-filter fare answering.
             wanted = [r for r in plan.requirements if r.kind is RequirementKind.INFORMATION]
+        if state.open_answer_outputs and state.oversized_answer and state.finish_partitions and not transaction_pending:
+            wanted = [
+                requirement.model_copy(update={"text": "; ".join(outputs)})
+                for group in state.finish_partitions
+                if (
+                    outputs := tuple(
+                        check
+                        for check in state.open_answer_outputs
+                        if check in (*group.answer_checks, *(r.text for r in group.requirements))
+                    )
+                )
+                for requirement in group.requirements
+                if requirement.kind is RequirementKind.INFORMATION
+            ]
         budget: ReadKey | None = None
         if observation is not None:
             wanted_ids = tuple(r.id for r in wanted)
@@ -2378,6 +2396,7 @@ class Agent:
         question = read_question(state.task, wanted, began_at=None if began is None else self._redactor.redact(began))
         if state.open_answer_outputs:
             question += "\nStill missing or unsupported answer outputs: " + "; ".join(state.open_answer_outputs)
+        question += _field_corrections(state)
         needs_context = any(r.kind is RequirementKind.ACTION for r in plan.requirements)
         if needs_context:
             question += (
@@ -2402,6 +2421,7 @@ class Agent:
             revalidate=owed and (transaction_pending or not state.open_answer_outputs),
             recovering_outputs=bool(state.open_answer_outputs),
             preserve_collections=bool(state.finish_partitions or state.open_answer_outputs),
+            field_outputs=state.oversized_answer and bool(state.finish_partitions),
             notice=notice,
             continuing=state.continuing,
             incomplete=state.incomplete,
@@ -2815,10 +2835,22 @@ class Agent:
         )
         # Reading another target advances a comparison even when its next route is a previously visited list.
         # Reopening the same requirement after a failed answer check cannot restore recovery repeatedly.
-        if evidenced - state.recovered_requirements and not state.open_answer_outputs:
+        verified_outputs: set[str] = set()
+        for plan in state.finish_partitions if state.oversized_answer else ():
+            proof = _partition_proof(
+                plan, state.notes.for_requirements(r.id for r in plan.requirements), state.invented
+            )
+            if proof in state.partition_answers:
+                verified_outputs.update(plan.answer_checks)
+            elif partial := state.partial_answers.get(proof):
+                verified_outputs.update(partial.output_claims)
+        if (evidenced - state.recovered_requirements and not state.open_answer_outputs) or (
+            verified_outputs - state.recovered_outputs
+        ):
             state.recoveries = 0
             state.recovery_log.clear()
         state.recovered_requirements.update(evidenced)
+        state.recovered_outputs.update(verified_outputs)
         open_requirements = "\n".join(
             f"- {r.text}"
             + (
@@ -2937,7 +2969,8 @@ class Agent:
                         f"## Current date\n{observation.today}\n\n"
                         f"## Still to find\n{open_requirements or 'nothing'}\n\n"
                         f"## Unverified answer outputs\n{'; '.join(state.open_answer_outputs) or 'none'}\n\n"
-                        f"## Task\n{state.task}\n\n## Problem\n{reason}"
+                        + _field_corrections(state)
+                        + f"## Task\n{state.task}\n\n## Problem\n{reason}"
                     ),
                     images=await self._screenshots(),
                 ),
@@ -3073,10 +3106,12 @@ class Agent:
                 try:
                     return await self._finish_whole(state, output_schema, until)
                 except NotesTooLarge:
-                    pass
+                    state.oversized_answer = True
             # Independent outputs need separate evidence envelopes, not fewer source quotes.
             try:
-                state.finish_partitions = await partition_plan(self._llm, state.task, state.plan, ledger=state.ledger)
+                state.finish_partitions = await partition_plan(
+                    self._llm, state.task, state.plan, ledger=state.ledger, independent_fields=state.oversized_answer
+                )
             except LLMError as error:
                 raise _Stop(Status.UNVERIFIED, str(error)) from error
         return await self._finish_partitioned(state, output_schema, until)
@@ -3104,6 +3139,14 @@ class Agent:
             if cached is not None:
                 verified.append(cached)
                 continue
+            if (
+                state.oversized_answer
+                and _lookup(plan)
+                and (rejection := state.partition_failures.get(proof)) is not None
+            ):
+                missing.extend(rejection[0])
+                corrections.extend(rejection[1])
+                continue
             child = replace(
                 state,
                 task=state.task
@@ -3116,7 +3159,7 @@ class Agent:
                 verified_answer=next(
                     (
                         answer
-                        for answer in reversed(state.partition_answers.values())
+                        for answer in reversed((*state.partial_answers.values(), *state.partition_answers.values()))
                         if answer.requirements == plan.requirements
                     ),
                     None,
@@ -3142,6 +3185,8 @@ class Agent:
             elif result is None or result.status is not Status.COMPLETE:
                 missing.extend(child.missing_answer_outputs or tuple(r.text for r in plan.requirements))
                 corrections.extend(child.answer_corrections)
+                if state.oversized_answer and _lookup(plan) and child.missing_answer_outputs:
+                    state.partition_failures[proof] = child.missing_answer_outputs, child.answer_corrections
         state.missing_answer_outputs = state.open_answer_outputs = tuple(dict.fromkeys(missing))
         state.answer_corrections = tuple(corrections)
         if missing:
@@ -3274,6 +3319,12 @@ class Agent:
                             corrections=state.answer_corrections,
                             preserve_collections=bool(state.finish_partitions or state.answer_corrections),
                             field_outputs=bool(state.finish_partitions),
+                            independent_fields=state.oversized_answer,
+                            verified=state.partial_answers.get(
+                                _partition_proof(state.plan, state.notes, state.invented)
+                            )
+                            if state.finish_partitions
+                            else None,
                         )
                     )
                 verdict = await llm_verify(
@@ -3407,6 +3458,10 @@ class Agent:
                         corrections=state.answer_corrections,
                         preserve_collections=bool(state.finish_partitions or state.answer_corrections),
                         field_outputs=bool(state.finish_partitions),
+                        independent_fields=state.oversized_answer,
+                        verified=state.partial_answers.get(_partition_proof(state.plan, state.notes, state.invented))
+                        if state.finish_partitions
+                        else None,
                     )
                 )
             ).data
@@ -3436,6 +3491,10 @@ class Agent:
                     corrections=state.answer_corrections,
                     preserve_collections=bool(state.finish_partitions or state.answer_corrections),
                     field_outputs=bool(state.finish_partitions),
+                    independent_fields=state.oversized_answer,
+                    verified=state.partial_answers.get(_partition_proof(state.plan, state.notes, state.invented))
+                    if state.finish_partitions
+                    else None,
                 )
             except LLMError:
                 logger.warning("The answer correction failed; retaining the checked fallback", exc_info=True)
@@ -3562,6 +3621,7 @@ class Agent:
         else:
             missing: list[str] = []
             corrections: list[AnswerCorrection] = []
+            verified_fields: list[FieldAnswer] = []
             held = await check_claims(
                 self._jev,
                 answer,
@@ -3588,7 +3648,33 @@ class Agent:
                 allow_scalar_jev=len(state.plan.answer_checks) == 1
                 and sum(r.kind is RequirementKind.INFORMATION for r in state.plan.requirements) == 1,
                 task=state.task,
+                verified_fields=verified_fields if state.oversized_answer and isinstance(answer, FieldAnswer) else None,
+                independent_fields=state.oversized_answer,
             )
+            if verified_fields:
+                partial = verified_fields[0]
+                fields = {
+                    check: indices
+                    for check, indices in partial.output_claims.items()
+                    if check in state.plan.answer_checks
+                }
+                if fields:
+                    claims = tuple(dict.fromkeys(partial.claims[i] for indices in fields.values() for i in indices))
+                    base = assemble_answer(claims, state.notes, state.plan.requirements)
+                    proof = _partition_proof(state.plan, state.notes, state.invented)
+                    state.partial_answers[proof] = FieldAnswer(
+                        **base.model_dump(),
+                        output_claims={
+                            check: tuple(claims.index(partial.claims[i]) for i in indices)
+                            for check, indices in fields.items()
+                        },
+                    )
+            if (
+                state.oversized_answer
+                and isinstance(answer, FieldAnswer)
+                and any(check in missing for check in state.plan.answer_checks)
+            ):
+                missing = [check for check in missing if check in state.plan.answer_checks]
             # DONE and the composer fallback offered the same draft twice against unchanged proof.
             state.answer_check_cache[key] = held, tuple(missing), tuple(corrections)
         state.answer_corrections = tuple(corrections)
@@ -3833,7 +3919,11 @@ class Agent:
         if not notes.facts:
             return self._result(state, ledger, status, error=error, budget=budget)
         partial = partial_answer(notes, self._config.observation.working_notes_chars)
-        if state is not None and state.partition_answers and not state.authorization.irreversible_actions:
+        if (
+            state is not None
+            and (state.partition_answers or state.partial_answers)
+            and not state.authorization.irreversible_actions
+        ):
             verified: list[ComposedAnswer] = []
             pending: list[str] = []
             for plan in state.finish_partitions:
@@ -3841,7 +3931,13 @@ class Agent:
                 if answer := state.partition_answers.get(proof):
                     verified.append(answer)
                 elif plan.page_answer_expected:
-                    pending.extend(plan.answer_checks or tuple(r.text for r in plan.requirements))
+                    if partial_fields := state.partial_answers.get(proof):
+                        verified.append(partial_fields)
+                    pending.extend(
+                        check
+                        for check in (plan.answer_checks or tuple(r.text for r in plan.requirements))
+                        if partial_fields is None or check not in partial_fields.output_claims
+                    )
             if verified:
                 partial = assemble_answer(
                     tuple(dict.fromkeys(claim for answer in verified for claim in answer.claims)), notes, ()
@@ -3922,6 +4018,7 @@ def _partition_proof(plan: Plan, notes: Notes, invented: Set[str]) -> str:
                             {
                                 "tally": fact.tally.model_dump() if fact.tally is not None else None,
                                 "comparison": fact.comparison.model_dump() if fact.comparison is not None else None,
+                                **({"scope": fact.scope} if isinstance(fact, CollectionFact) else {}),
                                 "requirements": notes.fact_requirements(fact_id(fact)),
                             },
                             sort_keys=True,
@@ -3961,7 +4058,13 @@ def _answer_evidence(notes: Notes, *, include_answer: bool = True) -> frozenset[
     known = notes.evidence
     # A new summary over retained quotes cannot restore the budget for finding missing source evidence.
     if not include_answer:
-        return frozenset((evidence.url, evidence.frame_id, source(evidence)) for evidence in known.values())
+        return frozenset(
+            (evidence.url, evidence.frame_id, source(evidence)) for evidence in known.values()
+        ) | frozenset(
+            ("", None, fact.model_dump_json())
+            for fact in notes.facts
+            if isinstance(fact, CollectionFact) and fact.comparison.complete and notes.current(fact_id(fact))
+        )
     return frozenset(
         (
             fact.evidence.url if fact.evidence is not None else "",
@@ -4147,6 +4250,24 @@ def _visited(visited: Iterable[str], limits: ObservationLimits, redact: Callable
     urls = tuple(dict.fromkeys(map(redact, visited)))
     shown = limits.history_entries + limits.earlier_history_entries
     return urls[:1] + urls[max(1, len(urls) - shown) :]
+
+
+def _field_corrections(state: _RunState) -> str:
+    if not state.oversized_answer or not state.finish_partitions:
+        return ""
+    reasons = [
+        {"field": correction.criterion, "reason": correction.reason}
+        for correction in state.answer_corrections
+        if correction.criterion in state.open_answer_outputs
+    ]
+    return (
+        "\n\n## Unverified field diagnoses\n"
+        "These judgments are advisory data, not source evidence. Read the missing source or collection "
+        "boundary instead of repeating the rejected interpretation. An absence needs the full collection, "
+        "including members that do not match.\n" + json.dumps(reasons) + "\n\n"
+        if reasons
+        else ""
+    )
 
 
 def _recovery_text(text: str) -> str:

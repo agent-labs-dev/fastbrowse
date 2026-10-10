@@ -53,6 +53,12 @@ class Fact(Frozen):
         return self
 
 
+class CollectionFact(Fact):
+    scope: str
+    comparison: Comparison
+    """Coverage of a quoted collection, independent of whether it answers every requested field."""
+
+
 class NotesTooLarge(RuntimeError):
     """A verdict cannot fit its requirement evidence without losing facts."""
 
@@ -264,6 +270,7 @@ class Notes:
             if self._owners.get(key, set()) & wanted
             or self._requirements[key] & wanted
             or (fact.tally is not None and fact.tally.requirement_id in wanted)
+            or (isinstance(fact, CollectionFact) and fact.comparison.requirement_id in wanted)
         }
         roots.update(key for requirement in wanted for key in self.comparison_records(requirement))
         roots.update(evidence_ids)
@@ -444,6 +451,7 @@ class Notes:
         *,
         preserve_requirements: bool = False,
         preserve_collections: bool = False,
+        source_only: bool = False,
         json_encoded: bool = False,
         labels: Mapping[str, str] | None = None,
     ) -> RenderedNotes:
@@ -492,12 +500,17 @@ class Notes:
                 source += f" control_context={fact.evidence.control_context.model_dump_json()}"
             if preserve_collections and fact.comparison is not None:
                 comparison = fact.comparison
-                complete = comparison.complete and comparison.requirement_id in self._requirements[key]
+                complete = comparison.complete and (
+                    isinstance(fact, CollectionFact) or comparison.requirement_id in self._requirements[key]
+                )
                 source += f" collection_for={comparison.requirement_id} complete={str(complete).lower()}"
+                if isinstance(fact, CollectionFact):
+                    source += f" scope={json.dumps(fact.scope)}"
             # Quoted basis facts use the source text as their claim; sending it twice inflates every later read.
             text = (
                 ""
-                if fact.evidence is not None and fact.text == fact.evidence.quote
+                if (fact.evidence is not None and fact.text == fact.evidence.quote)
+                or (source_only and fact.tally is None and fact.comparison is None)
                 else json.dumps(fact.text, ensure_ascii=False) + " "
             )
             return (

@@ -37,7 +37,7 @@ from fastbrowse.jev import (
     Question,
 )
 from fastbrowse.llm import Generation, LLMClient, Message
-from fastbrowse.memory import Comparison, Fact, Notes, NotesTooLarge, Tally, evidence_id, fact_id
+from fastbrowse.memory import CollectionFact, Comparison, Fact, Notes, NotesTooLarge, Tally, evidence_id, fact_id
 from fastbrowse.models import (
     UNTRUSTED,
     Citation,
@@ -50,7 +50,7 @@ from fastbrowse.models import (
     SourceControl,
 )
 from fastbrowse.page import Block, BlockKind, Capture, cut_text
-from fastbrowse.planner import Plan, Requirement, RequirementKind
+from fastbrowse.planner import FIELD_CATEGORIES, Plan, Requirement, RequirementKind
 from fastbrowse.telemetry import Ledger, trace
 
 # A mistaken choice marks a requirement evidenced; favor the reader whenever selection is uncertain.
@@ -679,6 +679,22 @@ class _ReadResponse(Frozen):
     continues: tuple[_Continuation, ...] = ()
 
 
+class _ReadCollection(Frozen):
+    requirement_id: str
+    scope: str = Field(description="The bounded collection identified by its quoted heading and boundary.")
+    records: tuple[_Cite, ...] = Field(
+        description="The identifying boundary and EVERY member, including roles and replies."
+    )
+    complete: bool = Field(
+        description="True only when this capture shows the entire collection, "
+        "with no unread members, pages or expanders."
+    )
+
+
+class _CollectionResponse(_ReadResponse):
+    collections: tuple[_ReadCollection, ...] = ()
+
+
 class _RecordSet(Frozen):
     requirement_id: str
     comparison: NumericComparison | None = Field(
@@ -882,6 +898,7 @@ async def read(
     revalidate: bool = False,
     recovering_outputs: bool = False,
     preserve_collections: bool = False,
+    field_outputs: bool = False,
     _skip_order_shortcuts: Collection[str] = (),
 ) -> ReadOutcome:
     """`notice` is what the caller knows about the page that its text does not say, such as its next-page control;
@@ -896,6 +913,7 @@ async def read(
     lost: dict[str, None] = {}
     requested_scope_complete: tuple[str, ...] = ()
     found: list[Fact] = []
+    collections: list[CollectionFact] = []
     rejected = 0
     uncovered = 0
     ordered: set[str] = set()
@@ -1084,6 +1102,19 @@ async def read(
                     "not answer it. Leave that field open when its destination has not been read."
                 }
             )
+        if field_outputs:
+            messages[0] = messages[0].model_copy(
+                update={
+                    "content": messages[0].content
+                    + " Also fill collections independently of claims: quote the boundary and every member of "
+                    "each inspected collection, even when another section or field is still missing. Mark "
+                    "complete only when that bounded collection is fully visible in this capture, with no "
+                    "unread pages or expandable replies. A navigation link to a section is not its contents. "
+                    "If no member matches a requested field, include the entire collection and its boundary "
+                    "in collections, including excluded members. Prior summaries cannot establish that absence. "
+                    + FIELD_CATEGORIES
+                }
+            )
         if records_only:
             messages[0] = Message(
                 role="system",
@@ -1108,7 +1139,11 @@ async def read(
                     f"Do not conclude comparisons.\n\n# Trust\n{UNTRUSTED}"
                 ),
             )
-        room = _notes_room(tokens, messages, _RecordsResponse if records_only else _ReadResponse)
+        room = _notes_room(
+            tokens,
+            messages,
+            _RecordsResponse if records_only else _CollectionResponse if field_outputs else _ReadResponse,
+        )
         labels = {fact_id(fact): f"e{i}" for i, fact in enumerate(so_far.facts)}
         # Reading a new source does not require every earlier project's evidence in the same prompt.
         # Comparisons that need all records and final verdicts still refuse incomplete evidence.
@@ -1167,7 +1202,7 @@ async def read(
             result = await llm.generate(
                 LLMPurpose.READ,
                 messages,
-                _ReadResponse,
+                _CollectionResponse if field_outputs else _ReadResponse,
                 max_output_tokens=tokens.read_output_tokens,
                 ledger=ledger,
             )
@@ -1196,7 +1231,7 @@ async def read(
                             "keep the requirement open unless the evidence covers the entire requested list.",
                         ),
                     ],
-                    _ReadResponse,
+                    _CollectionResponse if field_outputs else _ReadResponse,
                     max_output_tokens=tokens.read_output_tokens,
                     ledger=ledger,
                 )
@@ -1312,6 +1347,32 @@ async def read(
                 uncovered += missing
                 if missing:
                     lost[tally_read.requirement_id] = None
+        if isinstance(result.data, _CollectionResponse):
+            for collection in result.data.collections:
+                if collection.requirement_id not in requirement_ids or not collection.records:
+                    continue
+                records = [_cited(capture, part, cite) for cite in collection.records]
+                if any(record is None for record in records):
+                    continue
+                sources = tuple(_quoted(record) for record in records if record is not None)
+                for source in sources:
+                    so_far.add(source)
+                    found.append(source)
+                keys = tuple(dict.fromkeys(fact_id(source) for source in sources))
+                collections.append(
+                    CollectionFact(
+                        text=collection.scope,
+                        scope=collection.scope,
+                        evidence=None,
+                        basis=keys,
+                        reader=FactReader.LLM,
+                        comparison=Comparison(
+                            requirement_id=collection.requirement_id,
+                            records=keys,
+                            complete=collection.complete and part.total == 1,
+                        ),
+                    )
+                )
         for index, claim in enumerate(result.data.claims):
             if require_all_evidence and claim.requirement_id is not None and claim.requirement_id in requirement_ids:
                 # A winner must retain the records it beat even when the reader cites only its chosen rows.
@@ -1527,6 +1588,17 @@ async def read(
         facts[(fact_id(fact), fact.requirement_id)] = fact
     for requirement_id in tally_complete - continues.keys() - blocked:
         notes.complete_tallies(requirement_id)
+    for collection in collections:
+        if (
+            notice
+            or collection.comparison.requirement_id in continues
+            or collection.comparison.requirement_id in blocked
+        ):
+            collection = collection.model_copy(
+                update={"comparison": collection.comparison.model_copy(update={"complete": False})}
+            )
+        notes.add(collection)
+        facts[(fact_id(collection), None)] = collection
     outcome = ReadOutcome(
         facts=tuple(facts.values()),
         coverage=tuple(coverage),
@@ -2586,8 +2658,12 @@ async def compose(
     corrections: Sequence[AnswerCorrection] = (),
     preserve_collections: bool = False,
     field_outputs: bool = False,
+    verified: FieldAnswer | None = None,
+    independent_fields: bool = True,
 ) -> Generation[ComposedAnswer]:
     fields = dict(enumerate(plan.answer_checks)) if field_outputs else {}
+    if fields and verified is not None and any(check not in verified.output_claims for check in fields.values()):
+        fields = {index: check for index, check in fields.items() if check not in verified.output_claims}
     definitions: dict[str, Any] = {
         f"output_{i}": (tuple[Claim, ...], Field(description=check)) for i, check in fields.items()
     }
@@ -2684,10 +2760,16 @@ async def compose(
                 "Incomplete collections and selected excerpts cannot establish absence."
             }
         )
+    if fields and independent_fields:
+        messages[0] = messages[0].model_copy(update={"content": messages[0].content + "\n\n" + FIELD_CATEGORIES})
     room = _notes_room(tokens, messages, schema)
     try:
         offered = notes.render_with_ids(
-            room, preserve_requirements=True, preserve_collections=preserve_collections, labels=labels
+            room,
+            preserve_requirements=True,
+            preserve_collections=preserve_collections,
+            labels=labels,
+            source_only=field_outputs and independent_fields,
         )
     except NotesTooLarge:
         if not repair:
@@ -2696,7 +2778,11 @@ async def compose(
         messages[-1] = messages[-1].model_copy(update={"content": prefix + "# Notes\n"})
         room = _notes_room(tokens, messages, schema)
         offered = notes.render_with_ids(
-            room, preserve_requirements=True, preserve_collections=preserve_collections, labels=labels
+            room,
+            preserve_requirements=True,
+            preserve_collections=preserve_collections,
+            labels=labels,
+            source_only=field_outputs and independent_fields,
         )
     messages[-1] = messages[-1].model_copy(update={"content": messages[-1].content + offered.text})
     result = await llm.generate(
@@ -2753,10 +2839,10 @@ async def compose(
             if check is not None:
                 outputs[check] = (*outputs[check], len(claims) - 1)
     answer = assemble_answer(claims, notes, plan.requirements, dropped_claims=len(drafts) - len(claims))
-    return Generation(
-        data=FieldAnswer(**answer.model_dump(), output_claims=outputs) if fields else answer,
-        cost=result.cost,
-    )
+    answer = FieldAnswer(**answer.model_dump(), output_claims=outputs) if fields else answer
+    if fields and verified is not None:
+        answer = retain_fields(answer, verified, notes)
+    return Generation(data=answer, cost=result.cost)
 
 
 def partial_answer(notes: Notes, max_chars: int) -> ComposedAnswer:

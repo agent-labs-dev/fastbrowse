@@ -14,10 +14,14 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
 - Answers whose combined evidence exceeds a prompt are composed and verified in requirement groups, with
-  comparisons kept together. Verified outputs survive repair of missing outputs; evidence that cannot fit
-  even one group returns an unverified partial answer.
+  comparisons kept together. Each verified field survives a sibling field's failure. Recovery reads only
+  open fields and rechecks groups whose evidence changed; evidence that cannot fit even one group returns
+  an unverified partial answer.
 - Answer recovery retains each collection's records and identifying context when a later
-  conclusion combines them. Partial collections cannot support a finding that no members match.
+  conclusion combines them. Collection coverage is kept even when another requested field remains open.
+  Partial collections cannot support a finding that no members match.
+- Answers split across prompts check record categories and speaker roles against literal source quotes. Reader
+  paraphrases cannot supply missing names or values. Newly verified fields renew recovery once each.
 - Verified answer groups remain cached when summaries reuse the same sources. Changed evidence causes a
   fresh check of the existing answer before a replacement is composed.
 - Answer recovery cites underlying quotes instead of superseded prose. Composition uses the
