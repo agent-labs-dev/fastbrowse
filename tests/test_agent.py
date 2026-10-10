@@ -5852,6 +5852,23 @@ async def test_missing_answer_output_recovers_evidence_then_completes() -> None:
     agent._recover.assert_awaited_once()
     agent._ending_frame.assert_not_awaited()
     until.assert_not_awaited()
+    llm.responses.extend(
+        [
+            {
+                "groups": [
+                    {
+                        "subjects": [{"name": "the venue", "requirement_ids": ["r"]}],
+                        "fields": ["admission", "opening hours"],
+                        "check_indices": [0, 1],
+                    }
+                ]
+            },
+            {
+                "output_0": [{"text": price.text, "evidence_ids": [fact_id(price)]}],
+                "output_1": [{"text": hours.text, "evidence_ids": [fact_id(hours)]}],
+            },
+        ]
+    )
     result = await agent._finish(state, None, until)
     agent._ending_frame.assert_awaited_once()
     until.assert_awaited_once()

@@ -16,9 +16,9 @@ from collections.abc import Collection, Iterator, Mapping, Sequence
 from copy import deepcopy
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import Field, JsonValue, TypeAdapter, ValidationError, create_model
 from pydantic.fields import FieldInfo
 
 from fastbrowse.batches import evaluate_batches
@@ -2494,6 +2494,32 @@ class _AnswerDraft(Frozen):
     claims: tuple[Claim, ...]
 
 
+class FieldAnswer(ComposedAnswer):
+    output_claims: dict[str, tuple[int, ...]]
+    """Each requested field keeps its own claims through selection and fallback."""
+
+
+def retain_fields(answer: ComposedAnswer, previous: ComposedAnswer, notes: Notes) -> ComposedAnswer:
+    if not isinstance(previous, FieldAnswer):
+        return answer
+    claims = list(answer.claims)
+    outputs = dict(answer.output_claims) if isinstance(answer, FieldAnswer) else {}
+    for check, indices in previous.output_claims.items():
+        if outputs.get(check):
+            continue
+        kept = []
+        for index in indices:
+            claim = previous.claims[index]
+            if claim not in claims:
+                claims.append(claim)
+            kept.append(claims.index(claim))
+        outputs[check] = tuple(kept)
+    return FieldAnswer(
+        **assemble_answer(claims, notes, answer.requirements, dropped_claims=answer.dropped_claims).model_dump(),
+        output_claims=outputs,
+    )
+
+
 def assemble_answer(
     claims: Sequence[Claim],
     notes: Notes,
@@ -2559,7 +2585,13 @@ async def compose(
     transaction_evidence_ids: Collection[str] = (),
     corrections: Sequence[AnswerCorrection] = (),
     preserve_collections: bool = False,
+    field_outputs: bool = False,
 ) -> Generation[ComposedAnswer]:
+    fields = dict(enumerate(plan.answer_checks)) if field_outputs else {}
+    definitions: dict[str, Any] = {
+        f"output_{i}": (tuple[Claim, ...], Field(description=check)) for i, check in fields.items()
+    }
+    schema = create_model("_FieldAnswerDraft", __base__=Frozen, **definitions) if fields else _AnswerDraft
     labels = {fact_id(fact): f"e{i}" for i, fact in enumerate(notes.facts)}
     transaction = (
         "# Transaction evidence\nThese evidence ids come from pages where the run committed an action: "
@@ -2639,14 +2671,20 @@ async def compose(
         messages[0] = messages[0].model_copy(
             update={
                 "content": messages[0].content
-                + "\n\nReport every field in a bundled check, including supported bounded absence. Other "
-                "fields or unmentioned citations cannot stand in for it. For an absence, cite the "
+                + (
+                    "\n\nWrite separate claims for each requested field in its output slot. An empty slot "
+                    "leaves that field unanswered. If a completely read collection has no matching member, "
+                    "explicitly state that bounded absence in the field's slot. Other "
+                    if fields
+                    else "\n\nReport every field in a bundled check, including supported bounded absence. Other "
+                )
+                + "fields or unmentioned citations cannot stand in for it. For an absence, cite the "
                 "collection_for note marked complete=true and retain its bounded scope. Identify the "
                 "collection from quoted context and check every member's identity and relevant fields. "
                 "Incomplete collections and selected excerpts cannot establish absence."
             }
         )
-    room = _notes_room(tokens, messages, _AnswerDraft)
+    room = _notes_room(tokens, messages, schema)
     try:
         offered = notes.render_with_ids(
             room, preserve_requirements=True, preserve_collections=preserve_collections, labels=labels
@@ -2656,7 +2694,7 @@ async def compose(
             raise
         # Advisory corrections must not crowd out the source quotes needed to write a grounded answer.
         messages[-1] = messages[-1].model_copy(update={"content": prefix + "# Notes\n"})
-        room = _notes_room(tokens, messages, _AnswerDraft)
+        room = _notes_room(tokens, messages, schema)
         offered = notes.render_with_ids(
             room, preserve_requirements=True, preserve_collections=preserve_collections, labels=labels
         )
@@ -2664,7 +2702,7 @@ async def compose(
     result = await llm.generate(
         LLMPurpose.COMPOSE,
         messages,
-        _AnswerDraft,
+        schema,
         max_output_tokens=tokens.compose_output_tokens,
         ledger=ledger,
     )
@@ -2674,7 +2712,17 @@ async def compose(
     references = {labels[key]: key for key in known}
     references.update({key: key for key in known})
     claims: list[Claim] = []
-    for claim in result.data.claims:
+    outputs: dict[str, tuple[int, ...]] = dict.fromkeys(fields.values(), ())
+    drafts = (
+        [
+            (check, Claim.model_validate(claim))
+            for i, check in fields.items()
+            for claim in result.data.model_dump()[f"output_{i}"]
+        ]
+        if fields
+        else [(None, claim) for claim in _AnswerDraft.model_validate(result.data.model_dump()).claims]
+    )
+    for check, claim in drafts:
         unknown = set(claim.evidence_ids) - references.keys()
         if unknown:
             logger.warning("compose dropped claim with unknown citation references: %s", sorted(unknown))
@@ -2702,13 +2750,11 @@ async def compose(
                     }
                 )
             )
+            if check is not None:
+                outputs[check] = (*outputs[check], len(claims) - 1)
+    answer = assemble_answer(claims, notes, plan.requirements, dropped_claims=len(drafts) - len(claims))
     return Generation(
-        data=assemble_answer(
-            claims,
-            notes,
-            plan.requirements,
-            dropped_claims=len(result.data.claims) - len(claims),
-        ),
+        data=FieldAnswer(**answer.model_dump(), output_claims=outputs) if fields else answer,
         cost=result.cost,
     )
 

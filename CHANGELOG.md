@@ -24,8 +24,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   same source references, keeping retired quotes and incomplete collections subject to verification.
 - Search-field writing receives unresolved requirements and unverified outputs during answer recovery.
 - Recovery reads that add missing source evidence retry answer verification before more browsing.
-  Repeated quotes cannot trigger another attempt. Answer recovery prompts request explicit findings for
-  every field, including bounded absence findings in combined checks.
+  Repeated quotes cannot trigger another attempt. Partitioned and recovered finishes check each target's
+  requested fields separately, with claims bound to their fields. Empty fields cannot borrow another
+  field's evidence. Collections read to their end support explicit bounded absence findings, which survive
+  answer correction and reader-fact fallback.
+- Recovery follows observed links to unread sections relevant to an open target and field. Section
+  destinations retain their source titles and read status so recovery can leave already read pages.
 - A rejected answer keeps its current source quotes and collection scope. Missing outputs stay open, and
   unchanged evidence cannot trigger another completion check. Changed or misread sources still lose their
   requirement bindings.

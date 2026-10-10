@@ -5,6 +5,7 @@ import re
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from pydantic import JsonValue
 
 from fastbrowse.agent import Agent
 from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, Evaluation, NoulAnswer
@@ -66,13 +67,19 @@ class FinishWriter(ScriptedLLM):
 
     async def generate(self, purpose, messages, schema, **kwargs):
         content = messages[-1].content
-        if schema.__name__ == "_OutputBindings":
+        if schema.__name__ == "_FinishOutputs":
             payload = json.loads(content)
             self.responses.append(
                 {
-                    "bindings": [
-                        {"check_index": i, "requirement_ids": [f"r{i}"]}
-                        for i, _ in enumerate(payload["plan"]["answer_checks"])
+                    "groups": [
+                        {
+                            "subjects": [
+                                {"name": f"Project {i}", "requirement_ids": [f"r{i}"]}
+                                for i, _ in enumerate(payload["plan"]["answer_checks"])
+                            ],
+                            "fields": ["the reply"],
+                            "check_indices": list(range(len(payload["plan"]["answer_checks"]))),
+                        }
                     ]
                 }
             )
@@ -81,7 +88,12 @@ class FinishWriter(ScriptedLLM):
             projects = re.findall(r'\[(e\d+)\] "(Project (\d+): Author says the fix is available\.)"', offered)
             assert projects
             self.composed.append(tuple(int(project) for _, _, project in projects))
-            self.responses.append({"claims": [{"text": text, "evidence_ids": [ref]} for ref, text, _ in projects]})
+            claims: list[JsonValue] = [{"text": text, "evidence_ids": [ref]} for ref, text, _ in projects]
+            self.responses.append(
+                {key: claims for key in schema.model_fields}
+                if schema.__name__ == "_FieldAnswerDraft"
+                else {"claims": claims}
+            )
         elif schema.__name__ != "_OutputIdentities":
             key, field = next(iter(json.loads(content)["criteria"].items()))
             fails = self.unsupported is not None and f"Project {self.unsupported}" in field["criterion"]
@@ -192,6 +204,28 @@ async def test_recovered_output_evidence_is_checked_before_more_browsing(new_sou
         finish.assert_not_awaited()
 
 
+async def test_rejected_read_progress_cannot_preempt_the_selected_recovery_route(monkeypatch) -> None:
+    from fastbrowse.agent import _answer_evidence
+
+    agent, state, _, _ = await finish_agent(size=100)
+    state.open_answer_outputs = (state.plan.answer_checks[0],)
+    state.rejected_answer_evidence = _answer_evidence(state.notes)
+    state.directed = (Operation.CLICK, "description")
+    state.history.append(
+        HistoryEntry(
+            operation=Operation.READ, target=None, outcome=StepOutcome.EXECUTED, page_changed=False, read_progress=True
+        )
+    )
+    agent._reread_if_changed = AsyncMock(return_value=False)
+    agent._finish = AsyncMock(side_effect=RuntimeError("repeated verification"))
+    choosing = Mock(side_effect=RuntimeError("choosing the recovery action"))
+    monkeypatch.setattr("fastbrowse.agent.decide", choosing)
+    with pytest.raises(RuntimeError, match="choosing the recovery action"):
+        await agent._loop(state, None, None)
+    agent._finish.assert_not_awaited()
+    assert state.directed == (Operation.CLICK, "description")
+
+
 async def test_one_indivisible_oversized_requirement_stays_unverified() -> None:
     agent, state, _, _ = await finish_agent(size=85_000)
     result = await agent._finish(state, None, None)
@@ -225,7 +259,18 @@ def test_scoped_notes_keep_shared_ownership_basis_identity_freshness_and_counter
 async def test_binding_keeps_cross_requirement_comparisons_together() -> None:
     plan, _ = project_notes(size=100)
     llm = ScriptedLLM(
-        [{"bindings": [{"check_index": i, "requirement_ids": ["r0", "r1"] if i < 2 else [f"r{i}"]} for i in range(5)]}]
+        [
+            {
+                "groups": [
+                    {
+                        "subjects": [{"name": f"Project {i}", "requirement_ids": ["r0", "r1"] if i < 2 else [f"r{i}"]}],
+                        "fields": ["the reply"],
+                        "check_indices": [i],
+                    }
+                    for i in range(5)
+                ]
+            }
+        ]
     )
     state = await run_state()
     groups = await partition_plan(llm, "Compare two projects, then report three replies.", plan, ledger=state.ledger)

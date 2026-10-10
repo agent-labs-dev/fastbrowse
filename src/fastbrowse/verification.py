@@ -35,6 +35,7 @@ from fastbrowse.retrieval import (
     AnswerCorrection,
     Claim,
     ComposedAnswer,
+    FieldAnswer,
     UnsupportedField,
     assemble_answer,
     choose_candidate,
@@ -630,6 +631,15 @@ async def check_answer_outputs(
         return True
     if any(not check.strip() for check in checks):
         return False
+    if isinstance(composed, FieldAnswer):
+        missing = [
+            check
+            for check in checks
+            if not composed.output_claims.get(check)
+            or any(index < 0 or index >= len(composed.claims) for index in composed.output_claims[check])
+        ]
+        if missing:
+            return reject(missing, repair="This field has no claim. Report its value or a supported bounded absence.")
     context = _output_context(composed, notes)
     if context is None:
         known = {fact_id(fact) for fact in notes.facts}
@@ -820,7 +830,7 @@ async def check_answer_outputs(
         await evaluate_batches(
             jev, {"answer": composed.answer}, selecting, tokens=tokens, ledger=ledger, allow_failed_batches=False
         )
-        if len(choices) <= MAX_CHOICE_OPTIONS
+        if len(choices) <= MAX_CHOICE_OPTIONS and not isinstance(composed, FieldAnswer)
         else None
     )
     if selected is not None and any(not isinstance(selected.answers.get(key), ChoiceAnswer) for key in selecting):
@@ -859,12 +869,17 @@ async def check_answer_outputs(
     for key, criterion in uncertain.items():
         chosen = selected.answers.get(key) if selected is not None else None
         choice = chosen.choice if isinstance(chosen, ChoiceAnswer) else "all"
-        if choice == "none":
+        if isinstance(composed, FieldAnswer):
+            indices = composed.output_claims[criterion]
+            selected_claims[key] = tuple(composed.claims[index] for index in indices)
+            claims = tuple(context.claims[index] for index in indices)
+            covered.update(indices)
+        elif choice == "none":
             return reject(
                 (criterion,),
                 repair="The answer does not state this requested output. Use retained quotes to answer it.",
             )
-        if choice == "all":
+        elif choice == "all":
             selected_claims[key] = composed.claims
             claims = context.claims
             if len(claims) == 1:
@@ -1229,6 +1244,14 @@ async def check_claims(
         if supporting & was_cited and not supporting & cited:
             return None
     pruned = assemble_answer(kept, notes, composed.requirements)
+    if isinstance(composed, FieldAnswer):
+        pruned = FieldAnswer(
+            **pruned.model_dump(),
+            output_claims={
+                check: tuple(kept.index(composed.claims[i]) for i in indices if composed.claims[i] in kept)
+                for check, indices in composed.output_claims.items()
+            },
+        )
     if answer_checks:
         return (
             pruned

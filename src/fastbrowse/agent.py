@@ -94,6 +94,7 @@ from fastbrowse.policy import (
 from fastbrowse.retrieval import (
     AnswerCorrection,
     ComposedAnswer,
+    FieldAnswer,
     ReadOutcome,
     TallyReader,
     assemble_answer,
@@ -102,6 +103,7 @@ from fastbrowse.retrieval import (
     partial_answer,
     read,
     read_tallies,
+    retain_fields,
 )
 from fastbrowse.safety import (
     Redactor,
@@ -316,6 +318,13 @@ class _PageRead:
     frame: bytes | None
 
 
+class _ObservedLink(Frozen):
+    source: str
+    title: str
+    label: str
+    url: str
+
+
 @dataclass(slots=True)
 class _RunState:
     task: str
@@ -445,6 +454,8 @@ class _RunState:
     visited: dict[str, None] = field(default_factory=dict[str, None])
     """Addresses observed without an HTTP error, in order, including the starting address.
     An error at an address removes it until a later successful observation."""
+    observed_links: dict[str, _ObservedLink] = field(default_factory=dict)
+    read_urls: set[str] = field(default_factory=set)
     redecided: bool = False
     """A decision was dropped because the page redrew under it, so nothing is watched until an action is taken."""
     missing: set[tuple[str, str | None]] = field(default_factory=set[tuple[str, str | None]])
@@ -783,6 +794,7 @@ class Agent:
             if (
                 state.open_answer_outputs
                 and not state.owes_read
+                and state.rejected_answer_evidence != _answer_evidence(state.notes)
                 and state.history
                 and state.history[-1].read_progress
                 and (plan := state.ready_plan) is not None
@@ -849,7 +861,7 @@ class Agent:
                 decision = _code_decision(Operation.READ, None)
             uncertain = decision.confidence < self._config.thresholds.recover_below
             decided_by = Decider.JEV
-            if (uncertain or decision.operation not in _NOT_ACTING) and (
+            if (state.open_answer_outputs or uncertain or decision.operation not in _NOT_ACTING) and (
                 directed := _follow_recovery(
                     state, _without_failed_links(state, observation), decision, uncertain=uncertain
                 )
@@ -1492,6 +1504,23 @@ class Agent:
             state.visited.pop(observation.url, None)
         else:
             state.visited[observation.url] = None
+            for control in observation.controls:
+                # External display hrefs omit their scheme and query, so they cannot be replayed as destinations.
+                if (
+                    control.role == "link"
+                    and control.frame_id is None
+                    and control.href
+                    and control.href.startswith(("/", "http://", "https://"))
+                    and Operation.CLICK in control.operations
+                ):
+                    try:
+                        url = urljoin(observation.url, control.href)
+                    except ValueError:
+                        continue
+                    if urlsplit(url).scheme in {"http", "https"}:
+                        state.observed_links[url] = _ObservedLink(
+                            source=observation.url, title=observation.title, label=control.label, url=url
+                        )
         link, state.pending_link = state.pending_link, None
         if observation.response_status is not None:
             if observation.response_status >= 400:
@@ -1695,11 +1724,14 @@ class Agent:
         target = decision.target
         match decision.operation:
             case Operation.NAVIGATE:
-                if decision.url is None or decision.url not in task_urls(state.task, start=state.caller_start):
+                observed = decision.directed and decision.url in state.observed_links
+                if decision.url is None or (
+                    decision.url not in task_urls(state.task, start=state.caller_start) and not observed
+                ):
                     raise _Stop(Status.STUCK, "navigation address was not supplied by the caller")
                 if self._redactor.reveals(decision.url):
                     raise _Stop(Status.NEEDS_INPUT, "navigation address contains a resolved secret")
-                if gate:
+                if gate and not observed:
                     state.ledger.reserve(CostComponent.JEV)
                     evaluation = await self._jev.evaluate(
                         {"task": state.task, "address": decision.url},
@@ -2411,6 +2443,7 @@ class Agent:
             # forward with these missing is incomplete in the notes, which the trace should say out loud.
             uncovered=outcome.uncovered,
         )
+        state.read_urls.add(capture.url)
         spent(progressed)
         if observation is not None:
             state.read_at[state_key(observation)] = capture.sha256
@@ -2812,6 +2845,10 @@ class Agent:
             start_landing=state.start_landing_url,
             include_start=True,
         )
+        routes = _recovery_routes(state, self._config.observation.working_notes_chars)
+        caller_destinations = destinations
+        if state.open_answer_outputs:
+            destinations = tuple(dict.fromkeys((*destinations, *state.observed_links)))
         steps = "\n".join(
             f"- {h.operation.value if h.operation else 'open'} {h.target or ''} -> {h.outcome.value}"
             + (f": {h.effect}" if h.effect else "")
@@ -2866,6 +2903,17 @@ class Agent:
                         "the controls there instead of repeating actions on the guessed page. "
                         "Dates are relative to the supplied current date.\n\n"
                         f"# Trust\n{UNTRUSTED}"
+                        + (
+                            "\n\nUse the unverified field and target to choose its unread source section. "
+                            "Observed links list exact destinations, source titles and whether they were read. "
+                            "navigate may also open one of those observed destinations. Prefer the relevant "
+                            "unread section to rereading or scrolling a section already captured. "
+                            "When the missing field is a link destination, "
+                            "read the section containing actual links. Follow the target's observed section "
+                            "link even when another field is already evidenced."
+                            if state.open_answer_outputs
+                            else ""
+                        )
                     ),
                 ),
                 Message(
@@ -2876,8 +2924,9 @@ class Agent:
                         f"{observation.viewport_text}{secrets}\n\n"
                         f"## Caller start page\n{self._redactor.redact(state.started_url or state.first_url or '')}\n\n"
                         "## Caller-supplied addresses\n"
-                        f"{json.dumps(destinations)}\n\n"
-                        f"## Current address was proposed\n{observation.url in state.invented}\n\n"
+                        f"{json.dumps(caller_destinations)}\n\n"
+                        + (f"## Observed section links\n{routes}\n\n" if state.open_answer_outputs else "")
+                        + f"## Current address was proposed\n{observation.url in state.invented}\n\n"
                         f"## HTTP failure\n{state.http_failure.message if state.http_failure else 'none'}\n\n"
                         "## Notes read so far\n"
                         f"{state.notes.render_for_navigation(self._config.observation.working_notes_chars) or 'none'}"
@@ -3020,16 +3069,16 @@ class Agent:
         until: UntilCheck | None,
     ) -> RunResult | None:
         if not state.finish_partitions:
-            try:
-                return await self._finish_whole(state, output_schema, until)
-            except NotesTooLarge:
-                # Independent outputs need separate evidence envelopes, not fewer source quotes.
+            if not state.open_answer_outputs or state.rejected_answer_evidence == _answer_evidence(state.notes):
                 try:
-                    state.finish_partitions = await partition_plan(
-                        self._llm, state.task, state.plan, ledger=state.ledger
-                    )
-                except LLMError as error:
-                    raise _Stop(Status.UNVERIFIED, str(error)) from error
+                    return await self._finish_whole(state, output_schema, until)
+                except NotesTooLarge:
+                    pass
+            # Independent outputs need separate evidence envelopes, not fewer source quotes.
+            try:
+                state.finish_partitions = await partition_plan(self._llm, state.task, state.plan, ledger=state.ledger)
+            except LLMError as error:
+                raise _Stop(Status.UNVERIFIED, str(error)) from error
         return await self._finish_partitioned(state, output_schema, until)
 
     async def _finish_partitioned(
@@ -3224,6 +3273,7 @@ class Agent:
                             transaction_evidence_ids=await self._transaction_evidence_ids(state),
                             corrections=state.answer_corrections,
                             preserve_collections=bool(state.finish_partitions or state.answer_corrections),
+                            field_outputs=bool(state.finish_partitions),
                         )
                     )
                 verdict = await llm_verify(
@@ -3356,6 +3406,7 @@ class Agent:
                         transaction_evidence_ids=await self._transaction_evidence_ids(state),
                         corrections=state.answer_corrections,
                         preserve_collections=bool(state.finish_partitions or state.answer_corrections),
+                        field_outputs=bool(state.finish_partitions),
                     )
                 )
             ).data
@@ -3384,18 +3435,19 @@ class Agent:
                     transaction_evidence_ids=await self._transaction_evidence_ids(state),
                     corrections=state.answer_corrections,
                     preserve_collections=bool(state.finish_partitions or state.answer_corrections),
+                    field_outputs=bool(state.finish_partitions),
                 )
             except LLMError:
                 logger.warning("The answer correction failed; retaining the checked fallback", exc_info=True)
                 break
             else:
-                composed = corrected.data
+                composed = retain_fields(corrected.data, composed, state.notes)
                 held = await self._holds(state, composed)
         if held is None and facts is not None and facts != composed:
             # A list of forty records came back as one claim citing one quote, which no claim check should pass. The
             # reader's own facts each carry the quote that shows them, so they are offered to the same check.
             failure = state.missing_answer_outputs, state.open_answer_outputs, state.answer_corrections
-            held = await self._holds(state, facts)
+            held = await self._holds(state, retain_fields(facts, composed, state.notes))
             if held is None:
                 # Recovery follows the returned answer's failure, not a sparser fallback's missing fields.
                 state.missing_answer_outputs, state.open_answer_outputs, state.answer_corrections = failure
@@ -3473,6 +3525,23 @@ class Agent:
         return _HttpFailure(url=last.landed_url, status=last.landed_status)
 
     async def _holds(self, state: _RunState, answer: ComposedAnswer) -> ComposedAnswer | None:
+        if state.finish_partitions and state.plan.answer_checks and not isinstance(answer, FieldAnswer):
+            state.missing_answer_outputs = state.open_answer_outputs = state.plan.answer_checks
+            return None
+        if isinstance(answer, FieldAnswer):
+            # Decomposition cannot erase an original obligation by leaving its field out of the generated checks.
+            answer = answer.model_copy(
+                update={
+                    "output_claims": {
+                        **{
+                            r.text: tuple(range(len(answer.claims)))
+                            for r in state.plan.requirements
+                            if r.kind is RequirementKind.INFORMATION
+                        },
+                        **answer.output_claims,
+                    }
+                }
+            )
         proof = hashlib.sha256(
             json.dumps(
                 {
@@ -4372,6 +4441,33 @@ def _without_missing(observation: Observation, missing: Set[tuple[str, str | Non
     return observation if len(kept) == len(observation.controls) else observation.model_copy(update={"controls": kept})
 
 
+def _recovery_routes(state: _RunState, max_chars: int) -> str:
+    if not state.open_answer_outputs:
+        return "[]"
+    words = set(re.findall(r"\w+", " ".join(state.open_answer_outputs).casefold()))
+    read = state.read_urls | {e.url for e in state.notes.current_evidence().values()}
+    failed = {failure.url for failure in state.failed_links.values()}
+    links = sorted(
+        (link for link in state.observed_links.values() if link.url not in failed),
+        key=lambda link: (
+            -(
+                2 * len(words & set(re.findall(r"\w+", link.url.casefold())))
+                + len(words & set(re.findall(r"\w+", f"{link.source} {link.title} {link.label}".casefold())))
+            ),
+            link.url in read,
+        ),
+    )
+    offered = []
+    used = 2
+    for link in links:
+        entry = {**link.model_dump(), "read": link.url in read}
+        size = len(json.dumps(entry)) + 2
+        if used + size <= max_chars:
+            offered.append(entry)
+            used += size
+    return json.dumps(offered)
+
+
 def _follow_recovery(
     state: _RunState, observation: Observation, decision: Decision, *, uncertain: bool
 ) -> Decision | None:
@@ -4381,20 +4477,25 @@ def _follow_recovery(
     Jev choosing between two Search buttons at 0.49 until the recovery budget ran out, the named action never taken.
     """
     directed, state.directed = state.directed, None
-    if directed is None or (not uncertain and decision.operation is not Operation.ESCALATE):
+    if directed is None or (
+        not state.open_answer_outputs and not uncertain and decision.operation is not Operation.ESCALATE
+    ):
         return None
     operation, control_id = directed
     if operation is Operation.NAVIGATE:
         if (
             observation.dialog is not None
             or control_id is None
-            or control_id
-            not in navigation_urls(
-                state.task,
-                observation.url,
-                start=state.caller_start,
-                start_landing=state.start_landing_url,
-                include_start=True,
+            or (
+                control_id not in state.observed_links
+                and control_id
+                not in navigation_urls(
+                    state.task,
+                    observation.url,
+                    start=state.caller_start,
+                    start_landing=state.start_landing_url,
+                    include_start=True,
+                )
             )
         ):
             return None
