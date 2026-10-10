@@ -2384,6 +2384,57 @@ async def test_compact_comparison_records_keep_each_quote_once_in_the_answer_bas
     assert all(evidence.model_dump_json() in unsupported for evidence in notes.evidence.values())
 
 
+@pytest.mark.parametrize("gap", [None, "earlier_records", "unread_chunk", "more_pages"])
+async def test_comparison_coverage_reaches_answer_audits(gap: str | None) -> None:
+    from fastbrowse.verification import _output_context, check_answer_outputs
+    from tests.test_answer_repair import RoutingJev
+
+    page = capture(
+        (BlockKind.RECORD, "Oak $19"),
+        (BlockKind.RECORD, "Pine $7"),
+        *([(BlockKind.RECORD, "Elm $1")] if gap == "unread_chunk" else []),
+    )
+    requirement = Requirement(id="r", text="Find the cheapest item on this page", kind=RequirementKind.INFORMATION)
+    notes = Notes()
+    await read(
+        ScriptedLLM(
+            [
+                {
+                    "answered": True,
+                    "claims": [
+                        {
+                            "requirement_id": "r",
+                            "text": "Pine is cheapest at $7",
+                            "cite": None,
+                            "records": [{"first": "s0", "last": "s0"}, {"first": "s1", "last": "s1"}],
+                        }
+                    ],
+                    "continues": [{"requirement_id": "r"}] if gap == "more_pages" else [],
+                }
+            ]
+        ),
+        page,
+        requirement.text,
+        ["r"],
+        notes,
+        incomplete=("r",) if gap == "earlier_records" else (),
+        max_chars=15 if gap == "unread_chunk" else None,
+    )
+    winner = next(fact for fact in notes.facts if fact.evidence is None)
+    answer = assemble_answer((Claim(text=winner.text, evidence_ids=(fact_id(winner),)),), notes, (requirement,))
+    context = _output_context(answer, notes)
+    assert context is not None
+    expected = [{"scope": requirement.text, "complete": gap is None, "record_indices": [0, 1]}]
+    assert context.model_dump(mode="json")["claims"][0].get("compared_records") == expected
+    assert all(not source.complete_source for source in context.claims[0].cited_sources)
+    audit = ScriptedLLM([{"judgments": {"output_0": "yes"}, "reason": "Read coverage retained."}] * 2)
+    assert await check_answer_outputs(RoutingJev(), audit, answer, notes, (requirement.text,))
+    for _, messages in audit.calls[1:]:
+        field = json.loads(messages[-1].content)["criteria"]["output_0"]
+        records = field.get("sources", field.get("reported_claims"))
+        assert records[0]["compared_records"] == expected
+
+
 @pytest.mark.parametrize("bad_record", ["unknown", "reversed", "frame", "overflow"])
 async def test_a_compact_comparison_with_a_lost_record_cannot_close_later(bad_record: str) -> None:
     page = capture((BlockKind.RECORD, "Oak $19"), (BlockKind.RECORD, "Pine $7"))
@@ -3480,6 +3531,16 @@ def test_numeric_comparison_uses_decimal_values_and_preserves_every_source(order
     evidence = notes.supporting_evidence("r")
     assert [e.url for e in evidence] == ["https://example.test/0", "https://example.test/1"]
     assert [e.quote for e in evidence] == [p.text for p in pages]
+    from fastbrowse.verification import _output_context
+
+    requirement = Requirement(id="r", text="Find the ranked item", kind=RequirementKind.INFORMATION)
+    draft = draft_answer(Plan(requirements=(requirement,), answer_expected=True), notes)
+    assert draft is not None
+    context = _output_context(draft, notes)
+    assert context is not None
+    assert context.model_dump(mode="json")["claims"][0]["compared_records"] == [
+        {"scope": requirement.text, "complete": True, "record_indices": [0, 1]}
+    ]
 
 
 @pytest.mark.parametrize(

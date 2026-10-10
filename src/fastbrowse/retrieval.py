@@ -37,7 +37,7 @@ from fastbrowse.jev import (
     Question,
 )
 from fastbrowse.llm import Generation, LLMClient, Message
-from fastbrowse.memory import Fact, Notes, NotesTooLarge, Tally, evidence_id, fact_id
+from fastbrowse.memory import Comparison, Fact, Notes, NotesTooLarge, Tally, evidence_id, fact_id
 from fastbrowse.models import (
     UNTRUSTED,
     Citation,
@@ -1296,6 +1296,15 @@ async def read(
             found.extend(kept for kept in so_far.facts if fact_id(kept) in fact.basis and fact_id(kept) not in held)
             references[f"claim:{index}"] = fact_id(fact)
             requirement_id = claim.requirement_id if claim.requirement_id in requirement_ids else None
+            if requirement_id is not None and (records or so_far.comparison_records(requirement_id)):
+                fact = fact.model_copy(
+                    update={
+                        "comparison": Comparison(
+                            requirement_id=requirement_id,
+                            records=tuple(dict.fromkeys((*so_far.comparison_records(requirement_id), *records))),
+                        )
+                    }
+                )
             stated_count = requirement_id in counting and _quoted_count(fact, so_far, records, capture)
             if stated_count:
                 stated_counts.add((requirement_id, fact_id(fact)))
@@ -1424,6 +1433,18 @@ async def read(
         )
         if fact.requirement_id in continues or (fact.requirement_id in blocked and not stated_count):
             fact = fact.model_copy(update={"requirement_id": None})
+        if fact.comparison is not None:
+            fact = fact.model_copy(
+                update={
+                    "comparison": fact.comparison.model_copy(
+                        update={
+                            "complete": fact.requirement_id is not None
+                            and result.data.answered
+                            and part.index == part.total - 1
+                        }
+                    )
+                }
+            )
         # Its quote was verified against this capture when the chunk was read.
         notes.add(fact)
         facts[(fact_id(fact), fact.requirement_id)] = fact

@@ -3632,6 +3632,7 @@ def _answer_evidence(notes: Notes, *, include_answer: bool = True) -> frozenset[
                     "value": source(fact.evidence) if fact.evidence is not None else fact.text,
                     "text": fact.text,
                     "requirements": notes.fact_requirements(fact_id(fact)),
+                    "comparison": fact.comparison.model_dump(mode="json") if fact.comparison is not None else None,
                     "basis": sorted(
                         source(known[key]) for key in notes.expand_evidence_ids(fact.basis) if key in known
                     ),

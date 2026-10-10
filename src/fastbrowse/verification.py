@@ -450,10 +450,17 @@ class _OutputCount(Frozen):
     record_indices: tuple[int, ...]
 
 
+class _OutputComparison(Frozen):
+    scope: str | None
+    complete: bool
+    record_indices: tuple[int, ...]
+
+
 class _OutputClaim(Frozen):
     text: str
     cited_sources: tuple[_OutputSource, ...]
     counted_records: tuple[_OutputCount, ...] = ()
+    compared_records: tuple[_OutputComparison, ...] = ()
 
 
 class _OutputContext(Frozen):
@@ -546,7 +553,20 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
             )
         positions = {key: index for index, key in enumerate(keys)}
         counted = []
+        compared = []
         for fact in notes.facts:
+            if fact.comparison is not None and fact_id(fact) in expanded:
+                comparison = fact.comparison
+                if any(record not in positions for record in comparison.records):
+                    return None
+                compared.append(
+                    _OutputComparison(
+                        scope=requirements.get(comparison.requirement_id),
+                        complete=comparison.complete
+                        and comparison.requirement_id in notes.fact_requirements(fact_id(fact)),
+                        record_indices=tuple(dict.fromkeys(positions[record] for record in comparison.records)),
+                    )
+                )
             if fact.tally is None or fact_id(fact) not in expanded:
                 continue
             if any(record not in positions for record in fact.tally.records):
@@ -560,13 +580,13 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
                     record_indices=tuple(dict.fromkeys(positions[record] for record in fact.tally.records)),
                 )
             )
-        # Expanding a count into quotes loses whether the whole list was exhausted. Keep its code-owned
-        # coverage and exact record associations beside the quotes, without borrowing an uncited tally.
+        # Flattening a count or comparison loses its collection scope and whether every page was read.
         claims.append(
             _OutputClaim(
                 text=claim.text,
                 cited_sources=tuple(sources),
                 counted_records=tuple(counted),
+                compared_records=tuple(compared),
             )
         )
     return _OutputContext(
@@ -848,6 +868,7 @@ async def check_answer_outputs(
                 {
                     "cited_sources": [source.model_dump(exclude={"page_title"}) for source in claim.cited_sources],
                     "counted_records": [count.model_dump() for count in claim.counted_records],
+                    "compared_records": [comparison.model_dump() for comparison in claim.compared_records],
                 }
                 for claim in claims
             ],
@@ -958,6 +979,10 @@ async def check_answer_outputs(
                 "code-maintained distinct counts, their scope, cited record indices and collection completeness. "
                 "A complete count can rest on its matching quoted records without a page stating the total. "
                 "An incomplete or differently scoped count cannot establish the requested whole-list total. "
+                "Compared-record metadata preserves the reader's collection scope, completeness and indices "
+                "into these cited sources. A complete comparison establishes coverage of that scope, not "
+                "missing values, operand associations or the correctness of a conclusion. An incomplete "
+                "comparison cannot establish a whole-list winner. "
                 "The quoted records must still identify matching entities and filters. Observed page titles provide "
                 "identity context, not missing field "
                 "evidence. Never reconstruct missing table column labels from prior knowledge. Return "
@@ -1012,6 +1037,10 @@ async def check_answer_outputs(
                 "counts and collection completeness, with "
                 "indices into that claim's cited sources. Check the reported count against that matching scope "
                 "and quoted record membership. An incomplete count cannot establish a whole-list total. "
+                "Compared-record metadata preserves the reader's collection scope, completeness and cited "
+                "source indices. Check the conclusion against every compared operand and the matching scope. "
+                "Completeness establishes coverage only, not values, associations or the winning result. "
+                "An incomplete comparison cannot establish a whole-list winner. "
                 "Observed page titles provide identity "
                 "context, not missing field evidence. Return yes only if every part of the requested output "
                 "is stated and evidenced by its own cited sources. Every factual assertion in every selected "
