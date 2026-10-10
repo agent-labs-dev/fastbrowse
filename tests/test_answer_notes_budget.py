@@ -85,10 +85,10 @@ async def test_five_source_answer_above_notes_budget_keeps_full_quote_checks(fai
                 return Generation(
                     data=schema.model_validate(
                         {
-                            "identities": {
-                                f"i{index}": {"source_ref": ref, "quote": project}
+                            "identities": [
+                                {"id": f"i{index}", "source_ref": ref, "quote": project}
                                 for index, (ref, project) in enumerate(zip(sources, PROJECTS, strict=True))
-                            },
+                            ],
                             "bindings": {
                                 f"output_{index}": {"scope": "entities", "identity_ids": [f"i{index}"]}
                                 for index in range(len(PROJECTS))
