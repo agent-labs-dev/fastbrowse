@@ -13,6 +13,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.5.20] - 2026-10-09
 
+- Read decisions preserve values needed for remaining actions, including values found on another page for a
+  pending form. Pages expose whether they have been read, so observing a value does not stand in for saving it.
+- Pages with no controls offer the caller's starting address as a return route, so resuming from a browser
+  error page does not require recovery to propose that address.
 - Answer checks retain a comparison's collection scope and completeness alongside its quoted records, so a
   whole-list winner keeps the coverage established during reading.
 - Answer checks retain whether a quote covers a complete downloaded file, so totals can be verified from all
