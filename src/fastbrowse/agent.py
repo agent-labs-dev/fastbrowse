@@ -2439,8 +2439,8 @@ class Agent:
             jev=None if needs_context else self._jev,
             requirements=wanted,
             # Rebinding old quotes during output recovery does not make revisiting their page a fresh source.
-            revalidate=owed and (transaction_pending or not state.open_answer_outputs),
-            recovering_outputs=bool(state.open_answer_outputs),
+            revalidate=owed and (transaction_pending or not state.open_answer_outputs or not state.oversized_answer),
+            recovering_outputs=state.oversized_answer and bool(state.open_answer_outputs),
             preserve_collections=bool(state.finish_partitions or state.open_answer_outputs),
             field_outputs=state.oversized_answer and bool(state.finish_partitions),
             notice=notice,
@@ -3151,9 +3151,7 @@ class Agent:
         until: UntilCheck | None,
     ) -> RunResult | None:
         if not state.finish_partitions:
-            if not state.oversized_answer and (
-                not state.open_answer_outputs or state.rejected_answer_evidence == _answer_evidence(state.notes)
-            ):
+            if not state.oversized_answer:
                 try:
                     return await self._finish_whole(state, output_schema, until)
                 except NotesTooLarge:
@@ -3219,7 +3217,11 @@ class Agent:
                 else None,
                 missing_answer_outputs=(),
                 open_answer_outputs=(),
-                answer_corrections=(),
+                answer_corrections=tuple(
+                    correction
+                    for correction in state.answer_corrections
+                    if correction.criterion in (*plan.answer_checks, *(r.text for r in plan.requirements))
+                ),
                 rejected_answer_evidence=None,
                 answer_check_evidence=None,
                 answer_check_cache={},
@@ -3288,6 +3290,9 @@ class Agent:
         state.reset_answer_check()
         if state.open_answer_outputs and state.rejected_answer_evidence == _answer_evidence(state.notes):
             # Re-reading the same partial quotes must not buy another completion check or reset recovery.
+            if not state.finish_partitions:
+                state.notes.unevidence(r.id for r in state.plan.requirements if r.kind is RequirementKind.INFORMATION)
+                state.rejected_answer_evidence = _answer_evidence(state.notes)
             reason = "DONE rejected, no new output evidence: " + "; ".join(state.open_answer_outputs)
             await self._recover(state, fresh, reason, gives_up_as=Status.UNVERIFIED)
             return None
@@ -3420,7 +3425,11 @@ class Agent:
                 if result.status is Status.UNVERIFIED and state.missing_answer_outputs:
                     if partition:
                         return result
-                    # Missing answer fields do not invalidate source quotes; the open outputs drive recovery.
+                    # An ordinary rejected answer needs another read; grouped recovery retains its source proof.
+                    if not state.oversized_answer:
+                        state.notes.unevidence(
+                            r.id for r in state.plan.requirements if r.kind is RequirementKind.INFORMATION
+                        )
                     state.rejected_answer_evidence = _answer_evidence(state.notes)
                     accepted, result = False, None
                 if accepted and until is not None:

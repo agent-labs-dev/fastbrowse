@@ -300,3 +300,26 @@ def test_collection_scope_changes_partition_proof():
     proof = _partition_proof(plan, Notes((fact, collection)), set())
     changed = collection.model_copy(update={"scope": "Birch reviews"})
     assert _partition_proof(plan, Notes((fact, changed)), set()) != proof
+
+
+async def test_grouped_repair_keeps_its_rejection_after_new_source_evidence():
+    from fastbrowse.retrieval import AnswerCorrection
+    from tests.test_partitioned_finish import finish_agent
+
+    agent, state, _, _ = await finish_agent(size=100)
+    state.oversized_answer = True
+    state.finish_partitions = (state.plan,)
+    correction = AnswerCorrection(
+        criterion=state.plan.answer_checks[0], claims=(), reason="The quoted comment is a player question."
+    )
+    state.answer_corrections = (correction,)
+    state.open_answer_outputs = (correction.criterion,)
+
+    async def repair(child, *args, **kwargs):
+        assert child.answer_corrections == (correction,)
+        child.missing_answer_outputs = (correction.criterion,)
+        return None
+
+    agent._finish_whole = AsyncMock(side_effect=repair)
+    await agent._finish(state, None, None)
+    agent._finish_whole.assert_awaited_once()

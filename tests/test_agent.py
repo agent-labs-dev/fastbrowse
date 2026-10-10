@@ -5840,8 +5840,9 @@ async def test_missing_answer_output_recovers_evidence_then_completes() -> None:
 
     async def gather_missing(*args: object, **kwargs: object) -> None:
         assert kwargs == {"gives_up_as": Status.UNVERIFIED}
-        assert state.notes.current(fact_id(price))
+        assert not state.notes.evidenced("r")
         assert "Report opening hours." in str(args[-1])
+        state.notes.add(price)
         state.notes.add(hours)
 
     agent._jev = Jev({})
@@ -5852,23 +5853,6 @@ async def test_missing_answer_output_recovers_evidence_then_completes() -> None:
     agent._recover.assert_awaited_once()
     agent._ending_frame.assert_not_awaited()
     until.assert_not_awaited()
-    llm.responses.extend(
-        [
-            {
-                "groups": [
-                    {
-                        "subjects": [{"name": "the venue", "requirement_ids": ["r"]}],
-                        "fields": ["admission", "opening hours"],
-                        "check_indices": [0, 1],
-                    }
-                ]
-            },
-            {
-                "output_0": [{"text": price.text, "evidence_ids": [fact_id(price)]}],
-                "output_1": [{"text": hours.text, "evidence_ids": [fact_id(hours)]}],
-            },
-        ]
-    )
     result = await agent._finish(state, None, until)
     agent._ending_frame.assert_awaited_once()
     until.assert_awaited_once()
@@ -5919,6 +5903,7 @@ async def test_re_evidencing_partial_output_quotes_is_not_new_read_progress(
         state.notes.unevidence(("r1",))
     state.owes_read = rebound_requirements
     state.open_answer_outputs = ("Report the remaining requested field.",)
+    state.oversized_answer = True
     recaptured = capture((BlockKind.PARAGRAPH, "Total: 12"), (BlockKind.PARAGRAPH, "Updated a moment ago"))
     assert await agent._read(state, recaptured, here) == (False, False)
     assert "novelty" in jev.requests[-1]

@@ -2796,6 +2796,22 @@ async def compose(
     rejected: dict[str, int] = {}
     rejected_claims: list[JsonValue] = []
     failures: list[JsonValue] = []
+    complete_collections: list[JsonValue] = [
+        {
+            "evidence_id": labels[fact_id(fact)],
+            "requirement_id": fact.comparison.requirement_id,
+            "scope": fact.scope if isinstance(fact, CollectionFact) else fact.text,
+        }
+        for fact in notes.facts
+        if field_outputs
+        and independent_fields
+        and corrections
+        and fact.comparison is not None
+        and fact.comparison.complete
+        and fact.comparison.requirement_id in {r.id for r in plan.requirements}
+        and notes.current(fact_id(fact))
+        and all(notes.current(key) for key in (*fact.basis, *fact.comparison.records))
+    ]
     for correction in corrections:
         indices: list[JsonValue] = []
         for claim in correction.claims:
@@ -2819,12 +2835,28 @@ async def compose(
         "not source evidence. Repair the answer using only the offered quoted notes. Preserve every requested "
         "output and every source qualification. Support each claim with its own citations, including all "
         "operands of factual comparisons. Do not erase a requested output to avoid its failed check.\n"
-        + json.dumps({"claims": rejected_claims, "failures": failures})
+        + (
+            "The complete_collections entries identify retained coverage, not a verified conclusion. "
+            "If a rejection concerns the classification of a quoted member, check every member against "
+            "the requested category. Explain which quoted facts exclude the apparent matches, and cite "
+            "those records alongside the complete collection when reporting a bounded absence. "
+            "A rejection is not evidence that content is unread. Do not invent a match to satisfy it.\n"
+            if complete_collections
+            else ""
+        )
+        + json.dumps(
+            {
+                "claims": rejected_claims,
+                "failures": failures,
+                **({"complete_collections": complete_collections} if complete_collections else {}),
+            }
+        )
         + "\n\n"
         if corrections
         else ""
     )
-    repair = cut_text(repair, 8000) if repair else ""
+    if repair and not complete_collections:
+        repair = cut_text(repair, 8000)
     prefix = f"# Task\n{task}\n\n# Plan\n{plan.model_dump_json()}\n\n{transaction}"
     messages = [
         Message(
@@ -2889,7 +2921,7 @@ async def compose(
             source_only=field_outputs and independent_fields,
         )
     except NotesTooLarge:
-        if not repair:
+        if not repair or complete_collections:
             raise
         # Advisory corrections must not crowd out the source quotes needed to write a grounded answer.
         messages[-1] = messages[-1].model_copy(update={"content": prefix + "# Notes\n"})

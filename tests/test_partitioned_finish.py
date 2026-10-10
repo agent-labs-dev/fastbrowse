@@ -166,8 +166,9 @@ async def test_finish_that_fits_keeps_one_compose_and_does_not_bind_outputs() ->
     assert not any(purpose is LLMPurpose.PLAN for purpose, _ in llm.calls)
 
 
-async def test_whole_answer_rejection_keeps_sources_without_repeating_the_failed_check() -> None:
+async def test_grouped_answer_rejection_keeps_sources_without_repeating_the_failed_check() -> None:
     agent, state, _, llm = await finish_agent(size=100, unsupported=3)
+    state.oversized_answer = True
     assert await agent._finish(state, None, None) is None
     assert state.open_answer_outputs
     assert all(state.notes.current(fact_id(fact)) for fact in state.notes.facts)

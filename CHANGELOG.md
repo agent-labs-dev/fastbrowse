@@ -40,9 +40,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   answer correction and reader-fact fallback.
 - Recovery follows observed links to unread sections relevant to an open target and field. Section
   destinations retain their source titles and read status so recovery can leave already read pages.
-- A rejected answer keeps its current source quotes and collection scope. Missing outputs stay open, and
-  unchanged evidence cannot trigger another completion check. Changed or misread sources still lose their
-  requirement bindings.
+- A rejected grouped answer keeps its current source quotes and collection scope. Missing outputs stay open,
+  and unchanged evidence cannot trigger another grouped completion check. Answers that fit one prompt
+  reopen their information requirements for another read and check. Changed or misread sources still lose
+  their requirement bindings. Field repairs receive the rejection reason alongside retained complete
+  collection coverage, so they can distinguish missing evidence from a misclassified record.
 - Returning to a form with newly read prerequisite evidence renews recovery once for that state and those
   sources. Repeated quotes, paraphrases and values put back do not renew it.
 
