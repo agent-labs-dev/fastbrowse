@@ -394,6 +394,8 @@ class _RunState:
     """Page states where an unsure pick has been acted on instead of recovering; the next one there recovers."""
     reads: set[ReadKey] = field(default_factory=set)
     """Attempted reads by document, exact content and outstanding requirements, independent of URL edits."""
+    record_read_documents: set[str] = field(default_factory=set)
+    """Documents whose pagination records were read outside the ordinary read cache."""
     barren: dict[ReadKey, int] = field(default_factory=dict[ReadKey, int])
     """Reads by document, page state and outstanding requirements that added no fact. Keyed by what can be done
     on the page rather than by its exact text, so a page rewriting itself cannot mint a fresh key for ever."""
@@ -870,18 +872,9 @@ class Agent:
             if decision.operation in _NOT_ACTING:
                 plan = await state.await_plan()
                 # Notes that evidence every requirement can still describe the page before the last interaction
-                # redrew it, so an answer owed after one is read off what it drew. Actions can also need a read
-                # to carry a value between pages, without making that value evidence of the action's completion.
-                if (
-                    _unread(plan, state.notes)
-                    or (state.owes_read and plan.page_answer_expected)
-                    or (
-                        _action_requirements(plan, state.notes)
-                        and (
-                            decision.operation is Operation.READ or decision.read_assessment is ReadAssessment.EVIDENCE
-                        )
-                    )
-                ):
+                # redrew it, so an answer owed after one is read off what it drew. A plan that only acts has
+                # nothing to read, and finishes without waiting.
+                if _unread(plan, state.notes) or (state.owes_read and plan.page_answer_expected):
                     reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
                     # A read that ran spends the direction it was sent on, but may leave one of its own: the control
                     # the reader named to show more was cleared right after the read that named it, and Flights
@@ -901,8 +894,8 @@ class Agent:
                         decision = decision.model_copy(update={"operation": Operation.DONE, "target": None})
                     elif not _unread(plan, state.notes):
                         state.directed = held
-                        # A scroll changes the page but not its text, so a read can find content already read.
-                        # The notes already describe what the interaction drew; completion is still verified.
+                        # Only an owed read gets here: a scroll changes the page but not its text, so the read
+                        # found content already read, and the notes already describe what the interaction drew.
                         decision = decision.model_copy(update={"operation": Operation.DONE, "target": None})
                     else:
                         state.directed = held
@@ -2146,6 +2139,18 @@ class Agent:
         # A native dialog pauses JavaScript, so capture cannot run until the dialog has been handled.
         if observation.dialog is not None:
             return False
+        if (
+            decision.operation is Operation.BACK
+            and observation.document_key not in state.record_read_documents
+            and not any(key[0] == observation.document_key for key in state.reads)
+        ):
+            plan = await state.await_plan()
+            if state.notes.unresolved(plan):
+                # Backing out of an unread document can lose a value needed by a pending action, even after
+                # every information requirement is answered. Navigating to a supplied address or switching tab
+                # follows the plan, and reading the page left behind there only spends a read.
+                reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
+                return not await self._step(state, observation, reading, decided_by)
         if state.ready_plan is None and any(not candidate.outcome_read for candidate in state.transaction_candidates):
             await state.await_plan()
         # A read takes in the whole page, so a scroll over one never read only spends steps: Jev judges evidence from
@@ -2169,7 +2174,7 @@ class Agent:
             # a field, Jev called each earlier step evidence on the way, and reading them cost 4s a step.
             return False
         plan = await state.await_plan()
-        if not transaction_pending and not (_unread(plan, state.notes) or _action_requirements(plan, state.notes)):
+        if not transaction_pending and not _unread(plan, state.notes):
             return False
         # An interaction can remove evidence, so read first and reconsider before authorizing the next action.
         reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
@@ -2434,6 +2439,7 @@ class Agent:
         before = len(state.notes.facts)
         state.notes.remember_capture(page.capture)
         outcome.merge_records(state.notes)
+        state.record_read_documents.add(page.observation.document_key)
         state.incomplete.update(outcome.incomplete)
         state.history.append(
             HistoryEntry(
@@ -3546,8 +3552,6 @@ class Agent:
             has_attachments=bool(state.attachments),
             secrets=secrets,
             unread_requirements=unread,
-            action_requirements=_action_requirements(plan, state.notes) if plan is not None else (),
-            read_here=state.read_here,
             start_url=state.caller_start,
             start_landing_url=state.start_landing_url,
         )
@@ -3607,10 +3611,6 @@ class Agent:
             error=error,
             would_fire=tuple(state.would_fire) if state else (),
         )
-
-
-def _action_requirements(plan: Plan, notes: Notes) -> tuple[str, ...]:
-    return tuple(r.text for r in notes.unresolved(plan) if r.kind is RequirementKind.ACTION)
 
 
 def _unread(plan: Plan, notes: Notes) -> bool:
