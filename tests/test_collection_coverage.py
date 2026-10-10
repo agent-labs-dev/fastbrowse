@@ -311,3 +311,21 @@ def test_a_counted_heading_naming_one_target_covers_only_that_target(heading, co
     requirements = _requirements("Report reviews for Birch.", "Report reviews for Rowan.")
     facts = _counted_collections(page, ["r0", "r1"], len(page.text), requirements)
     assert {f.comparison.requirement_id for f in facts if isinstance(f, CollectionFact)} == covered
+
+
+@pytest.mark.parametrize(("heading", "counted"), [("API v2 (1)", True), ("Reviews (1)", True), ("Version 2", False)])
+def test_a_counted_heading_may_hold_digits_before_its_count(heading, counted):
+    from fastbrowse.retrieval import _counted_collections
+
+    page = capture((BlockKind.HEADING, heading), (BlockKind.LIST_ITEM, "Elm: Nice work."))
+    facts = _counted_collections(page, ["r"], len(page.text))
+    assert any(isinstance(f, CollectionFact) for f in facts) is counted
+
+
+def test_a_target_name_matches_whole_words_only():
+    from fastbrowse.retrieval import _counted_collections
+
+    page = capture((BlockKind.HEADING, "Birch (1)"), (BlockKind.LIST_ITEM, "Elm: Nice work."))
+    requirements = _requirements("Report reviews for Birchwood.", "Report reviews for Rowan.")
+    facts = _counted_collections(page, ["r0", "r1"], len(page.text), requirements)
+    assert not any(isinstance(f, CollectionFact) for f in facts)

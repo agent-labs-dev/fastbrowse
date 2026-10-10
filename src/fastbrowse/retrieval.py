@@ -699,7 +699,7 @@ def _counted_collections(
         if heading.kind is not BlockKind.HEADING or heading.frame_id is not None:
             continue
         title = capture.text[heading.start : heading.end]
-        count = re.fullmatch(r"[^\d\n()]+\s*\(\s*(\d+)\s*\)\s*", title)
+        count = re.fullmatch(r"[^\n()]*[^\s()]\s*\(\s*(\d+)\s*\)\s*", title)
         members = []
         for block in capture.blocks[index + 1 :]:
             if block.frame_id != heading.frame_id or block.kind is BlockKind.HEADING:
@@ -771,11 +771,11 @@ def _counted_collections(
         collections.extend(sources)
 
         def named(subject: str) -> set[str]:
-            words = " ".join(re.findall(r"\w+", subject.casefold()))
+            words = f" {' '.join(re.findall(r'\w+', subject.casefold()))} "
             return {
                 requirement.id
                 for requirement in requirements
-                if len(subject) > 3 and words in " ".join(re.findall(r"\w+", requirement.text.casefold()))
+                if len(subject) > 3 and words in f" {' '.join(re.findall(r'\w+', requirement.text.casefold()))} "
             }
 
         matching = set[str]().union(*(named(s) for s in (*heading.heading_path, capture.title.split(" - ")[0])))

@@ -313,3 +313,11 @@ def test_a_path_written_in_the_task_is_an_address_on_the_start_site() -> None:
         "http://shop.example/entry",
     )
     assert task_urls(task) == ("https://alpha.example/a/b",)
+
+
+def test_a_path_in_the_task_keeps_its_query_and_fragment() -> None:
+    task = "Open /login?next=/settings#top, then report the plan."
+    assert task_urls(task, start="http://shop.example/entry") == (
+        "http://shop.example/login?next=/settings#top",
+        "http://shop.example/entry",
+    )
