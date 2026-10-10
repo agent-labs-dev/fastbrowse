@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Answers whose combined evidence exceeds a prompt are composed and verified in requirement groups, with
+  comparisons kept together. Verified outputs survive repair of missing outputs; evidence that cannot fit
+  even one group returns an unverified partial answer.
+
 - Missing answer outputs and subject citations can be repaired from retained quotes before browsing again.
   Recovery keeps the returned answer's failure reason, checks whether a page adds evidence, and reads new
   pages with bounded prior notes.

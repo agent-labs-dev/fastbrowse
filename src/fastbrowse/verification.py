@@ -608,7 +608,13 @@ async def check_answer_outputs(
     allow_scalar_jev: bool = False,
     task: str = "",
     audit_cache: OutputAuditCache | None = None,
+    bounded: bool = False,
 ) -> bool:
+    def fit(messages: Sequence[Message], schema: type[BaseModel]) -> None:
+        size = sum(len(message.content) for message in messages) + len(json.dumps(schema.model_json_schema()))
+        if bounded and size > tokens.input_chars():
+            raise NotesTooLarge(f"Answer evidence exceeds the {tokens.input_chars()} character verification budget")
+
     def reject(failed: Sequence[str], *, repair: str | None = None) -> bool:
         if missing_outputs is not None:
             missing_outputs.extend(failed)
@@ -729,6 +735,7 @@ async def check_answer_outputs(
         if isinstance(cached, _OutputIdentities):
             resolved = cached
         else:
+            fit(messages, _identity_schema(uncertain))
             generated = await llm.generate(
                 LLMPurpose.VERIFY, messages, _identity_schema(uncertain), max_output_tokens=8000, ledger=ledger
             )
@@ -900,6 +907,7 @@ async def check_answer_outputs(
                 *messages,
                 Message(role="user", content=json.dumps({"task": task, "criteria": {key: field}, "urls": urls})),
             ]
+            fit(request, schema)
             fingerprint = hashlib.sha256(
                 json.dumps(
                     {
@@ -1108,6 +1116,7 @@ async def check_claims(
     allow_scalar_jev: bool = False,
     task: str = "",
     audit_cache: OutputAuditCache | None = None,
+    bounded: bool = False,
 ) -> ComposedAnswer | None:
     """The answer without any claim a check doubts, or None when a requirement is omitted from what is left or the
     pages where the run committed an action contradict it.
@@ -1156,6 +1165,7 @@ async def check_claims(
             allow_scalar_jev=allow_scalar_jev,
             task=task,
             audit_cache=audit_cache,
+            bounded=bounded,
         ),
         return_exceptions=True,
     )
@@ -1220,6 +1230,7 @@ async def check_claims(
                 allow_scalar_jev=allow_scalar_jev,
                 task=task,
                 audit_cache=audit_cache,
+                bounded=bounded,
             )
             else None
         )

@@ -104,6 +104,7 @@ class Notes:
     def __init__(self, facts: Iterable[Fact] = ()) -> None:
         self._facts: dict[str, Fact] = {}
         self._requirements: dict[str, set[str]] = {}
+        self._owners: dict[str, set[str]] = {}
         self._retired: set[str] = set()
         self._tally_records: set[str] = set()
         self._record_ids: dict[tuple[str, str, str], list[dict[str, str]]] = {}
@@ -233,6 +234,7 @@ class Notes:
         requirements = self._requirements.setdefault(key, set())
         if fact.requirement_id is not None:
             requirements.add(fact.requirement_id)
+            self._owners.setdefault(key, set()).add(fact.requirement_id)
         if key in self._facts:
             previous = self._facts[key]
             basis = tuple(dict.fromkeys((*previous.basis, *fact.basis)))
@@ -252,6 +254,42 @@ class Notes:
 
     def fact_requirements(self, key: str) -> tuple[str, ...]:
         return tuple(sorted(self._requirements.get(key, ())))
+
+    def for_requirements(self, requirement_ids: Iterable[str], *, evidence_ids: Iterable[str] = ()) -> "Notes":
+        """Keep a requirement's sources, basis and same-page counterevidence without changing their validity."""
+        wanted = set(requirement_ids)
+        roots = {
+            key
+            for key, fact in self._facts.items()
+            if self._owners.get(key, set()) & wanted
+            or self._requirements[key] & wanted
+            or (fact.tally is not None and fact.tally.requirement_id in wanted)
+        }
+        roots.update(key for requirement in wanted for key in self.comparison_records(requirement))
+        roots.update(evidence_ids)
+        kept = set(self.expand_evidence_ids(roots))
+        locations = {(_address(source.url), source.frame_id) for key, source in self.evidence.items() if key in kept}
+        # Identity quotes and conflicting values need not have been selected as answers by the reader.
+        kept.update(
+            key for key, source in self.evidence.items() if (_address(source.url), source.frame_id) in locations
+        )
+        kept = set(self.expand_evidence_ids(kept))
+        scoped = Notes()
+        scoped._facts = {key: fact for key, fact in self._facts.items() if key in kept}
+        scoped._requirements = {key: set(self._requirements[key]) for key in scoped._facts}
+        scoped._owners = {key: set(self._owners.get(key, ())) for key in scoped._facts}
+        scoped._retired = self._retired & kept
+        scoped._tally_records = self._tally_records & kept
+        scoped._continuation_records = {
+            requirement: records & kept for requirement, records in self._continuation_records.items()
+        }
+        scoped._record_ids = {
+            identity: [dict(occurrence) for occurrence in occurrences]
+            for identity, occurrences in self._record_ids.items()
+            if identity[0] in wanted
+        }
+        scoped._pages = dict(self._pages)
+        return scoped
 
     def evidenced(self, requirement_id: str) -> bool:
         return any(requirement_id in requirements for requirements in self._requirements.values())

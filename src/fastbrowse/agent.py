@@ -13,7 +13,7 @@ import re
 import time
 from collections import deque
 from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence, Set
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import Self
 from urllib.parse import parse_qsl, urljoin, urlsplit
@@ -80,7 +80,7 @@ from fastbrowse.page import (
     SiteUnreachable,
     pager_link,
 )
-from fastbrowse.planner import Plan, Requirement, RequirementKind, RunReport, make_plan
+from fastbrowse.planner import Plan, Requirement, RequirementKind, RunReport, make_plan, partition_plan
 from fastbrowse.policy import (
     Decision,
     HistoryEntry,
@@ -96,6 +96,7 @@ from fastbrowse.retrieval import (
     ComposedAnswer,
     ReadOutcome,
     TallyReader,
+    assemble_answer,
     compose,
     draft_answer,
     partial_answer,
@@ -317,6 +318,9 @@ class _RunState:
     ledger: Ledger
     planning: asyncio.Task[Generation[Plan]]
     notes: Notes = field(default_factory=Notes)
+    finish_partitions: tuple[Plan, ...] = ()
+    partition_answers: dict[str, ComposedAnswer] = field(default_factory=dict)
+    verified_answer: ComposedAnswer | None = None
     missing_answer_outputs: tuple[str, ...] = ()
     answer_corrections: tuple[AnswerCorrection, ...] = ()
     output_audit_cache: OutputAuditCache = field(default_factory=dict)
@@ -2969,6 +2973,104 @@ class Agent:
         output_schema: type[BaseModel] | None,
         until: UntilCheck | None,
     ) -> RunResult | None:
+        if not state.finish_partitions:
+            try:
+                return await self._finish_whole(state, output_schema, until)
+            except NotesTooLarge:
+                # Independent outputs need separate evidence envelopes, not fewer source quotes.
+                try:
+                    state.finish_partitions = await partition_plan(
+                        self._llm, state.task, state.plan, ledger=state.ledger
+                    )
+                except LLMError as error:
+                    raise _Stop(Status.UNVERIFIED, str(error)) from error
+        return await self._finish_partitioned(state, output_schema, until)
+
+    async def _finish_partitioned(
+        self,
+        state: _RunState,
+        output_schema: type[BaseModel] | None,
+        until: UntilCheck | None,
+    ) -> RunResult | None:
+        missing: list[str] = []
+        reopen: set[str] = set()
+        corrections: list[AnswerCorrection] = []
+        verified: list[ComposedAnswer] = []
+        oversized: list[str] = []
+        transactions = await self._transaction_evidence_ids(state)
+        for plan in state.finish_partitions:
+            notes = state.notes.for_requirements((r.id for r in plan.requirements), evidence_ids=transactions)
+            proof = _partition_proof(plan, notes, state.invented)
+            cached = state.partition_answers.get(proof) if _lookup(plan) else None
+            if cached is not None:
+                verified.append(cached)
+                continue
+            child = replace(
+                state,
+                task=state.task
+                + "\n\nThis pass checks only these requirements: "
+                + "; ".join(r.text for r in plan.requirements)
+                + ". Other requirements are checked in separate passes. Retain the original task's constraints.",
+                ready_plan=plan,
+                notes=notes,
+                finish_partitions=(),
+                verified_answer=None,
+                missing_answer_outputs=(),
+                open_answer_outputs=(),
+                answer_corrections=(),
+                rejected_answer_evidence=None,
+                answer_check_evidence=None,
+                answer_check_cache={},
+            )
+            try:
+                result = await self._finish_whole(child, None, None, partition=True)
+            except NotesTooLarge as error:
+                oversized.append(str(error))
+                result = None
+            if result is not None and result.status is Status.COMPLETE and child.verified_answer is not None:
+                if _lookup(plan):
+                    state.partition_answers[proof] = child.verified_answer
+                verified.append(child.verified_answer)
+            elif result is None or result.status is not Status.COMPLETE:
+                missing.extend(child.missing_answer_outputs or tuple(r.text for r in plan.requirements))
+                reopen.update(r.id for r in plan.requirements)
+                corrections.extend(child.answer_corrections)
+        state.missing_answer_outputs = state.open_answer_outputs = tuple(dict.fromkeys(missing))
+        state.answer_corrections = tuple(corrections)
+        if missing:
+            reason = "DONE rejected: " + "; ".join(f"Answer output not verified: {item}" for item in missing)
+            if oversized:
+                return self._partial_result(
+                    state.notes, state, state.ledger, Status.UNVERIFIED, reason + "; " + "; ".join(oversized)
+                )
+            state.notes.unevidence(reopen)
+            state.rejected_answer_evidence = _answer_evidence(state.notes)
+            fresh = await self._observe()
+            await self._record_failure(state, fresh, Operation.DONE, reason, decided_by=Decider.LLM)
+            await self._recover(state, fresh, reason, gives_up_as=Status.UNVERIFIED)
+            return None
+        answer = assemble_answer(
+            tuple(dict.fromkeys(claim for part in verified for claim in part.claims)),
+            state.notes,
+            state.plan.requirements,
+        )
+        try:
+            result = await self._conclude(state, output_schema, answer)
+        except NotesTooLarge as error:
+            return self._partial_result(state.notes, state, state.ledger, Status.UNVERIFIED, str(error))
+        if until is not None and not await until((self._raw_observation or await self._observe()).url):
+            await self._recover(state, await self._observe(), "Completion condition not satisfied")
+            return None
+        return result
+
+    async def _finish_whole(
+        self,
+        state: _RunState,
+        output_schema: type[BaseModel] | None,
+        until: UntilCheck | None,
+        *,
+        partition: bool = False,
+    ) -> RunResult | None:
         """Return the final result when DONE holds up; None sends the loop back to work.
 
         Search results can arrive or disappear without changing the URL or document. Completion needs a fresh
@@ -3105,9 +3207,11 @@ class Agent:
             result = None
             if accepted:
                 handed, drafting = drafting, None
-                result = await self._conclude(state, output_schema, check.answer or handed)
+                result = await self._conclude(state, output_schema, check.answer or handed, finalize=not partition)
                 fresh = self._observed or fresh
                 if result.status is Status.UNVERIFIED and state.missing_answer_outputs:
+                    if partition:
+                        return result
                     # Cited partial notes made DONE repeat; reopen them so recovery can gather the missing outputs.
                     state.notes.unevidence(
                         r.id for r in state.plan.requirements if r.kind is RequirementKind.INFORMATION
@@ -3117,6 +3221,8 @@ class Agent:
                 if accepted and until is not None:
                     accepted = await until((self._raw_observation or fresh).url)
             if not accepted:
+                if partition:
+                    return self._result(state, state.ledger, Status.UNVERIFIED)
                 requirements = {r.id: r.text for r in state.plan.requirements}
                 unmet = [
                     f"{key}: {requirements.get(key, key)}"
@@ -3344,6 +3450,7 @@ class Agent:
                 missing_outputs=missing,
                 corrections=corrections,
                 audit_cache=state.output_audit_cache,
+                bounded=True,
                 allow_scalar_jev=len(state.plan.answer_checks) == 1
                 and sum(r.kind is RequirementKind.INFORMATION for r in state.plan.requirements) == 1,
                 task=state.task,
@@ -3377,6 +3484,8 @@ class Agent:
         state: _RunState,
         output_schema: type[BaseModel] | None,
         prepared: _Prepared = None,
+        *,
+        finalize: bool = True,
     ) -> RunResult:
         answer: str | None = None
         composed: ComposedAnswer | None = None
@@ -3405,6 +3514,8 @@ class Agent:
             extraction = await extracting if extracting is not None else None
         if composed is not None:
             answer, citations = self._public_answer(composed)
+            if verified:
+                state.verified_answer = composed
         if extraction is not None:
             data = extraction.data
             evidence.extend(extraction.evidence)
@@ -3415,7 +3526,7 @@ class Agent:
         cited: dict[tuple[str, str], Evidence] = {}
         for item in evidence:
             cited.setdefault((item.url, item.quote), item)
-        if not verified and state.missing_answer_outputs:
+        if not finalize or (not verified and state.missing_answer_outputs):
             # Rejected answer outputs return to browsing; taking their ending frame added a discarded round trip.
             return self._result(
                 state,
@@ -3588,6 +3699,23 @@ class Agent:
         if not notes.facts:
             return self._result(state, ledger, status, error=error, budget=budget)
         partial = partial_answer(notes, self._config.observation.working_notes_chars)
+        if state is not None and state.partition_answers and not state.authorization.irreversible_actions:
+            verified: list[ComposedAnswer] = []
+            pending: list[str] = []
+            for plan in state.finish_partitions:
+                proof = _partition_proof(plan, notes.for_requirements(r.id for r in plan.requirements), state.invented)
+                if answer := state.partition_answers.get(proof):
+                    verified.append(answer)
+                elif plan.page_answer_expected:
+                    pending.extend(plan.answer_checks or tuple(r.text for r in plan.requirements))
+            if verified:
+                partial = assemble_answer(
+                    tuple(dict.fromkeys(claim for answer in verified for claim in answer.claims)), notes, ()
+                )
+                notice = "Partial answer."
+                if missing := state.open_answer_outputs or tuple(pending):
+                    notice += " Unverified outputs: " + "; ".join(missing)
+                partial = partial.model_copy(update={"linked_answer": notice + "\n\n" + partial.linked_answer})
         cited = notes.expand_evidence_ids(key for claim in partial.claims for key in claim.evidence_ids)
         answer, citations = self._public_answer(partial)
         return self._result(
@@ -3629,6 +3757,29 @@ class Agent:
             error=error,
             would_fire=tuple(state.would_fire) if state else (),
         )
+
+
+def _partition_proof(plan: Plan, notes: Notes, invented: Set[str]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "plan": plan.model_dump(mode="json"),
+                "facts": [
+                    {
+                        "fact": fact.model_dump(mode="json"),
+                        "current": notes.current(fact_id(fact)),
+                        "requirements": notes.fact_requirements(fact_id(fact)),
+                        "page": page.model_dump()
+                        if fact.evidence is not None and (page := notes.captured_page(fact.evidence)) is not None
+                        else None,
+                    }
+                    for fact in notes.facts
+                ],
+                "invented": sorted(invented),
+            },
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
 
 
 def _unread(plan: Plan, notes: Notes) -> bool:
