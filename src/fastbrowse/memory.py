@@ -443,6 +443,7 @@ class Notes:
         max_chars: int,
         *,
         preserve_requirements: bool = False,
+        preserve_collections: bool = False,
         json_encoded: bool = False,
         labels: Mapping[str, str] | None = None,
     ) -> RenderedNotes:
@@ -489,7 +490,7 @@ class Notes:
             )
             if fact.evidence is not None and fact.evidence.control_context is not None:
                 source += f" control_context={fact.evidence.control_context.model_dump_json()}"
-            if fact.comparison is not None:
+            if preserve_collections and fact.comparison is not None:
                 comparison = fact.comparison
                 complete = comparison.complete and comparison.requirement_id in self._requirements[key]
                 source += f" collection_for={comparison.requirement_id} complete={str(complete).lower()}"

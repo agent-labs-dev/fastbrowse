@@ -131,10 +131,10 @@ async def test_oversized_finish_completes_with_all_five_projects_and_bounded_pro
     agent._recover.assert_not_awaited()
 
 
-async def test_unsupported_output_reopens_only_its_requirement_and_keeps_verified_partial() -> None:
+async def test_unsupported_output_keeps_current_sources_and_verified_partial() -> None:
     agent, state, _, llm = await finish_agent(unsupported=3)
     assert await agent._finish(state, None, None) is None
-    assert {r.id for r in state.notes.unresolved(state.plan)} == {"r3"}
+    assert all(state.notes.current(fact_id(fact)) for fact in state.notes.facts)
     assert state.missing_answer_outputs == (state.plan.requirements[3].text,)
     partial = agent._partial_result(state.notes, state, state.ledger, Status.UNVERIFIED, "Missing reply")
     assert partial.status is Status.UNVERIFIED and partial.answer.startswith("Partial answer.")
@@ -152,6 +152,16 @@ async def test_finish_that_fits_keeps_one_compose_and_does_not_bind_outputs() ->
     assert llm.composed == [(0, 1, 2, 3, 4)]
     assert not getattr(state, "finish_partitions", ())
     assert not any(purpose is LLMPurpose.PLAN for purpose, _ in llm.calls)
+
+
+async def test_whole_answer_rejection_keeps_sources_without_repeating_the_failed_check() -> None:
+    agent, state, _, llm = await finish_agent(size=100, unsupported=3)
+    assert await agent._finish(state, None, None) is None
+    assert state.open_answer_outputs
+    assert all(state.notes.current(fact_id(fact)) for fact in state.notes.facts)
+    previous = len(llm.composed)
+    assert await agent._finish(state, None, None) is None
+    assert len(llm.composed) == previous
 
 
 @pytest.mark.parametrize("new_source", [True, False])
@@ -331,7 +341,9 @@ async def test_new_counterevidence_invalidates_only_its_verified_group() -> None
     ]
     assert fact.evidence is not None
     assert any(fact.evidence.quote in json.dumps(audit) for audit in audits)
-    assert {r.id for r in state.notes.unresolved(state.plan)} == {"r2"}
+    assert state.open_answer_outputs == (state.plan.requirements[2].text,)
+    partial = agent._partial_result(state.notes, state, state.ledger, Status.UNVERIFIED, "Reply withdrawn")
+    assert partial.status is Status.UNVERIFIED and "Project 2: Author says" not in partial.answer
 
 
 @pytest.mark.parametrize("addition", ["summary", "unrelated_navigation"])

@@ -11,24 +11,24 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- Collection summaries retain every record and the identifying context of a collection read in full.
-  Partial collections cannot support a finding that no members match.
-- Verified answer groups remain cached when new summaries reuse the same source evidence.
-- When evidence changes, previously verified group answers are checked again before composing replacements,
-  so supported outputs survive unrelated additions to their sources.
-- Search-field writing receives unresolved requirements and unverified outputs, so searching once does not
-  hide information still needed from a requested target.
-- New summaries cite the underlying quotes instead of inheriting superseded prose conclusions. Retired
-  quotes and incomplete collections remain invalid, and rejected citation chains identify outputs to repair.
-- Recovery reads that add missing source evidence retry answer verification before more browsing.
-  Repeated quotes cannot trigger another attempt.
-- Reading combines retained facts to mark each supported requirement as read while other targets remain open.
-- Answer checks separate requested fields, and answers state bounded absence findings explicitly instead of
-  letting other fields in a combined check hide an omitted output.
-
 - Answers whose combined evidence exceeds a prompt are composed and verified in requirement groups, with
   comparisons kept together. Verified outputs survive repair of missing outputs; evidence that cannot fit
   even one group returns an unverified partial answer.
+- Answer recovery retains each collection's records and identifying context when a later
+  conclusion combines them. Partial collections cannot support a finding that no members match.
+- Verified answer groups remain cached when summaries reuse the same sources. Changed evidence causes a
+  fresh check of the existing answer before a replacement is composed.
+- Answer recovery cites underlying quotes instead of superseded prose. Composition uses the
+  same source references, keeping retired quotes and incomplete collections subject to verification.
+- Search-field writing receives unresolved requirements and unverified outputs during answer recovery.
+- Recovery reads that add missing source evidence retry answer verification before more browsing.
+  Repeated quotes cannot trigger another attempt. Answer recovery prompts request explicit findings for
+  every field, including bounded absence findings in combined checks.
+- A rejected answer keeps its current source quotes and collection scope. Missing outputs stay open, and
+  unchanged evidence cannot trigger another completion check. Changed or misread sources still lose their
+  requirement bindings.
+- Returning to a form with newly read prerequisite evidence renews recovery once for that state and those
+  sources. Repeated quotes, paraphrases and values put back do not renew it.
 
 - Missing answer outputs and subject citations can be repaired from retained quotes before browsing again.
   Recovery keeps the returned answer's failure reason, checks whether a page adds evidence, and reads new

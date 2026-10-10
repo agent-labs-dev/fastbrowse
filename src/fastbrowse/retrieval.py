@@ -314,7 +314,7 @@ class _ReadClaim(Frozen):
     # Keys are written in schema order: what the claim rests on comes before what it concludes.
     cite: _Cite | None = Field(
         description="The run of source blocks the claim reads, first to last. Null for a count, total or winner "
-        "or absence the page does not state, which rests on draws_on and records."
+        "the page does not state, which rests on draws_on alone."
     )
     excerpt: str | None = Field(
         default=None,
@@ -327,16 +327,14 @@ class _ReadClaim(Frozen):
     draws_on: tuple[str, ...] = Field(
         default=(),
         description=(
-            "Every record counted, compared or inspected for absence: evidence ids from collected notes, or "
+            "Every record counted or compared: evidence ids from collected notes (without brackets), or "
             "claim:N for an earlier claim in this response's claims array, indexed from zero."
         ),
     )
     records: tuple[_Cite, ...] = Field(
         default=(),
-        description="Every record from this chunk inspected by a collection summary, comparison or absence claim, "
-        "as block ranges. A collection summary includes the identified collection's boundaries and every member "
-        "with its identity and relevant fields, even when the summary names only some categories. "
-        "Code copies full quotes into the claim's basis.",
+        description="Every record from this chunk compared by this claim, as block ranges only. Code copies "
+        "their quotes into the claim's basis; do not also write a prose claim for each record.",
     )
     orders_list: _Cite | None = Field(
         default=None,
@@ -403,36 +401,38 @@ def _record_cites(
     return tuple(result)
 
 
+def _source_basis(notes: Notes, key: str) -> tuple[str, ...]:
+    held = {fact_id(fact): fact for fact in notes.facts}
+    fact = held.get(key)
+    if fact is None or fact.evidence is not None or fact.tally is not None or fact.comparison is not None:
+        return (key,)
+    # Plain summaries add no source evidence; collection and tally nodes still carry required coverage checks.
+    return tuple(
+        source
+        for source in notes.expand_evidence_ids((key,))
+        if source not in held
+        or held[source].evidence is not None
+        or held[source].tally is not None
+        or held[source].comparison is not None
+    )
+
+
 def _remember(
     capture: Capture,
     part: Chunk,
     claim: _ReadClaim,
     notes: Notes,
     references: Mapping[str, str],
+    *,
+    preserve_collections: bool = False,
 ) -> Fact | None:
     basis: list[str] = []
-    held = {fact_id(fact): fact for fact in notes.facts}
     for reference in claim.draws_on:
         key = references.get(reference)
         if key is None:
             logger.debug("read dropped unknown basis reference=%r", reference)
         else:
-            # A replacement conclusion needs the quotes, not the validity of a superseded prose summary.
-            sources = (
-                tuple(
-                    source
-                    for source in notes.expand_evidence_ids((key,))
-                    if source not in held
-                    or held[source].evidence is not None
-                    or held[source].tally is not None
-                    or held[source].comparison is not None
-                )
-                if key in held
-                and held[key].evidence is None
-                and held[key].tally is None
-                and held[key].comparison is None
-                else (key,)
-            )
+            sources = _source_basis(notes, key) if preserve_collections else (key,)
             basis.extend(source for source in sources if source not in basis)
     evidence = None if claim.cite is None else _cited(capture, part, claim.cite)
     if claim.excerpt is not None:
@@ -881,6 +881,7 @@ async def read(
     require_all_evidence: bool = False,
     revalidate: bool = False,
     recovering_outputs: bool = False,
+    preserve_collections: bool = False,
     _skip_order_shortcuts: Collection[str] = (),
 ) -> ReadOutcome:
     """`notice` is what the caller knows about the page that its text does not say, such as its next-page control;
@@ -904,6 +905,7 @@ async def read(
     tally_complete: set[str] = set()
     through_end: tuple[str, ...] = ()
     continuation_records: dict[str, list[str]] = {}
+    context_records: dict[str, tuple[str, ...]] = {}
     ended: tuple[str, ...] = ()
     tally_readers: list[TallyReader] = []
     comparisons: dict[str, NumericComparison] = {}
@@ -993,35 +995,20 @@ async def read(
                     "Code matches the excerpt "
                     "uniquely inside the cited blocks and copies its original spelling; never paraphrase it. "
                     "Leave excerpt null when the complete blocks are needed.\n"
-                    "- A claim cites one run of blocks. A conclusion summarizing a collection puts every "
-                    "inspected member from this chunk and the collection's identifying boundary or total in "
-                    "records, even when it reports only positive findings. This preserves the scope for later "
-                    "questions about absent categories. A comparison likewise puts every compared record in "
-                    "records. Code copies their full quotes into the basis; never write a prose claim for each "
-                    "compared record. Use draws_on for earlier "
+                    "- A claim cites one run of blocks. For a comparison, put every compared record from this "
+                    "chunk in the conclusion's records as block ranges only. Code copies their quotes into its "
+                    "basis; never write a prose claim for each compared record. Use draws_on for earlier "
                     "evidence and context claims.\n"
                     "- The answer is checked later without the page, so a comparison also needs claims for the "
                     "query, filters, date and sort that make it valid, with a null requirement id.\n"
                     "- A count, total or winner rests on every record it counts or compares and on those "
                     "context claims. It cites blocks only when the page itself states it.\n"
                     "- Give a claim a requirement id only when it answers that whole requirement with its "
-                    "constraints; otherwise null. When separate facts together answer one requirement, add a "
-                    "concise derived conclusion with that requirement id and draws_on for every supporting "
-                    "claim or prior note. Close that requirement even while other requirements remain open. "
-                    "Set answered only when the collected evidence and this capture fully answer the question.\n"
+                    "constraints; otherwise null. Set answered only when the collected evidence and this capture "
+                    "fully answer the question.\n"
                     "- An explicit empty-result message is a finding: quote it and state that no matching "
                     "records are reported within that page's scope. Missing text, a loading view or an unread "
                     "section cannot establish absence.\n"
-                    "- Account for every requested category when reading a collection. If a category has no "
-                    "matching members, return an explicit bounded absence claim instead of omitting that "
-                    "category. An absence within a completely read collection is derived from all its records. "
-                    "Put every member's full blocks in records, including identities, roles and reply text; "
-                    "include quoted context identifying the collection and its boundaries or total. State the "
-                    "bounded scope in the claim, never that none exist elsewhere. Give it the requirement id "
-                    "when the whole requirement is answered, using collected notes for its other fields. "
-                    "Do not assign a requirement id to a claim covering only one of its requested categories. "
-                    "Use continues.records while more members, replies "
-                    "or pages remain unread. A summary of selected matches cannot establish absence.\n"
                     "- Values typed into fields, suggestions and previews are inputs, not results.\n\n"
                     "# Tallies\nFor a count of records or a ranking by record count, return tally groups: "
                     "each key is the label stated in its records, and each record cites its own source blocks. "
@@ -1060,7 +1047,7 @@ async def read(
                     "every matching record, applying the task's filters; never select only page winners. "
                     "Related requirements for the same winners use the same comparison and records. "
                     "Leave comparison null for counts, calculations, extra output fields or ambiguous formats.\n\n"
-                    "# Lists over several pages\nA count, total, superlative or absence over a list needs the whole "
+                    "# Lists over several pages\nA count, total or superlative over a list needs the whole "
                     "list. Earlier pages are in the collected evidence under their own URLs. When the list goes "
                     "on past this capture and the collected evidence does not cover the rest, add an entry to "
                     "continues naming the requirement. For counts, put matching records in its tallies as above. "
@@ -1081,6 +1068,22 @@ async def read(
             ),
             _read_message(capture, part, question, requirement_ids),
         ]
+        if preserve_collections:
+            messages[0] = messages[0].model_copy(
+                update={
+                    "content": messages[0].content
+                    + "\n\n# Collection evidence\nFor a collection summary, retain every inspected member and "
+                    "the collection's identifying boundary or total in records, including identities, roles "
+                    "and reply text. Account for every requested category. Report a bounded absence explicitly "
+                    "only when all members have been read and none matches. Selected excerpts, missing text "
+                    "and unread sections cannot establish absence. Use continues.records while more members "
+                    "or pages remain unread. When separate facts together answer one requirement, add a "
+                    "derived conclusion with that requirement id and draws_on for every supporting claim or "
+                    "prior note. A claim covering only some requested fields must leave requirement_id null. "
+                    "A requested link needs its quoted destination; navigation labels without destinations do "
+                    "not answer it. Leave that field open when its destination has not been read."
+                }
+            )
         if records_only:
             messages[0] = Message(
                 role="system",
@@ -1110,7 +1113,12 @@ async def read(
         # Reading a new source does not require every earlier project's evidence in the same prompt.
         # Comparisons that need all records and final verdicts still refuse incomplete evidence.
         try:
-            offered = so_far.render_with_ids(room, preserve_requirements=require_all_evidence, labels=labels)
+            offered = so_far.render_with_ids(
+                room,
+                preserve_requirements=require_all_evidence,
+                preserve_collections=preserve_collections,
+                labels=labels,
+            )
         except ValueError as error:
             raise NotesTooLarge(f"The {room} character reader notes budget cannot report omitted evidence") from error
         if require_all_evidence and {fact_id(fact) for fact in so_far.facts} - set(offered.evidence_ids):
@@ -1330,13 +1338,28 @@ async def read(
                 uncovered += missing
                 rejected_here += 1
                 continue
+            if preserve_collections:
+                # A partial collection claim can supply a later conclusion without closing the requirement itself.
+                cited = (references[ref] for ref in claim.draws_on if ref in references)
+                inherited = {
+                    record for key in so_far.expand_evidence_ids(cited) for record in context_records.get(key, ())
+                }
+                held = {fact_id(fact): fact for fact in so_far.facts}
+                records.update((key, held[key]) for key in inherited)
             for key, record in records.items():
                 so_far.add(record)
                 found.append(record)
                 references[key] = key
             claim = claim.model_copy(update={"draws_on": (*claim.draws_on, *records)})
             # Carried to the next chunk without its requirement id, which only the whole page can settle.
-            fact = _remember(capture, part, claim.model_copy(update={"requirement_id": None}), so_far, references)
+            fact = _remember(
+                capture,
+                part,
+                claim.model_copy(update={"requirement_id": None}),
+                so_far,
+                references,
+                preserve_collections=preserve_collections,
+            )
             if fact is None:
                 rejected_here += 1
                 continue
@@ -1344,6 +1367,8 @@ async def read(
             held = {fact_id(kept) for kept in found} | {fact_id(kept) for kept in notes.facts}
             found.extend(kept for kept in so_far.facts if fact_id(kept) in fact.basis and fact_id(kept) not in held)
             references[f"claim:{index}"] = fact_id(fact)
+            if preserve_collections and records:
+                context_records[fact_id(fact)] = tuple(records)
             requirement_id = claim.requirement_id if claim.requirement_id in requirement_ids else None
             if requirement_id is not None and (records or so_far.comparison_records(requirement_id)):
                 fact = fact.model_copy(
@@ -1532,6 +1557,7 @@ async def read(
             ledger=ledger,
             requirements=tuple(r for r in requirements if r.id in unconfirmed_orders),
             records_only=True,
+            preserve_collections=preserve_collections,
         )
         scope_ids = tuple(
             key
@@ -1551,6 +1577,7 @@ async def read(
                 requirements=tuple(r for r in requirements if r.id in scope_ids),
                 require_all_evidence=True,
                 _skip_order_shortcuts=scope_ids,
+                preserve_collections=preserve_collections,
             )
             if scope_ids
             else None
@@ -2531,6 +2558,7 @@ async def compose(
     ledger: Ledger | None = None,
     transaction_evidence_ids: Collection[str] = (),
     corrections: Sequence[AnswerCorrection] = (),
+    preserve_collections: bool = False,
 ) -> Generation[ComposedAnswer]:
     labels = {fact_id(fact): f"e{i}" for i, fact in enumerate(notes.facts)}
     transaction = (
@@ -2580,9 +2608,7 @@ async def compose(
                 "# Composer\nWrite the answer as self-contained plain-text claims in reading order, each citing the "
                 "evidence_ids of the notes it rests on. Answer the requested outputs; do not claim a requirement "
                 "the notes do not evidence. Write every value the task asks for, such as each item's price, in the "
-                "claim text itself: a reader sees the text, not the notes behind its citations. Report every field "
-                "in a bundled check, including supported bounded absence; other fields or unmentioned citations "
-                "cannot stand in for it.\n\n"
+                "claim text itself: a reader sees the text, not the notes behind its citations.\n\n"
                 "Reports requested in plan.run_reports are appended by code from browser state and the run record. "
                 "Do not write those reports or cite page notes for them.\n\n"
                 "# Evidence scope\nThe notes' prose may contain an unsupported inference. Verify each value "
@@ -2592,9 +2618,6 @@ async def compose(
                 "Do not turn compatibility with several items into simultaneous operation or a subjective "
                 "preference into a measured advantage. State what remains unsupported instead of supplying "
                 "a related value as the requested one.\n\n"
-                "For an absence, cite the collection_for note marked complete=true and retain its bounded scope. "
-                "Identify the collection from quoted context and check every member's identity and relevant fields. "
-                "Incomplete collections and selected excerpts cannot establish absence.\n\n"
                 "# One claim, one fact\nA claim is supported in full by the notes it cites. Split a statement that "
                 "combines separately evidenced facts into one claim each. A claim that compares, counts, totals or "
                 "picks a superlative cites every note it is drawn from. A list of records cites each record it "
@@ -2612,16 +2635,31 @@ async def compose(
             content=prefix + repair + "# Notes\n",
         ),
     ]
+    if preserve_collections:
+        messages[0] = messages[0].model_copy(
+            update={
+                "content": messages[0].content
+                + "\n\nReport every field in a bundled check, including supported bounded absence. Other "
+                "fields or unmentioned citations cannot stand in for it. For an absence, cite the "
+                "collection_for note marked complete=true and retain its bounded scope. Identify the "
+                "collection from quoted context and check every member's identity and relevant fields. "
+                "Incomplete collections and selected excerpts cannot establish absence."
+            }
+        )
     room = _notes_room(tokens, messages, _AnswerDraft)
     try:
-        offered = notes.render_with_ids(room, preserve_requirements=True, labels=labels)
+        offered = notes.render_with_ids(
+            room, preserve_requirements=True, preserve_collections=preserve_collections, labels=labels
+        )
     except NotesTooLarge:
         if not repair:
             raise
         # Advisory corrections must not crowd out the source quotes needed to write a grounded answer.
         messages[-1] = messages[-1].model_copy(update={"content": prefix + "# Notes\n"})
         room = _notes_room(tokens, messages, _AnswerDraft)
-        offered = notes.render_with_ids(room, preserve_requirements=True, labels=labels)
+        offered = notes.render_with_ids(
+            room, preserve_requirements=True, preserve_collections=preserve_collections, labels=labels
+        )
     messages[-1] = messages[-1].model_copy(update={"content": messages[-1].content + offered.text})
     result = await llm.generate(
         LLMPurpose.COMPOSE,
@@ -2641,11 +2679,26 @@ async def compose(
         if unknown:
             logger.warning("compose dropped claim with unknown citation references: %s", sorted(unknown))
         if claim.evidence_ids and not unknown:
+            keys = tuple(references[key] for key in claim.evidence_ids)
+            if preserve_collections:
+                keys = tuple(dict.fromkeys(source for key in keys for source in _source_basis(notes, key)))
+                selected = set(notes.expand_evidence_ids(keys))
+                # A composer can cite every record directly and omit the collection's completeness metadata.
+                collections = (
+                    fact_id(fact)
+                    for fact in notes.facts
+                    if fact.comparison is not None
+                    and fact.comparison.records
+                    and set(fact.comparison.records) <= selected
+                    and fact_id(fact) in known
+                    and all(notes.current(key) for key in notes.expand_evidence_ids((fact_id(fact),)))
+                )
+                keys = tuple(dict.fromkeys((*keys, *collections)))
             claims.append(
                 claim.model_copy(
                     update={
                         "text": _without_citation_markup(claim.text),
-                        "evidence_ids": tuple(references[key] for key in claim.evidence_ids),
+                        "evidence_ids": keys,
                     }
                 )
             )

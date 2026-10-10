@@ -5776,9 +5776,8 @@ async def test_missing_answer_output_recovers_evidence_then_completes() -> None:
 
     async def gather_missing(*args: object, **kwargs: object) -> None:
         assert kwargs == {"gives_up_as": Status.UNVERIFIED}
-        assert not state.notes.evidenced("r")
+        assert state.notes.current(fact_id(price))
         assert "Report opening hours." in str(args[-1])
-        state.notes.add(price)
         state.notes.add(hours)
 
     agent._jev = Jev({})
@@ -6427,3 +6426,45 @@ def test_public_dom_observation_citations_keep_the_plain_redacted_source_address
     assert "#:~:text=" not in answer
     assert "private-token" not in answer
     assert citation.quote == "Sign in: disabled"
+
+
+@pytest.mark.parametrize("renews", [False, True])
+async def test_revisiting_an_action_state_with_new_context_renews_recovery_once(renews: bool) -> None:
+    from tests.test_retrieval import block_evidence, capture
+
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="login", text="Sign in with the code.", kind=RequirementKind.ACTION),),
+        answer_expected=False,
+    )
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    login = observation((_button("Sign in"),))
+    agent._settle(state, login)
+    state.recoveries = 2
+    phone = capture((BlockKind.PARAGRAPH, "Account code: 123456"), url="https://example.test/phone")
+    context = Fact(text=phone.text, evidence=block_evidence(phone, "s0"), reader=FactReader.LLM)
+    state.notes.add(context)
+    agent._settle(state, login, renews=renews)
+    assert state.recoveries == (0 if renews else 2)
+    state.recoveries = 2
+    state.notes.add(context.model_copy(update={"text": "The same code is available."}))
+    agent._settle(state, login)
+    assert state.recoveries == 2
+    state.notes = Notes()
+    agent._settle(state, login)
+    state.notes.add(context)
+    agent._settle(state, login)
+    assert state.recoveries == 2
+
+
+async def test_ordinary_field_writer_does_not_receive_output_recovery_instructions() -> None:
+    state = await run_state()
+    llm = ScriptedLLM([{"text": "ada@example.com", "missing": False}])
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), llm)
+    email = field("Email").model_copy(update={"input_type": "email"})
+    await agent._generate_text(state, observation((email,)), email)
+    messages = llm.calls[0][1]
+    context = json.loads(messages[-1].content)
+    assert "unresolved_requirements" not in context
+    assert "unverified_outputs" not in context
+    assert "For a search field" not in messages[0].content
