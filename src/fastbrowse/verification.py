@@ -632,7 +632,14 @@ async def check_answer_outputs(
         return False
     context = _output_context(composed, notes)
     if context is None:
-        return False
+        known = {fact_id(fact) for fact in notes.facts}
+        if any(key not in known for claim in composed.claims for key in notes.expand_evidence_ids(claim.evidence_ids)):
+            return False
+        return reject(
+            checks,
+            repair="Some cited facts are no longer current or collection records are missing. "
+            "Use current source quotes and preserve their collection scope; do not cite superseded conclusions.",
+        )
     criteria = {f"output_{index}": check for index, check in enumerate(checks)}
     verbatim = False
     if allow_scalar_jev and len(composed.claims) == 1:
@@ -1001,7 +1008,10 @@ async def check_answer_outputs(
                 "Compared-record metadata preserves the reader's collection scope, completeness and indices "
                 "into these cited sources. A complete comparison establishes coverage of that scope, not "
                 "missing values, operand associations or the correctness of a conclusion. An incomplete "
-                "comparison cannot establish a whole-list winner. "
+                "comparison cannot establish a whole-list winner or absence. An absence can be derived from a "
+                "complete collection only when its quoted context identifies the collection and every cited "
+                "member includes the identity and fields needed to exclude a match. Check every member. "
+                "Coverage alone does not prove that none match, and establishes nothing outside that scope. "
                 "The quoted records must still identify matching entities and filters. Observed page titles provide "
                 "identity context, not missing field "
                 "evidence. Never reconstruct missing table column labels from prior knowledge. Return "
@@ -1061,10 +1071,15 @@ async def check_answer_outputs(
                 "Compared-record metadata preserves the reader's collection scope, completeness and cited "
                 "source indices. Check the conclusion against every compared operand and the matching scope. "
                 "Completeness establishes coverage only, not values, associations or the winning result. "
-                "An incomplete comparison cannot establish a whole-list winner. "
+                "An incomplete comparison cannot establish a whole-list winner or absence. An absence claim "
+                "needs a complete collection identified by quoted context and every member's identity and "
+                "relevant fields. Check every member for a match and preserve the collection's bounded scope. "
                 "Observed page titles provide identity "
                 "context, not missing field evidence. Return yes only if every part of the requested output "
-                "is stated and evidenced by its own cited sources. Every factual assertion in every selected "
+                "is stated and evidenced by its own cited sources. For a criterion naming several fields, "
+                "check that the answer explicitly reports each one; other fields passing cannot cover an "
+                "omitted field. A collection with no matches supports an absence only when the answer "
+                "explicitly reports that bounded absence. Every factual assertion in every selected "
                 "claim must also be supported, including extra details the user did not request. One supported "
                 "value cannot excuse another unsupported value in the same claim. A subjective recommendation "
                 "may rest on a quoted property. A factual comparative advantage, including highest, lowest "

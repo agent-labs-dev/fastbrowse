@@ -9,9 +9,10 @@ import pytest
 from fastbrowse.agent import Agent
 from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, Evaluation, NoulAnswer
 from fastbrowse.memory import Fact, Notes, NotesTooLarge, fact_id
-from fastbrowse.models import CostBasis, CostComponent, CostLine, FactReader, LLMPurpose, Status
+from fastbrowse.models import CostBasis, CostComponent, CostLine, FactReader, LLMPurpose, Operation, Status, StepOutcome
 from fastbrowse.page import BlockKind, Page
 from fastbrowse.planner import Plan, Requirement, RequirementKind, partition_plan
+from fastbrowse.policy import HistoryEntry
 from tests.test_agent import run_state
 from tests.test_policy import observation
 from tests.test_retrieval import ScriptedLLM, block_evidence, capture
@@ -151,6 +152,34 @@ async def test_finish_that_fits_keeps_one_compose_and_does_not_bind_outputs() ->
     assert llm.composed == [(0, 1, 2, 3, 4)]
     assert not getattr(state, "finish_partitions", ())
     assert not any(purpose is LLMPurpose.PLAN for purpose, _ in llm.calls)
+
+
+@pytest.mark.parametrize("new_source", [True, False])
+async def test_recovered_output_evidence_is_checked_before_more_browsing(new_source, monkeypatch) -> None:
+    agent, state, _, _ = await finish_agent(size=100)
+    state.open_answer_outputs = (state.plan.answer_checks[0],)
+    state.history.append(
+        HistoryEntry(
+            operation=Operation.READ,
+            target=None,
+            outcome=StepOutcome.EXECUTED,
+            page_changed=False,
+            read_progress=new_source,
+        )
+    )
+    agent._reread_if_changed = AsyncMock(return_value=False)
+    finish = agent._finish = AsyncMock(wraps=agent._finish)
+    choosing = Mock(side_effect=RuntimeError("choosing another browser action"))
+    monkeypatch.setattr("fastbrowse.agent.decide", choosing)
+    if new_source:
+        result = await agent._loop(state, None, None)
+        assert result.status is Status.COMPLETE
+        finish.assert_awaited_once()
+        choosing.assert_not_called()
+    else:
+        with pytest.raises(RuntimeError, match="choosing another browser action"):
+            await agent._loop(state, None, None)
+        finish.assert_not_awaited()
 
 
 async def test_one_indivisible_oversized_requirement_stays_unverified() -> None:
@@ -303,3 +332,36 @@ async def test_new_counterevidence_invalidates_only_its_verified_group() -> None
     assert fact.evidence is not None
     assert any(fact.evidence.quote in json.dumps(audit) for audit in audits)
     assert {r.id for r in state.notes.unresolved(state.plan)} == {"r2"}
+
+
+@pytest.mark.parametrize("addition", ["summary", "unrelated_navigation"])
+async def test_repeated_summary_and_unrelated_navigation_keep_verified_outputs(addition: str) -> None:
+    agent, state, _, llm = await finish_agent()
+    assert (await agent._finish(state, None, None)).status is Status.COMPLETE
+    original = state.notes.facts[3]
+    if addition == "summary":
+        state.notes.add(
+            Fact(
+                requirement_id="r3",
+                text="Project 3: Author says the fix is available.",
+                evidence=None,
+                basis=(fact_id(original),),
+                reader=FactReader.LLM,
+            )
+        )
+    else:
+        state.invented.add("https://unrelated.test/search?q=new")
+    assert (await agent._finish(state, None, None)).status is Status.COMPLETE
+    assert len(llm.composed) == 5
+
+
+async def test_changed_group_rechecks_its_verified_draft_before_composing_again() -> None:
+    agent, state, _, llm = await finish_agent()
+    assert (await agent._finish(state, None, None)).status is Status.COMPLETE
+    page = capture((BlockKind.PARAGRAPH, "Project 3: Translations are welcome."), url="https://projects.test/3")
+    state.notes.add(Fact(text=page.text, evidence=block_evidence(page, "s0"), reader=FactReader.LLM))
+    checking = agent._holds
+    agent._holds = AsyncMock(wraps=checking)
+    assert (await agent._finish(state, None, None)).status is Status.COMPLETE
+    assert len(llm.composed) == 5
+    agent._holds.assert_awaited()

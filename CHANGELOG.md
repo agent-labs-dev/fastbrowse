@@ -11,6 +11,21 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Collection summaries retain every record and the identifying context of a collection read in full.
+  Partial collections cannot support a finding that no members match.
+- Verified answer groups remain cached when new summaries reuse the same source evidence.
+- When evidence changes, previously verified group answers are checked again before composing replacements,
+  so supported outputs survive unrelated additions to their sources.
+- Search-field writing receives unresolved requirements and unverified outputs, so searching once does not
+  hide information still needed from a requested target.
+- New summaries cite the underlying quotes instead of inheriting superseded prose conclusions. Retired
+  quotes and incomplete collections remain invalid, and rejected citation chains identify outputs to repair.
+- Recovery reads that add missing source evidence retry answer verification before more browsing.
+  Repeated quotes cannot trigger another attempt.
+- Reading combines retained facts to mark each supported requirement as read while other targets remain open.
+- Answer checks separate requested fields, and answers state bounded absence findings explicitly instead of
+  letting other fields in a combined check hide an omitted output.
+
 - Answers whose combined evidence exceeds a prompt are composed and verified in requirement groups, with
   comparisons kept together. Verified outputs survive repair of missing outputs; evidence that cannot fit
   even one group returns an unverified partial answer.

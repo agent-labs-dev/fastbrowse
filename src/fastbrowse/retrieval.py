@@ -314,7 +314,7 @@ class _ReadClaim(Frozen):
     # Keys are written in schema order: what the claim rests on comes before what it concludes.
     cite: _Cite | None = Field(
         description="The run of source blocks the claim reads, first to last. Null for a count, total or winner "
-        "the page does not state, which rests on draws_on alone."
+        "or absence the page does not state, which rests on draws_on and records."
     )
     excerpt: str | None = Field(
         default=None,
@@ -327,14 +327,16 @@ class _ReadClaim(Frozen):
     draws_on: tuple[str, ...] = Field(
         default=(),
         description=(
-            "Every record counted or compared: evidence ids from collected notes (without brackets), or "
+            "Every record counted, compared or inspected for absence: evidence ids from collected notes, or "
             "claim:N for an earlier claim in this response's claims array, indexed from zero."
         ),
     )
     records: tuple[_Cite, ...] = Field(
         default=(),
-        description="Every record from this chunk compared by this claim, as block ranges only. Code copies "
-        "their quotes into the claim's basis; do not also write a prose claim for each record.",
+        description="Every record from this chunk inspected by a collection summary, comparison or absence claim, "
+        "as block ranges. A collection summary includes the identified collection's boundaries and every member "
+        "with its identity and relevant fields, even when the summary names only some categories. "
+        "Code copies full quotes into the claim's basis.",
     )
     orders_list: _Cite | None = Field(
         default=None,
@@ -409,12 +411,29 @@ def _remember(
     references: Mapping[str, str],
 ) -> Fact | None:
     basis: list[str] = []
+    held = {fact_id(fact): fact for fact in notes.facts}
     for reference in claim.draws_on:
         key = references.get(reference)
         if key is None:
             logger.debug("read dropped unknown basis reference=%r", reference)
-        elif key not in basis:
-            basis.append(key)
+        else:
+            # A replacement conclusion needs the quotes, not the validity of a superseded prose summary.
+            sources = (
+                tuple(
+                    source
+                    for source in notes.expand_evidence_ids((key,))
+                    if source not in held
+                    or held[source].evidence is not None
+                    or held[source].tally is not None
+                    or held[source].comparison is not None
+                )
+                if key in held
+                and held[key].evidence is None
+                and held[key].tally is None
+                and held[key].comparison is None
+                else (key,)
+            )
+            basis.extend(source for source in sources if source not in basis)
     evidence = None if claim.cite is None else _cited(capture, part, claim.cite)
     if claim.excerpt is not None:
         if evidence is None or not claim.excerpt.strip():
@@ -974,20 +993,35 @@ async def read(
                     "Code matches the excerpt "
                     "uniquely inside the cited blocks and copies its original spelling; never paraphrase it. "
                     "Leave excerpt null when the complete blocks are needed.\n"
-                    "- A claim cites one run of blocks. For a comparison, put every compared record from this "
-                    "chunk in the conclusion's records as block ranges only. Code copies their quotes into its "
-                    "basis; never write a prose claim for each compared record. Use draws_on for earlier "
+                    "- A claim cites one run of blocks. A conclusion summarizing a collection puts every "
+                    "inspected member from this chunk and the collection's identifying boundary or total in "
+                    "records, even when it reports only positive findings. This preserves the scope for later "
+                    "questions about absent categories. A comparison likewise puts every compared record in "
+                    "records. Code copies their full quotes into the basis; never write a prose claim for each "
+                    "compared record. Use draws_on for earlier "
                     "evidence and context claims.\n"
                     "- The answer is checked later without the page, so a comparison also needs claims for the "
                     "query, filters, date and sort that make it valid, with a null requirement id.\n"
                     "- A count, total or winner rests on every record it counts or compares and on those "
                     "context claims. It cites blocks only when the page itself states it.\n"
                     "- Give a claim a requirement id only when it answers that whole requirement with its "
-                    "constraints; otherwise null. Set answered only when the collected evidence and this capture "
-                    "fully answer the question.\n"
+                    "constraints; otherwise null. When separate facts together answer one requirement, add a "
+                    "concise derived conclusion with that requirement id and draws_on for every supporting "
+                    "claim or prior note. Close that requirement even while other requirements remain open. "
+                    "Set answered only when the collected evidence and this capture fully answer the question.\n"
                     "- An explicit empty-result message is a finding: quote it and state that no matching "
                     "records are reported within that page's scope. Missing text, a loading view or an unread "
                     "section cannot establish absence.\n"
+                    "- Account for every requested category when reading a collection. If a category has no "
+                    "matching members, return an explicit bounded absence claim instead of omitting that "
+                    "category. An absence within a completely read collection is derived from all its records. "
+                    "Put every member's full blocks in records, including identities, roles and reply text; "
+                    "include quoted context identifying the collection and its boundaries or total. State the "
+                    "bounded scope in the claim, never that none exist elsewhere. Give it the requirement id "
+                    "when the whole requirement is answered, using collected notes for its other fields. "
+                    "Do not assign a requirement id to a claim covering only one of its requested categories. "
+                    "Use continues.records while more members, replies "
+                    "or pages remain unread. A summary of selected matches cannot establish absence.\n"
                     "- Values typed into fields, suggestions and previews are inputs, not results.\n\n"
                     "# Tallies\nFor a count of records or a ranking by record count, return tally groups: "
                     "each key is the label stated in its records, and each record cites its own source blocks. "
@@ -1026,7 +1060,7 @@ async def read(
                     "every matching record, applying the task's filters; never select only page winners. "
                     "Related requirements for the same winners use the same comparison and records. "
                     "Leave comparison null for counts, calculations, extra output fields or ambiguous formats.\n\n"
-                    "# Lists over several pages\nA count, total or superlative over a list needs the whole "
+                    "# Lists over several pages\nA count, total, superlative or absence over a list needs the whole "
                     "list. Earlier pages are in the collected evidence under their own URLs. When the list goes "
                     "on past this capture and the collected evidence does not cover the rest, add an entry to "
                     "continues naming the requirement. For counts, put matching records in its tallies as above. "
@@ -2546,7 +2580,9 @@ async def compose(
                 "# Composer\nWrite the answer as self-contained plain-text claims in reading order, each citing the "
                 "evidence_ids of the notes it rests on. Answer the requested outputs; do not claim a requirement "
                 "the notes do not evidence. Write every value the task asks for, such as each item's price, in the "
-                "claim text itself: a reader sees the text, not the notes behind its citations.\n\n"
+                "claim text itself: a reader sees the text, not the notes behind its citations. Report every field "
+                "in a bundled check, including supported bounded absence; other fields or unmentioned citations "
+                "cannot stand in for it.\n\n"
                 "Reports requested in plan.run_reports are appended by code from browser state and the run record. "
                 "Do not write those reports or cite page notes for them.\n\n"
                 "# Evidence scope\nThe notes' prose may contain an unsupported inference. Verify each value "
@@ -2556,6 +2592,9 @@ async def compose(
                 "Do not turn compatibility with several items into simultaneous operation or a subjective "
                 "preference into a measured advantage. State what remains unsupported instead of supplying "
                 "a related value as the requested one.\n\n"
+                "For an absence, cite the collection_for note marked complete=true and retain its bounded scope. "
+                "Identify the collection from quoted context and check every member's identity and relevant fields. "
+                "Incomplete collections and selected excerpts cannot establish absence.\n\n"
                 "# One claim, one fact\nA claim is supported in full by the notes it cites. Split a statement that "
                 "combines separately evidenced facts into one claim each. A claim that compares, counts, totals or "
                 "picks a superlative cites every note it is drawn from. A list of records cites each record it "

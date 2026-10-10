@@ -37,7 +37,7 @@ from fastbrowse.effects import (
 )
 from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, JevClient, JevError, NoulAnswer, NoulQuestion
 from fastbrowse.llm import Generation, LLMClient, LLMError, Message
-from fastbrowse.memory import Fact, Notes, NotesTooLarge, fact_id, shows
+from fastbrowse.memory import Fact, Notes, NotesTooLarge, evidence_id, fact_id, shows
 from fastbrowse.models import (
     SCROLLING,
     UNTRUSTED,
@@ -213,7 +213,13 @@ _FIELD_RULES = (
     f"# Trust\n{UNTRUSTED}"
 )
 
-_FIELD_WRITER = "# Field writer\nWrite only the text for one form field. " + _FIELD_RULES
+_FIELD_WRITER = (
+    "# Field writer\nWrite only the text for one form field. "
+    "For a search field, form a query from a named target in the task that still has unresolved requirements "
+    "or unverified outputs. A previous search does not establish that its outputs were found. A read-only "
+    "task permits searching for its requested information. Do not clear a search merely because the task "
+    "does not dictate a literal query. "
+) + _FIELD_RULES
 
 _FORM_WRITER = (
     "# Form writer\nWrite text for ALL the listed empty fields whose values the task or notes supply. "
@@ -771,6 +777,21 @@ class Agent:
                         return result
                 continue
             if await self._reread_if_changed(state, observation):
+                continue
+            if (
+                state.open_answer_outputs
+                and not state.owes_read
+                and state.history
+                and state.history[-1].read_progress
+                and (plan := state.ready_plan) is not None
+                and _lookup(plan)
+                and _answered(plan, state.notes)
+            ):
+                # Recovery's missing-output list describes the rejected draft. New quoted support needs another
+                # finish check before that stale list sends the browser back to content it has already read.
+                result = await self._finish(state, output_schema, until)
+                if result is not None:
+                    return result
                 continue
             if (paging := _paging(state, _without_failed_links(state, observation))) is not None:
                 if await self._step(state, observation, paging, Decider.LLM, gate=False):
@@ -1943,6 +1964,8 @@ class Agent:
             # Given only the task, the writer typed "enter X, later correct it to Y" as Y on the first pass every
             # time, and no Back could then show a correction; in order, it typed X first and Y after going back.
             "requirements": [r.text for r in (await state.await_plan()).requirements],
+            "unresolved_requirements": [r.text for r in state.notes.unresolved(state.plan)],
+            "unverified_outputs": list(state.open_answer_outputs),
             "subgoal": state.hint,
             "field": target.model_dump(mode="json", exclude_none=True),
             "other_fields": [
@@ -3014,7 +3037,16 @@ class Agent:
                 ready_plan=plan,
                 notes=notes,
                 finish_partitions=(),
-                verified_answer=None,
+                verified_answer=next(
+                    (
+                        answer
+                        for answer in reversed(state.partition_answers.values())
+                        if answer.requirements == plan.requirements
+                    ),
+                    None,
+                )
+                if _lookup(plan)
+                else None,
                 missing_answer_outputs=(),
                 open_answer_outputs=(),
                 answer_corrections=(),
@@ -3157,7 +3189,7 @@ class Agent:
                 # Write the answer while the verifier is still deciding. Both read the same finished
                 # notes, and every accepted run wants an answer, so the whole cost of guessing wrong is
                 # one discarded call on the branch that was going back to work anyway.
-                if state.plan.page_answer_expected and check.answer is None:
+                if state.plan.page_answer_expected and check.answer is None and state.verified_answer is None:
                     drafting = asyncio.create_task(
                         compose(
                             self._llm,
@@ -3266,6 +3298,16 @@ class Agent:
         """Return the checked draft, or compose an answer and check its claims."""
         if isinstance(prepared, ComposedAnswer):
             return prepared, True
+        if state.verified_answer is not None:
+            # New context can invalidate a cache entry without changing a previously supported answer.
+            try:
+                held = await self._holds(state, state.verified_answer)
+            finally:
+                if prepared is not None:
+                    await _discard(prepared)
+                    prepared = None
+            if held is not None:
+                return held, True
         facts = draft_answer(state.plan, state.notes)
 
         def failed_checks() -> tuple[int, int]:
@@ -3760,22 +3802,43 @@ class Agent:
 
 
 def _partition_proof(plan: Plan, notes: Notes, invented: Set[str]) -> str:
+    places = {_place(source.url) for source in notes.evidence.values()}
     return hashlib.sha256(
         json.dumps(
             {
                 "plan": plan.model_dump(mode="json"),
                 "facts": [
                     {
-                        "fact": fact.model_dump(mode="json"),
+                        "evidence": fact.evidence.model_dump(mode="json"),
                         "current": notes.current(fact_id(fact)),
-                        "requirements": notes.fact_requirements(fact_id(fact)),
                         "page": page.model_dump()
                         if fact.evidence is not None and (page := notes.captured_page(fact.evidence)) is not None
                         else None,
                     }
                     for fact in notes.facts
+                    if fact.evidence is not None
                 ],
-                "invented": sorted(invented),
+                # Repeated summaries over the same quotes do not change any verified output's support.
+                "support": {
+                    requirement.id: sorted(evidence_id(source) for source in notes.supporting_evidence(requirement.id))
+                    for requirement in plan.requirements
+                },
+                "inactive": sorted(fact_id(fact) for fact in notes.facts if not notes.current(fact_id(fact))),
+                "collections": sorted(
+                    {
+                        json.dumps(
+                            {
+                                "tally": fact.tally.model_dump() if fact.tally is not None else None,
+                                "comparison": fact.comparison.model_dump() if fact.comparison is not None else None,
+                                "requirements": notes.fact_requirements(fact_id(fact)),
+                            },
+                            sort_keys=True,
+                        )
+                        for fact in notes.facts
+                        if fact.tally is not None or fact.comparison is not None
+                    }
+                ),
+                "invented": sorted(url for url in invented if _place(url) in places),
             },
             sort_keys=True,
         ).encode()

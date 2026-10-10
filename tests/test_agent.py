@@ -168,6 +168,21 @@ async def test_field_writer_receives_popup_context_and_other_field_values() -> N
     assert prompt["requirements"] == list(steps)
 
 
+async def test_search_writer_receives_unverified_outputs_even_for_a_read_requirement() -> None:
+    state = await run_state()
+    requirement = Requirement(id="r", text="Read Project Birch replies.", kind=RequirementKind.INFORMATION)
+    state.ready_plan = Plan(requirements=(requirement,), answer_expected=True)
+    page = capture((BlockKind.PARAGRAPH, "Project Birch"))
+    state.notes.add(
+        Fact(requirement_id="r", text=page.text, evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+    )
+    state.open_answer_outputs = ("Author replies for Project Birch",)
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    context = await agent._field_context(state, observation(()), field())
+    assert context["unresolved_requirements"] == []
+    assert context["unverified_outputs"] == ["Author replies for Project Birch"]
+
+
 async def test_a_field_given_values_in_turn_types_them_in_order() -> None:
     """Told the order, the writer still typed the correction first; the values it lists are typed in turn."""
     target = field("First Name")
