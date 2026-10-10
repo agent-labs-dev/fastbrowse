@@ -395,6 +395,8 @@ class _RunState:
     """Page states where an unsure pick has been acted on instead of recovering; the next one there recovers."""
     reads: set[ReadKey] = field(default_factory=set)
     """Attempted reads by document, exact content and outstanding requirements, independent of URL edits."""
+    record_read_documents: set[str] = field(default_factory=set)
+    """Documents whose pagination records were read outside the ordinary read cache."""
     barren: dict[ReadKey, int] = field(default_factory=dict[ReadKey, int])
     """Reads by document, page state and outstanding requirements that added no fact. Keyed by what can be done
     on the page rather than by its exact text, so a page rewriting itself cannot mint a fresh key for ever."""
@@ -2138,6 +2140,18 @@ class Agent:
         # A native dialog pauses JavaScript, so capture cannot run until the dialog has been handled.
         if observation.dialog is not None:
             return False
+        if (
+            decision.operation is Operation.BACK
+            and observation.document_key not in state.record_read_documents
+            and not any(key[0] == observation.document_key for key in state.reads)
+        ):
+            plan = await state.await_plan()
+            if state.notes.unresolved(plan):
+                # Backing out of an unread document can lose a value needed by a pending action, even after
+                # every information requirement is answered. Navigating to a supplied address or switching tab
+                # follows the plan, and reading the page left behind there only spends a read.
+                reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
+                return not await self._step(state, observation, reading, decided_by)
         if state.ready_plan is None and any(not candidate.outcome_read for candidate in state.transaction_candidates):
             await state.await_plan()
         # A read takes in the whole page, so a scroll over one never read only spends steps: Jev judges evidence from
@@ -2428,6 +2442,7 @@ class Agent:
         before = len(state.notes.facts)
         state.notes.remember_capture(page.capture)
         outcome.merge_records(state.notes)
+        state.record_read_documents.add(page.observation.document_key)
         state.incomplete.update(outcome.incomplete)
         state.history.append(
             HistoryEntry(
@@ -3650,6 +3665,7 @@ def _answer_evidence(notes: Notes, *, include_answer: bool = True) -> frozenset[
                     "value": source(fact.evidence) if fact.evidence is not None else fact.text,
                     "text": fact.text,
                     "requirements": notes.fact_requirements(fact_id(fact)),
+                    "comparison": fact.comparison.model_dump(mode="json") if fact.comparison is not None else None,
                     "basis": sorted(
                         source(known[key]) for key in notes.expand_evidence_ids(fact.basis) if key in known
                     ),
@@ -4122,13 +4138,13 @@ def _without_missing(observation: Observation, missing: Set[tuple[str, str | Non
 def _follow_recovery(
     state: _RunState, observation: Observation, decision: Decision, *, uncertain: bool
 ) -> Decision | None:
-    """The action recovery named, when Jev is unsure or repeats a failed read and the control still offers it.
+    """The action recovery named, when Jev cannot act or repeats a failed read and the control still offers it.
 
     Recovery names one action on one control, or on the page itself. Handed back to Jev only as a hint, it left
     Jev choosing between two Search buttons at 0.49 until the recovery budget ran out, the named action never taken.
     """
     directed, state.directed = state.directed, None
-    if not uncertain or directed is None:
+    if directed is None or (not uncertain and decision.operation is not Operation.ESCALATE):
         return None
     operation, control_id = directed
     if operation is Operation.NAVIGATE:

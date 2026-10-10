@@ -5969,6 +5969,34 @@ async def test_identical_answer_checks_reuse_verdict_until_evidence_or_scope_cha
     assert calls == 3
 
 
+async def test_answer_cache_rechecks_comparison_coverage_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastbrowse.memory import Comparison
+    from fastbrowse.retrieval import Claim, assemble_answer
+
+    state = await run_state()
+    record = Fact(reader=FactReader.LLM, text="Oak $19", evidence=evidence())
+    compared = Comparison(requirement_id="r1", records=(fact_id(record),))
+    winner = Fact(
+        requirement_id="r1",
+        reader=FactReader.LLM,
+        text="Oak is cheapest",
+        evidence=None,
+        basis=(fact_id(record),),
+        comparison=compared,
+    )
+    state.notes = Notes((record, winner))
+    answer = assemble_answer((Claim(text=winner.text, evidence_ids=(fact_id(winner),)),), state.notes, ())
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    checked = AsyncMock(side_effect=[None, answer, None])
+    monkeypatch.setattr(agent_module, "check_claims", checked)
+    assert await agent._holds(state, answer) is None
+    state.notes.add(winner.model_copy(update={"comparison": compared.model_copy(update={"complete": True})}))
+    assert await agent._holds(state, answer) == answer
+    state.notes.add(winner)
+    assert await agent._holds(state, answer) is None
+    assert checked.await_count == 3
+
+
 async def test_answer_cache_rechecks_replaced_citation_ids_even_with_identical_quotes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

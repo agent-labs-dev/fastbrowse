@@ -435,6 +435,7 @@ async def llm_verify(
 class _OutputSource(Frozen):
     url_ref: str
     quote: str
+    complete_source: bool = False
     source_id: str
     frame_id: str | None
     page_title: str | None
@@ -449,10 +450,17 @@ class _OutputCount(Frozen):
     record_indices: tuple[int, ...]
 
 
+class _OutputComparison(Frozen):
+    scope: str | None
+    complete: bool
+    record_indices: tuple[int, ...]
+
+
 class _OutputClaim(Frozen):
     text: str
     cited_sources: tuple[_OutputSource, ...]
     counted_records: tuple[_OutputCount, ...] = ()
+    compared_records: tuple[_OutputComparison, ...] = ()
 
 
 class _OutputContext(Frozen):
@@ -490,12 +498,20 @@ class _IdentityReferenceScope(Frozen):
     identity_ids: tuple[str, ...] = ()
 
 
+class _KeyedIdentity(Frozen):
+    id: str
+    source_ref: str
+    quote: str
+
+
 def _identity_schema(keys: Iterable[str]) -> type[BaseModel]:
     # An open dictionary permits an empty response even when every requested subject needs a binding.
     fields: dict[str, Any] = {key: (_IdentityReferenceScope, ...) for key in keys}
     bindings = create_model("_RequiredBindings", __base__=Frozen, **fields)
+    # The shared identities are a list of keyed entries: one provider route returns a map with free keys empty,
+    # which leaves every binding without its quote.
     return create_model(
-        "_OutputIdentities", __base__=Frozen, identities=(dict[str, _QuotedIdentity], ...), bindings=(bindings, ...)
+        "_OutputIdentities", __base__=Frozen, identities=(tuple[_KeyedIdentity, ...], ...), bindings=(bindings, ...)
     )
 
 
@@ -528,6 +544,7 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
                 _OutputSource(
                     url_ref=urls.setdefault(evidence.url, f"u{len(urls)}"),
                     quote=evidence.quote,
+                    complete_source=evidence.complete_source,
                     control_context=evidence.control_context,
                     source_id=evidence.source_id,
                     frame_id=evidence.frame_id,
@@ -536,7 +553,20 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
             )
         positions = {key: index for index, key in enumerate(keys)}
         counted = []
+        compared = []
         for fact in notes.facts:
+            if fact.comparison is not None and fact_id(fact) in expanded:
+                comparison = fact.comparison
+                if any(record not in positions for record in comparison.records):
+                    return None
+                compared.append(
+                    _OutputComparison(
+                        scope=requirements.get(comparison.requirement_id),
+                        complete=comparison.complete
+                        and comparison.requirement_id in notes.fact_requirements(fact_id(fact)),
+                        record_indices=tuple(dict.fromkeys(positions[record] for record in comparison.records)),
+                    )
+                )
             if fact.tally is None or fact_id(fact) not in expanded:
                 continue
             if any(record not in positions for record in fact.tally.records):
@@ -550,13 +580,13 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
                     record_indices=tuple(dict.fromkeys(positions[record] for record in fact.tally.records)),
                 )
             )
-        # Expanding a count into quotes loses whether the whole list was exhausted. Keep its code-owned
-        # coverage and exact record associations beside the quotes, without borrowing an uncited tally.
+        # Flattening a count or comparison loses its collection scope and whether every page was read.
         claims.append(
             _OutputClaim(
                 text=claim.text,
                 cited_sources=tuple(sources),
                 counted_records=tuple(counted),
+                compared_records=tuple(compared),
             )
         )
     return _OutputContext(
@@ -670,8 +700,8 @@ async def check_answer_outputs(
                     "Comparisons can require several subjects. Use scope subjectless only for a criterion "
                     "with no individual entity identity to establish, such as answer format or an aggregate "
                     "zero-record result. Missing identity evidence is scope unresolved, never subjectless. "
-                    "Do not change requested entities or omit subjects. Copy each distinct source_ref and literal "
-                    "identifying quote once into identities, keyed by a short id. Bind each criterion to every "
+                    "Do not change requested entities or omit subjects. List each distinct source_ref and literal "
+                    "identifying quote once in identities, each with a short unique id. Bind each criterion to every "
                     "required subject through identity_ids. Scope entities requires at least one valid id; "
                     "subjectless and unresolved have no ids."
                 ),
@@ -705,7 +735,12 @@ async def check_answer_outputs(
             if ledger is not None:
                 ledger.record(generated.cost)
             payload = generated.data.model_dump()
-            shared = {key: _QuotedIdentity.model_validate(value) for key, value in payload["identities"].items()}
+            shared: dict[str, _QuotedIdentity] = {}
+            for entry in payload["identities"]:
+                identity = _QuotedIdentity(source_ref=entry["source_ref"], quote=entry["quote"])
+                # One id naming two quotes leaves every binding through it ambiguous.
+                if shared.setdefault(entry["id"], identity) != identity:
+                    return reject(tuple(uncertain.values()))
             scopes = {}
             for key, value in payload["bindings"].items():
                 refs = value["identity_ids"]
@@ -796,6 +831,7 @@ async def check_answer_outputs(
             source = _OutputSource(
                 url_ref=alias,
                 quote=evidence.quote,
+                complete_source=evidence.complete_source,
                 control_context=evidence.control_context,
                 source_id=evidence.source_id,
                 frame_id=evidence.frame_id,
@@ -841,6 +877,7 @@ async def check_answer_outputs(
                 {
                     "cited_sources": [source.model_dump(exclude={"page_title"}) for source in claim.cited_sources],
                     "counted_records": [count.model_dump() for count in claim.counted_records],
+                    "compared_records": [comparison.model_dump() for comparison in claim.compared_records],
                 }
                 for claim in claims
             ],
@@ -946,10 +983,17 @@ async def check_answer_outputs(
                 "Control context identifies the quoted content's actual DOM container and sibling position, "
                 "not an absent field value. Derived outputs can calculate from quoted records only when "
                 "every operand and its association "
-                "is explicit; the source need not state the conclusion literally. Counted-record metadata gives "
+                "is explicit; the source need not state the conclusion literally. A quote marked complete_source "
+                "contains the entire downloaded text file. "
+                "This proves coverage of that file only, not a wider collection or missing operand associations. "
+                "Counted-record metadata gives "
                 "code-maintained distinct counts, their scope, cited record indices and collection completeness. "
                 "A complete count can rest on its matching quoted records without a page stating the total. "
                 "An incomplete or differently scoped count cannot establish the requested whole-list total. "
+                "Compared-record metadata preserves the reader's collection scope, completeness and indices "
+                "into these cited sources. A complete comparison establishes coverage of that scope, not "
+                "missing values, operand associations or the correctness of a conclusion. An incomplete "
+                "comparison cannot establish a whole-list winner. "
                 "The quoted records must still identify matching entities and filters. Observed page titles provide "
                 "identity context, not missing field "
                 "evidence. Never reconstruct missing table column labels from prior knowledge. Return "
@@ -999,11 +1043,17 @@ async def check_answer_outputs(
                 "treat different entities or explicitly different configurations as contradictions. "
                 "Derived outputs can "
                 "calculate from quoted records only when every operand and its association is explicit. "
+                "A quote marked complete_source contains the entire downloaded text file and establishes coverage "
+                "of that file only. Partial excerpts and truncated downloads do not establish whole-file totals. "
                 "Control context binds quoted content to its actual DOM container and sibling position, "
                 "but cannot replace a missing quoted value. Counted-record metadata supplies code-maintained "
                 "counts and collection completeness, with "
                 "indices into that claim's cited sources. Check the reported count against that matching scope "
                 "and quoted record membership. An incomplete count cannot establish a whole-list total. "
+                "Compared-record metadata preserves the reader's collection scope, completeness and cited "
+                "source indices. Check the conclusion against every compared operand and the matching scope. "
+                "Completeness establishes coverage only, not values, associations or the winning result. "
+                "An incomplete comparison cannot establish a whole-list winner. "
                 "Observed page titles provide identity "
                 "context, not missing field evidence. Return yes only if every part of the requested output "
                 "is stated and evidenced by its own cited sources. Every factual assertion in every selected "

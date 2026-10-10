@@ -22,6 +22,20 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Independent named targets have separate reading requirements. Newly evidenced targets renew recovery on
   revisited lists, remaining requirements guide action choices, and partial answers retain findings across sources.
 
+## [0.5.20] - 2026-10-09
+
+- Going back from a document that has not been read reads it first when requirements remain, so a pending
+  action can use values from that page after leaving it.
+- Answer checks retain a comparison's collection scope and completeness alongside its quoted records, so a
+  whole-list winner keeps the coverage established during reading.
+- Answer checks retain whether a quote covers a complete downloaded file, so totals can be verified from all
+  its records. Partial excerpts and truncated downloads do not claim complete file coverage.
+- Updated page evidence retires vanished context quotes as well as previous answers, so an earlier subtotal
+  does not conflict with the subtotal after the basket changes. Quotes still shown remain available to checks.
+- A confident request for recovery follows the pending recovery action when it is still valid, so a run can
+  leave a page with no usable controls without exhausting recovery on the same state.
+- Answer checks through the Vercel AI Gateway receive each subject's identifying quote, so supported answers
+  finish as `complete` there as they do through OpenRouter. Unsupported answers stay rejected on both.
 - Reply controls retain their own comment record as context when only one reply form is open.
 
 - Provider attempt deadlines bound total response time, including responses that keep sending occasional bytes.
@@ -41,8 +55,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Recordings of attached windows leave the caller's page in place. Explicit submit buttons expose the form's
   destination to the authorization check, while focusing a field does not claim to submit it.
-
-## [0.5.20] - 2026-10-09
 
 - Captured hover captions retain their DOM container and sibling position as source metadata.
   Answer checks can bind positional subjects without treating that context as a quoted value.

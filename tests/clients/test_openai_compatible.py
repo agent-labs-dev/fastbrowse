@@ -412,6 +412,15 @@ def test_a_strict_schema_leaves_array_caps_to_validation() -> None:
         Capped.model_validate({"items": ["x"] * 61})
 
 
+def test_a_strict_schema_refuses_a_map_with_free_keys() -> None:
+    # Gemini through the Vercel AI Gateway returns such a map empty where OpenRouter fills it.
+    class Keyed(Frozen):
+        entries: dict[str, int]
+
+    with pytest.raises(ValueError, match="free keys"):
+        strict_schema(Keyed.model_json_schema())
+
+
 @pytest.mark.parametrize("paid_retry", [False, True])
 @pytest.mark.parametrize("max_dollars", [None, 1.0])
 async def test_cancelled_generation_records_dispatched_costs_and_paid_retries_once(paid_retry, max_dollars):
