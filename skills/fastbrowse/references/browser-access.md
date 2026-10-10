@@ -15,7 +15,7 @@ uvx --from fastbrowse fastbrowse \
   --start https://app.example.com/login \
   --secret username=APP_USERNAME@https://app.example.com \
   --secret password=APP_PASSWORD@https://app.example.com \
-  --json --max-steps 30 --max-dollars 0.25
+  --json
 ```
 
 Use the real site origin and preconfigured variable names. fastbrowse resolves values only when typing them on
@@ -40,7 +40,7 @@ on their behalf unless the task requires it and they have authorized that access
 uvx --from fastbrowse fastbrowse \
   'Report the current account plan without changing it.' \
   --cdp-port 9222 --target-match app.example.com \
-  --json --max-steps 30 --max-dollars 0.25
+  --json
 ```
 
 The MCP server chooses its browser connection at startup; inspect the connected tool and ask its operator

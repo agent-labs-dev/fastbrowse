@@ -36,7 +36,7 @@ Detailed runs and validation live in the private
 Keep raw output in ignored `artifacts/evals/`, with private filesystem permissions. Git stores compact
 approved baselines and source identity receipts, not logs, recordings, decrypted tasks or credentials.
 
-Parallax exports the internal catalog into Fastbrowse and checks it byte-for-byte. The Fastbrowse publication
+Parallax exports the internal catalog into fastbrowse and checks it byte-for-byte. The fastbrowse publication
 gate requires the matching catalog digest, clean committed runner and agent builds, current task versions,
 complete task coverage, three measured repeats and every physical run in the ledger. Matched task success,
 time and cost regressions block publication. No result is published until complete runs are reviewed and
