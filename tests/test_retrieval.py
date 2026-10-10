@@ -3955,6 +3955,80 @@ async def test_reopened_requirement_reads_earlier_quotes_again() -> None:
     assert len(llm.calls) == 1 and "novelty" not in jev.requests[0][1]
 
 
+@pytest.mark.parametrize("room_for_notice", [True, False])
+async def test_reader_collects_next_project_when_earlier_requirement_evidence_does_not_fit(
+    room_for_notice: bool,
+) -> None:
+    from fastbrowse.memory import NotesTooLarge
+
+    earlier = capture((BlockKind.PARAGRAPH, "A reported problem. " * 2000), url="https://example.test/first")
+    old = Fact(text=earlier.text, evidence=block_evidence(earlier, "s0"), reader=FactReader.LLM, requirement_id="first")
+    notes = Notes((old,))
+    page = capture((BlockKind.PARAGRAPH, "No comments yet. Be the first to comment."), url="https://example.test/last")
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [
+                    {
+                        "text": "This page has no comments.",
+                        "requirement_id": "last",
+                        "cite": {"first": "s0", "last": "s0"},
+                    }
+                ],
+                "answered": True,
+            }
+        ]
+    )
+    tokens = TokenBudget(state_plus_largest_question=10000 if room_for_notice else 1)
+    if not room_for_notice:
+        with pytest.raises(NotesTooLarge):
+            await read(llm, page, "Find player reports for the last project.", ["last"], notes, tokens=tokens)
+        assert not llm.calls and not notes.evidenced("last")
+        return
+    await read(llm, page, "Find player reports for the last project.", ["last"], notes, tokens=tokens)
+    assert "facts omitted" in llm.calls[0][1][-1].content
+    assert notes.evidenced("first") and notes.evidenced("last")
+    assert old in notes.facts
+    # Reading another page can proceed, but a verdict must still see every required quote.
+    with pytest.raises(NotesTooLarge):
+        notes.render(20_000, preserve_requirements=True)
+
+
+@pytest.mark.parametrize("empty_state_shown", [True, False])
+async def test_no_player_reports_is_a_finding_only_with_a_matching_empty_state_quote(empty_state_shown: bool) -> None:
+    from fastbrowse.verification import check_answer_outputs
+    from tests.test_answer_repair import RoutingJev
+
+    empty = "Project Quartz comments: No comments yet. Be the first to comment."
+    page = capture((BlockKind.PARAGRAPH, empty if empty_state_shown else "Project Quartz comments: Loading..."))
+    claim: JsonValue = {
+        "text": "The Project Quartz comments page has no player reports or author replies.",
+        "requirement_id": "project",
+        "cite": {"first": "s0", "last": "s0"},
+        "excerpt": empty,
+    }
+    llm = ScriptedLLM([{"claims": [claim], "answered": True}])
+    notes = Notes()
+    requirement = Requirement(
+        id="project", text="Find player reports for Project Quartz", kind=RequirementKind.INFORMATION
+    )
+    await read(llm, page, requirement.text, ["project"], notes)
+    assert notes.evidenced("project") is empty_state_shown
+    if not empty_state_shown:
+        assert not notes.facts
+        return
+    plan = Plan(requirements=(requirement,), answer_expected=True)
+    answer = draft_answer(plan, notes)
+    assert answer is not None and answer.citations[0].quote == empty
+    llm.responses.extend(
+        [{"judgments": {"output_0": "yes"}, "reason": "The quoted page explicitly has no comments."}] * 2
+    )
+    assert await check_answer_outputs(RoutingJev(), llm, answer, notes, (requirement.text,))
+    source_payload = json.loads(llm.calls[2][1][-1].content)
+    sources = source_payload["criteria"]["output_0"]["sources"][0]["cited_sources"]
+    assert sources[0]["quote"] == empty
+
+
 async def test_duplicate_prior_packets_do_not_displace_the_novelty_check() -> None:
     page = capture((BlockKind.PARAGRAPH, "Price: GBP25.99"))
     facts = tuple(

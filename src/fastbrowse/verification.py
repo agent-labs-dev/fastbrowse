@@ -25,16 +25,17 @@ from fastbrowse.jev import (
     Question,
 )
 from fastbrowse.llm import Generation, LLMClient, Message
-from fastbrowse.memory import Notes, NotesTooLarge, fact_id
+from fastbrowse.memory import CollectionFact, Notes, NotesTooLarge, fact_id
 from fastbrowse.models import UNTRUSTED, CostLine, Evidence, FactReader, Frozen, LLMPurpose, SourceControl
 from fastbrowse.page import Capture, Control, Observation, cut_text
-from fastbrowse.planner import Plan, RequirementKind
+from fastbrowse.planner import FIELD_CATEGORIES, Plan, RequirementKind
 from fastbrowse.policy import HistoryEntry
 from fastbrowse.retrieval import (
     TRANSACTION_CONTRADICTED,
     AnswerCorrection,
     Claim,
     ComposedAnswer,
+    FieldAnswer,
     UnsupportedField,
     assemble_answer,
     choose_candidate,
@@ -555,15 +556,31 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
         counted = []
         compared = []
         for fact in notes.facts:
-            if fact.comparison is not None and fact_id(fact) in expanded:
+            if fact.comparison is not None and (
+                fact_id(fact) in expanded
+                or (
+                    isinstance(fact, CollectionFact)
+                    and fact.comparison.complete
+                    and fact.comparison.records
+                    and fact.basis
+                    and set(fact.basis) <= positions.keys()
+                    and notes.current(fact_id(fact))
+                    and set(fact.comparison.records) <= positions.keys()
+                )
+            ):
                 comparison = fact.comparison
                 if any(record not in positions for record in comparison.records):
                     return None
                 compared.append(
                     _OutputComparison(
-                        scope=requirements.get(comparison.requirement_id),
+                        scope=fact.scope
+                        if isinstance(fact, CollectionFact)
+                        else requirements.get(comparison.requirement_id),
                         complete=comparison.complete
-                        and comparison.requirement_id in notes.fact_requirements(fact_id(fact)),
+                        and (
+                            isinstance(fact, CollectionFact)
+                            or comparison.requirement_id in notes.fact_requirements(fact_id(fact))
+                        ),
                         record_indices=tuple(dict.fromkeys(positions[record] for record in comparison.records)),
                     )
                 )
@@ -608,19 +625,146 @@ async def check_answer_outputs(
     allow_scalar_jev: bool = False,
     task: str = "",
     audit_cache: OutputAuditCache | None = None,
+    bounded: bool = False,
+    verified_outputs: list[str] | None = None,
+    independent_fields: bool = True,
 ) -> bool:
-    def reject(failed: Sequence[str]) -> bool:
+    if independent_fields and isinstance(composed, FieldAnswer):
+        passed = []
+        obligations = {r.text for r in composed.requirements}
+        ordered = (*[c for c in checks if c not in obligations], *[c for c in checks if c in obligations])
+        for check in ordered:
+            if check in obligations and any(c not in passed for c in checks if c not in obligations):
+                continue
+            indices = composed.output_claims.get(check, ())
+            if any(index < 0 or index >= len(composed.claims) for index in indices):
+                indices = ()
+            claims = tuple(composed.claims[index] for index in indices)
+            base = assemble_answer(claims, notes, composed.requirements)
+            field = FieldAnswer(**base.model_dump(), output_claims={check: tuple(range(len(claims)))})
+            if await _check_answer_outputs(
+                jev,
+                llm,
+                field,
+                notes,
+                (check,),
+                tokens=tokens,
+                ledger=ledger,
+                missing_outputs=missing_outputs,
+                corrections=corrections,
+                task=task,
+                audit_cache=audit_cache,
+                bounded=bounded,
+            ):
+                passed.append(check)
+        if verified_outputs is not None:
+            verified_outputs.extend(passed)
+        return len(passed) == len(checks)
+    return await _check_answer_outputs(
+        jev,
+        llm,
+        composed,
+        notes,
+        checks,
+        tokens=tokens,
+        ledger=ledger,
+        missing_outputs=missing_outputs,
+        corrections=corrections,
+        allow_scalar_jev=allow_scalar_jev,
+        task=task,
+        audit_cache=audit_cache,
+        bounded=bounded,
+        independent_fields=independent_fields,
+    )
+
+
+def _share_output_sources(messages: Sequence[Message]) -> list[Message]:
+    payload = json.loads(messages[-1].content)
+    sources = {}
+    refs = {}
+
+    def reference(source: dict[str, object]) -> dict[str, str]:
+        key = json.dumps(source, sort_keys=True)
+        if key not in refs:
+            refs[key] = f"shared_{len(refs)}"
+            sources[refs[key]] = source
+        return {"source_ref": refs[key]}
+
+    for criterion in payload["criteria"].values():
+        for record in criterion.get("reported_claims", criterion.get("sources", ())):
+            record["cited_sources"] = [reference(source) for source in record["cited_sources"]]
+        criterion["counterevidence"] = [reference(source) for source in criterion["counterevidence"]]
+    payload["shared_sources"] = sources
+    return [
+        messages[0].model_copy(
+            update={
+                "content": messages[0].content
+                + " Cited sources and counterevidence use source_ref entries into shared_sources. Resolve every "
+                "reference to its full source. Repeated references preserve each claim's own citation; record "
+                "indices still index that claim's cited_sources in order. Check every claim and every source."
+            }
+        ),
+        *messages[1:-1],
+        messages[-1].model_copy(update={"content": json.dumps(payload)}),
+    ]
+
+
+async def _check_answer_outputs(
+    jev: JevClient,
+    llm: LLMClient | None,
+    composed: ComposedAnswer,
+    notes: Notes,
+    checks: Sequence[str],
+    *,
+    tokens: TokenBudget,
+    ledger: Ledger | None,
+    missing_outputs: list[str] | None,
+    corrections: list[AnswerCorrection] | None,
+    allow_scalar_jev: bool = False,
+    task: str,
+    audit_cache: OutputAuditCache | None,
+    bounded: bool,
+    independent_fields: bool = True,
+) -> bool:
+    def fit(messages: Sequence[Message], schema: type[BaseModel]) -> None:
+        size = sum(len(message.content) for message in messages) + len(json.dumps(schema.model_json_schema()))
+        if bounded and size > tokens.input_chars():
+            raise NotesTooLarge(f"Answer evidence exceeds the {tokens.input_chars()} character verification budget")
+
+    def reject(failed: Sequence[str], *, repair: str | None = None) -> bool:
         if missing_outputs is not None:
             missing_outputs.extend(failed)
+        if repair is not None and corrections is not None:
+            # Missing identities or outputs can be repaired from uncited notes before browsing again.
+            corrections.extend(
+                AnswerCorrection(stage="source", criterion=criterion, claims=composed.claims, reason=repair)
+                for criterion in failed
+            )
         return False
 
     if not checks:
         return True
     if any(not check.strip() for check in checks):
         return False
+    if isinstance(composed, FieldAnswer):
+        missing = [
+            check
+            for check in checks
+            if not composed.output_claims.get(check)
+            or any(index < 0 or index >= len(composed.claims) for index in composed.output_claims[check])
+        ]
+        if missing:
+            return reject(missing, repair="This field has no claim. Report its value or a supported bounded absence.")
     context = _output_context(composed, notes)
     if context is None:
-        return False
+        known = {fact_id(fact) for fact in notes.facts}
+        if any(key not in known for claim in composed.claims for key in notes.expand_evidence_ids(claim.evidence_ids)):
+            return False
+        return reject(
+            checks,
+            repair="Some cited facts are no longer current or collection records are missing. "
+            "Use current source quotes and preserve their collection scope; do not cite superseded conclusions.",
+        )
     criteria = {f"output_{index}": check for index, check in enumerate(checks)}
     verbatim = False
     if allow_scalar_jev and len(composed.claims) == 1:
@@ -723,6 +867,7 @@ async def check_answer_outputs(
         if isinstance(cached, _OutputIdentities):
             resolved = cached
         else:
+            fit(messages, _identity_schema(uncertain))
             generated = await llm.generate(
                 LLMPurpose.VERIFY, messages, _identity_schema(uncertain), max_output_tokens=8000, ledger=ledger
             )
@@ -739,7 +884,7 @@ async def check_answer_outputs(
             for key, value in payload["bindings"].items():
                 refs = value["identity_ids"]
                 if any(ref not in shared for ref in refs):
-                    return reject((uncertain[key],))
+                    return reject((uncertain[key],), repair="The requested subject has no valid quoted identity.")
                 scopes[key] = _IdentityScope(
                     scope=value["scope"], identities=tuple(dict.fromkeys(shared[ref] for ref in refs))
                 )
@@ -749,14 +894,14 @@ async def check_answer_outputs(
         for key, criterion in uncertain.items():
             scope = resolved.bindings.get(key)
             if scope is None or scope.scope == "unresolved":
-                return reject((criterion,))
+                return reject((criterion,), repair="Cite a literal identifying quote for every requested subject.")
             if scope.scope == "subjectless":
                 if scope.identities:
-                    return reject((criterion,))
+                    return reject((criterion,), repair="The subject binding contradicts its quoted identities.")
                 continue
             bindings = scope.identities
             if not bindings:
-                return reject((criterion,))
+                return reject((criterion,), repair="Cite a literal identifying quote for every requested subject.")
             identities[key] = []
             for binding in bindings:
                 source = offered.get(binding.source_ref)
@@ -765,7 +910,7 @@ async def check_answer_outputs(
                     or not binding.quote.strip()
                     or not any(binding.quote in text for text in (source.quote, source.page_title or ""))
                 ):
-                    return reject((criterion,))
+                    return reject((criterion,), repair="The requested subject's identity is not in its cited sources.")
                 identity: dict[str, JsonValue] = {
                     "reference": criterion,
                     "url_ref": source.url_ref,
@@ -800,7 +945,7 @@ async def check_answer_outputs(
         await evaluate_batches(
             jev, {"answer": composed.answer}, selecting, tokens=tokens, ledger=ledger, allow_failed_batches=False
         )
-        if len(choices) <= MAX_CHOICE_OPTIONS
+        if len(choices) <= MAX_CHOICE_OPTIONS and not isinstance(composed, FieldAnswer)
         else None
     )
     if selected is not None and any(not isinstance(selected.answers.get(key), ChoiceAnswer) for key in selecting):
@@ -839,9 +984,17 @@ async def check_answer_outputs(
     for key, criterion in uncertain.items():
         chosen = selected.answers.get(key) if selected is not None else None
         choice = chosen.choice if isinstance(chosen, ChoiceAnswer) else "all"
-        if choice == "none":
-            return reject((criterion,))
-        if choice == "all":
+        if isinstance(composed, FieldAnswer):
+            indices = composed.output_claims[criterion]
+            selected_claims[key] = tuple(composed.claims[index] for index in indices)
+            claims = tuple(context.claims[index] for index in indices)
+            covered.update(indices)
+        elif choice == "none":
+            return reject(
+                (criterion,),
+                repair="The answer does not state this requested output. Use retained quotes to answer it.",
+            )
+        elif choice == "all":
             selected_claims[key] = composed.claims
             claims = context.claims
             if len(claims) == 1:
@@ -891,6 +1044,15 @@ async def check_answer_outputs(
                 *messages,
                 Message(role="user", content=json.dumps({"task": task, "criteria": {key: field}, "urls": urls})),
             ]
+            if independent_fields and isinstance(composed, FieldAnswer):
+                request[0] = request[0].model_copy(update={"content": request[0].content + "\n\n" + FIELD_CATEGORIES})
+            try:
+                fit(request, schema)
+            except NotesTooLarge:
+                # Answer claims can cite the same full collection. Share its bytes while preserving each
+                # claim's source membership, collection metadata and counterevidence.
+                request = _share_output_sources(request)
+                fit(request, schema)
             fingerprint = hashlib.sha256(
                 json.dumps(
                     {
@@ -951,7 +1113,9 @@ async def check_answer_outputs(
                 "An explicitly labeled value remains available alongside an eligibility-dependent alternative; "
                 "preserve those conditions rather than assuming one value supersedes the other. "
                 "An explicit exhaustive description can establish that no other members exist; absence from a "
-                "partial description cannot. A total alone does not provide a component breakdown. A value scoped "
+                "partial description cannot. An explicit empty-result quote can answer a request to find records "
+                "with a finding of none within its stated scope. Missing or unread content cannot. "
+                "A total alone does not provide a component breakdown. A value scoped "
                 "to one component, mode, tier or single-item configuration does not establish an aggregate value "
                 "or another configuration. Require the source scope to match the requested scope and preserve "
                 "explicit distinctions. Do not add independent component maxima unless quoted sources state "
@@ -982,7 +1146,10 @@ async def check_answer_outputs(
                 "Compared-record metadata preserves the reader's collection scope, completeness and indices "
                 "into these cited sources. A complete comparison establishes coverage of that scope, not "
                 "missing values, operand associations or the correctness of a conclusion. An incomplete "
-                "comparison cannot establish a whole-list winner. "
+                "comparison cannot establish a whole-list winner or absence. An absence can be derived from a "
+                "complete collection only when its quoted context identifies the collection and every cited "
+                "member includes the identity and fields needed to exclude a match. Check every member. "
+                "Coverage alone does not prove that none match, and establishes nothing outside that scope. "
                 "The quoted records must still identify matching entities and filters. Observed page titles provide "
                 "identity context, not missing field "
                 "evidence. Never reconstruct missing table column labels from prior knowledge. Return "
@@ -1019,7 +1186,9 @@ async def check_answer_outputs(
                 "requirements beyond it. Preserve explicitly stated conditions on alternative values; "
                 "do not assume an eligibility-dependent alternative supersedes an unrestricted value. "
                 "An explicit exhaustive description can establish absence of other "
-                "members, but a total alone does not evidence a component breakdown. A value scoped to one "
+                "members. A quoted empty-result message supports reporting no records within that page's scope, "
+                "not an unbounded claim that none exist elsewhere. Missing or unread content cannot prove absence. "
+                "A total alone does not evidence a component breakdown. A value scoped to one "
                 "component, mode, tier or single-item configuration does not establish an aggregate value or "
                 "another configuration. Preserve the quoted scope and explicit distinctions in every assertion. "
                 "Do not add independent component maxima unless quoted sources state that they apply "
@@ -1040,10 +1209,15 @@ async def check_answer_outputs(
                 "Compared-record metadata preserves the reader's collection scope, completeness and cited "
                 "source indices. Check the conclusion against every compared operand and the matching scope. "
                 "Completeness establishes coverage only, not values, associations or the winning result. "
-                "An incomplete comparison cannot establish a whole-list winner. "
+                "An incomplete comparison cannot establish a whole-list winner or absence. An absence claim "
+                "needs a complete collection identified by quoted context and every member's identity and "
+                "relevant fields. Check every member for a match and preserve the collection's bounded scope. "
                 "Observed page titles provide identity "
                 "context, not missing field evidence. Return yes only if every part of the requested output "
-                "is stated and evidenced by its own cited sources. Every factual assertion in every selected "
+                "is stated and evidenced by its own cited sources. For a criterion naming several fields, "
+                "check that the answer explicitly reports each one; other fields passing cannot cover an "
+                "omitted field. A collection with no matches supports an absence only when the answer "
+                "explicitly reports that bounded absence. Every factual assertion in every selected "
                 "claim must also be supported, including extra details the user did not request. One supported "
                 "value cannot excuse another unsupported value in the same claim. A subjective recommendation "
                 "may rest on a quoted property. A factual comparative advantage, including highest, lowest "
@@ -1095,6 +1269,9 @@ async def check_claims(
     allow_scalar_jev: bool = False,
     task: str = "",
     audit_cache: OutputAuditCache | None = None,
+    bounded: bool = False,
+    verified_fields: list[FieldAnswer] | None = None,
+    independent_fields: bool = True,
 ) -> ComposedAnswer | None:
     """The answer without any claim a check doubts, or None when a requirement is omitted from what is left or the
     pages where the run committed an action contradict it.
@@ -1103,9 +1280,8 @@ async def check_claims(
     those failed three runs in four of a correct sign-in answer. Removing a doubted claim asserts nothing new,
     so it is honest as long as the rest still answers: the omission check is asked again of what remains.
     """
-    questions = claim_check_questions(composed, notes, tokens=tokens)
-    if answer_checks:
-        questions = {key: question for key, question in questions.items() if key != _OMITTED}
+    # Explicit output audits replace the omission question; rendering its unused notes can exceed the budget.
+    questions = claim_check_questions(composed, notes, tokens=tokens, check_omission=not answer_checks)
     # An action-only task can finish without factual claims. Its completion was checked already,
     # and Jev rejects an empty question batch; dropped or uncited answer text still cannot pass.
     if not questions and not answer_checks:
@@ -1129,6 +1305,7 @@ async def check_claims(
             raise committed
         return {**claimed, **committed}
 
+    verified_outputs: list[str] = []
     checked, outputs_supported = await asyncio.gather(
         claims(),
         check_answer_outputs(
@@ -1144,6 +1321,9 @@ async def check_claims(
             allow_scalar_jev=allow_scalar_jev,
             task=task,
             audit_cache=audit_cache,
+            bounded=bounded,
+            verified_outputs=verified_outputs,
+            independent_fields=independent_fields,
         ),
         return_exceptions=True,
     )
@@ -1151,8 +1331,6 @@ async def check_claims(
         raise checked
     if isinstance(outputs_supported, BaseException):
         raise outputs_supported
-    if not outputs_supported:
-        return None
     answers = checked
     if transaction is not None:
         questions = {**questions, TRANSACTION_CONTRADICTED: transaction}
@@ -1176,6 +1354,26 @@ async def check_claims(
         for index, claim in enumerate(composed.claims)
         if max(_probability(answers, f"unsupported_{index}"), _probability(answers, f"contradicted_{index}")) <= limit
     )
+    if verified_fields is not None and isinstance(composed, FieldAnswer):
+        outputs = {
+            check: indices
+            for check, indices in composed.output_claims.items()
+            if check in verified_outputs and indices and all(composed.claims[i] in kept for i in indices)
+        }
+        accepted = tuple(dict.fromkeys(composed.claims[i] for indices in outputs.values() for i in indices))
+        if accepted:
+            base = assemble_answer(accepted, notes, composed.requirements)
+            verified_fields.append(
+                FieldAnswer(
+                    **base.model_dump(),
+                    output_claims={
+                        check: tuple(accepted.index(composed.claims[i]) for i in indices)
+                        for check, indices in outputs.items()
+                    },
+                )
+            )
+    if not outputs_supported:
+        return None
     if len(kept) == len(composed.claims):
         return composed
     # An action-only task needs no answer: the done check judged its completion, so a restatement of the action
@@ -1192,6 +1390,14 @@ async def check_claims(
         if supporting & was_cited and not supporting & cited:
             return None
     pruned = assemble_answer(kept, notes, composed.requirements)
+    if isinstance(composed, FieldAnswer):
+        pruned = FieldAnswer(
+            **pruned.model_dump(),
+            output_claims={
+                check: tuple(kept.index(composed.claims[i]) for i in indices if composed.claims[i] in kept)
+                for check, indices in composed.output_claims.items()
+            },
+        )
     if answer_checks:
         return (
             pruned
@@ -1208,6 +1414,8 @@ async def check_claims(
                 allow_scalar_jev=allow_scalar_jev,
                 task=task,
                 audit_cache=audit_cache,
+                bounded=bounded,
+                independent_fields=independent_fields,
             )
             else None
         )

@@ -80,9 +80,38 @@
     }
     return found ? registry.hoverContexts.get(found).control : null;
   };
+  const listIds = new WeakMap();
+  let nextListId = 0;
+  const listContext = nodes => {
+    const lists = new Set();
+    for (const node of nodes) {
+      let element = node.nodeType === 1 ? node : node.parentElement;
+      let list = null;
+      for (let parent = element; parent; parent = parent.parentElement) {
+        if (parent.matches('nav,[role="navigation"]')) return {};
+        if (parent.matches('ul,ol,[role="list"]')) list = parent;
+      }
+      if (!list) {
+        const nested = [...(element?.querySelectorAll('ul,ol,[role="list"]') ?? [])];
+        const outer = nested.filter(candidate => !nested.some(other => other !== candidate && other.contains(candidate)));
+        if (outer.length === 1) list = outer[0];
+      }
+      if (list) lists.add(list);
+    }
+    if (lists.size !== 1) return {};
+    const list = [...lists][0];
+    if (!listIds.has(list)) listIds.set(list, String(nextListId++));
+    const members = [...list.querySelectorAll('li,[role="listitem"]')].filter(member => {
+      for (let parent = member; parent && parent !== list; parent = parent.parentElement) {
+        if (hidden(parent)) return false;
+      }
+      return !!textOf(member);
+    });
+    return { list_id: listIds.get(list), list_count: members.length };
+  };
   const push = (kind, text, extra = {}, nodes = []) => {
     if (text)
-      blocks.push({ kind, text, heading_path: [...path], frame_path: framePath, source_path: sourcePath, control_context: controlOf(nodes), ...extra });
+      blocks.push({ kind, text, heading_path: [...path], frame_path: framePath, source_path: sourcePath, control_context: controlOf(nodes), ...listContext(nodes), ...extra });
   };
 
   // A cell can say what it says with an image or an icon alone: a flag marking the winner, a tick for "yes".

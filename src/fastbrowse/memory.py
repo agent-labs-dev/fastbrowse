@@ -53,6 +53,12 @@ class Fact(Frozen):
         return self
 
 
+class CollectionFact(Fact):
+    scope: str
+    comparison: Comparison
+    """Coverage of a quoted collection, independent of whether it answers every requested field."""
+
+
 class NotesTooLarge(RuntimeError):
     """A verdict cannot fit its requirement evidence without losing facts."""
 
@@ -91,7 +97,9 @@ def fact_id(fact: Fact) -> str:
         return f"tally:{digest[:16]}"
     if fact.evidence is not None:
         return evidence_id(fact.evidence)
-    digest = hashlib.sha256(json.dumps([fact.text, sorted(fact.basis)]).encode()).hexdigest()
+    # One collection can cover two or more requirements; each keeps its own coverage fact.
+    covers = [fact.comparison.requirement_id] if isinstance(fact, CollectionFact) else []
+    digest = hashlib.sha256(json.dumps([fact.text, sorted(fact.basis), *covers]).encode()).hexdigest()
     return f"derived:{digest[:16]}"
 
 
@@ -104,6 +112,7 @@ class Notes:
     def __init__(self, facts: Iterable[Fact] = ()) -> None:
         self._facts: dict[str, Fact] = {}
         self._requirements: dict[str, set[str]] = {}
+        self._owners: dict[str, set[str]] = {}
         self._retired: set[str] = set()
         self._tally_records: set[str] = set()
         self._record_ids: dict[tuple[str, str, str], list[dict[str, str]]] = {}
@@ -233,6 +242,7 @@ class Notes:
         requirements = self._requirements.setdefault(key, set())
         if fact.requirement_id is not None:
             requirements.add(fact.requirement_id)
+            self._owners.setdefault(key, set()).add(fact.requirement_id)
         if key in self._facts:
             previous = self._facts[key]
             basis = tuple(dict.fromkeys((*previous.basis, *fact.basis)))
@@ -252,6 +262,43 @@ class Notes:
 
     def fact_requirements(self, key: str) -> tuple[str, ...]:
         return tuple(sorted(self._requirements.get(key, ())))
+
+    def for_requirements(self, requirement_ids: Iterable[str], *, evidence_ids: Iterable[str] = ()) -> "Notes":
+        """Keep a requirement's sources, basis and same-page counterevidence without changing their validity."""
+        wanted = set(requirement_ids)
+        roots = {
+            key
+            for key, fact in self._facts.items()
+            if self._owners.get(key, set()) & wanted
+            or self._requirements[key] & wanted
+            or (fact.tally is not None and fact.tally.requirement_id in wanted)
+            or (isinstance(fact, CollectionFact) and fact.comparison.requirement_id in wanted)
+        }
+        roots.update(key for requirement in wanted for key in self.comparison_records(requirement))
+        roots.update(evidence_ids)
+        kept = set(self.expand_evidence_ids(roots))
+        locations = {(_address(source.url), source.frame_id) for key, source in self.evidence.items() if key in kept}
+        # Identity quotes and conflicting values need not have been selected as answers by the reader.
+        kept.update(
+            key for key, source in self.evidence.items() if (_address(source.url), source.frame_id) in locations
+        )
+        kept = set(self.expand_evidence_ids(kept))
+        scoped = Notes()
+        scoped._facts = {key: fact for key, fact in self._facts.items() if key in kept}
+        scoped._requirements = {key: set(self._requirements[key]) for key in scoped._facts}
+        scoped._owners = {key: set(self._owners.get(key, ())) for key in scoped._facts}
+        scoped._retired = self._retired & kept
+        scoped._tally_records = self._tally_records & kept
+        scoped._continuation_records = {
+            requirement: records & kept for requirement, records in self._continuation_records.items()
+        }
+        scoped._record_ids = {
+            identity: [dict(occurrence) for occurrence in occurrences]
+            for identity, occurrences in self._record_ids.items()
+            if identity[0] in wanted
+        }
+        scoped._pages = dict(self._pages)
+        return scoped
 
     def evidenced(self, requirement_id: str) -> bool:
         return any(requirement_id in requirements for requirements in self._requirements.values())
@@ -340,17 +387,28 @@ class Notes:
     def unresolved(self, plan: Plan) -> tuple[Requirement, ...]:
         return tuple(requirement for requirement in plan.requirements if not self.evidenced(requirement.id))
 
-    def render_for_navigation(self, max_chars: int) -> str:
-        """Recent claims for picking the next action; completion checks use full quoted evidence."""
+    def render_for_navigation(self, max_chars: int, *, quotes: bool = False) -> str:
+        """Claims across read sources for picking the next action; completion checks use full quoted evidence.
+
+        `quotes` adds each claim's literal source text where it fits, for a writer that must copy a value exactly.
+        """
         if max_chars < 0:
             raise ValueError("max_chars must be nonnegative")
         marker = f"[{len(self._facts)} facts omitted]"
         lines: list[str] = []
         sources: dict[str, int] = {}
         used = len(marker)
+        ranks: dict[str | None, int] = {}
+        ranked: list[tuple[int, str, Fact]] = []
+        # Repeated reads of one page must not push every earlier source out of the next action's memory.
+        for key, fact in reversed(self._facts.items()):
+            address = fact.evidence.url if fact.evidence is not None else None
+            rank = ranks.get(address, 0)
+            ranked.append((rank, key, fact))
+            ranks[address] = rank + 1
         # A long source quote can consume the whole action budget and hide which items were already checked.
         # Actions need progress claims; readers and verification retain their separate quoted view.
-        for key, fact in reversed(self._facts.items()):
+        for _, key, fact in sorted(ranked, key=lambda entry: entry[0]):
             source = ""
             if fact.evidence is not None:
                 address = fact.evidence.url
@@ -366,6 +424,11 @@ class Notes:
                 f"{json.dumps(fact.text, ensure_ascii=False)} "
                 f"requirements={','.join(sorted(self._requirements[key])) or '-'}{source}"
             )
+            if quotes and fact.evidence is not None:
+                # A claim is model prose and can normalize a code or a name; the quote is what the page said.
+                quoted = f"{line} quote={json.dumps(fact.evidence.quote, ensure_ascii=False)}"
+                if used + len(quoted) + 1 <= max_chars:
+                    line = quoted
             if used + len(line) + 1 <= max_chars:
                 lines.append(line)
                 used += len(line) + 1
@@ -389,6 +452,8 @@ class Notes:
         max_chars: int,
         *,
         preserve_requirements: bool = False,
+        preserve_collections: bool = False,
+        source_only: bool = False,
         json_encoded: bool = False,
         labels: Mapping[str, str] | None = None,
     ) -> RenderedNotes:
@@ -435,10 +500,19 @@ class Notes:
             )
             if fact.evidence is not None and fact.evidence.control_context is not None:
                 source += f" control_context={fact.evidence.control_context.model_dump_json()}"
+            if preserve_collections and fact.comparison is not None:
+                comparison = fact.comparison
+                complete = comparison.complete and (
+                    isinstance(fact, CollectionFact) or comparison.requirement_id in self._requirements[key]
+                )
+                source += f" collection_for={comparison.requirement_id} complete={str(complete).lower()}"
+                if isinstance(fact, CollectionFact):
+                    source += f" scope={json.dumps(fact.scope)}"
             # Quoted basis facts use the source text as their claim; sending it twice inflates every later read.
             text = (
                 ""
-                if fact.evidence is not None and fact.text == fact.evidence.quote
+                if (fact.evidence is not None and fact.text == fact.evidence.quote)
+                or (source_only and fact.tally is None and fact.comparison is None)
                 else json.dumps(fact.text, ensure_ascii=False) + " "
             )
             return (

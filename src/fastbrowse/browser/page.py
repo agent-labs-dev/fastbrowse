@@ -227,6 +227,8 @@ class _SnapshotBlock(Frozen):
     frame_path: str | None = None
     source_path: str = ""
     href: str | None = None
+    list_id: str | None = None
+    list_count: int | None = None
 
 
 class _CaptureSnapshot(_FrameText):
@@ -583,6 +585,10 @@ class CdpPage(Page):
                         end=end,
                         heading_path=block.heading_path,
                         href=block.href,
+                        list_id=f"{frame_id or _MAIN}/{block.source_path}:{block.list_id}"
+                        if block.list_id is not None
+                        else None,
+                        list_count=block.list_count,
                     )
                 )
         for download_index, download in enumerate(self._session.download_texts()):

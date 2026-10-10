@@ -13,7 +13,7 @@ import re
 import time
 from collections import deque
 from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence, Set
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import Self
 from urllib.parse import parse_qsl, urljoin, urlsplit
@@ -37,7 +37,7 @@ from fastbrowse.effects import (
 )
 from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, JevClient, JevError, NoulAnswer, NoulQuestion
 from fastbrowse.llm import Generation, LLMClient, LLMError, Message
-from fastbrowse.memory import Fact, Notes, NotesTooLarge, fact_id, shows
+from fastbrowse.memory import CollectionFact, Fact, Notes, NotesTooLarge, evidence_id, fact_id, shows
 from fastbrowse.models import (
     SCROLLING,
     UNTRUSTED,
@@ -80,7 +80,7 @@ from fastbrowse.page import (
     SiteUnreachable,
     pager_link,
 )
-from fastbrowse.planner import Plan, Requirement, RequirementKind, RunReport, make_plan
+from fastbrowse.planner import Plan, Requirement, RequirementKind, RunReport, make_plan, partition_plan
 from fastbrowse.policy import (
     Decision,
     HistoryEntry,
@@ -94,13 +94,16 @@ from fastbrowse.policy import (
 from fastbrowse.retrieval import (
     AnswerCorrection,
     ComposedAnswer,
+    FieldAnswer,
     ReadOutcome,
     TallyReader,
+    assemble_answer,
     compose,
     draft_answer,
     partial_answer,
     read,
     read_tallies,
+    retain_fields,
 )
 from fastbrowse.safety import (
     Redactor,
@@ -214,6 +217,13 @@ _FIELD_RULES = (
 
 _FIELD_WRITER = "# Field writer\nWrite only the text for one form field. " + _FIELD_RULES
 
+_OUTPUT_SEARCH = (
+    "For a search field, form a query from a named target in the task that still has unresolved requirements "
+    "or unverified outputs. A previous search does not establish that its outputs were found. A read-only "
+    "task permits searching for its requested information. Do not clear a search merely because the task "
+    "does not dictate a literal query. "
+)
+
 _FORM_WRITER = (
     "# Form writer\nWrite text for ALL the listed empty fields whose values the task or notes supply. "
     "These fields belong to one form. Filling several contact or address fields together is one task step: "
@@ -308,6 +318,13 @@ class _PageRead:
     frame: bytes | None
 
 
+class _ObservedLink(Frozen):
+    source: str
+    title: str
+    label: str
+    url: str
+
+
 @dataclass(slots=True)
 class _RunState:
     task: str
@@ -317,6 +334,17 @@ class _RunState:
     ledger: Ledger
     planning: asyncio.Task[Generation[Plan]]
     notes: Notes = field(default_factory=Notes)
+    finish_partitions: tuple[Plan, ...] = ()
+    oversized_answer: bool = False
+    read_source_sizes: dict[str, int] = field(default_factory=dict)
+    pending_collections: dict[str, tuple[str, tuple[Fact, ...]]] = field(default_factory=dict)
+    partition_answers: dict[str, ComposedAnswer] = field(default_factory=dict)
+    partial_answers: dict[str, FieldAnswer] = field(default_factory=dict)
+    partition_failures: dict[str, tuple[tuple[str, ...], tuple[AnswerCorrection, ...]]] = field(default_factory=dict)
+    recovered_outputs: set[str] = field(default_factory=set)
+    recovered_sources: set[str] = field(default_factory=set)
+    recovered_collections: set[tuple[str, str]] = field(default_factory=set)
+    verified_answer: ComposedAnswer | None = None
     missing_answer_outputs: tuple[str, ...] = ()
     answer_corrections: tuple[AnswerCorrection, ...] = ()
     output_audit_cache: OutputAuditCache = field(default_factory=dict)
@@ -350,6 +378,7 @@ class _RunState:
     """Controls a fill or select has written, by document, so only a field's first new value counts as progress by
     itself. A new document restarts control ids, and its fields would otherwise inherit the last page's writes."""
     recoveries: int = 0
+    recovered_requirements: set[str] = field(default_factory=set)
     terminal_verification_attempted: bool = False
     blank_opening_checked: bool = False
     recovery_log: deque[str] = field(default_factory=lambda: deque(maxlen=_RECOVERY_RECORDS))
@@ -363,8 +392,9 @@ class _RunState:
     """What became of each action taken from each page state, which is how a cycle is told from progress."""
     last_page: tuple[str, str] | None = None
     reached: dict[str, int] = field(default_factory=dict[str, int])
-    """Each page state the run has been in, with how many actions had been taken when it was first reached. Only
-    reaching a new one restores the recovery budget or counts an action that changed the page as progress."""
+    """Each page state and the action count when it was first reached."""
+    reached_with_evidence: dict[str, frozenset[tuple[str, str | None, str]]] = field(default_factory=dict)
+    """Source evidence already available at each action state; repeated quotes cannot renew recovery there."""
     left: str | None = None
     """The state the last action that changed the page was taken from, until the next observation judges it."""
     crossed: set[tuple[str, str, str]] = field(default_factory=set[tuple[str, str, str]])
@@ -432,6 +462,8 @@ class _RunState:
     visited: dict[str, None] = field(default_factory=dict[str, None])
     """Addresses observed without an HTTP error, in order, including the starting address.
     An error at an address removes it until a later successful observation."""
+    observed_links: dict[str, _ObservedLink] = field(default_factory=dict)
+    read_urls: set[str] = field(default_factory=set)
     redecided: bool = False
     """A decision was dropped because the page redrew under it, so nothing is watched until an action is taken."""
     missing: set[tuple[str, str | None]] = field(default_factory=set[tuple[str, str | None]])
@@ -767,6 +799,22 @@ class Agent:
                 continue
             if await self._reread_if_changed(state, observation):
                 continue
+            if (
+                state.open_answer_outputs
+                and not state.owes_read
+                and state.rejected_answer_evidence != _answer_evidence(state.notes)
+                and state.history
+                and state.history[-1].read_progress
+                and (plan := state.ready_plan) is not None
+                and _lookup(plan)
+                and _answered(plan, state.notes)
+            ):
+                # Recovery's missing-output list describes the rejected draft. New quoted support needs another
+                # finish check before that stale list sends the browser back to content it has already read.
+                result = await self._finish(state, output_schema, until)
+                if result is not None:
+                    return result
+                continue
             if (paging := _paging(state, _without_failed_links(state, observation))) is not None:
                 if await self._step(state, observation, paging, Decider.LLM, gate=False):
                     await self._recover(state, observation, _read_exhausted(state))
@@ -821,7 +869,7 @@ class Agent:
                 decision = _code_decision(Operation.READ, None)
             uncertain = decision.confidence < self._config.thresholds.recover_below
             decided_by = Decider.JEV
-            if (uncertain or decision.operation not in _NOT_ACTING) and (
+            if (state.open_answer_outputs or uncertain or decision.operation not in _NOT_ACTING) and (
                 directed := _follow_recovery(
                     state, _without_failed_links(state, observation), decision, uncertain=uncertain
                 )
@@ -1364,6 +1412,15 @@ class Agent:
         """
         key = state_key(observation)
         first = state.reached.get(key)
+        evidence = (
+            _answer_evidence(state.notes, include_answer=False)
+            if state.ready_plan is not None
+            and any(r.kind is RequirementKind.ACTION for r in state.ready_plan.requirements)
+            else frozenset()
+        )
+        prior = state.reached_with_evidence.get(key, evidence)
+        new_context = evidence - prior
+        state.reached_with_evidence[key] = prior | evidence
         if first is None:
             if state.http_failure is not None and (
                 (observation.response_status is None and observation.url != state.http_failure.url)
@@ -1371,11 +1428,14 @@ class Agent:
             ):
                 state.http_failure = None
             state.reached[key] = len(state.history)
-            if renews and (
-                not state.open_answer_outputs or _answer_evidence(state.notes) != state.rejected_answer_evidence
-            ):
-                state.recoveries = 0
-                state.recovery_log.clear()
+        # Returning to a form with a newly read prerequisite is progress once for that state and those sources.
+        if (
+            (first is None or new_context)
+            and renews
+            and (not state.open_answer_outputs or _answer_evidence(state.notes) != state.rejected_answer_evidence)
+        ):
+            state.recoveries = 0
+            state.recovery_log.clear()
         left, state.left = state.left, None
         if left is None:
             return None
@@ -1452,6 +1512,23 @@ class Agent:
             state.visited.pop(observation.url, None)
         else:
             state.visited[observation.url] = None
+            for control in observation.controls:
+                # External display hrefs omit their scheme and query, so they cannot be replayed as destinations.
+                if (
+                    control.role == "link"
+                    and control.frame_id is None
+                    and control.href
+                    and control.href.startswith(("/", "http://", "https://"))
+                    and Operation.CLICK in control.operations
+                ):
+                    try:
+                        url = urljoin(observation.url, control.href)
+                    except ValueError:
+                        continue
+                    if urlsplit(url).scheme in {"http", "https"}:
+                        state.observed_links[url] = _ObservedLink(
+                            source=observation.url, title=observation.title, label=control.label, url=url
+                        )
         link, state.pending_link = state.pending_link, None
         if observation.response_status is not None:
             if observation.response_status >= 400:
@@ -1655,11 +1732,14 @@ class Agent:
         target = decision.target
         match decision.operation:
             case Operation.NAVIGATE:
-                if decision.url is None or decision.url not in task_urls(state.task, start=state.caller_start):
+                observed = decision.directed and decision.url in state.observed_links
+                if decision.url is None or (
+                    decision.url not in task_urls(state.task, start=state.caller_start) and not observed
+                ):
                     raise _Stop(Status.STUCK, "navigation address was not supplied by the caller")
                 if self._redactor.reveals(decision.url):
                     raise _Stop(Status.NEEDS_INPUT, "navigation address contains a resolved secret")
-                if gate:
+                if gate and not observed:
                     state.ledger.reserve(CostComponent.JEV)
                     evaluation = await self._jev.evaluate(
                         {"task": state.task, "address": decision.url},
@@ -1905,7 +1985,9 @@ class Agent:
             return _next_value(value.values, state.history, target.label) if len(value.values) > 1 else value.text
         context = await self._field_context(state, observation, target)
         messages = [
-            Message(role="system", content=_FIELD_WRITER),
+            Message(
+                role="system", content=_FIELD_WRITER + ("\n\n" + _OUTPUT_SEARCH if state.open_answer_outputs else "")
+            ),
             Message(role="user", content=json.dumps(context)),
         ]
         written = await self._write_field(state, messages, target)
@@ -1938,6 +2020,14 @@ class Agent:
             # Given only the task, the writer typed "enter X, later correct it to Y" as Y on the first pass every
             # time, and no Back could then show a correction; in order, it typed X first and Y after going back.
             "requirements": [r.text for r in (await state.await_plan()).requirements],
+            **(
+                {
+                    "unresolved_requirements": [r.text for r in state.notes.unresolved(state.plan)],
+                    "unverified_outputs": list(state.open_answer_outputs),
+                }
+                if state.open_answer_outputs
+                else {}
+            ),
             "subgoal": state.hint,
             "field": target.model_dump(mode="json", exclude_none=True),
             "other_fields": [
@@ -1964,7 +2054,7 @@ class Agent:
                 entry.model_dump(mode="json", exclude_none=True)
                 for entry in _record(state.history, self._config.observation)
             ],
-            "notes": state.notes.render(self._config.observation.working_notes_chars),
+            "notes": state.notes.render_for_navigation(self._config.observation.working_notes_chars, quotes=True),
         }
 
     async def _fill_form(self, state: _RunState, observation: Observation, decision: Decision) -> bool:
@@ -2140,6 +2230,19 @@ class Agent:
         if observation.dialog is not None:
             return False
         if (
+            state.oversized_answer
+            and state.open_answer_outputs
+            and state.owes_read
+            and state.ready_plan is not None
+            and _lookup(state.ready_plan)
+            and not any(
+                key[0] == observation.document_key and key[-1] == state.open_answer_outputs for key in state.reads
+            )
+        ):
+            # Recovery selected this source to repair missing fields. Uncertainty about the next click
+            # cannot spend another recovery before its evidence is read.
+            return not await self._step(state, observation, _code_decision(Operation.READ, None), Decider.LLM)
+        if (
             decision.operation is Operation.BACK
             and observation.document_key not in state.record_read_documents
             and not any(key[0] == observation.document_key for key in state.reads)
@@ -2239,13 +2342,31 @@ class Agent:
         """Return (added evidence, skipped duplicate), since only new evidence makes a read progress."""
         capture = capture or await self._capture()
         plan = await state.await_plan()
+        if _lookup(plan):
+            # Reader-selected excerpts cannot decide whether the full sources fit together in one prompt.
+            state.read_source_sizes[capture.url] = len(capture.text)
+            state.oversized_answer |= sum(state.read_source_sizes.values()) > self._config.tokens.input_chars()
         wanted = [r for r in state.notes.unresolved(plan) if r.kind is RequirementKind.INFORMATION]
         transaction_pending = _unread_transaction(state)
         owed = transaction_pending or (not wanted and state.owes_read and plan.page_answer_expected)
-        if owed:
+        if owed or (not wanted and state.open_answer_outputs):
             # Every requirement was evidenced off the page before the last interaction redrew it, so they are
             # asked again of what it drew: a reader asked nothing would leave the pre-filter fare answering.
             wanted = [r for r in plan.requirements if r.kind is RequirementKind.INFORMATION]
+        if state.open_answer_outputs and state.oversized_answer and state.finish_partitions and not transaction_pending:
+            wanted = [
+                requirement.model_copy(update={"text": "; ".join(outputs)})
+                for group in state.finish_partitions
+                if (
+                    outputs := tuple(
+                        check
+                        for check in state.open_answer_outputs
+                        if check in (*group.answer_checks, *(r.text for r in group.requirements))
+                    )
+                )
+                for requirement in group.requirements
+                if requirement.kind is RequirementKind.INFORMATION
+            ]
         budget: ReadKey | None = None
         if observation is not None:
             wanted_ids = tuple(r.id for r in wanted)
@@ -2296,6 +2417,7 @@ class Agent:
         question = read_question(state.task, wanted, began_at=None if began is None else self._redactor.redact(began))
         if state.open_answer_outputs:
             question += "\nStill missing or unsupported answer outputs: " + "; ".join(state.open_answer_outputs)
+        question += _field_corrections(state)
         needs_context = any(r.kind is RequirementKind.ACTION for r in plan.requirements)
         if needs_context:
             question += (
@@ -2316,12 +2438,30 @@ class Agent:
             ledger=state.ledger,
             jev=None if needs_context else self._jev,
             requirements=wanted,
-            revalidate=owed,
+            # Rebinding old quotes during output recovery does not make revisiting their page a fresh source.
+            revalidate=owed and (transaction_pending or not state.open_answer_outputs or not state.oversized_answer),
+            recovering_outputs=state.oversized_answer and bool(state.open_answer_outputs),
+            preserve_collections=bool(state.finish_partitions or state.open_answer_outputs),
+            field_outputs=state.oversized_answer and bool(state.finish_partitions),
             notice=notice,
             continuing=state.continuing,
             incomplete=state.incomplete,
             require_all_evidence=require_all_evidence or (state.through_end and state.pages > 0),
         )
+        if _lookup(plan):
+            previous = state.pending_collections.get(capture.url)
+            retained = previous[1] if previous is not None and previous[0] == capture.sha256 else ()
+            state.pending_collections[capture.url] = (
+                capture.sha256,
+                tuple({fact_id(fact): fact for fact in (*retained, *outcome.collection_facts)}.values()),
+            )
+            if state.oversized_answer:
+                # Earlier reads keep page-proven coverage outside ordinary notes until the sources need
+                # separate prompts. Entering recovery must not require the same collection to be read again.
+                for _, collection_facts in state.pending_collections.values():
+                    for fact in collection_facts:
+                        state.notes.add(fact)
+                state.pending_collections.clear()
         for candidate in state.transaction_candidates:
             candidate.outcome_read = True
         for requirement in wanted:
@@ -2358,6 +2498,7 @@ class Agent:
             # forward with these missing is incomplete in the notes, which the trace should say out loud.
             uncovered=outcome.uncovered,
         )
+        state.read_urls.add(capture.url)
         spent(progressed)
         if observation is not None:
             state.read_at[state_key(observation)] = capture.sha256
@@ -2720,6 +2861,54 @@ class Agent:
     ) -> None:
         state.form_values.clear()
         reason = self._redactor.redact(reason)
+        remaining = state.notes.unresolved(state.ready_plan) if state.ready_plan else ()
+        evidenced = (
+            {r.id for r in state.ready_plan.requirements if r.kind is RequirementKind.INFORMATION}
+            - {r.id for r in remaining}
+            if state.ready_plan
+            else set()
+        )
+        # Reading another target advances a comparison even when its next route is a previously visited list.
+        # Reopening the same requirement after a failed answer check cannot restore recovery repeatedly.
+        verified_outputs: set[str] = set()
+        for plan in state.finish_partitions if state.oversized_answer else ():
+            proof = _partition_proof(
+                plan, state.notes.for_requirements(r.id for r in plan.requirements), state.invented
+            )
+            if proof in state.partition_answers:
+                verified_outputs.update(plan.answer_checks)
+            elif partial := state.partial_answers.get(proof):
+                verified_outputs.update(partial.output_claims)
+        current_sources = state.notes.current_evidence() if state.oversized_answer else {}
+        sources = {source.url for source in current_sources.values()}
+        collections = {
+            (source.url, fact.scope)
+            for fact in state.notes.facts
+            if state.oversized_answer and isinstance(fact, CollectionFact) and fact.comparison.complete
+            for key in fact.basis
+            if (source := current_sources.get(key)) is not None
+        }
+        if (
+            (evidenced - state.recovered_requirements and not state.open_answer_outputs)
+            or verified_outputs - state.recovered_outputs
+            or sources - state.recovered_sources
+            or collections - state.recovered_collections
+        ):
+            state.recoveries = 0
+            state.recovery_log.clear()
+        state.recovered_requirements.update(evidenced)
+        state.recovered_outputs.update(verified_outputs)
+        state.recovered_sources.update(sources)
+        state.recovered_collections.update(collections)
+        open_requirements = "\n".join(
+            f"- {r.text}"
+            + (
+                " (the reader saw the list this ranges over go on past what the page shows: load the rest first)"
+                if r.id in state.continuing
+                else ""
+            )
+            for r in remaining
+        )
         state.recoveries += 1
         # Recovery spends every tripwire's evidence so the same threshold crossing cannot trigger it again.
         state.unchanged = 0
@@ -2728,7 +2917,8 @@ class Agent:
         if state.recoveries > self._config.stall.max_recoveries:
             if state.http_failure is not None and gives_up_as is not Status.NEEDS_INPUT:
                 raise state.http_failure.stop()
-            raise _Stop(gives_up_as, reason)
+            detail = f"{reason}\nStill to find:\n{open_requirements}" if open_requirements else reason
+            raise _Stop(gives_up_as, detail)
         destinations = navigation_urls(
             state.task,
             observation.url,
@@ -2736,6 +2926,10 @@ class Agent:
             start_landing=state.start_landing_url,
             include_start=True,
         )
+        routes = _recovery_routes(state, self._config.observation.working_notes_chars)
+        caller_destinations = destinations
+        if state.open_answer_outputs:
+            destinations = tuple(dict.fromkeys((*destinations, *state.observed_links)))
         steps = "\n".join(
             f"- {h.operation.value if h.operation else 'open'} {h.target or ''} -> {h.outcome.value}"
             + (f": {h.effect}" if h.effect else "")
@@ -2748,19 +2942,6 @@ class Agent:
         # books" three times, and stopped stuck with the answer in hand.
         # Without the reader's word that a list goes on, a note holding the best record SO FAR reads as the answer:
         # a run with the cheapest of the first few flights noted was sent to finish, and the done check refused.
-        open_requirements = (
-            "\n".join(
-                f"- {r.text}"
-                + (
-                    " (the reader saw the list this ranges over go on past what the page shows: load the rest first)"
-                    if r.id in state.continuing
-                    else ""
-                )
-                for r in state.notes.unresolved(state.ready_plan)
-            )
-            if state.ready_plan
-            else ""
-        )
         secrets = (
             f"\n\n## Stored secrets\n{', '.join(stored)}. Filling a field with one types its hidden value."
             if stored
@@ -2803,6 +2984,17 @@ class Agent:
                         "the controls there instead of repeating actions on the guessed page. "
                         "Dates are relative to the supplied current date.\n\n"
                         f"# Trust\n{UNTRUSTED}"
+                        + (
+                            "\n\nUse the unverified field and target to choose its unread source section. "
+                            "Observed links list exact destinations, source titles and whether they were read. "
+                            "navigate may also open one of those observed destinations. Prefer the relevant "
+                            "unread section to rereading or scrolling a section already captured. "
+                            "When the missing field is a link destination, "
+                            "read the section containing actual links. Follow the target's observed section "
+                            "link even when another field is already evidenced."
+                            if state.open_answer_outputs
+                            else ""
+                        )
                     ),
                 ),
                 Message(
@@ -2813,18 +3005,21 @@ class Agent:
                         f"{observation.viewport_text}{secrets}\n\n"
                         f"## Caller start page\n{self._redactor.redact(state.started_url or state.first_url or '')}\n\n"
                         "## Caller-supplied addresses\n"
-                        f"{json.dumps(destinations)}\n\n"
-                        f"## Current address was proposed\n{observation.url in state.invented}\n\n"
+                        f"{json.dumps(caller_destinations)}\n\n"
+                        + (f"## Observed section links\n{routes}\n\n" if state.open_answer_outputs else "")
+                        + f"## Current address was proposed\n{observation.url in state.invented}\n\n"
                         f"## HTTP failure\n{state.http_failure.message if state.http_failure else 'none'}\n\n"
                         "## Notes read so far\n"
-                        f"{state.notes.render(self._config.observation.working_notes_chars) or 'none'}\n\n"
+                        f"{state.notes.render_for_navigation(self._config.observation.working_notes_chars) or 'none'}"
+                        "\n\n"
                         f"## Recent steps\n{steps}\n\n"
                         "## Recovery memory\n"
                         f"{_recovery_memory(state, self._config.stall.max_recoveries, self._redactor)}\n\n"
                         f"## Current date\n{observation.today}\n\n"
                         f"## Still to find\n{open_requirements or 'nothing'}\n\n"
                         f"## Unverified answer outputs\n{'; '.join(state.open_answer_outputs) or 'none'}\n\n"
-                        f"## Task\n{state.task}\n\n## Problem\n{reason}"
+                        + _field_corrections(state)
+                        + f"## Task\n{state.task}\n\n## Problem\n{reason}"
                     ),
                     images=await self._screenshots(),
                 ),
@@ -2955,6 +3150,131 @@ class Agent:
         output_schema: type[BaseModel] | None,
         until: UntilCheck | None,
     ) -> RunResult | None:
+        if not state.finish_partitions:
+            if not state.oversized_answer:
+                try:
+                    return await self._finish_whole(state, output_schema, until)
+                except NotesTooLarge:
+                    state.oversized_answer = True
+            # Independent outputs need separate evidence envelopes, not fewer source quotes.
+            try:
+                state.finish_partitions = await partition_plan(
+                    self._llm, state.task, state.plan, ledger=state.ledger, independent_fields=state.oversized_answer
+                )
+            except LLMError as error:
+                raise _Stop(Status.UNVERIFIED, str(error)) from error
+        return await self._finish_partitioned(state, output_schema, until)
+
+    async def _finish_partitioned(
+        self,
+        state: _RunState,
+        output_schema: type[BaseModel] | None,
+        until: UntilCheck | None,
+    ) -> RunResult | None:
+        if state.open_answer_outputs and state.rejected_answer_evidence == _answer_evidence(state.notes):
+            fresh = await self._observe()
+            reason = "DONE rejected, no new output evidence: " + "; ".join(state.open_answer_outputs)
+            await self._recover(state, fresh, reason, gives_up_as=Status.UNVERIFIED)
+            return None
+        missing: list[str] = []
+        corrections: list[AnswerCorrection] = []
+        verified: list[ComposedAnswer] = []
+        oversized: list[str] = []
+        transactions = await self._transaction_evidence_ids(state)
+        for plan in state.finish_partitions:
+            notes = state.notes.for_requirements((r.id for r in plan.requirements), evidence_ids=transactions)
+            proof = _partition_proof(plan, notes, state.invented)
+            cached = state.partition_answers.get(proof) if _lookup(plan) else None
+            if cached is not None:
+                verified.append(cached)
+                continue
+            if (
+                state.oversized_answer
+                and _lookup(plan)
+                and (rejection := state.partition_failures.get(proof)) is not None
+            ):
+                missing.extend(rejection[0])
+                corrections.extend(rejection[1])
+                continue
+            child = replace(
+                state,
+                task=state.task
+                + "\n\nThis pass checks only these requirements: "
+                + "; ".join(r.text for r in plan.requirements)
+                + ". Other requirements are checked in separate passes. Retain the original task's constraints.",
+                ready_plan=plan,
+                notes=notes,
+                finish_partitions=(plan,),
+                verified_answer=next(
+                    (
+                        answer
+                        for answer in reversed((*state.partial_answers.values(), *state.partition_answers.values()))
+                        if answer.requirements == plan.requirements
+                    ),
+                    None,
+                )
+                if _lookup(plan)
+                else None,
+                missing_answer_outputs=(),
+                open_answer_outputs=(),
+                answer_corrections=tuple(
+                    correction
+                    for correction in state.answer_corrections
+                    if correction.criterion in (*plan.answer_checks, *(r.text for r in plan.requirements))
+                ),
+                rejected_answer_evidence=None,
+                answer_check_evidence=None,
+                answer_check_cache={},
+            )
+            try:
+                result = await self._finish_whole(child, None, None, partition=True)
+            except NotesTooLarge as error:
+                oversized.append(str(error))
+                result = None
+            if result is not None and result.status is Status.COMPLETE and child.verified_answer is not None:
+                if _lookup(plan):
+                    state.partition_answers[proof] = child.verified_answer
+                verified.append(child.verified_answer)
+            elif result is None or result.status is not Status.COMPLETE:
+                missing.extend(child.missing_answer_outputs or tuple(r.text for r in plan.requirements))
+                corrections.extend(child.answer_corrections)
+                if state.oversized_answer and _lookup(plan) and child.missing_answer_outputs:
+                    state.partition_failures[proof] = child.missing_answer_outputs, child.answer_corrections
+        state.missing_answer_outputs = state.open_answer_outputs = tuple(dict.fromkeys(missing))
+        state.answer_corrections = tuple(corrections)
+        if missing:
+            reason = "DONE rejected: " + "; ".join(f"Answer output not verified: {item}" for item in missing)
+            if oversized:
+                return self._partial_result(
+                    state.notes, state, state.ledger, Status.UNVERIFIED, reason + "; " + "; ".join(oversized)
+                )
+            state.rejected_answer_evidence = _answer_evidence(state.notes)
+            fresh = await self._observe()
+            await self._record_failure(state, fresh, Operation.DONE, reason, decided_by=Decider.LLM)
+            await self._recover(state, fresh, reason, gives_up_as=Status.UNVERIFIED)
+            return None
+        answer = assemble_answer(
+            tuple(dict.fromkeys(claim for part in verified for claim in part.claims)),
+            state.notes,
+            state.plan.requirements,
+        )
+        try:
+            result = await self._conclude(state, output_schema, answer)
+        except NotesTooLarge as error:
+            return self._partial_result(state.notes, state, state.ledger, Status.UNVERIFIED, str(error))
+        if until is not None and not await until((self._raw_observation or await self._observe()).url):
+            await self._recover(state, await self._observe(), "Completion condition not satisfied")
+            return None
+        return result
+
+    async def _finish_whole(
+        self,
+        state: _RunState,
+        output_schema: type[BaseModel] | None,
+        until: UntilCheck | None,
+        *,
+        partition: bool = False,
+    ) -> RunResult | None:
         """Return the final result when DONE holds up; None sends the loop back to work.
 
         Search results can arrive or disappear without changing the URL or document. Completion needs a fresh
@@ -2970,8 +3290,9 @@ class Agent:
         state.reset_answer_check()
         if state.open_answer_outputs and state.rejected_answer_evidence == _answer_evidence(state.notes):
             # Re-reading the same partial quotes must not buy another completion check or reset recovery.
-            state.notes.unevidence(r.id for r in state.plan.requirements if r.kind is RequirementKind.INFORMATION)
-            state.rejected_answer_evidence = _answer_evidence(state.notes)
+            if not state.finish_partitions:
+                state.notes.unevidence(r.id for r in state.plan.requirements if r.kind is RequirementKind.INFORMATION)
+                state.rejected_answer_evidence = _answer_evidence(state.notes)
             reason = "DONE rejected, no new output evidence: " + "; ".join(state.open_answer_outputs)
             await self._recover(state, fresh, reason, gives_up_as=Status.UNVERIFIED)
             return None
@@ -3041,7 +3362,7 @@ class Agent:
                 # Write the answer while the verifier is still deciding. Both read the same finished
                 # notes, and every accepted run wants an answer, so the whole cost of guessing wrong is
                 # one discarded call on the branch that was going back to work anyway.
-                if state.plan.page_answer_expected and check.answer is None:
+                if state.plan.page_answer_expected and check.answer is None and state.verified_answer is None:
                     drafting = asyncio.create_task(
                         compose(
                             self._llm,
@@ -3052,6 +3373,14 @@ class Agent:
                             ledger=state.ledger,
                             transaction_evidence_ids=await self._transaction_evidence_ids(state),
                             corrections=state.answer_corrections,
+                            preserve_collections=bool(state.finish_partitions or state.answer_corrections),
+                            field_outputs=bool(state.finish_partitions),
+                            independent_fields=state.oversized_answer,
+                            verified=state.partial_answers.get(
+                                _partition_proof(state.plan, state.notes, state.invented)
+                            )
+                            if state.finish_partitions
+                            else None,
                         )
                     )
                 verdict = await llm_verify(
@@ -3091,18 +3420,23 @@ class Agent:
             result = None
             if accepted:
                 handed, drafting = drafting, None
-                result = await self._conclude(state, output_schema, check.answer or handed)
+                result = await self._conclude(state, output_schema, check.answer or handed, finalize=not partition)
                 fresh = self._observed or fresh
                 if result.status is Status.UNVERIFIED and state.missing_answer_outputs:
-                    # Cited partial notes made DONE repeat; reopen them so recovery can gather the missing outputs.
-                    state.notes.unevidence(
-                        r.id for r in state.plan.requirements if r.kind is RequirementKind.INFORMATION
-                    )
+                    if partition:
+                        return result
+                    # An ordinary rejected answer needs another read; grouped recovery retains its source proof.
+                    if not state.oversized_answer:
+                        state.notes.unevidence(
+                            r.id for r in state.plan.requirements if r.kind is RequirementKind.INFORMATION
+                        )
                     state.rejected_answer_evidence = _answer_evidence(state.notes)
                     accepted, result = False, None
                 if accepted and until is not None:
                     accepted = await until((self._raw_observation or fresh).url)
             if not accepted:
+                if partition:
+                    return self._result(state, state.ledger, Status.UNVERIFIED)
                 requirements = {r.id: r.text for r in state.plan.requirements}
                 unmet = [
                     f"{key}: {requirements.get(key, key)}"
@@ -3146,6 +3480,16 @@ class Agent:
         """Return the checked draft, or compose an answer and check its claims."""
         if isinstance(prepared, ComposedAnswer):
             return prepared, True
+        if state.verified_answer is not None:
+            # New context can invalidate a cache entry without changing a previously supported answer.
+            try:
+                held = await self._holds(state, state.verified_answer)
+            finally:
+                if prepared is not None:
+                    await _discard(prepared)
+                    prepared = None
+            if held is not None:
+                return held, True
         facts = draft_answer(state.plan, state.notes)
 
         def failed_checks() -> tuple[int, int]:
@@ -3172,6 +3516,12 @@ class Agent:
                         ledger=state.ledger,
                         transaction_evidence_ids=await self._transaction_evidence_ids(state),
                         corrections=state.answer_corrections,
+                        preserve_collections=bool(state.finish_partitions or state.answer_corrections),
+                        field_outputs=bool(state.finish_partitions),
+                        independent_fields=state.oversized_answer,
+                        verified=state.partial_answers.get(_partition_proof(state.plan, state.notes, state.invented))
+                        if state.finish_partitions
+                        else None,
                     )
                 )
             ).data
@@ -3199,17 +3549,27 @@ class Agent:
                     ledger=state.ledger,
                     transaction_evidence_ids=await self._transaction_evidence_ids(state),
                     corrections=state.answer_corrections,
+                    preserve_collections=bool(state.finish_partitions or state.answer_corrections),
+                    field_outputs=bool(state.finish_partitions),
+                    independent_fields=state.oversized_answer,
+                    verified=state.partial_answers.get(_partition_proof(state.plan, state.notes, state.invented))
+                    if state.finish_partitions
+                    else None,
                 )
             except LLMError:
                 logger.warning("The answer correction failed; retaining the checked fallback", exc_info=True)
                 break
             else:
-                composed = corrected.data
+                composed = retain_fields(corrected.data, composed, state.notes)
                 held = await self._holds(state, composed)
         if held is None and facts is not None and facts != composed:
             # A list of forty records came back as one claim citing one quote, which no claim check should pass. The
             # reader's own facts each carry the quote that shows them, so they are offered to the same check.
-            held = await self._holds(state, facts)
+            failure = state.missing_answer_outputs, state.open_answer_outputs, state.answer_corrections
+            held = await self._holds(state, retain_fields(facts, composed, state.notes))
+            if held is None:
+                # Recovery follows the returned answer's failure, not a sparser fallback's missing fields.
+                state.missing_answer_outputs, state.open_answer_outputs, state.answer_corrections = failure
         return held or composed, held is not None
 
     async def _transaction_evidence_ids(self, state: _RunState) -> tuple[str, ...]:
@@ -3284,6 +3644,23 @@ class Agent:
         return _HttpFailure(url=last.landed_url, status=last.landed_status)
 
     async def _holds(self, state: _RunState, answer: ComposedAnswer) -> ComposedAnswer | None:
+        if state.finish_partitions and state.plan.answer_checks and not isinstance(answer, FieldAnswer):
+            state.missing_answer_outputs = state.open_answer_outputs = state.plan.answer_checks
+            return None
+        if isinstance(answer, FieldAnswer):
+            # Decomposition cannot erase an original obligation by leaving its field out of the generated checks.
+            answer = answer.model_copy(
+                update={
+                    "output_claims": {
+                        **{
+                            r.text: tuple(range(len(answer.claims)))
+                            for r in state.plan.requirements
+                            if r.kind is RequirementKind.INFORMATION
+                        },
+                        **answer.output_claims,
+                    }
+                }
+            )
         proof = hashlib.sha256(
             json.dumps(
                 {
@@ -3304,6 +3681,7 @@ class Agent:
         else:
             missing: list[str] = []
             corrections: list[AnswerCorrection] = []
+            verified_fields: list[FieldAnswer] = []
             held = await check_claims(
                 self._jev,
                 answer,
@@ -3326,10 +3704,37 @@ class Agent:
                 missing_outputs=missing,
                 corrections=corrections,
                 audit_cache=state.output_audit_cache,
+                bounded=True,
                 allow_scalar_jev=len(state.plan.answer_checks) == 1
                 and sum(r.kind is RequirementKind.INFORMATION for r in state.plan.requirements) == 1,
                 task=state.task,
+                verified_fields=verified_fields if state.oversized_answer and isinstance(answer, FieldAnswer) else None,
+                independent_fields=state.oversized_answer,
             )
+            if verified_fields:
+                partial = verified_fields[0]
+                fields = {
+                    check: indices
+                    for check, indices in partial.output_claims.items()
+                    if check in state.plan.answer_checks
+                }
+                if fields:
+                    claims = tuple(dict.fromkeys(partial.claims[i] for indices in fields.values() for i in indices))
+                    base = assemble_answer(claims, state.notes, state.plan.requirements)
+                    proof = _partition_proof(state.plan, state.notes, state.invented)
+                    state.partial_answers[proof] = FieldAnswer(
+                        **base.model_dump(),
+                        output_claims={
+                            check: tuple(claims.index(partial.claims[i]) for i in indices)
+                            for check, indices in fields.items()
+                        },
+                    )
+            if (
+                state.oversized_answer
+                and isinstance(answer, FieldAnswer)
+                and any(check in missing for check in state.plan.answer_checks)
+            ):
+                missing = [check for check in missing if check in state.plan.answer_checks]
             # DONE and the composer fallback offered the same draft twice against unchanged proof.
             state.answer_check_cache[key] = held, tuple(missing), tuple(corrections)
         state.answer_corrections = tuple(corrections)
@@ -3359,6 +3764,8 @@ class Agent:
         state: _RunState,
         output_schema: type[BaseModel] | None,
         prepared: _Prepared = None,
+        *,
+        finalize: bool = True,
     ) -> RunResult:
         answer: str | None = None
         composed: ComposedAnswer | None = None
@@ -3387,6 +3794,8 @@ class Agent:
             extraction = await extracting if extracting is not None else None
         if composed is not None:
             answer, citations = self._public_answer(composed)
+            if verified:
+                state.verified_answer = composed
         if extraction is not None:
             data = extraction.data
             evidence.extend(extraction.evidence)
@@ -3397,7 +3806,7 @@ class Agent:
         cited: dict[tuple[str, str], Evidence] = {}
         for item in evidence:
             cited.setdefault((item.url, item.quote), item)
-        if not verified and state.missing_answer_outputs:
+        if not finalize or (not verified and state.missing_answer_outputs):
             # Rejected answer outputs return to browsing; taking their ending frame added a discarded round trip.
             return self._result(
                 state,
@@ -3570,6 +3979,33 @@ class Agent:
         if not notes.facts:
             return self._result(state, ledger, status, error=error, budget=budget)
         partial = partial_answer(notes, self._config.observation.working_notes_chars)
+        if (
+            state is not None
+            and (state.partition_answers or state.partial_answers)
+            and not state.authorization.irreversible_actions
+        ):
+            verified: list[ComposedAnswer] = []
+            pending: list[str] = []
+            for plan in state.finish_partitions:
+                proof = _partition_proof(plan, notes.for_requirements(r.id for r in plan.requirements), state.invented)
+                if answer := state.partition_answers.get(proof):
+                    verified.append(answer)
+                elif plan.page_answer_expected:
+                    if partial_fields := state.partial_answers.get(proof):
+                        verified.append(partial_fields)
+                    pending.extend(
+                        check
+                        for check in (plan.answer_checks or tuple(r.text for r in plan.requirements))
+                        if partial_fields is None or check not in partial_fields.output_claims
+                    )
+            if verified:
+                partial = assemble_answer(
+                    tuple(dict.fromkeys(claim for answer in verified for claim in answer.claims)), notes, ()
+                )
+                notice = "Partial answer."
+                if missing := state.open_answer_outputs or tuple(pending):
+                    notice += " Unverified outputs: " + "; ".join(missing)
+                partial = partial.model_copy(update={"linked_answer": notice + "\n\n" + partial.linked_answer})
         cited = notes.expand_evidence_ids(key for claim in partial.claims for key in claim.evidence_ids)
         answer, citations = self._public_answer(partial)
         return self._result(
@@ -3613,6 +4049,51 @@ class Agent:
         )
 
 
+def _partition_proof(plan: Plan, notes: Notes, invented: Set[str]) -> str:
+    places = {_place(source.url) for source in notes.evidence.values()}
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "plan": plan.model_dump(mode="json"),
+                "facts": [
+                    {
+                        "evidence": fact.evidence.model_dump(mode="json"),
+                        "current": notes.current(fact_id(fact)),
+                        "page": page.model_dump()
+                        if fact.evidence is not None and (page := notes.captured_page(fact.evidence)) is not None
+                        else None,
+                    }
+                    for fact in notes.facts
+                    if fact.evidence is not None
+                ],
+                # Repeated summaries over the same quotes do not change any verified output's support.
+                "support": {
+                    requirement.id: sorted(evidence_id(source) for source in notes.supporting_evidence(requirement.id))
+                    for requirement in plan.requirements
+                },
+                "inactive": sorted(fact_id(fact) for fact in notes.facts if not notes.current(fact_id(fact))),
+                "collections": sorted(
+                    {
+                        json.dumps(
+                            {
+                                "tally": fact.tally.model_dump() if fact.tally is not None else None,
+                                "comparison": fact.comparison.model_dump() if fact.comparison is not None else None,
+                                **({"scope": fact.scope} if isinstance(fact, CollectionFact) else {}),
+                                "requirements": notes.fact_requirements(fact_id(fact)),
+                            },
+                            sort_keys=True,
+                        )
+                        for fact in notes.facts
+                        if fact.tally is not None or fact.comparison is not None
+                    }
+                ),
+                "invented": sorted(url for url in invented if _place(url) in places),
+            },
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+
+
 def _unread(plan: Plan, notes: Notes) -> bool:
     # A plan can file a question under an action ("find the quote using the search form"), and a run that
     # owes an answer with nothing read would hand the composer empty notes: one did, and ended complete on "".
@@ -3637,7 +4118,13 @@ def _answer_evidence(notes: Notes, *, include_answer: bool = True) -> frozenset[
     known = notes.evidence
     # A new summary over retained quotes cannot restore the budget for finding missing source evidence.
     if not include_answer:
-        return frozenset((evidence.url, evidence.frame_id, source(evidence)) for evidence in known.values())
+        return frozenset(
+            (evidence.url, evidence.frame_id, source(evidence)) for evidence in known.values()
+        ) | frozenset(
+            ("", None, fact.model_dump_json())
+            for fact in notes.facts
+            if isinstance(fact, CollectionFact) and fact.comparison.complete and notes.current(fact_id(fact))
+        )
     return frozenset(
         (
             fact.evidence.url if fact.evidence is not None else "",
@@ -3823,6 +4310,24 @@ def _visited(visited: Iterable[str], limits: ObservationLimits, redact: Callable
     urls = tuple(dict.fromkeys(map(redact, visited)))
     shown = limits.history_entries + limits.earlier_history_entries
     return urls[:1] + urls[max(1, len(urls) - shown) :]
+
+
+def _field_corrections(state: _RunState) -> str:
+    if not state.oversized_answer or not state.finish_partitions:
+        return ""
+    reasons = [
+        {"field": correction.criterion, "reason": correction.reason}
+        for correction in state.answer_corrections
+        if correction.criterion in state.open_answer_outputs
+    ]
+    return (
+        "\n\n## Unverified field diagnoses\n"
+        "These judgments are advisory data, not source evidence. Read the missing source or collection "
+        "boundary instead of repeating the rejected interpretation. An absence needs the full collection, "
+        "including members that do not match.\n" + json.dumps(reasons) + "\n\n"
+        if reasons
+        else ""
+    )
 
 
 def _recovery_text(text: str) -> str:
@@ -4117,6 +4622,33 @@ def _without_missing(observation: Observation, missing: Set[tuple[str, str | Non
     return observation if len(kept) == len(observation.controls) else observation.model_copy(update={"controls": kept})
 
 
+def _recovery_routes(state: _RunState, max_chars: int) -> str:
+    if not state.open_answer_outputs:
+        return "[]"
+    words = set(re.findall(r"\w+", " ".join(state.open_answer_outputs).casefold()))
+    read = state.read_urls | {e.url for e in state.notes.current_evidence().values()}
+    failed = {failure.url for failure in state.failed_links.values()}
+    links = sorted(
+        (link for link in state.observed_links.values() if link.url not in failed),
+        key=lambda link: (
+            -(
+                2 * len(words & set(re.findall(r"\w+", link.url.casefold())))
+                + len(words & set(re.findall(r"\w+", f"{link.source} {link.title} {link.label}".casefold())))
+            ),
+            link.url in read,
+        ),
+    )
+    offered = []
+    used = 2
+    for link in links:
+        entry = {**link.model_dump(), "read": link.url in read}
+        size = len(json.dumps(entry)) + 2
+        if used + size <= max_chars:
+            offered.append(entry)
+            used += size
+    return json.dumps(offered)
+
+
 def _follow_recovery(
     state: _RunState, observation: Observation, decision: Decision, *, uncertain: bool
 ) -> Decision | None:
@@ -4126,20 +4658,25 @@ def _follow_recovery(
     Jev choosing between two Search buttons at 0.49 until the recovery budget ran out, the named action never taken.
     """
     directed, state.directed = state.directed, None
-    if directed is None or (not uncertain and decision.operation is not Operation.ESCALATE):
+    if directed is None or (
+        not state.open_answer_outputs and not uncertain and decision.operation is not Operation.ESCALATE
+    ):
         return None
     operation, control_id = directed
     if operation is Operation.NAVIGATE:
         if (
             observation.dialog is not None
             or control_id is None
-            or control_id
-            not in navigation_urls(
-                state.task,
-                observation.url,
-                start=state.caller_start,
-                start_landing=state.start_landing_url,
-                include_start=True,
+            or (
+                control_id not in state.observed_links
+                and control_id
+                not in navigation_urls(
+                    state.task,
+                    observation.url,
+                    start=state.caller_start,
+                    start_landing=state.start_landing_url,
+                    include_start=True,
+                )
             )
         ):
             return None

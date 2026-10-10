@@ -169,6 +169,21 @@ async def test_field_writer_receives_popup_context_and_other_field_values() -> N
     assert prompt["requirements"] == list(steps)
 
 
+async def test_search_writer_receives_unverified_outputs_even_for_a_read_requirement() -> None:
+    state = await run_state()
+    requirement = Requirement(id="r", text="Read Project Birch replies.", kind=RequirementKind.INFORMATION)
+    state.ready_plan = Plan(requirements=(requirement,), answer_expected=True)
+    page = capture((BlockKind.PARAGRAPH, "Project Birch"))
+    state.notes.add(
+        Fact(requirement_id="r", text=page.text, evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+    )
+    state.open_answer_outputs = ("Author replies for Project Birch",)
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    context = await agent._field_context(state, observation(()), field())
+    assert context["unresolved_requirements"] == []
+    assert context["unverified_outputs"] == ["Author replies for Project Birch"]
+
+
 async def test_a_field_given_values_in_turn_types_them_in_order() -> None:
     """Told the order, the writer still typed the correction first; the values it lists are typed in turn."""
     target = field("First Name")
@@ -5867,7 +5882,11 @@ async def test_unchanged_failed_output_evidence_cannot_reset_or_repeat_completio
     assert state.ledger.jev_calls == 0 and state.ledger.llm_calls == 1
 
 
-async def test_re_evidencing_partial_output_quotes_is_not_new_read_progress() -> None:
+@pytest.mark.parametrize("novelty", [0.0, 0.95])
+@pytest.mark.parametrize("rebound_requirements", [False, True])
+async def test_re_evidencing_partial_output_quotes_is_not_new_read_progress(
+    novelty: float, rebound_requirements: bool
+) -> None:
     state = await _reading_state()
     here = _at("https://example.test/live/", _button("Refresh"))
     response: JsonValue = {
@@ -5875,14 +5894,22 @@ async def test_re_evidencing_partial_output_quotes_is_not_new_read_progress() ->
         "answered": True,
     }
     llm = ScriptedLLM([response, response])
-    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
+    jev = ScriptedJev({"r1": "synthesis"}, noul=novelty)
+    agent = Agent(Mock(spec=Page), jev, llm)
     page = capture((BlockKind.PARAGRAPH, "Total: 12"))
     assert await agent._read(state, page, here) == (True, False)
     assert state.notes.evidenced("r1")
-    state.notes.unevidence(("r1",))
+    if not rebound_requirements:
+        state.notes.unevidence(("r1",))
+    state.owes_read = rebound_requirements
     state.open_answer_outputs = ("Report the remaining requested field.",)
-    assert await agent._read(state, page, here) == (False, False)
-    assert "remaining requested field" in llm.calls[-1][1][-1].content
+    state.oversized_answer = True
+    recaptured = capture((BlockKind.PARAGRAPH, "Total: 12"), (BlockKind.PARAGRAPH, "Updated a moment ago"))
+    assert await agent._read(state, recaptured, here) == (False, False)
+    assert "novelty" in jev.requests[-1]
+    assert len(llm.calls) == len(state.notes.facts) == (1 if novelty == 0 else 2)
+    if novelty:
+        assert "remaining requested field" in llm.calls[-1][1][-1].content
 
 
 def test_derived_paraphrases_do_not_create_new_read_evidence() -> None:
@@ -6465,3 +6492,45 @@ def test_public_dom_observation_citations_keep_the_plain_redacted_source_address
     assert "#:~:text=" not in answer
     assert "private-token" not in answer
     assert citation.quote == "Sign in: disabled"
+
+
+@pytest.mark.parametrize("renews", [False, True])
+async def test_revisiting_an_action_state_with_new_context_renews_recovery_once(renews: bool) -> None:
+    from tests.test_retrieval import block_evidence, capture
+
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="login", text="Sign in with the code.", kind=RequirementKind.ACTION),),
+        answer_expected=False,
+    )
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    login = observation((_button("Sign in"),))
+    agent._settle(state, login)
+    state.recoveries = 2
+    phone = capture((BlockKind.PARAGRAPH, "Account code: 123456"), url="https://example.test/phone")
+    context = Fact(text=phone.text, evidence=block_evidence(phone, "s0"), reader=FactReader.LLM)
+    state.notes.add(context)
+    agent._settle(state, login, renews=renews)
+    assert state.recoveries == (0 if renews else 2)
+    state.recoveries = 2
+    state.notes.add(context.model_copy(update={"text": "The same code is available."}))
+    agent._settle(state, login)
+    assert state.recoveries == 2
+    state.notes = Notes()
+    agent._settle(state, login)
+    state.notes.add(context)
+    agent._settle(state, login)
+    assert state.recoveries == 2
+
+
+async def test_ordinary_field_writer_does_not_receive_output_recovery_instructions() -> None:
+    state = await run_state()
+    llm = ScriptedLLM([{"text": "ada@example.com", "missing": False}])
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), llm)
+    email = field("Email").model_copy(update={"input_type": "email"})
+    await agent._generate_text(state, observation((email,)), email)
+    messages = llm.calls[0][1]
+    context = json.loads(messages[-1].content)
+    assert "unresolved_requirements" not in context
+    assert "unverified_outputs" not in context
+    assert "For a search field" not in messages[0].content
