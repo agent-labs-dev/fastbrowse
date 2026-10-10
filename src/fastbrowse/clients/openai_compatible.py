@@ -326,7 +326,7 @@ class OpenAICompatibleLLM:
                     offset = len(costs)
                     costs.extend(_cost({}, purpose) for _ in range(usage.unaccounted_requests))
 
-                    async def settle(responses: Sequence[httpx.Response], start: int) -> None:
+                    async def settle(responses: Sequence[httpx.Response], start: int, twins: int) -> None:
                         for index, response in enumerate(responses, start=start):
                             try:
                                 receipt = json_object(response)
@@ -334,9 +334,16 @@ class OpenAICompatibleLLM:
                                 continue
                             costs[index] = _cost(receipt, purpose)
                             costs[index] = await self._settled_cost(receipt, purpose)
+                        # A hedge twin cancelled once its sibling answered carried the same prompt, so it is
+                        # charged as that answer was, as an estimate. Other requests without a response stay unknown.
+                        known = next((c for c in costs[start:] if c.dollars is not None), None)
+                        unknown = [i for i in range(start, len(costs)) if costs[i].dollars is None]
+                        if known is not None:
+                            for index in unknown[:twins]:
+                                costs[index] = known.model_copy(update={"basis": CostBasis.ESTIMATED})
 
                     # Repeated cancellation must join receipt lookups before the run reports its final spend.
-                    settling = asyncio.create_task(settle(usage.discarded_responses, offset))
+                    settling = asyncio.create_task(settle(usage.discarded_responses, offset, usage.cancelled_twins))
                     cancelled = False
                     while not settling.done():
                         try:

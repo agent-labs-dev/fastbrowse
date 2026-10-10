@@ -844,3 +844,32 @@ async def test_receipt_does_not_double_count_normal_provider_spend(base_url, byo
         assert result.cost.dollars is None
     else:
         assert result.cost.dollars == pytest.approx(amount)
+
+
+async def test_twin_cancelled_after_its_sibling_answered_is_charged_as_that_answer(monkeypatch) -> None:
+    ledger = Ledger(Limits(max_dollars=0.25))
+    settled = httpx.Response(
+        200,
+        json={
+            "choices": [{"message": {"content": '{"count":3}'}}],
+            "usage": {"cost": 0.001, "prompt_tokens": 7, "completion_tokens": 2},
+        },
+    )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: settled)) as http:
+        client = OpenAICompatibleLLM("key", http=http, base_url="https://llm.test", models={LLMPurpose.PLAN: "model"})
+
+        async def abandoned(body, ledger, usage):
+            usage.unaccounted_requests += 2
+            usage.cancelled_twins += 1
+            usage.discarded_responses.append(settled)
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(client, "_request", abandoned)
+        with pytest.raises(asyncio.CancelledError):
+            await client.generate(LLMPurpose.PLAN, [], Result, ledger=ledger)
+    assert [(line.basis, line.dollars) for line in ledger.lines] == [
+        (CostBasis.METERED, 0.001),
+        (CostBasis.ESTIMATED, 0.001),
+    ]
+    ledger.check()

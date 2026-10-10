@@ -224,6 +224,8 @@ class RequestUsage:
     """Why each request that came back unusable failed, in order: its status and reason, or its transport error."""
     discarded_responses: list[httpx.Response] = field(default_factory=list[httpx.Response])
     """Successful responses withheld from the caller, whose charges can still be read."""
+    cancelled_twins: int = 0
+    """Unaccounted hedge requests cancelled because their sibling had already answered."""
 
     def history(self, seconds: float) -> str:
         """How the call went before it gave up, so an error says whether it was one blip or a sustained outage."""
@@ -413,6 +415,8 @@ async def _hedged(
                 usage.unaccounted_requests += 1
                 if result is not None:
                     usage.discarded_responses.append(result)
+                elif winner is not None and not abandoned:
+                    usage.cancelled_twins += 1
         if cancelled:
             raise asyncio.CancelledError
 
