@@ -284,3 +284,30 @@ def test_counted_collection_keeps_its_owning_entity_context():
     collection = next(f for f in notes.facts if isinstance(f, CollectionFact))
     assert any("By Ash" in notes.evidence[key].quote for key in collection.basis)
     assert any("Elm: Nice work." in notes.evidence[key].quote for key in collection.basis)
+
+
+def _requirements(*texts: str):
+    from fastbrowse.planner import Requirement, RequirementKind
+
+    return [Requirement(id=f"r{i}", text=text, kind=RequirementKind.INFORMATION) for i, text in enumerate(texts)]
+
+
+def test_one_collection_keeps_coverage_for_each_requirement_it_serves():
+    from fastbrowse.retrieval import _counted_collections
+
+    page = capture((BlockKind.HEADING, "Reviews (1)"), (BlockKind.LIST_ITEM, "Elm: Nice work."))
+    notes = Notes(_counted_collections(page, ["r0"], len(page.text)))
+    for fact in _counted_collections(page, ["r1"], len(page.text)):
+        notes.add(fact)
+    covered = {f.comparison.requirement_id for f in notes.facts if isinstance(f, CollectionFact)}
+    assert covered == {"r0", "r1"}
+
+
+@pytest.mark.parametrize(("heading", "covered"), [("Birch (1)", {"r0"}), ("Reviews (1)", set())])
+def test_a_counted_heading_naming_one_target_covers_only_that_target(heading, covered):
+    from fastbrowse.retrieval import _counted_collections
+
+    page = capture((BlockKind.HEADING, heading), (BlockKind.LIST_ITEM, "Elm: Nice work."))
+    requirements = _requirements("Report reviews for Birch.", "Report reviews for Rowan.")
+    facts = _counted_collections(page, ["r0", "r1"], len(page.text), requirements)
+    assert {f.comparison.requirement_id for f in facts if isinstance(f, CollectionFact)} == covered

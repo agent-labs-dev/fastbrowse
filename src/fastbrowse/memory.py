@@ -97,7 +97,9 @@ def fact_id(fact: Fact) -> str:
         return f"tally:{digest[:16]}"
     if fact.evidence is not None:
         return evidence_id(fact.evidence)
-    digest = hashlib.sha256(json.dumps([fact.text, sorted(fact.basis)]).encode()).hexdigest()
+    # One collection can cover several requirements; each keeps its own coverage fact.
+    covers = [fact.comparison.requirement_id] if isinstance(fact, CollectionFact) else []
+    digest = hashlib.sha256(json.dumps([fact.text, sorted(fact.basis), *covers]).encode()).hexdigest()
     return f"derived:{digest[:16]}"
 
 

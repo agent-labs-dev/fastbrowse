@@ -769,17 +769,21 @@ def _counted_collections(
         )
         keys = tuple(fact_id(source) for source in sources)
         collections.extend(sources)
-        subjects = (*heading.heading_path, capture.title.split(" - ")[0])
-        matching = {
-            requirement.id
-            for requirement in requirements
-            if any(
-                len(subject) > 3
-                and " ".join(re.findall(r"\w+", subject.casefold()))
-                in " ".join(re.findall(r"\w+", requirement.text.casefold()))
-                for subject in subjects
-            )
-        }
+
+        def named(subject: str) -> set[str]:
+            words = " ".join(re.findall(r"\w+", subject.casefold()))
+            return {
+                requirement.id
+                for requirement in requirements
+                if len(subject) > 3 and words in " ".join(re.findall(r"\w+", requirement.text.casefold()))
+            }
+
+        matching = set[str]().union(*(named(s) for s in (*heading.heading_path, capture.title.split(" - ")[0])))
+        if count is not None:
+            # The counted heading can name the target itself. A label every requirement mentions names none.
+            own = named(title[: title.rindex("(")].strip())
+            if len(own) < len(requirements):
+                matching |= own
         for requirement_id in requirement_ids:
             if len(requirement_ids) > 1 and requirement_id not in matching:
                 continue
