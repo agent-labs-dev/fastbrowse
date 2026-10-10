@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.5.20] - 2026-10-09
 
+- Answer checks retain a comparison's collection scope and completeness alongside its quoted records, so a
+  whole-list winner keeps the coverage established during reading.
 - Answer checks retain whether a quote covers a complete downloaded file, so totals can be verified from all
   its records. Partial excerpts and truncated downloads do not claim complete file coverage.
 - Updated page evidence retires vanished context quotes as well as previous answers, so an earlier subtotal

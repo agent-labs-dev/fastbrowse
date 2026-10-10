@@ -27,9 +27,17 @@ class Tally(Frozen):
         return len(set(self.records))
 
 
+class Comparison(Frozen):
+    requirement_id: str
+    records: tuple[str, ...]
+    """Quoted operands whose collection scope was checked by the reader."""
+    complete: bool = False
+
+
 class Fact(Frozen):
     requirement_id: str | None = None
     tally: Tally | None = None
+    comparison: Comparison | None = None
     text: str
     evidence: Evidence | None
     """The span the fact was read from; None when a repeated choice, count, total or winner rests on its basis."""
@@ -235,7 +243,9 @@ class Notes:
             text = kept.text
             if fact is not kept and fact.requirement_id is not None and fact.text not in text:
                 text = f"{text}\n{fact.text}"
-            self._facts[key] = kept.model_copy(update={"basis": basis, "text": text})
+            self._facts[key] = kept.model_copy(
+                update={"basis": basis, "text": text, "comparison": fact.comparison or kept.comparison}
+            )
             return False
         self._facts[key] = fact
         return True
