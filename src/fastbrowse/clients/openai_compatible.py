@@ -215,6 +215,7 @@ class OpenAICompatibleLLM:
                 hedge_seconds=LLM_HEDGE_SECONDS,
                 before_retry=None if ledger is None else lambda: ledger.reserve(CostComponent.LLM),
                 usage=usage,
+                settle_on_cancel=True,
             )
         except httpx.HTTPError as error:
             raise LLMError(f"LLM request could not be sent ({type(error).__name__})") from None
@@ -322,8 +323,29 @@ class OpenAICompatibleLLM:
                 try:
                     payload = await self._request(body, ledger, usage)
                 except BaseException:
-                    # With no answer to estimate from, a request that may have been billed is an unknown cost.
+                    offset = len(costs)
                     costs.extend(_cost({}, purpose) for _ in range(usage.unaccounted_requests))
+
+                    async def settle(responses: Sequence[httpx.Response], start: int) -> None:
+                        for index, response in enumerate(responses, start=start):
+                            try:
+                                receipt = json_object(response)
+                            except ValueError:
+                                continue
+                            costs[index] = _cost(receipt, purpose)
+                            costs[index] = await self._settled_cost(receipt, purpose)
+
+                    # Repeated cancellation must join receipt lookups before the run reports its final spend.
+                    settling = asyncio.create_task(settle(usage.discarded_responses, offset))
+                    cancelled = False
+                    while not settling.done():
+                        try:
+                            await asyncio.shield(settling)
+                        except asyncio.CancelledError:
+                            cancelled = True
+                    settling.result()
+                    if cancelled:
+                        raise asyncio.CancelledError from None
                     raise
                 # Recorded before the envelope is read: a generation we cannot parse was still billed, and
                 # dropping it would let an unaccounted request pass a dollar cap. A hedge's discarded twin

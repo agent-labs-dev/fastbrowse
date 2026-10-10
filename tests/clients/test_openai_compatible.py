@@ -423,7 +423,10 @@ def test_a_strict_schema_refuses_a_map_with_free_keys() -> None:
 
 @pytest.mark.parametrize("paid_retry", [False, True])
 @pytest.mark.parametrize("max_dollars", [None, 1.0])
-async def test_cancelled_generation_records_dispatched_costs_and_paid_retries_once(paid_retry, max_dollars):
+async def test_cancelled_generation_records_dispatched_costs_and_paid_retries_once(
+    paid_retry, max_dollars, monkeypatch
+):
+    monkeypatch.setattr("fastbrowse.clients.openai_compatible.LLM_ATTEMPT_SECONDS", 0.02)
     waiting = asyncio.Event()
     calls = 0
     ledger = Ledger(Limits(max_dollars=max_dollars))
@@ -457,9 +460,72 @@ async def test_cancelled_generation_records_dispatched_costs_and_paid_retries_on
             ledger.check()
 
 
-async def test_abandoned_head_start_keeps_cancelled_normalization_receipt():
+async def test_cancelled_generation_before_dispatch_does_not_wait_or_record_spend(monkeypatch) -> None:
+    waiting, stopped = asyncio.Event(), asyncio.Event()
+    ledger = Ledger(Limits(max_dollars=0.25))
+
+    async def unsent(*args, **kwargs):
+        waiting.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    monkeypatch.setattr(validation, "_send", unsent)
+    async with httpx.AsyncClient() as http:
+        client = OpenAICompatibleLLM("key", http=http, base_url="https://llm.test", models={LLMPurpose.PLAN: "planner"})
+        task = asyncio.create_task(client.generate(LLMPurpose.PLAN, [], Result, ledger=ledger))
+        await waiting.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 0.1)
+    assert stopped.is_set()
+    assert ledger.lines == []
+    ledger.check()
+
+
+@pytest.mark.parametrize("purpose", [LLMPurpose.PLAN, LLMPurpose.FIELD_TEXT])
+async def test_abandoned_generation_settles_its_response_before_propagating_cancellation(purpose: LLMPurpose) -> None:
+    waiting, release, stopped = (asyncio.Event() for _ in range(3))
+    ledger = Ledger(Limits(max_dollars=0.25))
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        waiting.set()
+        try:
+            await release.wait()
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": '{"count":3}'}}],
+                    "usage": {"cost": 0.001, "prompt_tokens": 7, "completion_tokens": 2},
+                },
+            )
+        finally:
+            stopped.set()
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OpenAICompatibleLLM("key", http=http, base_url="https://llm.test", models={purpose: "model"})
+        task = asyncio.create_task(client.generate(purpose, [], Result, ledger=ledger))
+        await waiting.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert stopped.is_set()
+    assert ledger.llm_calls == 1
+    assert len(ledger.lines) == 1
+    cost = ledger.lines[0]
+    assert cost.basis is CostBasis.METERED
+    assert cost.dollars == 0.001
+    assert (cost.input_tokens, cost.output_tokens) == (7, 2)
+    ledger.check()
+
+
+async def test_abandoned_head_start_keeps_cancelled_normalization_receipt(monkeypatch):
     from fastbrowse.agent import HeadStart
 
+    monkeypatch.setattr("fastbrowse.clients.openai_compatible.LLM_ATTEMPT_SECONDS", 0.02)
     waiting = asyncio.Event()
     calls = 0
 
@@ -497,6 +563,89 @@ async def test_abandoned_head_start_keeps_cancelled_normalization_receipt():
     assert costs[0].dollars == 0.01
     assert costs[1].basis is CostBasis.UNKNOWN
     assert costs[1].dollars is None
+
+
+@pytest.mark.parametrize("cancellations", [1, 2])
+async def test_abandoned_generation_recovers_its_receipt_and_joins_repeated_cancellation(cancellations: int) -> None:
+    waiting, release, looking_up, receipt_ready = (asyncio.Event() for _ in range(4))
+    ledger = Ledger(Limits(max_dollars=0.25))
+    methods: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        if request.method == "GET":
+            assert request.url.params["id"] == "generation-cancelled"
+            looking_up.set()
+            await receipt_ready.wait()
+            return httpx.Response(200, json={"data": {"id": "generation-cancelled", "total_cost": 0.002}})
+        waiting.set()
+        await release.wait()
+        return httpx.Response(200, json={"id": "generation-cancelled"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OpenAICompatibleLLM(
+            "key", http=http, base_url="https://openrouter.ai/api/v1", models={LLMPurpose.FIELD_TEXT: "writer"}
+        )
+        task = asyncio.create_task(client.generate(LLMPurpose.FIELD_TEXT, [], Result, ledger=ledger))
+        await waiting.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.wait_for(looking_up.wait(), 1)
+        if cancellations == 2:
+            task.cancel()
+            await asyncio.sleep(0)
+        assert not task.done()
+        receipt_ready.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert methods == ["POST", "GET"]
+    assert len(ledger.lines) == 1
+    assert ledger.lines[0].basis is CostBasis.METERED
+    assert ledger.breakdown().known_dollars == 0.002
+    ledger.check()
+
+
+@pytest.mark.parametrize("answered", [False, True])
+async def test_abandoned_hedged_generation_retains_known_and_unknown_attempts(monkeypatch, answered: bool) -> None:
+    monkeypatch.setattr("fastbrowse.clients.openai_compatible.LLM_HEDGE_SECONDS", 0.001)
+    monkeypatch.setattr("fastbrowse.clients.openai_compatible.LLM_ATTEMPT_SECONDS", 0.02)
+    hedged, release = asyncio.Event(), asyncio.Event()
+    ledger = Ledger(Limits(max_dollars=0.25))
+    calls, stopped = 0, 0
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls, stopped
+        calls += 1
+        number = calls
+        if number == 2:
+            hedged.set()
+        try:
+            if number == 1 and not answered:
+                await asyncio.Event().wait()
+            await release.wait()
+            return httpx.Response(200, json={"usage": {"cost": 0.001 * number}})
+        finally:
+            stopped += 1
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OpenAICompatibleLLM("key", http=http, base_url="https://llm.test", models={LLMPurpose.PLAN: "planner"})
+        task = asyncio.create_task(client.generate(LLMPurpose.PLAN, [], Result, ledger=ledger))
+        await hedged.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 1)
+    assert calls == stopped == ledger.llm_calls == 2
+    assert len(ledger.lines) == 2
+    assert ledger.breakdown().known_dollars == (0.003 if answered else 0.002)
+    assert ledger.breakdown().has_unknown is not answered
+    if answered:
+        ledger.check()
+    else:
+        with pytest.raises(BudgetExceeded, match="reported no cost"):
+            ledger.check()
 
 
 async def test_missing_field_cost_recovers_matching_provider_receipt() -> None:

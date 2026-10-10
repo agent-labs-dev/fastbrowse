@@ -34,6 +34,7 @@ from fastbrowse.agent import (
 )
 from fastbrowse.batches import evaluate_batches
 from fastbrowse.citations import text_fragment
+from fastbrowse.clients.openai_compatible import OpenAICompatibleLLM
 from fastbrowse.clients.typesafe import TypeSafeJevClient
 from fastbrowse.config import Config, ObservationLimits, StallRules, Thresholds
 from fastbrowse.effects import state_key
@@ -232,6 +233,69 @@ async def test_a_step_abandoned_while_waiting_for_the_plan_leaves_the_plan_to_th
         await waiting
     release.set()
     assert await state.await_plan() is plan
+
+
+@pytest.mark.parametrize("known", [False, True])
+async def test_redrawn_field_settles_cost_or_stops_the_run_and_keeps_eval_cost_unknown(
+    monkeypatch, known: bool
+) -> None:
+    from fastbrowse.evals.runner import _row
+
+    monkeypatch.setattr("fastbrowse.clients.openai_compatible.LLM_ATTEMPT_SECONDS", 0.05)
+    waiting, stopped = asyncio.Event(), asyncio.Event()
+    head = HeadStart.begin(
+        ScriptedLLM([{"requirements": [], "answer_expected": False}]),
+        "Fill the search field",
+        limits=Limits(max_dollars=0.25),
+    )
+    await head.planning
+    page = Mock(spec=Page)
+    page.artifacts = []
+    target = field()
+
+    async def redrawn(*args, **kwargs):
+        await waiting.wait()
+        return True
+
+    page.redrawn = redrawn
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        waiting.set()
+        try:
+            if not known:
+                await asyncio.Event().wait()
+            await asyncio.sleep(0.01)
+            return httpx.Response(200, json={"usage": {"cost": 0.001}})
+        finally:
+            stopped.set()
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OpenAICompatibleLLM(
+            "key", http=http, base_url="https://llm.test", models={LLMPurpose.FIELD_TEXT: "writer"}
+        )
+        agent = Agent(page, ScriptedJev({}), client)
+
+        async def fill(state, output_schema, until):
+            result = await agent._unless_redrawn(
+                state, agent._write_field(state, [], target), observation((target,)), target
+            )
+            assert result is None
+            state.ledger.check()
+            return agent._result(state, state.ledger, Status.COMPLETE)
+
+        monkeypatch.setattr(agent, "_loop", fill)
+        result = await agent.run(head.task, head_start=head)
+    assert stopped.is_set()
+    assert head.ledger.llm_calls == 2
+    assert result.status is (Status.COMPLETE if known else Status.BUDGET_EXCEEDED)
+    assert result.cost.known_dollars == (0.002 if known else 0.001)
+    assert result.cost.has_unknown is not known
+    row = _row(result, task_id="redrawn", failure=None if known else result.error, seconds=1, lost=0, limit=None)
+    assert row["dollars"] == (0.002 if known else None)
+    assert row["unknown_cost"] is not known
+    if not known:
+        assert result.error is not None and "reported no cost" in result.error
+        assert result.budget is not None and result.budget.resource == "dollars"
 
 
 async def test_plan_trace_retains_counting_mode_without_requirement_text() -> None:

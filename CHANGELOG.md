@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
+  matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
+
 ## [0.5.20] - 2026-10-09
 
 - Going back from a document that has not been read reads it first when requirements remain, so a pending
