@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
+  matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
 - Answers whose combined evidence exceeds a prompt are composed and verified in requirement groups, with
   comparisons kept together. Verified outputs survive repair of missing outputs; evidence that cannot fit
   even one group returns an unverified partial answer.
