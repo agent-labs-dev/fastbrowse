@@ -13,7 +13,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.5.20] - 2026-10-09
 
-- Back, navigation and tab switches read an unread document first when requirements remain, so a pending
+- Going back from a document that has not been read reads it first when requirements remain, so a pending
   action can use values from that page after leaving it.
 - Answer checks retain a comparison's collection scope and completeness alongside its quoted records, so a
   whole-list winner keeps the coverage established during reading.

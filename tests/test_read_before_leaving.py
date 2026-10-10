@@ -16,8 +16,8 @@ from tests.test_retrieval import ScriptedLLM, capture
 
 
 @pytest.mark.parametrize("kind", [RequirementKind.ACTION, RequirementKind.INFORMATION])
-@pytest.mark.parametrize("operation", [Operation.BACK, Operation.NAVIGATE, Operation.SWITCH_TAB])
-async def test_unread_departure_keeps_a_pending_requirement_value(operation: Operation, kind: RequirementKind) -> None:
+async def test_unread_departure_keeps_a_pending_requirement_value(kind: RequirementKind) -> None:
+    operation = Operation.BACK
     state = await run_state()
     state.ready_plan = Plan(
         requirements=(Requirement(id="reference", text="Use the return reference", kind=kind),),
@@ -73,11 +73,7 @@ async def test_back_is_reconsidered_after_reading_with_information_already_answe
 
 @pytest.mark.parametrize(
     "operation",
-    [
-        op
-        for op in Operation
-        if op not in {Operation.BACK, Operation.NAVIGATE, Operation.SWITCH_TAB, Operation.SCROLL, Operation.SCROLL_UP}
-    ],
+    [op for op in Operation if op not in {Operation.BACK, Operation.SCROLL, Operation.SCROLL_UP}],
 )
 async def test_non_departure_without_read_evidence_is_unchanged(operation: Operation) -> None:
     state = await run_state()

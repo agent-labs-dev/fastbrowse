@@ -2140,14 +2140,15 @@ class Agent:
         if observation.dialog is not None:
             return False
         if (
-            decision.operation in {Operation.BACK, Operation.NAVIGATE, Operation.SWITCH_TAB}
+            decision.operation is Operation.BACK
             and observation.document_key not in state.record_read_documents
             and not any(key[0] == observation.document_key for key in state.reads)
         ):
             plan = await state.await_plan()
             if state.notes.unresolved(plan):
-                # Leaving an unread document can lose a value needed by a pending action, even after every
-                # information requirement is answered. Keep its evidence before choosing where to go next.
+                # Backing out of an unread document can lose a value needed by a pending action, even after
+                # every information requirement is answered. Navigating to a supplied address or switching tab
+                # follows the plan, and reading the page left behind there only spends a read.
                 reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
                 return not await self._step(state, observation, reading, decided_by)
         if state.ready_plan is None and any(not candidate.outcome_read for candidate in state.transaction_candidates):
