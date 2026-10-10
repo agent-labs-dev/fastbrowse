@@ -2,7 +2,7 @@
 
 import re
 from ipaddress import IPv6Address
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from fastbrowse.origins import origin_of
 
@@ -24,6 +24,11 @@ def task_urls(task: str, *, start: str | None = None) -> tuple[str, ...]:
             continue
         urls[url] = None
     if start is not None and _valid_address(start):
+        # A route the caller wrote as a path, such as "sign in at /login", is an address on the start page's site.
+        for match in re.finditer(r"(?<![\w/.:])/[A-Za-z0-9][\w\-./%]*", task):
+            url = urljoin(start, match.group().rstrip(".,;:"))
+            if _valid_address(url):
+                urls[url] = None
         urls[start] = None
     return tuple(urls)
 

@@ -303,3 +303,13 @@ async def test_recovery_prompt_and_response_exclude_the_redirected_start() -> No
     prompt = llm.calls[0][1][-1].content
     destinations = prompt.split("## Caller-supplied addresses\n", 1)[1].split("\n\n", 1)[0]
     assert json.loads(destinations) == []
+
+
+def test_a_path_written_in_the_task_is_an_address_on_the_start_site() -> None:
+    task = "Sign in at /login as grace@example.com, and/or read 3/4 of https://alpha.example/a/b."
+    assert task_urls(task, start="http://shop.example/entry") == (
+        "https://alpha.example/a/b",
+        "http://shop.example/login",
+        "http://shop.example/entry",
+    )
+    assert task_urls(task) == ("https://alpha.example/a/b",)
