@@ -870,9 +870,18 @@ class Agent:
             if decision.operation in _NOT_ACTING:
                 plan = await state.await_plan()
                 # Notes that evidence every requirement can still describe the page before the last interaction
-                # redrew it, so an answer owed after one is read off what it drew. A plan that only acts has
-                # nothing to read, and finishes without waiting.
-                if _unread(plan, state.notes) or (state.owes_read and plan.page_answer_expected):
+                # redrew it, so an answer owed after one is read off what it drew. Actions can also need a read
+                # to carry a value between pages, without making that value evidence of the action's completion.
+                if (
+                    _unread(plan, state.notes)
+                    or (state.owes_read and plan.page_answer_expected)
+                    or (
+                        _action_requirements(plan, state.notes)
+                        and (
+                            decision.operation is Operation.READ or decision.read_assessment is ReadAssessment.EVIDENCE
+                        )
+                    )
+                ):
                     reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
                     # A read that ran spends the direction it was sent on, but may leave one of its own: the control
                     # the reader named to show more was cleared right after the read that named it, and Flights
@@ -892,8 +901,8 @@ class Agent:
                         decision = decision.model_copy(update={"operation": Operation.DONE, "target": None})
                     elif not _unread(plan, state.notes):
                         state.directed = held
-                        # Only an owed read gets here: a scroll changes the page but not its text, so the read
-                        # found content already read, and the notes already describe what the interaction drew.
+                        # A scroll changes the page but not its text, so a read can find content already read.
+                        # The notes already describe what the interaction drew; completion is still verified.
                         decision = decision.model_copy(update={"operation": Operation.DONE, "target": None})
                     else:
                         state.directed = held
@@ -2160,7 +2169,7 @@ class Agent:
             # a field, Jev called each earlier step evidence on the way, and reading them cost 4s a step.
             return False
         plan = await state.await_plan()
-        if not transaction_pending and not _unread(plan, state.notes):
+        if not transaction_pending and not (_unread(plan, state.notes) or _action_requirements(plan, state.notes)):
             return False
         # An interaction can remove evidence, so read first and reconsider before authorizing the next action.
         reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
@@ -3537,6 +3546,8 @@ class Agent:
             has_attachments=bool(state.attachments),
             secrets=secrets,
             unread_requirements=unread,
+            action_requirements=_action_requirements(plan, state.notes) if plan is not None else (),
+            read_here=state.read_here,
             start_url=state.caller_start,
             start_landing_url=state.start_landing_url,
         )
@@ -3596,6 +3607,10 @@ class Agent:
             error=error,
             would_fire=tuple(state.would_fire) if state else (),
         )
+
+
+def _action_requirements(plan: Plan, notes: Notes) -> tuple[str, ...]:
+    return tuple(r.text for r in notes.unresolved(plan) if r.kind is RequirementKind.ACTION)
 
 
 def _unread(plan: Plan, notes: Notes) -> bool:

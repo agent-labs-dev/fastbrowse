@@ -99,7 +99,7 @@ OPERATION_LABELS: Mapping[Operation, str] = {
     Operation.BACK: "Go back to the previous page.",
     Operation.SWITCH_TAB: "Switch to another open tab.",
     Operation.DIALOG: "Respond to the open browser dialog.",
-    Operation.READ: "Read this page's content to extract information the task needs.",
+    Operation.READ: "Read this page's content to preserve answers or values needed for remaining actions.",
     Operation.DONE: "Every requirement is visibly satisfied.",
     Operation.ESCALATE: "No offered operation can make progress.",
 }
@@ -166,6 +166,9 @@ class StepContext(Frozen):
     """Names of stored secrets the current origin may receive; a fill can type one without Jev seeing it."""
     unread_requirements: tuple[str, ...] | None = None
     """None while planning; an empty tuple means no information remains to collect."""
+    action_requirements: tuple[str, ...] = ()
+    """Actions may need values from another page even when no answer remains to collect."""
+    read_here: bool = False
     start_url: str | None = None
     start_landing_url: str | None = None
     recovery_memory: str = ""
@@ -459,7 +462,10 @@ def _index_controls(controls: Sequence[Control]) -> dict[Operation, tuple[Contro
 
 
 def _offered_operations(
-    observation: Observation, indexed: Mapping[Operation, tuple[Control, ...]], context: StepContext
+    observation: Observation,
+    indexed: Mapping[Operation, tuple[Control, ...]],
+    context: StepContext,
+    urls: tuple[str, ...],
 ) -> tuple[Operation, ...]:
     if observation.dialog is not None:
         return (Operation.DIALOG, Operation.ESCALATE)
@@ -467,9 +473,7 @@ def _offered_operations(
     for operation in Operation:
         match operation:
             case Operation.NAVIGATE:
-                if navigation_urls(
-                    context.task, observation.url, start=context.start_url, start_landing=context.start_landing_url
-                ):
+                if urls:
                     available.append(operation)
             case Operation.CLICK | Operation.HOVER | Operation.FILL | Operation.SELECT | Operation.ENTER:
                 if operation in indexed:
@@ -511,14 +515,34 @@ def build_request(
     compact: bool = False,
 ) -> _Request:
     indexed = _index_controls(controls)
-    offered = _offered_operations(observation, indexed, context)
+    # A page with no controls can need the starting address to resume the task. Offering it on a working
+    # form instead encourages reopening the form and losing its values.
+    urls = navigation_urls(
+        context.task,
+        observation.url,
+        start=context.start_url,
+        start_landing=context.start_landing_url,
+        include_start=not observation.controls and not observation.omitted_controls,
+    )
+    offered = _offered_operations(observation, indexed, context, urls)
     questions: dict[str, Question] = {
         "operation": ChoiceQuestion(
-            instructions=NEXT_ACTION,
-            criteria={op.value: OPERATION_LABELS[op] for op in offered},
+            instructions=NEXT_ACTION
+            + (
+                "\nRead values needed on another page before leaving, unless notes already preserve them. "
+                "Page text alone is not saved. Then return to the pending action."
+                if context.action_requirements
+                else ""
+            ),
+            criteria={
+                op.value: {"action": OPERATION_LABELS[op], "destinations": list(urls)}
+                if op is Operation.NAVIGATE
+                else OPERATION_LABELS[op]
+                for op in offered
+            },
         )
     }
-    if context.unread_requirements is None or context.unread_requirements:
+    if context.unread_requirements is None or context.unread_requirements or context.action_requirements:
         listing = (
             "Matching records in a paginated list are evidence for a count or comparison even when this page "
             "cannot supply the final answer. Read those records before opening a record's detail link or "
@@ -528,9 +552,9 @@ def build_request(
         )
         questions["read_assessment"] = ChoiceQuestion(
             instructions=(
-                f"{UNTRUSTED}\nDoes the current page contain evidence for an unanswered information "
-                "requirement that should be read before further interaction? Use unread_requirements, the "
-                "collected notes and recent actions; while planning, judge from the task. Evidence can answer "
+                f"{UNTRUSTED}\nDoes this page hold an unread answer or a value needed for action_requirements? "
+                "Judge unread_requirements, notes and recent actions; use the task while planning. "
+                "A value for another page must be read into notes before leaving. Evidence can answer "
                 f"part of a comparison or explain a failed action. {listing}A relevant error, refusal, result or total "
                 "must be preserved even when the page also has an editable form. Field values, suggestions "
                 "and previews are inputs, unless inspecting their labels, disabled state or layout is requested. "
@@ -542,13 +566,14 @@ def build_request(
                 "rewritten URL alone proves nothing. Judge the content regardless of control labels or roles."
             ),
             criteria={
-                ReadAssessment.ABSENT.value: "The page adds no evidence for the unanswered requirements.",
+                ReadAssessment.ABSENT.value: "The page adds no answers or needed action values beyond the notes.",
                 ReadAssessment.EDITING.value: (
-                    "Only inputs toward a later result are relevant; no requested inspection needs this form read."
+                    "Only fields or choices being edited here are relevant; no inspection or value to carry away "
+                    "needs reading."
                 ),
                 ReadAssessment.EVIDENCE.value: (
                     "The page contains relevant evidence, including requested form inspection, "
-                    "partial results or a failure, "
+                    "partial results, a failure or values needed for remaining actions, "
                     "that the notes do not yet preserve. Read it before interacting again."
                 ),
             },
@@ -586,9 +611,6 @@ def build_request(
         )
     navigation_groups: tuple[tuple[str, ...], ...] = ()
     if Operation.NAVIGATE in offered:
-        urls = navigation_urls(
-            context.task, observation.url, start=context.start_url, start_landing=context.start_landing_url
-        )
         navigation = ChoiceQuestion(
             instructions=(
                 f"{UNTRUSTED}\nChoose the caller-supplied address that advances the next unanswered requirement. "
@@ -756,9 +778,11 @@ def _state(observation: Observation, controls: Sequence[Control], context: StepC
             "title": observation.title,
             "text": observation.viewport_text,
             "response_status": observation.response_status,
+            "read": context.read_here,
         },
         "requirements": list(context.requirements),
         "unread_requirements": (list(context.unread_requirements) if context.unread_requirements is not None else None),
+        "action_requirements": list(context.action_requirements),
         "notes": context.notes,
         "recent_actions": [entry.model_dump(mode="json", exclude_none=True) for entry in context.history],
         "elements": [_element(c, compact=compact) for c in controls],
