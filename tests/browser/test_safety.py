@@ -150,6 +150,41 @@ async def test_enter_uses_form_semantics_and_focuses_verified_target(
         assert submitted is None and result.status is Status.NEEDS_CONFIRMATION
 
 
+READ_ONLY = "Tell me which game version release 2.1.0 supports. This is read-only: do not download anything."
+GIVE_UP: JsonValue = {"diagnosis": "The page has been read", "next_subgoal": "Stop", "give_up": True}
+
+
+@pytest.mark.parametrize("label", ["Download 2.1.0", "Export changelog"])
+async def test_a_task_that_rules_out_downloads_never_clicks_a_download_link(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, label: str
+) -> None:
+    # A read-only task said not to download, and the click that saved a release archive was asked only whether it
+    # committed anything; a download commits nothing, so nothing stopped it.
+    await page.navigate(f"{main_site}/release.html")
+    link = find(await page.observe(), label)
+    jev = ScriptedJev({"operation": "click", "click_target": link.id}, noul=0.0, nouls={"downloads": 1.0})
+    result = await Agent(page, jev, ScriptedLLM([PLAN, GIVE_UP]), config=CONFIG).run(
+        READ_ONLY, limits=Limits(max_steps=2)
+    )
+    assert not await browser_session.download_settled(0, timeout_seconds=1.0)
+    assert browser_session.artifacts == ()
+    assert result.steps[0].outcome is StepOutcome.FAILED and "download" in (result.steps[0].note or "")
+
+
+async def test_a_task_that_asks_for_a_download_still_downloads(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/release.html")
+    link = find(await page.observe(), "Download 2.1.0")
+    jev = ScriptedJev({"operation": "click", "click_target": link.id}, noul=0.0)
+    result = await Agent(page, jev, ScriptedLLM([PLAN]), config=CONFIG).run(
+        "Download the release 2.1.0 archive.", limits=Limits(max_steps=1)
+    )
+    assert await browser_session.download_settled(0)
+    assert [artifact.name for artifact in browser_session.artifacts] == ["addon-2.1.0.zip"]
+    assert result.steps[0].outcome is StepOutcome.EXECUTED
+
+
 @pytest.mark.parametrize("choice,authorize", [("accept", False), ("accept", True), ("dismiss", False)])
 async def test_dialog_acceptance_has_its_own_gate(
     page: CdpPage, browser_session: BrowserSession, main_site: str, choice: str, authorize: bool

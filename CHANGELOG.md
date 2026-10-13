@@ -27,6 +27,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   `bounded` cost: its model's whole context window at the highest price any of its routes lists. A run with a
   dollar cap keeps going within that bound instead of stopping, and a call whose price has no ceiling still
   stops it.
+- A task that says not to download, or calls itself read-only, no longer downloads files. A link the page
+  marks as a download, by a `download` attribute or an address ending in a file type such as `.zip`, is
+  refused before it is clicked or opened, and recovery is not offered it.
 
 ## [0.5.20] - 2026-10-09
 

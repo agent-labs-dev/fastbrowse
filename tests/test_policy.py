@@ -37,10 +37,19 @@ FREE = CostLine(component=CostComponent.JEV, basis=CostBasis.ESTIMATED, dollars=
 class ScriptedJev:
     """Picks `pick` for every choice whose criteria contain it, else the first option."""
 
-    def __init__(self, pick: Mapping[str, str], *, reject_offscreen: bool = False, noul: float = 0.8) -> None:
+    def __init__(
+        self,
+        pick: Mapping[str, str],
+        *,
+        reject_offscreen: bool = False,
+        noul: float = 0.8,
+        nouls: Mapping[str, float] | None = None,
+    ) -> None:
         self.pick = pick
         self.reject_offscreen = reject_offscreen
         self.noul = noul
+        # A yes/no answer for one question key, where a test needs two gates to disagree.
+        self.nouls = nouls or {}
         self.requests: list[Mapping[str, Question]] = []
 
     async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
@@ -57,7 +66,7 @@ class ScriptedJev:
                         choice=choice, probabilities={o: float(o == choice) for o in options}, confidence=0.9
                     )
                 case NoulQuestion():
-                    answers[key] = NoulAnswer(probability=self.noul)
+                    answers[key] = NoulAnswer(probability=self.nouls.get(key, self.noul))
                 case _:
                     raise AssertionError(question)
         return Evaluation(model="test", answers=answers, input_tokens=10, cost=FREE)

@@ -77,6 +77,44 @@ def irreversible_question(
     )
 
 
+# File types a browser saves rather than shows. Chrome renders a page, an image or a PDF; an archive, an installer,
+# a disk image or a spreadsheet goes to the downloads folder whatever the link that leads to it says.
+_DOWNLOADED_SUFFIXES = frozenset(
+    {
+        *("zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "zst"),
+        *("exe", "msi", "dmg", "pkg", "deb", "rpm", "apk", "appimage", "iso", "img", "jar", "torrent"),
+        *("csv", "tsv", "xls", "xlsx", "ods", "doc", "docx", "odt", "ppt", "pptx", "odp"),
+    }
+)
+
+
+def starts_download(control: Control) -> bool:
+    """Whether the page says activating this control saves a file, before anything is clicked.
+
+    The page's own evidence, not the label: a `download` attribute, or a link to a file type a browser saves. A
+    link's address is the one thing an icon-only download button carries, so it holds up where a label says
+    nothing or says it in another language.
+    """
+    if control.download:
+        return True
+    if not control.href:
+        return False
+    name = urlsplit(control.href).path.rsplit("/", 1)[-1]
+    return "." in name and name.rsplit(".", 1)[1].lower() in _DOWNLOADED_SUFFIXES
+
+
+def downloads_question(task: str) -> NoulQuestion:
+    """Whether the task rules out downloading: asked of the task alone, once a control would download a file."""
+    return NoulQuestion(
+        instructions=(
+            f"The agent is doing this task: {task}\nDoes the task rule out downloading files, either by telling the "
+            "agent not to download anything or by saying the work is read-only?"
+        ),
+        true="The task says not to download files, or calls the work read-only.",
+        false="The task says nothing against downloading, even if it only asks for information.",
+    )
+
+
 _NEW_SECRET = re.compile(r"\b(new|confirm|confirmation|repeat|re-?enter|re-?type|choose|create)\b", re.IGNORECASE)
 _CHANGE_PASSWORD = re.compile(r"\b(change|reset|update|replace|set)\b.*\bpassword\b", re.IGNORECASE)
 
