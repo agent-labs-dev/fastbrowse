@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A handed-over browser that accepts the DevTools connection and then answers nothing is reported as
+  `unavailable` after about 20 seconds, with a message that it may be waiting for its remote debugging approval
+  prompt, where it used to wait over a minute and report a lost browser. A `--cdp-port` whose `/json/version`
+  answers 404, as a Chrome switched on at chrome://inspect does, now says to pass the `ws://` address from its
+  `DevToolsActivePort` file with `--cdp-url`. Neither failure switches to another browser.
+
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
 
