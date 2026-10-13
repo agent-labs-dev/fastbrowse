@@ -41,8 +41,8 @@ Rows are comparable only at matching task versions. See [eval results and workfl
   that are on the page, so there is no invented selector to retry. Factual claims in a complete answer link to the page text they came from.
 - **Choice-model navigators** ([Browser Use Ultrafast](https://github.com/browser-use/jev-ultrafast), the
   `jev-ultrafast` package and eval arm): both choose actions with Jev. fastbrowse adds cited answers, schema-validated
-  data, scoped credentials and an authorization gate. Navigation tasks compare the page each run ended on,
-  which does not establish a winner for every workflow.
+  data, scoped credentials and an authorization gate. Navigation tasks compare the page each run ended on.
+  This navigation result does not establish a winner for every workflow.
 - **Scripts:** there are no selectors to maintain. The same agent handles a date picker, a checkout and
   a search box it has never seen.
 
@@ -300,8 +300,9 @@ or popup outside the list is refused before it is sent, and a window already ope
 A sign-in that redirects through another origin needs that origin listed too. The list scopes documents, not
 the network: images, scripts and requests a listed page makes to other hosts still load. A scoped run delivers
 no live frames or screenshots, and combining it with `record=` is an error. `check_access=` is an async callback
-awaited before the browser starts and before every read, navigation and action. When it raises, the run stops
-with a `BrowserError` that keeps only the exception's type.
+awaited before the browser starts and before every read, navigation and action. When it raises, `connect_cdp`
+raises a `BrowserError` and `run_task` returns a `RunResult` with status `error`; either way the error names only
+the exception's type, never its text.
 
 `RunResult.citations` is a tuple of `Citation` objects, also importable from `fastbrowse`. Each has `id`
 (the number in the answer), `text` (the Notes fact), `requirement_id` (or `None`), `url`, `quote` and
@@ -418,12 +419,12 @@ await fb.run('Log in as standard_user with the saved password and add the backpa
 
 `secrets.resolve` is called each time a value is typed and never for an origin its ref does not cover, so the
 value leaves your vault at that moment and a one-time code is fresh. `until` gets the address the run ended on,
-and anything but `true` keeps the run from `complete`. `onFrame` receives JPEG frames of the active tab;
-without it no frame is sent. A callback that throws ends the run with status `error`. The other options are
-`run_task`'s: `inputs`, `attachments` as bytes, `downloads`, `record`, and the browser choices
-`chrome`, `cloudProfile`, `cdpUrl`, `cdpPort`, `attach`, `targetMatch`, `proxyCountry`, `viewport` and
-`cloudAllowResizing`, which `Fastbrowse.start` also takes as defaults for every run. A run passes `null` for one of them to go without
-that default.
+and anything but `true` keeps the run from `complete`. `onFrame` receives JPEG frames of the active tab; without
+it no frame is sent. A callback that throws ends the run with status `error`. The other options are `run_task`'s:
+`inputs`, `attachments` as bytes, `downloads`, `record`, and the browser choices `chrome`, `cloudProfile`,
+`cdpUrl`, `cdpPort`, `attach`, `targetMatch`, `proxyCountry`, `viewport` and `cloudAllowResizing`, which
+`Fastbrowse.start` also takes as defaults for every run. A run passes `null` for one of them to go without that
+default.
 
 There is no binary for Alpine or another musl system, and none for a platform outside the five. There
 `Fastbrowse.start` rejects with an error that names the platform, and a binary of your own is named with
