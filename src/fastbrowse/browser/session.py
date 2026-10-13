@@ -127,7 +127,18 @@ class _Frame:
     session_id: str | None
 
 
+_APPROVAL_HINT = (
+    "If this is a Chrome you started yourself, it may be waiting for you to approve remote debugging, "
+    "or the address may be stale; check the browser window and the address, then retry."
+)
+
+
 class _BrowserClient(CDPClient):
+    _answered = False
+    """Whether the browser has replied to anything on this connection. Chrome can accept the socket and then hold
+    every command while its remote debugging approval prompt waits, which would otherwise read as a lost browser
+    only after CDP_REPLY_SECONDS."""
+
     async def start(self) -> None:
         try:
             await super().start()
@@ -135,8 +146,7 @@ class _BrowserClient(CDPClient):
             if _unreachable(exc):
                 raise BrowserUnresponsive(
                     f"CDP.start failed ({type(exc).__name__}): the browser did not complete the DevTools handshake. "
-                    "If this is a Chrome you started yourself, it may be waiting for you to approve remote debugging, "
-                    "or the address may be stale; check the browser window and the address, then retry."
+                    + _APPROVAL_HINT
                 ) from exc
             raise _browser_error("CDP.start", exc) from exc
 
@@ -151,10 +161,19 @@ class _BrowserClient(CDPClient):
         try:
             try:
                 async with asyncio.timeout(CDP_COMMAND_SECONDS):
-                    while not (await asyncio.wait({reply}, timeout=CDP_REPLY_SECONDS))[0]:
+                    while not (
+                        await asyncio.wait({reply}, timeout=CDP_REPLY_SECONDS if self._answered else CDP_ALIVE_SECONDS)
+                    )[0]:
                         # A reply that landed while the probe waited still counts, however the probe ended.
                         if not await self._alive() and not reply.done():
+                            if not self._answered:
+                                raise BrowserUnresponsive(
+                                    f"{method} got no reply: the browser accepted the DevTools connection but has "
+                                    "not answered anything on it. " + _APPROVAL_HINT
+                                )
                             raise BrowserUnresponsive(f"{method} got no reply, and the browser stopped answering")
+                    # An error reply is an answer too: the browser is there and reading the connection.
+                    self._answered = True
                     return reply.result()
             except TimeoutError:
                 raise BrowserUnresponsive(f"{method} exceeded its command deadline; the page did not answer") from None
@@ -180,6 +199,7 @@ class _BrowserClient(CDPClient):
                 await super().send_raw("Browser.getVersion")
         except Exception:  # no answer, or a closed socket: either way nothing is there to reply
             return False
+        self._answered = True
         return True
 
 

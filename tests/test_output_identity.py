@@ -185,3 +185,15 @@ async def test_an_identity_id_naming_two_quotes_fails_closed():
         RoutingJev(), writer, answer, notes, ("Report Adapter Beacon exact port count.",)
     )
     assert len(writer.calls) == 1
+
+
+async def test_identity_request_lets_a_record_be_named_by_its_requested_identifier():
+    # An order row named only by its reference left a strict reading with no legal quote, so every binding came back
+    # unresolved and a finished run ended stuck.
+    notes, answer = two_entity_answer()
+    writer = IdentityWriter(scope="unresolved")
+    assert not await check_answer_outputs(
+        RoutingJev(), writer, answer, notes, ("Report Adapter Beacon exact port count.",)
+    )
+    system = writer.calls[0][1][0].content
+    assert "only identifier is itself a requested field" in system
