@@ -17,7 +17,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Benchmark results from public sites measured in headless local Chrome with a throwaway profile are refused
   for publication, since about half of those sites refused that browser before the first step. A campaign can
   check its browser with `fastbrowse.evals.live_tasks.browser_refusal` before it starts; a headed window, a kept
-  profile or a cloud browser is admitted.
+  profile or a cloud browser is admitted. Public-site results that do not record their browser, or record one
+  that is malformed or unknown, are refused as well.
 
 ## [0.5.20] - 2026-10-09
 

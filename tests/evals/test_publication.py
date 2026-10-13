@@ -56,6 +56,7 @@ def row(**overrides: Any) -> dict[str, Any]:
             "max_steps": 50,
             "concurrency": 2,
             "arms": {"fastbrowse": {"pin": "0.5.18+0123456789", "tier": "A"}},
+            "browser": {"mode": "browser-use-cloud"},
         },
     }
     return base | overrides
@@ -798,5 +799,33 @@ def test_public_site_rows_from_an_accepted_browser_clear_the_gate(browser: dict[
     sources = attempts(3)
     for source in sources:
         source["run"]["browser"] = browser
+    report = publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY)
+    assert not any(f.check == "browser" for f in report.findings)
+
+
+@pytest.mark.parametrize("browser", [None, "local-chrome", {}, {"mode": "some-other-browser"}])
+def test_public_site_rows_without_a_valid_browser_record_are_refused(browser: object) -> None:
+    sources = attempts(3)
+    for source in sources:
+        if browser is None:
+            del source["run"]["browser"]
+        else:
+            source["run"]["browser"] = browser
+    report = publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY)
+    assert any(f.check == "browser" for f in report.blocking)
+
+
+def test_corpus_rows_without_a_browser_record_are_refused() -> None:
+    sources = attempts(3, corpus="a" * 64)
+    for source in sources:
+        del source["run"]["browser"]
+    report = publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY)
+    assert any(f.check == "browser" for f in report.blocking)
+
+
+def test_fixture_rows_need_no_browser_record() -> None:
+    sources = attempts(3, suite="mock")
+    for source in sources:
+        del source["run"]["browser"]
     report = publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY)
     assert not any(f.check == "browser" for f in report.findings)

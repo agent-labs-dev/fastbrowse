@@ -425,8 +425,7 @@ def _browser(row: Mapping[str, Any]) -> list[Finding]:
     from fastbrowse.evals.live_tasks import browser_refusal
 
     run = row.get("run")
-    browser = run.get("browser") if isinstance(run, Mapping) else None
-    refusal = browser_refusal(browser if isinstance(browser, Mapping) else None)
+    refusal = browser_refusal(run.get("browser") if isinstance(run, Mapping) else None)
     return [] if refusal is None else [_finding(REFUSE, "browser", f"{_where(row)}: {refusal}")]
 
 
