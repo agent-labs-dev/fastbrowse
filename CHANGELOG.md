@@ -15,6 +15,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   the caller's start address as a way to continue, so leaving it does not wait on recovery.
 - Answer checks accept a record named only by a requested identifier, such as an order reference, so a
   finished run no longer ends `stuck` with every output unresolved.
+- A handed-over browser that accepts the DevTools connection and then answers nothing is reported as
+  `unavailable` after about 20 seconds, with a message that it may be waiting for its remote debugging approval
+  prompt, where it used to wait over a minute and report a lost browser. A `--cdp-port` whose `/json/version`
+  answers 404, as a Chrome switched on at chrome://inspect does, now says to build the `ws://` address from the
+  port and path in its `DevToolsActivePort` file and pass it with `--cdp-url`; other refusals name their status.
+  None of these failures switches to another browser.
+
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
 - A run that stops with a message quoting the page, such as a field's label, redacts any resolved secret
