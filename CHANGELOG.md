@@ -24,7 +24,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - A page the run has already read no longer restores its recovery budget each time a repeated click
   redraws it, such as a row expanding or a countdown ending. A read-only release check clicked the same
   Files, version and download links until its step limit; now it ends `stuck` once recovery is spent
-  there, with the partial answer it holds, unless a read since the last recovery found something new.
+  there, with the partial answer it holds, unless a read since the last recovery found something new. A
+  wizard step that brings new fields or a new submit control at the same address still counts as a move.
 
 ## [0.5.20] - 2026-10-09
 

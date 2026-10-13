@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 from fastbrowse.agent import Agent, _RunState
 from fastbrowse.models import Authorization, Operation, StepOutcome
-from fastbrowse.page import BlockKind, Observation, Page
+from fastbrowse.page import BlockKind, Control, Observation, Page
 from fastbrowse.policy import HistoryEntry
 from tests.test_agent import _button, run_state
 from tests.test_policy import ScriptedJev, observation
@@ -68,4 +68,24 @@ async def test_a_read_page_redrawn_after_a_read_that_paid_out_still_renews_recov
         ),
     )
     agent._settle(state, _at(FILES, "Files", "v1.14.1", "Download", "v1.14.0"))
+    assert state.recoveries == 0
+
+
+def _field(label: str) -> Control:
+    return Control(id=label.lower(), frame_id=None, role="textbox", label=label, operations=frozenset({Operation.FILL}))
+
+
+async def test_a_new_step_at_the_same_address_still_renews_recovery() -> None:
+    """A wizard that keeps its address is read on its first step; the next step's new fields are a real move."""
+    state = await run_state()
+    state.authorization = Authorization(irreversible_actions=True)
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    first = observation((_field("Name"), _button("Next"))).model_copy(update={"url": FILES})
+    agent._settle(state, first)
+    state.notes.remember_capture(capture((BlockKind.RECORD, "Step 1 of 3"), url=FILES))
+    state.recoveries = 1
+    state.recovered_at = len(state.history)
+    state.history.append(_clicked("Next"))
+    state.left = "step 1"
+    agent._settle(state, observation((_field("Email"), _button("Next"))).model_copy(update={"url": FILES}))
     assert state.recoveries == 0

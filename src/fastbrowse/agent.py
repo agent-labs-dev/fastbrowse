@@ -399,6 +399,9 @@ class _RunState:
     """This page has been read since it last changed."""
     tried_unsure: set[str] = field(default_factory=set[str])
     """Page states where an unsure pick has been acted on instead of recovering; the next one there recovers."""
+    form_controls_at: dict[str, set[str]] = field(default_factory=dict[str, set[str]])
+    """The fields, settings and submit controls each address has shown, which tell a wizard's next step at the same
+    address from a redraw of a page already read."""
     reads: set[ReadKey] = field(default_factory=set)
     """Attempted reads by document, exact content and outstanding requirements, independent of URL edits."""
     record_read_documents: set[str] = field(default_factory=set)
@@ -3863,9 +3866,22 @@ def _redrawn_read(state: _RunState, observation: Observation) -> bool:
     """Whether a page state is a redraw of an address already read, reached with no read paying out since the
     last recovery. A release check clicked a project's Files tab, version row and download link over and over:
     each click expanded a row, ended a countdown or closed a banner on a page already read, and each redraw was a
-    state never seen, so it restored the recovery budget and the run went round until its step limit."""
-    return state.notes.read_address(observation.url) and not any(
-        entry.read_progress for entry in state.history[state.recovered_at :]
+    state never seen, so it restored the recovery budget and the run went round until its step limit.
+
+    A wizard that keeps its address moves to a step with fields or a submit control the address has not shown,
+    which none of those redraws brings, and that step is a real move whatever was read before it."""
+    form = {
+        json.dumps([control.role, control.label, control.context])
+        for control in observation.controls
+        if Operation.FILL in control.operations or control.role in SETTING_ROLES or control.submit_semantics is not None
+    }
+    seen = state.form_controls_at.setdefault(observation.url, set())
+    new_step = bool(form - seen)
+    seen.update(form)
+    return (
+        not new_step
+        and state.notes.read_address(observation.url)
+        and not any(entry.read_progress for entry in state.history[state.recovered_at :])
     )
 
 
