@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
+- A run that stops with a message quoting the page, such as a field's label, redacts any resolved secret
+  from its `error`, as the run's other text results already were.
 
 ## [0.5.20] - 2026-10-09
 
