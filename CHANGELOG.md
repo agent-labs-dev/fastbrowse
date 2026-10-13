@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
+- A run blocked by a bot check returns the challenge page's opening text as cited evidence, so a caller can
+  tell what stopped it without browsing again. The check is still never bypassed.
 
 ## [0.5.20] - 2026-10-09
 

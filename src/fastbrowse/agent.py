@@ -98,6 +98,7 @@ from fastbrowse.retrieval import (
     TallyReader,
     compose,
     draft_answer,
+    leading_quotes,
     partial_answer,
     read,
     read_tallies,
@@ -249,11 +250,16 @@ class _Recovery(Frozen):
     )
 
 
+_WALL_QUOTE_CHARS = 600
+"""How much of a wall's text a blocked result quotes: enough for its message, not a whole page."""
+
+
 class _Stop(Exception):
-    def __init__(self, status: Status, error: str | None = None) -> None:
+    def __init__(self, status: Status, error: str | None = None, evidence: tuple[Evidence, ...] = ()) -> None:
         super().__init__(error or status.value)
         self.status = status
         self.error = error
+        self.evidence = evidence
 
 
 class _HttpFailure(Frozen):
@@ -612,7 +618,7 @@ class Agent:
                     # What was read is still cited evidence; a caller told only "stuck" has to browse again for it.
                     result = self._partial_result(state.notes, state, ledger, stop.status, stop.error)
                 else:
-                    result = self._result(state, ledger, stop.status, error=stop.error)
+                    result = self._result(state, ledger, stop.status, error=stop.error, evidence=stop.evidence)
             except TimeoutError:
                 if not deadline.expired():
                     raise
@@ -813,6 +819,7 @@ class Agent:
                         Status.BLOCKED,
                         f"bot check at {origin}; it is not a sign-in and no credential passes it. "
                         "Retry using an attached local browser or choose another source for this research.",
+                        evidence=await self._wall_quotes(),
                     )
                 plan = await state.await_plan()
                 if not _access_inspection(plan):
@@ -1514,6 +1521,14 @@ class Agent:
             }
         )
         return self._observed
+
+    async def _wall_quotes(self) -> tuple[Evidence, ...]:
+        # A blocked run that returned no evidence left its caller only the final address to tell a CAPTCHA from
+        # a rate limit or an outage, so the challenge's own words are cited. A failed capture loses only the quote.
+        try:
+            return leading_quotes(await self._capture(), _WALL_QUOTE_CHARS)
+        except BrowserError:
+            return ()
 
     async def _capture(self) -> Capture:
         capture = await self._page.capture()

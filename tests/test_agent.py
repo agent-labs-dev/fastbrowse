@@ -2674,6 +2674,7 @@ async def test_a_bot_check_stops_the_run_even_where_a_secret_is_held_for_the_sit
     page.observe = AsyncMock(return_value=captcha)
     page.artifacts = ()
     jev = ScriptedJev({}, noul=0.9)
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "Verify you are human")))
     agent = Agent(
         page,
         jev,
@@ -2692,12 +2693,58 @@ async def test_a_bot_check_stops_the_run_even_where_a_secret_is_held_for_the_sit
     assert "login_required" not in asked
 
 
+async def test_a_bot_check_stop_cites_the_challenge_the_page_showed() -> None:
+    """A blocked run with no evidence leaves the caller nothing to act on; the wall's own words are the evidence."""
+    wall = "https://search.test/sorry/index?continue=/search"
+    captcha = _at(wall, _button("I'm not a robot"))
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=captcha)
+    page.capture = AsyncMock(
+        return_value=capture(
+            (BlockKind.PARAGRAPH, "Our systems have detected unusual traffic from your computer network."),
+            (BlockKind.OBSERVATION, "checkbox: I'm not a robot"),
+            (BlockKind.PARAGRAPH, "x" * 2000),
+            url=wall,
+        )
+    )
+    page.artifacts = ()
+    agent = Agent(page, ScriptedJev({}, noul=0.9), ScriptedLLM([{"requirements": [], "answer_expected": False}]))
+    agent._outwait = AsyncMock(return_value=False)
+
+    result = await agent.run("Research the startup error", limits=Limits(max_steps=2))
+
+    assert result.status is Status.BLOCKED
+    assert result.evidence, "the blocked result carries no evidence of the block"
+    first = result.evidence[0]
+    assert first.url == wall
+    assert first.quote == "Our systems have detected unusual traffic from your computer network."
+    # A typed observation is not page text, and a wall's quote stays short.
+    assert all(item.rendered_text for item in result.evidence)
+    assert sum(len(item.quote) for item in result.evidence) <= 600
+
+
+async def test_a_bot_check_stop_survives_a_capture_that_fails() -> None:
+    captcha = _at("https://shop.test/login", _button("Verify you are human"))
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=captcha)
+    page.capture = AsyncMock(side_effect=BrowserError("target closed"))
+    page.artifacts = ()
+    agent = Agent(page, ScriptedJev({}, noul=0.9), ScriptedLLM([{"requirements": [], "answer_expected": False}]))
+    agent._outwait = AsyncMock(return_value=False)
+
+    result = await agent.run("Open my orders", limits=Limits(max_steps=2))
+
+    assert result.status is Status.BLOCKED
+    assert result.evidence == ()
+
+
 async def test_a_decision_dropped_for_a_redraw_still_asks_the_bot_check_again() -> None:
     captcha = _at("https://shop.test/login", _button("Verify you are human"))
     page = Mock(spec=Page)
     page.observe = AsyncMock(return_value=captcha)
     page.redrawn = AsyncMock(side_effect=[True, False])
     page.artifacts = ()
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "Verify you are human")))
 
     class SlowFirstJev(ScriptedJev):
         async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
@@ -5358,6 +5405,7 @@ async def test_access_inspection_reads_login_evidence_without_bypassing_bot_chec
 ) -> None:
     obs = _at("https://shop.test/login", _button("Sign in"))
     page = Mock(spec=Page)
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "Sign in"), url=obs.url))
     agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
     agent._observe = AsyncMock(return_value=obs)
     agent._outwait = AsyncMock(return_value=False)
