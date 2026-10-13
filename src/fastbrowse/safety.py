@@ -86,6 +86,16 @@ def sets_new_password(control: Control) -> bool:
     return control.sensitive and _NEW_SECRET.search(control.label) is not None
 
 
+# Tokens a page uses to mark the fields of a sign-in form, whatever language its labels are in.
+_SIGN_IN_AUTOCOMPLETE = frozenset({"username", "current-password", "one-time-code", "webauthn"})
+
+
+def asks_for_credentials(control: Control) -> bool:
+    """Whether a field takes an account's credentials: the page's own evidence that it wants a sign-in."""
+    tokens = (control.autocomplete or "").lower().split()
+    return control.sensitive or control.input_type == "password" or not _SIGN_IN_AUTOCOMPLETE.isdisjoint(tokens)
+
+
 def changes_credentials(controls: Sequence[Control], target: Control, operation: Operation = Operation.CLICK) -> bool:
     """Recognize password submissions without treating field focus or settings links as commits."""
     if operation is Operation.CLICK and (target.role != "button" or target.href):
