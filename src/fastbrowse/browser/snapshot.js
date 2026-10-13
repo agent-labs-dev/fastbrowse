@@ -745,13 +745,30 @@
 
   // An unnamed control the page draws once per card, a trash icon beside each image, is a twin only while another
   // card shows the same icon: one left alone, or drawn by another icon set, would name no card and leave the choice
-  // guessing which image it removes. It is named by the nearest ancestor that says anything besides it.
+  // guessing which image it removes. It is named by the card that holds it, or failing one by the nearest ancestor
+  // that says anything besides it.
+  // A card is an item, a row, or an element the page repeats beside itself with the same tag and class.
+  const isCard = e =>
+    e.matches('article,li,[role="listitem"],tr,[role="row"]') ||
+    (!!e.getAttribute('class') &&
+      [...(e.parentElement?.children || [])].some(
+        s => s !== e && s.localName === e.localName && s.getAttribute('class') === e.getAttribute('class'),
+      ));
   const nearestName = (element, label) => {
-    for (let e = element.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
-      const name = nameOf(e, element, label, true);
-      if (name) return excerpt(name, CONTROL_CONTEXT_CHARS);
+    let first = '';
+    for (let e = element.parentElement, path = element; e && e !== e.ownerDocument.body; path = e, e = e.parentElement) {
+      first ||= nameOf(e, element, label, true);
+      if (!isCard(e)) continue;
+      // An action row's own caption ("Actions") is the first text the climb meets and names no item, so the card
+      // is named by what it holds outside the row that holds the control.
+      const aria = (e.getAttribute('aria-label') || '').trim();
+      const outside = [...e.children]
+        .filter(child => child !== path)
+        .map(child => firstLine(child.innerText))
+        .find(line => line && line !== label && !repeated.has(line));
+      return excerpt((aria !== label && aria) || outside || first, CONTROL_CONTEXT_CHARS);
     }
-    return '';
+    return excerpt(first, CONTROL_CONTEXT_CHARS);
   };
   for (const c of controls) {
     if (!c.context && unnamed.has(c.id)) {

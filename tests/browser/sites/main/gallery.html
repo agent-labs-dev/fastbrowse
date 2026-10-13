@@ -25,6 +25,10 @@
     <div class="card" id="c6"><a class="thumb" href="/gallery/106/edit"><img src="data:," alt=""></a>
       <p>new-icon.png</p>
       <button type="button" class="remove" aria-describedby="remove-hint"></button></div>
+    <div class="card" id="c7"><a class="thumb" href="/gallery/107/edit"><img src="data:," alt=""></a>
+      <div class="actions"><span>Actions</span>
+        <button type="button"><svg class="bi bi-x-circle" aria-hidden="true"></svg></button></div>
+      <p>Alpha</p></div>
   </div>
   <p id="remove-hint" hidden>Remove from gallery</p>
   <p id="status"></p>
@@ -33,7 +37,7 @@
       control.addEventListener('click', event => {
         event.preventDefault();
         const card = control.closest('.card');
-        if (!confirm('Delete ' + card.querySelector('p').textContent + '?')) return;
+        if (!confirm('Delete ' + card.querySelector('p:last-of-type').textContent + '?')) return;
         card.remove();
         document.getElementById('status').textContent = 'Deleted ' + card.id;
       });

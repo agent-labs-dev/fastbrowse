@@ -293,6 +293,8 @@ async def test_unnamed_card_controls_are_named_by_their_icon_and_card(
         ("Delete image", None),
         ("delete icon", "old-icon.png"),
         ("Remove from gallery", "new-icon.png"),
+        # The card's action row has its own caption, which every card repeats and which names no image.
+        ("x circle icon", "Alpha"),
     ]
     trash = next(c for c in obs.controls if c.label == "trash can icon")
     result = await page.act(Action(operation=Operation.CLICK, target_id=trash.id), obs)
