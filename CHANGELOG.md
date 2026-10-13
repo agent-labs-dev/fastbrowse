@@ -17,6 +17,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   from its `error`, as the run's other text results already were.
 - A run blocked by a bot check returns the challenge page's opening text as cited evidence, so a caller can
   tell what stopped it without browsing again. The check is still never bypassed.
+- A sign-in prompt no longer ends a reading task before the page is read. When the page asks for no
+  credentials, the run reads it first, so a public list whose only sign-in box is for posting a reply, or
+  its empty state, is answered. A `needs_login` error now names its evidence: the credential fields the page
+  asks for, or a read of the page that found nothing requested.
 
 ## [0.5.20] - 2026-10-09
 
