@@ -189,6 +189,8 @@ class BlockKind(StrEnum):
 class Block(Frozen):
     source_id: str
     source_url: str | None = None
+    complete_source: bool = False
+    """This block contains the entire downloaded text, with no omitted bytes."""
     kind: BlockKind
     frame_id: str | None
     start: int = Field(ge=0)

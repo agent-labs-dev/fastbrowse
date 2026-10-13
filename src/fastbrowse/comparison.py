@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from fastbrowse.memory import Fact, Notes
+from fastbrowse.memory import Comparison, Fact, Notes
 from fastbrowse.models import FactReader, Frozen
 
 
@@ -64,5 +64,14 @@ def complete_comparison(notes: Notes, requirement_id: str, comparison: NumericCo
         f"{label}: {value}" for _, label, value in rows[: comparison.limit]
     )
     # Context such as the active category or filter is part of the proof, even when it is outside a record.
-    notes.add(Fact(requirement_id=requirement_id, text=text, evidence=None, basis=tuple(known), reader=FactReader.LLM))
+    notes.add(
+        Fact(
+            requirement_id=requirement_id,
+            comparison=Comparison(requirement_id=requirement_id, records=records, complete=True),
+            text=text,
+            evidence=None,
+            basis=tuple(known),
+            reader=FactReader.LLM,
+        )
+    )
     return True
