@@ -1902,7 +1902,11 @@ class Agent:
         known = state.form_values.pop((observation.document_key, target.id), None)
         if known is not None and known[0].model_copy(update={"offscreen": target.offscreen}) == target:
             value = known[1]
-            return _next_value(value.values, state.history, target.label) if len(value.values) > 1 else value.text
+            text = _next_value(value.values, state.history, target.label) if len(value.values) > 1 else value.text
+            # The value due now moves on as fills are typed, so a kept one is checked when it is used, not only
+            # when the batch kept it.
+            if not _misfit(target, text):
+                return text
         context = await self._field_context(state, observation, target)
         messages = [
             Message(role="system", content=_FIELD_WRITER),
@@ -2012,13 +2016,16 @@ class Agent:
         # Scrolling to the first field ends a batch too. A later Jev choice can reuse its value only while
         # the field's identity, meaning and empty value survive the fresh observation.
         for value in written.fields:
+            control = fields[value.id]
+            # The value typed is the one due in turn, which a value listed for later correction can differ from.
+            text = _next_value(value.values, state.history, control.label) if len(value.values) > 1 else value.text
             if (
                 not value.missing
-                and value.text
-                and not _misfit(fields[value.id], value.text)
+                and text
+                and not _misfit(control, text)
                 and not self._redactor.reveals(value.model_dump_json())
             ):
-                state.form_values[(observation.document_key, value.id)] = (fields[value.id], value)
+                state.form_values[(observation.document_key, value.id)] = (control, value)
         for index, value in enumerate(written.fields):
             control = fields[value.id]
             text = _next_value(value.values, state.history, control.label) if len(value.values) > 1 else value.text

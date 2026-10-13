@@ -4628,6 +4628,35 @@ async def test_a_batch_stops_before_a_value_that_does_not_fit_its_field_and_does
     assert (obs.document_key, email.id) not in state.form_values
 
 
+async def test_a_batch_value_listed_in_turn_is_checked_as_it_would_be_typed() -> None:
+    """The batch kept a field whose text was an address while its first listed value was a code, and the field's
+    own path then typed that code from the kept value without checking it."""
+    name, email = form_fields()
+    email = email.model_copy(update={"input_type": "email"})
+    page = Mock(spec=Page)
+    page.redrawn = AsyncMock(return_value=False)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=False))
+    listed: JsonValue = {
+        "id": "Email",
+        "missing": False,
+        "text": "ada@example.test",
+        "values": ["482913", "ada@example.test"],
+    }
+    llm = ScriptedLLM(
+        [
+            {"fields": [{"id": "Name", "missing": False, "text": "Ada"}, listed]},
+            {"missing": False, "text": "ada@example.test"},
+        ]
+    )
+    agent = Agent(page, ScriptedJev({}), llm)
+    state = await run_state()
+    obs = observation((name, email))
+
+    assert await agent._fill_form(state, obs, _code_decision(Operation.FILL, name))
+    assert [call.args[0].text for call in page.act.call_args_list] == ["Ada"]
+    assert await agent._generate_text(state, obs, email) == "ada@example.test"
+
+
 @pytest.mark.parametrize("continues", [True, False])
 async def test_form_batch_writes_once_and_stops_when_browser_cannot_confirm(continues: bool) -> None:
     name, email = form_fields()
