@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
+- A path the task names on its own, such as "sign in at /login", is an address on the caller's start site, so a
+  run that lands on an empty entry page can open it instead of stopping stuck.
 
 ## [0.5.20] - 2026-10-09
 
