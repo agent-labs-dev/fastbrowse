@@ -98,12 +98,14 @@ from fastbrowse.retrieval import (
     TallyReader,
     compose,
     draft_answer,
+    leading_quotes,
     partial_answer,
     read,
     read_tallies,
 )
 from fastbrowse.safety import (
     Redactor,
+    asks_for_credentials,
     changes_credentials,
     irreversible_question,
     may_be_irreversible,
@@ -249,11 +251,16 @@ class _Recovery(Frozen):
     )
 
 
+_WALL_QUOTE_CHARS = 600
+"""How much of a wall's text a blocked result quotes: enough for its message, not a whole page."""
+
+
 class _Stop(Exception):
-    def __init__(self, status: Status, error: str | None = None) -> None:
+    def __init__(self, status: Status, error: str | None = None, evidence: tuple[Evidence, ...] = ()) -> None:
         super().__init__(error or status.value)
         self.status = status
         self.error = error
+        self.evidence = evidence
 
 
 class _HttpFailure(Frozen):
@@ -608,11 +615,14 @@ class Agent:
                     result = await self._loop(state, output_schema, until)
                     loop_returned = True
             except _Stop as stop:
+                # A stop's message can quote the page, such as a field's label, and a page can echo a typed secret
+                # there; redacting at each raise missed one, so every stop is redacted here before the caller sees it.
+                stop.error = None if stop.error is None else self._redactor.redact(stop.error)
                 if stop.status in {Status.STUCK, Status.UNVERIFIED} and state is not None and state.notes.evidence:
                     # What was read is still cited evidence; a caller told only "stuck" has to browse again for it.
                     result = self._partial_result(state.notes, state, ledger, stop.status, stop.error)
                 else:
-                    result = self._result(state, ledger, stop.status, error=stop.error)
+                    result = self._result(state, ledger, stop.status, error=stop.error, evidence=stop.evidence)
             except TimeoutError:
                 if not deadline.expired():
                     raise
@@ -809,14 +819,19 @@ class Agent:
                 if (bot_check or not raw.controls) and await self._outwait(raw):
                     continue
                 if bot_check:
+                    # The address is the raw observation's, and an error is written out of the process, so a
+                    # secret typed earlier and echoed in another host is redacted here as in any other report.
                     raise _Stop(
                         Status.BLOCKED,
-                        f"bot check at {origin}; it is not a sign-in and no credential passes it. "
+                        f"bot check at {self._redactor.redact(origin)}; "
+                        "it is not a sign-in and no credential passes it. "
                         "Retry using an attached local browser or choose another source for this research.",
+                        evidence=await self._wall_quotes(raw),
                     )
                 plan = await state.await_plan()
                 if not _access_inspection(plan):
-                    raise _Stop(Status.NEEDS_LOGIN, f"sign-in required at {origin}")
+                    await self._meet_wall(state, observation, raw, plan)
+                    continue
                 # A task inspecting an access boundary needs its observed wall read and verified, not passed.
                 decision = _code_decision(Operation.READ, None)
             uncertain = decision.confidence < self._config.thresholds.recover_below
@@ -1515,6 +1530,19 @@ class Agent:
         )
         return self._observed
 
+    async def _wall_quotes(self, wall: Observation) -> tuple[Evidence, ...]:
+        # A blocked run that returned no evidence left its caller only the final address to tell a CAPTCHA from
+        # a rate limit or an outage, so the challenge's own words are cited. A failed capture loses only the quote.
+        try:
+            capture = await self._capture()
+            # A scripted check can clear just after it was outwaited, and the capture then reads its destination;
+            # the page is observed again so only the wall's own words are cited.
+            if (await self._observe()).page_key != wall.page_key:
+                return ()
+        except BrowserError:
+            return ()
+        return leading_quotes(capture, _WALL_QUOTE_CHARS)
+
     async def _capture(self) -> Capture:
         capture = await self._page.capture()
         text = self._redactor.mask(capture.text)
@@ -1902,7 +1930,11 @@ class Agent:
         known = state.form_values.pop((observation.document_key, target.id), None)
         if known is not None and known[0].model_copy(update={"offscreen": target.offscreen}) == target:
             value = known[1]
-            return _next_value(value.values, state.history, target.label) if len(value.values) > 1 else value.text
+            text = _next_value(value.values, state.history, target.label) if len(value.values) > 1 else value.text
+            # The value due now moves on as fills are typed, so a kept one is checked when it is used, not only
+            # when the batch kept it.
+            if not _misfit(target, text):
+                return text
         context = await self._field_context(state, observation, target)
         messages = [
             Message(role="system", content=_FIELD_WRITER),
@@ -2012,12 +2044,22 @@ class Agent:
         # Scrolling to the first field ends a batch too. A later Jev choice can reuse its value only while
         # the field's identity, meaning and empty value survive the fresh observation.
         for value in written.fields:
-            if not value.missing and value.text and not self._redactor.reveals(value.model_dump_json()):
-                state.form_values[(observation.document_key, value.id)] = (fields[value.id], value)
+            control = fields[value.id]
+            # The value typed is the one due in turn, which a value listed for later correction can differ from.
+            text = _next_value(value.values, state.history, control.label) if len(value.values) > 1 else value.text
+            if (
+                not value.missing
+                and text
+                and not _misfit(control, text)
+                and not self._redactor.reveals(value.model_dump_json())
+            ):
+                state.form_values[(observation.document_key, value.id)] = (control, value)
         for index, value in enumerate(written.fields):
             control = fields[value.id]
             text = _next_value(value.values, state.history, control.label) if len(value.values) > 1 else value.text
-            if value.missing or not text or self._redactor.reveals(text):
+            # A value that does not fit its field's declared kind ends the batch, so the field's own path can
+            # check it and ask again before typing.
+            if value.missing or not text or self._redactor.reveals(text) or _misfit(control, text):
                 return index > 0
             state.ledger.check()
             state.form_values.pop((observation.document_key, control.id), None)
@@ -2065,14 +2107,34 @@ class Agent:
             gives_up_as=Status.NEEDS_INPUT,
         )
 
-    async def _write_field(self, state: _RunState, messages: Sequence[Message], target: Control) -> str | None:
+    async def _write_field(
+        self, state: _RunState, messages: Sequence[Message], target: Control, *, refit: bool = True
+    ) -> str | None:
         """The text for one field, or None when the writer says the value was never given."""
         generation = await self._llm.generate(LLMPurpose.FIELD_TEXT, list(messages), _FieldText, ledger=state.ledger)
         state.ledger.record(generation.cost)
         written = generation.data
         if written.missing:
             return None
-        return _next_value(written.values, state.history, target.label) if len(written.values) > 1 else written.text
+        text = _next_value(written.values, state.history, target.label) if len(written.values) > 1 else written.text
+        # Shown a field declaring input_type email and a code saved in the notes, the writer typed the code into
+        # Email in 7 of 12 two-step sign-ins, and recovery then spent a call and a fill putting it right. The
+        # field's own declaration is checked here instead, and the writer is asked once more before anything is typed.
+        wanted = _misfit(target, text)
+        if wanted is None or not refit:
+            return text
+        corrected = [
+            *messages,
+            Message(
+                role="user",
+                content=(
+                    f"The field declares that it takes {wanted}, and {self._redactor.mask(text)!r} is not one. "
+                    f"Write the {wanted} the task or notes give for this field; a value saved for another field "
+                    "does not belong in it."
+                ),
+            ),
+        ]
+        return await self._write_field(state, corrected, target, refit=False)
 
     async def _value_absent(self, state: _RunState, observation: Observation, target: Control) -> bool:
         state.ledger.reserve(CostComponent.JEV)
@@ -2132,6 +2194,33 @@ class Agent:
             {"accept": "Accept / OK", "dismiss": "Dismiss / Cancel"},
         )
         return choice == "accept"
+
+    async def _meet_wall(self, state: _RunState, observation: Observation, raw: Observation, plan: Plan) -> None:
+        """Stop at a sign-in wall Jev saw only on the page's evidence for it; return once the page proved readable.
+
+        A public comment list whose only sign-in prompt was a box for posting a reply ended needs_login before a
+        single step, with nothing cited: the list, empty and saying so, could be read without an account."""
+
+        # The error reaches the caller as it is, so it is built from what models see and redacted as well: a page
+        # can echo a typed secret into its title or a field's label.
+        def wall(evidence: str) -> _Stop:
+            return _Stop(Status.NEEDS_LOGIN, self._redactor.redact(f"sign-in required at {origin}: {evidence}"))
+
+        origin = origin_of(observation.url)
+        page = observation.title or observation.url
+        # Which fields ask for credentials is read from the raw page, whose flags masking cannot have changed.
+        credential = {c.id for c in raw.controls if asks_for_credentials(c)}
+        asked = [c.label or c.input_name or "a password" for c in observation.controls if c.id in credential]
+        if credential:
+            raise wall(f"the page asks for {', '.join(asked) or 'a password'}")
+        if not _unread(plan, state.notes):
+            raise wall(f"{page} offers only sign-in")
+        # A prompt to sign in can gate only writing, such as posting a reply, so a task that reads is asked of the
+        # page before any credential is: what the page shows decides whether the wall stands between them.
+        facts = len(state.notes.facts)
+        await self._step(state, observation, _code_decision(Operation.READ, None))
+        if len(state.notes.facts) == facts:
+            raise wall(f"reading {page} found none of the requested information")
 
     async def _read_before_interaction(
         self, state: _RunState, observation: Observation, decision: Decision, decided_by: Decider = Decider.JEV
@@ -3772,6 +3861,18 @@ def _history(history: Sequence[HistoryEntry], limits: ObservationLimits) -> tupl
     split = len(history) - limits.history_entries
     earlier = history[max(0, split - limits.earlier_history_entries) : max(0, split)]
     return (*(entry.model_copy(update={"effect": None}) for entry in earlier), *history[max(0, split) :])
+
+
+def _misfit(target: Control, text: str) -> str | None:
+    """The kind of value the field declares it takes, when the text cannot be one, else None.
+
+    An address field's type and autocomplete token are the page's own statement of what it takes, and a browser
+    refuses to submit an email field holding no address. Only that check is made: a phone or number field takes
+    too many shapes to reject one in code."""
+    tokens = (target.autocomplete or "").lower().split()
+    if ((target.input_type or "").lower() == "email" or "email" in tokens) and "@" not in text:
+        return "an email address"
+    return None
 
 
 def _next_value(values: Sequence[str], history: Sequence[HistoryEntry], label: str | None) -> str:
