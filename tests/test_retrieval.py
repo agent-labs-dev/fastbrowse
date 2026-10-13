@@ -2944,11 +2944,12 @@ async def test_a_quoted_whole_list_total_can_answer_beside_an_unfinished_tally(
     notes.add(context)
     tally = notes.add_tally(Tally(requirement_id="r", key="items", records=(fact_id(record),)))
     requirement = Requirement(id="r", text="Total item count", kind=RequirementKind.INFORMATION, count_records=True)
+    draws_on: list[JsonValue] = [*([] if stated else [fact_id(tally)]), *([fact_id(context)] if with_context else [])]
     claim: JsonValue = {
         "requirement_id": "r",
         "text": value,
         "cite": {"first": "s1", "last": "s1"} if stated else None,
-        "draws_on": ([] if stated else [fact_id(tally)]) + ([fact_id(context)] if with_context else []),
+        "draws_on": draws_on,
     }
     await read(
         ScriptedLLM([{"claims": [claim], "answered": True}]),
