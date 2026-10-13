@@ -14,6 +14,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
 
+- Benchmark results from public sites measured in headless local Chrome with a throwaway profile are refused
+  for publication, since about half of those sites refused that browser before the first step. A campaign can
+  check its browser with `fastbrowse.evals.live_tasks.browser_refusal` before it starts; a headed window, a kept
+  profile or a cloud browser is admitted.
+
 ## [0.5.20] - 2026-10-09
 
 - Going back from a document that has not been read reads it first when requirements remain, so a pending

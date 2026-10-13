@@ -420,6 +420,16 @@ def _provenance(row: Mapping[str, Any], *, release: str | None, require_clean: b
     return problems
 
 
+def _browser(row: Mapping[str, Any]) -> list[Finding]:
+    """A public-site row measured in a browser those sites refuse scores the refusal, not the agent."""
+    from fastbrowse.evals.live_tasks import browser_refusal
+
+    run = row.get("run")
+    browser = run.get("browser") if isinstance(run, Mapping) else None
+    refusal = browser_refusal(browser if isinstance(browser, Mapping) else None)
+    return [] if refusal is None else [_finding(REFUSE, "browser", f"{_where(row)}: {refusal}")]
+
+
 def _version(row: Mapping[str, Any], lock: Mapping[str, Mapping[str, Any]], suites: Mapping[str, tuple[str, ...]]):
     where = _where(row)
     task = str(row.get("task"))
@@ -906,6 +916,8 @@ def gate(
         findings += _shape(row)
         findings += _provenance(row, release=release, require_clean=require_clean, live=live)
         findings += _version(row, lock, suites)
+        if live or "corpus" in row:
+            findings += _browser(row)
         findings += _protocol(row)
         findings += _cost(row)
         findings += _dataset(row)
