@@ -10,6 +10,11 @@ updates:
     schedule: {interval: weekly}
     groups:
       javascript-tools: {patterns: ["*"]}
+    ignore:
+      # The SDK supports Node 20 (packages/sdk engines), and a newer @types/node type-checks APIs Node 20
+      # lacks, such as fs.globSync and the global navigator. Raise this together with engines.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule: {interval: weekly}
