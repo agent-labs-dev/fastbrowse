@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A run whose `on_frame` callback ignores cancellation still returns and stops its browser. Closing waited on
+  the callback with no limit, so such a run never returned a result and its cloud browser kept billing.
+
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
 

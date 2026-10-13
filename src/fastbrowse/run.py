@@ -252,6 +252,7 @@ async def run_task(
     an MP4 of the tab, ending on the answer; it needs ffmpeg, and shows whatever the pages showed.
     `on_frame` receives JPEG bytes from the active tab. Frames are acknowledged after delivery, with no fixed
     frame rate; only the latest pending frame is kept. Handler failures are logged without interrupting the run.
+    A handler still running when the run ends is cancelled, and the run waits at most two seconds for it to stop.
     Live frames and recordings are held back while a resolved secret shows on the page, as PNG step frames are.
     No handler means no live capture.
 
