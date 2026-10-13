@@ -32,6 +32,10 @@ The release's `aur` job has by then built that version in the container and kept
 as the run's `aur` artifact. A change to the package that is not a new version, a rebuild for a new Arch Python
 among them, raises `pkgrel` by hand in both files.
 
+The AUR workflow also runs weekly. It builds the committed package, since Arch moves between our changes, and
+runs `scripts/aur_package.py` without `--write`, which fails while `packaging/aur` is older than the PyPI
+release in `pyproject.toml`. A release that skipped this step shows there.
+
 ## Publishing it
 
 No workflow pushes to the AUR. The maintainer does, with an SSH key registered to the AUR account that owns

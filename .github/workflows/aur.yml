@@ -4,7 +4,9 @@ name: AUR
 # has left the range fastbrowse accepts, is seen before a user sees it.
 #
 # CI calls this when a change touches the package, and the required `check` waits for it. A release calls it
-# with its version once PyPI holds it, which builds the package that version will be.
+# with its version once PyPI holds it, which builds the package that version will be. A weekly schedule builds
+# the committed package between changes, since Arch moves without one, and fails when it is older than the PyPI
+# release in pyproject.toml, which a release that skipped `scripts/aur_package.py --write` leaves behind.
 # Nothing here publishes: pushing to aur.archlinux.org needs the maintainer's key.
 on:
   workflow_call:
@@ -14,6 +16,8 @@ on:
         type: string
         required: false
   workflow_dispatch:
+  schedule:
+    - cron: "41 5 * * 1"
 permissions: {}
 jobs:
   package:
@@ -29,6 +33,10 @@ jobs:
         run: python3 scripts/aur_package.py "$VERSION" --write --wait 300
       - name: Build, install and run in a clean Arch container
         run: docker run --rm -v "$PWD:/repo:ro" archlinux:base-devel bash /repo/packaging/aur/build.sh
+      # Checked after the build, and even when it fails, so one run reports both an Arch break and a missed bump.
+      - name: Check the package is the PyPI release
+        if: ${{ !cancelled() && github.event_name == 'schedule' }}
+        run: python3 scripts/aur_package.py
       # What the maintainer pushes to the AUR for this release, when the release moved it.
       - if: inputs.version != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
