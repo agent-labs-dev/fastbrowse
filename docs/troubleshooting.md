@@ -212,3 +212,54 @@ authorize it.
 **Next step.** Try a `--start` URL closer to the goal, or a narrower task that needs fewer facts in one
 answer. The embedding API takes the budgets in `Config` (`observation` and `tokens`) if you need to
 raise them.
+
+## needs_input (exit 5)
+
+**What it means.** The run needs a value or a file that the task did not give, or an upload is over the size
+limit. It stops rather than guess.
+
+**Common causes.**
+
+- The run opened no page: `the task names no page to start from, and none was given`.
+- A field needs a value the task never states. The run first tries to go on without it, then stops with
+  `'<field>' needs a value the task does not give`, or with recovery's diagnosis.
+- The page asks for a file and the run has none: `the page asks for a file and none was provided`.
+- A file is larger than `Config.max_upload_bytes` (25 MiB by default): `<name> exceeds the upload size limit`.
+- A password change without a replacement secret: `A replacement password requires --secret
+  new_password=ENV_VAR@https://host; set ENV_VAR to the new value instead of putting it in the task.`
+- A secret declared for another origin than the one the run is typing on:
+  `secret <name> is not available for <origin>`.
+- A drag with nowhere to drop: `the page offers no drop target for the drag`.
+- An address the run would open contains a resolved secret: `navigation address contains a resolved secret`.
+
+**Next step.** Supply what the error names, then run again:
+
+- Give `--start`, or name the page in the task.
+- Put missing text in the task. The embedding API and the JavaScript SDK also take `inputs` for exact field
+  text.
+- Pass files as `attachments` in the embedding API or the JavaScript SDK. The CLI and the MCP tool cannot
+  supply files.
+- Supply a new password as `--secret new_password=ENV_VAR@https://host`, and fix the origin of a secret
+  scoped to the wrong one.
+
+## error (exit 1)
+
+**What it means.** A model or browser failure that is not a provider outage, or a run that never started.
+Configuration refusals also exit 1.
+
+**Common causes.**
+
+- A model or browser call failed in a way retries do not cover. `error` holds the failure, cut to 500
+  characters with any secret redacted.
+- The browser could not be reached as configured, for example `no DevTools endpoint at
+  http://127.0.0.1:<port>/json/version (<cause>)` from `--cdp-port`, or a pair of browser options that
+  cannot go together, such as `cdp_url and cdp_port both name a browser to attach to; pass one`.
+- A callback in the embedding API or the JavaScript SDK threw, or `check_access` raised.
+- The CLI refused its options before starting, printing `fastbrowse: <reason>`, such as
+  `--secret names unset variables: <names>` or
+  `--bitwarden needs --start: the vault item is matched against its origin`. With `--json` it prints a result
+  with status `error` and that reason.
+
+**Next step.** Read `error`. For a refused option or browser choice, fix the command and run again. For a
+model or browser failure, run again, and if it repeats, open an issue with the task, the start page and the
+`--json` step trace, as [CONTRIBUTING.md](../CONTRIBUTING.md) describes.
