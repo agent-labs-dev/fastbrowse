@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - A page with no controls, such as a browser error page reached by going back from a submitted form, offers
   the caller's start address as a way to continue, so leaving it does not wait on recovery.
+- Answer checks accept a record named only by a requested identifier, such as an order reference, so a
+  finished run no longer ends `stuck` with every output unresolved.
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
 - A run that stops with a message quoting the page, such as a field's label, redacts any resolved secret
