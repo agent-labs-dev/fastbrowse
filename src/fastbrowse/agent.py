@@ -98,6 +98,7 @@ from fastbrowse.retrieval import (
     TallyReader,
     compose,
     draft_answer,
+    leading_quotes,
     partial_answer,
     read,
     read_tallies,
@@ -250,11 +251,16 @@ class _Recovery(Frozen):
     )
 
 
+_WALL_QUOTE_CHARS = 600
+"""How much of a wall's text a blocked result quotes: enough for its message, not a whole page."""
+
+
 class _Stop(Exception):
-    def __init__(self, status: Status, error: str | None = None) -> None:
+    def __init__(self, status: Status, error: str | None = None, evidence: tuple[Evidence, ...] = ()) -> None:
         super().__init__(error or status.value)
         self.status = status
         self.error = error
+        self.evidence = evidence
 
 
 class _HttpFailure(Frozen):
@@ -609,11 +615,14 @@ class Agent:
                     result = await self._loop(state, output_schema, until)
                     loop_returned = True
             except _Stop as stop:
+                # A stop's message can quote the page, such as a field's label, and a page can echo a typed secret
+                # there; redacting at each raise missed one, so every stop is redacted here before the caller sees it.
+                stop.error = None if stop.error is None else self._redactor.redact(stop.error)
                 if stop.status in {Status.STUCK, Status.UNVERIFIED} and state is not None and state.notes.evidence:
                     # What was read is still cited evidence; a caller told only "stuck" has to browse again for it.
                     result = self._partial_result(state.notes, state, ledger, stop.status, stop.error)
                 else:
-                    result = self._result(state, ledger, stop.status, error=stop.error)
+                    result = self._result(state, ledger, stop.status, error=stop.error, evidence=stop.evidence)
             except TimeoutError:
                 if not deadline.expired():
                     raise
@@ -810,10 +819,14 @@ class Agent:
                 if (bot_check or not raw.controls) and await self._outwait(raw):
                     continue
                 if bot_check:
+                    # The address is the raw observation's, and an error is written out of the process, so a
+                    # secret typed earlier and echoed in another host is redacted here as in any other report.
                     raise _Stop(
                         Status.BLOCKED,
-                        f"bot check at {origin}; it is not a sign-in and no credential passes it. "
+                        f"bot check at {self._redactor.redact(origin)}; "
+                        "it is not a sign-in and no credential passes it. "
                         "Retry using an attached local browser or choose another source for this research.",
+                        evidence=await self._wall_quotes(raw),
                     )
                 plan = await state.await_plan()
                 if not _access_inspection(plan):
@@ -1516,6 +1529,19 @@ class Agent:
             }
         )
         return self._observed
+
+    async def _wall_quotes(self, wall: Observation) -> tuple[Evidence, ...]:
+        # A blocked run that returned no evidence left its caller only the final address to tell a CAPTCHA from
+        # a rate limit or an outage, so the challenge's own words are cited. A failed capture loses only the quote.
+        try:
+            capture = await self._capture()
+            # A scripted check can clear just after it was outwaited, and the capture then reads its destination;
+            # the page is observed again so only the wall's own words are cited.
+            if (await self._observe()).page_key != wall.page_key:
+                return ()
+        except BrowserError:
+            return ()
+        return leading_quotes(capture, _WALL_QUOTE_CHARS)
 
     async def _capture(self) -> Capture:
         capture = await self._page.capture()
