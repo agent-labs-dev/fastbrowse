@@ -70,8 +70,12 @@ def _handler_for(
                 self.wfile.write(body)
                 return
             if self.path.startswith("/report.csv") or self.path == "/export-report":
-                body = b"name,total\nReport,139.79\n" + b"item,1\n" * 10000
-                self.send_response(200)
+                body = b"name,total\nReport,139.79\n"
+                if self.path not in {"/report.csv?short", "/report.csv?partial"}:
+                    body += b"item,1\n" * 10000
+                self.send_response(206 if self.path == "/report.csv?partial" else 200)
+                if self.path == "/report.csv?partial":
+                    self.send_header("Content-Range", f"bytes 0-{len(body) - 1}/1000")
                 self.send_header(
                     "Content-Type", "text/plain" if self.path == "/export-report" else "text/csv; charset=utf-8"
                 )

@@ -851,7 +851,7 @@ async def test_a_browser_handed_over_by_cdp_url_drives_and_survives_the_run(
         assert await CdpPage(after, Config()).observe() is not None
 
 
-@pytest.mark.parametrize("path", ["/report.csv", "/export-report"])
+@pytest.mark.parametrize("path", ["/report.csv", "/export-report", "/report.csv?short", "/report.csv?partial"])
 async def test_download_evidence_is_bounded_and_cites_the_response(page: CdpPage, main_site: str, path: str) -> None:
     from fastbrowse.page import BlockKind
     from fastbrowse.retrieval import _Cite, _cited, chunk
@@ -868,7 +868,8 @@ async def test_download_evidence_is_bounded_and_cites_the_response(page: CdpPage
     assert evidence.url == f"{main_site}{path}"
     assert "name,total" in evidence.quote
     assert "139.79" in evidence.quote
-    assert "omitted" in evidence.quote
+    assert ("omitted" in evidence.quote) is (path in {"/report.csv", "/export-report"})
+    assert evidence.complete_source is (path == "/report.csv?short")
     first = capture.blocks[0]
     assert _cited(capture, part, _Cite(first=first.source_id, last=block.source_id)) is None
 
