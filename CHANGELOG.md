@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- An icon-only control is named by its icon (a sprite reference, an icon font class, a ligature or an svg title)
+  or its accessible description, and carries the card it sits in, so a gallery's trash control is no longer an
+  unnamed button the agent cannot tell from the edit link beside it.
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
 

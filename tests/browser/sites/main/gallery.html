@@ -1,0 +1,42 @@
+<!doctype html>
+<html><head><title>Gallery</title>
+<style>.card { display: inline-block; width: 160px; margin: 8px; } .card img { width: 160px; height: 90px; }
+.thumb { display: block; } .card button, .card [role=button] { display: inline-block; width: 32px; height: 32px; }</style></head>
+<body>
+  <svg style="display:none"><symbol id="icon-trash" viewBox="0 0 16 16"><path d="M2 4h12"/></symbol></svg>
+  <h1>Gallery</h1>
+  <p>Icon-only controls name their action in markup only: a sprite reference, an icon font class, an svg title.</p>
+  <div id="cards">
+    <div class="card" id="c1"><a class="thumb" href="/gallery/101/edit"><img src="data:," alt=""></a>
+      <p>old-banner.png</p>
+      <button type="button" class="btn btn-sm"><svg aria-hidden="true"><use href="#icon-trash"></use></svg></button></div>
+    <div class="card" id="c2"><a class="thumb" href="/gallery/102/edit"><img src="data:," alt=""></a>
+      <p>new-banner.png</p>
+      <button type="button" class="btn btn-sm"><svg aria-hidden="true"><use href="#icon-trash"></use></svg></button></div>
+    <div class="card" id="c3"><a class="thumb" href="/gallery/103/edit"><img src="data:," alt=""></a>
+      <p>old-logo.png</p>
+      <a href="#" role="button"><i class="fa-solid fa-trash-can" aria-hidden="true"></i></a></div>
+    <div class="card" id="c4"><a class="thumb" href="/gallery/104/edit"><img src="data:," alt=""></a>
+      <p>new-logo.png</p>
+      <button type="button"><svg><title>Delete image</title><path d="M2 4h12"/></svg></button></div>
+    <div class="card" id="c5"><a class="thumb" href="/gallery/105/edit"><img src="data:," alt=""></a>
+      <p>old-icon.png</p>
+      <button type="button"><span class="material-symbols-outlined" aria-hidden="true">delete</span></button></div>
+    <div class="card" id="c6"><a class="thumb" href="/gallery/106/edit"><img src="data:," alt=""></a>
+      <p>new-icon.png</p>
+      <button type="button" class="remove" aria-describedby="remove-hint"></button></div>
+  </div>
+  <p id="remove-hint" hidden>Remove from gallery</p>
+  <p id="status"></p>
+  <script>
+    for (const control of document.querySelectorAll('.card [type=button], .card [role=button]')) {
+      control.addEventListener('click', event => {
+        event.preventDefault();
+        const card = control.closest('.card');
+        if (!confirm('Delete ' + card.querySelector('p').textContent + '?')) return;
+        card.remove();
+        document.getElementById('status').textContent = 'Deleted ' + card.id;
+      });
+    }
+  </script>
+</body></html>
