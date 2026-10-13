@@ -2831,10 +2831,6 @@ class Agent:
             if state.http_failure is not None and gives_up_as is not Status.NEEDS_INPUT:
                 raise state.http_failure.stop()
             raise _Stop(gives_up_as, reason)
-        # Recovery that could not see a release's address clicked its download link to look for it, in a task that
-        # said not to download. Asked before the controls are listed, a link the task rules out is never offered.
-        if any(starts_download(control) for control in observation.controls):
-            await self._downloads_forbidden(state)
         destinations = navigation_urls(
             state.task,
             observation.url,
@@ -2842,6 +2838,10 @@ class Agent:
             start_landing=state.start_landing_url,
             include_start=True,
         )
+        # Recovery that could not see a release's address clicked its download link to look for it, in a task that
+        # said not to download. Asked before the controls are listed, a link the task rules out is never offered.
+        if any(starts_download(control) for control in observation.controls):
+            await self._downloads_forbidden(state)
         steps = "\n".join(
             f"- {h.operation.value if h.operation else 'open'} {h.target or ''} -> {h.outcome.value}"
             + (f": {h.effect}" if h.effect else "")
