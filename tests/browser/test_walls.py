@@ -74,8 +74,10 @@ async def test_a_log_in_to_reply_box_does_not_wall_off_an_empty_comment_list(
     )
     captured = await page.capture()
     empty = next(block for block in captured.blocks if "Be the first" in captured.text[block.start : block.end])
-    cite = {"first": empty.source_id, "last": empty.source_id}
-    claims = [{"text": "There are no comments", "requirement_id": "r", "cite": cite}] if readable else []
+    cite: dict[str, JsonValue] = {"first": empty.source_id, "last": empty.source_id}
+    claims: list[JsonValue] = (
+        [{"text": "There are no comments", "requirement_id": "r", "cite": cite}] if readable else []
+    )
     agent._llm = ScriptedLLM([{"claims": claims, "answered": readable}])
     if readable:
         await agent._meet_wall(state, observation, observation, plan)
