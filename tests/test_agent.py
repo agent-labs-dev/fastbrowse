@@ -5429,6 +5429,35 @@ async def test_a_sign_in_prompt_for_writing_stops_a_read_only_when_the_page_does
         assert "reading Birch comments found none of the requested information" in stopped.value.error
 
 
+@pytest.mark.parametrize("echoed_in", ["title", "label", "host"])
+async def test_a_sign_in_wall_error_never_carries_a_secret_the_page_echoes(
+    monkeypatch: pytest.MonkeyPatch, echoed_in: str
+) -> None:
+    """The error is the caller's to read, and a page can repeat a typed secret in its title, a field's label or the
+    address it redirects to."""
+    password = field("Password").model_copy(update={"id": "pw", "input_type": "password", "sensitive": True})
+    if echoed_in == "label":
+        password = password.model_copy(update={"label": "Password (last tried hunter2)"})
+    controls = (password,) if echoed_in == "label" else (_button("Log in"),)
+    title = "Welcome back hunter2" if echoed_in == "title" else "Sign in"
+    url = "https://hunter2.wall.test/account" if echoed_in == "host" else "https://shop.test/account"
+    obs = _at(url, *controls).model_copy(update={"title": title})
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=obs)
+    page.artifacts = ()
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([{"requirements": [], "answer_expected": False}]))
+    agent._redactor.register("PASSWORD", "hunter2")
+    agent._outwait = AsyncMock(return_value=False)
+    walled = _code_decision(Operation.CLICK, obs.controls[0]).model_copy(update={"login_required": 0.99})
+    monkeypatch.setattr(agent_module, "decide", AsyncMock(return_value=walled))
+
+    result = await agent.run("Open my orders", limits=Limits(max_steps=2))
+
+    assert result.status is Status.NEEDS_LOGIN
+    assert result.error is not None and "sign-in required" in result.error
+    assert "hunter2" not in result.error
+
+
 @pytest.mark.parametrize("change", ["document", "semantics", "sensitive"])
 async def test_recovery_correction_is_not_reused_for_a_different_field(change: str) -> None:
     target = field("Contact").model_copy(update={"input_type": "email", "sensitive": change == "sensitive"})

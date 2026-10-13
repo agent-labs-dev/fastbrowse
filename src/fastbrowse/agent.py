@@ -2140,21 +2140,27 @@ class Agent:
 
         A public comment list whose only sign-in prompt was a box for posting a reply ended needs_login before a
         single step, with nothing cited: the list, empty and saying so, could be read without an account."""
-        origin = origin_of(raw.url)
-        asked = [c.label or c.input_name or "a password" for c in raw.controls if asks_for_credentials(c)]
-        if asked:
-            raise _Stop(Status.NEEDS_LOGIN, f"sign-in required at {origin}: the page asks for {', '.join(asked)}")
+
+        # The error reaches the caller as it is, so it is built from what models see and redacted as well: a page
+        # can echo a typed secret into its title or a field's label.
+        def wall(evidence: str) -> _Stop:
+            return _Stop(Status.NEEDS_LOGIN, self._redactor.redact(f"sign-in required at {origin}: {evidence}"))
+
+        origin = origin_of(observation.url)
+        page = observation.title or observation.url
+        # Which fields ask for credentials is read from the raw page, whose flags masking cannot have changed.
+        credential = {c.id for c in raw.controls if asks_for_credentials(c)}
+        asked = [c.label or c.input_name or "a password" for c in observation.controls if c.id in credential]
+        if credential:
+            raise wall(f"the page asks for {', '.join(asked) or 'a password'}")
         if not _unread(plan, state.notes):
-            raise _Stop(Status.NEEDS_LOGIN, f"sign-in required at {origin}: {raw.title or raw.url} offers only sign-in")
+            raise wall(f"{page} offers only sign-in")
         # A prompt to sign in can gate only writing, such as posting a reply, so a task that reads is asked of the
         # page before any credential is: what the page shows decides whether the wall stands between them.
         facts = len(state.notes.facts)
         await self._step(state, observation, _code_decision(Operation.READ, None))
         if len(state.notes.facts) == facts:
-            raise _Stop(
-                Status.NEEDS_LOGIN,
-                f"sign-in required at {origin}: reading {raw.title or raw.url} found none of the requested information",
-            )
+            raise wall(f"reading {page} found none of the requested information")
 
     async def _read_before_interaction(
         self, state: _RunState, observation: Observation, decision: Decision, decided_by: Decider = Decider.JEV
