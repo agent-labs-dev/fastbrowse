@@ -27,6 +27,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   `bounded` cost: its model's whole context window at the highest price any of its routes lists. A run with a
   dollar cap keeps going within that bound instead of stopping, and a call whose price has no ceiling still
   stops it.
+- A field that declares it takes an email address, by its input type or autocomplete token, is no longer typed
+  with text that holds no address: the field writer is asked once more first. A sign-in that had read a code
+  sometimes typed it into Email and needed recovery to put it right.
 
 ## [0.5.20] - 2026-10-09
 
