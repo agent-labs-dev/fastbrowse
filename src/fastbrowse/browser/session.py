@@ -197,6 +197,7 @@ class DownloadText(Frozen):
     name: str
     url: str
     text: str
+    complete: bool = False
 
 
 _DOWNLOAD_TEXT_BYTES = 16_384
@@ -853,14 +854,23 @@ class BrowserSession:
             disposition = headers.get("content-disposition", "")
             mime = headers.get("content-type", "")
             if _is_download(mime, disposition):
-                await self._capture_download(request_id, session_id, event["request"]["url"], disposition, mime)
+                await self._capture_download(
+                    request_id,
+                    session_id,
+                    event["request"]["url"],
+                    disposition,
+                    mime,
+                    complete=event.get("responseStatusCode") == 200 and "content-range" not in headers,
+                )
         finally:
             # Never leave a request paused, even if capture above raised. The request/session may
             # already be gone (navigation, tab close), which is fine to swallow here.
             with contextlib.suppress(Exception):
                 await self.client.send.Fetch.continueRequest(params={"requestId": request_id}, session_id=session_id)
 
-    async def _capture_download(self, request_id: str, session_id: str, url: str, disposition: str, mime: str) -> None:
+    async def _capture_download(
+        self, request_id: str, session_id: str, url: str, disposition: str, mime: str, *, complete: bool
+    ) -> None:
         body = await self.client.send.Fetch.getResponseBody(params={"requestId": request_id}, session_id=session_id)
         raw = base64.b64decode(body["body"]) if body["base64Encoded"] else body["body"].encode()
         if len(raw) > self._max_download_bytes:
@@ -872,7 +882,15 @@ class BrowserSession:
         self._artifacts.append(artifact)
         self._downloads_captured += 1
         if text := _readable_text(mime, raw):
-            self._download_texts.append(DownloadText(mime=_response_mime(mime), name=name, url=url, text=text))
+            self._download_texts.append(
+                DownloadText(
+                    mime=_response_mime(mime),
+                    name=name,
+                    url=url,
+                    text=text,
+                    complete=complete and len(raw) <= _DOWNLOAD_TEXT_BYTES,
+                )
+            )
             while sum(len(item.text) for item in self._download_texts) > _DOWNLOAD_TEXT_TOTAL:
                 self._download_texts.pop(0)
                 self._download_texts_shown = max(0, self._download_texts_shown - 1)

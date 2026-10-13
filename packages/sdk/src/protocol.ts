@@ -133,6 +133,10 @@ export interface Evidence {
   start: number;
   end: number;
   quote: string;
+  /**
+   * The quote covers an entire downloaded text file, apart from surrounding whitespace.
+   */
+  complete_source: boolean;
   control_context: SourceControl | null;
   /**
    * False for typed DOM observations whose quote is not literal rendered page text.

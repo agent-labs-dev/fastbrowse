@@ -593,6 +593,7 @@ class CdpPage(Page):
                 Block(
                     source_id=f"download/{download_index}",
                     source_url=download.url,
+                    complete_source=download.complete,
                     # CSV rows lose their column meanings when treated as unrelated prose excerpts.
                     kind=(
                         BlockKind.TABLE

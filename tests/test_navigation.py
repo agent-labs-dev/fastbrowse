@@ -202,11 +202,12 @@ async def test_navigation_never_carries_a_resolved_secret() -> None:
 
 
 @pytest.mark.parametrize("url", [BETA, "https://evil.example.test/", HERE])
-async def test_recovery_navigation_revalidates_the_destination(url: str) -> None:
+@pytest.mark.parametrize("uncertain", [True, False])
+async def test_recovery_navigation_revalidates_the_destination(url: str, uncertain: bool) -> None:
     state = await run_state()
     state.task = task_with(HERE, BETA)
     state.directed = (Operation.NAVIGATE, url)
-    decision = _follow_recovery(state, observation(()), _code_decision(Operation.ESCALATE, None), uncertain=True)
+    decision = _follow_recovery(state, observation(()), _code_decision(Operation.ESCALATE, None), uncertain=uncertain)
     if url == BETA:
         assert decision is not None and decision.operation is Operation.NAVIGATE and decision.url == BETA
     else:

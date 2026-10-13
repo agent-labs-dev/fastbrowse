@@ -105,6 +105,10 @@ def strict_schema(schema: JsonValue) -> JsonValue:
     A field with a default is optional to pydantic, which strict mode rejects; the model instead writes the
     empty value, and validation accepts it as it would the default. An array's `maxItems` is left to validation
     too: a provider behind OpenRouter answered HTTP 400 to every read whose claims list carried `maxItems: 60`.
+
+    A map with free keys is refused: Gemini through the Vercel AI Gateway returned such a map empty where
+    OpenRouter's endpoint filled it, so the same request answers differently by route. A list of keyed entries
+    says the same thing on both.
     """
     if isinstance(schema, list):
         return [strict_schema(item) for item in schema]
@@ -114,6 +118,8 @@ def strict_schema(schema: JsonValue) -> JsonValue:
     for key, value in schema.items():
         if key in ("default", "maxItems"):
             continue
+        if key == "additionalProperties" and isinstance(value, dict):
+            raise ValueError("a strict schema cannot hold a map with free keys; use a list of keyed entries")
         # These map names to schemas, so a property called "default" is a name, not a keyword.
         if key in ("properties", "$defs") and isinstance(value, dict):
             result[key] = {name: strict_schema(item) for name, item in value.items()}
@@ -209,6 +215,7 @@ class OpenAICompatibleLLM:
                 hedge_seconds=LLM_HEDGE_SECONDS,
                 before_retry=None if ledger is None else lambda: ledger.reserve(CostComponent.LLM),
                 usage=usage,
+                settle_on_cancel=True,
             )
         except httpx.HTTPError as error:
             raise LLMError(f"LLM request could not be sent ({type(error).__name__})") from None
@@ -316,8 +323,36 @@ class OpenAICompatibleLLM:
                 try:
                     payload = await self._request(body, ledger, usage)
                 except BaseException:
-                    # With no answer to estimate from, a request that may have been billed is an unknown cost.
+                    offset = len(costs)
                     costs.extend(_cost({}, purpose) for _ in range(usage.unaccounted_requests))
+
+                    async def settle(responses: Sequence[httpx.Response], start: int, twins: int) -> None:
+                        for index, response in enumerate(responses, start=start):
+                            try:
+                                receipt = json_object(response)
+                            except ValueError:
+                                continue
+                            costs[index] = _cost(receipt, purpose)
+                            costs[index] = await self._settled_cost(receipt, purpose)
+                        # A hedge twin cancelled once its sibling answered carried the same prompt, so it is
+                        # charged as that answer was, as an estimate. Other requests without a response stay unknown.
+                        known = next((c for c in costs[start:] if c.dollars is not None), None)
+                        unknown = [i for i in range(start, len(costs)) if costs[i].dollars is None]
+                        if known is not None:
+                            for index in unknown[:twins]:
+                                costs[index] = known.model_copy(update={"basis": CostBasis.ESTIMATED})
+
+                    # Repeated cancellation must join receipt lookups before the run reports its final spend.
+                    settling = asyncio.create_task(settle(usage.discarded_responses, offset, usage.cancelled_twins))
+                    cancelled = False
+                    while not settling.done():
+                        try:
+                            await asyncio.shield(settling)
+                        except asyncio.CancelledError:
+                            cancelled = True
+                    settling.result()
+                    if cancelled:
+                        raise asyncio.CancelledError from None
                     raise
                 # Recorded before the envelope is read: a generation we cannot parse was still billed, and
                 # dropping it would let an unaccounted request pass a dollar cap. A hedge's discarded twin
