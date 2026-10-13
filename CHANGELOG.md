@@ -13,6 +13,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
+- A model call through OpenRouter that reports no cost, such as a request that timed out, is charged at a
+  `bounded` cost: its model's whole context window at the highest price any of its routes lists. A run with a
+  dollar cap keeps going within that bound instead of stopping, and a call whose price has no ceiling still
+  stops it.
 
 ## [0.5.20] - 2026-10-09
 

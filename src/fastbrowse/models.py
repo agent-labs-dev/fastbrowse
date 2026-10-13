@@ -1,7 +1,7 @@
 """Run-level contracts: what a caller passes in and what a run returns."""
 
 import base64
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -194,6 +194,9 @@ class CostBasis(StrEnum):
     """Reported by the provider for this exact call."""
     ESTIMATED = "estimated"
     """Computed from token counts and a price table."""
+    BOUNDED = "bounded"
+    """No charge was reported, and `dollars` is the most the call could have cost: its model's whole context
+    window at the highest token price any of its routes lists. Never less than the charge."""
     UNKNOWN = "unknown"
     """No charge information; never counted as zero."""
 
@@ -206,6 +209,14 @@ class LLMPurpose(StrEnum):
     VERIFY = "verify"
     COMPOSE = "compose"
     SHORTCUT = "shortcut"
+
+
+def combined_basis(lines: Iterable["CostLine"]) -> CostBasis:
+    """The basis of a sum of lines: the weakest claim among them. A bound plus an estimate is an estimate, since
+    the estimate may be under its charge."""
+    bases = {line.basis for line in lines}
+    order = (CostBasis.UNKNOWN, CostBasis.ESTIMATED, CostBasis.BOUNDED, CostBasis.METERED)
+    return next((basis for basis in order if basis in bases), CostBasis.METERED)
 
 
 class CostLine(Frozen):
