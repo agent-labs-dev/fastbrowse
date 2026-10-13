@@ -122,3 +122,18 @@ async def test_a_devtools_port_without_its_discovery_route_names_the_websocket_t
     assert result.status is Status.ERROR
     assert result.error is not None
     assert "answered 404" in result.error and "DevToolsActivePort" in result.error
+    assert "ws://127.0.0.1:<port><path>" in result.error
+
+
+@pytest.mark.parametrize("status", [401, 403, 500])
+async def test_a_devtools_port_refusing_discovery_names_the_status_without_the_chrome_inspect_advice(
+    status: int,
+) -> None:
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(status))) as http:
+        result = await run_module.run_task(
+            "read the page", cdp_port=9222, http=http, jev=ScriptedJev({}), llm=ScriptedLLM([])
+        )
+    assert result.status is Status.ERROR
+    assert result.error is not None
+    assert f"answered {status}" in result.error
+    assert "chrome://inspect" not in result.error and "DevToolsActivePort" not in result.error

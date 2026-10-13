@@ -59,11 +59,14 @@ async def resolve_cdp_port(port: int, host: str = "127.0.0.1", *, http: httpx.As
             response.raise_for_status()
             version = response.json()
     except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status != 404:
+            raise BrowserError(f"{endpoint} answered {status}, so it names no DevTools websocket") from None
         # Chrome's remote debugging switch at chrome://inspect serves the websocket but not this discovery route.
         raise BrowserError(
-            f"{endpoint} answered {exc.response.status_code}, so it names no DevTools websocket. A Chrome whose "
-            "remote debugging was turned on at chrome://inspect serves none here: pass the ws:// address from its "
-            "DevToolsActivePort file as cdp_url instead."
+            f"{endpoint} answered 404, so it names no DevTools websocket. A Chrome whose remote debugging was "
+            "turned on at chrome://inspect serves none here: its DevToolsActivePort file holds the port on the "
+            "first line and the browser path on the second, so pass ws://127.0.0.1:<port><path> as cdp_url instead."
         ) from None
     except (httpx.HTTPError, ValueError) as exc:
         raise BrowserError(f"no DevTools endpoint at {endpoint} ({type(exc).__name__})") from None
