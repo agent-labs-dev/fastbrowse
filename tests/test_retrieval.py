@@ -8,6 +8,7 @@ from decimal import Decimal
 import pytest
 from pydantic import BaseModel, Field, JsonValue
 
+from fastbrowse.clients.openai_compatible import strict_schema
 from fastbrowse.config import Thresholds, TokenBudget
 from fastbrowse.jev import (
     MAX_CHOICE_OPTIONS,
@@ -100,12 +101,23 @@ class ScriptedLLM:
             ledger.reserve(CostComponent.LLM)
         self.calls.append((purpose, tuple(messages)))
         self.output_caps.append(max_output_tokens)
+        # The real client refuses a schema it cannot send strictly; a scripted reply must not hide one.
+        strict_schema(schema.model_json_schema())
         return Generation(
             data=schema.model_validate(
                 scripted_identities(messages) if schema.__name__ == "_OutputIdentities" else self.responses.pop(0)
             ),
             cost=CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0.001, purpose=purpose),
         )
+
+
+async def test_scripted_llm_refuses_a_schema_the_real_client_cannot_send() -> None:
+    # A fake that validated any schema let a map with free keys pass every test and fail only on a live route.
+    class Keyed(Frozen):
+        entries: dict[str, str]
+
+    with pytest.raises(ValueError, match="free keys"):
+        await ScriptedLLM([{"entries": {}}]).generate(LLMPurpose.READ, [], Keyed)
 
 
 def block_evidence(page: Capture, source_id: str) -> Evidence:
