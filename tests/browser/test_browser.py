@@ -894,6 +894,32 @@ async def test_a_background_run_drives_its_tab_without_bringing_it_forward(
     ]
 
 
+async def test_a_background_run_sets_up_tabs_behind_an_open_confirm_once_it_is_answered(
+    chrome_connection: BrowserConnection, artifact_sink: RecordingArtifactSink, main_site: str
+) -> None:
+    """A native dialog holds its renderer, so setup sent to a page behind one, focus emulation included, waits
+    for the answer. The run must still be able to answer it, and setup must then finish rather than hang."""
+    background = chrome_connection.model_copy(update={"foreground": False})
+    async with BrowserSession(background, artifact_sink) as session:
+        await CdpPage(session, Config()).navigate(f"{main_site}/")
+        opener = session.active_session_id
+        # The popup shares the opener's renderer, which the confirm holds until it is answered.
+        await session.client.send.Runtime.evaluate(
+            params={"expression": "setTimeout(() => { window.open('/popup.html'); confirm('Remove?') }, 0)"},
+            session_id=opener,
+        )
+        await wait_until(lambda: session.pending_dialog() is not None and bool(session.popups()))
+        popup = session.popups()[-1]
+        prepared = asyncio.ensure_future(session._prepare_session(opener))
+        await asyncio.sleep(0.5)
+        async with asyncio.timeout(5):
+            await session.handle_dialog(True)
+            assert await asyncio.shield(session._popups[popup][1])
+            await prepared
+        await session.switch_tab(popup)
+        assert await eval_value(session, session.active_session_id, "document.hasFocus()")
+
+
 @pytest.mark.parametrize("path", ["/report.csv", "/export-report", "/report.csv?short", "/report.csv?partial"])
 async def test_download_evidence_is_bounded_and_cites_the_response(page: CdpPage, main_site: str, path: str) -> None:
     from fastbrowse.page import BlockKind

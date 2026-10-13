@@ -105,7 +105,7 @@ the quotes behind the answer, and cost by component.
 | `--downloads DIR` | keep downloaded files |
 | `--json` | full result instead of the answer |
 | `--record FILE` | save an MP4 of the tab, each step captioned, ending on the answer, time and cost (needs `ffmpeg`; the captions need its libass), e.g. `recordings/demo.mp4`, which git ignores; `demo.plain.mp4` beside it has no captions. It shows what the pages showed, so watch it before sharing |
-| `--cursor` | draw the agent's cursor over a visible Chrome (`--headed`, or one you attach to) with [Cua Driver](https://github.com/trycua/cua), so you can watch where it acts. Off by default. It needs `cua-driver` on `PATH` and an X11 display on Linux, and does nothing without them It brings the run's tab to the front as `--foreground` does, since the cursor lies over the window's front tab |
+| `--cursor` | draw the agent's cursor over a visible Chrome (`--headed`, or one you attach to) with [Cua Driver](https://github.com/trycua/cua), so you can watch where it acts. Off by default. It needs `cua-driver` on `PATH` and an X11 display on Linux, and does nothing without them. It brings the run's tab to the front as `--foreground` does, since the cursor lies over the window's front tab |
 
 ```sh
 export SAUCE_PASSWORD=secret_sauce

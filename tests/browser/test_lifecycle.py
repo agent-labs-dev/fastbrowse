@@ -114,6 +114,19 @@ async def test_a_run_in_a_visible_window_never_activates_its_target(
         assert transport.requests.count((method, params, "session")) == 2
 
 
+async def test_a_keeper_that_cannot_attach_leaves_the_tab_to_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The cast that keeps a background tab painting only speeds up captures, so its attach never holds up setup."""
+    transport = CdpTransport(monkeypatch)
+    transport.results["Target.attachToTarget"] = [{"sessionId": "session"}]
+    transport.blocked["Target.attachToTarget"] = asyncio.Event()
+    monkeypatch.setattr(browser_session, "_SCREENCAST_COMMAND_SECONDS", 0.01)
+    async with asyncio.timeout(5), BrowserSession(BACKGROUND, RecordingArtifactSink()) as session:
+        assert session.active_session_id == "session"
+        assert not session._keepers
+    assert "Target.attachToTarget" in transport.finished
+    assert "Page.startScreencast" not in transport.calls
+
+
 async def test_a_run_nobody_sits_in_front_of_activates_its_target(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = CdpTransport(monkeypatch)
     async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:

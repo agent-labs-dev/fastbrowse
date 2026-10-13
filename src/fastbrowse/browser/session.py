@@ -1,6 +1,6 @@
 """One owned tab on a `BrowserConnection`: attach, OOPIF sessions, popup ownership, dialogs, downloads.
 
-Session lifecycle, the "foreground the owned tab" behaviour, and the freshness/guard
+Session lifecycle, bringing the owned tab forward when the run may, and the freshness/guard
 primitives `page.py` builds on were proven live in jev-ultrafast (MIT): jev_ultrafast/browser.py.
 """
 
@@ -490,20 +490,30 @@ class BrowserSession:
     async def bring_to_front(self) -> None:
         """Put the active tab in front where the run may. A background run sends nothing: its tabs already render
         where they are, and Chrome raises and focuses the whole window along with an activated tab."""
+        await self._activate(self._active_target_id)
+
+    async def _activate(self, target_id: str) -> bool:
+        """Activate a tab when the run may bring it forward, and say whether it did."""
         if self._connection.foreground:
-            await self.client.send.Target.activateTarget(params={"targetId": self._active_target_id})
+            await self.client.send.Target.activateTarget(params={"targetId": target_id})
+        return self._connection.foreground
 
     async def _show(self, target_id: str) -> None:
         """Have a tab that joins the run render: in front of its window, or behind it and kept painting."""
-        if self._connection.foreground:
-            await self.client.send.Target.activateTarget(params={"targetId": target_id})
+        if await self._activate(target_id):
             return
         # Focus emulation alone leaves a tab behind another with a compositor that sleeps between repaints, where
         # a screenshot of an idle page waits seconds for a frame. Chrome keeps a tab painting while it is being
         # cast, so a cast too small and too sparse to cost anything runs on a session of its own, where the casts
         # that deliver live frames and recordings cannot replace it. A start can go unanswered while a tab swaps
         # renderer, and a tab without the cast is only slower to capture, so it is bounded and never fails the run.
-        keeper = await self.client.send.Target.attachToTarget(params={"targetId": target_id, "flatten": True})
+        try:
+            async with asyncio.timeout(_SCREENCAST_COMMAND_SECONDS):
+                keeper = await self.client.send.Target.attachToTarget(params={"targetId": target_id, "flatten": True})
+        except Exception as exc:
+            # Transport exceptions may contain credentials or page text.
+            logger.warning("Target.attachToTarget for the paint keeper failed (%s)", type(exc).__name__)
+            return
         self._keepers[target_id] = keeper["sessionId"]
         await self._screencast_command("Page.startScreencast", _KEEP_PAINTING, keeper["sessionId"])
 
@@ -511,8 +521,7 @@ class BrowserSession:
         """Get the active tab painting again when a capture of it stalls. True when the tab was brought to the
         front, which always yields a frame; a background run restarts the cast that keeps it painting instead,
         which may have gone unanswered or ended with the renderer it was started on."""
-        if self._connection.foreground:
-            await self.bring_to_front()
+        if await self._activate(self._active_target_id):
             return True
         if keeper := self._keepers.get(self._active_target_id):
             await self._screencast_command("Page.startScreencast", _KEEP_PAINTING, keeper)
@@ -584,6 +593,9 @@ class BrowserSession:
         if self._on_frame is not None:
             self._spawn(self._update_screencast())
 
+    async def _emulate_focus(self, session_id: str) -> None:
+        await self.client.send.Emulation.setFocusEmulationEnabled(params={"enabled": True}, session_id=session_id)
+
     async def _prepare_session(self, session_id: str) -> None:
         await self.check_access()
         scoped = self._grant is not None
@@ -599,15 +611,7 @@ class BrowserSession:
             self.client.send.Fetch.enable(params={"patterns": patterns}, session_id=session_id),
             # A page behind another tab is hidden and unfocused, so it paints nothing and takes no typing. Focus
             # emulation has it render and hold focus where it is, which is what lets a run leave the window alone.
-            *(
-                ()
-                if self._connection.foreground
-                else (
-                    self.client.send.Emulation.setFocusEmulationEnabled(
-                        params={"enabled": True}, session_id=session_id
-                    ),
-                )
-            ),
+            *((self._emulate_focus(session_id),) if not self._connection.foreground else ()),
             *((self._bypass_service_workers(session_id, True),) if scoped else ()),
             # Track parsing and hydration before the first post-navigation read, so an already
             # quiet document does not pay another full window just to install its observer.
