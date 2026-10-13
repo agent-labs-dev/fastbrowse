@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A troubleshooting page, `docs/troubleshooting.md`, explains each status a run can stop with, its common
+  causes and the next step, so a stopped run's error leads somewhere. The README's results section links to it.
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
 
