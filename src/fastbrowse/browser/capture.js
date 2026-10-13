@@ -81,6 +81,7 @@
     return found ? registry.hoverContexts.get(found).control : null;
   };
   const listIds = new WeakMap();
+  const listFrameless = new WeakMap();
   let nextListId = 0;
   const listContext = nodes => {
     const lists = new Set();
@@ -100,14 +101,21 @@
     }
     if (lists.size !== 1) return {};
     const list = [...lists][0];
-    if (!listIds.has(list)) listIds.set(list, String(nextListId++));
+    if (!listIds.has(list)) {
+      listIds.set(list, String(nextListId++));
+      // A frame the capture cannot open elsewhere on the page, such as an advertisement, cannot hold a member of a
+      // list whose element contains no frame; one inside the list, or behind a shadow root the list or anything in it
+      // holds, could.
+      const framed = e => e.tagName === 'IFRAME' || e.tagName === 'FRAME' || !!e.shadowRoot;
+      listFrameless.set(list, !framed(list) && ![...list.querySelectorAll('*')].some(framed));
+    }
     const members = [...list.querySelectorAll('li,[role="listitem"]')].filter(member => {
       for (let parent = member; parent && parent !== list; parent = parent.parentElement) {
         if (hidden(parent)) return false;
       }
       return !!textOf(member);
     });
-    return { list_id: listIds.get(list), list_count: members.length };
+    return { list_id: listIds.get(list), list_count: members.length, list_frameless: listFrameless.get(list) };
   };
   const push = (kind, text, extra = {}, nodes = []) => {
     if (text)
