@@ -16,7 +16,8 @@ async def test_capture_reports_icon_link_destination_with_its_row(
         document.body.innerHTML = '<h1>Releases</h1><div class="row"><span>v2.1.0</span> <span>12 KB</span> ' +
           '<span><a href="/files/abc.zip?sig=1"><svg viewBox="0 0 8 8"><path d="M0 0h8v8z"></path></svg></a>' +
           '</span></div><a href="/about">About</a>' +
-          '<a href="/private.zip" style="display:none"><svg></svg></a><a href="#menu"><svg></svg></a>';
+          '<a href="/private.zip" style="display:none"><svg></svg></a><a href="#menu"><svg></svg></a>' +
+          '<a href="#"><svg></svg></a><a href="http://["><svg></svg></a>';
     """,
     )
     capture = await page.capture()
@@ -32,6 +33,9 @@ async def test_capture_reports_icon_link_destination_with_its_row(
     assert "/about" not in capture.text
     assert "/private.zip" not in capture.text
     assert "#menu" not in capture.text
+    # A bare `#` is a placeholder whose parsed hash is empty, and an unparsable address must not end the capture.
+    assert capture.text.count("Link element DOM metadata") == 1
+    assert "http://[" not in capture.text
 
 
 async def test_icon_link_observations_are_bounded(

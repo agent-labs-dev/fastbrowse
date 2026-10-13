@@ -416,10 +416,18 @@
     // which item the link belongs to, since the observation is not read where the link stands.
     for (const link of [...root.querySelectorAll('a[href]')].filter(visible)) {
       if (clean(link.innerText ?? '')) continue;
-      // An icon button written as `href="#"` or a script URL runs code here and leads nowhere to report.
-      const target = new URL(link.href, location.href);
-      if (target.protocol === 'javascript:' || (target.hash && target.href.split('#')[0] === location.href.split('#')[0]))
+      // An icon button written as `href="#"` or a script URL runs code here and leads nowhere to report. A bare
+      // `#` parses to an empty hash, so the raw attribute says it is a fragment link, not the parsed URL.
+      let target;
+      try {
+        target = new URL(link.getAttribute('href'), location.href);
+      } catch {
+        // One malformed address must not cost the page its whole capture.
         continue;
+      }
+      const page = location.href.split('#')[0];
+      const fragment = link.getAttribute('href').trim().startsWith('#') || (target.hash && target.href.split('#')[0] === page);
+      if (target.protocol === 'javascript:' || fragment) continue;
       if (linkObservations++ >= 32) {
         if (!linksOmitted) push('observation', 'Additional link destinations omitted.');
         linksOmitted = true;
