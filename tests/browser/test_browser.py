@@ -278,6 +278,39 @@ async def test_confirm_dialog_handled_via_dialog_operation(
     assert value == "confirmed"
 
 
+async def test_unnamed_card_controls_are_named_by_their_icon_and_card(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    # A gallery's icon-only trash controls read "button" beside an edit link, so the choice picked the edit link or
+    # refused the trash control it could not tie to an image.
+    await page.navigate(f"{main_site}/gallery.html")
+    obs = await page.observe()
+    buttons = [(c.label, c.context) for c in obs.controls if c.role == "button"]
+    assert buttons == [
+        ("trash icon", "old-banner.png"),
+        ("trash icon", "new-banner.png"),
+        ("trash can icon", "old-logo.png"),
+        ("Delete image", None),
+        ("delete icon", "old-icon.png"),
+        ("Remove from gallery", "new-icon.png"),
+        # The card's action row has its own caption, which every card repeats and which names no image.
+        ("x circle icon", "Alpha"),
+    ]
+    trash = next(c for c in obs.controls if c.label == "trash can icon")
+    result = await page.act(Action(operation=Operation.CLICK, target_id=trash.id), obs)
+    assert result.outcome is StepOutcome.EXECUTED
+    await wait_until(lambda: browser_session.pending_dialog() is not None)
+    confirm = await page.observe()
+    assert confirm.dialog is not None and confirm.dialog.message == "Delete old-logo.png?"
+    async with asyncio.timeout(10):
+        handled = await page.act(Action(operation=Operation.DIALOG, accept_dialog=True), confirm)
+    assert handled.outcome is StepOutcome.EXECUTED
+    status = "document.getElementById('status').textContent"
+    assert await eval_value(browser_session, browser_session.active_session_id, status) == "Deleted c3"
+    after = await page.observe()
+    assert [c.context for c in after.controls if c.label == "trash can icon"] == []
+
+
 async def test_identical_labels_carry_their_card_as_context(loaded_page: CdpPage) -> None:
     obs = await loaded_page.observe()
     adds = [c for c in obs.controls if c.label == "Add to cart"]
