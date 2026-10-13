@@ -258,8 +258,14 @@ def leading_quotes(capture: Capture, max_chars: int) -> tuple[Evidence, ...]:
     quotes: list[Evidence] = []
     left = max_chars
     for block in capture.blocks:
-        # A typed observation is a description code wrote, not words the page showed.
-        if left <= 0 or block.kind is BlockKind.OBSERVATION or not capture.text[block.start : block.end].strip():
+        # A typed observation is a description code wrote, not words the page showed, and a download the
+        # session kept is an earlier file appended after the page, not the page itself.
+        if (
+            left <= 0
+            or block.kind is BlockKind.OBSERVATION
+            or block.source_url is not None
+            or not capture.text[block.start : block.end].strip()
+        ):
             continue
         end = min(block.end, block.start + left)
         quotes.append(_evidence(capture, block, block.start, end))

@@ -2723,6 +2723,45 @@ async def test_a_bot_check_stop_cites_the_challenge_the_page_showed() -> None:
     assert sum(len(item.quote) for item in result.evidence) <= 600
 
 
+async def test_a_bot_check_stop_does_not_quote_an_earlier_download() -> None:
+    wall = capture(
+        (BlockKind.PARAGRAPH, "Checking your browser"),
+        (BlockKind.PARAGRAPH, "name,price\nwidget,3"),
+        url="https://shop.test/challenge",
+    )
+    download = wall.blocks[1].model_copy(update={"source_url": "https://files.test/prices.csv"})
+    wall = wall.model_copy(update={"blocks": (wall.blocks[0], download)})
+    captcha = _at("https://shop.test/challenge", _button("Verify you are human"))
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=captcha)
+    page.capture = AsyncMock(return_value=wall)
+    page.artifacts = ()
+    agent = Agent(page, ScriptedJev({}, noul=0.9), ScriptedLLM([{"requirements": [], "answer_expected": False}]))
+    agent._outwait = AsyncMock(return_value=False)
+
+    result = await agent.run("Open my orders", limits=Limits(max_steps=2))
+
+    assert result.status is Status.BLOCKED
+    assert [item.quote for item in result.evidence] == ["Checking your browser"]
+
+
+async def test_a_bot_check_that_clears_during_the_capture_cites_nothing() -> None:
+    """A scripted check can clear just after it was outwaited, and its destination is not the wall."""
+    captcha = _at("https://shop.test/challenge", _button("Verify you are human"))
+    cleared = _at("https://shop.test/orders", _button("Order 1"))
+    page = Mock(spec=Page)
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "Your orders"), url=cleared.url))
+    page.observe = AsyncMock(side_effect=lambda *_, **__: cleared if page.capture.await_count else captcha)
+    page.artifacts = ()
+    agent = Agent(page, ScriptedJev({}, noul=0.9), ScriptedLLM([{"requirements": [], "answer_expected": False}]))
+    agent._outwait = AsyncMock(return_value=False)
+
+    result = await agent.run("Open my orders", limits=Limits(max_steps=2))
+
+    assert result.status is Status.BLOCKED
+    assert result.evidence == ()
+
+
 async def test_a_bot_check_stop_survives_a_capture_that_fails() -> None:
     captcha = _at("https://shop.test/login", _button("Verify you are human"))
     page = Mock(spec=Page)

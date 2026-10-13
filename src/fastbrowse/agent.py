@@ -819,7 +819,7 @@ class Agent:
                         Status.BLOCKED,
                         f"bot check at {origin}; it is not a sign-in and no credential passes it. "
                         "Retry using an attached local browser or choose another source for this research.",
-                        evidence=await self._wall_quotes(),
+                        evidence=await self._wall_quotes(raw),
                     )
                 plan = await state.await_plan()
                 if not _access_inspection(plan):
@@ -1522,13 +1522,18 @@ class Agent:
         )
         return self._observed
 
-    async def _wall_quotes(self) -> tuple[Evidence, ...]:
+    async def _wall_quotes(self, wall: Observation) -> tuple[Evidence, ...]:
         # A blocked run that returned no evidence left its caller only the final address to tell a CAPTCHA from
         # a rate limit or an outage, so the challenge's own words are cited. A failed capture loses only the quote.
         try:
-            return leading_quotes(await self._capture(), _WALL_QUOTE_CHARS)
+            capture = await self._capture()
+            # A scripted check can clear just after it was outwaited, and the capture then reads its destination;
+            # the page is observed again so only the wall's own words are cited.
+            if (await self._observe()).page_key != wall.page_key:
+                return ()
         except BrowserError:
             return ()
+        return leading_quotes(capture, _WALL_QUOTE_CHARS)
 
     async def _capture(self) -> Capture:
         capture = await self._page.capture()
