@@ -104,9 +104,10 @@
     if (!listIds.has(list)) {
       listIds.set(list, String(nextListId++));
       // A frame the capture cannot open elsewhere on the page, such as an advertisement, cannot hold a member of a
-      // list whose element contains no frame; one inside the list, or behind a shadow root it holds, could.
+      // list whose element contains no frame; one inside the list, or behind a shadow root the list or anything in it
+      // holds, could.
       const framed = e => e.tagName === 'IFRAME' || e.tagName === 'FRAME' || !!e.shadowRoot;
-      listFrameless.set(list, ![...list.querySelectorAll('*')].some(framed));
+      listFrameless.set(list, !framed(list) && ![...list.querySelectorAll('*')].some(framed));
     }
     const members = [...list.querySelectorAll('li,[role="listitem"]')].filter(member => {
       for (let parent = member; parent && parent !== list; parent = parent.parentElement) {

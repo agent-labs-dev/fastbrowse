@@ -71,3 +71,17 @@ async def test_a_list_records_whether_its_element_holds_a_frame(page: CdpPage, i
     members = [block for block in captured.blocks if block.list_id is not None]
     assert members
     assert {block.list_frameless for block in members} == {not inside}
+
+
+async def test_a_list_that_hosts_a_shadow_root_is_not_frameless(page: CdpPage) -> None:
+    await page.navigate(
+        "data:text/html,<h1>Birch</h1><h2>Comments (2)</h2>"
+        "<div id=list role=list><div role=listitem><p>Elm: The map crashes.</p></div>"
+        "<div role=listitem><p>Oak: Thanks.</p></div></div>"
+        "<script>document.getElementById('list').attachShadow({mode: 'open'}).innerHTML ="
+        " \"<slot></slot><iframe sandbox srcdoc='<p>More</p>'></iframe>\";</script>"
+    )
+    captured = await page.capture()
+    members = [block for block in captured.blocks if block.list_id is not None]
+    assert members
+    assert {block.list_frameless for block in members} == {False}
