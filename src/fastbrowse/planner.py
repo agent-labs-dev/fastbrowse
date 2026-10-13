@@ -6,8 +6,9 @@ Callers redact task text before this seam; the planner has no secret resolver.
 """
 
 import json
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import Self
+from typing import NamedTuple, Self
 
 from pydantic import Field, model_validator
 
@@ -106,12 +107,27 @@ class _FinishOutputs(Frozen):
     groups: tuple[_OutputGroup, ...] = Field(min_length=1)
 
 
+class OutputTarget(Frozen):
+    """The field and subject one grouped answer check was made from."""
+
+    field: str
+    subject: str
+
+
+class Partition(NamedTuple):
+    plans: tuple[Plan, ...]
+    # A subject's own name can hold " for " ("Leatrix Plus for Classic"), so the check's prose cannot be
+    # split back into its field and subject; callers look the parts up here instead.
+    targets: Mapping[str, OutputTarget]
+
+
 async def partition_plan(
     llm: LLMClient, task: str, plan: Plan, *, ledger: Ledger, independent_fields: bool = True
-) -> tuple[Plan, ...]:
+) -> Partition:
     """Give each target's fields separate checks; comparisons keep all their operands."""
     groups = [{requirement.id} for requirement in plan.requirements]
     bindings: dict[int, set[str]] = {}
+    targets: dict[str, OutputTarget] = {}
     if plan.answer_checks:
         generated = await llm.generate(
             LLMPurpose.PLAN,
@@ -151,7 +167,9 @@ async def partition_plan(
                     if not field.strip():
                         raise LLMError("Answer output field is empty")
                     bindings[len(checks)] = set(subject.requirement_ids)
-                    checks.append(f"Report {field.strip()} for {subject.name.strip()}.")
+                    target = OutputTarget(field=field.strip(), subject=subject.name.strip())
+                    checks.append(f"Report {target.field} for {target.subject}.")
+                    targets[checks[-1]] = target
         if covered != set(range(len(plan.answer_checks))):
             raise LLMError("Answer output binding does not cover every requested output")
         plan = plan.model_copy(update={"answer_checks": tuple(checks)})
@@ -163,7 +181,7 @@ async def partition_plan(
         if joined:
             groups.append(joined)
     groups.sort(key=lambda group: next(i for i, r in enumerate(plan.requirements) if r.id in group))
-    return tuple(
+    plans = tuple(
         plan.model_copy(
             update={
                 "requirements": tuple(r for r in plan.requirements if r.id in group),
@@ -178,6 +196,7 @@ async def partition_plan(
         )
         for group in groups
     )
+    return Partition(plans, targets)
 
 
 def _instructions() -> Message:

@@ -9,7 +9,7 @@ from fastbrowse.memory import CollectionFact, Comparison, Notes, fact_id
 from fastbrowse.models import FactReader, Operation, Status, StepOutcome
 from fastbrowse.page import ActResult, BlockKind, Page
 from fastbrowse.planner import Plan, Requirement, RequirementKind
-from tests.test_agent import _link, run_state
+from tests.test_agent import _link, open_outputs, run_state
 from tests.test_partitioned_finish import finish_agent
 from tests.test_policy import ScriptedJev, observation
 from tests.test_retrieval import ScriptedLLM, capture
@@ -18,7 +18,7 @@ from tests.test_retrieval import ScriptedLLM, capture
 @pytest.mark.parametrize("already_read", [False, True])
 async def test_recovery_chooses_unread_target_section_before_model_scroll(already_read):
     state = await run_state()
-    state.open_answer_outputs = ("Report links for Project Birch.",)
+    open_outputs(state, ("links", "Project Birch"))
     url = "https://example.test/projects/birch"
     seen = observation((_link("description", "Description", url),)).model_copy(
         update={"url": url + "/comments", "title": "Project Birch comments"}
@@ -91,7 +91,7 @@ async def test_scrolling_a_read_lookup_credits_new_content_only(
         answer_expected=True,
     )
     if open_output:
-        state.open_answer_outputs = ("Report links for Birch.",)
+        open_outputs(state, ("links", "Birch"))
     here = observation(()).model_copy(update={"document_key": "doc"})
     captured = capture((BlockKind.PARAGRAPH, "All project comments"))
     state.reads.add((here.document_key, captured.read_key, ("r",), ()))
@@ -127,7 +127,7 @@ async def test_section_navigation_and_read_precede_another_choice_even_if_click_
         requirements=(Requirement(id="r", text="Find links.", kind=RequirementKind.INFORMATION),), answer_expected=True
     )
     state.oversized_answer = True
-    state.open_answer_outputs = ("Report links for Project Birch.",)
+    open_outputs(state, ("links", "Project Birch"))
     url = "https://example.test/birch"
     source = observation((_link("description", "Description", url),)).model_copy(
         update={"url": url + "/comments", "title": "Project Birch comments"}
@@ -224,7 +224,7 @@ async def test_file_records_do_not_become_output_sections():
     from fastbrowse.agent import _unread_output_section
 
     state = await run_state()
-    state.open_answer_outputs = ("Report links for birch.",)
+    open_outputs(state, ("links", "birch"))
     main = "https://example.test/projects/birch"
     files = main + "/files"
     seen = observation((_link("file", "version 1.2", files + "/123"),)).model_copy(
@@ -254,7 +254,7 @@ async def test_directory_and_other_targets_are_not_sections_of_this_target():
     from fastbrowse.agent import _unread_output_section
 
     state = await run_state()
-    state.open_answer_outputs = ("Report links for Project Birch.",)
+    open_outputs(state, ("links", "Project Birch"))
     root = "https://example.test/projects/birch"
     seen = observation((_link("list", "Projects", "/projects"), _link("other", "Elm", "/projects/elm"))).model_copy(
         update={"url": root, "title": "Project Birch"}
@@ -268,10 +268,29 @@ async def test_an_exhausted_output_does_not_hide_another_targets_unread_section(
     from fastbrowse.agent import _unread_output_section
 
     state = await run_state()
-    state.open_answer_outputs = ("Report links for Elm.", "Report links for Birch.")
+    open_outputs(state, ("links", "Elm"), ("links", "Birch"))
     root = "https://example.test/projects/birch"
     seen = observation((_link("description", "Description", root),)).model_copy(
         update={"url": root + "/comments", "title": "Birch"}
     )
     Agent._note_effect(state, seen)
     assert _unread_output_section(state) == root
+
+
+async def test_a_target_name_holding_for_keeps_its_whole_name():
+    """Split on its last " for ", "Leatrix Plus for Classic" became "Classic" and recovery chose that site section."""
+    from fastbrowse.agent import _unread_output_section
+
+    state = await run_state()
+    open_outputs(state, ("links", "Leatrix Plus for Classic"))
+    root = "https://example.test/addons/leatrix-plus-for-classic"
+    seen = observation(
+        (
+            _link("classic", "Classic", "/classic-era"),
+            _link("news", "News", "/classic-era/news"),
+            _link("description", "Description", root + "/description"),
+        )
+    ).model_copy(update={"url": root, "title": "Leatrix Plus for Classic"})
+    Agent._note_effect(state, seen)
+    state.read_urls.add(root)
+    assert _unread_output_section(state) == root + "/description"

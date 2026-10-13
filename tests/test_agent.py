@@ -81,7 +81,7 @@ from fastbrowse.page import (
     Page,
     SiteUnreachable,
 )
-from fastbrowse.planner import Plan, Requirement, RequirementKind, RunReport
+from fastbrowse.planner import OutputTarget, Plan, Requirement, RequirementKind, RunReport
 from fastbrowse.policy import Decision, HistoryEntry, ReadAssessment, build_request, decide
 from fastbrowse.retrieval import TRANSACTION_CONTRADICTED, ComposedAnswer
 from fastbrowse.safety import Redactor, ScopedSecrets
@@ -111,6 +111,13 @@ async def run_state() -> _RunState:
         planning=planning,
         ready_plan=plan,
     )
+
+
+def open_outputs(state: _RunState, *targets: tuple[str, str]) -> None:
+    """Leave grouped checks open as partition_plan makes them, each with its field and subject."""
+    made = {f"Report {name} for {subject}.": OutputTarget(field=name, subject=subject) for name, subject in targets}
+    state.output_targets = {**state.output_targets, **made}
+    state.open_answer_outputs = tuple(made)
 
 
 def field(label: str = "Search elsewhere") -> Control:
@@ -182,6 +189,25 @@ async def test_search_writer_receives_unverified_outputs_even_for_a_read_require
     context = await agent._field_context(state, observation(()), field())
     assert context["unresolved_requirements"] == []
     assert context["unverified_outputs"] == ["Author replies for Project Birch"]
+
+
+@pytest.mark.parametrize("open_output", [False, True])
+async def test_site_search_is_written_from_an_open_output(open_output: bool) -> None:
+    """With an output still unverified, the writer is told a site search may look for its target."""
+    state = await run_state()
+    requirement = Requirement(id="r", text="Read Project Birch replies.", kind=RequirementKind.INFORMATION)
+    state.ready_plan = Plan(requirements=(requirement,), answer_expected=True)
+    if open_output:
+        open_outputs(state, ("author replies", "Project Birch"))
+    llm = ScriptedLLM([{"missing": False, "text": "Project Birch"}])
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), llm)
+    target = field("Search projects")
+    assert await agent._generate_text(state, observation((target,)), target) == "Project Birch"
+    system, user = llm.calls[0][1]
+    assert ("form a query from a named target" in system.content) is open_output
+    assert json.loads(user.content).get("unverified_outputs") == (
+        ["Report author replies for Project Birch."] if open_output else None
+    )
 
 
 async def test_a_field_given_values_in_turn_types_them_in_order() -> None:

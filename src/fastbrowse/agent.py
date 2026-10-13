@@ -81,7 +81,15 @@ from fastbrowse.page import (
     SiteUnreachable,
     pager_link,
 )
-from fastbrowse.planner import Plan, Requirement, RequirementKind, RunReport, make_plan, partition_plan
+from fastbrowse.planner import (
+    OutputTarget,
+    Plan,
+    Requirement,
+    RequirementKind,
+    RunReport,
+    make_plan,
+    partition_plan,
+)
 from fastbrowse.policy import (
     Decision,
     HistoryEntry,
@@ -101,10 +109,12 @@ from fastbrowse.retrieval import (
     assemble_answer,
     compose,
     draft_answer,
+    names_subject,
     partial_answer,
     read,
     read_tallies,
     retain_fields,
+    subject_words,
 )
 from fastbrowse.safety import (
     Redactor,
@@ -336,6 +346,7 @@ class _RunState:
     planning: asyncio.Task[Generation[Plan]]
     notes: Notes = field(default_factory=Notes)
     finish_partitions: tuple[Plan, ...] = ()
+    output_targets: Mapping[str, OutputTarget] = field(default_factory=dict)
     oversized_answer: bool = False
     read_source_sizes: dict[str, int] = field(default_factory=dict)
     pending_collections: dict[str, tuple[str, tuple[Fact, ...]]] = field(default_factory=dict)
@@ -2484,6 +2495,7 @@ class Agent:
             ledger=state.ledger,
             jev=None if needs_context else self._jev,
             requirements=wanted,
+            targets=[r for r in plan.requirements if r.kind is RequirementKind.INFORMATION],
             # Rebinding old quotes during output recovery does not make revisiting their page a fresh source.
             revalidate=owed and (transaction_pending or not state.open_answer_outputs or not state.oversized_answer),
             recovering_outputs=state.oversized_answer and bool(state.open_answer_outputs),
@@ -3229,23 +3241,25 @@ class Agent:
                     state.oversized_answer = True
             # Independent outputs need separate evidence envelopes, not fewer source quotes.
             try:
-                state.finish_partitions = await partition_plan(
+                state.finish_partitions, state.output_targets = await partition_plan(
                     self._llm, state.task, state.plan, ledger=state.ledger, independent_fields=state.oversized_answer
                 )
             except LLMError as error:
                 raise _Stop(Status.UNVERIFIED, str(error)) from error
         for group in state.finish_partitions if state.oversized_answer else ():
-            subjects = tuple(check.removesuffix(".").rpartition(" for ")[2] for check in group.answer_checks)
+            subjects = tuple(
+                state.output_targets[check].subject for check in group.answer_checks if check in state.output_targets
+            )
             sources = (
                 key
                 for key, evidence in state.notes.current_evidence().items()
                 if any(
                     subject
                     and (
-                        _names_subject(urlsplit(evidence.url).path, subject)
+                        names_subject(urlsplit(evidence.url).path, subject)
                         or (
                             (page := state.notes.captured_page(evidence)) is not None
-                            and _names_subject(page.title, subject)
+                            and names_subject(page.title, subject)
                         )
                     )
                     for subject in subjects
@@ -4733,35 +4747,27 @@ def _without_missing(observation: Observation, missing: Set[tuple[str, str | Non
     return observation if len(kept) == len(observation.controls) else observation.model_copy(update={"controls": kept})
 
 
-def _subject_words(text: str) -> tuple[str, ...]:
-    return tuple(re.findall(r"[^\W_]+", text.casefold()))
-
-
-def _names_subject(text: str, subject: str) -> bool:
-    tokens, target = _subject_words(text), _subject_words(subject)
-    return bool(target) and any(tokens[i : i + len(target)] == target for i in range(len(tokens)))
-
-
 def _unread_output_section(state: _RunState) -> str | None:
     read = state.read_urls | state.recovery_sections | {e.url for e in state.notes.current_evidence().values()}
     failed = {failure.url for failure in state.failed_links.values()}
     for output in state.open_answer_outputs:
-        # Grouped checks are made by partition_plan from one field and one subject.
-        field, separator, subject = output.removeprefix("Report ").removesuffix(".").rpartition(" for ")
-        if not separator or not (target := _subject_words(subject)):
+        if (output_target := state.output_targets.get(output)) is None:
+            continue
+        field, subject = output_target.field, output_target.subject
+        if not (target := subject_words(subject)):
             continue
         roots: set[tuple[str, str]] = set()
         for link in state.observed_links.values():
             source, destination = urlsplit(link.source), urlsplit(link.url)
-            if _names_subject(link.label, subject):
+            if names_subject(link.label, subject):
                 roots.add((destination.netloc, destination.path.rstrip("/")))
-            if _names_subject(link.title, subject):
+            if names_subject(link.title, subject):
                 for address in (source, destination):
                     path = address.path.rstrip("/")
-                    tail = _subject_words(path.rpartition("/")[2])
+                    tail = subject_words(path.rpartition("/")[2])
                     if tail and set(tail) <= set(target):
                         roots.add((address.netloc, path))
-            if _names_subject(destination.path.rpartition("/")[2], subject):
+            if names_subject(destination.path.rpartition("/")[2], subject):
                 roots.add((destination.netloc, destination.path.rstrip("/")))
         candidates: list[tuple[int, int, str]] = []
         for link in state.observed_links.values():
@@ -4771,7 +4777,7 @@ def _unread_output_section(state: _RunState) -> str | None:
             path = destination.path.rstrip("/")
             # A target's directory and another target beside it are not sections of that target.
             if (destination.netloc, path) in roots or (destination.netloc, path.rpartition("/")[0]) in roots:
-                overlap = len(set(_subject_words(field)) & set(_subject_words(link.label)))
+                overlap = len(set(subject_words(field)) & set(subject_words(link.label)))
                 candidates.append((-overlap, len(path), link.url))
         if candidates:
             return min(candidates)[2]

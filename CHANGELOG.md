@@ -27,7 +27,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   retain their enclosing heading and identifying context. Explicit empty states
   retain their source quotes. Recovery reuses this coverage from earlier reads. Partial collections cannot
   support a finding that no members match. Citing every record and its boundary preserves that proven
-  coverage even when the answer cites their quotes directly.
+  coverage even when the answer cites their quotes directly. In a task with more than one target, a counted list
+  covers a target only when its page names that target, including when that target is the last one left to read.
 - Answers split across prompts check record categories and speaker roles against literal source quotes. Reader
   paraphrases cannot supply missing names or values. Newly verified fields renew recovery once each.
 - Verified answer groups remain cached when summaries reuse the same sources. Changed evidence causes a
@@ -41,7 +42,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   field's evidence. Collections read to their end support explicit bounded absence findings, which survive
   answer correction and reader-fact fallback.
 - Recovery opens an observed unread section for a missing target field and reads it before choosing another
-  action. Sections already read are excluded. Scrolling fully read content without loading more does not
+  action. Sections already read are excluded. A target whose name contains "for", such as "Leatrix Plus for
+  Classic", is matched by its whole name. Scrolling fully read content without loading more does not
   count as progress during output recovery.
 - Grouped answers audit retained quotes even when separate reads leave a bundled requirement open.
   Verified fields bind their source evidence before the normal completion check. Readers and grouped

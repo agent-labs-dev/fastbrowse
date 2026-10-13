@@ -274,7 +274,7 @@ async def test_binding_keeps_cross_requirement_comparisons_together() -> None:
         ]
     )
     state = await run_state()
-    groups = await partition_plan(llm, "Compare two projects, then report three replies.", plan, ledger=state.ledger)
+    groups, _ = await partition_plan(llm, "Compare two projects, then report three replies.", plan, ledger=state.ledger)
     assert [tuple(r.id for r in group.requirements) for group in groups] == [("r0", "r1"), ("r2",), ("r3",), ("r4",)]
     assert groups[0].answer_checks == plan.answer_checks[:2]
 
@@ -287,7 +287,7 @@ async def test_scoped_finish_keeps_actions_together_and_does_not_invent_action_a
     )
     plan = plan.model_copy(update={"requirements": (*actions, *plan.requirements)})
     state = await run_state()
-    groups = await partition_plan(
+    groups, _ = await partition_plan(
         FinishWriter(), "Correct the name, then read five replies.", plan, ledger=state.ledger
     )
     assert tuple(r.id for r in groups[0].requirements) == ("action0", "action1")

@@ -8,7 +8,7 @@ from fastbrowse.agent import Agent
 from fastbrowse.memory import CollectionFact, Notes
 from fastbrowse.page import BlockKind, Page
 from fastbrowse.retrieval import read
-from tests.test_agent import run_state
+from tests.test_agent import open_outputs, run_state
 from tests.test_partitioned_finish import project_notes
 from tests.test_policy import ScriptedJev
 from tests.test_retrieval import ScriptedLLM, capture
@@ -53,7 +53,7 @@ async def test_large_read_sources_enable_field_recovery_before_an_early_rejectio
         await agent._read(state, capture((BlockKind.PARAGRAPH, "source " * 6000), url=f"https://test/{index}"))
     state.open_answer_outputs = ("Report author replies.",)
     state.rejected_answer_evidence = frozenset()
-    partition = AsyncMock(return_value=())
+    partition = AsyncMock(return_value=((), {}))
     monkeypatch.setattr("fastbrowse.agent.partition_plan", partition)
     monkeypatch.setattr(agent, "_finish_partitioned", AsyncMock(return_value=None))
     await agent._finish(state, None, None)
@@ -182,7 +182,7 @@ async def test_unread_output_recovery_destination_is_read_before_uncertainty():
     state = await run_state()
     state.ready_plan, state.notes = project_notes(100)
     state.oversized_answer = True
-    state.open_answer_outputs = ("Report links for Birch.",)
+    open_outputs(state, ("links", "Birch"))
     state.owes_read = True
     observed = observation(())
     agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
@@ -329,3 +329,16 @@ def test_a_target_name_matches_whole_words_only():
     requirements = _requirements("Report reviews for Birchwood.", "Report reviews for Rowan.")
     facts = _counted_collections(page, ["r0", "r1"], len(page.text), requirements)
     assert not any(isinstance(f, CollectionFact) for f in facts)
+
+
+@pytest.mark.parametrize(("title", "covered"), [("Elm", set()), ("Rowan", {"r1"})])
+def test_the_last_requirement_left_still_needs_its_target_named(title, covered):
+    """With only Rowan left to read, a full "Reviews (1)" on Elm's page closed Rowan's collection."""
+    from fastbrowse.retrieval import _counted_collections
+
+    page = capture((BlockKind.HEADING, "Reviews (1)"), (BlockKind.LIST_ITEM, "Ann: Nice work.")).model_copy(
+        update={"title": title}
+    )
+    requirements = _requirements("Report reviews for Elm.", "Report reviews for Rowan.")
+    facts = _counted_collections(page, ["r1"], len(page.text), requirements[1:], requirements)
+    assert {f.comparison.requirement_id for f in facts if isinstance(f, CollectionFact)} == covered

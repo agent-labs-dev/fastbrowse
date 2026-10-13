@@ -9,11 +9,11 @@ from fastbrowse.agent import Agent, _follow_recovery, _recovery_routes, _Stop
 from fastbrowse.memory import Comparison, Fact, Notes, fact_id
 from fastbrowse.models import FactReader, Operation, Status
 from fastbrowse.page import BlockKind, Control, Page
-from fastbrowse.planner import Plan, Requirement, RequirementKind, partition_plan
+from fastbrowse.planner import OutputTarget, Plan, Requirement, RequirementKind, partition_plan
 from fastbrowse.policy import Decision, Reduction
 from fastbrowse.retrieval import compose
 from fastbrowse.verification import check_answer_outputs
-from tests.test_agent import run_state
+from tests.test_agent import open_outputs, run_state
 from tests.test_answer_repair import RoutingJev
 from tests.test_policy import ScriptedJev, observation
 from tests.test_retrieval import ScriptedLLM, block_evidence, capture
@@ -64,11 +64,12 @@ async def test_partition_expands_bundled_fields_for_every_named_target() -> None
             },
         ]
     )
-    groups = await partition_plan(llm, "Read bugs and requests for Birch and Elm.", plan, ledger=state.ledger)
+    groups, targets = await partition_plan(llm, "Read bugs and requests for Birch and Elm.", plan, ledger=state.ledger)
     assert [group.answer_checks for group in groups] == [
         (f"Report player bug reports for {name}.", f"Report player feature requests for {name}.")
         for name in ("Birch", "Elm")
     ]
+    assert targets["Report player bug reports for Elm."] == OutputTarget(field="player bug reports", subject="Elm")
 
 
 def comments(complete: bool):
@@ -220,7 +221,7 @@ async def test_output_recovery_routes_to_observed_unread_section_and_keeps_autho
     state = await run_state()
     state.task = "Report Project Birch author replies and links."
     state.caller_start = "https://example.test/birch/comments"
-    state.open_answer_outputs = ("Report links for Project Birch.",)
+    open_outputs(state, ("links", "Project Birch"))
     description = "https://example.test/birch"
     seen = observation(
         (
@@ -282,7 +283,7 @@ async def test_output_recovery_routes_to_observed_unread_section_and_keeps_autho
 
 async def test_recovery_section_routes_do_not_reconstruct_display_only_external_addresses() -> None:
     state = await run_state()
-    state.open_answer_outputs = ("Report links for Project Birch.",)
+    open_outputs(state, ("links", "Project Birch"))
     controls = (
         *tuple(
             Control(

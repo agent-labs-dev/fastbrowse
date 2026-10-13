@@ -691,9 +691,30 @@ class _CollectionResponse(_ReadResponse):
     collections: tuple[_ReadCollection, ...] = ()
 
 
+def subject_words(text: str) -> tuple[str, ...]:
+    return tuple(re.findall(r"[^\W_]+", text.casefold()))
+
+
+def names_subject(text: str, subject: str) -> bool:
+    """Whether `text` holds `subject` as whole words, so "Birch" does not name "Birchwood"."""
+    tokens, target = subject_words(text), subject_words(subject)
+    return bool(target) and any(tokens[i : i + len(target)] == target for i in range(len(tokens)))
+
+
 def _counted_collections(
-    capture: Capture, requirement_ids: Sequence[str], read_end: int, requirements: Sequence[Requirement] = ()
+    capture: Capture,
+    requirement_ids: Sequence[str],
+    read_end: int,
+    requirements: Sequence[Requirement] = (),
+    targets: Sequence[Requirement] | None = None,
 ) -> tuple[Fact, ...]:
+    """Fully shown counted lists as complete collections.
+
+    `targets` is every information requirement of the plan. When there is more than one, a list counts for a
+    target only if the page names it: with one requirement left to read, an unrelated "Reviews (3)" on another
+    target's page would otherwise close the last target's collection.
+    """
+    targets = requirements if targets is None else targets
     collections: list[Fact] = []
     for index, heading in enumerate(capture.blocks):
         if heading.kind is not BlockKind.HEADING or heading.frame_id is not None:
@@ -771,21 +792,20 @@ def _counted_collections(
         collections.extend(sources)
 
         def named(subject: str) -> set[str]:
-            words = f" {' '.join(re.findall(r'\w+', subject.casefold()))} "
             return {
                 requirement.id
-                for requirement in requirements
-                if len(subject) > 3 and words in f" {' '.join(re.findall(r'\w+', requirement.text.casefold()))} "
+                for requirement in targets
+                if len(subject) > 3 and names_subject(requirement.text, subject)
             }
 
         matching = set[str]().union(*(named(s) for s in (*heading.heading_path, capture.title.split(" - ")[0])))
         if count is not None:
             # The counted heading can name the target itself. A label every requirement mentions names none.
             own = named(title[: title.rindex("(")].strip())
-            if len(own) < len(requirements):
+            if len(own) < len(targets):
                 matching |= own
         for requirement_id in requirement_ids:
-            if len(requirement_ids) > 1 and requirement_id not in matching:
+            if len(targets) > 1 and requirement_id not in matching:
                 continue
             collections.append(
                 CollectionFact(
@@ -1005,12 +1025,14 @@ async def read(
     recovering_outputs: bool = False,
     preserve_collections: bool = False,
     field_outputs: bool = False,
+    targets: Sequence[Requirement] | None = None,
     _skip_order_shortcuts: Collection[str] = (),
 ) -> ReadOutcome:
     """`notice` is what the caller knows about the page that its text does not say, such as its next-page control;
     it goes with every question the reader is asked, however the question is narrowed. `continuing` names the
     requirements an earlier page already said run past it. Neither those nor `incomplete` comparisons can be
-    answered by scalar choice, so they go to the reader."""
+    answered by scalar choice, so they go to the reader. `targets` is the plan's information requirements, read
+    or not, which decide whether a counted list must name the target it covers."""
     notes.remember_capture(capture)
     facts: dict[tuple[str, str | None], Fact] = {}
     coverage: list[int] = []
@@ -1709,7 +1731,9 @@ async def read(
         notes.add(collection)
         facts[(fact_id(collection), None)] = collection
     collection_facts = (
-        _counted_collections(capture, [key for key in requirement_ids if key not in blocked], part.end, requirements)
+        _counted_collections(
+            capture, [key for key in requirement_ids if key not in blocked], part.end, requirements, targets
+        )
         if not notice and not capture.inaccessible_frames
         else ()
     )
@@ -1747,6 +1771,7 @@ async def read(
             tokens=tokens,
             ledger=ledger,
             requirements=tuple(r for r in requirements if r.id in unconfirmed_orders),
+            targets=requirements if targets is None else targets,
             records_only=True,
             preserve_collections=preserve_collections,
         )
@@ -1766,6 +1791,7 @@ async def read(
                 tokens=tokens,
                 ledger=ledger,
                 requirements=tuple(r for r in requirements if r.id in scope_ids),
+                targets=requirements if targets is None else targets,
                 require_all_evidence=True,
                 _skip_order_shortcuts=scope_ids,
                 preserve_collections=preserve_collections,
