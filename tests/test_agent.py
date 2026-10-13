@@ -356,6 +356,31 @@ async def test_a_value_the_task_states_is_asked_for_again_rather_than_ending_the
     assert "never invent one" in llm.calls[1][1][-1].content
 
 
+@pytest.mark.parametrize("declared", [{"input_type": "email"}, {"input_type": "text", "autocomplete": "email"}])
+async def test_a_saved_code_written_for_an_email_field_is_asked_for_again(declared: dict[str, str]) -> None:
+    """Given a field declaring input_type email and a code in the notes, the writer typed the code into Email in
+    7 of 12 two-step sign-ins; the declared kind is checked before typing, not left to recovery."""
+    target = field("Email").model_copy(update={"value": None, "role": "textbox", **declared})
+    llm = ScriptedLLM([{"missing": False, "text": "482913"}, {"missing": False, "text": "ada@example.test"}])
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), llm)
+
+    assert await agent._generate_text(await run_state(), observation((target,)), target) == "ada@example.test"
+    assert len(llm.calls) == 2
+    assert "takes an email address" in llm.calls[1][1][-1].content
+
+
+async def test_a_value_fitting_its_declared_kind_is_typed_without_asking_again() -> None:
+    email = field("Email").model_copy(update={"value": None, "input_type": "email"})
+    code = field("Code").model_copy(update={"value": None, "input_type": "text"})
+    llm = ScriptedLLM([{"missing": False, "text": "ada@example.test"}, {"missing": False, "text": "482913"}])
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), llm)
+    state = await run_state()
+
+    assert await agent._generate_text(state, observation((email,)), email) == "ada@example.test"
+    assert await agent._generate_text(state, observation((code,)), code) == "482913"
+    assert len(llm.calls) == 2
+
+
 async def test_a_second_missing_verdict_goes_to_recovery() -> None:
     target = field("Account number")
     llm = ScriptedLLM([{"missing": True, "text": ""}, {"missing": True, "text": ""}])
@@ -4576,6 +4601,31 @@ def form_fields() -> tuple[Control, Control]:
         for label in ("Name", "Email")
     )
     return name, email
+
+
+async def test_a_batch_stops_before_a_value_that_does_not_fit_its_field_and_does_not_keep_it() -> None:
+    name, email = form_fields()
+    email = email.model_copy(update={"input_type": "email"})
+    page = Mock(spec=Page)
+    page.redrawn = AsyncMock(return_value=False)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=False))
+    llm = ScriptedLLM(
+        [
+            {
+                "fields": [
+                    {"id": "Name", "missing": False, "text": "Ada"},
+                    {"id": "Email", "missing": False, "text": "482913"},
+                ]
+            }
+        ]
+    )
+    agent = Agent(page, ScriptedJev({}), llm)
+    state = await run_state()
+    obs = observation((name, email))
+
+    assert await agent._fill_form(state, obs, _code_decision(Operation.FILL, name))
+    assert [call.args[0].text for call in page.act.call_args_list] == ["Ada"]
+    assert (obs.document_key, email.id) not in state.form_values
 
 
 @pytest.mark.parametrize("continues", [True, False])

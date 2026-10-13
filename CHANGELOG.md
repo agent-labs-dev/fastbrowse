@@ -13,6 +13,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
+- A field that declares it takes an email address, by its input type or autocomplete token, is no longer typed
+  with text that holds no address: the field writer is asked once more first. A sign-in that had read a code
+  sometimes typed it into Email and needed recovery to put it right.
 
 ## [0.5.20] - 2026-10-09
 

@@ -2012,12 +2012,19 @@ class Agent:
         # Scrolling to the first field ends a batch too. A later Jev choice can reuse its value only while
         # the field's identity, meaning and empty value survive the fresh observation.
         for value in written.fields:
-            if not value.missing and value.text and not self._redactor.reveals(value.model_dump_json()):
+            if (
+                not value.missing
+                and value.text
+                and not _misfit(fields[value.id], value.text)
+                and not self._redactor.reveals(value.model_dump_json())
+            ):
                 state.form_values[(observation.document_key, value.id)] = (fields[value.id], value)
         for index, value in enumerate(written.fields):
             control = fields[value.id]
             text = _next_value(value.values, state.history, control.label) if len(value.values) > 1 else value.text
-            if value.missing or not text or self._redactor.reveals(text):
+            # A value that does not fit its field's declared kind ends the batch, so the field's own path can
+            # check it and ask again before typing.
+            if value.missing or not text or self._redactor.reveals(text) or _misfit(control, text):
                 return index > 0
             state.ledger.check()
             state.form_values.pop((observation.document_key, control.id), None)
@@ -2065,14 +2072,34 @@ class Agent:
             gives_up_as=Status.NEEDS_INPUT,
         )
 
-    async def _write_field(self, state: _RunState, messages: Sequence[Message], target: Control) -> str | None:
+    async def _write_field(
+        self, state: _RunState, messages: Sequence[Message], target: Control, *, refit: bool = True
+    ) -> str | None:
         """The text for one field, or None when the writer says the value was never given."""
         generation = await self._llm.generate(LLMPurpose.FIELD_TEXT, list(messages), _FieldText, ledger=state.ledger)
         state.ledger.record(generation.cost)
         written = generation.data
         if written.missing:
             return None
-        return _next_value(written.values, state.history, target.label) if len(written.values) > 1 else written.text
+        text = _next_value(written.values, state.history, target.label) if len(written.values) > 1 else written.text
+        # Shown a field declaring input_type email and a code saved in the notes, the writer typed the code into
+        # Email in 7 of 12 two-step sign-ins, and recovery then spent a call and a fill putting it right. The
+        # field's own declaration is checked here instead, and the writer is asked once more before anything is typed.
+        wanted = _misfit(target, text)
+        if wanted is None or not refit:
+            return text
+        corrected = [
+            *messages,
+            Message(
+                role="user",
+                content=(
+                    f"The field declares that it takes {wanted}, and {self._redactor.mask(text)!r} is not one. "
+                    f"Write the {wanted} the task or notes give for this field; a value saved for another field "
+                    "does not belong in it."
+                ),
+            ),
+        ]
+        return await self._write_field(state, corrected, target, refit=False)
 
     async def _value_absent(self, state: _RunState, observation: Observation, target: Control) -> bool:
         state.ledger.reserve(CostComponent.JEV)
@@ -3772,6 +3799,18 @@ def _history(history: Sequence[HistoryEntry], limits: ObservationLimits) -> tupl
     split = len(history) - limits.history_entries
     earlier = history[max(0, split - limits.earlier_history_entries) : max(0, split)]
     return (*(entry.model_copy(update={"effect": None}) for entry in earlier), *history[max(0, split) :])
+
+
+def _misfit(target: Control, text: str) -> str | None:
+    """The kind of value the field declares it takes, when the text cannot be one, else None.
+
+    An address field's type and autocomplete token are the page's own statement of what it takes, and a browser
+    refuses to submit an email field holding no address. Only that check is made: a phone or number field takes
+    too many shapes to reject one in code."""
+    tokens = (target.autocomplete or "").lower().split()
+    if ((target.input_type or "").lower() == "email" or "email" in tokens) and "@" not in text:
+        return "an email address"
+    return None
 
 
 def _next_value(values: Sequence[str], history: Sequence[HistoryEntry], label: str | None) -> str:
