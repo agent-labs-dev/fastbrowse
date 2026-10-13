@@ -13,6 +13,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
+- A sign-in prompt no longer ends a reading task before the page is read. When the page asks for no
+  credentials, the run reads it first, so a public list whose only sign-in box is for posting a reply, or
+  its empty state, is answered. A `needs_login` error now names its evidence: the credential fields the page
+  asks for, or a read of the page that found nothing requested.
 
 ## [0.5.20] - 2026-10-09
 

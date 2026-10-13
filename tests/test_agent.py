@@ -5356,7 +5356,8 @@ async def test_navigation_report_keeps_start_after_error_removes_visited_evidenc
 async def test_access_inspection_reads_login_evidence_without_bypassing_bot_checks(
     monkeypatch: pytest.MonkeyPatch, inspect_access: bool, bot_check: bool
 ) -> None:
-    obs = _at("https://shop.test/login", _button("Sign in"))
+    password = field("Password").model_copy(update={"id": "pw", "input_type": "password", "sensitive": True})
+    obs = _at("https://shop.test/login", _button("Sign in"), password)
     page = Mock(spec=Page)
     agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
     agent._observe = AsyncMock(return_value=obs)
@@ -5381,6 +5382,51 @@ async def test_access_inspection_reads_login_evidence_without_bypassing_bot_chec
         assert agent._read_before_interaction.call_args.args[2].operation is Operation.READ
     else:
         agent._read_before_interaction.assert_not_awaited()
+
+
+@pytest.mark.parametrize("readable", [True, False])
+async def test_a_sign_in_prompt_for_writing_stops_a_read_only_when_the_page_does_not_answer(
+    monkeypatch: pytest.MonkeyPatch, readable: bool
+) -> None:
+    """A public comment list with only a box for signing in to reply ended needs_login before any step, citing
+    nothing: the list said it had no comments, which any visitor could read."""
+    empty = "Comments\n\nNo comments yet. Be the first to post one."
+    obs = _at("https://forum.test/projects/birch/comments", _button("Log in to reply")).model_copy(
+        update={"title": "Birch comments", "viewport_text": empty}
+    )
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    agent._observe = AsyncMock(return_value=obs)
+    agent._outwait = AsyncMock(return_value=False)
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(
+            Requirement(id="r", text="List the comments, or say there are none", kind=RequirementKind.INFORMATION),
+        ),
+        answer_expected=True,
+    )
+    walled = _code_decision(Operation.CLICK, obs.controls[0]).model_copy(update={"login_required": 0.99})
+    # The second decision is where the run would go on from the page it read; this test stops it there.
+    monkeypatch.setattr(agent_module, "decide", AsyncMock(side_effect=[walled, _Stop(Status.UNVERIFIED)]))
+    page = capture((BlockKind.PARAGRAPH, empty), url=obs.url)
+
+    async def read(state: _RunState, observation: Observation, decision: Decision, *args: object) -> bool:
+        assert decision.operation is Operation.READ
+        if readable:
+            state.notes.add(
+                Fact(text="There are no comments", evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+            )
+        return False
+
+    agent._step = AsyncMock(side_effect=read)
+    with pytest.raises(_Stop) as stopped:
+        await agent._loop(state, None, None)
+    agent._step.assert_awaited_once()
+    if readable:
+        assert stopped.value.status is Status.UNVERIFIED
+    else:
+        assert stopped.value.status is Status.NEEDS_LOGIN
+        assert stopped.value.error is not None
+        assert "reading Birch comments found none of the requested information" in stopped.value.error
 
 
 @pytest.mark.parametrize("change", ["document", "semantics", "sensitive"])

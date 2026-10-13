@@ -104,6 +104,7 @@ from fastbrowse.retrieval import (
 )
 from fastbrowse.safety import (
     Redactor,
+    asks_for_credentials,
     changes_credentials,
     irreversible_question,
     may_be_irreversible,
@@ -816,7 +817,8 @@ class Agent:
                     )
                 plan = await state.await_plan()
                 if not _access_inspection(plan):
-                    raise _Stop(Status.NEEDS_LOGIN, f"sign-in required at {origin}")
+                    await self._meet_wall(state, observation, raw, plan)
+                    continue
                 # A task inspecting an access boundary needs its observed wall read and verified, not passed.
                 decision = _code_decision(Operation.READ, None)
             uncertain = decision.confidence < self._config.thresholds.recover_below
@@ -2132,6 +2134,27 @@ class Agent:
             {"accept": "Accept / OK", "dismiss": "Dismiss / Cancel"},
         )
         return choice == "accept"
+
+    async def _meet_wall(self, state: _RunState, observation: Observation, raw: Observation, plan: Plan) -> None:
+        """Stop at a sign-in wall Jev saw only on the page's evidence for it; return once the page proved readable.
+
+        A public comment list whose only sign-in prompt was a box for posting a reply ended needs_login before a
+        single step, with nothing cited: the list, empty and saying so, could be read without an account."""
+        origin = origin_of(raw.url)
+        asked = [c.label or c.input_name or "a password" for c in raw.controls if asks_for_credentials(c)]
+        if asked:
+            raise _Stop(Status.NEEDS_LOGIN, f"sign-in required at {origin}: the page asks for {', '.join(asked)}")
+        if not _unread(plan, state.notes):
+            raise _Stop(Status.NEEDS_LOGIN, f"sign-in required at {origin}: {raw.title or raw.url} offers only sign-in")
+        # A prompt to sign in can gate only writing, such as posting a reply, so a task that reads is asked of the
+        # page before any credential is: what the page shows decides whether the wall stands between them.
+        facts = len(state.notes.facts)
+        await self._step(state, observation, _code_decision(Operation.READ, None))
+        if len(state.notes.facts) == facts:
+            raise _Stop(
+                Status.NEEDS_LOGIN,
+                f"sign-in required at {origin}: reading {raw.title or raw.url} found none of the requested information",
+            )
 
     async def _read_before_interaction(
         self, state: _RunState, observation: Observation, decision: Decision, decided_by: Decider = Decider.JEV
