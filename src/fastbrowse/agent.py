@@ -1377,6 +1377,7 @@ class Agent:
         Done closed a date picker, Search opened it again, and Done and Search went round for a minute, each click
         a change, until recovery happened to fix the form.
         """
+        renews = renews and not _redrawn_read(state, observation)
         key = state_key(observation)
         first = state.reached.get(key)
         if first is None:
@@ -3856,6 +3857,16 @@ def _only_typed_since_read(history: Sequence[HistoryEntry]) -> bool:
         if entry.operation is not Operation.FILL or entry.page_changed:
             return False
     return False
+
+
+def _redrawn_read(state: _RunState, observation: Observation) -> bool:
+    """Whether a page state is a redraw of an address already read, reached with no read paying out since the
+    last recovery. A release check clicked a project's Files tab, version row and download link over and over:
+    each click expanded a row, ended a countdown or closed a banner on a page already read, and each redraw was a
+    state never seen, so it restored the recovery budget and the run went round until its step limit."""
+    return state.notes.read_address(observation.url) and not any(
+        entry.read_progress for entry in state.history[state.recovered_at :]
+    )
 
 
 def _record(history: Sequence[HistoryEntry], limits: ObservationLimits) -> tuple[HistoryEntry, ...]:

@@ -21,6 +21,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   credentials, the run reads it first, so a public list whose only sign-in box is for posting a reply, or
   its empty state, is answered. A `needs_login` error now names its evidence: the credential fields the page
   asks for, or a read of the page that found nothing requested.
+- A page the run has already read no longer restores its recovery budget each time a repeated click
+  redraws it, such as a row expanding or a countdown ending. A read-only release check clicked the same
+  Files, version and download links until its step limit; now it ends `stuck` once recovery is spent
+  there, with the partial answer it holds, unless a read since the last recovery found something new.
 
 ## [0.5.20] - 2026-10-09
 
