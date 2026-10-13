@@ -614,6 +614,9 @@ class Agent:
                     result = await self._loop(state, output_schema, until)
                     loop_returned = True
             except _Stop as stop:
+                # A stop's message can quote the page, such as a field's label, and a page can echo a typed secret
+                # there; redacting at each raise missed one, so every stop is redacted here before the caller sees it.
+                stop.error = None if stop.error is None else self._redactor.redact(stop.error)
                 if stop.status in {Status.STUCK, Status.UNVERIFIED} and state is not None and state.notes.evidence:
                     # What was read is still cited evidence; a caller told only "stuck" has to browse again for it.
                     result = self._partial_result(state.notes, state, ledger, stop.status, stop.error)

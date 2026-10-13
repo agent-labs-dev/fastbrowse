@@ -4980,6 +4980,31 @@ async def test_new_password_without_replacement_never_uses_existing_secret() -> 
     assert "--secret new_password=" in str(stopped.value)
 
 
+async def test_a_stop_message_built_from_page_text_reaches_the_caller_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stop quoting a control's label carried a secret the page echoed into that label to RunResult.error."""
+    password = field("Password (last tried hunter2)").model_copy(
+        update={"id": "pw", "input_type": "password", "sensitive": True}
+    )
+    obs = _at("https://shop.test/login", password)
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=obs)
+    page.artifacts = ()
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([{"requirements": [], "answer_expected": False}]))
+    # As if typed earlier in the run: only a resolved secret is known to the redactor.
+    agent._redactor.register("PASSWORD", "hunter2", "https://shop.test")
+    agent._outwait = AsyncMock(return_value=False)
+    monkeypatch.setattr(agent_module, "decide", AsyncMock(return_value=_code_decision(Operation.FILL, password)))
+
+    result = await agent.run("Sign in to my account", limits=Limits(max_steps=2))
+
+    assert result.status is Status.NEEDS_LOGIN
+    assert result.error is not None and "wants a secret and none is stored" in result.error
+    assert "hunter2" not in result.error
+    assert "[secret:PASSWORD]" in result.error
+
+
 async def test_action_detour_keeps_context_even_when_the_information_answer_is_absent() -> None:
     state = await run_state()
     state.task = "Read the Phone code to sign in, then report the latest order."
