@@ -2699,6 +2699,7 @@ async def test_a_bot_check_stops_the_run_even_where_a_secret_is_held_for_the_sit
     page.observe = AsyncMock(return_value=captcha)
     page.artifacts = ()
     jev = ScriptedJev({}, noul=0.9)
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "Verify you are human")))
     agent = Agent(
         page,
         jev,
@@ -2717,12 +2718,123 @@ async def test_a_bot_check_stops_the_run_even_where_a_secret_is_held_for_the_sit
     assert "login_required" not in asked
 
 
+async def test_a_bot_check_stop_cites_the_challenge_the_page_showed() -> None:
+    """A blocked run with no evidence leaves the caller nothing to act on; the wall's own words are the evidence."""
+    wall = "https://search.test/sorry/index?continue=/search"
+    captcha = _at(wall, _button("I'm not a robot"))
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=captcha)
+    page.capture = AsyncMock(
+        return_value=capture(
+            (BlockKind.PARAGRAPH, "Our systems have detected unusual traffic from your computer network."),
+            (BlockKind.OBSERVATION, "checkbox: I'm not a robot"),
+            (BlockKind.PARAGRAPH, "x" * 2000),
+            url=wall,
+        )
+    )
+    page.artifacts = ()
+    agent = Agent(page, ScriptedJev({}, noul=0.9), ScriptedLLM([{"requirements": [], "answer_expected": False}]))
+    agent._outwait = AsyncMock(return_value=False)
+
+    result = await agent.run("Research the startup error", limits=Limits(max_steps=2))
+
+    assert result.status is Status.BLOCKED
+    assert result.evidence, "the blocked result carries no evidence of the block"
+    first = result.evidence[0]
+    assert first.url == wall
+    assert first.quote == "Our systems have detected unusual traffic from your computer network."
+    # A typed observation is not page text, and a wall's quote stays short.
+    assert all(item.rendered_text for item in result.evidence)
+    assert sum(len(item.quote) for item in result.evidence) <= 600
+
+
+async def test_a_bot_check_stop_does_not_quote_an_earlier_download() -> None:
+    wall = capture(
+        (BlockKind.PARAGRAPH, "Checking your browser"),
+        (BlockKind.PARAGRAPH, "name,price\nwidget,3"),
+        url="https://shop.test/challenge",
+    )
+    download = wall.blocks[1].model_copy(update={"source_url": "https://files.test/prices.csv"})
+    wall = wall.model_copy(update={"blocks": (wall.blocks[0], download)})
+    captcha = _at("https://shop.test/challenge", _button("Verify you are human"))
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=captcha)
+    page.capture = AsyncMock(return_value=wall)
+    page.artifacts = ()
+    agent = Agent(page, ScriptedJev({}, noul=0.9), ScriptedLLM([{"requirements": [], "answer_expected": False}]))
+    agent._outwait = AsyncMock(return_value=False)
+
+    result = await agent.run("Open my orders", limits=Limits(max_steps=2))
+
+    assert result.status is Status.BLOCKED
+    assert [item.quote for item in result.evidence] == ["Checking your browser"]
+
+
+async def test_a_bot_check_that_clears_during_the_capture_cites_nothing() -> None:
+    """A scripted check can clear just after it was outwaited, and its destination is not the wall."""
+    captcha = _at("https://shop.test/challenge", _button("Verify you are human"))
+    cleared = _at("https://shop.test/orders", _button("Order 1"))
+    page = Mock(spec=Page)
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "Your orders"), url=cleared.url))
+    page.observe = AsyncMock(side_effect=lambda *_, **__: cleared if page.capture.await_count else captcha)
+    page.artifacts = ()
+    agent = Agent(page, ScriptedJev({}, noul=0.9), ScriptedLLM([{"requirements": [], "answer_expected": False}]))
+    agent._outwait = AsyncMock(return_value=False)
+
+    result = await agent.run("Open my orders", limits=Limits(max_steps=2))
+
+    assert result.status is Status.BLOCKED
+    assert result.evidence == ()
+
+
+async def test_a_bot_check_stop_reports_no_secret_the_wall_echoes() -> None:
+    """The wall's quote and the stop's address are written out of the process, so a held secret is kept out."""
+    wall = "https://hunter2.wall.test/challenge?token=hunter2"
+    captcha = _at(wall, _button("Verify you are human"))
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=captcha)
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "Blocked request for hunter2"), url=wall))
+    page.artifacts = ()
+    agent = Agent(
+        page,
+        ScriptedJev({}, noul=0.9),
+        ScriptedLLM([{"requirements": [], "answer_expected": False}]),
+        secrets=ScopedSecrets({"PASSWORD": "hunter2"}, "https://shop.test"),
+    )
+    agent._outwait = AsyncMock(return_value=False)
+    # As if typed on the shop earlier in the run: only a resolved secret is known to the redactor.
+    agent._redactor.register("PASSWORD", "hunter2", "https://shop.test")
+
+    result = await agent.run("Open my orders", limits=Limits(max_steps=2))
+
+    assert result.status is Status.BLOCKED
+    assert result.evidence and result.error is not None
+    reported = [result.error, *(item.quote for item in result.evidence), *(item.url for item in result.evidence)]
+    assert not any("hunter2" in text for text in reported)
+
+
+async def test_a_bot_check_stop_survives_a_capture_that_fails() -> None:
+    captcha = _at("https://shop.test/login", _button("Verify you are human"))
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=captcha)
+    page.capture = AsyncMock(side_effect=BrowserError("target closed"))
+    page.artifacts = ()
+    agent = Agent(page, ScriptedJev({}, noul=0.9), ScriptedLLM([{"requirements": [], "answer_expected": False}]))
+    agent._outwait = AsyncMock(return_value=False)
+
+    result = await agent.run("Open my orders", limits=Limits(max_steps=2))
+
+    assert result.status is Status.BLOCKED
+    assert result.evidence == ()
+
+
 async def test_a_decision_dropped_for_a_redraw_still_asks_the_bot_check_again() -> None:
     captcha = _at("https://shop.test/login", _button("Verify you are human"))
     page = Mock(spec=Page)
     page.observe = AsyncMock(return_value=captcha)
     page.redrawn = AsyncMock(side_effect=[True, False])
     page.artifacts = ()
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "Verify you are human")))
 
     class SlowFirstJev(ScriptedJev):
         async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
@@ -4947,6 +5059,31 @@ async def test_new_password_without_replacement_never_uses_existing_secret() -> 
     assert "--secret new_password=" in str(stopped.value)
 
 
+async def test_a_stop_message_built_from_page_text_reaches_the_caller_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stop quoting a control's label carried a secret the page echoed into that label to RunResult.error."""
+    password = field("Password (last tried hunter2)").model_copy(
+        update={"id": "pw", "input_type": "password", "sensitive": True}
+    )
+    obs = _at("https://shop.test/login", password)
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=obs)
+    page.artifacts = ()
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([{"requirements": [], "answer_expected": False}]))
+    # As if typed earlier in the run: only a resolved secret is known to the redactor.
+    agent._redactor.register("PASSWORD", "hunter2", "https://shop.test")
+    agent._outwait = AsyncMock(return_value=False)
+    monkeypatch.setattr(agent_module, "decide", AsyncMock(return_value=_code_decision(Operation.FILL, password)))
+
+    result = await agent.run("Sign in to my account", limits=Limits(max_steps=2))
+
+    assert result.status is Status.NEEDS_LOGIN
+    assert result.error is not None and "wants a secret and none is stored" in result.error
+    assert "hunter2" not in result.error
+    assert "[secret:PASSWORD]" in result.error
+
+
 async def test_action_detour_keeps_context_even_when_the_information_answer_is_absent() -> None:
     state = await run_state()
     state.task = "Read the Phone code to sign in, then report the latest order."
@@ -5435,8 +5572,10 @@ async def test_navigation_report_keeps_start_after_error_removes_visited_evidenc
 async def test_access_inspection_reads_login_evidence_without_bypassing_bot_checks(
     monkeypatch: pytest.MonkeyPatch, inspect_access: bool, bot_check: bool
 ) -> None:
-    obs = _at("https://shop.test/login", _button("Sign in"))
+    password = field("Password").model_copy(update={"id": "pw", "input_type": "password", "sensitive": True})
+    obs = _at("https://shop.test/login", _button("Sign in"), password)
     page = Mock(spec=Page)
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "Sign in"), url=obs.url))
     agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
     agent._observe = AsyncMock(return_value=obs)
     agent._outwait = AsyncMock(return_value=False)
@@ -5460,6 +5599,80 @@ async def test_access_inspection_reads_login_evidence_without_bypassing_bot_chec
         assert agent._read_before_interaction.call_args.args[2].operation is Operation.READ
     else:
         agent._read_before_interaction.assert_not_awaited()
+
+
+@pytest.mark.parametrize("readable", [True, False])
+async def test_a_sign_in_prompt_for_writing_stops_a_read_only_when_the_page_does_not_answer(
+    monkeypatch: pytest.MonkeyPatch, readable: bool
+) -> None:
+    """A public comment list with only a box for signing in to reply ended needs_login before any step, citing
+    nothing: the list said it had no comments, which any visitor could read."""
+    empty = "Comments\n\nNo comments yet. Be the first to post one."
+    obs = _at("https://forum.test/projects/birch/comments", _button("Log in to reply")).model_copy(
+        update={"title": "Birch comments", "viewport_text": empty}
+    )
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    agent._observe = AsyncMock(return_value=obs)
+    agent._outwait = AsyncMock(return_value=False)
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(
+            Requirement(id="r", text="List the comments, or say there are none", kind=RequirementKind.INFORMATION),
+        ),
+        answer_expected=True,
+    )
+    walled = _code_decision(Operation.CLICK, obs.controls[0]).model_copy(update={"login_required": 0.99})
+    # The second decision is where the run would go on from the page it read; this test stops it there.
+    monkeypatch.setattr(agent_module, "decide", AsyncMock(side_effect=[walled, _Stop(Status.UNVERIFIED)]))
+    page = capture((BlockKind.PARAGRAPH, empty), url=obs.url)
+
+    async def read(state: _RunState, observation: Observation, decision: Decision, *args: object) -> bool:
+        assert decision.operation is Operation.READ
+        if readable:
+            state.notes.add(
+                Fact(text="There are no comments", evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+            )
+        return False
+
+    agent._step = AsyncMock(side_effect=read)
+    with pytest.raises(_Stop) as stopped:
+        await agent._loop(state, None, None)
+    agent._step.assert_awaited_once()
+    if readable:
+        assert stopped.value.status is Status.UNVERIFIED
+    else:
+        assert stopped.value.status is Status.NEEDS_LOGIN
+        assert stopped.value.error is not None
+        assert "reading Birch comments found none of the requested information" in stopped.value.error
+
+
+@pytest.mark.parametrize("echoed_in", ["title", "label", "host"])
+async def test_a_sign_in_wall_error_never_carries_a_secret_the_page_echoes(
+    monkeypatch: pytest.MonkeyPatch, echoed_in: str
+) -> None:
+    """The error is the caller's to read, and a page can repeat a typed secret in its title, a field's label or the
+    address it redirects to."""
+    password = field("Password").model_copy(update={"id": "pw", "input_type": "password", "sensitive": True})
+    if echoed_in == "label":
+        password = password.model_copy(update={"label": "Password (last tried hunter2)"})
+    controls = (password,) if echoed_in == "label" else (_button("Log in"),)
+    title = "Welcome back hunter2" if echoed_in == "title" else "Sign in"
+    url = "https://hunter2.wall.test/account" if echoed_in == "host" else "https://shop.test/account"
+    obs = _at(url, *controls).model_copy(update={"title": title})
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=obs)
+    page.artifacts = ()
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([{"requirements": [], "answer_expected": False}]))
+    agent._redactor.register("PASSWORD", "hunter2")
+    agent._outwait = AsyncMock(return_value=False)
+    walled = _code_decision(Operation.CLICK, obs.controls[0]).model_copy(update={"login_required": 0.99})
+    monkeypatch.setattr(agent_module, "decide", AsyncMock(return_value=walled))
+
+    result = await agent.run("Open my orders", limits=Limits(max_steps=2))
+
+    assert result.status is Status.NEEDS_LOGIN
+    assert result.error is not None and "sign-in required" in result.error
+    assert "hunter2" not in result.error
 
 
 @pytest.mark.parametrize("change", ["document", "semantics", "sensitive"])
