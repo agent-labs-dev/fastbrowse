@@ -815,9 +815,12 @@ class Agent:
                 if (bot_check or not raw.controls) and await self._outwait(raw):
                     continue
                 if bot_check:
+                    # The address is the raw observation's, and an error is written out of the process, so a
+                    # secret typed earlier and echoed in another host is redacted here as in any other report.
                     raise _Stop(
                         Status.BLOCKED,
-                        f"bot check at {origin}; it is not a sign-in and no credential passes it. "
+                        f"bot check at {self._redactor.redact(origin)}; "
+                        "it is not a sign-in and no credential passes it. "
                         "Retry using an attached local browser or choose another source for this research.",
                         evidence=await self._wall_quotes(raw),
                     )

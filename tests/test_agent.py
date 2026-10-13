@@ -2762,6 +2762,32 @@ async def test_a_bot_check_that_clears_during_the_capture_cites_nothing() -> Non
     assert result.evidence == ()
 
 
+async def test_a_bot_check_stop_reports_no_secret_the_wall_echoes() -> None:
+    """The wall's quote and the stop's address are written out of the process, so a held secret is kept out."""
+    wall = "https://hunter2.wall.test/challenge?token=hunter2"
+    captcha = _at(wall, _button("Verify you are human"))
+    page = Mock(spec=Page)
+    page.observe = AsyncMock(return_value=captcha)
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "Blocked request for hunter2"), url=wall))
+    page.artifacts = ()
+    agent = Agent(
+        page,
+        ScriptedJev({}, noul=0.9),
+        ScriptedLLM([{"requirements": [], "answer_expected": False}]),
+        secrets=ScopedSecrets({"PASSWORD": "hunter2"}, "https://shop.test"),
+    )
+    agent._outwait = AsyncMock(return_value=False)
+    # As if typed on the shop earlier in the run: only a resolved secret is known to the redactor.
+    agent._redactor.register("PASSWORD", "hunter2", "https://shop.test")
+
+    result = await agent.run("Open my orders", limits=Limits(max_steps=2))
+
+    assert result.status is Status.BLOCKED
+    assert result.evidence and result.error is not None
+    reported = [result.error, *(item.quote for item in result.evidence), *(item.url for item in result.evidence)]
+    assert not any("hunter2" in text for text in reported)
+
+
 async def test_a_bot_check_stop_survives_a_capture_that_fails() -> None:
     captcha = _at("https://shop.test/login", _button("Verify you are human"))
     page = Mock(spec=Page)
