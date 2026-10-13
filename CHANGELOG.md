@@ -21,6 +21,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   credentials, the run reads it first, so a public list whose only sign-in box is for posting a reply, or
   its empty state, is answered. A `needs_login` error now names its evidence: the credential fields the page
   asks for, or a read of the page that found nothing requested.
+- A model call through OpenRouter that reports no cost, such as a request that timed out, is charged at a
+  `bounded` cost: its model's whole context window at the highest price any of its routes lists. A run with a
+  dollar cap keeps going within that bound instead of stopping, and a call whose price has no ceiling still
+  stops it.
 
 ## [0.5.20] - 2026-10-09
 
