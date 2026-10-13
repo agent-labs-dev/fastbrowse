@@ -224,6 +224,12 @@ ENTRY = "https://example.test/entry"
         ("Open `/account/orders?page=2`, then read it.", ("https://example.test/account/orders?page=2",)),
         ("Sign in at (/login).", ("https://example.test/login",)),
         (f"Open /login, then {ALPHA}", (ALPHA, "https://example.test/login")),
+        ("Read /wiki/Example_(topic).", ("https://example.test/wiki/Example_(topic)",)),
+        ("Open /search?tags=red,blue and report", ("https://example.test/search?tags=red,blue",)),
+        ("Sign in at /login.", ("https://example.test/login",)),
+        ("Sign in at the form (see /login)", ("https://example.test/login",)),
+        ("Sign in at **/login** now", ("https://example.test/login",)),
+        ("Open /login?next=/settings#top, then report", ("https://example.test/login?next=/settings#top",)),
     ],
 )
 def test_a_path_named_in_the_task_is_an_address_on_the_caller_start_site(task: str, expected: tuple[str, ...]) -> None:

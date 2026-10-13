@@ -7,8 +7,23 @@ from urllib.parse import urljoin, urlsplit
 from fastbrowse.origins import origin_of
 
 # A path the task names on its own, such as "sign in at /login". It must open a word, so a fraction, a rate or
-# "and/or" is not one, and its first character must not be a slash, so it never names another host.
-_TASK_PATH = re.compile(r"(?<![^\s\"'`(\[<])/[A-Za-z0-9_~-][^\s<>\"'`()\[\]{},;]*")
+# "and/or" is not one, and its first character must not be a slash, so it never names another host. Its body is
+# read like an absolute address's, so "/wiki/Example_(topic)" or "/search?tags=red,blue" is not cut short.
+_TASK_PATH = re.compile(r"(?<![^\s\"'`(\[<*_])/[A-Za-z0-9_~-][^\s<>\"`]*")
+_SENTENCE_END = ".,;:'\u2019\u201d\u2026"
+
+
+def _trimmed(task: str, match: re.Match[str], sentence_end: str = _SENTENCE_END) -> str:
+    """The address a match names, without the sentence punctuation or unmatched wrapper that closes around it."""
+    url = match.group().rstrip(sentence_end)
+    for marker in ("**", "__", "*", "_"):
+        if task[: match.start()].endswith(marker) and url.endswith(marker):
+            url = url[: -len(marker)]
+            break
+    for left, right in (("(", ")"), ("[", "]"), ("{", "}")):
+        while url.endswith(right) and url.count(right) > url.count(left):
+            url = url[:-1]
+    return url
 
 
 def task_urls(task: str, *, start: str | None = None, include_start: bool = True) -> tuple[str, ...]:
@@ -16,14 +31,7 @@ def task_urls(task: str, *, start: str | None = None, include_start: bool = True
     task = re.sub(r"([,;])(?=https?://)", r"\1 ", task, flags=re.IGNORECASE)
     task = task.replace("](", "] (")
     for match in re.finditer(r"https?://[^\s<>\"`]+", task, re.IGNORECASE):
-        url = match.group().rstrip(".,;:'\u2019\u201d\u2026")
-        for marker in ("**", "__", "*", "_"):
-            if task[: match.start()].endswith(marker) and url.endswith(marker):
-                url = url[: -len(marker)]
-                break
-        for left, right in (("(", ")"), ("[", "]"), ("{", "}")):
-            while url.endswith(right) and url.count(right) > url.count(left):
-                url = url[:-1]
+        url = _trimmed(task, match)
         if not _valid_address(url):
             continue
         urls[url] = None
@@ -31,7 +39,8 @@ def task_urls(task: str, *, start: str | None = None, include_start: bool = True
         # An entry page with nothing on it left a run told to "sign in at /login" with no address to open, so it
         # stopped stuck. The caller gave the path for the site they started the run on, so it resolves there.
         for match in _TASK_PATH.finditer(task):
-            url = urljoin(start, match.group().rstrip(".:!?"))
+            # A path asked about in a question ends the sentence with "?", which an address does not.
+            url = urljoin(start, _trimmed(task, match, _SENTENCE_END + "!?"))
             if _valid_address(url):
                 urls[url] = None
         if include_start:
