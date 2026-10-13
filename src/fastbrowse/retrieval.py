@@ -764,6 +764,11 @@ def _counted_collections(
             members = [empty]
         if not members or members[-1].end > read_end:
             continue
+        if capture.inaccessible_frames and (members[0].list_id is None or not members[0].list_frameless):
+            # An unopened frame could hold members of a list known only by adjacency; an advertisement frame
+            # elsewhere on the page used to withhold coverage from a list read in full, so a correct finding
+            # of none was rejected on whichever run its frame did not load.
+            continue
         if count is not None:
             total = members[0].list_count
             if total is None:
@@ -1734,7 +1739,7 @@ async def read(
         _counted_collections(
             capture, [key for key in requirement_ids if key not in blocked], part.end, requirements, targets
         )
-        if not notice and not capture.inaccessible_frames
+        if not notice
         else ()
     )
     if field_outputs:

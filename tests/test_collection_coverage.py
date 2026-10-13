@@ -342,3 +342,75 @@ def test_the_last_requirement_left_still_needs_its_target_named(title, covered):
     requirements = _requirements("Report reviews for Elm.", "Report reviews for Rowan.")
     facts = _counted_collections(page, ["r1"], len(page.text), requirements[1:], requirements)
     assert {f.comparison.requirement_id for f in facts if isinstance(f, CollectionFact)} == covered
+
+
+@pytest.mark.parametrize(
+    ("members", "covered"),
+    [("frameless list", True), ("list holding a frame", False), ("adjacent records", False)],
+)
+async def test_an_unopened_frame_outside_a_list_leaves_its_finding_of_none_supported(members, covered):
+    """An advertisement frame that did not load left a fully read "Comments (2)" without coverage, so the
+    output audit rejected "no feature requests" while agreeing that none of the comments asked for one."""
+    import json
+
+    from fastbrowse.memory import fact_id
+    from fastbrowse.planner import Requirement, RequirementKind
+    from fastbrowse.retrieval import Claim, FieldAnswer, assemble_answer
+    from fastbrowse.verification import _output_context, check_answer_outputs
+    from tests.test_answer_repair import RoutingJev
+
+    page = capture(
+        (BlockKind.HEADING, "Birch"),
+        (BlockKind.HEADING, "Comments (2)"),
+        (BlockKind.RECORD, "Elm: The map crashes on load."),
+        (BlockKind.RECORD, "Oak: Thanks for the update."),
+    )
+    listed = {"list_id": "comments", "list_count": 2, "list_frameless": members == "frameless list"}
+    page = page.model_copy(
+        update={
+            "inaccessible_frames": 1,
+            "blocks": tuple(
+                block.model_copy(
+                    update={
+                        "heading_path": ("Birch",) if i else (),
+                        **(listed if i > 1 and members != "adjacent records" else {}),
+                    }
+                )
+                for i, block in enumerate(page.blocks)
+            ),
+        }
+    )
+    requirement = Requirement(id="r", text="Report feature requests for Birch.", kind=RequirementKind.INFORMATION)
+    notes = Notes()
+    await read(
+        ScriptedLLM([{"claims": [], "answered": False, "collections": []}]),
+        page,
+        requirement.text,
+        ["r"],
+        notes,
+        preserve_collections=True,
+        field_outputs=True,
+    )
+    collections = [f for f in notes.facts if isinstance(f, CollectionFact) and f.comparison.complete]
+    assert bool(collections) is covered
+    if not covered:
+        return
+    check = "Report feature requests for Birch."
+    claim = Claim(text="Birch has no feature requests in its 2 comments.", evidence_ids=(fact_id(collections[0]),))
+    base = assemble_answer((claim,), notes, (requirement,))
+    answer = FieldAnswer(**base.model_dump(), output_claims={check: (0,)})
+    context = _output_context(answer, notes)
+    assert context is not None and context.claims[0].compared_records[0].complete
+
+    class CoverageJudge(ScriptedLLM):
+        async def generate(self, purpose, messages, schema, **kwargs):
+            if schema.__name__ != "_OutputIdentities":
+                field = json.loads(messages[-1].content)["criteria"]["output_0"]
+                claims = field.get("sources", field.get("reported_claims"))
+                complete = any(c["complete"] for claim in claims for c in claim["compared_records"])
+                self.responses.append(
+                    {"judgments": {"output_0": "yes" if complete else "no"}, "reason": "No comment asks for a feature."}
+                )
+            return await super().generate(purpose, messages, schema, **kwargs)
+
+    assert await check_answer_outputs(RoutingJev(), CoverageJudge([]), answer, notes, (check,))
