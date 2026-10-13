@@ -244,13 +244,15 @@ def exhausted(requests: int, seconds: float, last: str) -> str:
 
 def with_discarded(cost: CostLine, usage: RequestUsage) -> CostLine:
     """A Jev call's cost including requests raced and discarded: each carried the same input, so each is
-    charged as the one that answered, as an estimate."""
+    charged as the one that answered, as an estimate. A bound holds for any request with that input, so it
+    stays a bound."""
     if not usage.unaccounted_requests:
         return cost
     sent = 1 + usage.unaccounted_requests
+    basis = cost.basis if cost.basis in (CostBasis.UNKNOWN, CostBasis.BOUNDED) else CostBasis.ESTIMATED
     return cost.model_copy(
         update={
-            "basis": CostBasis.ESTIMATED if cost.dollars is not None else CostBasis.UNKNOWN,
+            "basis": CostBasis.UNKNOWN if cost.dollars is None else basis,
             "dollars": None if cost.dollars is None else cost.dollars * sent,
             "input_tokens": cost.input_tokens * sent,
         }

@@ -459,7 +459,10 @@ def _index_controls(controls: Sequence[Control]) -> dict[Operation, tuple[Contro
 
 
 def _offered_operations(
-    observation: Observation, indexed: Mapping[Operation, tuple[Control, ...]], context: StepContext
+    observation: Observation,
+    indexed: Mapping[Operation, tuple[Control, ...]],
+    context: StepContext,
+    urls: Sequence[str],
 ) -> tuple[Operation, ...]:
     if observation.dialog is not None:
         return (Operation.DIALOG, Operation.ESCALATE)
@@ -467,9 +470,7 @@ def _offered_operations(
     for operation in Operation:
         match operation:
             case Operation.NAVIGATE:
-                if navigation_urls(
-                    context.task, observation.url, start=context.start_url, start_landing=context.start_landing_url
-                ):
+                if urls:
                     available.append(operation)
             case Operation.CLICK | Operation.HOVER | Operation.FILL | Operation.SELECT | Operation.ENTER:
                 if operation in indexed:
@@ -511,7 +512,17 @@ def build_request(
     compact: bool = False,
 ) -> _Request:
     indexed = _index_controls(controls)
-    offered = _offered_operations(observation, indexed, context)
+    # Back from a form's result can land on a browser error page that asks to resubmit and has nothing to click,
+    # and the caller's start address, held back so a working form is not reopened and emptied, was then reachable
+    # only after recovery proposed it. A page with no controls, offered or omitted, has no form to lose.
+    urls = navigation_urls(
+        context.task,
+        observation.url,
+        start=context.start_url,
+        start_landing=context.start_landing_url,
+        include_start=not observation.controls and not observation.omitted_controls,
+    )
+    offered = _offered_operations(observation, indexed, context, urls)
     questions: dict[str, Question] = {
         "operation": ChoiceQuestion(
             instructions=NEXT_ACTION,
@@ -586,9 +597,6 @@ def build_request(
         )
     navigation_groups: tuple[tuple[str, ...], ...] = ()
     if Operation.NAVIGATE in offered:
-        urls = navigation_urls(
-            context.task, observation.url, start=context.start_url, start_landing=context.start_landing_url
-        )
         navigation = ChoiceQuestion(
             instructions=(
                 f"{UNTRUSTED}\nChoose the caller-supplied address that advances the next unanswered requirement. "
