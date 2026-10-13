@@ -66,7 +66,7 @@ from fastbrowse.models import (
     Unavailable,
     UntilCheck,
 )
-from fastbrowse.navigation import navigation_urls, task_urls
+from fastbrowse.navigation import navigation_urls, same_address, task_urls
 from fastbrowse.page import (
     Action,
     ActResult,
@@ -268,6 +268,11 @@ class _Recovery(Frozen):
         description="With give_up: true when what the user must supply is a value the task never gave, such as a "
         "field it names no value for; false for any other dead end.",
     )
+    needs_login: bool = Field(
+        default=False,
+        description="With give_up: true when a sign-in page or prompt is what blocks the task and no stored secret "
+        "covers it; false for any other dead end.",
+    )
 
 
 class _Stop(Exception):
@@ -406,6 +411,8 @@ class _RunState:
     attempts: dict[Signature, _Attempts] = field(default_factory=dict[Signature, "_Attempts"])
     """What became of each action taken from each page state, which is how a cycle is told from progress."""
     last_page: tuple[str, str] | None = None
+    passed_wall: str | None = None
+    """The address of a sign-in wall an access inspection read instead of stopping on."""
     reached: dict[str, int] = field(default_factory=dict[str, int])
     """Each page state and the action count when it was first reached."""
     reached_with_evidence: dict[str, frozenset[tuple[str, str | None, str]]] = field(default_factory=dict)
@@ -908,6 +915,7 @@ class Agent:
                 plan = await state.await_plan()
                 if not _access_inspection(plan):
                     raise _Stop(Status.NEEDS_LOGIN, f"sign-in required at {origin}")
+                state.passed_wall = raw.url
                 # A task inspecting an access boundary needs its observed wall read and verified, not passed.
                 decision = _code_decision(Operation.READ, None)
             uncertain = decision.confidence < self._config.thresholds.recover_below
@@ -1697,6 +1705,17 @@ class Agent:
             return (await self._page.screenshot(),)
         except ScreenshotsUnavailable:
             return ()
+
+    def _walled(self, state: _RunState, observation: Observation, status: Status, *, said: bool = False) -> Status:
+        """Stuck becomes needs_login when a sign-in is what the run stopped at: an owner-controls audit escalated
+        on an SSO page until recovery ran out, and another gave up saying credentials were required, and both
+        reported stuck, which tells the caller to narrow the task rather than sign in."""
+        if status is not Status.STUCK:
+            return status
+        walled = said or (state.passed_wall is not None and same_address(state.passed_wall, observation.url))
+        # A held secret makes the sign-in work the run can do, so a run holding one did not stop for want of it.
+        origin = origin_of(observation.url)
+        return Status.NEEDS_LOGIN if walled and not (origin and self._secret_names(origin)) else status
 
     def _secret_names(self, origin: str) -> tuple[str, ...]:
         """Stored secrets this origin may receive. With any, a sign-in wall is a step to take, not a stop."""
@@ -2997,7 +3016,7 @@ class Agent:
             if state.http_failure is not None and gives_up_as is not Status.NEEDS_INPUT:
                 raise state.http_failure.stop()
             detail = f"{reason}\nStill to find:\n{open_requirements}" if open_requirements else reason
-            raise _Stop(gives_up_as, detail)
+            raise _Stop(self._walled(state, observation, gives_up_as), detail)
         destinations = navigation_urls(
             state.task,
             observation.url,
@@ -3145,7 +3164,7 @@ class Agent:
                 if generation.data.needs_input
                 else Status.UNVERIFIED
                 if gives_up_as is Status.UNVERIFIED
-                else Status.STUCK
+                else self._walled(state, observation, Status.STUCK, said=generation.data.needs_login)
             )
             if state.http_failure is not None and status is not Status.NEEDS_INPUT:
                 raise state.http_failure.stop()
