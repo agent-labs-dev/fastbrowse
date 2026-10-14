@@ -76,6 +76,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   page from being recorded as read in full, so a finding of none over that list passes its check on every run
   rather than only on runs where the frame loaded. A list that holds a frame, or one known only by adjacent
   records, still needs every frame on the page read.
+- A run that stops at a sign-in wall ends `needs_login` rather than `stuck`: an access inspection that
+  read the wall and could not go on from it, or recovery giving up because a sign-in blocks the task and no
+  stored secret covers the site.
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
 - Answers whose combined evidence exceeds a prompt are composed and verified in requirement groups, with
