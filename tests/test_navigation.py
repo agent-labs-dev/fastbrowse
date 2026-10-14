@@ -6,7 +6,7 @@ from fastbrowse.agent import Agent, _code_decision, _follow_recovery, _Stop, _Un
 from fastbrowse.config import Config
 from fastbrowse.jev import ChoiceQuestion
 from fastbrowse.models import Operation, Status
-from fastbrowse.navigation import task_urls
+from fastbrowse.navigation import navigation_urls, task_urls
 from fastbrowse.page import Dialog, Observation, Page
 from fastbrowse.policy import build_request, decide
 from tests.test_agent import run_state
@@ -212,6 +212,64 @@ async def test_recovery_navigation_revalidates_the_destination(url: str, uncerta
         assert decision is not None and decision.operation is Operation.NAVIGATE and decision.url == BETA
     else:
         assert decision is None
+
+
+ENTRY = "https://example.test/entry"
+
+
+@pytest.mark.parametrize(
+    ("task", "expected"),
+    [
+        ("Sign in at /login as a@example.test", ("https://example.test/login",)),
+        ("Open `/account/orders?page=2`, then read it.", ("https://example.test/account/orders?page=2",)),
+        ("Sign in at (/login).", ("https://example.test/login",)),
+        (f"Open /login, then {ALPHA}", (ALPHA, "https://example.test/login")),
+        ("Read /wiki/Example_(topic).", ("https://example.test/wiki/Example_(topic)",)),
+        ("Open /search?tags=red,blue and report", ("https://example.test/search?tags=red,blue",)),
+        ("Sign in at /login.", ("https://example.test/login",)),
+        ("Sign in at the form (see /login)", ("https://example.test/login",)),
+        ("Sign in at **/login** now", ("https://example.test/login",)),
+        ("Open /login?next=/settings#top, then report", ("https://example.test/login?next=/settings#top",)),
+    ],
+)
+def test_a_path_named_in_the_task_is_an_address_on_the_caller_start_site(task: str, expected: tuple[str, ...]) -> None:
+    assert navigation_urls(task, ENTRY, start=ENTRY) == expected
+
+
+@pytest.mark.parametrize(
+    ("task", "expected"),
+    [
+        ("Open it 24/7 and/or tell me 1/2 of the price in $/kg", ()),
+        ("Read the / page", ()),
+        ("Open //other.example.test/login", ()),
+        ("Read the review at /entry", ()),
+        (f"Open {ALPHA}/issues", (f"{ALPHA}/issues",)),
+    ],
+)
+def test_text_that_is_not_another_path_on_the_site_names_no_address(task: str, expected: tuple[str, ...]) -> None:
+    assert navigation_urls(task, ENTRY, start=ENTRY) == expected
+
+
+def test_a_path_names_no_address_without_a_caller_start() -> None:
+    assert navigation_urls("Sign in at /login", ENTRY) == ()
+
+
+async def test_a_bare_entry_page_offers_the_sign_in_path_the_task_names() -> None:
+    jev = ScriptedJev({"operation": "navigate", "navigate_target": "0"})
+    page = observation(()).model_copy(update={"url": ENTRY})
+    decision = await decide(jev, page, context(task="Sign in at /login as a@example.test", start_url=ENTRY), Config())
+    assert (decision.operation, decision.url) == (Operation.NAVIGATE, "https://example.test/login")
+
+
+async def test_action_opens_a_path_the_task_names_on_the_caller_start_site() -> None:
+    jev = ScriptedJev({}, noul=0.99)
+    agent = Agent(Mock(spec=Page), jev, ScriptedLLM([]))
+    state = await run_state()
+    state.caller_start = ENTRY
+    state.task = "Sign in at /login as a@example.test"
+    decision = _code_decision(Operation.NAVIGATE, None).model_copy(update={"url": "https://example.test/login"})
+    action = await agent._action(state, observation(()), decision, gate=False)
+    assert action.url == "https://example.test/login"
 
 
 def test_explicit_start_is_available_without_repeating_it_in_task() -> None:

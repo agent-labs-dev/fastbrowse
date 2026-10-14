@@ -70,6 +70,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   check its browser with `fastbrowse.evals.live_tasks.browser_refusal` before it starts; a headed window, a kept
   profile or a cloud browser is admitted. Public-site results that do not record their browser, or record one
   that is malformed or unknown, are refused as well.
+- A path the task names on its own, such as "sign in at /login", is an address on the caller's start site, so a
+  run that lands on an empty entry page can open it instead of stopping stuck.
 
 ## [0.5.20] - 2026-10-09
 
