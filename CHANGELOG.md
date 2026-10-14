@@ -72,6 +72,65 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   that is malformed or unknown, are refused as well.
 - A path the task names on its own, such as "sign in at /login", is an address on the caller's start site, so a
   run that lands on an empty entry page can open it instead of stopping stuck.
+- A frame the capture cannot open, such as an advertisement, no longer keeps a counted list elsewhere on the
+  page from being recorded as read in full, so a finding of none over that list passes its check on every run
+  rather than only on runs where the frame loaded. A list that holds a frame, or one known only by adjacent
+  records, still needs every frame on the page read.
+- Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
+  matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
+- Answers whose combined evidence exceeds a prompt are composed and verified in requirement groups, with
+  comparisons kept together. Each verified field survives a sibling field's failure. Recovery reads only
+  open fields and rechecks groups whose evidence changed; evidence that cannot fit even one group returns
+  an unverified partial answer. Captured source size selects this path before reader excerpts can shrink
+  the evidence. Newly read source pages and complete collections renew recovery once each. Oversized
+  verification requests share repeated source quotes while keeping every claim and its citations.
+- Answer recovery retains each collection's records and identifying context when a later
+  conclusion combines them. Collection coverage is kept even when another requested field remains open.
+  Page totals must match the captured list members to establish complete coverage. Collection quotes
+  retain their enclosing heading and identifying context. Explicit empty states
+  retain their source quotes. Recovery reuses this coverage from earlier reads. Partial collections cannot
+  support a finding that no members match. Citing every record and its boundary preserves that proven
+  coverage even when the answer cites their quotes directly. In a task with more than one target, a counted list
+  covers a target only when its page names that target, including when that target is the last one left to read.
+- Answers split across prompts check record categories and speaker roles against literal source quotes. Reader
+  paraphrases cannot supply missing names or values. Newly verified fields renew recovery once each.
+- Verified answer groups remain cached when summaries reuse the same sources. Changed evidence causes a
+  fresh check of the existing answer before a replacement is composed.
+- Answer recovery cites underlying quotes instead of superseded prose. Composition uses the
+  same source references, keeping retired quotes and incomplete collections subject to verification.
+- Search-field writing receives unresolved requirements and unverified outputs during answer recovery.
+- Recovery reads that add missing source evidence retry answer verification before more browsing.
+  Repeated quotes cannot trigger another attempt. Partitioned and recovered finishes check each target's
+  requested fields separately, with claims bound to their fields. Empty fields cannot borrow another
+  field's evidence. Collections read to their end support explicit bounded absence findings, which survive
+  answer correction and reader-fact fallback.
+- Recovery opens an observed unread section for a missing target field and reads it before choosing another
+  action. Sections already read are excluded. A target whose name contains "for", such as "Leatrix Plus for
+  Classic", is matched by its whole name. Scrolling fully read content without loading more does not
+  count as progress during output recovery.
+- Grouped answers audit retained quotes even when separate reads leave a bundled requirement open.
+  Verified fields bind their source evidence before the normal completion check. Readers and grouped
+  composers leave links fields open unless their sources quote a destination, including a written hostname.
+  Initial grouping and recovery
+  retain a target's quotes without treating source ownership as verified completion.
+- A rejected grouped answer keeps its current source quotes and collection scope. Missing outputs stay open,
+  and unchanged evidence cannot trigger another grouped completion check. Answers that fit one prompt
+  reopen their information requirements for another read and check. Changed or misread sources still lose
+  their requirement bindings. Field repairs receive the rejection reason alongside retained complete
+  collection coverage, so they can distinguish missing evidence from a misclassified record.
+- Returning to a form with newly read prerequisite evidence renews recovery once for that state and those
+  sources. Repeated quotes, paraphrases and values put back do not renew it.
+
+- Missing answer outputs and subject citations can be repaired from retained quotes before browsing again.
+  Recovery keeps the returned answer's failure reason, checks whether a page adds evidence, and reads new
+  pages with bounded prior notes.
+  Explicit empty-result messages support findings of no records within the quoted page's scope.
+
+- Multi-project tasks retain earlier sources for navigation and verify answers with explicit output checks
+  without requiring an unused whole-notes check to fit the evidence budget.
+  Form field writing keeps each note's literal source quote where it fits.
+- Independent named targets have separate reading requirements. Newly evidenced targets renew recovery on
+  revisited lists, remaining requirements guide action choices, and partial answers retain findings across sources.
 
 ## [0.5.20] - 2026-10-09
 
