@@ -6,12 +6,14 @@ import pytest
 from pydantic import JsonValue
 
 from fastbrowse import agent as agent_module
-from fastbrowse.agent import Agent
+from fastbrowse.agent import Agent, _Stop
 from fastbrowse.browser import BrowserSession, CdpPage
 from fastbrowse.config import Config, ObservationLimits
 from fastbrowse.jev import Answer, Evaluation, NoulAnswer, NoulQuestion, Question
 from fastbrowse.models import CostBreakdown, RunResult, Status
+from fastbrowse.planner import Plan, Requirement, RequirementKind
 from tests.browser.test_browser import eval_value, observe_until
+from tests.test_agent import run_state
 from tests.test_policy import FREE, ScriptedJev
 from tests.test_retrieval import ScriptedLLM
 
@@ -53,6 +55,39 @@ async def test_a_sign_in_form_is_still_a_sign_in(page: CdpPage, main_site: str) 
     result = await Agent(page, WallJev(bot_check=0.05), ScriptedLLM([PLAN])).run("Find the release date")
     assert result.status is Status.NEEDS_LOGIN
     assert result.error is not None and "sign-in required" in result.error
+    # The stop names the page's own evidence, the credentials it asks for.
+    assert "the page asks for Password" in result.error
+
+
+@pytest.mark.parametrize("readable", [True, False])
+async def test_a_log_in_to_reply_box_does_not_wall_off_an_empty_comment_list(
+    page: CdpPage, main_site: str, readable: bool
+) -> None:
+    await page.navigate(f"{main_site}/comments-empty.html")
+    observation = await observe_until(page, "Log in to reply")
+    agent = Agent(page, WallJev(bot_check=0.05), ScriptedLLM([]))
+    state = await run_state()
+    state.task = "Read the comments on Project Birch, or say there are none. Read only."
+    plan = Plan(
+        requirements=(Requirement(id="r", text=state.task, kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    captured = await page.capture()
+    empty = next(block for block in captured.blocks if "Be the first" in captured.text[block.start : block.end])
+    cite: dict[str, JsonValue] = {"first": empty.source_id, "last": empty.source_id}
+    claims: list[JsonValue] = (
+        [{"text": "There are no comments", "requirement_id": "r", "cite": cite}] if readable else []
+    )
+    agent._llm = ScriptedLLM([{"claims": claims, "answered": readable}])
+    if readable:
+        await agent._meet_wall(state, observation, observation, plan)
+        quotes = [fact.evidence.quote for fact in state.notes.facts if fact.evidence is not None]
+        assert "Be the first to post a comment and get the discussion started." in quotes
+    else:
+        with pytest.raises(_Stop) as stopped:
+            await agent._meet_wall(state, observation, observation, plan)
+        assert stopped.value.status is Status.NEEDS_LOGIN
+        assert stopped.value.error is not None and "reading Birch comments found none" in stopped.value.error
 
 
 async def test_the_pager_and_load_more_at_the_foot_of_a_long_listing_are_still_offered(

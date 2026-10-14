@@ -97,7 +97,10 @@ def local_chrome(options: LocalChrome) -> Generator[BrowserConnection]:
                 f"--user-data-dir={profile}",
                 "--no-first-run",
                 "--disable-popup-blocking",
-                "about:blank",
+                # A headless tab opened beside the startup tab sometimes never presented a frame: one run in five
+                # had no screencast and a screenshot that never returned. Without a startup window, the run's tab
+                # opens in a window of its own, as headless Chrome's first tab, and that tab always painted.
+                *(("about:blank",) if options.headed else ("--no-startup-window",)),
             ],
             stdout=subprocess.DEVNULL,
             stderr=log,

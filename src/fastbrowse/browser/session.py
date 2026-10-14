@@ -41,6 +41,9 @@ from fastbrowse.page import BrowserError, BrowserUnavailable, Dialog, Tab
 logger = logging.getLogger(__name__)
 
 _SCREENCAST_COMMAND_SECONDS = 0.5
+_FRAME_RELEASE_SECONDS = 2.0
+"""How long closing waits for a cancelled frame callback. The callback is the caller's code, and one that swallows
+its cancellation held the run open with no result while its cloud browser went on billing."""
 CDP_REPLY_SECONDS = 60.0
 """How long a CDP command waits before the browser is asked whether it is still there. A cloud browser's proxy can
 keep the socket open, answering pings, after losing the browser behind it, and a run with no wall-clock limit would
@@ -135,7 +138,18 @@ class _Frame:
     session_id: str | None
 
 
+_APPROVAL_HINT = (
+    "If this is a Chrome you started yourself, it may be waiting for you to approve remote debugging, "
+    "or the address may be stale; check the browser window and the address, then retry."
+)
+
+
 class _BrowserClient(CDPClient):
+    _answered = False
+    """Whether the browser has replied to anything on this connection. Chrome can accept the socket and then hold
+    every command while its remote debugging approval prompt waits, which would otherwise read as a lost browser
+    only after CDP_REPLY_SECONDS."""
+
     async def start(self) -> None:
         try:
             await super().start()
@@ -143,8 +157,7 @@ class _BrowserClient(CDPClient):
             if _unreachable(exc):
                 raise BrowserUnresponsive(
                     f"CDP.start failed ({type(exc).__name__}): the browser did not complete the DevTools handshake. "
-                    "If this is a Chrome you started yourself, it may be waiting for you to approve remote debugging, "
-                    "or the address may be stale; check the browser window and the address, then retry."
+                    + _APPROVAL_HINT
                 ) from exc
             raise _browser_error("CDP.start", exc) from exc
 
@@ -159,10 +172,19 @@ class _BrowserClient(CDPClient):
         try:
             try:
                 async with asyncio.timeout(CDP_COMMAND_SECONDS):
-                    while not (await asyncio.wait({reply}, timeout=CDP_REPLY_SECONDS))[0]:
+                    while not (
+                        await asyncio.wait({reply}, timeout=CDP_REPLY_SECONDS if self._answered else CDP_ALIVE_SECONDS)
+                    )[0]:
                         # A reply that landed while the probe waited still counts, however the probe ended.
                         if not await self._alive() and not reply.done():
+                            if not self._answered:
+                                raise BrowserUnresponsive(
+                                    f"{method} got no reply: the browser accepted the DevTools connection but has "
+                                    "not answered anything on it. " + _APPROVAL_HINT
+                                )
                             raise BrowserUnresponsive(f"{method} got no reply, and the browser stopped answering")
+                    # An error reply is an answer too: the browser is there and reading the connection.
+                    self._answered = True
                     return reply.result()
             except TimeoutError:
                 raise BrowserUnresponsive(f"{method} exceeded its command deadline; the page did not answer") from None
@@ -188,6 +210,7 @@ class _BrowserClient(CDPClient):
                 await super().send_raw("Browser.getVersion")
         except Exception:  # no answer, or a closed socket: either way nothing is there to reply
             return False
+        self._answered = True
         return True
 
 
@@ -260,6 +283,7 @@ class BrowserSession:
         self._screencast_lock = asyncio.Lock()
         self._pending_frame: _Frame | None = None
         self._frame_scheduled = False
+        self._delivery: asyncio.Task[None] | None = None
         self._frame_sessions: dict[str, str] = {}
         """OOPIF frame_id -> session_id, keyed by target id per the plan's `frameId/targetId` guidance."""
         self._frame_parents: dict[str, str] = {}
@@ -459,8 +483,13 @@ class BrowserSession:
         background = list(self._background)
         for task in background:
             task.cancel()
+        delivery = self._delivery
         # Download finalizers still need the socket to release intercepted requests.
-        await asyncio.gather(*background, return_exceptions=True)
+        await asyncio.gather(*(task for task in background if task is not delivery), return_exceptions=True)
+        if delivery is not None and delivery in background:
+            await asyncio.wait({delivery}, timeout=_FRAME_RELEASE_SECONDS)
+            if not delivery.done():
+                logger.warning("The frame callback ignored cancellation; closing without it")
         if self._screencast_session_id is not None:
             await self._screencast_command("Page.stopScreencast", None, self._screencast_session_id)
             self._screencast_session_id = None
@@ -644,13 +673,14 @@ class BrowserSession:
             client.register.Page.screencastFrame(self._on_screencast_frame)
         client.register.Fetch.requestPaused(self._on_request_paused)
 
-    def _spawn(self, coro: Coroutine[None, None, None]) -> None:
+    def _spawn(self, coro: Coroutine[None, None, None]) -> asyncio.Task[None] | None:
         if self._closing:
             coro.close()
-            return
+            return None
         task = asyncio.ensure_future(coro)
         self._background.add(task)
         task.add_done_callback(self._background_finished)
+        return task
 
     def _background_finished(self, task: asyncio.Task[None]) -> None:
         self._background.discard(task)
@@ -822,7 +852,7 @@ class BrowserSession:
         self._pending_frame = frame
         if not self._frame_scheduled:
             self._frame_scheduled = True
-            self._spawn(self._deliver_frames())
+            self._delivery = self._spawn(self._deliver_frames())
 
     def _ack(self, frame: _Frame) -> None:
         self._spawn(self._screencast_command("Page.screencastFrameAck", {"sessionId": frame.ack_id}, frame.session_id))

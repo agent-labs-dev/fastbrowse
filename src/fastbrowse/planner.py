@@ -12,7 +12,7 @@ from typing import Self
 from pydantic import Field, model_validator
 
 from fastbrowse.llm import Generation, LLMClient, Message
-from fastbrowse.models import CostBasis, Frozen, Limits, LLMPurpose
+from fastbrowse.models import CostBasis, Frozen, Limits, LLMPurpose, combined_basis
 from fastbrowse.telemetry import Ledger
 
 
@@ -206,13 +206,7 @@ async def make_plan(
         if ledger is None:
             # Without an external ledger the returned line accounts for both calls, rather than hiding the repair.
             lines = (generated.cost, repaired.cost)
-            basis = (
-                CostBasis.UNKNOWN
-                if any(line.dollars is None or line.basis is CostBasis.UNKNOWN for line in lines)
-                else CostBasis.ESTIMATED
-                if any(line.basis is CostBasis.ESTIMATED for line in lines)
-                else CostBasis.METERED
-            )
+            basis = CostBasis.UNKNOWN if any(line.dollars is None for line in lines) else combined_basis(lines)
             cost = cost.model_copy(
                 update={
                     "basis": basis,

@@ -686,6 +686,10 @@ async def check_answer_outputs(
                     "supply identity evidence. For each criterion return scope entities and every requested "
                     "subject's offered source_ref and exact identifying quote from its body or captured page title. "
                     "Copy only the entity name or identifying description, not the reported field value. "
+                    # A table row named only by its reference left a strict reading with no legal quote, so every
+                    # binding came back unresolved and a finished run ended stuck.
+                    "When a record's only identifier is itself a requested field, such as an order reference, "
+                    "quote that identifier for each of the record's outputs. "
                     "Code-captured control context binds a quote to its actual hovered DOM ancestor "
                     "and sibling position; "
                     "it can identify a positional subject but cannot supply an absent quoted value. "

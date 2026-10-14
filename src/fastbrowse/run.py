@@ -58,6 +58,16 @@ async def resolve_cdp_port(port: int, host: str = "127.0.0.1", *, http: httpx.As
             response = await client.get(endpoint)
             response.raise_for_status()
             version = response.json()
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status != 404:
+            raise BrowserError(f"{endpoint} answered {status}, so it names no DevTools websocket") from None
+        # Chrome's remote debugging switch at chrome://inspect serves the websocket but not this discovery route.
+        raise BrowserError(
+            f"{endpoint} answered 404, so it names no DevTools websocket. A Chrome whose remote debugging was "
+            "turned on at chrome://inspect serves none here: its DevToolsActivePort file holds the port on the "
+            "first line and the browser path on the second, so pass ws://127.0.0.1:<port><path> as cdp_url instead."
+        ) from None
     except (httpx.HTTPError, ValueError) as exc:
         raise BrowserError(f"no DevTools endpoint at {endpoint} ({type(exc).__name__})") from None
     ws_url = version.get("webSocketDebuggerUrl") if isinstance(version, dict) else None
@@ -256,12 +266,14 @@ async def run_task(
     delivers no live frames or screenshots and cannot `record`, since pixels cannot be attributed to a document.
 
     `check_access` is awaited before browser startup and every observation, capture, screenshot, address, navigation
-    and action, scoped or not. If it raises, the run stops with a `BrowserError` and the exception's text is not kept.
+    and action, scoped or not. If it raises, `run_task` returns a `RunResult` with status `error` and `connect_cdp`
+    raises a `BrowserError`; either error names only the exception's type, and its text is not kept.
 
     Files the run downloads are discarded unless `downloads` names a directory to keep them in. `record` saves
     an MP4 of the tab, ending on the answer; it needs ffmpeg, and shows whatever the pages showed.
     `on_frame` receives JPEG bytes from the active tab. Frames are acknowledged after delivery, with no fixed
     frame rate; only the latest pending frame is kept. Handler failures are logged without interrupting the run.
+    A handler still running when the run ends is cancelled, and the run waits at most two seconds for it to stop.
     Live frames and recordings are held back while a resolved secret shows on the page, as PNG step frames are.
     No handler means no live capture.
 
