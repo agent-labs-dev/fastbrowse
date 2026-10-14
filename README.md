@@ -204,6 +204,7 @@ optional object, so callers can identify the affected limit without parsing an e
 
 A bot check can block a cloud browser before any task steps execute. Retry with an attached local browser
 or choose another source for the research. Credentials do not resolve a CAPTCHA.
+The `blocked` result's `evidence` quotes the opening text of the challenge page, with its address.
 
 If a model completion omits its cost, fastbrowse looks up the matching OpenRouter or Vercel generation
 receipt. If that receipt is still unavailable, a run with a dollar cap stops with `budget_exceeded`;
@@ -213,6 +214,9 @@ without a field-writing generation.
 A browser command that remains unanswered for 120 seconds returns `unavailable`, even if the browser
 still answers health checks. Step and dollar limits do not bound total elapsed time. Set `Limits(max_seconds=...)` for a run deadline.
 When investigating a stalled run, enable trace logging and retain the last event alongside the result.
+
+[Troubleshooting](docs/troubleshooting.md) takes each status a run can stop with: what it means, its common
+causes and the next step.
 
 ## How it works
 

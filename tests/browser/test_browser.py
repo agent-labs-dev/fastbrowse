@@ -12,8 +12,10 @@ from typing import Any
 
 import pytest
 
+from fastbrowse.adapters.local_chrome import find_chrome, local_chrome
 from fastbrowse.browser.page import CdpPage
 from fastbrowse.browser.session import BrowserSession
+from fastbrowse.clients.environment import load_settings
 from fastbrowse.config import Config, ObservationLimits
 from fastbrowse.effects import effect
 from fastbrowse.models import Attachment, BrowserConnection, Operation, StepOutcome
@@ -276,6 +278,39 @@ async def test_confirm_dialog_handled_via_dialog_operation(
         browser_session, browser_session.active_session_id, "document.getElementById('dialog-result').textContent"
     )
     assert value == "confirmed"
+
+
+async def test_unnamed_card_controls_are_named_by_their_icon_and_card(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    # A gallery's icon-only trash controls read "button" beside an edit link, so the choice picked the edit link or
+    # refused the trash control it could not tie to an image.
+    await page.navigate(f"{main_site}/gallery.html")
+    obs = await page.observe()
+    buttons = [(c.label, c.context) for c in obs.controls if c.role == "button"]
+    assert buttons == [
+        ("trash icon", "old-banner.png"),
+        ("trash icon", "new-banner.png"),
+        ("trash can icon", "old-logo.png"),
+        ("Delete image", None),
+        ("delete icon", "old-icon.png"),
+        ("Remove from gallery", "new-icon.png"),
+        # The card's action row has its own caption, which every card repeats and which names no image.
+        ("x circle icon", "Alpha"),
+    ]
+    trash = next(c for c in obs.controls if c.label == "trash can icon")
+    result = await page.act(Action(operation=Operation.CLICK, target_id=trash.id), obs)
+    assert result.outcome is StepOutcome.EXECUTED
+    await wait_until(lambda: browser_session.pending_dialog() is not None)
+    confirm = await page.observe()
+    assert confirm.dialog is not None and confirm.dialog.message == "Delete old-logo.png?"
+    async with asyncio.timeout(10):
+        handled = await page.act(Action(operation=Operation.DIALOG, accept_dialog=True), confirm)
+    assert handled.outcome is StepOutcome.EXECUTED
+    status = "document.getElementById('status').textContent"
+    assert await eval_value(browser_session, browser_session.active_session_id, status) == "Deleted c3"
+    after = await page.observe()
+    assert [c.context for c in after.controls if c.label == "trash can icon"] == []
 
 
 async def test_identical_labels_carry_their_card_as_context(loaded_page: CdpPage) -> None:
@@ -1029,3 +1064,17 @@ async def test_hover_quote_context_does_not_attach_to_unrelated_or_reordered_con
         assert all(block.control_context is None for block in captured.blocks)
     if mutation == "mixed":
         assert "Revealed name" in captured.text and "Unrelated name" in captured.text
+
+
+async def test_a_headless_run_tab_has_a_window_of_its_own_and_paints() -> None:
+    """A tab opened beside headless Chrome's startup tab sometimes never presented a frame, so its screencast sent
+    nothing and a screenshot of it never returned."""
+    settings = load_settings()
+    if find_chrome(settings.chrome) is None:
+        pytest.skip("Chrome is not installed")
+    with local_chrome(settings.local_chrome()) as connection:
+        async with BrowserSession(connection, RecordingArtifactSink()) as session:
+            targets = (await session.client.send.Target.getTargets())["targetInfos"]
+            assert [target["targetId"] for target in targets if target["type"] == "page"] == [session.active_target_id]
+            async with asyncio.timeout(5):
+                await session.client.send.Page.captureScreenshot(session_id=session.active_session_id)
