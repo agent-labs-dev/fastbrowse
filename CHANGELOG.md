@@ -28,6 +28,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - A run whose `on_frame` callback ignores cancellation still returns and stops its browser. Closing waited on
   the callback with no limit, so such a run never returned a result and its cloud browser kept billing.
 
+- A troubleshooting page, `docs/troubleshooting.md`, explains each status a run can stop with, its common
+  causes and the next step, so a stopped run's error leads somewhere. The README's results section links to it.
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
 - A run that stops with a message quoting the page, such as a field's label, redacts any resolved secret
@@ -49,6 +51,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   the startup tab, it sometimes never painted: about one run in five had no live frames, a screenshot that never
   returned, and a recording that came back empty. A recording whose screencast sent no frame now ends on one
   screenshot of the tab, unless a resolved secret is showing.
+
+- Benchmark results from public sites measured in headless local Chrome with a throwaway profile are refused
+  for publication, since about half of those sites refused that browser before the first step. A campaign can
+  check its browser with `fastbrowse.evals.live_tasks.browser_refusal` before it starts; a headed window, a kept
+  profile or a cloud browser is admitted. Public-site results that do not record their browser, or record one
+  that is malformed or unknown, are refused as well.
 
 ## [0.5.20] - 2026-10-09
 
