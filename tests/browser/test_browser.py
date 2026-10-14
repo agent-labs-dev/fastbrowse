@@ -12,8 +12,10 @@ from typing import Any
 
 import pytest
 
+from fastbrowse.adapters.local_chrome import find_chrome, local_chrome
 from fastbrowse.browser.page import CdpPage
 from fastbrowse.browser.session import BrowserSession
+from fastbrowse.clients.environment import load_settings
 from fastbrowse.config import Config, ObservationLimits
 from fastbrowse.effects import effect
 from fastbrowse.models import Attachment, BrowserConnection, Operation, StepOutcome
@@ -1062,3 +1064,17 @@ async def test_hover_quote_context_does_not_attach_to_unrelated_or_reordered_con
         assert all(block.control_context is None for block in captured.blocks)
     if mutation == "mixed":
         assert "Revealed name" in captured.text and "Unrelated name" in captured.text
+
+
+async def test_a_headless_run_tab_has_a_window_of_its_own_and_paints() -> None:
+    """A tab opened beside headless Chrome's startup tab sometimes never presented a frame, so its screencast sent
+    nothing and a screenshot of it never returned."""
+    settings = load_settings()
+    if find_chrome(settings.chrome) is None:
+        pytest.skip("Chrome is not installed")
+    with local_chrome(settings.local_chrome()) as connection:
+        async with BrowserSession(connection, RecordingArtifactSink()) as session:
+            targets = (await session.client.send.Target.getTargets())["targetInfos"]
+            assert [target["targetId"] for target in targets if target["type"] == "page"] == [session.active_target_id]
+            async with asyncio.timeout(5):
+                await session.client.send.Page.captureScreenshot(session_id=session.active_session_id)

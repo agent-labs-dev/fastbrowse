@@ -47,6 +47,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - A field that declares it takes an email address, by its input type or autocomplete token, is no longer typed
   with text that holds no address: the field writer is asked once more first. A sign-in that had read a code
   sometimes typed it into Email and needed recovery to put it right.
+- Headless local Chrome starts without a startup tab, so the run's tab opens in a window of its own. Opened beside
+  the startup tab, it sometimes never painted: about one run in five had no live frames, a screenshot that never
+  returned, and a recording that came back empty. A recording whose screencast sent no frame now ends on one
+  screenshot of the tab, unless a resolved secret is showing.
 
 - Benchmark results from public sites measured in headless local Chrome with a throwaway profile are refused
   for publication, since about half of those sites refused that browser before the first step. A campaign can
