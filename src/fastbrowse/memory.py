@@ -130,6 +130,10 @@ class Notes:
     def captured_page(self, evidence: Evidence) -> CapturedPage | None:
         return self._pages.get((evidence.capture_sha256, evidence.url, evidence.captured_at))
 
+    def read_address(self, url: str) -> bool:
+        """Whether a read has captured this address, whatever the page showed then."""
+        return any(page.url == url for page in self._pages.values())
+
     @property
     def facts(self) -> tuple[Fact, ...]:
         return tuple(self._facts.values())

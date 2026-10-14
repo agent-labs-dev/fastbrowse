@@ -137,6 +137,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - A link drawn only as an icon, such as a release row's download button, now has its destination in the
   page text a run reads, with the text of the row it sits in. A task asking for that address answers it from
   the page instead of clicking the link until the run ends `stuck`.
+- A page the run has already read no longer restores its recovery budget each time a repeated click
+  redraws it, such as a row expanding or a countdown ending. A read-only release check clicked the same
+  Files, version and download links until its step limit; now it ends `stuck` once recovery is spent
+  there, with the partial answer it holds, unless a read since the last recovery found something new. A
+  wizard step that brings new fields or a new submit control at the same address still counts as a move.
 
 ## [0.5.20] - 2026-10-09
 
