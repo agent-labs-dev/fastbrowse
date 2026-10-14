@@ -8,7 +8,7 @@ import json
 import os
 import time
 import zlib
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -93,7 +93,7 @@ def digest(content: str) -> str:
 
 
 @contextmanager
-def connection() -> Iterator[httpx.Client]:
+def connection() -> Generator[httpx.Client]:
     public = os.environ["LANGFUSE_PUBLIC_KEY"]
     secret = os.environ["LANGFUSE_SECRET_KEY"]
     if os.environ.get("LANGFUSE_BASE_URL", HOST).rstrip("/") != HOST:

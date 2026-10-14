@@ -11,7 +11,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -150,7 +150,7 @@ def _gone(pids: set[int]) -> bool:
 
 
 @contextmanager
-def serving(tmp_path: Path) -> Iterator[Client]:
+def serving(tmp_path: Path) -> Generator[Client]:
     """The command with the scripted models, from an empty directory and with no model key of the caller's.
 
     A `.env` beside the caller would otherwise hand the server a real key. The one stand-in passes the check

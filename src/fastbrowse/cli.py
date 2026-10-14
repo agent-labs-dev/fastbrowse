@@ -8,6 +8,8 @@ A Browser Use Cloud browser by default (BROWSER_USE_API_KEY), with a URL printed
 country. `--local` runs a headless local Chrome instead; `--headed` shows it, and `--profile DIR` keeps its profile
 so a site signed into there once stays signed in. Either of those implies `--local`. `--cdp-url ws://…` instead
 attaches to a browser already running anywhere, opening one tab and leaving the browser as it was found.
+A run in a visible window works behind it, neither raising nor focusing it; `--foreground` brings its tab to the
+front to be watched.
 Secrets come from `--secret NAME=ENV_VAR`, read from that variable, or `--bitwarden ITEM`, a vault login's
 `username` and `password`, and its `one_time_code` when the item holds an authenticator key.
 `--secret NAME=ENV_VAR@ORIGIN` declares an exact or wildcard origin; without it, the scope is the `--start`
@@ -153,6 +155,12 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         help="substring match on page title or URL when attaching to an existing window (implies --attach)",
     )
     parser.add_argument(
+        "--foreground",
+        action="store_true",
+        help="bring the run's tab and its browser window to the front, to watch it; "
+        "otherwise a visible window stays in the background",
+    )
+    parser.add_argument(
         "--proxy-country",
         metavar="CC",
         default=None,
@@ -245,6 +253,7 @@ async def run(args: argparse.Namespace) -> int:
         cdp_port=args.cdp_port,
         attach=args.attach,
         target_match=args.target_match,
+        foreground=args.foreground,
         proxy_country=options.proxy_country(args.proxy_country),
         secrets=secrets,
         limits=limits,

@@ -587,6 +587,39 @@ async def test_redirected_start_is_not_an_implicit_navigation_destination() -> N
     assert "navigate_target" not in jev.requests[0]
 
 
+async def test_a_page_with_no_controls_offers_the_caller_start_as_a_way_back() -> None:
+    # Back from a submitted form can land on a browser error page asking to resubmit, with nothing to click.
+    jev = ScriptedJev({"operation": "navigate", "navigate_target": "0"})
+    page = observation(()).model_copy(update={"url": "chrome-error://chromewebdata/"})
+    decision = await decide(jev, page, context(task="Sign in", start_url="https://example.com/login"), Config())
+    assert (decision.operation, decision.url) == (Operation.NAVIGATE, "https://example.com/login")
+
+
+@pytest.mark.parametrize("omitted", [0, 3])
+async def test_a_page_with_controls_still_holds_back_the_caller_start(omitted: int) -> None:
+    jev = ScriptedJev({"operation": "click"})
+    controls = (button(1),) if not omitted else ()
+    page = observation(controls).model_copy(update={"url": "https://example.com/code", "omitted_controls": omitted})
+    await decide(jev, page, context(task="Sign in", start_url="https://example.com/login"), Config())
+    operation = jev.requests[0]["operation"]
+    assert isinstance(operation, ChoiceQuestion)
+    assert "navigate" not in operation.criteria
+
+
+async def test_a_bare_page_already_at_the_start_landing_is_not_sent_back_there() -> None:
+    jev = ScriptedJev({"operation": "scroll"})
+    page = observation(()).model_copy(update={"url": "https://example.com/form/"})
+    await decide(
+        jev,
+        page,
+        context(task="Sign in", start_url="https://example.com/", start_landing_url="https://example.com/form/"),
+        Config(),
+    )
+    operation = jev.requests[0]["operation"]
+    assert isinstance(operation, ChoiceQuestion)
+    assert "navigate" not in operation.criteria
+
+
 async def test_explicit_start_redirect_is_normalized_to_its_landing_page() -> None:
     jev = ScriptedJev({"operation": "click"})
     page = observation((button(1),)).model_copy(update={"url": "https://example.com/form/"})

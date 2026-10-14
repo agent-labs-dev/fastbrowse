@@ -3,7 +3,7 @@
 # Update hook revisions and pyproject.toml tool pins together, then run `uv lock`; autoupdate only edits this file.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.9
+    rev: v0.17.0
     hooks:
       - id: ruff-check
         exclude: ^\.sift/(gate|agents)\.py$
@@ -11,7 +11,7 @@ repos:
       - id: ruff-format
         exclude: ^\.sift/(gate|agents)\.py$
   - repo: https://github.com/astral-sh/ty-pre-commit
-    rev: v0.0.84
+    rev: v0.0.86
     hooks:
       # Checks the whole project, not the staged files: a change in one file moves diagnostics in another.
       - id: ty
