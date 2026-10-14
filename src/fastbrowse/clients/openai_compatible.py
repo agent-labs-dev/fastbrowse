@@ -238,8 +238,14 @@ class OpenAICompatibleLLM:
         models: Mapping[LLMPurpose, str],
         reasoning_effort: ReasoningEffort | None = None,
         provider_routing: JsonValue | None = OPENROUTER_PROVIDER_ROUTING,
+        auth_required: bool = True,
+        strict: bool = True,
+        extra_body: Mapping[str, JsonValue] | None = None,
     ) -> None:
         self._api_key = api_key
+        self._auth_required = auth_required
+        self._strict = strict
+        self._extra_body = dict(extra_body or {})
         self._http = http
         self._base_url = base_url.rstrip("/")
         self._models = dict(models)
@@ -259,7 +265,7 @@ class OpenAICompatibleLLM:
                 self._http,
                 f"{self._base_url}/chat/completions",
                 body,
-                {"Authorization": f"Bearer {self._api_key}"},
+                {"Authorization": f"Bearer {self._api_key}"} if self._auth_required else {},
                 call=f"llm {body.get('model')}",
                 attempt_seconds=LLM_ATTEMPT_SECONDS,
                 hedge_seconds=LLM_HEDGE_SECONDS,
@@ -397,13 +403,21 @@ class OpenAICompatibleLLM:
                 "type": "json_schema",
                 "json_schema": {
                     "name": schema.__name__,
-                    "schema": TypeAdapter(JsonValue).validate_python(strict_schema(schema.model_json_schema())),
-                    "strict": True,
+                    # Strict mode needs every property required and no defaults; a decoder without strict
+                    # support (some local vLLM builds) gets the model's own schema instead.
+                    "schema": (
+                        TypeAdapter(JsonValue).validate_python(strict_schema(schema.model_json_schema()))
+                        if self._strict
+                        else TypeAdapter(JsonValue).validate_python(schema.model_json_schema())
+                    ),
+                    "strict": self._strict,
                 },
             },
         }
         if self._provider_routing is not None:
             body["provider"] = self._provider_routing
+        if self._extra_body:
+            body.update(self._extra_body)
         if self._reasoning_effort is not None:
             body["reasoning"] = {"effort": self._reasoning_effort.value}
         costs: list[CostLine] = []
