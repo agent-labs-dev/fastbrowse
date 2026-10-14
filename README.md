@@ -211,6 +211,9 @@ A browser command that remains unanswered for 120 seconds returns `unavailable`,
 still answers health checks. Step and dollar limits do not bound total elapsed time. Set `Limits(max_seconds=...)` for a run deadline.
 When investigating a stalled run, enable trace logging and retain the last event alongside the result.
 
+[Troubleshooting](docs/troubleshooting.md) takes each status a run can stop with: what it means, its common
+causes and the next step.
+
 ## How it works
 
 <picture>
