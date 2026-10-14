@@ -4,11 +4,12 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from fastbrowse.agent import Agent, _Unsure
+from fastbrowse.agent import Agent, _Unsure, next_page_control
 from fastbrowse.config import Config
-from fastbrowse.models import Authorization, Operation, StepOutcome
-from fastbrowse.page import ActResult, Control, Page
+from fastbrowse.models import Authorization, Limits, Operation, StepOutcome
+from fastbrowse.page import ActResult, Control, Observation, Page
 from fastbrowse.policy import decide
+from fastbrowse.telemetry import Ledger
 from tests.test_agent import run_state
 from tests.test_policy import ScriptedJev, context, observation
 from tests.test_retrieval import ScriptedLLM
@@ -105,3 +106,28 @@ async def test_a_control_with_no_download_evidence_costs_no_question() -> None:
     await Agent(page, jev, ScriptedLLM([]))._step(state, obs, decision)
     page.act.assert_awaited_once()
     assert not any("downloads" in request for request in jev.requests)
+
+
+async def test_a_shortcut_that_names_a_file_is_not_opened() -> None:
+    # The opening shortcut is a page to start on. One that names an archive would save it before any gate could ask.
+    start = "https://addons.test/"
+    page = Mock(spec=Page)
+    page.navigate = AsyncMock()
+    page.address = AsyncMock(return_value="https://addons.test/files/addon-2.1.0.zip")
+    page.response_status = AsyncMock(return_value=200)
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([{"url": "https://addons.test/files/addon-2.1.0.zip"}]))
+
+    history, invented = await agent._open(READ_ONLY, start, Ledger(Limits()), None)
+
+    assert (history, invented) == ([], set())
+    assert [call.args for call in page.navigate.await_args_list] == [(start,)]
+
+
+def test_a_link_that_saves_a_file_is_not_a_next_page() -> None:
+    # Paging clicks without the per-step gate, so a "next" link to an export must never be taken for a pager.
+    def at_page_one(control: Control) -> Observation:
+        return observation((control,)).model_copy(update={"url": "https://addons.test/list/page-1"})
+
+    assert next_page_control(at_page_one(link("next", "Next", "/list/page-2.csv"))) is None
+    pager = link("next", "Next", "/list/page-2")
+    assert next_page_control(at_page_one(pager)) == pager

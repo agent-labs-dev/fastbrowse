@@ -1153,7 +1153,8 @@ class Agent:
         except (TimeoutError, LLMError):
             proposal = None
         shortcut = None if proposal is None else accept(proposal.url, start)
-        if shortcut is None:
+        # A shortcut is a page to start on. One naming a file would save it before any step's download gate could ask.
+        if shortcut is None or starts_download(_caller_link(shortcut)):
             await self._page.navigate(start)
             return [], set()
         try:
@@ -4835,6 +4836,9 @@ def next_page_control(observation: Observation) -> Control | None:
     current_query = _pager_query(parse_qsl(here.query, keep_blank_values=True))
     for control in observation.controls:
         if control.role != "link" or Operation.CLICK not in control.operations or control.href is None:
+            continue
+        # Paging clicks without the step's gates, so a link that saves a file is never taken for the next page.
+        if starts_download(control):
             continue
         # The snapshot gives a same-origin link as a path; a bare host/path denotes another site.
         if not control.href.startswith(("/", "http://", "https://")):
