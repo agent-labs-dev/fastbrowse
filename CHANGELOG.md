@@ -32,6 +32,17 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   causes and the next step, so a stopped run's error leads somewhere. The README's results section links to it.
 - Arch Linux has a `fastbrowse` package for the AUR, kept in `packaging/aur`. It installs `fastbrowse` and
   `fastbrowse-mcp` from the PyPI release and takes every dependency Arch packages from Arch's repositories.
+- A run in a visible browser window works in the background. With `--headed`, or in a browser handed over with
+  `--cdp-url` or `--cdp-port`, the task tab opens behind the window's current tab and the run sends nothing
+  that raises or focuses the window, where each run used to take the keyboard from whatever else was in use.
+  `--foreground` (`foreground` for `run_task`, the SDK and `serve`) brings the tab to the front to watch a run.
+  Chrome still brings a window forward on its own when a headed Chrome starts, when a page opens a popup, and,
+  with `--attach`, on a click in a window's front tab. Headless and cloud runs are unchanged.
+
+- The fastbrowse skill sends agents to `--local`, a kept `--profile`, or a Chrome started for the purpose with
+  its own data directory. It no longer has them look for a debugging endpoint in the user's everyday Chrome,
+  which asks for approval on every connection.
+
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
 - A run that stops with a message quoting the page, such as a field's label, redacts any resolved secret

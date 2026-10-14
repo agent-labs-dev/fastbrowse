@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
+from cdp_use.client import CDPClient
 
 from fastbrowse.adapters.local_chrome import find_chrome, local_chrome
 from fastbrowse.browser.page import CdpPage
@@ -884,6 +885,74 @@ async def test_a_browser_handed_over_by_cdp_url_drives_and_survives_the_run(
     # The session closed its own tab; the browser it was handed is still answering.
     async with BrowserSession(chrome_connection, artifact_sink) as after:
         assert await CdpPage(after, Config()).observe() is not None
+
+
+async def test_a_background_run_drives_its_tab_without_bringing_it_forward(
+    chrome_connection: BrowserConnection, artifact_sink: RecordingArtifactSink, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run in a visible window clicks, types and captures behind the window's current tab, and activates nothing."""
+    sent: list[tuple[str, Any]] = []
+    send_raw = CDPClient.send_raw
+
+    async def traced(self: CDPClient, method: str, params: Any = None, session_id: str | None = None) -> Any:
+        sent.append((method, params))
+        return await send_raw(self, method, params, session_id)
+
+    monkeypatch.setattr(CDPClient, "send_raw", traced)
+    background = chrome_connection.model_copy(update={"foreground": False})
+    async with BrowserSession(background, artifact_sink) as session:
+        page = CdpPage(session, Config())
+        await page.navigate(
+            "data:text/html,<title>Idle</title><button onclick=\"document.title='Clicked'\">Go</button>"
+            "<input aria-label='Name'>"
+        )
+        observation = await page.observe()
+        await page.act(Action(operation=Operation.CLICK, target_id=find(observation, "Go").id), observation)
+        observation = await page.observe()
+        assert observation.title == "Clicked"
+        filled = await page.act(
+            Action(operation=Operation.FILL, target_id=find(observation, "Name").id, text="Ada"), observation
+        )
+        assert filled.outcome is StepOutcome.EXECUTED
+        assert await eval_value(session, session.active_session_id, "document.querySelector('input').value") == "Ada"
+        assert await eval_value(
+            session, session.active_session_id, "document.visibilityState === 'visible' && document.hasFocus()"
+        )
+        # A tab behind another that has gone idle paints nothing new, and a capture would wait on its next frame.
+        await asyncio.sleep(1)
+        async with asyncio.timeout(2):
+            assert (await page.screenshot()).startswith(b"\x89PNG")
+    methods = {method for method, _ in sent}
+    assert not {"Target.activateTarget", "Page.bringToFront"} & methods
+    assert [params for method, params in sent if method == "Target.createTarget"] == [
+        {"url": "about:blank", "background": True}
+    ]
+
+
+async def test_a_background_run_sets_up_tabs_behind_an_open_confirm_once_it_is_answered(
+    chrome_connection: BrowserConnection, artifact_sink: RecordingArtifactSink, main_site: str
+) -> None:
+    """A native dialog holds its renderer, so setup sent to a page behind one, focus emulation included, waits
+    for the answer. The run must still be able to answer it, and setup must then finish rather than hang."""
+    background = chrome_connection.model_copy(update={"foreground": False})
+    async with BrowserSession(background, artifact_sink) as session:
+        await CdpPage(session, Config()).navigate(f"{main_site}/")
+        opener = session.active_session_id
+        # The popup shares the opener's renderer, which the confirm holds until it is answered.
+        await session.client.send.Runtime.evaluate(
+            params={"expression": "setTimeout(() => { window.open('/popup.html'); confirm('Remove?') }, 0)"},
+            session_id=opener,
+        )
+        await wait_until(lambda: session.pending_dialog() is not None and bool(session.popups()))
+        popup = session.popups()[-1]
+        prepared = asyncio.ensure_future(session._prepare_session(opener))
+        await asyncio.sleep(0.5)
+        async with asyncio.timeout(5):
+            await session.handle_dialog(True)
+            assert await asyncio.shield(session._popups[popup][1])
+            await prepared
+        await session.switch_tab(popup)
+        assert await eval_value(session, session.active_session_id, "document.hasFocus()")
 
 
 @pytest.mark.parametrize("path", ["/report.csv", "/export-report", "/report.csv?short", "/report.csv?partial"])
