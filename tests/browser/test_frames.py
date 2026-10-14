@@ -176,7 +176,9 @@ async def test_a_stalled_screencast_does_not_delay_switching_tabs(monkeypatch: p
     assert "Page.startScreencast" in transport.finished
 
 
-@pytest.mark.parametrize("page", ["clear", "showing a secret", "revealing a secret during the capture"])
+@pytest.mark.parametrize(
+    "page", ["clear", "showing a secret", "revealing a secret during the capture", "after access is revoked"]
+)
 async def test_a_recording_whose_cast_sent_no_frame_ends_on_a_screenshot_unless_frames_are_withheld(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture, page: str
 ) -> None:
@@ -191,7 +193,13 @@ async def test_a_recording_whose_cast_sent_no_frame_ends_on_a_screenshot_unless_
     transport = CdpTransport(monkeypatch)
     transport.results["Page.captureScreenshot"] = [{"data": base64.b64encode(still.read_bytes()).decode()}]
     path = tmp_path / "clip.mp4"
-    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+    revoked = False
+
+    async def check_access() -> None:
+        if revoked:
+            raise PermissionError("revoked")
+
+    async with BrowserSession(CONNECTION, RecordingArtifactSink(), check_access=check_access) as session:
         session.frames_withheld = page == "showing a secret"
 
         async def send(method: str, params: Any = None, session_id: str | None = None) -> dict[str, Any]:
@@ -204,6 +212,7 @@ async def test_a_recording_whose_cast_sent_no_frame_ends_on_a_screenshot_unless_
         with caplog.at_level(logging.WARNING):
             async with Recording(session, path) as recording:
                 await asyncio.sleep(0.2)
+                revoked = page == "after access is revoked"
     assert ("Page.startScreencast", {"format": "jpeg", "quality": 95}, "session") in transport.requests
     if page == "clear":
         assert recording.outputs == (path, path.with_suffix(".plain.mp4"))
@@ -211,7 +220,7 @@ async def test_a_recording_whose_cast_sent_no_frame_ends_on_a_screenshot_unless_
         assert "no frames" not in caplog.text
         return
     # A recording keeps its last clean frame, and with none it records nothing rather than the secret.
-    assert ("Page.captureScreenshot" in transport.calls) is (page != "showing a secret")
+    assert ("Page.captureScreenshot" in transport.calls) is (page == "revealing a secret during the capture")
     assert recording.outputs == ()
     assert not path.exists()
     assert "the browser sent no frames" in caplog.text

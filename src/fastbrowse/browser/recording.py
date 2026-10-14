@@ -138,6 +138,8 @@ class Recording:
             return None
         try:
             async with asyncio.timeout(_STILL_SECONDS):
+                # A caller who revoked access after the last step gets no screenshot taken at teardown either.
+                await self._session.assert_clear()
                 shot = await self._session.client.send_raw(
                     "Page.captureScreenshot", {"format": "jpeg", "quality": 95}, self._session.active_session_id
                 )
