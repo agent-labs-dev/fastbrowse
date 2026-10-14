@@ -37,6 +37,7 @@ NEXT_ACTION = f"""{UNTRUSTED}
 Advance the user's task from the current page using one operation.
 When a subgoal is supplied, take its next action first; it describes the current obstacle.
 Use current field values and the recent history.
+Prioritize unread_requirements when choosing the next target to research.
 Preserve authentication unless the task requires a session change.
 Fill a search query before submitting. Clicking only focuses; fill can open an editor and type.
 Do not repeat satisfied steps. Fill required fields before submitting. An element marked blocking is a field
@@ -62,7 +63,7 @@ within the form."""
 
 TARGET = f"""{UNTRUSTED}
 Choose the best observed target if the next operation is the one this question names.
-Use the task, field values, nearby text and recent actions. Another question decides which operation runs.
+Use the task, unread_requirements, field values, nearby text and recent actions. Another question chooses the operation.
 Do not choose a field that already contains the requested value. Choose only an offered element.
 Do not toggle a checkbox, switch or radio already in the requested state.
 While the form's mode (a trip or ticket type, a tab) is not the one the task needs, the control that sets

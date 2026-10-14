@@ -13,6 +13,36 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - A page with no controls, such as a browser error page reached by going back from a submitted form, offers
   the caller's start address as a way to continue, so leaving it does not wait on recovery.
+- Answer checks accept a record named only by a requested identifier, such as an order reference, so a
+  finished run no longer ends `stuck` with every output unresolved.
+- A handed-over browser that accepts the DevTools connection and then answers nothing is reported as
+  `unavailable` after about 20 seconds, with a message that it may be waiting for its remote debugging approval
+  prompt, where it used to wait over a minute and report a lost browser. A `--cdp-port` whose `/json/version`
+  answers 404, as a Chrome switched on at chrome://inspect does, now says to build the `ws://` address from the
+  port and path in its `DevToolsActivePort` file and pass it with `--cdp-url`; other refusals name their status.
+  None of these failures switches to another browser.
+
+- An icon-only control is named by its icon (a sprite reference, an icon font class, a ligature or an svg title)
+  or its accessible description, and carries the card it sits in, so a gallery's trash control is no longer an
+  unnamed button the agent cannot tell from the edit link beside it.
+- A run whose `on_frame` callback ignores cancellation still returns and stops its browser. Closing waited on
+  the callback with no limit, so such a run never returned a result and its cloud browser kept billing.
+
+- A troubleshooting page, `docs/troubleshooting.md`, explains each status a run can stop with, its common
+  causes and the next step, so a stopped run's error leads somewhere. The README's results section links to it.
+- Arch Linux has a `fastbrowse` package for the AUR, kept in `packaging/aur`. It installs `fastbrowse` and
+  `fastbrowse-mcp` from the PyPI release and takes every dependency Arch packages from Arch's repositories.
+- A run in a visible browser window works in the background. With `--headed`, or in a browser handed over with
+  `--cdp-url` or `--cdp-port`, the task tab opens behind the window's current tab and the run sends nothing
+  that raises or focuses the window, where each run used to take the keyboard from whatever else was in use.
+  `--foreground` (`foreground` for `run_task`, the SDK and `serve`) brings the tab to the front to watch a run.
+  Chrome still brings a window forward on its own when a headed Chrome starts, when a page opens a popup, and,
+  with `--attach`, on a click in a window's front tab. Headless and cloud runs are unchanged.
+
+- The fastbrowse skill sends agents to `--local`, a kept `--profile`, or a Chrome started for the purpose with
+  its own data directory. It no longer has them look for a debugging endpoint in the user's everyday Chrome,
+  which asks for approval on every connection.
+
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
 - A run that stops with a message quoting the page, such as a field's label, redacts any resolved secret
@@ -27,6 +57,91 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   `bounded` cost: its model's whole context window at the highest price any of its routes lists. A run with a
   dollar cap keeps going within that bound instead of stopping, and a call whose price has no ceiling still
   stops it.
+- A field that declares it takes an email address, by its input type or autocomplete token, is no longer typed
+  with text that holds no address: the field writer is asked once more first. A sign-in that had read a code
+  sometimes typed it into Email and needed recovery to put it right.
+- Headless local Chrome starts without a startup tab, so the run's tab opens in a window of its own. Opened beside
+  the startup tab, it sometimes never painted: about one run in five had no live frames, a screenshot that never
+  returned, and a recording that came back empty. A recording whose screencast sent no frame now ends on one
+  screenshot of the tab, unless a resolved secret is showing.
+
+- Benchmark results from public sites measured in headless local Chrome with a throwaway profile are refused
+  for publication, since about half of those sites refused that browser before the first step. A campaign can
+  check its browser with `fastbrowse.evals.live_tasks.browser_refusal` before it starts; a headed window, a kept
+  profile or a cloud browser is admitted. Public-site results that do not record their browser, or record one
+  that is malformed or unknown, are refused as well.
+- A path the task names on its own, such as "sign in at /login", is an address on the caller's start site, so a
+  run that lands on an empty entry page can open it instead of stopping stuck.
+- A frame the capture cannot open, such as an advertisement, no longer keeps a counted list elsewhere on the
+  page from being recorded as read in full, so a finding of none over that list passes its check on every run
+  rather than only on runs where the frame loaded. A list that holds a frame, or one known only by adjacent
+  records, still needs every frame on the page read.
+- A run that stops at a sign-in wall ends `needs_login` rather than `stuck`: an access inspection that
+  read the wall and could not go on from it, or recovery giving up because a sign-in blocks the task and no
+  stored secret covers the site.
+- Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
+  matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
+- Answers whose combined evidence exceeds a prompt are composed and verified in requirement groups, with
+  comparisons kept together. Each verified field survives a sibling field's failure. Recovery reads only
+  open fields and rechecks groups whose evidence changed; evidence that cannot fit even one group returns
+  an unverified partial answer. Captured source size selects this path before reader excerpts can shrink
+  the evidence. Newly read source pages and complete collections renew recovery once each. Oversized
+  verification requests share repeated source quotes while keeping every claim and its citations.
+- Answer recovery retains each collection's records and identifying context when a later
+  conclusion combines them. Collection coverage is kept even when another requested field remains open.
+  Page totals must match the captured list members to establish complete coverage. Collection quotes
+  retain their enclosing heading and identifying context. Explicit empty states
+  retain their source quotes. Recovery reuses this coverage from earlier reads. Partial collections cannot
+  support a finding that no members match. Citing every record and its boundary preserves that proven
+  coverage even when the answer cites their quotes directly. In a task with more than one target, a counted list
+  covers a target only when its page names that target, including when that target is the last one left to read.
+- Answers split across prompts check record categories and speaker roles against literal source quotes. Reader
+  paraphrases cannot supply missing names or values. Newly verified fields renew recovery once each.
+- Verified answer groups remain cached when summaries reuse the same sources. Changed evidence causes a
+  fresh check of the existing answer before a replacement is composed.
+- Answer recovery cites underlying quotes instead of superseded prose. Composition uses the
+  same source references, keeping retired quotes and incomplete collections subject to verification.
+- Search-field writing receives unresolved requirements and unverified outputs during answer recovery.
+- Recovery reads that add missing source evidence retry answer verification before more browsing.
+  Repeated quotes cannot trigger another attempt. Partitioned and recovered finishes check each target's
+  requested fields separately, with claims bound to their fields. Empty fields cannot borrow another
+  field's evidence. Collections read to their end support explicit bounded absence findings, which survive
+  answer correction and reader-fact fallback.
+- Recovery opens an observed unread section for a missing target field and reads it before choosing another
+  action. Sections already read are excluded. A target whose name contains "for", such as "Leatrix Plus for
+  Classic", is matched by its whole name. Scrolling fully read content without loading more does not
+  count as progress during output recovery.
+- Grouped answers audit retained quotes even when separate reads leave a bundled requirement open.
+  Verified fields bind their source evidence before the normal completion check. Readers and grouped
+  composers leave links fields open unless their sources quote a destination, including a written hostname.
+  Initial grouping and recovery
+  retain a target's quotes without treating source ownership as verified completion.
+- A rejected grouped answer keeps its current source quotes and collection scope. Missing outputs stay open,
+  and unchanged evidence cannot trigger another grouped completion check. Answers that fit one prompt
+  reopen their information requirements for another read and check. Changed or misread sources still lose
+  their requirement bindings. Field repairs receive the rejection reason alongside retained complete
+  collection coverage, so they can distinguish missing evidence from a misclassified record.
+- Returning to a form with newly read prerequisite evidence renews recovery once for that state and those
+  sources. Repeated quotes, paraphrases and values put back do not renew it.
+
+- Missing answer outputs and subject citations can be repaired from retained quotes before browsing again.
+  Recovery keeps the returned answer's failure reason, checks whether a page adds evidence, and reads new
+  pages with bounded prior notes.
+  Explicit empty-result messages support findings of no records within the quoted page's scope.
+
+- Multi-project tasks retain earlier sources for navigation and verify answers with explicit output checks
+  without requiring an unused whole-notes check to fit the evidence budget.
+  Form field writing keeps each note's literal source quote where it fits.
+- Independent named targets have separate reading requirements. Newly evidenced targets renew recovery on
+  revisited lists, remaining requirements guide action choices, and partial answers retain findings across sources.
+- A link drawn only as an icon, such as a release row's download button, now has its destination in the
+  page text a run reads, with the text of the row it sits in. A task asking for that address answers it from
+  the page instead of clicking the link until the run ends `stuck`.
+- A page the run has already read no longer restores its recovery budget each time a repeated click
+  redraws it, such as a row expanding or a countdown ending. A read-only release check clicked the same
+  Files, version and download links until its step limit; now it ends `stuck` once recovery is spent
+  there, with the partial answer it holds, unless a read since the last recovery found something new. A
+  wizard step that brings new fields or a new submit control at the same address still counts as a move.
 - A task that says not to download, or calls itself read-only, no longer downloads files. A link the page
   marks as a download, by a `download` attribute or an address ending in a file type such as `.zip`, is
   refused before it is clicked or opened, and recovery is not offered it.

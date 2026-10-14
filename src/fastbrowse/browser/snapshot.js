@@ -180,17 +180,51 @@
 
   // Their text is code, not a name: Amazon nests a <style> inside a result card's link.
   const CODE = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
-  // Icon-only buttons hide their glyph from accessibility text, but the icon library still names it.
+  // Icon-only buttons hide their glyph from accessibility text, but the icon library still names it: in a class,
+  // a sprite reference, a data attribute, an svg title or a ligature. A gallery's trash control otherwise reads
+  // "button" beside an edit link that reads "link", and the choice cannot tell removing an image from editing it.
+  const ICON_CLASS =
+    /^(?:icon-tabler|tabler-icon|lucide|glyphicon|fa|fas|far|bi|mdi|icon|ti|la|ri|ion|feather)-([a-z][a-z0-9-]{0,47})$/;
+  // Sizes, weights and effects share an icon library's prefix without naming a glyph, as does the library itself.
+  const ICON_STYLE =
+    /^(?:icon|tabler|solid|regular|light|thin|duotone|brands|xs|sm|lg|xl|\d+x|fw|spin|pulse|border|inverse|stack.*|pull-.*|rotate-.*|flip-.*)$/;
+  const glyphName = text => {
+    const name = (text || '').trim().toLowerCase().replace(/^(?:icons?|ico|ic|svg|sprite)[-_]/, '');
+    return /^[a-z][a-z0-9_-]{0,47}$/.test(name) && !ICON_STYLE.test(name) ? name : '';
+  };
   const iconLabel = e => {
     const glyphs = new Set();
-    for (const icon of e.querySelectorAll('svg')) {
-      if (!showing(icon)) continue;
+    for (const icon of e.querySelectorAll('svg,i,span,[role="img"]')) {
+      if (!icon.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
+      const named = [];
       for (const token of icon.classList) {
-        const glyph = /^(?:icon-tabler|tabler-icon|lucide)-([a-z][a-z0-9-]{0,47})$/.exec(token);
-        if (glyph && !/^(?:icon|xs|sm|lg|xl|\d+x|spin|pulse)$/.test(glyph[1])) glyphs.add(glyph[1]);
+        const glyph = ICON_CLASS.exec(token);
+        if (glyph && !ICON_STYLE.test(glyph[1])) named.push(glyph[1]);
       }
+      const use = icon.localName === 'svg' && icon.querySelector('use');
+      const sprite = use && (use.getAttribute('href') || use.getAttribute('xlink:href') || '');
+      if (sprite) named.push(glyphName(sprite.split('#').pop().split('/').pop().replace(/\.svg$/, '')));
+      named.push(glyphName(icon.getAttribute('data-icon')));
+      // A ligature font draws the glyph its text names, and the icon is hidden so readers skip that word.
+      if ([...icon.classList].some(token => /^material-(?:icons|symbols)/.test(token))) {
+        named.push(glyphName(icon.textContent.replace(/\s+/g, '_')));
+      }
+      const title =
+        icon.getAttribute('aria-label') || (icon.localName === 'svg' ? icon.querySelector(':scope > title')?.textContent : '');
+      if (title?.trim()) glyphs.add(title.replace(/\s+/g, ' ').trim());
+      else for (const name of named) if (name) glyphs.add(`${name.replace(/[-_]/g, ' ')} icon`);
     }
-    return glyphs.size === 1 ? `${[...glyphs][0].replace(/-/g, ' ')} icon` : '';
+    return glyphs.size === 1 ? [...glyphs][0] : '';
+  };
+  // An accessible description is what an unnamed control has left that says what it does.
+  const describedBy = e => {
+    const root = typeof e.getRootNode === 'function' ? e.getRootNode() : document;
+    return (e.getAttribute('aria-describedby') || '')
+      .split(/\s+/)
+      .map(id => (id && (root.getElementById ? root.getElementById(id) : document.getElementById(id))?.textContent) || '')
+      .map(text => text.replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .join(' ');
   };
   const labelOf = (e, seen = new Set()) => {
     if (!e || seen.has(e)) return '';
@@ -373,6 +407,8 @@
   };
 
   const controls = [];
+  // Controls with no accessible name of their own, whose label is an icon's or only their role.
+  const unnamed = new Set();
   const fieldScope = e => {
     if (!e.matches('input,textarea,select')) return null;
     const form = e.form || e.closest('form,fieldset,[role="form"]');
@@ -412,10 +448,12 @@
 
     const id = identity(e);
     registry.controls.add(e);
+    const named = labelOf(e);
+    if (!named) unnamed.add(id);
     const base = {
       id,
       role: rname,
-      label: labelOf(e) || (rname === 'button' ? iconLabel(e) : '') || rname,
+      label: named || iconLabel(e) || describedBy(e) || rname,
       offscreen: y < 0 || y >= innerHeight,
       distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
       sensitive: secret(source),
@@ -704,6 +742,40 @@
       for (const c of group) {
         c.context = `${twins.indexOf(registry.nodes.get(c.id)) + 1} of ${twins.length}`;
       }
+    }
+  }
+
+  // An unnamed control the page draws once per card, a trash icon beside each image, is a twin only while another
+  // card shows the same icon: one left alone, or drawn by another icon set, would name no card and leave the choice
+  // guessing which image it removes. It is named by the card that holds it, or failing one by the nearest ancestor
+  // that says anything besides it.
+  // A card is an item, a row, or an element the page repeats beside itself with the same tag and class.
+  const isCard = e =>
+    e.matches('article,li,[role="listitem"],tr,[role="row"]') ||
+    (!!e.getAttribute('class') &&
+      [...(e.parentElement?.children || [])].some(
+        s => s !== e && s.localName === e.localName && s.getAttribute('class') === e.getAttribute('class'),
+      ));
+  const nearestName = (element, label) => {
+    let first = '';
+    for (let e = element.parentElement, path = element; e && e !== e.ownerDocument.body; path = e, e = e.parentElement) {
+      first ||= nameOf(e, element, label, true);
+      if (!isCard(e)) continue;
+      // An action row's own caption ("Actions") is the first text the climb meets and names no item, so the card
+      // is named by what it holds outside the row that holds the control.
+      const aria = (e.getAttribute('aria-label') || '').trim();
+      const outside = [...e.children]
+        .filter(child => child !== path)
+        .map(child => firstLine(child.innerText))
+        .find(line => line && line !== label && !repeated.has(line));
+      return excerpt((aria !== label && aria) || outside || first, CONTROL_CONTEXT_CHARS);
+    }
+    return excerpt(first, CONTROL_CONTEXT_CHARS);
+  };
+  for (const c of controls) {
+    if (!c.context && unnamed.has(c.id)) {
+      const context = nearestName(registry.nodes.get(c.id), c.label);
+      if (context) c.context = context;
     }
   }
 

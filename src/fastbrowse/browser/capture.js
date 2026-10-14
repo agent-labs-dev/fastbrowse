@@ -16,6 +16,8 @@
   let controlObservations = 0;
   let imageObservations = 0;
   let imagesOmitted = false;
+  let linkObservations = 0;
+  let linksOmitted = false;
   let controlsOmitted = false;
   const imageSource = source => {
     if (!source) return source;
@@ -80,9 +82,46 @@
     }
     return found ? registry.hoverContexts.get(found).control : null;
   };
+  const listIds = new WeakMap();
+  const listFrameless = new WeakMap();
+  let nextListId = 0;
+  const listContext = nodes => {
+    const lists = new Set();
+    for (const node of nodes) {
+      let element = node.nodeType === 1 ? node : node.parentElement;
+      let list = null;
+      for (let parent = element; parent; parent = parent.parentElement) {
+        if (parent.matches('nav,[role="navigation"]')) return {};
+        if (parent.matches('ul,ol,[role="list"]')) list = parent;
+      }
+      if (!list) {
+        const nested = [...(element?.querySelectorAll('ul,ol,[role="list"]') ?? [])];
+        const outer = nested.filter(candidate => !nested.some(other => other !== candidate && other.contains(candidate)));
+        if (outer.length === 1) list = outer[0];
+      }
+      if (list) lists.add(list);
+    }
+    if (lists.size !== 1) return {};
+    const list = [...lists][0];
+    if (!listIds.has(list)) {
+      listIds.set(list, String(nextListId++));
+      // A frame the capture cannot open elsewhere on the page, such as an advertisement, cannot hold a member of a
+      // list whose element contains no frame; one inside the list, or behind a shadow root the list or anything in it
+      // holds, could.
+      const framed = e => e.tagName === 'IFRAME' || e.tagName === 'FRAME' || !!e.shadowRoot;
+      listFrameless.set(list, !framed(list) && ![...list.querySelectorAll('*')].some(framed));
+    }
+    const members = [...list.querySelectorAll('li,[role="listitem"]')].filter(member => {
+      for (let parent = member; parent && parent !== list; parent = parent.parentElement) {
+        if (hidden(parent)) return false;
+      }
+      return !!textOf(member);
+    });
+    return { list_id: listIds.get(list), list_count: members.length, list_frameless: listFrameless.get(list) };
+  };
   const push = (kind, text, extra = {}, nodes = []) => {
     if (text)
-      blocks.push({ kind, text, heading_path: [...path], frame_path: framePath, source_path: sourcePath, control_context: controlOf(nodes), ...extra });
+      blocks.push({ kind, text, heading_path: [...path], frame_path: framePath, source_path: sourcePath, control_context: controlOf(nodes), ...listContext(nodes), ...extra });
   };
 
   // A cell can say what it says with an image or an icon alone: a flag marking the winner, a tick for "yes".
@@ -407,6 +446,38 @@
       const metadata = { alt: image.getAttribute('alt')?.slice(0, 1024) ?? null,
         src: imageSource(image.getAttribute('src') ?? image.getAttribute('srcset')) };
       push('observation', `Image element DOM metadata: ${JSON.stringify(metadata)}. Pixels are not described.`);
+    }
+    // A link drawn only as an icon has no text, so its destination, the one thing it says, was nowhere a reader
+    // could quote: asked for a release's download URL beside an icon-only download link, a run read every other
+    // field of the row and then clicked the link again and again looking for the address. The row's text names
+    // which item the link belongs to, since the observation is not read where the link stands.
+    for (const link of [...root.querySelectorAll('a[href]')].filter(visible)) {
+      if (clean(link.innerText ?? '')) continue;
+      // An icon button written as `href="#"` or a script URL runs code here and leads nowhere to report. A bare
+      // `#` parses to an empty hash, so the raw attribute says it is a fragment link, not the parsed URL.
+      let target;
+      try {
+        target = new URL(link.getAttribute('href'), location.href);
+      } catch {
+        // One malformed address must not cost the page its whole capture.
+        continue;
+      }
+      const page = location.href.split('#')[0];
+      const fragment = link.getAttribute('href').trim().startsWith('#') || (target.hash && target.href.split('#')[0] === page);
+      if (target.protocol === 'javascript:' || fragment) continue;
+      if (linkObservations++ >= 32) {
+        if (!linksOmitted) push('observation', 'Additional link destinations omitted.');
+        linksOmitted = true;
+        break;
+      }
+      let row = link.parentElement;
+      while (row && row !== root && !clean(row.innerText ?? '')) row = row.parentElement;
+      const metadata = {
+        label: (nameOf(link) || drawn(link)).slice(0, 256) || null,
+        href: imageSource(link.href),
+        near: row ? textOf(row).replace(/\s+/g, ' ').slice(0, 256) || null : null,
+      };
+      push('observation', `Link element DOM metadata: ${JSON.stringify(metadata)}. The link has no text.`);
     }
     const h1 = [...root.querySelectorAll('h1,[role="heading"][aria-level="1"]')].filter(visible);
     visibleH1 ||= h1.length > 0;

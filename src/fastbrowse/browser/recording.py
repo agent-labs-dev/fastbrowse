@@ -39,6 +39,9 @@ _RECAST_SECONDS = 1.0
 """A cast with no frame this long is restarted. A start sent while the tab swaps renderer on a cross-site
 navigation can go unanswered, and GitHub runs then recorded nothing; restarting a live cast only costs a frame."""
 _COMMAND_SECONDS = 0.5
+_STILL_SECONDS = 1.0
+"""How long a run that ended without a frame waits for one screenshot of its tab, so a stalled capture cannot hold
+up the run's result."""
 _RESULT_SECONDS = 4.0
 """Long enough to read a one-line answer in a shared clip."""
 _CITATION_LINK = re.compile(r"\s*\[(\d+)\]\(<[^>]*>\)")
@@ -112,6 +115,11 @@ class Recording:
     async def _close(self) -> None:
         if self._ffmpeg is None or self._ffmpeg.stdin is None:
             return
+        # Chrome can acknowledge a cast and then send nothing, and a short run, an attached one with no result card,
+        # ends before the cast is restarted: the video is then one still of the tab rather than nothing at all.
+        if self._first_frame_at is None and (frame := self._frame or await self._still()) is not None:
+            self._ffmpeg.stdin.write(frame)
+            self._first_frame_at = time.monotonic()
         if self._first_frame_at is None:
             self._ffmpeg.kill()
             await self._ffmpeg.wait()
@@ -123,6 +131,26 @@ class Recording:
             logger.warning("ffmpeg could not write %s: %s", self._path, stderr.decode(errors="replace").strip()[:400])
             return
         await self._finish(self._first_frame_at)
+
+    async def _still(self) -> bytes | None:
+        """One screenshot of the active tab, or None while frames are withheld or when the capture fails."""
+        if self._session.frames_withheld:
+            return None
+        try:
+            async with asyncio.timeout(_STILL_SECONDS):
+                # A caller who revoked access after the last step gets no screenshot taken at teardown either.
+                await self._session.assert_clear()
+                shot = await self._session.client.send_raw(
+                    "Page.captureScreenshot", {"format": "jpeg", "quality": 95}, self._session.active_session_id
+                )
+            frame = base64.b64decode(shot["data"])
+        except Exception as exc:
+            # Transport exceptions may contain credentials or page text.
+            logger.warning("Page.captureScreenshot for the recording failed (%s)", type(exc).__name__)
+            return None
+        # Checked again for the page as it is once the image exists, as a live frame is when it arrives: the
+        # page can come to show a secret while the capture is in flight.
+        return None if self._session.frames_withheld else frame
 
     def caption(self, step: StepResult) -> None:
         """Caption `step` from when its action began; it arrives once the step is over."""
@@ -228,6 +256,10 @@ class Recording:
     def _on_frame(self, event: ScreencastFrameEvent, session_id: str | None) -> None:
         # CDP keeps one subscriber per event, so recording must also forward frames to the live view.
         self._session._on_screencast_frame(event, session_id)
+        # A background run keeps each tab painting with a 16-pixel cast on a session of its own, which is no
+        # picture of the tab.
+        if session_id != self._session.active_session_id:
+            return
         self._frame_at = time.monotonic()
         # The video holds its last clean frame rather than showing a secret.
         if not self._session.frames_withheld:

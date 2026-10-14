@@ -201,6 +201,11 @@ class Block(Frozen):
     heading_path: tuple[str, ...] = ()
     control_context: SourceControl | None = None
     href: str | None = None
+    list_id: str | None = None
+    list_count: int | None = Field(default=None, ge=0)
+    list_frameless: bool = False
+    """The capture saw no frame inside this block's list element, so a frame it could not open elsewhere on the page
+    cannot hold one of the list's members."""
 
 
 class Capture(Frozen):
