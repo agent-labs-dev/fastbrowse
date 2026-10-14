@@ -97,14 +97,20 @@ def local_chrome(options: LocalChrome) -> Generator[BrowserConnection]:
                 f"--user-data-dir={profile}",
                 "--no-first-run",
                 "--disable-popup-blocking",
-                "about:blank",
+                # A headless tab opened beside the startup tab sometimes never presented a frame: one run in five
+                # had no screencast and a screenshot that never returned. Without a startup window, the run's tab
+                # opens in a window of its own, as headless Chrome's first tab, and that tab always painted.
+                *(("about:blank",) if options.headed else ("--no-startup-window",)),
             ],
             stdout=subprocess.DEVNULL,
             stderr=log,
             env=system_environment(),
         )
         try:
-            yield BrowserConnection(cdp_url=_wait_for_ws(active, proc, log), live_url=None, remote=False)
+            # Headless Chrome has no window for an activated tab to raise, so it keeps the foreground path.
+            yield BrowserConnection(
+                cdp_url=_wait_for_ws(active, proc, log), live_url=None, remote=False, foreground=not options.headed
+            )
         finally:
             proc.terminate()
             try:

@@ -129,6 +129,7 @@ Verified with `cdp-use==1.4.5` against local headless Chrome and a Browser Use c
 | Capability | Mechanism | Local | Cloud |
 |---|---|---|---|
 | Own tab rendered | `Target.createTarget` + `Target.activateTarget` | pass | pass |
+| Own tab rendered behind a visible window | `Target.createTarget(background)` + `Emulation.setFocusEmulationEnabled` + a 16px `Page.startScreencast` on a second session | pass | not used |
 | Upload caller bytes | in-page `DataTransfer` + `File` on the input, `input`/`change` events (no host path needed) | pass | pass |
 | Download bytes | `Fetch.enable` at Response stage for Document responses (download-attribute anchors included), `Fetch.getResponseBody` on `Content-Disposition: attachment` | pass | pass |
 | Cross-origin iframe | `Target.setAutoAttach(flatten)` on the page session, evaluate in the iframe session | pass | pass |
@@ -136,6 +137,21 @@ Verified with `cdp-use==1.4.5` against local headless Chrome and a Browser Use c
 | Dialogs | `Page.javascriptDialogOpening` + `Page.handleJavaScriptDialog` | pass | pass |
 
 The cloud browser ignores `Browser.setDownloadBehavior(deny)`, so bytes come from response interception, never from the remote filesystem. Host-path `DOM.setFileInputFiles` is only valid for a browser on the same machine.
+
+### Foreground and background
+
+Chrome raises and focuses the whole window of a tab that is activated (`Target.activateTarget`,
+`Page.bringToFront`) or created in front, so a session does either only when `BrowserConnection.foreground` is
+set: on a cloud browser, whose live view shows the front tab, on headless Chrome, which has no window, and when
+the caller asks to watch. Otherwise the tab is created with `background: true` and nothing activates it. A tab
+behind another is hidden, so two things stand in for being in front. Focus emulation makes the document visible
+and focused, which runs animation frames and lets it take typing. A screencast keeps the tab's compositor
+awake, without which a screenshot of an idle page waits seconds for a frame; it is 16 pixels, every thousandth
+frame, on a session of its own so that live frames and recordings cannot replace it. Measured on Chrome 155 in
+a headed window beside a focused window of another program: none of the session's commands moved focus.
+
+What still moves it is Chrome's own doing: a popup a page opens is created in front, and a pointer press
+dispatched to the front tab of an inactive window activates that window, as an attached window often is.
 
 ### Attached windows
 

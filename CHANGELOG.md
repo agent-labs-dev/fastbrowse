@@ -25,6 +25,24 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - An icon-only control is named by its icon (a sprite reference, an icon font class, a ligature or an svg title)
   or its accessible description, and carries the card it sits in, so a gallery's trash control is no longer an
   unnamed button the agent cannot tell from the edit link beside it.
+- A run whose `on_frame` callback ignores cancellation still returns and stops its browser. Closing waited on
+  the callback with no limit, so such a run never returned a result and its cloud browser kept billing.
+
+- A troubleshooting page, `docs/troubleshooting.md`, explains each status a run can stop with, its common
+  causes and the next step, so a stopped run's error leads somewhere. The README's results section links to it.
+- Arch Linux has a `fastbrowse` package for the AUR, kept in `packaging/aur`. It installs `fastbrowse` and
+  `fastbrowse-mcp` from the PyPI release and takes every dependency Arch packages from Arch's repositories.
+- A run in a visible browser window works in the background. With `--headed`, or in a browser handed over with
+  `--cdp-url` or `--cdp-port`, the task tab opens behind the window's current tab and the run sends nothing
+  that raises or focuses the window, where each run used to take the keyboard from whatever else was in use.
+  `--foreground` (`foreground` for `run_task`, the SDK and `serve`) brings the tab to the front to watch a run.
+  Chrome still brings a window forward on its own when a headed Chrome starts, when a page opens a popup, and,
+  with `--attach`, on a click in a window's front tab. Headless and cloud runs are unchanged.
+
+- The fastbrowse skill sends agents to `--local`, a kept `--profile`, or a Chrome started for the purpose with
+  its own data directory. It no longer has them look for a debugging endpoint in the user's everyday Chrome,
+  which asks for approval on every connection.
+
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
 - A run that stops with a message quoting the page, such as a field's label, redacts any resolved secret
@@ -42,12 +60,22 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - A field that declares it takes an email address, by its input type or autocomplete token, is no longer typed
   with text that holds no address: the field writer is asked once more first. A sign-in that had read a code
   sometimes typed it into Email and needed recovery to put it right.
+- Headless local Chrome starts without a startup tab, so the run's tab opens in a window of its own. Opened beside
+  the startup tab, it sometimes never painted: about one run in five had no live frames, a screenshot that never
+  returned, and a recording that came back empty. A recording whose screencast sent no frame now ends on one
+  screenshot of the tab, unless a resolved secret is showing.
+
+- Benchmark results from public sites measured in headless local Chrome with a throwaway profile are refused
+  for publication, since about half of those sites refused that browser before the first step. A campaign can
+  check its browser with `fastbrowse.evals.live_tasks.browser_refusal` before it starts; a headed window, a kept
+  profile or a cloud browser is admitted. Public-site results that do not record their browser, or record one
+  that is malformed or unknown, are refused as well.
+- A path the task names on its own, such as "sign in at /login", is an address on the caller's start site, so a
+  run that lands on an empty entry page can open it instead of stopping stuck.
 - A frame the capture cannot open, such as an advertisement, no longer keeps a counted list elsewhere on the
   page from being recorded as read in full, so a finding of none over that list passes its check on every run
   rather than only on runs where the frame loaded. A list that holds a frame, or one known only by adjacent
   records, still needs every frame on the page read.
-- A route the task writes as a path, such as `/login`, is offered as an address on the start page's site,
-  so recovery can open it when the opening shortcut does not.
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
 - Answers whose combined evidence exceeds a prompt are composed and verified in requirement groups, with
