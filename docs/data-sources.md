@@ -1,6 +1,6 @@
 # Benchmark sources
 
-Fastbrowse retains source identities in `fastbrowse.evals.sources`. Parallax owns dataset loading, official
+fastbrowse retains source identities in `fastbrowse.evals.sources`. Parallax owns dataset loading, official
 grader adapters and benchmark execution under its `browser-use` family.
 
 BU Bench uses the pinned Browser Use benchmark dataset and its weighted findings grader. The encrypted

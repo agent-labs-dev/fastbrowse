@@ -256,7 +256,8 @@ async def run_task(
     delivers no live frames or screenshots and cannot `record`, since pixels cannot be attributed to a document.
 
     `check_access` is awaited before browser startup and every observation, capture, screenshot, address, navigation
-    and action, scoped or not. If it raises, the run stops with a `BrowserError` and the exception's text is not kept.
+    and action, scoped or not. If it raises, `run_task` returns a `RunResult` with status `error` and `connect_cdp`
+    raises a `BrowserError`; either error names only the exception's type, and its text is not kept.
 
     Files the run downloads are discarded unless `downloads` names a directory to keep them in. `record` saves
     an MP4 of the tab, ending on the answer; it needs ffmpeg, and shows whatever the pages showed.

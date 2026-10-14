@@ -102,7 +102,7 @@ the quotes behind the answer, and cost by component.
 | `--target-match TEXT` | attach to the first window whose title or URL contains `TEXT` (implies `--attach`) |
 | `--proxy-country CC` | browse from that country (Browser Use's codes: `uk`, `de`, ...; default `us`), so a shop shows its local delivery and prices |
 | `--authorize` | allow submit, pay, delete and send; without it the run stops at `needs_confirmation` first |
-| `--secret NAME=ENV_VAR[@ORIGIN]` | let the agent type `$ENV_VAR` on the declared origin, or the `--start` origin if omitted; models only see `NAME`. An explicit origin needs no `--start` |
+| `--secret NAME=ENV_VAR[@ORIGIN]` | let the agent type `$ENV_VAR` on the declared origin (`https://*.site.com` covers its hosts), or the `--start` origin if omitted; models only see `NAME`. An explicit origin needs no `--start` |
 | `--bitwarden ITEM` | match the vault login's saved URIs against `--start`, then allow its `username`, `password` and, when the item holds an authenticator key, `one_time_code` only on that start origin |
 | `--max-steps N`, `--max-dollars N` | optionally bound steps and model spend; defaults are unlimited. Cloud browser charges are added when it stops |
 | `--downloads DIR` | keep downloaded files |
@@ -182,7 +182,7 @@ Override with `FASTBROWSE_LLM_MODEL` (every purpose), `FASTBROWSE_LLM_MODEL_<PUR
 ### Results
 
 The exit code identifies the run status. Configuration refusals exit 1; invalid command syntax exits 2.
-Programs that only check zero versus nonzero continue to work.
+Only `complete` exits 0, so a program can also check zero versus nonzero.
 
 | Status | Exit | Meaning |
 |:--|--:|:--|
@@ -301,6 +301,17 @@ async def main() -> None:
 
 `resolve_cdp_port(port)` returns the `ws://` URL behind a DevTools port, for a caller that passes `cdp_url=`.
 
+`run_task` and `connect_cdp` take two access controls that the command line, the MCP server and the JavaScript
+SDK do not offer. `allowed_origins=["https://app.example.com"]` limits the documents a run may read and control
+to those exact origins: scheme, host and optional port, with no wildcard or path. A navigation, redirect, frame
+or popup outside the list is refused before it is sent, and a window already open outside it is never read.
+A sign-in that redirects through another origin needs that origin listed too. The list scopes documents, not
+the network: images, scripts and requests a listed page makes to other hosts still load. A scoped run delivers
+no live frames or screenshots, and combining it with `record=` is an error. `check_access=` is an async callback
+awaited before the browser starts and before every read, navigation and action. When it raises, `connect_cdp`
+raises a `BrowserError` and `run_task` returns a `RunResult` with status `error`; either way the error names only
+the exception's type, never its text.
+
 `RunResult.citations` is a tuple of `Citation` objects, also importable from `fastbrowse`. Each has `id`
 (the number in the answer), `text` (the Notes fact), `requirement_id` (or `None`), `url`, `quote` and
 `deep_link`. Each claim in `result.answer` carries numbered Markdown links to its supporting facts.
@@ -340,7 +351,7 @@ package is a TypeScript SDK with no dependencies. With it npm installs one of fi
 as a native binary, the one for your platform: `@fastbrowse/darwin-arm64`, `darwin-x64`, `linux-arm64`,
 `linux-x64` or `win32-x64`. No install script runs and nothing is downloaded on first use, so it installs under
 pnpm and bun with scripts blocked, and it starts offline. It needs Node.js 20 or newer. The npm packages carry
-the PyPI package's version and are published by the same tag, starting with the release after 0.5.18.
+the PyPI package's version and are published by the same tag.
 
 The binary brings no browser. It finds local Chrome, starts a Browser Use Cloud browser, or drives one already
 running, as the command line does. It reads the same keys from the environment of your process
@@ -395,7 +406,7 @@ the options are camelCase. The structured data is in `data`, as in Python. The S
 schema's output type. Data the schema refuses rejects with `OutputValidationError`, which carries the result.
 A JSON Schema object is accepted too; `output` is then `data`, typed `unknown`.
 
-What a run can fill today is narrower than what a schema can say. The server accepts nested objects, arrays,
+What a run can fill is narrower than what a schema can say. The server accepts nested objects, arrays,
 `enum`, `const` and optional values, and refuses any other keyword by name before a browser opens. A run
 fills a flat object of required string, number, integer and boolean fields, as the example has. With any
 other field the run ends `unverified` with no data.
@@ -416,12 +427,12 @@ await fb.run('Log in as standard_user with the saved password and add the backpa
 
 `secrets.resolve` is called each time a value is typed and never for an origin its ref does not cover, so the
 value leaves your vault at that moment and a one-time code is fresh. `until` gets the address the run ended on,
-and anything but `true` keeps the run from `complete`. `onFrame` receives JPEG frames of the active tab;
-without it no frame is sent. A callback that throws ends the run with status `error`. The other options are
-the command line's: `inputs`, `attachments` as bytes, `downloads`, `record`, and the browser choices
-`chrome`, `cloudProfile`, `cdpUrl`, `cdpPort`, `attach`, `targetMatch` and `proxyCountry`, which
-`Fastbrowse.start` also takes as defaults for every run. A run passes `null` for one of them to go without
-that default.
+and anything but `true` keeps the run from `complete`. `onFrame` receives JPEG frames of the active tab; without
+it no frame is sent. A callback that throws ends the run with status `error`. The other options are `run_task`'s:
+`inputs`, `attachments` as bytes, `downloads`, `record`, and the browser choices `chrome`, `cloudProfile`,
+`cdpUrl`, `cdpPort`, `attach`, `targetMatch`, `proxyCountry`, `viewport` and `cloudAllowResizing`, which
+`Fastbrowse.start` also takes as defaults for every run. A run passes `null` for one of them to go without that
+default.
 
 There is no binary for Alpine or another musl system, and none for a platform outside the five. There
 `Fastbrowse.start` rejects with an error that names the platform, and a binary of your own is named with
