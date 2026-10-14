@@ -61,6 +61,32 @@ def page_defect(evidence: PageEvidence | None) -> str | None:
     return None
 
 
+def browser_refusal(browser: object) -> str | None:
+    """Why a benchmark run on public sites must not start, or be published, in `browser`; None when it may.
+
+    `browser` is the run's browser as a campaign records it: `mode`, and for `local-chrome` whether it was
+    `headed` and whether it kept a `profile`, both booleans. In headless Chrome with a throwaway profile about
+    half of the public-site tasks ended `blocked` on an HTTP 403 or a bot check before their first step, against
+    a few percent in a cloud browser (#317), so those rows measured the sites' refusal of that browser, not the
+    agent. A local Chrome record that leaves either field out is read as Chrome's own default, headless with a
+    throwaway profile, since that is what `run_task` starts when nobody asks for more. A missing, malformed or
+    unknown record is refused too: otherwise dropping the record would publish the refused mode unseen.
+    """
+    if not isinstance(browser, Mapping):
+        return "no browser record; a public-site run must record the browser it ran in"
+    mode = browser.get("mode")
+    if mode == "browser-use-cloud":
+        return None
+    if mode != "local-chrome":
+        return f"browser mode {mode!r} is not one public-site runs are admitted in (local-chrome, browser-use-cloud)"
+    if browser.get("headed") is True or browser.get("profile") is True:
+        return None
+    return (
+        "headless local Chrome with a throwaway profile is refused by public benchmark sites; "
+        "run headed, with a kept profile, or in a cloud browser"
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class Outcome:
     answer: str | None

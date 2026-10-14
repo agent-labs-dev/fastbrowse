@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import json
 import threading
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote
@@ -421,7 +421,7 @@ def sites() -> Iterator[OriginSites]:
 @contextlib.asynccontextmanager
 async def scoped(
     connection: BrowserConnection, origin: str, **changes: object
-) -> AsyncIterator[tuple[BrowserSession, CdpPage]]:
+) -> AsyncGenerator[tuple[BrowserSession, CdpPage]]:
     scoped_connection = connection.model_copy(update={"allowed_origins": (origin,), **changes})
     async with BrowserSession(scoped_connection, RecordingArtifactSink()) as session:
         yield session, CdpPage(session, Config())

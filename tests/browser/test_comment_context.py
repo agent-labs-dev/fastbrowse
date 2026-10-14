@@ -55,3 +55,33 @@ async def test_counted_collection_retains_every_visible_member(page: CdpPage, hi
         quotes = [notes.evidence[key].quote for key in collections[0].comparison.records]
         assert any("Author Ash: Added." in quote for quote in quotes)
         assert not any("Footer" in quote for quote in quotes)
+
+
+@pytest.mark.parametrize("inside", [False, True])
+async def test_a_list_records_whether_its_element_holds_a_frame(page: CdpPage, inside: bool) -> None:
+    frame = "<iframe sandbox srcdoc='<p>Advertisement</p>'></iframe>"
+    await page.navigate(
+        "data:text/html,<h1>Birch</h1>"
+        + ("" if inside else frame)
+        + "<h2>Comments (2)</h2><ul><li><p>Elm: The map crashes.</p></li><li><p>Oak: Thanks.</p>"
+        + (frame if inside else "")
+        + "</li></ul>"
+    )
+    captured = await page.capture()
+    members = [block for block in captured.blocks if block.list_id is not None]
+    assert members
+    assert {block.list_frameless for block in members} == {not inside}
+
+
+async def test_a_list_that_hosts_a_shadow_root_is_not_frameless(page: CdpPage) -> None:
+    await page.navigate(
+        "data:text/html,<h1>Birch</h1><h2>Comments (2)</h2>"
+        "<div id=list role=list><div role=listitem><p>Elm: The map crashes.</p></div>"
+        "<div role=listitem><p>Oak: Thanks.</p></div></div>"
+        "<script>document.getElementById('list').attachShadow({mode: 'open'}).innerHTML ="
+        " \"<slot></slot><iframe sandbox srcdoc='<p>More</p>'></iframe>\";</script>"
+    )
+    captured = await page.capture()
+    members = [block for block in captured.blocks if block.list_id is not None]
+    assert members
+    assert {block.list_frameless for block in members} == {False}

@@ -253,6 +253,26 @@ def _evidence(capture: Capture, block: Block, start: int, end: int) -> Evidence:
     )
 
 
+def leading_quotes(capture: Capture, max_chars: int) -> tuple[Evidence, ...]:
+    """The page's first rendered text, quoted block by block, for a page the run stops on without reading."""
+    quotes: list[Evidence] = []
+    left = max_chars
+    for block in capture.blocks:
+        # A typed observation is a description code wrote, not words the page showed, and a download the
+        # session kept is an earlier file appended after the page, not the page itself.
+        if (
+            left <= 0
+            or block.kind is BlockKind.OBSERVATION
+            or block.source_url is not None
+            or not capture.text[block.start : block.end].strip()
+        ):
+            continue
+        end = min(block.end, block.start + left)
+        quotes.append(_evidence(capture, block, block.start, end))
+        left -= end - block.start
+    return tuple(quotes)
+
+
 # A model asked to quote a page rewrites its punctuation: a curly apostrophe becomes a straight one, an en dash
 # a hyphen, an ellipsis three dots. The words are still the page's own, so a byte-exact test drops a correct
 # value, the fact never lands, and the requirement it would have evidenced stays open until the run stalls.
@@ -763,6 +783,11 @@ def _counted_collections(
                 continue
             members = [empty]
         if not members or members[-1].end > read_end:
+            continue
+        if capture.inaccessible_frames and (members[0].list_id is None or not members[0].list_frameless):
+            # An unopened frame could hold members of a list known only by adjacency; an advertisement frame
+            # elsewhere on the page used to withhold coverage from a list read in full, so a correct finding
+            # of none was rejected on whichever run its frame did not load.
             continue
         if count is not None:
             total = members[0].list_count
@@ -1734,7 +1759,7 @@ async def read(
         _counted_collections(
             capture, [key for key in requirement_ids if key not in blocked], part.end, requirements, targets
         )
-        if not notice and not capture.inaccessible_frames
+        if not notice
         else ()
     )
     if field_outputs:

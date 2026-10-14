@@ -20,12 +20,14 @@ jobs:
       contents: read
       # The eval guard reads workflow results for this build.
       actions: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           python-version: "3.14"
           enable-cache: false
@@ -36,6 +38,8 @@ jobs:
       # a tag pushed on a branch or a stray local commit stops here.
       - if: github.event_name == 'push'
         run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - id: version
+        run: echo "version=$(uv version --short)" >> "$GITHUB_OUTPUT"
       # The tag is the Python version, and every npm version is published from it.
       - run: uv run python scripts/npm_versions.py
       - run: uv build
@@ -55,11 +59,11 @@ jobs:
       # say the same thing about a version. A tag whose version has no entry fails here rather than
       # publishing notes nobody wrote.
       - run: uv run python scripts/changelog.py "$(uv version --short)" > "$RUNNER_TEMP/notes.md"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
           path: dist/
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: notes
           path: ${{ runner.temp }}/notes.md
@@ -81,11 +85,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: notes
           path: notes/
@@ -102,7 +106,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
@@ -121,21 +125,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           python-version: "3.13"
           enable-cache: false
       # The tag is this number, which the first job checked.
       - run: echo "VERSION=$(uv version --short)" >> "$GITHUB_ENV"
       # Trusted publishing needs npm 11.5.1, which Node 22 does not carry and Node 24 does.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
       # An older npm fails the publish with a missing-token error that does not name its cause.
       - run: test "$(printf '%s\n' 11.5.1 "$(npm --version)" | sort -V | head -n 1)" = 11.5.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: fastbrowse-*
           path: ${{ runner.temp }}/builds
@@ -172,6 +176,15 @@ jobs:
             # With `./`, or npm reads the argument as a GitHub repository.
             npm publish ./packages/sdk --access public
           fi
+
+  # The Arch package for this release, built from the sources PyPI now holds and run in a clean Arch container.
+  # Its PKGBUILD and .SRCINFO are this run's `aur` artifact. Nothing is pushed to the AUR from here.
+  aur:
+    needs: [build, pypi]
+    permissions: {contents: read}
+    uses: ./.github/workflows/aur.yml
+    with:
+      version: ${{ needs.build.outputs.version }}
 
   # The site shows this release only once it builds again after the version is on PyPI, when its
   # "runs exactly the release below it" is true; site.yml asks it to.
