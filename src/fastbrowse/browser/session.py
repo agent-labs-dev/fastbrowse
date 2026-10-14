@@ -40,6 +40,9 @@ from fastbrowse.page import BrowserError, BrowserUnavailable, Dialog, Tab
 logger = logging.getLogger(__name__)
 
 _SCREENCAST_COMMAND_SECONDS = 0.5
+_FRAME_RELEASE_SECONDS = 2.0
+"""How long closing waits for a cancelled frame callback. The callback is the caller's code, and one that swallows
+its cancellation held the run open with no result while its cloud browser went on billing."""
 CDP_REPLY_SECONDS = 60.0
 """How long a CDP command waits before the browser is asked whether it is still there. A cloud browser's proxy can
 keep the socket open, answering pings, after losing the browser behind it, and a run with no wall-clock limit would
@@ -270,6 +273,7 @@ class BrowserSession:
         self._screencast_lock = asyncio.Lock()
         self._pending_frame: _Frame | None = None
         self._frame_scheduled = False
+        self._delivery: asyncio.Task[None] | None = None
         self._frame_sessions: dict[str, str] = {}
         """OOPIF frame_id -> session_id, keyed by target id per the plan's `frameId/targetId` guidance."""
         self._frame_parents: dict[str, str] = {}
@@ -469,8 +473,13 @@ class BrowserSession:
         background = list(self._background)
         for task in background:
             task.cancel()
+        delivery = self._delivery
         # Download finalizers still need the socket to release intercepted requests.
-        await asyncio.gather(*background, return_exceptions=True)
+        await asyncio.gather(*(task for task in background if task is not delivery), return_exceptions=True)
+        if delivery is not None and delivery in background:
+            await asyncio.wait({delivery}, timeout=_FRAME_RELEASE_SECONDS)
+            if not delivery.done():
+                logger.warning("The frame callback ignored cancellation; closing without it")
         if self._screencast_session_id is not None:
             await self._screencast_command("Page.stopScreencast", None, self._screencast_session_id)
             self._screencast_session_id = None
@@ -607,13 +616,14 @@ class BrowserSession:
             client.register.Page.screencastFrame(self._on_screencast_frame)
         client.register.Fetch.requestPaused(self._on_request_paused)
 
-    def _spawn(self, coro: Coroutine[None, None, None]) -> None:
+    def _spawn(self, coro: Coroutine[None, None, None]) -> asyncio.Task[None] | None:
         if self._closing:
             coro.close()
-            return
+            return None
         task = asyncio.ensure_future(coro)
         self._background.add(task)
         task.add_done_callback(self._background_finished)
+        return task
 
     def _background_finished(self, task: asyncio.Task[None]) -> None:
         self._background.discard(task)
@@ -787,7 +797,7 @@ class BrowserSession:
         self._pending_frame = frame
         if not self._frame_scheduled:
             self._frame_scheduled = True
-            self._spawn(self._deliver_frames())
+            self._delivery = self._spawn(self._deliver_frames())
 
     def _ack(self, frame: _Frame) -> None:
         self._spawn(self._screencast_command("Page.screencastFrameAck", {"sessionId": frame.ack_id}, frame.session_id))
