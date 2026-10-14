@@ -25,7 +25,7 @@ from fastbrowse.clients.validation import (
     with_discarded,
 )
 from fastbrowse.llm import DEFAULT_MAX_OUTPUT_TOKENS, Generation, LLMError, LLMRetriesExhausted, Message
-from fastbrowse.models import CostBasis, CostComponent, CostLine, LLMPurpose
+from fastbrowse.models import CostBasis, CostComponent, CostLine, LLMPurpose, combined_basis
 from fastbrowse.telemetry import BudgetExceeded, Ledger
 
 _TRUNCATION_RETRY_FACTOR = 4
@@ -159,8 +159,7 @@ def _cost(payload: dict[str, JsonValue], purpose: LLMPurpose) -> CostLine:
 
 
 def _total_cost(costs: Sequence[CostLine], purpose: LLMPurpose) -> CostLine:
-    bases = {line.basis for line in costs}
-    basis = next(b for b in (CostBasis.UNKNOWN, CostBasis.ESTIMATED, CostBasis.METERED) if b in bases)
+    basis = combined_basis(costs)
     return CostLine(
         component=CostComponent.LLM,
         purpose=purpose,
@@ -168,6 +167,56 @@ def _total_cost(costs: Sequence[CostLine], purpose: LLMPurpose) -> CostLine:
         dollars=None if basis is CostBasis.UNKNOWN else sum(line.dollars or 0 for line in costs),
         input_tokens=sum(line.input_tokens for line in costs),
         output_tokens=sum(line.output_tokens for line in costs),
+    )
+
+
+_BYOK_FEE = 0.05
+"""OpenRouter's fee on a request sent with the caller's own provider key, as a share of the listed price, billed
+beside the provider's own charge. A bound without it would fall short of that pair."""
+
+_PER_REQUEST_PRICES = frozenset({"request", "web_search"})
+"""OpenRouter price keys charged once per request; `image` is charged per input image and every other key per
+token. A key added later is read as per token, which can only raise the bound."""
+
+
+def _ceiling(payload: dict[str, JsonValue]) -> tuple[int, float, float, float] | None:
+    """The context window, highest token price, per-request fees and per-image price across a model's endpoints.
+
+    Routing can send a request to any of them, so the largest of each is taken. None when a price cannot be read
+    or is negative, as OpenRouter lists a price set per request: no ceiling holds for those.
+    """
+    endpoints = object_value(payload.get("data")).get("endpoints")
+    if not isinstance(endpoints, list) or not endpoints:
+        return None
+    context, per_token, per_request, per_image = 0, 0.0, 0.0, 0.0
+    for entry in endpoints:
+        endpoint = object_value(entry)
+        context = max(context, token_count(endpoint.get("context_length")))
+        request, image = 0.0, 0.0
+        for key, value in object_value(endpoint.get("pricing")).items():
+            if key == "discount":
+                continue  # a discount lowers the charge, and leaving it out keeps the bound above it
+            price = dollars(value)
+            if key in _PER_REQUEST_PRICES:
+                request += price
+            elif key == "image":
+                image = price
+            else:
+                per_token = max(per_token, price)
+        per_request, per_image = max(per_request, request), max(per_image, image)
+    return (context, per_token, per_request, per_image) if context else None
+
+
+def _images(body: dict[str, JsonValue]) -> int:
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return 0
+    return sum(
+        1
+        for message in messages
+        if isinstance(message, dict) and isinstance(parts := message.get("content"), list)
+        for part in parts
+        if isinstance(part, dict) and part.get("type") == "image_url"
     )
 
 
@@ -196,6 +245,7 @@ class OpenAICompatibleLLM:
         self._models = dict(models)
         self._reasoning_effort = reasoning_effort
         self._provider_routing = provider_routing
+        self._ceilings: dict[str, tuple[int, float, float, float]] = {}
 
     def _scrubbed(self, text: str) -> str:
         return text.replace(self._api_key, "[api key]") if self._api_key else text
@@ -234,7 +284,13 @@ class OpenAICompatibleLLM:
         except ValueError:
             raise LLMError(f"Invalid LLM response; HTTP {response.status_code}: {body_excerpt(response)}") from None
 
-    async def _settled_cost(self, payload: dict[str, JsonValue], purpose: LLMPurpose) -> CostLine:
+    async def _settled_cost(
+        self, payload: dict[str, JsonValue], purpose: LLMPurpose, body: dict[str, JsonValue]
+    ) -> CostLine:
+        cost = await self._receipt_cost(payload, purpose)
+        return cost if cost.dollars is not None else await self._bounded(cost, body)
+
+    async def _receipt_cost(self, payload: dict[str, JsonValue], purpose: LLMPurpose) -> CostLine:
         cost = _cost(payload, purpose)
         generation_id = payload.get("id")
         if cost.dollars is not None or not isinstance(generation_id, str) or not generation_id:
@@ -279,6 +335,46 @@ class OpenAICompatibleLLM:
             except (httpx.HTTPError, TimeoutError, ValueError, TypeError, OverflowError):
                 continue
         return cost
+
+    async def _bounded(self, cost: CostLine, body: dict[str, JsonValue]) -> CostLine:
+        """An unknown charge bounded from the model's listed prices, or left unknown when none can be read.
+
+        A request that timed out, or a response without usage whose receipt never came, stopped every run with a
+        dollar cap although it had spent a fraction of a cent. No call can bill more tokens than its context
+        window holds, prompt and output together, so that window at the highest price is a true ceiling where the
+        output cap would not be: some routes do not count reasoning against it.
+        """
+        model = body.get("model")
+        if not isinstance(model, str) or httpx.URL(self._base_url).host != "openrouter.ai":
+            return cost
+        ceiling = self._ceilings.get(model)
+        for attempt in range(0 if ceiling is not None else 3):
+            if attempt:
+                await asyncio.sleep(1)
+            try:
+                async with asyncio.timeout(2.0):
+                    response = await self._http.get(
+                        f"{self._base_url}/models/{model}/endpoints",
+                        headers={"Authorization": f"Bearer {self._api_key}"},
+                        timeout=2.0,
+                    )
+            except (httpx.HTTPError, TimeoutError):
+                continue
+            if not response.is_success:
+                continue
+            try:
+                ceiling = _ceiling(json_object(response))
+            except (ValueError, TypeError, OverflowError):
+                return cost
+            if ceiling is None:
+                return cost
+            self._ceilings[model] = ceiling
+            break
+        if ceiling is None:
+            return cost
+        context, per_token, per_request, per_image = ceiling
+        bound = (context * per_token + per_request + per_image * _images(body)) * (1 + _BYOK_FEE)
+        return cost.model_copy(update={"basis": CostBasis.BOUNDED, "dollars": bound})
 
     async def generate[T: BaseModel](
         self,
@@ -333,14 +429,17 @@ class OpenAICompatibleLLM:
                             except ValueError:
                                 continue
                             costs[index] = _cost(receipt, purpose)
-                            costs[index] = await self._settled_cost(receipt, purpose)
+                            costs[index] = await self._settled_cost(receipt, purpose, body)
                         # A hedge twin cancelled once its sibling answered carried the same prompt, so it is
-                        # charged as that answer was, as an estimate. Other requests without a response stay unknown.
+                        # charged as that answer was, as an estimate. Other requests without a response are bounded.
                         known = next((c for c in costs[start:] if c.dollars is not None), None)
                         unknown = [i for i in range(start, len(costs)) if costs[i].dollars is None]
                         if known is not None:
                             for index in unknown[:twins]:
                                 costs[index] = known.model_copy(update={"basis": CostBasis.ESTIMATED})
+                        for index in range(start, len(costs)):
+                            if costs[index].dollars is None:
+                                costs[index] = await self._bounded(costs[index], body)
 
                     # Repeated cancellation must join receipt lookups before the run reports its final spend.
                     settling = asyncio.create_task(settle(usage.discarded_responses, offset, usage.cancelled_twins))
@@ -359,7 +458,7 @@ class OpenAICompatibleLLM:
                 # carried the same prompt, so it is charged as the answer was; charging it as unknown instead
                 # made every run with one slow call stop at its dollar cap.
                 costs.append(with_discarded(_cost(payload, purpose), usage))
-                costs[-1] = with_discarded(await self._settled_cost(payload, purpose), usage)
+                costs[-1] = with_discarded(await self._settled_cost(payload, purpose, body), usage)
                 if _truncated(payload):
                     _grow_cap(body, attempt, max_output_tokens, purpose)
                     continue

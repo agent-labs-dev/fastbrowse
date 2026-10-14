@@ -873,3 +873,95 @@ async def test_twin_cancelled_after_its_sibling_answered_is_charged_as_that_answ
         (CostBasis.ESTIMATED, 0.001),
     ]
     ledger.check()
+
+
+_ENDPOINTS: dict[str, JsonValue] = {
+    "data": {
+        "id": "writer",
+        "endpoints": [
+            {"context_length": 1000, "pricing": {"prompt": "0.000001", "completion": "0.000004", "request": "0"}},
+            {
+                "context_length": 2000,
+                "pricing": {"prompt": "0.000002", "completion": "0.000003", "image": "0.01", "discount": 0.5},
+            },
+        ],
+    }
+}
+_CEILING = (2000 * 0.000004 + 0.01) * 1.05
+"""The largest window at the highest token price, the image fee once, and the BYOK fee on top."""
+
+
+async def test_requests_without_a_response_are_bounded_so_a_capped_run_can_go_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every attempt timed out, so no cost was reported; the run must hear the failure, not a stopped budget."""
+    monkeypatch.setattr(validation, "RETRY_DELAYS_SECONDS", (0.0,))
+    looked_up: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            looked_up.append(request.url.path)
+            return httpx.Response(200, json=_ENDPOINTS)
+        raise httpx.ReadTimeout("no response", request=request)
+
+    image = Message(role="user", content="Write", images=(b"\x89PNG\r\n\x1a\n0",))
+    ledger = Ledger(Limits(max_dollars=28.0))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(LLMRetriesExhausted):
+            await OpenAICompatibleLLM(
+                "key", http=http, base_url="https://openrouter.ai/api/v1", models={LLMPurpose.FIELD_TEXT: "writer"}
+            ).generate(LLMPurpose.FIELD_TEXT, [image], Result, ledger=ledger)
+    assert looked_up == ["/api/v1/models/writer/endpoints"]
+    assert [line.basis for line in ledger.lines] == [CostBasis.BOUNDED, CostBasis.BOUNDED]
+    assert ledger.breakdown().known_dollars == pytest.approx(2 * _CEILING)
+    ledger.check()
+
+
+async def test_a_response_without_cost_or_receipt_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def no_delay(_: float) -> None:
+        pass
+
+    monkeypatch.setattr("fastbrowse.clients.openai_compatible.asyncio.sleep", no_delay)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/endpoints"):
+            return httpx.Response(200, json=_ENDPOINTS)
+        if request.method == "GET":
+            return httpx.Response(404)
+        return httpx.Response(
+            200,
+            json={
+                "id": "generation-1",
+                "choices": [{"message": {"content": '{"count":3}'}}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 2},
+            },
+        )
+
+    ledger = Ledger(Limits(max_dollars=28.0))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await OpenAICompatibleLLM(
+            "key", http=http, base_url="https://openrouter.ai/api/v1", models={LLMPurpose.PLAN: "writer"}
+        ).generate(LLMPurpose.PLAN, [], Result, ledger=ledger)
+    ledger.record(result.cost)
+    assert result.cost.basis is CostBasis.BOUNDED
+    assert result.cost.dollars == pytest.approx((2000 * 0.000004) * 1.05)
+    assert result.cost.input_tokens == 7
+
+
+@pytest.mark.parametrize("price", ["-1", "free", None])
+async def test_a_price_with_no_ceiling_keeps_the_spend_guard(price: JsonValue, monkeypatch) -> None:
+    monkeypatch.setattr(validation, "RETRY_DELAYS_SECONDS", ())
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            endpoint = {"context_length": 1000, "pricing": {"prompt": "0.000001", "completion": price}}
+            return httpx.Response(200, json={"data": {"endpoints": [endpoint]}})
+        raise httpx.ReadTimeout("no response", request=request)
+
+    ledger = Ledger(Limits(max_dollars=28.0))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(BudgetExceeded, match="cannot be enforced"):
+            await OpenAICompatibleLLM(
+                "key", http=http, base_url="https://openrouter.ai/api/v1", models={LLMPurpose.PLAN: "writer"}
+            ).generate(LLMPurpose.PLAN, [], Result, ledger=ledger)
+    assert ledger.breakdown().has_unknown

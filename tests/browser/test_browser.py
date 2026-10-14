@@ -11,9 +11,12 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
+from cdp_use.client import CDPClient
 
+from fastbrowse.adapters.local_chrome import find_chrome, local_chrome
 from fastbrowse.browser.page import CdpPage
 from fastbrowse.browser.session import BrowserSession
+from fastbrowse.clients.environment import load_settings
 from fastbrowse.config import Config, ObservationLimits
 from fastbrowse.effects import effect
 from fastbrowse.models import Attachment, BrowserConnection, Operation, StepOutcome
@@ -276,6 +279,39 @@ async def test_confirm_dialog_handled_via_dialog_operation(
         browser_session, browser_session.active_session_id, "document.getElementById('dialog-result').textContent"
     )
     assert value == "confirmed"
+
+
+async def test_unnamed_card_controls_are_named_by_their_icon_and_card(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    # A gallery's icon-only trash controls read "button" beside an edit link, so the choice picked the edit link or
+    # refused the trash control it could not tie to an image.
+    await page.navigate(f"{main_site}/gallery.html")
+    obs = await page.observe()
+    buttons = [(c.label, c.context) for c in obs.controls if c.role == "button"]
+    assert buttons == [
+        ("trash icon", "old-banner.png"),
+        ("trash icon", "new-banner.png"),
+        ("trash can icon", "old-logo.png"),
+        ("Delete image", None),
+        ("delete icon", "old-icon.png"),
+        ("Remove from gallery", "new-icon.png"),
+        # The card's action row has its own caption, which every card repeats and which names no image.
+        ("x circle icon", "Alpha"),
+    ]
+    trash = next(c for c in obs.controls if c.label == "trash can icon")
+    result = await page.act(Action(operation=Operation.CLICK, target_id=trash.id), obs)
+    assert result.outcome is StepOutcome.EXECUTED
+    await wait_until(lambda: browser_session.pending_dialog() is not None)
+    confirm = await page.observe()
+    assert confirm.dialog is not None and confirm.dialog.message == "Delete old-logo.png?"
+    async with asyncio.timeout(10):
+        handled = await page.act(Action(operation=Operation.DIALOG, accept_dialog=True), confirm)
+    assert handled.outcome is StepOutcome.EXECUTED
+    status = "document.getElementById('status').textContent"
+    assert await eval_value(browser_session, browser_session.active_session_id, status) == "Deleted c3"
+    after = await page.observe()
+    assert [c.context for c in after.controls if c.label == "trash can icon"] == []
 
 
 async def test_identical_labels_carry_their_card_as_context(loaded_page: CdpPage) -> None:
@@ -851,6 +887,74 @@ async def test_a_browser_handed_over_by_cdp_url_drives_and_survives_the_run(
         assert await CdpPage(after, Config()).observe() is not None
 
 
+async def test_a_background_run_drives_its_tab_without_bringing_it_forward(
+    chrome_connection: BrowserConnection, artifact_sink: RecordingArtifactSink, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run in a visible window clicks, types and captures behind the window's current tab, and activates nothing."""
+    sent: list[tuple[str, Any]] = []
+    send_raw = CDPClient.send_raw
+
+    async def traced(self: CDPClient, method: str, params: Any = None, session_id: str | None = None) -> Any:
+        sent.append((method, params))
+        return await send_raw(self, method, params, session_id)
+
+    monkeypatch.setattr(CDPClient, "send_raw", traced)
+    background = chrome_connection.model_copy(update={"foreground": False})
+    async with BrowserSession(background, artifact_sink) as session:
+        page = CdpPage(session, Config())
+        await page.navigate(
+            "data:text/html,<title>Idle</title><button onclick=\"document.title='Clicked'\">Go</button>"
+            "<input aria-label='Name'>"
+        )
+        observation = await page.observe()
+        await page.act(Action(operation=Operation.CLICK, target_id=find(observation, "Go").id), observation)
+        observation = await page.observe()
+        assert observation.title == "Clicked"
+        filled = await page.act(
+            Action(operation=Operation.FILL, target_id=find(observation, "Name").id, text="Ada"), observation
+        )
+        assert filled.outcome is StepOutcome.EXECUTED
+        assert await eval_value(session, session.active_session_id, "document.querySelector('input').value") == "Ada"
+        assert await eval_value(
+            session, session.active_session_id, "document.visibilityState === 'visible' && document.hasFocus()"
+        )
+        # A tab behind another that has gone idle paints nothing new, and a capture would wait on its next frame.
+        await asyncio.sleep(1)
+        async with asyncio.timeout(2):
+            assert (await page.screenshot()).startswith(b"\x89PNG")
+    methods = {method for method, _ in sent}
+    assert not {"Target.activateTarget", "Page.bringToFront"} & methods
+    assert [params for method, params in sent if method == "Target.createTarget"] == [
+        {"url": "about:blank", "background": True}
+    ]
+
+
+async def test_a_background_run_sets_up_tabs_behind_an_open_confirm_once_it_is_answered(
+    chrome_connection: BrowserConnection, artifact_sink: RecordingArtifactSink, main_site: str
+) -> None:
+    """A native dialog holds its renderer, so setup sent to a page behind one, focus emulation included, waits
+    for the answer. The run must still be able to answer it, and setup must then finish rather than hang."""
+    background = chrome_connection.model_copy(update={"foreground": False})
+    async with BrowserSession(background, artifact_sink) as session:
+        await CdpPage(session, Config()).navigate(f"{main_site}/")
+        opener = session.active_session_id
+        # The popup shares the opener's renderer, which the confirm holds until it is answered.
+        await session.client.send.Runtime.evaluate(
+            params={"expression": "setTimeout(() => { window.open('/popup.html'); confirm('Remove?') }, 0)"},
+            session_id=opener,
+        )
+        await wait_until(lambda: session.pending_dialog() is not None and bool(session.popups()))
+        popup = session.popups()[-1]
+        prepared = asyncio.ensure_future(session._prepare_session(opener))
+        await asyncio.sleep(0.5)
+        async with asyncio.timeout(5):
+            await session.handle_dialog(True)
+            assert await asyncio.shield(session._popups[popup][1])
+            await prepared
+        await session.switch_tab(popup)
+        assert await eval_value(session, session.active_session_id, "document.hasFocus()")
+
+
 @pytest.mark.parametrize("path", ["/report.csv", "/export-report", "/report.csv?short", "/report.csv?partial"])
 async def test_download_evidence_is_bounded_and_cites_the_response(page: CdpPage, main_site: str, path: str) -> None:
     from fastbrowse.page import BlockKind
@@ -1029,3 +1133,17 @@ async def test_hover_quote_context_does_not_attach_to_unrelated_or_reordered_con
         assert all(block.control_context is None for block in captured.blocks)
     if mutation == "mixed":
         assert "Revealed name" in captured.text and "Unrelated name" in captured.text
+
+
+async def test_a_headless_run_tab_has_a_window_of_its_own_and_paints() -> None:
+    """A tab opened beside headless Chrome's startup tab sometimes never presented a frame, so its screencast sent
+    nothing and a screenshot of it never returned."""
+    settings = load_settings()
+    if find_chrome(settings.chrome) is None:
+        pytest.skip("Chrome is not installed")
+    with local_chrome(settings.local_chrome()) as connection:
+        async with BrowserSession(connection, RecordingArtifactSink()) as session:
+            targets = (await session.client.send.Target.getTargets())["targetInfos"]
+            assert [target["targetId"] for target in targets if target["type"] == "page"] == [session.active_target_id]
+            async with asyncio.timeout(5):
+                await session.client.send.Page.captureScreenshot(session_id=session.active_session_id)

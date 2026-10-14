@@ -1,7 +1,7 @@
 """Run-level contracts: what a caller passes in and what a run returns."""
 
 import base64
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -194,6 +194,9 @@ class CostBasis(StrEnum):
     """Reported by the provider for this exact call."""
     ESTIMATED = "estimated"
     """Computed from token counts and a price table."""
+    BOUNDED = "bounded"
+    """No charge was reported, and `dollars` is the most the call could have cost: its model's whole context
+    window at the highest token price any of its routes lists. Never less than the charge."""
     UNKNOWN = "unknown"
     """No charge information; never counted as zero."""
 
@@ -206,6 +209,14 @@ class LLMPurpose(StrEnum):
     VERIFY = "verify"
     COMPOSE = "compose"
     SHORTCUT = "shortcut"
+
+
+def combined_basis(lines: Iterable["CostLine"]) -> CostBasis:
+    """The basis of a sum of lines: the weakest claim among them. A bound plus an estimate is an estimate, since
+    the estimate may be under its charge."""
+    bases = {line.basis for line in lines}
+    order = (CostBasis.UNKNOWN, CostBasis.ESTIMATED, CostBasis.BOUNDED, CostBasis.METERED)
+    return next((basis for basis in order if basis in bases), CostBasis.METERED)
 
 
 class CostLine(Frozen):
@@ -299,7 +310,12 @@ class BrowserConnection(Frozen):
     """The cloud browser's id, when a cloud browser was started for this run. A caller that has to stop it
     out of band (a user pressing cancel, a subscription ending) cannot do so without this."""
     remote: bool
-    """True when the browser runs on another host: tabs must be foregrounded and files move as bytes."""
+    """True when the browser runs on another host: files move as bytes."""
+    foreground: bool = False
+    """The run brings its tab, and with it the browser window, to the front. Right where no desktop follows the
+    window (a cloud browser, whose live view shows the front tab, or headless Chrome) and when someone asked to
+    watch. Otherwise the tab opens behind the window's current one and renders under focus emulation, so the
+    window is neither raised nor focused."""
     attach: bool = False
     """True when attaching to an existing window (e.g. Electron or external Chrome) without creating a tab."""
     target_match: str | None = None

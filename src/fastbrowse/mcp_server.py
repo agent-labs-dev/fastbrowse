@@ -4,7 +4,8 @@
     fastbrowse-mcp --transport http --port 8765            # streamable HTTP on 127.0.0.1, at /mcp
 
 The operator sets on the command line what a calling model may do, and the model sets the rest per call:
-- The browser (`--local`, `--headed`, `--profile`) and where downloads are kept are fixed for the server.
+- The browser (`--local`, `--headed`, `--profile`, `--foreground`) and where downloads are kept are fixed for
+  the server.
 - `--max-steps`, `--max-dollars` and `--max-seconds` are optional ceilings: a call may ask for less, never more.
 - An irreversible action stops the run at `needs_confirmation`. Only a server started with `--allow-authorize`
   lets a call pass `authorize` to go through it, so a model cannot grant itself the right to pay or send.
@@ -91,6 +92,8 @@ class ServerConfig:
 
     browser_api_key: str | None = None
     chrome: LocalChrome = field(default_factory=LocalChrome)
+    foreground: bool = False
+    """Runs bring their tab and a visible window to the front, to be watched, instead of working behind it."""
     cloud_profile: str | None = None
     """A profile on the operator's cloud account whose sign-ins every call runs with. A calling model
     cannot choose it: which accounts the browser is signed into is the operator's decision, not the task's."""
@@ -418,6 +421,7 @@ def build_server(
                         start=start,
                         browser_api_key=config.browser_api_key,
                         chrome=config.chrome,
+                        foreground=config.foreground,
                         cloud_profile=config.cloud_profile,
                         output_schema=schema,
                         limits=limits,
@@ -513,6 +517,12 @@ def parse(argv: list[str]) -> argparse.Namespace:
         "--profile", type=Path, default=None, help="Chrome profile directory kept between runs (implies --local)"
     )
     parser.add_argument(
+        "--foreground",
+        action="store_true",
+        help="bring each run's tab and its browser window to the front, to watch it; "
+        "otherwise a visible window stays in the background",
+    )
+    parser.add_argument(
         "--cloud-profile", metavar="ID", default=None, help="a Browser Use Cloud profile to run signed in as"
     )
     parser.add_argument("--allow-authorize", action="store_true", help="let a call pass authorize")
@@ -566,6 +576,7 @@ async def configure(args: argparse.Namespace, settings: Settings, environ: Mappi
     return ServerConfig(
         browser_api_key=options.browser_key(settings, cloud),
         chrome=chrome,
+        foreground=args.foreground,
         cloud_profile=args.cloud_profile,
         ceilings=Limits(max_steps=args.max_steps, max_dollars=args.max_dollars, max_seconds=args.max_seconds),
         allow_authorize=args.allow_authorize,
