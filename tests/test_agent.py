@@ -81,7 +81,7 @@ from fastbrowse.page import (
     Page,
     SiteUnreachable,
 )
-from fastbrowse.planner import Plan, Requirement, RequirementKind, RunReport
+from fastbrowse.planner import OutputTarget, Plan, Requirement, RequirementKind, RunReport
 from fastbrowse.policy import Decision, HistoryEntry, ReadAssessment, build_request, decide
 from fastbrowse.retrieval import TRANSACTION_CONTRADICTED, ComposedAnswer
 from fastbrowse.safety import Redactor, ScopedSecrets
@@ -111,6 +111,13 @@ async def run_state() -> _RunState:
         planning=planning,
         ready_plan=plan,
     )
+
+
+def open_outputs(state: _RunState, *targets: tuple[str, str]) -> None:
+    """Leave grouped checks open as partition_plan makes them, each with its field and subject."""
+    made = {f"Report {name} for {subject}.": OutputTarget(field=name, subject=subject) for name, subject in targets}
+    state.output_targets = {**state.output_targets, **made}
+    state.open_answer_outputs = tuple(made)
 
 
 def field(label: str = "Search elsewhere") -> Control:
@@ -167,6 +174,40 @@ async def test_field_writer_receives_popup_context_and_other_field_values() -> N
     assert prompt["page"]["text"] == "Choose a station"
     # In order: told only the task, the writer typed a later correction on the first pass.
     assert prompt["requirements"] == list(steps)
+
+
+async def test_search_writer_receives_unverified_outputs_even_for_a_read_requirement() -> None:
+    state = await run_state()
+    requirement = Requirement(id="r", text="Read Project Birch replies.", kind=RequirementKind.INFORMATION)
+    state.ready_plan = Plan(requirements=(requirement,), answer_expected=True)
+    page = capture((BlockKind.PARAGRAPH, "Project Birch"))
+    state.notes.add(
+        Fact(requirement_id="r", text=page.text, evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
+    )
+    state.open_answer_outputs = ("Author replies for Project Birch",)
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    context = await agent._field_context(state, observation(()), field())
+    assert context["unresolved_requirements"] == []
+    assert context["unverified_outputs"] == ["Author replies for Project Birch"]
+
+
+@pytest.mark.parametrize("open_output", [False, True])
+async def test_site_search_is_written_from_an_open_output(open_output: bool) -> None:
+    """With an output still unverified, the writer is told a site search may look for its target."""
+    state = await run_state()
+    requirement = Requirement(id="r", text="Read Project Birch replies.", kind=RequirementKind.INFORMATION)
+    state.ready_plan = Plan(requirements=(requirement,), answer_expected=True)
+    if open_output:
+        open_outputs(state, ("author replies", "Project Birch"))
+    llm = ScriptedLLM([{"missing": False, "text": "Project Birch"}])
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), llm)
+    target = field("Search projects")
+    assert await agent._generate_text(state, observation((target,)), target) == "Project Birch"
+    system, user = llm.calls[0][1]
+    assert ("form a query from a named target" in system.content) is open_output
+    assert json.loads(user.content).get("unverified_outputs") == (
+        ["Report author replies for Project Birch."] if open_output else None
+    )
 
 
 async def test_a_field_given_values_in_turn_types_them_in_order() -> None:
@@ -354,6 +395,31 @@ async def test_a_value_the_task_states_is_asked_for_again_rather_than_ending_the
 
     assert await agent._generate_text(await run_state(), observation((target,)), target) == "Lovelace"
     assert "never invent one" in llm.calls[1][1][-1].content
+
+
+@pytest.mark.parametrize("declared", [{"input_type": "email"}, {"input_type": "text", "autocomplete": "email"}])
+async def test_a_saved_code_written_for_an_email_field_is_asked_for_again(declared: dict[str, str]) -> None:
+    """Given a field declaring input_type email and a code in the notes, the writer typed the code into Email in
+    7 of 12 two-step sign-ins; the declared kind is checked before typing, not left to recovery."""
+    target = field("Email").model_copy(update={"value": None, "role": "textbox", **declared})
+    llm = ScriptedLLM([{"missing": False, "text": "482913"}, {"missing": False, "text": "ada@example.test"}])
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), llm)
+
+    assert await agent._generate_text(await run_state(), observation((target,)), target) == "ada@example.test"
+    assert len(llm.calls) == 2
+    assert "takes an email address" in llm.calls[1][1][-1].content
+
+
+async def test_a_value_fitting_its_declared_kind_is_typed_without_asking_again() -> None:
+    email = field("Email").model_copy(update={"value": None, "input_type": "email"})
+    code = field("Code").model_copy(update={"value": None, "input_type": "text"})
+    llm = ScriptedLLM([{"missing": False, "text": "ada@example.test"}, {"missing": False, "text": "482913"}])
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), llm)
+    state = await run_state()
+
+    assert await agent._generate_text(state, observation((email,)), email) == "ada@example.test"
+    assert await agent._generate_text(state, observation((code,)), code) == "482913"
+    assert len(llm.calls) == 2
 
 
 async def test_a_second_missing_verdict_goes_to_recovery() -> None:
@@ -4690,6 +4756,60 @@ def form_fields() -> tuple[Control, Control]:
     return name, email
 
 
+async def test_a_batch_stops_before_a_value_that_does_not_fit_its_field_and_does_not_keep_it() -> None:
+    name, email = form_fields()
+    email = email.model_copy(update={"input_type": "email"})
+    page = Mock(spec=Page)
+    page.redrawn = AsyncMock(return_value=False)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=False))
+    llm = ScriptedLLM(
+        [
+            {
+                "fields": [
+                    {"id": "Name", "missing": False, "text": "Ada"},
+                    {"id": "Email", "missing": False, "text": "482913"},
+                ]
+            }
+        ]
+    )
+    agent = Agent(page, ScriptedJev({}), llm)
+    state = await run_state()
+    obs = observation((name, email))
+
+    assert await agent._fill_form(state, obs, _code_decision(Operation.FILL, name))
+    assert [call.args[0].text for call in page.act.call_args_list] == ["Ada"]
+    assert (obs.document_key, email.id) not in state.form_values
+
+
+async def test_a_batch_value_listed_in_turn_is_checked_as_it_would_be_typed() -> None:
+    """The batch kept a field whose text was an address while its first listed value was a code, and the field's
+    own path then typed that code from the kept value without checking it."""
+    name, email = form_fields()
+    email = email.model_copy(update={"input_type": "email"})
+    page = Mock(spec=Page)
+    page.redrawn = AsyncMock(return_value=False)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=False))
+    listed: JsonValue = {
+        "id": "Email",
+        "missing": False,
+        "text": "ada@example.test",
+        "values": ["482913", "ada@example.test"],
+    }
+    llm = ScriptedLLM(
+        [
+            {"fields": [{"id": "Name", "missing": False, "text": "Ada"}, listed]},
+            {"missing": False, "text": "ada@example.test"},
+        ]
+    )
+    agent = Agent(page, ScriptedJev({}), llm)
+    state = await run_state()
+    obs = observation((name, email))
+
+    assert await agent._fill_form(state, obs, _code_decision(Operation.FILL, name))
+    assert [call.args[0].text for call in page.act.call_args_list] == ["Ada"]
+    assert await agent._generate_text(state, obs, email) == "ada@example.test"
+
+
 @pytest.mark.parametrize("continues", [True, False])
 async def test_form_batch_writes_once_and_stops_when_browser_cannot_confirm(continues: bool) -> None:
     name, email = form_fields()
@@ -6080,7 +6200,11 @@ async def test_unchanged_failed_output_evidence_cannot_reset_or_repeat_completio
     assert state.ledger.jev_calls == 0 and state.ledger.llm_calls == 1
 
 
-async def test_re_evidencing_partial_output_quotes_is_not_new_read_progress() -> None:
+@pytest.mark.parametrize("novelty", [0.0, 0.95])
+@pytest.mark.parametrize("rebound_requirements", [False, True])
+async def test_re_evidencing_partial_output_quotes_is_not_new_read_progress(
+    novelty: float, rebound_requirements: bool
+) -> None:
     state = await _reading_state()
     here = _at("https://example.test/live/", _button("Refresh"))
     response: JsonValue = {
@@ -6088,14 +6212,22 @@ async def test_re_evidencing_partial_output_quotes_is_not_new_read_progress() ->
         "answered": True,
     }
     llm = ScriptedLLM([response, response])
-    agent = Agent(Mock(spec=Page), ScriptedJev({"r1": "synthesis"}), llm)
+    jev = ScriptedJev({"r1": "synthesis"}, noul=novelty)
+    agent = Agent(Mock(spec=Page), jev, llm)
     page = capture((BlockKind.PARAGRAPH, "Total: 12"))
     assert await agent._read(state, page, here) == (True, False)
     assert state.notes.evidenced("r1")
-    state.notes.unevidence(("r1",))
+    if not rebound_requirements:
+        state.notes.unevidence(("r1",))
+    state.owes_read = rebound_requirements
     state.open_answer_outputs = ("Report the remaining requested field.",)
-    assert await agent._read(state, page, here) == (False, False)
-    assert "remaining requested field" in llm.calls[-1][1][-1].content
+    state.oversized_answer = True
+    recaptured = capture((BlockKind.PARAGRAPH, "Total: 12"), (BlockKind.PARAGRAPH, "Updated a moment ago"))
+    assert await agent._read(state, recaptured, here) == (False, False)
+    assert "novelty" in jev.requests[-1]
+    assert len(llm.calls) == len(state.notes.facts) == (1 if novelty == 0 else 2)
+    if novelty:
+        assert "remaining requested field" in llm.calls[-1][1][-1].content
 
 
 def test_derived_paraphrases_do_not_create_new_read_evidence() -> None:
@@ -6678,3 +6810,45 @@ def test_public_dom_observation_citations_keep_the_plain_redacted_source_address
     assert "#:~:text=" not in answer
     assert "private-token" not in answer
     assert citation.quote == "Sign in: disabled"
+
+
+@pytest.mark.parametrize("renews", [False, True])
+async def test_revisiting_an_action_state_with_new_context_renews_recovery_once(renews: bool) -> None:
+    from tests.test_retrieval import block_evidence, capture
+
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="login", text="Sign in with the code.", kind=RequirementKind.ACTION),),
+        answer_expected=False,
+    )
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    login = observation((_button("Sign in"),))
+    agent._settle(state, login)
+    state.recoveries = 2
+    phone = capture((BlockKind.PARAGRAPH, "Account code: 123456"), url="https://example.test/phone")
+    context = Fact(text=phone.text, evidence=block_evidence(phone, "s0"), reader=FactReader.LLM)
+    state.notes.add(context)
+    agent._settle(state, login, renews=renews)
+    assert state.recoveries == (0 if renews else 2)
+    state.recoveries = 2
+    state.notes.add(context.model_copy(update={"text": "The same code is available."}))
+    agent._settle(state, login)
+    assert state.recoveries == 2
+    state.notes = Notes()
+    agent._settle(state, login)
+    state.notes.add(context)
+    agent._settle(state, login)
+    assert state.recoveries == 2
+
+
+async def test_ordinary_field_writer_does_not_receive_output_recovery_instructions() -> None:
+    state = await run_state()
+    llm = ScriptedLLM([{"text": "ada@example.com", "missing": False}])
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), llm)
+    email = field("Email").model_copy(update={"input_type": "email"})
+    await agent._generate_text(state, observation((email,)), email)
+    messages = llm.calls[0][1]
+    context = json.loads(messages[-1].content)
+    assert "unresolved_requirements" not in context
+    assert "unverified_outputs" not in context
+    assert "For a search field" not in messages[0].content

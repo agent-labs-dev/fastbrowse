@@ -22,7 +22,7 @@ uv run python scripts/changelog.py --check "$(uv version --short)"
 uv run python scripts/npm_versions.py
 uv run python scripts/no_slop.py
 uv run vale sync
-uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs src scripts tests
+uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs skills src scripts tests
 uv run pytest -q
 npm run check:browser
 npm run generate:sdk && git diff --exit-code -- packages/sdk/src/protocol.ts
@@ -93,7 +93,7 @@ See [the evaluation workflow](../../../docs/agents/evals.md) for paid-run prereq
 | scripts/ | script |
 | tests/ Python | test |
 | tests/browser/sites/, evals/fixtures/, audit/fixtures/ | fixture |
-| docs/results/, src/fastbrowse/evals/versions.json | generated |
+| docs/results/, src/fastbrowse/evals/versions.json, packaging/aur/.SRCINFO | generated |
 | src/fastbrowse/browser/autoconsent/, .sift/gate.py, .sift/agents.py | vendor |
 | .github/, packaging/, tool manifests and lockfiles | config |
 | Markdown and .agents/skills/ | docs |

@@ -119,7 +119,7 @@ class BrowserUseCloudBrowser:
                 version.raise_for_status()
                 ws_url = str(version.json()["webSocketDebuggerUrl"])
             self._connection = BrowserConnection(
-                cdp_url=ws_url, live_url=browser.live_url, browser_id=browser.id, remote=True
+                cdp_url=ws_url, live_url=browser.live_url, browser_id=browser.id, remote=True, foreground=True
             )
         except BaseException:
             await asyncio.gather(creation, return_exceptions=True)

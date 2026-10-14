@@ -3,9 +3,13 @@
 import asyncio
 import base64
 import logging
+import shutil
 from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
+from cdp_use.client import CDPClient
 
 from fastbrowse.browser import BrowserSession
 from fastbrowse.browser.recording import Recording
@@ -92,6 +96,11 @@ async def test_live_frames_follow_tabs_ack_after_delivery_and_keep_only_the_late
         await emit_frame(session, 8, b"recorded too")
         await asyncio.gather(*session._background)
         assert frames[-1] == recording._frame == b"recorded too"
+        # A frame from another session, as the cast that keeps a background tab painting sends, is acked unseen.
+        await emit_frame(session, 80, b"no picture of the tab", "keeper")
+        await asyncio.gather(*session._background)
+        assert frames[-1] == recording._frame == b"recorded too"
+        transport.requests.remove(("Page.screencastFrameAck", {"sessionId": 80}, "keeper"))
 
         release.clear()
         delivering.clear()
@@ -170,3 +179,53 @@ async def test_a_stalled_screencast_does_not_delay_switching_tabs(monkeypatch: p
         await session.switch_tab("owned")
         assert "Page.startScreencast" not in transport.finished
     assert "Page.startScreencast" in transport.finished
+
+
+@pytest.mark.parametrize(
+    "page", ["clear", "showing a secret", "revealing a secret during the capture", "after access is revoked"]
+)
+async def test_a_recording_whose_cast_sent_no_frame_ends_on_a_screenshot_unless_frames_are_withheld(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture, page: str
+) -> None:
+    """Chrome can acknowledge `Page.startScreencast` and then send nothing, and a short run ends before the restart."""
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("recording needs ffmpeg")
+    still = tmp_path / "still.jpg"
+    ffmpeg = await asyncio.create_subprocess_exec(
+        *("ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=teal:s=64x48", "-frames:v", "1", str(still))
+    )
+    assert await ffmpeg.wait() == 0
+    transport = CdpTransport(monkeypatch)
+    transport.results["Page.captureScreenshot"] = [{"data": base64.b64encode(still.read_bytes()).decode()}]
+    path = tmp_path / "clip.mp4"
+    revoked = False
+
+    async def check_access() -> None:
+        if revoked:
+            raise PermissionError("revoked")
+
+    async with BrowserSession(CONNECTION, RecordingArtifactSink(), check_access=check_access) as session:
+        session.frames_withheld = page == "showing a secret"
+
+        async def send(method: str, params: Any = None, session_id: str | None = None) -> dict[str, Any]:
+            reply = await transport.send(method, params, session_id)
+            if method == "Page.captureScreenshot" and page == "revealing a secret during the capture":
+                session.frames_withheld = True
+            return reply
+
+        monkeypatch.setattr(CDPClient, "send_raw", AsyncMock(side_effect=send))
+        with caplog.at_level(logging.WARNING):
+            async with Recording(session, path) as recording:
+                await asyncio.sleep(0.2)
+                revoked = page == "after access is revoked"
+    assert ("Page.startScreencast", {"format": "jpeg", "quality": 95}, "session") in transport.requests
+    if page == "clear":
+        assert recording.outputs == (path, path.with_suffix(".plain.mp4"))
+        assert all(output.stat().st_size > 0 for output in recording.outputs)
+        assert "no frames" not in caplog.text
+        return
+    # A recording keeps its last clean frame, and with none it records nothing rather than the secret.
+    assert ("Page.captureScreenshot" in transport.calls) is (page == "revealing a secret during the capture")
+    assert recording.outputs == ()
+    assert not path.exists()
+    assert "the browser sent no frames" in caplog.text

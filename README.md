@@ -72,6 +72,10 @@ automatic selection; see [provider routing](docs/jev.md#provider-failover). The 
 PATH, and `uv add fastbrowse` puts it in a project. Service keys can live in a `.env` file in the working directory;
 [`.env.example`](.env.example) shows the settings. Values named by `--secret` must be in the process environment.
 
+On Arch Linux, the [`fastbrowse` AUR package](https://aur.archlinux.org/packages/fastbrowse) puts `fastbrowse` and
+`fastbrowse-mcp` on your PATH from the same PyPI release: `paru -S fastbrowse` with an AUR helper, or `makepkg -si`
+in [`packaging/aur`](packaging/aur).
+
 To work on fastbrowse itself:
 
 ```sh
@@ -96,15 +100,16 @@ the quotes behind the answer, and cost by component.
 | `--cdp-port PORT` | the same, for a browser or Electron app listening on `127.0.0.1:PORT`; the URL is read from its `/json/version` |
 | `--attach` | with `--cdp-url` or `--cdp-port`, drive a window already open instead of opening a tab, and leave it open after the run |
 | `--target-match TEXT` | attach to the first window whose title or URL contains `TEXT` (implies `--attach`) |
+| `--foreground` | bring the run's tab and its browser window to the front, to watch it. Without it a run in a visible window works behind the window's current tab; see [working in the background](#working-in-the-background) for what Chrome still brings forward |
 | `--proxy-country CC` | browse from that country (Browser Use's codes: `uk`, `de`, ...; default `us`), so a shop shows its local delivery and prices |
 | `--authorize` | allow submit, pay, delete and send; without it the run stops at `needs_confirmation` first |
-| `--secret NAME=ENV_VAR[@ORIGIN]` | let the agent type `$ENV_VAR` on the declared origin, or the `--start` origin if omitted; models only see `NAME`. An explicit origin needs no `--start` |
+| `--secret NAME=ENV_VAR[@ORIGIN]` | let the agent type `$ENV_VAR` on the declared origin (`https://*.site.com` covers its hosts), or the `--start` origin if omitted; models only see `NAME`. An explicit origin needs no `--start` |
 | `--bitwarden ITEM` | match the vault login's saved URIs against `--start`, then allow its `username`, `password` and, when the item holds an authenticator key, `one_time_code` only on that start origin |
 | `--max-steps N`, `--max-dollars N` | optionally bound steps and model spend; defaults are unlimited. Cloud browser charges are added when it stops |
 | `--downloads DIR` | keep downloaded files |
 | `--json` | full result instead of the answer |
 | `--record FILE` | save an MP4 of the tab, each step captioned, ending on the answer, time and cost (needs `ffmpeg`; the captions need its libass), e.g. `recordings/demo.mp4`, which git ignores; `demo.plain.mp4` beside it has no captions. It shows what the pages showed, so watch it before sharing |
-| `--cursor` | draw the agent's cursor over a visible Chrome (`--headed`, or one you attach to) with [Cua Driver](https://github.com/trycua/cua), so you can watch where it acts. Off by default. It needs `cua-driver` on `PATH` and an X11 display on Linux, and does nothing without them |
+| `--cursor` | draw the agent's cursor over a visible Chrome (`--headed`, or one you attach to) with [Cua Driver](https://github.com/trycua/cua), so you can watch where it acts. Off by default. It needs `cua-driver` on `PATH` and an X11 display on Linux, and does nothing without them. It brings the run's tab to the front as `--foreground` does, since the cursor lies over the window's front tab |
 
 ```sh
 export SAUCE_PASSWORD=secret_sauce
@@ -121,6 +126,9 @@ google-chrome --user-data-dir="$HOME/.fastbrowse/amazon" https://www.amazon.com/
 uv run fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
   --start https://www.amazon.com/ --profile ~/.fastbrowse/amazon --headed
 ```
+
+`--headed` is not needed once the profile is signed in: without it the run is headless and opens no window. A
+headed run opens one window when Chrome starts and then works in a tab behind it.
 
 On a cloud browser the profile lives on the [Browser Use Cloud](https://cloud.browser-use.com) account
 rather than on disk, and `--cloud-profile ID` runs as it. Whoever signed that profile in did so once, in a
@@ -164,6 +172,26 @@ the text; `--attach` alone takes the first window, skipping DevTools. Popups the
 Windows that nothing opened, as an Electron app's main process opens them, join only with `--target-match`,
 because in a browser such a window could equally be a tab you opened yourself.
 
+### Working in the background
+
+A run in a visible window, whether `--headed` or a browser you handed over, opens its tab behind the window's
+current tab and renders it there under focus emulation. Nothing the run sends raises or focuses the window. `--foreground` brings the tab and its window to the front instead, to watch the run. Three things
+are Chrome's own and still bring a window forward: a headed Chrome showing its window as it starts, a popup a
+page opens, and, with `--attach`, a click in a window's front tab.
+
+For a signed-in browser that stays open and asks for nothing, start a Chrome of its own once, sign in, and leave
+it running. Each run then opens and closes a background tab in it:
+
+```sh
+google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.fastbrowse/chrome"
+uv run fastbrowse "Report my open orders." --start https://www.amazon.com/ --cdp-port 9222
+```
+
+Chrome ignores `--remote-debugging-port` on its default data directory, so the directory of its own is required.
+Your everyday Chrome can instead offer an endpoint from `chrome://inspect/#remote-debugging`, but it then stops
+every connection on an "Allow remote debugging?" prompt that takes focus and waits for a click, once per run.
+Any program on the machine can drive a browser that listens on a debugging port.
+
 A DevTools port gives any program on the machine full control of the app, including its signed-in sessions.
 Close the app, or restart it without the flag, when you are done.
 
@@ -178,7 +206,7 @@ Override with `FASTBROWSE_LLM_MODEL` (every purpose), `FASTBROWSE_LLM_MODEL_<PUR
 ### Results
 
 The exit code identifies the run status. Configuration refusals exit 1; invalid command syntax exits 2.
-Programs that only check zero versus nonzero continue to work.
+Only `complete` exits 0, so a program can also check zero versus nonzero.
 
 | Status | Exit | Meaning |
 |:--|--:|:--|
@@ -210,6 +238,9 @@ without a field-writing generation.
 A browser command that remains unanswered for 120 seconds returns `unavailable`, even if the browser
 still answers health checks. Step and dollar limits do not bound total elapsed time. Set `Limits(max_seconds=...)` for a run deadline.
 When investigating a stalled run, enable trace logging and retain the last event alongside the result.
+
+[Troubleshooting](docs/troubleshooting.md) takes each status a run can stop with: what it means, its common
+causes and the next step.
 
 ## How it works
 
@@ -275,7 +306,8 @@ asyncio.run(main())
 the run opens its own tab and closes the tabs it owns. It leaves the browser and pre-existing tabs open;
 cookies and other changes made by the task can persist. `cdp_port=` finds the same browser from its DevTools
 port on `127.0.0.1`. `attach=True` and `target_match=` drive a window already open and leave it open, as
-`--attach` and `--target-match` do. Pass `browser_api_key=` to start a cloud browser;
+`--attach` and `--target-match` do, and `foreground=True` brings the run's tab to the front as `--foreground`
+does. Pass `browser_api_key=` to start a cloud browser;
 with neither argument, it runs local Chrome. Passing both is an error. `cloud_extensions=[...]` loads up to
 three of your account's ready Browser Use Cloud extensions, by ID, into that cloud browser; it is an error with
 local or attached browsers.
@@ -293,6 +325,17 @@ async def main() -> None:
 ```
 
 `resolve_cdp_port(port)` returns the `ws://` URL behind a DevTools port, for a caller that passes `cdp_url=`.
+
+`run_task` and `connect_cdp` take two access controls that the command line, the MCP server and the JavaScript
+SDK do not offer. `allowed_origins=["https://app.example.com"]` limits the documents a run may read and control
+to those exact origins: scheme, host and optional port, with no wildcard or path. A navigation, redirect, frame
+or popup outside the list is refused before it is sent, and a window already open outside it is never read.
+A sign-in that redirects through another origin needs that origin listed too. The list scopes documents, not
+the network: images, scripts and requests a listed page makes to other hosts still load. A scoped run delivers
+no live frames or screenshots, and combining it with `record=` is an error. `check_access=` is an async callback
+awaited before the browser starts and before every read, navigation and action. When it raises, `connect_cdp`
+raises a `BrowserError` and `run_task` returns a `RunResult` with status `error`; either way the error names only
+the exception's type, never its text.
 
 `RunResult.citations` is a tuple of `Citation` objects, also importable from `fastbrowse`. Each has `id`
 (the number in the answer), `text` (the Notes fact), `requirement_id` (or `None`), `url`, `quote` and
@@ -333,7 +376,7 @@ package is a TypeScript SDK with no dependencies. With it npm installs one of fi
 as a native binary, the one for your platform: `@fastbrowse/darwin-arm64`, `darwin-x64`, `linux-arm64`,
 `linux-x64` or `win32-x64`. No install script runs and nothing is downloaded on first use, so it installs under
 pnpm and bun with scripts blocked, and it starts offline. It needs Node.js 20 or newer. The npm packages carry
-the PyPI package's version and are published by the same tag, starting with the release after 0.5.18.
+the PyPI package's version and are published by the same tag.
 
 The binary brings no browser. It finds local Chrome, starts a Browser Use Cloud browser, or drives one already
 running, as the command line does. It reads the same keys from the environment of your process
@@ -388,7 +431,7 @@ the options are camelCase. The structured data is in `data`, as in Python. The S
 schema's output type. Data the schema refuses rejects with `OutputValidationError`, which carries the result.
 A JSON Schema object is accepted too; `output` is then `data`, typed `unknown`.
 
-What a run can fill today is narrower than what a schema can say. The server accepts nested objects, arrays,
+What a run can fill is narrower than what a schema can say. The server accepts nested objects, arrays,
 `enum`, `const` and optional values, and refuses any other keyword by name before a browser opens. A run
 fills a flat object of required string, number, integer and boolean fields, as the example has. With any
 other field the run ends `unverified` with no data.
@@ -409,11 +452,11 @@ await fb.run('Log in as standard_user with the saved password and add the backpa
 
 `secrets.resolve` is called each time a value is typed and never for an origin its ref does not cover, so the
 value leaves your vault at that moment and a one-time code is fresh. `until` gets the address the run ended on,
-and anything but `true` keeps the run from `complete`. `onFrame` receives JPEG frames of the active tab;
-without it no frame is sent. A callback that throws ends the run with status `error`. The other options are
-the command line's: `inputs`, `attachments` as bytes, `downloads`, `record`, and the browser choices
-`chrome`, `cloudProfile`, `cdpUrl`, `cdpPort`, `attach`, `targetMatch` and `proxyCountry`, which
-`Fastbrowse.start` also takes as defaults for every run. A run passes `null` for one of them to go without
+and anything but `true` keeps the run from `complete`. `onFrame` receives JPEG frames of the active tab; without
+it no frame is sent. A callback that throws ends the run with status `error`. The other options are `run_task`'s:
+`inputs`, `attachments` as bytes, `downloads`, `record`, and the browser choices `chrome`, `cloudProfile`,
+`cdpUrl`, `cdpPort`, `attach`, `targetMatch`, `foreground`, `proxyCountry`, `viewport` and `cloudAllowResizing`,
+which `Fastbrowse.start` also takes as defaults for every run. A run passes `null` for one of them to go without
 that default.
 
 There is no binary for Alpine or another musl system, and none for a platform outside the five. There
@@ -465,7 +508,7 @@ The server's flags decide what a calling model may do; a call can ask for less, 
 
 | Flag | Effect |
 |:--|:--|
-| `--local`, `--headed`, `--profile DIR`, `--downloads DIR`, `--cursor` | as for the CLI, fixed for every call |
+| `--local`, `--headed`, `--profile DIR`, `--foreground`, `--downloads DIR`, `--cursor` | as for the CLI, fixed for every call |
 | `--cloud-profile ID` | every call runs signed in as that cloud profile; a calling model cannot choose it |
 | `--allow-authorize` | let a call pass `authorize` to go through irreversible actions; without it they always stop at `needs_confirmation` |
 | `--secret NAME=ENV_VAR@ORIGIN` | typed when a call's start page is on `ORIGIN` (`https://*.site.com` covers its hosts); the model sees `NAME` only |

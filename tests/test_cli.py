@@ -254,6 +254,7 @@ def test_cdp_port_hands_run_task_the_port_and_no_cloud_key(monkeypatch: pytest.M
             "--attach",
             "--target-match",
             "app",
+            "--foreground",
         ],
     )
     with pytest.raises(SystemExit) as exit_:
@@ -261,6 +262,7 @@ def test_cdp_port_hands_run_task_the_port_and_no_cloud_key(monkeypatch: pytest.M
     assert exit_.value.code == 0
     assert seen["cdp_port"] == 9222
     assert seen["attach"] is True
+    assert seen["foreground"] is True
     assert seen["target_match"] == "app"
     assert seen["browser_api_key"] is None
 
