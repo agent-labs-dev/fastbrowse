@@ -134,6 +134,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   Form field writing keeps each note's literal source quote where it fits.
 - Independent named targets have separate reading requirements. Newly evidenced targets renew recovery on
   revisited lists, remaining requirements guide action choices, and partial answers retain findings across sources.
+- A link drawn only as an icon, such as a release row's download button, now has its destination in the
+  page text a run reads, with the text of the row it sits in. A task asking for that address answers it from
+  the page instead of clicking the link until the run ends `stuck`.
 
 ## [0.5.20] - 2026-10-09
 

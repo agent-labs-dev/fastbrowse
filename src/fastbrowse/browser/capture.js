@@ -16,6 +16,8 @@
   let controlObservations = 0;
   let imageObservations = 0;
   let imagesOmitted = false;
+  let linkObservations = 0;
+  let linksOmitted = false;
   let controlsOmitted = false;
   const imageSource = source => {
     if (!source) return source;
@@ -444,6 +446,38 @@
       const metadata = { alt: image.getAttribute('alt')?.slice(0, 1024) ?? null,
         src: imageSource(image.getAttribute('src') ?? image.getAttribute('srcset')) };
       push('observation', `Image element DOM metadata: ${JSON.stringify(metadata)}. Pixels are not described.`);
+    }
+    // A link drawn only as an icon has no text, so its destination, the one thing it says, was nowhere a reader
+    // could quote: asked for a release's download URL beside an icon-only download link, a run read every other
+    // field of the row and then clicked the link again and again looking for the address. The row's text names
+    // which item the link belongs to, since the observation is not read where the link stands.
+    for (const link of [...root.querySelectorAll('a[href]')].filter(visible)) {
+      if (clean(link.innerText ?? '')) continue;
+      // An icon button written as `href="#"` or a script URL runs code here and leads nowhere to report. A bare
+      // `#` parses to an empty hash, so the raw attribute says it is a fragment link, not the parsed URL.
+      let target;
+      try {
+        target = new URL(link.getAttribute('href'), location.href);
+      } catch {
+        // One malformed address must not cost the page its whole capture.
+        continue;
+      }
+      const page = location.href.split('#')[0];
+      const fragment = link.getAttribute('href').trim().startsWith('#') || (target.hash && target.href.split('#')[0] === page);
+      if (target.protocol === 'javascript:' || fragment) continue;
+      if (linkObservations++ >= 32) {
+        if (!linksOmitted) push('observation', 'Additional link destinations omitted.');
+        linksOmitted = true;
+        break;
+      }
+      let row = link.parentElement;
+      while (row && row !== root && !clean(row.innerText ?? '')) row = row.parentElement;
+      const metadata = {
+        label: (nameOf(link) || drawn(link)).slice(0, 256) || null,
+        href: imageSource(link.href),
+        near: row ? textOf(row).replace(/\s+/g, ' ').slice(0, 256) || null : null,
+      };
+      push('observation', `Link element DOM metadata: ${JSON.stringify(metadata)}. The link has no text.`);
     }
     const h1 = [...root.querySelectorAll('h1,[role="heading"][aria-level="1"]')].filter(visible);
     visibleH1 ||= h1.length > 0;
