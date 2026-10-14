@@ -200,6 +200,7 @@ optional object, so callers can identify the affected limit without parsing an e
 
 A bot check can block a cloud browser before any task steps execute. Retry with an attached local browser
 or choose another source for the research. Credentials do not resolve a CAPTCHA.
+The `blocked` result's `evidence` quotes the opening text of the challenge page, with its address.
 
 If a model completion omits its cost, fastbrowse looks up the matching OpenRouter or Vercel generation
 receipt. If that receipt is still unavailable, a run with a dollar cap stops with `budget_exceeded`;
