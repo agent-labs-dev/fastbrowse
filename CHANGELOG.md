@@ -79,8 +79,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - A run that stops at a sign-in wall ends `needs_login` rather than `stuck`: an access inspection that
   read the wall and could not go on from it, or recovery giving up because a sign-in blocks the task and no
   stored secret covers the site.
-- A route the task writes as a path, such as `/login`, is offered as an address on the start page's site,
-  so recovery can open it when the opening shortcut does not.
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
 - Answers whose combined evidence exceeds a prompt are composed and verified in requirement groups, with
