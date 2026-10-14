@@ -6,7 +6,7 @@ the other side of the pipe would see and never looks inside the server.
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -108,7 +108,7 @@ class FakeClient:
 
 
 @asynccontextmanager
-async def serving(**server_options: Any) -> AsyncIterator[FakeClient]:
+async def serving(**server_options: Any) -> AsyncGenerator[FakeClient]:
     """A running server and a client connected to it. `server_options` go to `Server` as keywords."""
     transport = MemoryTransport()
     task = asyncio.create_task(Server(transport, **server_options).serve())

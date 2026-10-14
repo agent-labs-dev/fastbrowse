@@ -93,7 +93,7 @@ See [the evaluation workflow](../../../docs/agents/evals.md) for paid-run prereq
 | scripts/ | script |
 | tests/ Python | test |
 | tests/browser/sites/, evals/fixtures/, audit/fixtures/ | fixture |
-| docs/results/, src/fastbrowse/evals/versions.json | generated |
+| docs/results/, src/fastbrowse/evals/versions.json, packaging/aur/.SRCINFO | generated |
 | src/fastbrowse/browser/autoconsent/, .sift/gate.py, .sift/agents.py | vendor |
 | .github/, packaging/, tool manifests and lockfiles | config |
 | Markdown and .agents/skills/ | docs |

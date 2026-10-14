@@ -11,8 +11,54 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A page with no controls, such as a browser error page reached by going back from a submitted form, offers
+  the caller's start address as a way to continue, so leaving it does not wait on recovery.
+- Answer checks accept a record named only by a requested identifier, such as an order reference, so a
+  finished run no longer ends `stuck` with every output unresolved.
+- A handed-over browser that accepts the DevTools connection and then answers nothing is reported as
+  `unavailable` after about 20 seconds, with a message that it may be waiting for its remote debugging approval
+  prompt, where it used to wait over a minute and report a lost browser. A `--cdp-port` whose `/json/version`
+  answers 404, as a Chrome switched on at chrome://inspect does, now says to build the `ws://` address from the
+  port and path in its `DevToolsActivePort` file and pass it with `--cdp-url`; other refusals name their status.
+  None of these failures switches to another browser.
+
+- An icon-only control is named by its icon (a sprite reference, an icon font class, a ligature or an svg title)
+  or its accessible description, and carries the card it sits in, so a gallery's trash control is no longer an
+  unnamed button the agent cannot tell from the edit link beside it.
+- A run whose `on_frame` callback ignores cancellation still returns and stops its browser. Closing waited on
+  the callback with no limit, so such a run never returned a result and its cloud browser kept billing.
+
+- A troubleshooting page, `docs/troubleshooting.md`, explains each status a run can stop with, its common
+  causes and the next step, so a stopped run's error leads somewhere. The README's results section links to it.
+- Arch Linux has a `fastbrowse` package for the AUR, kept in `packaging/aur`. It installs `fastbrowse` and
+  `fastbrowse-mcp` from the PyPI release and takes every dependency Arch packages from Arch's repositories.
 - Abandoned model calls retain charges from responses that arrive within their attempt deadline, including
   matching provider receipts. Dollar caps still stop runs whose charges cannot be established.
+- A run that stops with a message quoting the page, such as a field's label, redacts any resolved secret
+  from its `error`, as the run's other text results already were.
+- A run blocked by a bot check returns the challenge page's opening text as cited evidence, so a caller can
+  tell what stopped it without browsing again. The check is still never bypassed.
+- A sign-in prompt no longer ends a reading task before the page is read. When the page asks for no
+  credentials, the run reads it first, so a public list whose only sign-in box is for posting a reply, or
+  its empty state, is answered. A `needs_login` error now names its evidence: the credential fields the page
+  asks for, or a read of the page that found nothing requested.
+- A model call through OpenRouter that reports no cost, such as a request that timed out, is charged at a
+  `bounded` cost: its model's whole context window at the highest price any of its routes lists. A run with a
+  dollar cap keeps going within that bound instead of stopping, and a call whose price has no ceiling still
+  stops it.
+- A field that declares it takes an email address, by its input type or autocomplete token, is no longer typed
+  with text that holds no address: the field writer is asked once more first. A sign-in that had read a code
+  sometimes typed it into Email and needed recovery to put it right.
+- Headless local Chrome starts without a startup tab, so the run's tab opens in a window of its own. Opened beside
+  the startup tab, it sometimes never painted: about one run in five had no live frames, a screenshot that never
+  returned, and a recording that came back empty. A recording whose screencast sent no frame now ends on one
+  screenshot of the tab, unless a resolved secret is showing.
+
+- Benchmark results from public sites measured in headless local Chrome with a throwaway profile are refused
+  for publication, since about half of those sites refused that browser before the first step. A campaign can
+  check its browser with `fastbrowse.evals.live_tasks.browser_refusal` before it starts; a headed window, a kept
+  profile or a cloud browser is admitted. Public-site results that do not record their browser, or record one
+  that is malformed or unknown, are refused as well.
 
 ## [0.5.20] - 2026-10-09
 
