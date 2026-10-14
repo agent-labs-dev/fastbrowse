@@ -2,7 +2,14 @@ import pytest
 
 from fastbrowse.models import Operation, SecretRef
 from fastbrowse.page import Control
-from fastbrowse.safety import Redactor, ScopedSecrets, may_be_irreversible, origin_of, secret_allowed
+from fastbrowse.safety import (
+    Redactor,
+    ScopedSecrets,
+    may_be_irreversible,
+    origin_of,
+    secret_allowed,
+    starts_download,
+)
 
 
 def control(label: str, *, role: str = "button", href: str | None = None, input_type: str | None = None) -> Control:
@@ -177,3 +184,22 @@ async def test_each_secret_keeps_the_scope_it_was_declared_with() -> None:
     assert await held.resolve("bank", origin_of("https://secure.bank.test")) == "bank-password"
     # A secret declared for nowhere is offered nowhere, rather than everywhere.
     assert await held.resolve("orphan", origin_of("https://www.example.test")) is None
+
+
+@pytest.mark.parametrize(
+    ("href", "download", "expected"),
+    [
+        ("/files/addon-2.1.0.zip?sig=1", None, True),
+        ("cdn.example.com/releases/Setup.EXE", None, True),
+        ("/export", True, True),
+        ("/releases/2.1.0", None, False),
+        ("/guide.pdf", None, False),
+        ("https://downloads.zip", None, False),
+        (None, None, False),
+    ],
+)
+def test_starts_download_reads_the_page_evidence(href: str | None, download: bool | None, expected: bool) -> None:
+    control = Control(
+        id="a", frame_id=None, role="link", label="Get it", href=href, download=download, operations=frozenset()
+    )
+    assert starts_download(control) is expected

@@ -470,6 +470,8 @@
       base.href = u.origin === location.origin ? u.pathname + u.search : u.host + u.pathname;
       // The page's own word for "the next page of this list", which survives an icon label or another language.
       if (e.rel && e.rel.split(/\s+/).includes('next')) base.next_page = true;
+      // The page's own word that this link saves a file, which a task ruling out downloads has to see before a click.
+      if (e.hasAttribute('download')) base.download = true;
     }
     for (const key of ['checked', 'selected', 'expanded']) {
       const value = e.getAttribute('aria-' + key);

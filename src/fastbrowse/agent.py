@@ -121,12 +121,14 @@ from fastbrowse.safety import (
     Redactor,
     asks_for_credentials,
     changes_credentials,
+    downloads_question,
     irreversible_question,
     may_be_irreversible,
     origin_of,
     resolve_secret,
     secret_allowed,
     sets_new_password,
+    starts_download,
 )
 from fastbrowse.shortcut import Shortcut, accept, accept_start, propose_shortcut, propose_start
 from fastbrowse.telemetry import BudgetExceeded, Ledger, trace
@@ -443,6 +445,8 @@ class _RunState:
     """Addresses this run built from the task rather than reached by clicking: an accepted shortcut, or a start
     page worked out from the task. These are the ones that can land on a page of the right shape and the wrong
     search, so the verifier is told which they were."""
+    downloads_forbidden: bool | None = None
+    """Jev's word that the task rules out downloading, asked once a control the page says downloads is in play."""
     owes_read: bool = False
     """An interaction changed the page after the notes last read it. A run clicked a filter and declared itself
     done, and the check judged notes read off the list before the filter applied, so an answer is not finished
@@ -1149,7 +1153,8 @@ class Agent:
         except (TimeoutError, LLMError):
             proposal = None
         shortcut = None if proposal is None else accept(proposal.url, start)
-        if shortcut is None:
+        # A shortcut is a page to start on. One naming a file would save it before any step's download gate could ask.
+        if shortcut is None or starts_download(_caller_link(shortcut)):
             await self._page.navigate(start)
             return [], set()
         try:
@@ -1864,6 +1869,7 @@ class Agent:
                     if not isinstance(answer, NoulAnswer) or answer.probability < self._config.thresholds.recover_below:
                         raise _Unsure("the supplied address is not confidently a browsing destination")
                 if gate:
+                    await self._gate_download(state, observation, decision, _caller_link(decision.url))
                     await self._gate_question(
                         state,
                         observation,
@@ -1941,6 +1947,7 @@ class Agent:
         target = decision.target
         if target is None or not may_be_irreversible(decision.operation, target):
             return
+        await self._gate_download(state, observation, decision, target)
         label = _describe(target)
         if decision.destination is not None:
             label += f" onto {_describe(decision.destination)}"
@@ -1953,6 +1960,47 @@ class Agent:
             force=decision.operation in {Operation.CLICK, Operation.ENTER}
             and changes_credentials(observation.controls, target, decision.operation),
         )
+
+    async def _gate_download(
+        self, state: _RunState, observation: Observation, decision: Decision, control: Control
+    ) -> None:
+        """Refuse a control the page says downloads a file when the task rules downloading out.
+
+        The irreversible question cannot catch it: a download commits nothing anyone else sees, so a read-only task
+        that said not to download saved a release archive when recovery clicked its link. Authorization does not
+        lift this, since it lets a run commit what the task asks for, never what the task forbids.
+        """
+        if not starts_download(control) or not await self._downloads_forbidden(state):
+            return
+        label = _describe(control)
+        reason = f"{decision.operation.value} {label!r} downloads a file, and the task rules out downloading"
+        await self._record_failure(
+            state,
+            observation,
+            decision.operation,
+            self._redactor.redact(reason),
+            target=self._redactor.redact(label),
+            confidence=None if decision.directed else decision.confidence,
+            page_changed=False,
+            decided_by=Decider.LLM if decision.directed else Decider.JEV,
+        )
+        raise _Unsure(self._redactor.redact(reason))
+
+    async def _downloads_forbidden(self, state: _RunState) -> bool:
+        """Whether the task rules out downloading, asked of Jev about the task alone and kept for the run."""
+        if state.downloads_forbidden is not None:
+            return state.downloads_forbidden
+        state.ledger.reserve(CostComponent.JEV)
+        evaluation = await self._jev.evaluate({"task": state.task}, {"downloads": downloads_question(state.task)})
+        state.ledger.record(evaluation.cost)
+        answer = evaluation.answers.get("downloads")
+        trace("downloads", probability=answer.probability if isinstance(answer, NoulAnswer) else None)
+        # No answer refuses this once, as the irreversible gate does, but is not kept: one failed call must not
+        # forbid every download for the rest of a run that asked for one.
+        if not isinstance(answer, NoulAnswer):
+            return True
+        state.downloads_forbidden = answer.probability > self._config.thresholds.irreversible_above
+        return state.downloads_forbidden
 
     async def _gate_question(
         self,
@@ -3105,6 +3153,10 @@ class Agent:
         state.unchanged = 0
         state.recovered_at = len(state.history)
         state.plan_marks.clear()
+        # Recovery that could not see a release's address clicked its download link to look for it, in a task that
+        # said not to download. Asked before the controls are listed, a link the task rules out is never offered.
+        if any(starts_download(control) for control in observation.controls):
+            await self._downloads_forbidden(state)
         if state.recoveries > self._config.stall.max_recoveries:
             if state.http_failure is not None and gives_up_as is not Status.NEEDS_INPUT:
                 raise state.http_failure.stop()
@@ -4642,8 +4694,9 @@ def _controls_text(observation: Observation) -> str:
     )
 
 
-def _navigation_question(task: str, url: str) -> NoulQuestion:
-    link = Control(
+def _caller_link(url: str) -> Control:
+    """A caller-supplied address as the link it stands for, so it meets the same gates a link on a page does."""
+    return Control(
         id="caller-address",
         frame_id=None,
         role="link",
@@ -4651,7 +4704,10 @@ def _navigation_question(task: str, url: str) -> NoulQuestion:
         href=url,
         operations=frozenset({Operation.CLICK}),
     )
-    return irreversible_question(task, Operation.CLICK, link)
+
+
+def _navigation_question(task: str, url: str) -> NoulQuestion:
+    return irreversible_question(task, Operation.CLICK, _caller_link(url))
 
 
 def _signature(decision: Decision, observation: Observation) -> Signature:
@@ -4719,7 +4775,8 @@ def _stale_link_key(observation: Observation, control: Control) -> tuple[str, st
 
 
 def _without_failed_links(state: _RunState, observation: Observation) -> Observation:
-    if not state.failed_links and not state.stale_links:
+    """The page without the links the run cannot use: failed, repeatedly stale, or downloads the task rules out."""
+    if not state.failed_links and not state.stale_links and not state.downloads_forbidden:
         return observation
     return observation.model_copy(
         update={
@@ -4727,6 +4784,7 @@ def _without_failed_links(state: _RunState, observation: Observation) -> Observa
                 control
                 for control in observation.controls
                 if _link_key(observation, control) not in state.failed_links
+                and not (state.downloads_forbidden and starts_download(control))
                 and (
                     (stale := _stale_link_key(observation, control)) is None
                     or state.stale_links.get(stale, 0) < _STALE_LINK_FAILURES
@@ -4778,6 +4836,9 @@ def next_page_control(observation: Observation) -> Control | None:
     current_query = _pager_query(parse_qsl(here.query, keep_blank_values=True))
     for control in observation.controls:
         if control.role != "link" or Operation.CLICK not in control.operations or control.href is None:
+            continue
+        # Paging clicks without the step's gates, so a link that saves a file is never taken for the next page.
+        if starts_download(control):
             continue
         # The snapshot gives a same-origin link as a path; a bare host/path denotes another site.
         if not control.href.startswith(("/", "http://", "https://")):

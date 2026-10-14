@@ -194,6 +194,7 @@ class _SnapshotControl(Frozen):
     offscreen: bool = False
     blocking: bool | None = None
     next_page: bool | None = None
+    download: bool | None = None
 
 
 class _FrameText(Frozen):
@@ -1831,6 +1832,7 @@ def _control_from_raw(
         offscreen=c.offscreen,
         blocking=c.blocking,
         next_page=c.next_page,
+        download=c.download,
     )
 
 

@@ -142,6 +142,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   Files, version and download links until its step limit; now it ends `stuck` once recovery is spent
   there, with the partial answer it holds, unless a read since the last recovery found something new. A
   wizard step that brings new fields or a new submit control at the same address still counts as a move.
+- A task that says not to download, or calls itself read-only, no longer downloads files. A link the page
+  marks as a download, by a `download` attribute or an address ending in a file type such as `.zip`, is
+  refused before it is clicked or opened, and recovery is not offered it.
 
 ## [0.5.20] - 2026-10-09
 

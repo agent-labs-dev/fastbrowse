@@ -85,6 +85,14 @@ def _handler_for(
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if self.path.startswith("/files/"):
+                body = b"PK fixture release archive"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if self.path == "/download":
                 body = b"fastbrowse fixture attachment bytes for download checksum test"
                 self.send_response(200)
