@@ -35,7 +35,7 @@ with methods and run summaries.
 
 Rows are comparable only at matching task versions. See [eval results and workflow](docs/evals.md).
 
-Recorded results — the published head-to-head, the matched-task campaigns and the browser cost basis — are
+Recorded results - the published head-to-head, the matched-task campaigns and the browser cost basis - are
 summarised with their limitations in [benchmark results](docs/benchmarks.md).
 
 ### Why fastbrowse, against each kind of agent

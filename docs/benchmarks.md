@@ -8,7 +8,7 @@ matched-task campaigns and the browser cost basis.
 These are recorded benchmark comparisons, not a controlled experiment: the associations below do not
 establish cause.
 
-## Published head-to-head — fastbrowse vs hosted Browser Use
+## Published head-to-head: fastbrowse vs hosted Browser Use
 
 Same 14 answer tasks (lookups, sign-ins, checkout, Google Flights), three passes each, on identical cloud
 browsers under identical limits (30 steps, $0.25 cap, 300s).
@@ -22,7 +22,7 @@ browsers under identical limits (30 steps, $0.25 cap, 300s).
 All 28 of Browser Use's failures ran past the $0.25 cap. Source: the published benchmark page
 (`fastbrowse-site`, `src/app/page.tsx`).
 
-## Internal matched-task campaigns — fastbrowse vs the Browser Use hosted agent
+## Internal matched-task campaigns: fastbrowse vs the Browser Use hosted agent
 
 Both arms ran the same task revisions within a build. Medians and means are over all recorded attempts in
 `docs/results/<build>.jsonl`. Cost is metered provider spend; the ratio is Browser Use's mean divided by
@@ -52,12 +52,12 @@ within a build, not across.
 | | fastbrowse's own fleet | Browser Use Cloud |
 |:--|:--|:--|
 | Browser time | no per-browser-hour fee (self-hosted Chrome, or the hosted product's own browser pool) | $0.02/browser-hour infrastructure tier; $0.06/browser-hour pay-as-you-go |
-| Billing granularity | — | billed per whole minute, 1-minute minimum |
+| Billing granularity | n/a | billed per whole minute, 1-minute minimum |
 | Proxy | own egress | residential proxies, $5/GB, on by default |
 
-A recorded fastbrowse run settles at a median of **$0.0043–$0.0084** in metered model+run cost across the
-campaigns above. One billed Browser Use Cloud browser minute ($0.0003–$0.001) is a fraction of that, so on
-fastbrowse's own cost scale the browser backend is not the cost driver — model routing is. Source: the
+A recorded fastbrowse run settles at a median of **$0.0043 to $0.0084** in metered model+run cost across
+the campaigns above. One billed Browser Use Cloud browser minute ($0.0003 to $0.001) is a fraction of that,
+so on fastbrowse's own cost scale the browser backend is not the cost driver: model routing is. Source: the
 campaign rows and Browser Use's published cloud pricing.
 
 ## Fixture regression suite
