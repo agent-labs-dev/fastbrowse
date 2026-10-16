@@ -62,21 +62,6 @@ def page_defect(evidence: PageEvidence | None) -> str | None:
     return None
 
 
-def run_browser(run: Mapping[str, Any], arm: object) -> object:
-    """The browser `arm` ran in: its entry in a campaign's per-arm `browsers` record, or the single `browser` an
-    older campaign recorded for every arm."""
-    browsers = run.get("browsers")
-    if isinstance(browsers, Mapping):
-        return browsers.get(arm)
-    return run.get("browser")
-
-
-_HOSTED_BROWSERS = ("browser-use-cloud", "browser-use-hosted", "fastbrowse-pool")
-"""Browsers a provider runs, each the one its arm sells: Browser Use Cloud's, the browser Browser Use's hosted agent
-drives, and the hosted fastbrowse pool. A pool row's block rate is part of what the backend comparison measures, so
-it is admitted rather than refused."""
-
-
 def browser_refusal(browser: object) -> str | None:
     """Why a benchmark run on public sites must not start, or be published, in `browser`; None when it may.
 
@@ -91,11 +76,10 @@ def browser_refusal(browser: object) -> str | None:
     if not isinstance(browser, Mapping):
         return "no browser record; a public-site run must record the browser it ran in"
     mode = browser.get("mode")
-    if mode in _HOSTED_BROWSERS:
+    if mode == "browser-use-cloud":
         return None
     if mode != "local-chrome":
-        admitted = ", ".join(("local-chrome", *_HOSTED_BROWSERS))
-        return f"browser mode {mode!r} is not one public-site runs are admitted in ({admitted})"
+        return f"browser mode {mode!r} is not one public-site runs are admitted in (local-chrome, browser-use-cloud)"
     if browser.get("headed") is True or browser.get("profile") is True:
         return None
     return (
@@ -153,3 +137,32 @@ class LiveTask:
 def prompt(task: LiveTask) -> str:
     """What every arm is asked; part of each task's version fingerprint, since it is what the task asks."""
     return f"Start at {task.start}. {task.task}"
+
+
+ARM_BROWSERS = {
+    "fastbrowse": ("browser-use-cloud", "local-chrome"),
+    "fastbrowse-pool": ("fastbrowse-pool",),
+    "jev-ultrafast": ("browser-use-cloud",),
+    "browser-use": ("browser-use-hosted",),
+}
+"""The browsers each arm is measured in. The pool and Browser Use's hosted browser are each the one their arm sells,
+so a pool row's block rate is part of what the backend comparison measures; binding the mode to the arm keeps a
+swapped record from publishing one backend under another's name."""
+
+
+def arm_browser_refusal(run: Mapping[str, Any], arm: object) -> str | None:
+    """Why `arm`'s row of `run` must not be published for the browser it ran in; None when it may.
+
+    A campaign records one browser per arm (`browsers`), and each arm is judged by its own. An older campaign
+    recorded a single `browser` for every arm, which only `browser_refusal` can judge."""
+    browsers = run.get("browsers")
+    if not isinstance(browsers, Mapping):
+        return browser_refusal(run.get("browser"))
+    browser = browsers.get(arm)
+    if not isinstance(browser, Mapping):
+        return f"no browser record for {arm}; a public-site run must record the browser each arm ran in"
+    admitted = ARM_BROWSERS.get(str(arm), ())
+    if browser.get("mode") not in admitted:
+        named = ", ".join(admitted) or "no browser this build knows"
+        return f"{arm} ran in browser mode {browser.get('mode')!r}; it is measured only in {named}"
+    return browser_refusal(browser) if browser["mode"] in ("browser-use-cloud", "local-chrome") else None
