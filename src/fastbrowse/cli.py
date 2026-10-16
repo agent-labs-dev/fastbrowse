@@ -272,7 +272,11 @@ async def run(args: argparse.Namespace) -> int:
     if args.json:
         print(result.model_dump_json(indent=2))
     else:
-        print(f"{result.status.value} (${result.cost.known_dollars:.4f}, {len(result.steps)} steps)")
+        # A local LLM endpoint reports no price, and printing only the priced calls would read as the whole bill.
+        spend = f"${result.cost.known_dollars:.4f}"
+        if result.cost.has_unknown:
+            spend += " plus calls with no reported cost"
+        print(f"{result.status.value} ({spend}, {len(result.steps)} steps)")
         # A run that stopped short can carry both: why it stopped, and what it had read by then.
         print("\n\n".join(part for part in (result.error, result.answer) if part))
     if result.final_frame is not None:

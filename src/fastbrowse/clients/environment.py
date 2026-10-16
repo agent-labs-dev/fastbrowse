@@ -9,7 +9,8 @@ FASTBROWSE_JEV_MODEL pins an OpenRouter or direct model. A custom endpoint or mo
 LLM: OPENROUTER_API_KEY; when it is absent, AI_GATEWAY_API_KEY serves the same models through the Vercel AI
 Gateway's OpenAI-compatible chat completions. FASTBROWSE_LLM_BASE_URL points the LLM at any other
 OpenAI-compatible chat completions endpoint (for example a local vLLM server) instead, and
-FASTBROWSE_LLM_API_KEY supplies its bearer token when it has one.
+FASTBROWSE_LLM_API_KEY supplies its bearer token when it has one; that endpoint never receives the OpenRouter or
+gateway key. FASTBROWSE_LLM_STRICT and FASTBROWSE_LLM_EXTRA_BODY shape requests to that endpoint only.
 Cloud browser: BROWSER_USE_API_KEY. FASTBROWSE_LLM_MODEL overrides every purpose at once, and
 FASTBROWSE_LLM_MODEL_<PURPOSE> (PLAN, READ, FIELD_TEXT, RECOVER, COMPOSE, VERIFY, SHORTCUT) overrides one.
 FASTBROWSE_LLM_REASONING sets the reasoning effort: low (default), medium or high. FASTBROWSE_CHROME
@@ -31,6 +32,7 @@ from fastbrowse.clients.failover import FailoverJevClient
 from fastbrowse.clients.openai_compatible import (
     GATEWAY_PROVIDER_ROUTING,
     OPENROUTER_PROVIDER_ROUTING,
+    RESERVED_BODY_KEYS,
     OpenAICompatibleLLM,
     ReasoningEffort,
 )
@@ -116,7 +118,7 @@ class Settings(BaseSettings):
     """A custom OpenAI-compatible chat completions endpoint (for example a local vLLM server). When set,
     the LLM stops going to OpenRouter and the Vercel AI Gateway and every purpose talks to this host
     instead. Pair it with FASTBROWSE_LLM_MODEL so each request names the model the endpoint serves."""
-    llm_api_key: str | None = None
+    llm_api_key: SecretStr | None = None
     """Bearer token for FASTBROWSE_LLM_BASE_URL. Optional: a local server needs no key; an empty value
     sends requests without an Authorization header."""
     llm_strict: bool = True
@@ -192,7 +194,8 @@ class Settings(BaseSettings):
     def llm_source(self) -> LLMSource:
         """Where the LLM goes: a custom endpoint when FASTBROWSE_LLM_BASE_URL is set, else OpenRouter
         when keyed, otherwise the gateway, which serves the same models."""
-        if self.llm_base_url is not None:
+        # An empty FASTBROWSE_LLM_BASE_URL= left in a `.env` is unset, not a request to an empty address.
+        if self.llm_base_url:
             return LLMSource.LOCAL
         return LLMSource.OPENROUTER if self.openrouter_api_key else LLMSource.GATEWAY
 
@@ -244,6 +247,10 @@ class Settings(BaseSettings):
             raise ConfigurationError("FASTBROWSE_LLM_EXTRA_BODY is not valid JSON") from error
         if not isinstance(parsed, dict):
             raise ConfigurationError("FASTBROWSE_LLM_EXTRA_BODY must be a JSON object")
+        if clashes := sorted(RESERVED_BODY_KEYS.intersection(parsed)):
+            raise ConfigurationError(
+                f"FASTBROWSE_LLM_EXTRA_BODY cannot set {', '.join(clashes)}: fastbrowse sets those fields itself"
+            )
         return cast(dict[str, JsonValue], parsed)
 
     def llm(self, http: httpx.AsyncClient) -> LLMClient:
@@ -252,15 +259,18 @@ class Settings(BaseSettings):
     def _llm_client(self, source: LLMSource, http: httpx.AsyncClient) -> LLMClient:
         match source:
             case LLMSource.LOCAL:
-                key = (self.llm_api_key or "").strip()
+                # A default model is an OpenRouter id the endpoint would not serve, which surfaces as a 404 on
+                # the first plan rather than as the setting that is missing.
+                if self.llm_model is None and any(self._purpose_model(purpose) is None for purpose in LLMPurpose):
+                    raise ConfigurationError("set FASTBROWSE_LLM_MODEL to the model FASTBROWSE_LLM_BASE_URL serves")
+                # Only this endpoint's own key: an OpenRouter or gateway key must never reach another host.
                 return OpenAICompatibleLLM(
-                    key or "local",
+                    self.llm_api_key.get_secret_value().strip() if self.llm_api_key else "",
                     http=http,
                     base_url=self.llm_base_url or "",
                     models=self.models(),
                     reasoning_effort=self.llm_reasoning,
                     provider_routing=None,
-                    auth_required=bool(key),
                     strict=self.llm_strict,
                     extra_body=self._extra_body(),
                 )

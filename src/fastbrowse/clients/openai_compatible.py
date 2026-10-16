@@ -40,6 +40,10 @@ GATEWAY_PROVIDER_ROUTING: dict[str, JsonValue] = {"sort": "ttft"}
 """The Vercel AI Gateway documents `ttft` for the lowest time to first token where OpenRouter calls that sort
 `latency`, and takes no `require_parameters`: the gateway matches the schema itself."""
 
+RESERVED_BODY_KEYS = frozenset({"model", "max_tokens", "messages", "response_format", "provider", "reasoning"})
+"""Request fields fastbrowse sets itself. An extra body that named one would replace the schema, the messages or
+the output cap the truncation retry grows, so the run would fail far from the setting that caused it."""
+
 
 def _image_url(content: bytes) -> str:
     if content.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -238,12 +242,13 @@ class OpenAICompatibleLLM:
         models: Mapping[LLMPurpose, str],
         reasoning_effort: ReasoningEffort | None = None,
         provider_routing: JsonValue | None = OPENROUTER_PROVIDER_ROUTING,
-        auth_required: bool = True,
         strict: bool = True,
         extra_body: Mapping[str, JsonValue] | None = None,
     ) -> None:
+        """An empty `api_key` sends no Authorization header, which is what a keyless local server expects."""
+        if clashes := sorted(RESERVED_BODY_KEYS.intersection(extra_body or {})):
+            raise ValueError(f"extra request fields replace ones fastbrowse sets: {', '.join(clashes)}")
         self._api_key = api_key
-        self._auth_required = auth_required
         self._strict = strict
         self._extra_body = dict(extra_body or {})
         self._http = http
@@ -252,6 +257,9 @@ class OpenAICompatibleLLM:
         self._reasoning_effort = reasoning_effort
         self._provider_routing = provider_routing
         self._ceilings: dict[str, tuple[int, float, float, float]] = {}
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
 
     def _scrubbed(self, text: str) -> str:
         return text.replace(self._api_key, "[api key]") if self._api_key else text
@@ -265,7 +273,7 @@ class OpenAICompatibleLLM:
                 self._http,
                 f"{self._base_url}/chat/completions",
                 body,
-                {"Authorization": f"Bearer {self._api_key}"} if self._auth_required else {},
+                self._headers(),
                 call=f"llm {body.get('model')}",
                 attempt_seconds=LLM_ATTEMPT_SECONDS,
                 hedge_seconds=LLM_HEDGE_SECONDS,
@@ -313,7 +321,7 @@ class OpenAICompatibleLLM:
                     response = await self._http.get(
                         f"{self._base_url}/generation",
                         params={"id": generation_id},
-                        headers={"Authorization": f"Bearer {self._api_key}"},
+                        headers=self._headers(),
                         timeout=2.0,
                     )
                 if not response.is_success:
@@ -361,7 +369,7 @@ class OpenAICompatibleLLM:
                 async with asyncio.timeout(2.0):
                     response = await self._http.get(
                         f"{self._base_url}/models/{model}/endpoints",
-                        headers={"Authorization": f"Bearer {self._api_key}"},
+                        headers=self._headers(),
                         timeout=2.0,
                     )
             except (httpx.HTTPError, TimeoutError):
@@ -396,6 +404,7 @@ class OpenAICompatibleLLM:
             raise LLMError(f"No model configured for {purpose}")
         wire_messages = [_message(message) for message in messages]
         body: dict[str, JsonValue] = {
+            **self._extra_body,
             "model": model,
             "max_tokens": max_output_tokens,
             "messages": wire_messages,
@@ -416,8 +425,6 @@ class OpenAICompatibleLLM:
         }
         if self._provider_routing is not None:
             body["provider"] = self._provider_routing
-        if self._extra_body:
-            body.update(self._extra_body)
         if self._reasoning_effort is not None:
             body["reasoning"] = {"effort": self._reasoning_effort.value}
         costs: list[CostLine] = []
