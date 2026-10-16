@@ -965,3 +965,32 @@ async def test_a_price_with_no_ceiling_keeps_the_spend_guard(price: JsonValue, m
                 "key", http=http, base_url="https://openrouter.ai/api/v1", models={LLMPurpose.PLAN: "writer"}
             ).generate(LLMPurpose.PLAN, [], Result, ledger=ledger)
     assert ledger.breakdown().has_unknown
+
+
+def test_extra_fields_cannot_replace_the_ones_the_client_sets() -> None:
+    with pytest.raises(ValueError, match="model, response_format"):
+        OpenAICompatibleLLM(
+            "",
+            http=httpx.AsyncClient(),
+            base_url="http://127.0.0.1:8000/v1",
+            models={},
+            extra_body={"response_format": {}, "model": "x", "top_k": 1},
+        )
+
+
+async def test_a_keyless_client_sends_no_authorization_and_scrubs_nothing() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"count": 1, "local": 2}'}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        llm = OpenAICompatibleLLM(
+            "", http=http, base_url="http://127.0.0.1:8000/v1", models={LLMPurpose.READ: "qwen"}, provider_routing=None
+        )
+        with pytest.raises(LLMError) as error:
+            await llm.generate(LLMPurpose.READ, [Message(role="user", content="?")], Result)
+    assert seen and all("authorization" not in request.headers for request in seen)
+    # No placeholder key stands in for a missing one, so nothing in an error is mistaken for it and blanked.
+    assert "local" in str(error.value) and "[api key]" not in str(error.value)

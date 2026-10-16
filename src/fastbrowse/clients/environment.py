@@ -7,7 +7,10 @@ gateway as backup; the gateway uses direct when configured, otherwise OpenRouter
 FASTBROWSE_JEV_BASE_URL points either at a proxy or another host serving the same API, and
 FASTBROWSE_JEV_MODEL pins an OpenRouter or direct model. A custom endpoint or model disables automatic failover.
 LLM: OPENROUTER_API_KEY; when it is absent, AI_GATEWAY_API_KEY serves the same models through the Vercel AI
-Gateway's OpenAI-compatible chat completions.
+Gateway's OpenAI-compatible chat completions. FASTBROWSE_LLM_BASE_URL points the LLM at any other
+OpenAI-compatible chat completions endpoint (for example a local vLLM server) instead, and
+FASTBROWSE_LLM_API_KEY supplies its bearer token when it has one; that endpoint never receives the OpenRouter or
+gateway key. FASTBROWSE_LLM_STRICT and FASTBROWSE_LLM_EXTRA_BODY shape requests to that endpoint only.
 Cloud browser: BROWSER_USE_API_KEY. FASTBROWSE_LLM_MODEL overrides every purpose at once, and
 FASTBROWSE_LLM_MODEL_<PURPOSE> (PLAN, READ, FIELD_TEXT, RECOVER, COMPOSE, VERIFY, SHORTCUT) overrides one.
 FASTBROWSE_LLM_REASONING sets the reasoning effort: low (default), medium or high. FASTBROWSE_CHROME
@@ -16,18 +19,20 @@ between runs, and either one selects local Chrome. `.env.example` lists them all
 beats `.env`.
 """
 
+import json
 from enum import StrEnum
 from pathlib import Path
-from typing import assert_never
+from typing import assert_never, cast
 
 import httpx
-from pydantic import AliasChoices, Field, SecretStr, ValidationError
+from pydantic import AliasChoices, Field, JsonValue, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from fastbrowse.clients.failover import FailoverJevClient
 from fastbrowse.clients.openai_compatible import (
     GATEWAY_PROVIDER_ROUTING,
     OPENROUTER_PROVIDER_ROUTING,
+    RESERVED_BODY_KEYS,
     OpenAICompatibleLLM,
     ReasoningEffort,
 )
@@ -68,9 +73,14 @@ class JevSource(StrEnum):
 class LLMSource(StrEnum):
     OPENROUTER = "openrouter"
     GATEWAY = "gateway"
+    LOCAL = "local"
 
 
-_LLM_LABELS = {LLMSource.OPENROUTER: "OpenRouter", LLMSource.GATEWAY: "Vercel AI Gateway"}
+_LLM_LABELS = {
+    LLMSource.OPENROUTER: "OpenRouter",
+    LLMSource.GATEWAY: "Vercel AI Gateway",
+    LLMSource.LOCAL: "local endpoint",
+}
 LLM_OPENROUTER_URL = "https://openrouter.ai/api/v1"
 LLM_GATEWAY_URL = "https://ai-gateway.vercel.sh/v1"
 
@@ -104,6 +114,22 @@ class Settings(BaseSettings):
     llm_model_compose: str | None = None
     llm_model_verify: str | None = None
     llm_model_shortcut: str | None = None
+    llm_base_url: str | None = None
+    """A custom OpenAI-compatible chat completions endpoint (for example a local vLLM server). When set,
+    the LLM stops going to OpenRouter and the Vercel AI Gateway and every purpose talks to this host
+    instead. Pair it with FASTBROWSE_LLM_MODEL so each request names the model the endpoint serves."""
+    llm_api_key: SecretStr | None = None
+    """Bearer token for FASTBROWSE_LLM_BASE_URL. Optional: a local server needs no key; an empty value
+    sends requests without an Authorization header."""
+    llm_strict: bool = True
+    """Send strict structured output (every property required, no defaults). Some local vLLM builds
+    mangle the output under strict mode; set FASTBROWSE_LLM_STRICT=0 to send the model's own schema
+    instead."""
+    llm_extra_body: str | None = None
+    """Extra JSON object merged into every chat completions request body, for parameters the endpoint
+    accepts that fastbrowse does not send. For example a Qwen on vLLM whose reasoning stream breaks
+    structured output needs {"chat_template_kwargs": {"enable_thinking": false}}. An invalid value
+    stops the run."""
     llm_reasoning: ReasoningEffort = DEFAULT_REASONING
     chrome: str | None = None
     headed: bool = False
@@ -166,7 +192,11 @@ class Settings(BaseSettings):
         return f"Jev {source} ({failover}); LLM {models} via {_LLM_LABELS[self.llm_source()]}"
 
     def llm_source(self) -> LLMSource:
-        """Where the LLM goes: OpenRouter when keyed, otherwise the gateway, which serves the same models."""
+        """Where the LLM goes: a custom endpoint when FASTBROWSE_LLM_BASE_URL is set, else OpenRouter
+        when keyed, otherwise the gateway, which serves the same models."""
+        # An empty FASTBROWSE_LLM_BASE_URL= left in a `.env` is unset, not a request to an empty address.
+        if self.llm_base_url:
+            return LLMSource.LOCAL
         return LLMSource.OPENROUTER if self.openrouter_api_key else LLMSource.GATEWAY
 
     def jev(self, http: httpx.AsyncClient) -> JevClient:
@@ -207,11 +237,55 @@ class Settings(BaseSettings):
             case _:
                 assert_never(source)
 
+    def _extra_body(self) -> dict[str, JsonValue]:
+        """The extra request body, parsed. A malformed value is a configuration error, not a retry."""
+        if not self.llm_extra_body:
+            return {}
+        try:
+            parsed = json.loads(self.llm_extra_body)
+        except ValueError as error:
+            raise ConfigurationError("FASTBROWSE_LLM_EXTRA_BODY is not valid JSON") from error
+        if not isinstance(parsed, dict):
+            raise ConfigurationError("FASTBROWSE_LLM_EXTRA_BODY must be a JSON object")
+        if clashes := sorted(RESERVED_BODY_KEYS.intersection(parsed)):
+            raise ConfigurationError(
+                f"FASTBROWSE_LLM_EXTRA_BODY cannot set {', '.join(clashes)}: fastbrowse sets those fields itself"
+            )
+        return cast(dict[str, JsonValue], parsed)
+
+    def _local_models(self) -> dict[LLMPurpose, str]:
+        """Per-purpose models for a custom endpoint, with no default to fall back on.
+
+        A default model is an OpenRouter id the endpoint would not serve, which surfaces as a 404 on the first plan
+        rather than as the setting that is missing; a blank `FASTBROWSE_LLM_MODEL=` in a `.env` is unset too.
+        """
+        models: dict[LLMPurpose, str] = {}
+        for purpose in LLMPurpose:
+            model = next((m.strip() for m in (self._purpose_model(purpose), self.llm_model) if m and m.strip()), None)
+            if model is None:
+                raise ConfigurationError("set FASTBROWSE_LLM_MODEL to the model FASTBROWSE_LLM_BASE_URL serves")
+            models[purpose] = model
+        return models
+
     def llm(self, http: httpx.AsyncClient) -> LLMClient:
         return self._llm_client(self.llm_source(), http)
 
     def _llm_client(self, source: LLMSource, http: httpx.AsyncClient) -> LLMClient:
         match source:
+            case LLMSource.LOCAL:
+                # Only this endpoint's own key: an OpenRouter or gateway key must never reach another host.
+                return OpenAICompatibleLLM(
+                    self.llm_api_key.get_secret_value().strip() if self.llm_api_key else "",
+                    http=http,
+                    base_url=self.llm_base_url or "",
+                    models=self._local_models(),
+                    # `reasoning` is OpenRouter's field, and a strict server answers HTTP 400 to a field it does
+                    # not know, so the local route sends it only when FASTBROWSE_LLM_REASONING asks for it.
+                    reasoning_effort=self.llm_reasoning if "llm_reasoning" in self.model_fields_set else None,
+                    provider_routing=None,
+                    strict=self.llm_strict,
+                    extra_body=self._extra_body(),
+                )
             case LLMSource.OPENROUTER:
                 if not self.openrouter_api_key:
                     raise ConfigurationError("set OPENROUTER_API_KEY or AI_GATEWAY_API_KEY for the LLM")

@@ -4,7 +4,7 @@ import pytest
 
 from fastbrowse import cli, options
 from fastbrowse.clients.environment import Settings
-from fastbrowse.models import CostBreakdown, RunResult, Status
+from fastbrowse.models import CostBasis, CostBreakdown, CostComponent, CostLine, RunResult, Status
 
 
 def test_a_preflight_error_under_json_still_leaves_a_result_on_stdout(
@@ -354,3 +354,20 @@ def test_only_serve_as_the_first_argument_is_the_subcommand(
         cli.main()
     assert exit_.value.code == 0
     assert tasks == [task]
+
+
+@pytest.mark.parametrize(("basis", "expected"), [("metered", "($0.0020, 0 steps)"), ("unknown", "plus calls with no")])
+async def test_the_summary_line_says_when_some_calls_reported_no_cost(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], basis: str, expected: str
+) -> None:
+    lines = (
+        CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.002),
+        CostLine(component=CostComponent.LLM, basis=CostBasis(basis), dollars=None if basis == "unknown" else 0.0),
+    )
+
+    async def fake(task: str, **kwargs: object) -> RunResult:
+        return options.error_result("test").model_copy(update={"cost": CostBreakdown(lines=lines)})
+
+    monkeypatch.setattr(cli, "run_task", fake)
+    await cli.run(cli._parse(["task", "--local"]))
+    assert expected in capsys.readouterr().out
