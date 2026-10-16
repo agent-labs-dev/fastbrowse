@@ -6,6 +6,7 @@ Maintainer benchmark tasks and orchestration live in Parallax.
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -61,6 +62,21 @@ def page_defect(evidence: PageEvidence | None) -> str | None:
     return None
 
 
+def run_browser(run: Mapping[str, Any], arm: object) -> object:
+    """The browser `arm` ran in: its entry in a campaign's per-arm `browsers` record, or the single `browser` an
+    older campaign recorded for every arm."""
+    browsers = run.get("browsers")
+    if isinstance(browsers, Mapping):
+        return browsers.get(arm)
+    return run.get("browser")
+
+
+_HOSTED_BROWSERS = ("browser-use-cloud", "browser-use-hosted", "fastbrowse-pool")
+"""Browsers a provider runs, each the one its arm sells: Browser Use Cloud's, the browser Browser Use's hosted agent
+drives, and the hosted fastbrowse pool. A pool row's block rate is part of what the backend comparison measures, so
+it is admitted rather than refused."""
+
+
 def browser_refusal(browser: object) -> str | None:
     """Why a benchmark run on public sites must not start, or be published, in `browser`; None when it may.
 
@@ -75,10 +91,11 @@ def browser_refusal(browser: object) -> str | None:
     if not isinstance(browser, Mapping):
         return "no browser record; a public-site run must record the browser it ran in"
     mode = browser.get("mode")
-    if mode == "browser-use-cloud":
+    if mode in _HOSTED_BROWSERS:
         return None
     if mode != "local-chrome":
-        return f"browser mode {mode!r} is not one public-site runs are admitted in (local-chrome, browser-use-cloud)"
+        admitted = ", ".join(("local-chrome", *_HOSTED_BROWSERS))
+        return f"browser mode {mode!r} is not one public-site runs are admitted in ({admitted})"
     if browser.get("headed") is True or browser.get("profile") is True:
         return None
     return (

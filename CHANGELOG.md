@@ -19,6 +19,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   whose approved budget decided nothing but whether the next run started can be published. A new
   `internal-backend` comparison runs fastbrowse on its own hosted browser pool against fastbrowse on a
   Browser Use Cloud browser, over the same 54 tasks.
+- The publication gate judges each benchmark row by the browser its own arm ran in, read from the campaign's
+  per-arm browser record, and admits the hosted fastbrowse pool and Browser Use's hosted browser alongside a
+  Browser Use Cloud browser. Before, it read one browser for the whole campaign, so a comparison across
+  backends could not be published.
 
 - A page with no controls, such as a browser error page reached by going back from a submitted form, offers
   the caller's start address as a way to continue, so leaving it does not wait on recovery.
