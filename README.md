@@ -203,6 +203,17 @@ Override with `FASTBROWSE_LLM_MODEL` (every purpose), `FASTBROWSE_LLM_MODEL_<PUR
 `READ`, `FIELD_TEXT`, `SHORTCUT`, `RECOVER`, `COMPOSE`, `VERIFY`) and `FASTBROWSE_LLM_REASONING`
 (`low`, `medium`, `high`).
 
+`FASTBROWSE_LLM_BASE_URL` sends every LLM call to another OpenAI-compatible chat completions endpoint instead
+of OpenRouter and the gateway, such as a local vLLM server at `http://127.0.0.1:8000/v1`. Name the model it
+serves with `FASTBROWSE_LLM_MODEL`; a run refuses to start without one. `FASTBROWSE_LLM_API_KEY` is its bearer
+token, sent only when set, and that endpoint never receives `OPENROUTER_API_KEY` or `AI_GATEWAY_API_KEY`. Two
+settings shape its requests: `FASTBROWSE_LLM_STRICT=0` sends each schema as the model defines it rather than
+in strict form, for a server whose structured output breaks under strict mode, and `FASTBROWSE_LLM_EXTRA_BODY`
+is a JSON object added to every request, such as `{"chat_template_kwargs":{"enable_thinking":false}}`. It may
+not set a field fastbrowse sends itself (`model`, `messages`, `max_tokens`, `response_format`, `provider`,
+`reasoning`). Jev still needs its own key. An endpoint that reports no price leaves those calls' cost unknown
+rather than zero, so `--max-dollars` stops the run after the first such call.
+
 ### Results
 
 The exit code identifies the run status. Configuration refusals exit 1; invalid command syntax exits 2.
