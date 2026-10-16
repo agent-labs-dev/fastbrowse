@@ -30,7 +30,17 @@ FIELDS = {
     "replaces_run_id",
     "run",
 }
-RUN_FIELDS = {"fastbrowse_version", "run_started", "run_id", "providers", "max_steps", "git_sha", "git_dirty"}
+RUN_FIELDS = {
+    "fastbrowse_version",
+    "run_started",
+    "run_id",
+    "providers",
+    "max_steps",
+    "git_sha",
+    "git_dirty",
+    "agent_limits",
+    "budget_policy",
+}
 
 
 class Baseline(BaseModel):

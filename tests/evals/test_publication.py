@@ -53,7 +53,12 @@ def row(**overrides: Any) -> dict[str, Any]:
             "benchmark_runner_sha": "1" * 40,
             "benchmark_runner_dirty": False,
             "providers": "openrouter",
-            "max_steps": 50,
+            "max_steps": None,
+            "max_seconds": None,
+            "max_dollars": None,
+            "budget_policy": "start-gate-v1",
+            "budget_usd": 10.0,
+            "agent_limits": Limits().model_dump(mode="json"),
             "concurrency": 2,
             "arms": {"fastbrowse": {"pin": "0.5.18+0123456789", "tier": "A"}},
             "browser": {"mode": "browser-use-cloud"},
@@ -110,7 +115,7 @@ def baseline_row(
         "passed": passed,
         "seconds": seconds,
         "dollars": dollars,
-        "run": {"fastbrowse_version": release, "providers": providers, "max_steps": 50},
+        "run": {"fastbrowse_version": release, "providers": providers, "max_steps": None},
     }
 
 
@@ -327,7 +332,7 @@ def test_an_attempt_with_a_negative_cost_is_refused() -> None:
         (lambda r: r | {"run": r["run"] | {"git_dirty": True}}, "build"),
         (lambda r: r | {"run": r["run"] | {"fastbrowse_version": "9.9.8"}}, "build"),
         (lambda r: r | {"run": r["run"] | {"arms": {}}}, "provenance"),
-        (lambda r: r | {"run": r["run"] | {"max_steps": 0}}, "protocol"),
+        (lambda r: r | {"run": r["run"] | {"max_steps": 50}}, "protocol"),
         (lambda r: r | {"run": r["run"] | {"providers": None}}, "provenance"),
     ],
 )
@@ -733,43 +738,42 @@ def test_a_renamed_result_file_fails_the_diff_check(tmp_path: Path) -> None:
     assert any("removed" in finding.detail for finding in findings)
 
 
-def remaining_rows() -> list[dict[str, Any]]:
+def test_an_uncapped_start_gate_run_clears_publication_gate() -> None:
     sources = attempts(3)
-    for index, source in enumerate(sources):
-        source["run"].update(
-            budget_policy="remaining-campaign-v1",
-            max_steps=None,
-            max_seconds=None,
-            max_dollars=None,
-            concurrency=1,
-            budget_usd=10.0,
-            browser_reserve_dollars=0.0,
-            browser={"mode": "local-chrome", "headed": True},
-            agent_limits=Limits(max_dollars=10.0 - index * 0.01).model_dump(mode="json"),
-        )
-    return sources
-
-
-def test_uncapped_remaining_funds_run_clears_publication_gate() -> None:
-    sources = remaining_rows()
     assert publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY).blocking == ()
+
+
+def test_a_published_slim_row_still_proves_it_ran_uncapped() -> None:
+    """The publisher trims rows before the gate reads them again; the trim must keep what the protocol checks."""
+    sources = [versions.slim(source) for source in attempts(3)]
+    assert publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY).blocking == ()
+
+
+def test_a_slim_row_keeps_the_browser_but_never_a_local_path() -> None:
+    source = attempts(1)[0]
+    source["run"]["browser"] = {"mode": "local-chrome", "binary": "/home/someone/chrome", "headed": True}
+    assert versions.slim(source)["run"]["browser"] == {"mode": "local-chrome", "headed": True}
 
 
 @pytest.mark.parametrize(
     "field,value",
     [
         ("budget_policy", None),
+        ("budget_policy", "remaining-campaign-v1"),
         ("agent_limits", None),
-        ("agent_limits", Limits(max_steps=50, max_dollars=10).model_dump(mode="json")),
-        ("agent_limits", Limits(max_dollars=11).model_dump(mode="json")),
-        ("agent_limits", Limits(max_dollars=float("inf")).model_dump(mode="json")),
-        ("concurrency", 2),
+        ("agent_limits", Limits(max_steps=50).model_dump(mode="json")),
+        ("agent_limits", Limits(max_seconds=300).model_dump(mode="json")),
+        ("agent_limits", Limits(max_dollars=10).model_dump(mode="json")),
+        ("agent_limits", Limits(max_llm_calls=40).model_dump(mode="json")),
+        ("max_steps", 50),
+        ("max_seconds", 300),
+        ("max_dollars", 1.0),
         ("budget_usd", 0),
-        ("browser", {"mode": "browser-use-cloud"}),
     ],
 )
-def test_uncapped_publication_refuses_unrecorded_or_inconsistent_policy(field: str, value: object) -> None:
-    sources = remaining_rows()
+def test_a_capped_or_unrecorded_run_is_never_published(field: str, value: object) -> None:
+    """A step, time, call or spend limit decides a comparison instead of measuring the agents."""
+    sources = attempts(3)
     sources[0]["run"][field] = value
     report = publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY)
     assert any(f.check == "protocol" for f in report.blocking)

@@ -143,6 +143,7 @@ async def _browser(
     viewport: tuple[int, int] | None = None,
     allow_resizing: bool = False,
     cloud_extensions: Sequence[str] = (),
+    cloud_timeout_minutes: int = 15,
 ) -> AsyncGenerator[BrowserConnection]:
     """The browser a run drives: one it is handed, a cloud browser, or local Chrome."""
     if cloud_extensions and (key is None or cdp_url is not None or cdp_port is not None):
@@ -184,6 +185,7 @@ async def _browser(
         viewport=viewport,
         allow_resizing=allow_resizing,
         extensions=cloud_extensions,
+        timeout_minutes=cloud_timeout_minutes,
     )
     try:
         async with remote:
@@ -211,6 +213,7 @@ async def run_task(
     viewport: tuple[int, int] | None = None,
     cloud_allow_resizing: bool = False,
     cloud_extensions: Sequence[str] = (),
+    cloud_timeout_minutes: int = 15,
     jev: JevClient | None = None,
     llm: LLMClient | None = None,
     output_schema: type[BaseModel] | None = None,
@@ -252,8 +255,9 @@ async def run_task(
     and `viewport` shape a cloud browser this run starts. `cloud_allow_resizing` opts that browser into
     CDP viewport changes, which the cloud service otherwise ignores. `cloud_extensions` lists up to three
     distinct extension IDs (UUIDs of ready extensions on that account) to load into the cloud browser; it is
-    an error with a local or attached browser rather than ignored. The other cloud options mean nothing for
-    the other two browsers. `jev` and
+    an error with a local or attached browser rather than ignored. `cloud_timeout_minutes` is how long that
+    browser may live (15 by default; the service allows up to 240), so a run that needs longer asks for it
+    rather than losing its browser. The other cloud options mean nothing for the other two browsers. `jev` and
     `llm` default to clients built from `Settings` (the environment, then `.env`), so an embedder that
     resolves its own credentials, or serves Jev from somewhere else, passes them instead.
 
@@ -318,6 +322,7 @@ async def run_task(
                     viewport=viewport,
                     allow_resizing=cloud_allow_resizing,
                     cloud_extensions=cloud_extensions,
+                    cloud_timeout_minutes=cloud_timeout_minutes,
                 ) as connection:
                     connection = connection.model_copy(update={"allowed_origins": origins})
                     if on_event is not None:

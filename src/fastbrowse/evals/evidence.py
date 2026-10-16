@@ -177,7 +177,7 @@ def campaign(path: Path, root: Path, *, kind: Literal["published", "diagnostic"]
         source = Source(path=ledger.relative_to(root).as_posix(), sha256=_digest(content))
         sources.append(source)
         rows = [json.loads(line) for line in content.splitlines() if line.strip()]
-    if any((row.get("run") or {}).get("budget_policy") == "remaining-campaign-v1" for row in rows):
+    if any((row.get("run") or {}).get("budget_policy") in {"remaining-campaign-v1", "start-gate-v1"} for row in rows):
         receipts = [path.with_suffix(suffix) for suffix in (".budget.jsonl", ".budget.json")]
         present = [receipt for receipt in receipts if receipt.is_file()]
         if not present:

@@ -263,7 +263,8 @@ _KEPT = ("arm", "task", "repeat", "category", "suite", "suite_version", "task_ve
 _RUN_KEPT = ("run_id", "run_started", "fastbrowse_version", "git_sha", "git_dirty", "providers", "max_steps",
              "concurrency", "jev_ultrafast", "arms", "python", "argv", "benchmark_family", "benchmark_origin",
              "benchmark_suite", "benchmark_runner_sha", "benchmark_runner_dirty",
-             "benchmark_catalog_sha256")  # fmt: skip
+             "benchmark_catalog_sha256", "agent_limits", "budget_policy", "budget_usd", "max_seconds", "max_dollars",
+             "hosted_max_cost_usd", "browsers", "provider_limits")  # fmt: skip
 
 
 def slim(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -271,7 +272,14 @@ def slim(row: Mapping[str, Any]) -> dict[str, Any]:
     kept = {key: row.get(key) for key in _KEPT}
     if isinstance(kept["failure"], str):
         kept["failure"] = kept["failure"][:300]
-    kept["run"] = {key: (row.get("run") or {}).get(key) for key in _RUN_KEPT}
+    run = row.get("run") or {}
+    kept["run"] = {key: run.get(key) for key in _RUN_KEPT}
+    # The browser record is what the gate reads to tell a real browser from a throwaway one, so it is kept; a local
+    # Chrome's executable path is dropped, because a local path never enters published evidence.
+    browser = run.get("browser")
+    kept["run"]["browser"] = (
+        {key: value for key, value in browser.items() if key != "binary"} if isinstance(browser, Mapping) else browser
+    )
     return kept
 
 

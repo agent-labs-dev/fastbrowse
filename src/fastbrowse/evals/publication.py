@@ -343,27 +343,19 @@ def _shape(row: Mapping[str, Any]) -> list[Finding]:
     return problems
 
 
-def _remaining_budget(run: Mapping[str, Any]) -> bool:
+def _uncapped(run: Mapping[str, Any]) -> bool:
+    """start-gate-v1: the approved budget only decided whether a new run started; no agent had any limit."""
     try:
         limits = Limits.model_validate(run.get("agent_limits"), strict=True)
     except ValueError:
         return False
-    budget, reserve = run.get("budget_usd"), run.get("browser_reserve_dollars")
-    if not _number(budget) or not _number(reserve) or budget <= 0 or reserve < 0:
-        return False
-    browser = run.get("browser")
+    budget = run.get("budget_usd")
     return (
-        run.get("concurrency") == 1
-        and type(run.get("concurrency")) is int
-        and all(run.get(name) is None for name in ("max_steps", "max_seconds", "max_dollars"))
-        and run.get("agent_limits") == limits.model_dump(mode="json")
-        and all(
-            getattr(limits, name) is None for name in ("max_steps", "max_seconds", "max_llm_calls", "max_jev_calls")
-        )
-        and limits.max_dollars is not None
-        and math.isfinite(limits.max_dollars)
-        and limits.max_dollars + reserve <= budget
-        and (reserve > 0 or (isinstance(browser, Mapping) and browser.get("mode") == "local-chrome"))
+        run.get("agent_limits") == limits.model_dump(mode="json")
+        and all(value is None for value in limits.model_dump().values())
+        and all(name in run and run[name] is None for name in ("max_steps", "max_seconds", "max_dollars"))
+        and _number(budget)
+        and budget > 0
     )
 
 
@@ -410,11 +402,10 @@ def _provenance(row: Mapping[str, Any], *, release: str | None, require_clean: b
             problems.append(_finding(REFUSE, "provenance", f"{where}: arm is not pinned in the run"))
         elif not isinstance((arms[row["arm"]] or {}).get("pin"), str) or not arms[row["arm"]]["pin"]:
             problems.append(_finding(REFUSE, "provenance", f"{where}: arm has no pin"))
-        if run.get("budget_policy") == "remaining-campaign-v1":
-            if not _remaining_budget(run):
-                problems.append(_finding(REFUSE, "protocol", f"{where}: invalid remaining-campaign limits"))
-        elif not isinstance(run.get("max_steps"), int) or run["max_steps"] <= 0:
-            problems.append(_finding(REFUSE, "protocol", f"{where}: no positive step limit"))
+        if run.get("budget_policy") != "start-gate-v1" or not _uncapped(run):
+            # A step, time, call or spend limit decides a comparison instead of measuring the agents, so a capped
+            # run is never published, whatever else it recorded.
+            problems.append(_finding(REFUSE, "protocol", f"{where}: not an uncapped start-gate run"))
         if not isinstance(run.get("concurrency"), int) or run["concurrency"] <= 0:
             problems.append(_finding(REFUSE, "protocol", f"{where}: no positive concurrency"))
     return problems

@@ -27,7 +27,7 @@ class PublicModel(BaseModel):
 class Row(PublicModel):
     task: Identifier
     repeat: Annotated[int, Field(ge=0)]
-    arm: Literal["fastbrowse", "browser-use", "jev-ultrafast"]
+    arm: Literal["fastbrowse", "fastbrowse-pool", "browser-use", "jev-ultrafast"]
     status: Identifier
     completed: bool
     score: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
@@ -37,7 +37,8 @@ class Row(PublicModel):
 
     @model_validator(mode="after")
     def completion(self) -> Self:
-        if self.arm == "fastbrowse":
+        # fastbrowse-pool is fastbrowse itself on another browser, so its completion is its own run status too.
+        if self.arm in {"fastbrowse", "fastbrowse-pool"}:
             status = Status(self.status)
             if self.completed != (status is Status.COMPLETE):
                 raise ValueError("Fastbrowse completion must agree with its run status")
@@ -45,7 +46,14 @@ class Row(PublicModel):
 
 
 class Group(PublicModel):
-    id: Literal["internal-fastbrowse", "internal-hosted", "internal-ultrafast", "bu-bench", "online-mind2web"]
+    id: Literal[
+        "internal-fastbrowse",
+        "internal-hosted",
+        "internal-ultrafast",
+        "internal-backend",
+        "bu-bench",
+        "online-mind2web",
+    ]
     agent_sha: Sha | None = None
     runner_sha: Sha | None = None
     metric: Literal["task-success", "weighted-rubric", "full-task-success"]
@@ -63,6 +71,7 @@ class Group(PublicModel):
             "internal-fastbrowse": (54, 3, "task-success", {"fastbrowse"}),
             "internal-hosted": (47, 3, "task-success", {"fastbrowse", "browser-use"}),
             "internal-ultrafast": (6, 3, "task-success", {"fastbrowse", "jev-ultrafast"}),
+            "internal-backend": (54, 3, "task-success", {"fastbrowse", "fastbrowse-pool"}),
             "bu-bench": (200, 1, "weighted-rubric", {"fastbrowse"}),
             "online-mind2web": (300, 1, "full-task-success", {"fastbrowse"}),
         }
@@ -88,7 +97,7 @@ class Fixture(PublicModel):
 
 
 class Candidate(PublicModel):
-    schema_version: Literal[1, 2, 3]
+    schema_version: Literal[1, 2, 3, 4]
     campaign_id: Identifier
     agent_sha: Sha
     runner_sha: Sha
@@ -107,6 +116,8 @@ class Candidate(PublicModel):
             raise ValueError("all four full benchmark groups are required")
         if self.schema_version == 2 and not ids <= expected:
             raise ValueError("schema 2 supports only the four original benchmark groups")
+        if self.schema_version < 4 and "internal-backend" in ids:
+            raise ValueError("the internal-backend group requires schema 4")
         for group in self.groups:
             for field in ("agent_sha", "runner_sha"):
                 measured = getattr(group, field)
@@ -135,7 +146,11 @@ def check_catalog(candidate: Candidate, path: Path) -> None:
         raise ValueError("catalog must match the current pinned task source")
     catalog = json.loads(raw)
     tasks = [task for suite in catalog["suites"].values() for task in suite]
-    for group, other in (("internal-hosted", "browser-use"), ("internal-ultrafast", "jev-ultrafast")):
+    for group, other in (
+        ("internal-hosted", "browser-use"),
+        ("internal-ultrafast", "jev-ultrafast"),
+        ("internal-backend", "fastbrowse-pool"),
+    ):
         required = {task["id"] for task in tasks if {"fastbrowse", other} <= set(task["arms"])}
         found = next((g for g in candidate.groups if g.id == group), None)
         if found is None:

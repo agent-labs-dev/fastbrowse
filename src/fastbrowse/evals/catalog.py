@@ -40,7 +40,6 @@ class Catalog(Closed):
     task_sources: dict[str, Digest]
     suites: dict[str, tuple[CatalogTask, ...]]
     arms: dict[str, ArmMetadata]
-    max_steps: Annotated[int, Field(ge=1)]
     ultrafast_text_model: str
 
     @model_validator(mode="after")
@@ -64,4 +63,6 @@ SUITES = CATALOG.suites
 
 
 def eligible(arm: str, task: CatalogTask) -> bool:
+    if arm == "fastbrowse-pool":
+        return "fastbrowse" in task.arms
     return arm in task.arms or (arm == "browser-use-oss" and task.expect == Status.COMPLETE)

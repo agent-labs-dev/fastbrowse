@@ -11,6 +11,15 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- `run_task` takes `cloud_timeout_minutes`, how long a Browser Use Cloud browser it starts may live (15 by
+  default, up to the service's 240), so a run that needs longer than a quarter of an hour can ask for it
+  instead of losing its browser at minute 15.
+- Benchmarks are never capped. The internal benchmark catalog no longer carries a step limit, and the
+  publication gate refuses any live result whose run recorded a step, time, call or spend limit: only runs
+  whose approved budget decided nothing but whether the next run started can be published. A new
+  `internal-backend` comparison runs fastbrowse on its own hosted browser pool against fastbrowse on a
+  Browser Use Cloud browser, over the same 54 tasks.
+
 - A page with no controls, such as a browser error page reached by going back from a submitted form, offers
   the caller's start address as a way to continue, so leaving it does not wait on recovery.
 - Answer checks accept a record named only by a requested identifier, such as an order reference, so a
