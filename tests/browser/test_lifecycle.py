@@ -648,6 +648,29 @@ async def test_cloud_extensions_pick_the_api_version(extensions: tuple[str, ...]
     )
 
 
+@pytest.mark.parametrize(("minutes", "sent"), [(None, 15), (240, 240)], ids=["default", "asked"])
+async def test_a_run_asks_the_cloud_for_the_browser_lifetime_it_needs(minutes: int | None, sent: int) -> None:
+    """A browser that outlives the run's needs is not cut off at the default quarter of an hour."""
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200, json={"id": "created", "cdpUrl": "https://cdp.test", "webSocketDebuggerUrl": "ws://cdp.test"}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+        browser = (
+            _browser("key", LocalChrome(), http, [])
+            if minutes is None
+            else _browser("key", LocalChrome(), http, [], cloud_timeout_minutes=minutes)
+        )
+        async with browser:
+            pass
+    created = next(r for r in requests if r.url.host == "api.browser-use.com" and r.method == "POST")
+    assert json.loads(created.content)["timeout"] == sent
+
+
 @pytest.mark.parametrize(
     "extensions",
     [

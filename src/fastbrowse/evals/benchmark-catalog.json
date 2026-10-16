@@ -16,6 +16,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -28,6 +29,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -40,6 +42,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -52,6 +55,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -64,6 +68,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -76,6 +81,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -88,6 +94,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -99,7 +106,8 @@
         "category": "login",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "fastbrowse-pool"
         ],
         "expect": "complete",
         "source_fingerprint": "9b04bd5e40bdc5fb",
@@ -110,7 +118,8 @@
         "category": "login",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "fastbrowse-pool"
         ],
         "expect": "complete",
         "source_fingerprint": "414d61a40ffac29f",
@@ -121,7 +130,8 @@
         "category": "login",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "fastbrowse-pool"
         ],
         "expect": "complete",
         "source_fingerprint": "51cbc63f2994be69",
@@ -132,7 +142,8 @@
         "category": "login",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "fastbrowse-pool"
         ],
         "expect": "complete",
         "source_fingerprint": "2d66bcc0aeee7744",
@@ -143,7 +154,8 @@
         "category": "checkout",
         "arms": [
           "fastbrowse",
-          "browser-use"
+          "browser-use",
+          "fastbrowse-pool"
         ],
         "expect": "complete",
         "source_fingerprint": "12cfe299aa40fd83",
@@ -153,7 +165,8 @@
         "id": "saucedemo-pause",
         "category": "safety",
         "arms": [
-          "fastbrowse"
+          "fastbrowse",
+          "fastbrowse-pool"
         ],
         "expect": "needs_confirmation",
         "source_fingerprint": "78f548abb2f6b359",
@@ -165,6 +178,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -177,6 +191,7 @@
         "arms": [
           "fastbrowse",
           "jev-ultrafast",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -189,6 +204,7 @@
         "arms": [
           "fastbrowse",
           "jev-ultrafast",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -201,6 +217,7 @@
         "arms": [
           "fastbrowse",
           "jev-ultrafast",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -213,6 +230,7 @@
         "arms": [
           "fastbrowse",
           "jev-ultrafast",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -225,6 +243,7 @@
         "arms": [
           "fastbrowse",
           "jev-ultrafast",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -237,6 +256,7 @@
         "arms": [
           "fastbrowse",
           "jev-ultrafast",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -251,6 +271,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -263,6 +284,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -275,6 +297,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -287,6 +310,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -299,6 +323,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -311,6 +336,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -323,6 +349,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -335,6 +362,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -347,6 +375,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -359,6 +388,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -371,6 +401,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -383,6 +414,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -395,6 +427,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -409,6 +442,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -421,6 +455,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -433,6 +468,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -445,6 +481,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -457,6 +494,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -469,6 +507,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -481,6 +520,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -493,6 +533,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -505,6 +546,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -519,6 +561,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -531,6 +574,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -543,6 +587,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -555,6 +600,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -567,6 +613,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -579,6 +626,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -591,6 +639,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -603,6 +652,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -615,6 +665,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -629,6 +680,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -641,6 +693,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -653,6 +706,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
+          "fastbrowse-pool",
           "cua-codex"
         ],
         "expect": "complete",
@@ -666,6 +720,11 @@
       "pin": "run.fastbrowse_version + run.git_sha",
       "tier": "A",
       "default": true
+    },
+    "fastbrowse-pool": {
+      "pin": "run.fastbrowse_version + run.git_sha; fastbrowse-hosted browser pool",
+      "tier": "A",
+      "default": false
     },
     "jev-ultrafast": {
       "pin": "jev-ultrafast @ git+https://github.com/browser-use/jev-ultrafast@1231850a0bf1a0c0341fe408ef1668dbbfdfac46",
@@ -688,6 +747,5 @@
       "default": false
     }
   },
-  "max_steps": 50,
   "ultrafast_text_model": "inception/mercury-2.5"
 }

@@ -263,7 +263,8 @@ _KEPT = ("arm", "task", "repeat", "category", "suite", "suite_version", "task_ve
 _RUN_KEPT = ("run_id", "run_started", "fastbrowse_version", "git_sha", "git_dirty", "providers", "max_steps",
              "concurrency", "jev_ultrafast", "arms", "python", "argv", "benchmark_family", "benchmark_origin",
              "benchmark_suite", "benchmark_runner_sha", "benchmark_runner_dirty",
-             "benchmark_catalog_sha256")  # fmt: skip
+             "benchmark_catalog_sha256", "agent_limits", "budget_policy", "hosted_max_cost_usd", "browsers",
+             "provider_limits")  # fmt: skip
 
 
 def slim(row: Mapping[str, Any]) -> dict[str, Any]:
