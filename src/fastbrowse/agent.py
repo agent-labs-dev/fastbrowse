@@ -34,6 +34,7 @@ from fastbrowse.effects import (
     move,
     reversal,
     state_key,
+    step_key,
 )
 from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, JevClient, JevError, NoulAnswer, NoulQuestion
 from fastbrowse.llm import Generation, LLMClient, LLMError, Message
@@ -409,8 +410,10 @@ class _RunState:
     recoveries: int = 0
     recovered_requirements: set[str] = field(default_factory=set)
     terminal_verification_attempted: bool = False
-    unread_rereads: set[tuple[str, str]] = field(default_factory=set[tuple[str, str]])
-    """Pages, by address and document, whose reader a finish refused for an unread requirement asked once more."""
+    unread_rereads: set[str] = field(default_factory=set[str])
+    """Steps, by `step_key`, whose reader a finish refused for an unread requirement asked once more."""
+    read_step: str | None = None
+    """The `step_key` of the capture the last read read."""
     blank_opening_checked: bool = False
     recovery_log: deque[str] = field(default_factory=lambda: deque(maxlen=_RECOVERY_RECORDS))
     recovered_at: int = 0
@@ -477,7 +480,8 @@ class _RunState:
     """By page state, each requirement a read of it evidenced and the capture it read, so a return to that state
     can tell the evidence went stale."""
     captures_at: dict[str, set[str]] = field(default_factory=dict[str, set[str]])
-    """By page state, every capture a read of it read: a step the run has come back to is no longer history."""
+    """By `step_key`, every capture a read of that step read: a step the run has come back to is no longer
+    history."""
     read_at: dict[str, str] = field(default_factory=dict[str, str])
     """By page state, the capture its last read read, evidence or not: a requirement asked of two pages (the name
     Review showed and the confirmation) is evidenced by neither alone, and Review, reached again after a correction,
@@ -2696,7 +2700,8 @@ class Agent:
         earlier_states = {r.id for r in plan.requirements if r.earlier_state}
         revisited: set[str] = set()
         if observation is not None:
-            revisited = state.captures_at.setdefault(state_key(observation), set())
+            state.read_step = step_key(observation, capture)
+            revisited = state.captures_at.setdefault(state.read_step, set())
         for requirement in wanted:
             state.notes.supersede(
                 requirement.id,
@@ -3343,9 +3348,10 @@ class Agent:
             # and each one was refused.
             if state.http_failure is not None and gives_up_as is not Status.NEEDS_INPUT:
                 raise state.http_failure.stop()
-            # Once per page: a second page can repeat the reader's mistake, but the same page asked twice
-            # answers the same way, and a run must not read it until its recoveries run out.
-            page_read = (observation.url, observation.document_key)
+            # Once per step: a later step of the same single-page app can repeat the reader's mistake, but the same
+            # step asked twice answers the same way. A page whose shape changes on every capture is still bounded by
+            # max_recoveries, which this recovery has already counted.
+            page_read = state.read_step or f"{observation.url}\n{observation.document_key}"
             if page_read in state.unread_rereads or gives_up_as is not Status.STUCK:
                 raise _Stop(gives_up_as, diagnosis)
             # A reader filed a date picker's "Date Picker 2 (dd/mm/yyyy) : SelectedDate: 27/12/2026" as context for

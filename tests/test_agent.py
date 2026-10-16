@@ -1383,7 +1383,11 @@ async def test_returning_to_a_step_retires_the_value_it_no_longer_shows() -> Non
         answer_expected=True,
     )
     review = observation(())
-    first = capture((BlockKind.PARAGRAPH, "Review"), (BlockKind.PARAGRAPH, "Name: Priya Sharma"))
+    first = capture(
+        (BlockKind.PARAGRAPH, "Review"),
+        (BlockKind.PARAGRAPH, "Name: Priya Sharma"),
+        (BlockKind.PARAGRAPH, "Status: draft"),
+    )
     corrected = capture(
         (BlockKind.PARAGRAPH, "Review"),
         (BlockKind.PARAGRAPH, "Name: Priya Sharman"),
@@ -1410,6 +1414,99 @@ async def test_returning_to_a_step_retires_the_value_it_no_longer_shows() -> Non
 
     assert state.notes.evidenced("status")
     assert not state.notes.evidenced("review_name")
+
+
+def _wizard_plan() -> Plan:
+    return Plan(
+        requirements=(
+            Requirement(id="submit", text="Submit the form", kind=RequirementKind.ACTION),
+            Requirement(
+                id="review_name",
+                text="Find the first name the Review step showed last",
+                kind=RequirementKind.INFORMATION,
+                earlier_state=True,
+            ),
+            Requirement(id="status", text="Find the form's status line", kind=RequirementKind.INFORMATION),
+        ),
+        answer_expected=True,
+    )
+
+
+async def test_the_next_step_at_the_same_address_and_controls_is_not_a_return() -> None:
+    """Codex on #362: Review and Submit shared an address and their Back and Next buttons, so reading Submit was
+    taken for a return to Review and the name Review showed was retired."""
+    state = await run_state()
+    state.ready_plan = _wizard_plan()
+    wizard = observation((_button("Back"), _button("Next")))
+    review = capture((BlockKind.HEADING, "Step 4 of 5: Review"), (BlockKind.PARAGRAPH, "Name: Priya Sharman"))
+    submit = capture((BlockKind.HEADING, "Step 5 of 5: Submit"), (BlockKind.PARAGRAPH, "Status: ready to submit"))
+    name: JsonValue = {
+        "text": "Name: Priya Sharman",
+        "cite": {"first": "s1", "last": "s1"},
+        "requirement_id": "review_name",
+    }
+    status: JsonValue = {
+        "text": "Status: ready to submit",
+        "cite": {"first": "s1", "last": "s1"},
+        "requirement_id": "status",
+    }
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    llm = ScriptedLLM([{"claims": [name], "answered": False}, {"claims": [status], "answered": False}])
+    agent = Agent(page, ScriptedJev({}), llm)
+    await agent._read(state, review, wizard)
+    await agent._read(state, submit, wizard)
+    assert state.notes.evidenced("review_name") and state.notes.evidenced("status")
+
+
+def test_a_steps_identity_ignores_a_timer_but_not_its_heading() -> None:
+    from fastbrowse.effects import step_key
+
+    on = observation((_button("Next"),))
+
+    def shown(heading: str, timer: str) -> Capture:
+        return capture((BlockKind.HEADING, heading), (BlockKind.PARAGRAPH, f"Elapsed: {timer}"))
+
+    assert step_key(on, shown("Review", "00:01")) == step_key(on, shown("Review", "00:07"))
+    assert step_key(on, shown("Review", "00:01")) != step_key(on, shown("Submit", "00:01"))
+
+
+async def test_each_state_of_a_single_page_app_gets_its_own_extra_read() -> None:
+    """Codex on #362: keyed by address and document, a misfiled read on one state of a page that swaps its content
+    in place spent the extra read for every later state."""
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(
+            Requirement(id="pick", text="Pick the last Saturday", kind=RequirementKind.ACTION),
+            Requirement(id="r1", text="Find the date shown", kind=RequirementKind.INFORMATION),
+        ),
+        answer_expected=True,
+    )
+    app = observation(())
+    first = capture((BlockKind.HEADING, "Calendar"), (BlockKind.PARAGRAPH, "Date: 26/12/2026"))
+    second = capture((BlockKind.HEADING, "Summary"), (BlockKind.PARAGRAPH, "Date: 27/12/2026"))
+    nothing: JsonValue = {"claims": [], "answered": False}
+    recovery: JsonValue = {
+        "diagnosis": "The date is on screen",
+        "next_subgoal": "Finish",
+        "give_up": False,
+        "control": None,
+        "operation": "done",
+    }
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"png")
+    page.artifacts = ()
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([nothing, recovery, nothing, recovery, recovery]))
+    for shown in (first, second):
+        await agent._read(state, shown, app)
+        state.read_here = True
+        await agent._recover(state, app, "missing r1")
+        assert state.directed == (Operation.READ, None)
+        state.directed = None
+    # The second state asked again answers the same way, so the run stops there.
+    with pytest.raises(_Stop) as stopped:
+        await agent._recover(state, app, "missing r1")
+    assert stopped.value.status is Status.STUCK
 
 
 @pytest.mark.parametrize("second_page", [True, False])

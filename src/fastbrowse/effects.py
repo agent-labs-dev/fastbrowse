@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 
 from fastbrowse.models import Frozen
-from fastbrowse.page import Control, Observation
+from fastbrowse.page import BlockKind, Capture, Control, Observation
 
 _SHOWN = 4
 _TEXT = 60
@@ -98,6 +98,21 @@ def state_key(observation: Observation) -> str:
         for c in observation.controls
     )
     return hashlib.sha256(json.dumps([observation.url, controls]).encode()).hexdigest()
+
+
+def step_key(observation: Observation, capture: Capture) -> str:
+    """Identify which step or content state a capture shows: its page state and the shape of its text.
+
+    A wizard's Review and Submit steps can share an address and their Back and Next buttons, so `state_key` takes
+    one for the other. Each block's kind and the headings over it tell them apart, while a block's own words are
+    left out: a countdown or a corrected name changes them on every capture of the same step."""
+    shape = [
+        [block.kind.value, block.frame_id, list(block.heading_path)]
+        for block in capture.blocks
+        if block.kind is not BlockKind.OBSERVATION
+    ]
+    headings = [capture.text[block.start : block.end] for block in capture.blocks if block.kind is BlockKind.HEADING]
+    return hashlib.sha256(json.dumps([state_key(observation), shape, headings]).encode()).hexdigest()
 
 
 def _short(value: object) -> str:
