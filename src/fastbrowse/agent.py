@@ -479,9 +479,6 @@ class _RunState:
     evidenced_at: dict[str, dict[str, str]] = field(default_factory=dict[str, dict[str, str]])
     """By page state, each requirement a read of it evidenced and the capture it read, so a return to that state
     can tell the evidence went stale."""
-    captures_at: dict[str, set[str]] = field(default_factory=dict[str, set[str]])
-    """By `step_key`, every capture a read of that step read: a step the run has come back to is no longer
-    history."""
     read_at: dict[str, str] = field(default_factory=dict[str, str])
     """By page state, the capture its last read read, evidence or not: a requirement asked of two pages (the name
     Review showed and the confirmation) is evidenced by neither alone, and Review, reached again after a correction,
@@ -2697,21 +2694,10 @@ class Agent:
                 state.pending_collections.clear()
         for candidate in state.transaction_candidates:
             candidate.outcome_read = True
-        earlier_states = {r.id for r in plan.requirements if r.earlier_state}
-        revisited: set[str] = set()
         if observation is not None:
             state.read_step = step_key(observation, capture)
-            revisited = state.captures_at.setdefault(state.read_step, set())
         for requirement in wanted:
-            state.notes.supersede(
-                requirement.id,
-                capture.url,
-                capture.sha256,
-                capture.text,
-                earlier_states=earlier_states,
-                revisited=revisited - {capture.sha256},
-            )
-        revisited.add(capture.sha256)
+            state.notes.supersede(requirement.id, capture.url, capture.sha256, capture.text)
         state.incomplete.update(outcome.incomplete)
         state.tally_readers = outcome.tally_readers
         state.comparisons = outcome.comparisons

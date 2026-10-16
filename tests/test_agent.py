@@ -1335,48 +1335,15 @@ async def test_a_finish_refused_for_an_unbound_value_asks_the_reader_once_more()
     assert not skipped and state.notes.evidenced("requirement_2")
 
 
-async def test_a_read_tells_supersede_which_requirements_ask_about_an_earlier_step() -> None:
-    state = await run_state()
-    state.ready_plan = Plan(
-        requirements=(
-            Requirement(
-                id="review_name",
-                text="Find the first name the Review step showed last",
-                kind=RequirementKind.INFORMATION,
-                earlier_state=True,
-            ),
-            Requirement(id="confirmation", text="Find what the confirmation says", kind=RequirementKind.INFORMATION),
-        ),
-        answer_expected=True,
-    )
-    shown = capture((BlockKind.PARAGRAPH, "Multi-step form submitted successfully."))
-    page = Mock(spec=Page)
-    page.artifacts = ()
-    claim: JsonValue = {
-        "text": "Multi-step form submitted successfully.",
-        "cite": {"first": "s0", "last": "s0"},
-        "requirement_id": "confirmation",
-    }
-    agent = Agent(page, ScriptedJev({}), ScriptedLLM([{"claims": [claim], "answered": True}]))
-    superseded = Mock(wraps=state.notes.supersede)
-    state.notes.supersede = superseded
-    await agent._read(state, shown, None)
-    assert superseded.call_args_list
-    assert all(call.kwargs["earlier_states"] == {"review_name"} for call in superseded.call_args_list)
-
-
 async def test_returning_to_a_step_retires_the_value_it_no_longer_shows() -> None:
-    """Codex on #362: back on Review after a correction, a read that bound only another requirement left the
-    earlier-state requirement answered by the old name, and the run could finish on it."""
+    """Codex on #362: back on Review after a correction, a read that bound only another requirement must not leave
+    the name requirement answered by the old name."""
     state = await run_state()
     state.ready_plan = Plan(
         requirements=(
             Requirement(id="submit", text="Submit the form", kind=RequirementKind.ACTION),
             Requirement(
-                id="review_name",
-                text="Find the first name the Review step showed last",
-                kind=RequirementKind.INFORMATION,
-                earlier_state=True,
+                id="review_name", text="Find the first name the Review step showed", kind=RequirementKind.INFORMATION
             ),
             Requirement(id="status", text="Find the form's status line", kind=RequirementKind.INFORMATION),
         ),
@@ -1414,49 +1381,6 @@ async def test_returning_to_a_step_retires_the_value_it_no_longer_shows() -> Non
 
     assert state.notes.evidenced("status")
     assert not state.notes.evidenced("review_name")
-
-
-def _wizard_plan() -> Plan:
-    return Plan(
-        requirements=(
-            Requirement(id="submit", text="Submit the form", kind=RequirementKind.ACTION),
-            Requirement(
-                id="review_name",
-                text="Find the first name the Review step showed last",
-                kind=RequirementKind.INFORMATION,
-                earlier_state=True,
-            ),
-            Requirement(id="status", text="Find the form's status line", kind=RequirementKind.INFORMATION),
-        ),
-        answer_expected=True,
-    )
-
-
-async def test_the_next_step_at_the_same_address_and_controls_is_not_a_return() -> None:
-    """Codex on #362: Review and Submit shared an address and their Back and Next buttons, so reading Submit was
-    taken for a return to Review and the name Review showed was retired."""
-    state = await run_state()
-    state.ready_plan = _wizard_plan()
-    wizard = observation((_button("Back"), _button("Next")))
-    review = capture((BlockKind.HEADING, "Step 4 of 5: Review"), (BlockKind.PARAGRAPH, "Name: Priya Sharman"))
-    submit = capture((BlockKind.HEADING, "Step 5 of 5: Submit"), (BlockKind.PARAGRAPH, "Status: ready to submit"))
-    name: JsonValue = {
-        "text": "Name: Priya Sharman",
-        "cite": {"first": "s1", "last": "s1"},
-        "requirement_id": "review_name",
-    }
-    status: JsonValue = {
-        "text": "Status: ready to submit",
-        "cite": {"first": "s1", "last": "s1"},
-        "requirement_id": "status",
-    }
-    page = Mock(spec=Page)
-    page.artifacts = ()
-    llm = ScriptedLLM([{"claims": [name], "answered": False}, {"claims": [status], "answered": False}])
-    agent = Agent(page, ScriptedJev({}), llm)
-    await agent._read(state, review, wizard)
-    await agent._read(state, submit, wizard)
-    assert state.notes.evidenced("review_name") and state.notes.evidenced("status")
 
 
 def test_a_steps_identity_ignores_a_timer_but_not_its_heading() -> None:

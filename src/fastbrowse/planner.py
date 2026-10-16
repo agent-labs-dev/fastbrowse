@@ -48,12 +48,6 @@ class Requirement(Frozen):
         "False for a ranking or separate counts by group, a sum of record values, a count of distinct "
         "attribute values, or a comparison such as the cheapest record. Code counts the matching records.",
     )
-    earlier_state: bool = Field(
-        default=False,
-        description="True only when this information requirement asks what the page showed at a step the task "
-        "itself moves past, such as the name a Review step showed before the form is submitted. False when it "
-        "asks for a value the page shows now, such as a product's name or price.",
-    )
 
 
 class Plan(Frozen):
@@ -251,9 +245,7 @@ def _instructions() -> Message:
             "Set count_records for a requested total number of matching entities, including items nested in "
             "groups. Preserve the requested entity and filters: group headings are not the entities they "
             "contain. Do not turn a record count into a prose estimate. Set inspect_access only for an explicit "
-            "request to inspect access restrictions; never for a request to retrieve protected content. "
-            "Set earlier_state only for a value the task asks about at a step it then leaves, such as what a "
-            "Review step showed before submitting; a later step not showing that value does not make it wrong.\n\n"
+            "request to inspect access restrictions; never for a request to retrieve protected content.\n\n"
             "# Secrets\nNever write a password, token or other secret value into a requirement."
         ),
     )

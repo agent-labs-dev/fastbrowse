@@ -629,22 +629,6 @@ def test_a_fresh_quote_resting_on_a_vanished_step_still_evidences_its_requiremen
     assert _output_context(answer, notes) is not None
 
 
-def test_reading_one_state_of_a_page_keeps_another_requirements_earlier_state() -> None:
-    """Rows internal-*|stretch-wizard-correction, all four: reading the confirmation retired the first name the
-    Review step showed, which no later state shows again, and the two requirements took turns being open."""
-    url = "https://lab.hakdogan.com/practice/form-multi-step/"
-    review = _wizard_fact(
-        "Priya Sharman, priya.sharma@example.com, 221B Baker Street, Manchester", "review", "req-3", url=url
-    )
-    confirmation = _wizard_fact("Multi-step form submitted successfully.", "done", "req-4", url=url)
-    notes = Notes((review, confirmation))
-
-    notes.supersede("req-4", url, "done", confirmation.text, earlier_states={"req-3"})
-
-    assert notes.evidenced("req-3") and notes.evidenced("req-4")
-    assert fact_id(review) in notes.current_evidence()
-
-
 def test_a_page_that_replaces_several_values_retires_every_one_it_no_longer_shows() -> None:
     """A product page that swaps its name and price together, read again for the price alone, must not keep the old
     name as current beside the new price: the answer would join two states of the page that never coexisted."""

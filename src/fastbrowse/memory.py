@@ -3,7 +3,7 @@
 import hashlib
 import json
 import re
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from itertools import groupby
 from typing import Self
@@ -328,27 +328,14 @@ class Notes:
         for requirements in self._requirements.values():
             requirements -= dropped
 
-    def supersede(
-        self,
-        requirement_id: str,
-        url: str,
-        sha256: str,
-        text: str,
-        *,
-        earlier_states: Collection[str] = (),
-        revisited: Collection[str] = (),
-    ) -> None:
+    def supersede(self, requirement_id: str, url: str, sha256: str, text: str) -> None:
         """Once a read of `url` evidences a requirement, earlier reads of that address whose quote the page no
         longer shows stop evidencing it, and stay as context.
 
         After a date picker's choice was corrected from 31/10 to 28/11, a new read quoted the new date, but the
-        answer still quoted the old one, since both facts evidenced the requirement.
-
-        `earlier_states` names requirements that ask what a step the task moves past showed. Their evidence is
-        retired only by a read that evidences them again, while the run is away from that step; every other
-        vanished value is retired here. `revisited` holds the earlier captures of the page state this capture
-        shows: evidence read off one of them is back on its own step, and a quote that step no longer shows is
-        stale there like any other."""
+        answer still quoted the old one, since both facts evidenced the requirement. A product page that swaps its
+        name and price together must not answer with the old name beside the new price either, so a vanished value
+        is retired whichever requirement it answered."""
         fresh = tuple(
             evidence for evidence in self.supporting_evidence(requirement_id) if evidence.capture_sha256 == sha256
         )
@@ -359,26 +346,6 @@ class Notes:
         evidence = self.evidence
         # Virtualized lists replace visible rows while a tally or comparison still depends on those already read.
         kept = self._tally_records | set(self.comparison_records())
-        # A product page that swaps its name and price together must not answer with the old name beside the new
-        # price, so a vanished value is retired whichever requirement it answered. The exception is a value the
-        # task asks of a step it then leaves: reading a wizard's confirmation retired the name its Review step
-        # showed, which no later state shows again, and the two requirements took turns being open until the run
-        # ended stuck. A quote shared with this requirement is this requirement's stale value too, and goes with it.
-        # Back on Review after a correction, a read that bound only the confirmation kept the old name as Review's.
-        returned = {
-            key
-            for key in self._facts
-            if any(
-                source is not None and source.capture_sha256 in revisited
-                for source in (evidence.get(item) for item in self.expand_evidence_ids((key,)))
-            )
-        }
-        others = {
-            key
-            for key, ids in self._requirements.items()
-            if ids & set(earlier_states) and requirement_id not in ids and key not in returned
-        }
-        resting = set(self.expand_evidence_ids(others))
         # The quote this read cut is on the page by construction. A confirmation claim that drew on the Review step
         # it followed was retired along with that step, and the requirement it had just evidenced was open again.
         own = {
@@ -402,8 +369,6 @@ class Notes:
                 and not shows(text, source.quote)
                 for source in sources
             ):
-                continue
-            if key in resting and requirement_id not in self._requirements[key]:
                 continue
             # Context quotes can contradict a later value even when they never evidenced a requirement.
             self._retired.add(key)
