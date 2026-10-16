@@ -462,9 +462,8 @@ def _remember(
         if evidence is None or not claim.excerpt.strip():
             return None
         excerpt = claim.excerpt.strip()
-        matches = _loose(excerpt).finditer(evidence.quote)
-        match = next(matches, None)
-        if match is None:
+        matches = list(_loose(excerpt).finditer(evidence.quote))
+        if not matches:
             # Readers copy our block labels between paragraphs; those annotations are not captured page text.
             markers = tuple(
                 _source_marker(block)
@@ -475,9 +474,9 @@ def _remember(
                 next((line.removeprefix(marker) for marker in markers if line.startswith(marker)), line)
                 for line in excerpt.splitlines()
             )
-            matches = _loose(excerpt).finditer(evidence.quote)
-            match = next(matches, None)
-        if match is None or next(matches, None) is not None:
+            matches = list(_loose(excerpt).finditer(evidence.quote))
+        match = _excerpt_match(capture, evidence, matches)
+        if match is None:
             logger.debug("read rejected missing or ambiguous excerpt")
             return None
         start, end = evidence.start + match.start(), evidence.start + match.end()
@@ -575,6 +574,32 @@ def _block_context(capture: Capture, evidence: Evidence, reader: FactReader) -> 
         return None
     span = _evidence(capture, block, block.start, block.end)
     return Fact(text=span.quote, evidence=span, reader=reader)
+
+
+def _excerpt_match(capture: Capture, evidence: Evidence, matches: Sequence[re.Match[str]]) -> re.Match[str] | None:
+    """The one place in the cited run an excerpt names, or None when it is missing or could be either of two.
+
+    Equal text in two places can be two records' values, the same price under two products, so a repeated excerpt
+    is refused. One case is not ambiguous: the excerpt is the whole of exactly one block, and its other matches
+    sit inside longer blocks that say more around it. A wizard's result panel read "Multi-step form submitted
+    successfully." and its toast "Success toast: Multi-step form submitted successfully."; refused as ambiguous,
+    the confirmation was never noted, and two runs that had submitted the form ended stuck."""
+    if len(matches) == 1:
+        return matches[0]
+
+    def whole(match: re.Match[str]) -> bool:
+        start, end = evidence.start + match.start(), evidence.start + match.end()
+        return any(
+            block.start <= start
+            and end <= block.end
+            and block.frame_id == evidence.frame_id
+            and not capture.text[block.start : start].strip()
+            and not capture.text[end : block.end].strip()
+            for block in capture.blocks
+        )
+
+    blocks = [match for match in matches if whole(match)]
+    return blocks[0] if len(blocks) == 1 else None
 
 
 def _heading_facts(capture: Capture, evidence: Evidence, reader: FactReader) -> tuple[Fact, ...]:

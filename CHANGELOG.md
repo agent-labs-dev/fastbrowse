@@ -21,7 +21,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   so a product page that swaps its name and price cannot be answered with the old name beside the new price. The answer check is told the run's
   date, so "the last Saturday of the month after next" can be checked against the date the page shows. A finish
   refused because a requirement was left unread now asks the reader of that page once more before the run
-  stops `stuck`, since a reader can file a value it was asked for as context.
+  stops `stuck`, since a reader can file a value it was asked for as context. An excerpt that appears twice in
+  the blocks a reader cited, such as a confirmation shown in a result panel and again in a toast, is no longer
+  refused as ambiguous when it is the whole of exactly one block; the same price under two products still is.
 
 ## [0.5.22] - 2026-10-16
 
