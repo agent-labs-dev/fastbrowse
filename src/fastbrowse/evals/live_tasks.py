@@ -6,6 +6,7 @@ Maintainer benchmark tasks and orchestration live in Parallax.
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -136,3 +137,32 @@ class LiveTask:
 def prompt(task: LiveTask) -> str:
     """What every arm is asked; part of each task's version fingerprint, since it is what the task asks."""
     return f"Start at {task.start}. {task.task}"
+
+
+ARM_BROWSERS = {
+    "fastbrowse": ("browser-use-cloud", "local-chrome"),
+    "fastbrowse-pool": ("fastbrowse-pool",),
+    "jev-ultrafast": ("browser-use-cloud",),
+    "browser-use": ("browser-use-hosted",),
+}
+"""The browsers each arm is measured in. The pool and Browser Use's hosted browser are each the one their arm sells,
+so a pool row's block rate is part of what the backend comparison measures; binding the mode to the arm keeps a
+swapped record from publishing one backend under another's name."""
+
+
+def arm_browser_refusal(run: Mapping[str, Any], arm: object) -> str | None:
+    """Why `arm`'s row of `run` must not be published for the browser it ran in; None when it may.
+
+    A campaign records one browser per arm (`browsers`), and each arm is judged by its own. An older campaign
+    recorded a single `browser` for every arm, which only `browser_refusal` can judge."""
+    browsers = run.get("browsers")
+    if not isinstance(browsers, Mapping):
+        return browser_refusal(run.get("browser"))
+    browser = browsers.get(arm)
+    if not isinstance(browser, Mapping):
+        return f"no browser record for {arm}; a public-site run must record the browser each arm ran in"
+    admitted = ARM_BROWSERS.get(str(arm), ())
+    if browser.get("mode") not in admitted:
+        named = ", ".join(admitted) or "no browser this build knows"
+        return f"{arm} ran in browser mode {browser.get('mode')!r}; it is measured only in {named}"
+    return browser_refusal(browser) if browser["mode"] in ("browser-use-cloud", "local-chrome") else None

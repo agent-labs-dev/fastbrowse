@@ -276,11 +276,17 @@ def slim(row: Mapping[str, Any]) -> dict[str, Any]:
     kept["run"] = {key: run.get(key) for key in _RUN_KEPT}
     # The browser record is what the gate reads to tell a real browser from a throwaway one, so it is kept; a local
     # Chrome's executable path is dropped, because a local path never enters published evidence.
-    browser = run.get("browser")
-    kept["run"]["browser"] = (
-        {key: value for key, value in browser.items() if key != "binary"} if isinstance(browser, Mapping) else browser
-    )
+    kept["run"]["browser"] = _without_path(run.get("browser"))
+    browsers = run.get("browsers")
+    if isinstance(browsers, Mapping):
+        kept["run"]["browsers"] = {arm: _without_path(browser) for arm, browser in browsers.items()}
     return kept
+
+
+def _without_path(browser: object) -> object:
+    if not isinstance(browser, Mapping):
+        return browser
+    return {key: value for key, value in browser.items() if key != "binary"}
 
 
 def publish(release: str, source: Path) -> Path:

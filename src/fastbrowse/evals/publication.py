@@ -413,10 +413,12 @@ def _provenance(row: Mapping[str, Any], *, release: str | None, require_clean: b
 
 def _browser(row: Mapping[str, Any]) -> list[Finding]:
     """A public-site row measured in a browser those sites refuse scores the refusal, not the agent."""
-    from fastbrowse.evals.live_tasks import browser_refusal
+    from fastbrowse.evals.live_tasks import arm_browser_refusal
 
     run = row.get("run")
-    refusal = browser_refusal(run.get("browser") if isinstance(run, Mapping) else None)
+    if not isinstance(run, Mapping):
+        return [_finding(REFUSE, "browser", f"{_where(row)}: no run record")]
+    refusal = arm_browser_refusal(run, row.get("arm"))
     return [] if refusal is None else [_finding(REFUSE, "browser", f"{_where(row)}: {refusal}")]
 
 

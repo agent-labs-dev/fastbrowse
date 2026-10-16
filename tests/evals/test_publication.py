@@ -755,6 +755,18 @@ def test_a_slim_row_keeps_the_browser_but_never_a_local_path() -> None:
     assert versions.slim(source)["run"]["browser"] == {"mode": "local-chrome", "headed": True}
 
 
+def test_a_slim_row_keeps_each_arms_browser_but_never_a_local_path() -> None:
+    source = attempts(1)[0]
+    source["run"]["browsers"] = {
+        "fastbrowse": {"mode": "local-chrome", "binary": "/home/someone/chrome", "headed": True},
+        "fastbrowse-pool": {"mode": "fastbrowse-pool", "host": "pool.internal"},
+    }
+    assert versions.slim(source)["run"]["browsers"] == {
+        "fastbrowse": {"mode": "local-chrome", "headed": True},
+        "fastbrowse-pool": {"mode": "fastbrowse-pool", "host": "pool.internal"},
+    }
+
+
 @pytest.mark.parametrize(
     "field,value",
     [
