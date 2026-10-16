@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.22] - 2026-10-16
+
 - `FASTBROWSE_LLM_BASE_URL` points the LLM at any OpenAI-compatible chat completions endpoint, such as a local
   vLLM server, instead of OpenRouter or the Vercel AI Gateway. `FASTBROWSE_LLM_API_KEY` is sent to it only when
   set, and the OpenRouter and gateway keys never are. `FASTBROWSE_LLM_STRICT=0` sends schemas in the model's own
@@ -33,8 +35,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   for one teardown come to ten minutes at most. A browser that still could not be stopped is logged as a
   warning with its id, where before a run that had already failed, had failed to start or was cancelled
   dropped that error without a word.
-
-## [0.5.21] - 2026-10-16
 
 - `run_task` takes `cloud_timeout_minutes`, how long a Browser Use Cloud browser it starts may live (15 by
   default, up to the service's 240), so a run that needs longer than a quarter of an hour can ask for it
@@ -1324,8 +1324,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.21...HEAD
-[0.5.21]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.21
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.22...HEAD
+[0.5.22]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.22
 [0.5.20]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.20
 [0.5.19]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.19
 [0.5.18]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.18
