@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.22] - 2026-10-16
+
 - Runs that had found and cited the right answer no longer end `stuck` or `unverified` under a "Partial evidence
   only" header for five reasons found in the 0.5.21 benchmark, where 36 such runs had a correct answer. A
   quote cut down to its value, such as "by Marilyn Monroe" or a quote's text without the "C.S. Lewis (god)" line
@@ -25,8 +27,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   appears twice in the blocks a reader cited, such as a confirmation shown in a result panel and again in a
   toast, is no longer refused as ambiguous when it is the whole of exactly one block; the same price under two
   products still is.
-
-## [0.5.22] - 2026-10-16
 
 - `FASTBROWSE_LLM_BASE_URL` points the LLM at any OpenAI-compatible chat completions endpoint, such as a local
   vLLM server, instead of OpenRouter or the Vercel AI Gateway. `FASTBROWSE_LLM_API_KEY` is sent to it only when
