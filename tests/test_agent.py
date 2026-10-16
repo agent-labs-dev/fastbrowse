@@ -1251,10 +1251,14 @@ async def test_recovery_cannot_direct_a_finish_while_information_is_unread() -> 
         "control": None,
         "operation": "done",
     }
-    llm = ScriptedLLM([{"claims": [claim], "answered": False}, recovery])
+    llm = ScriptedLLM([{"claims": [claim], "answered": False}, recovery, recovery])
     agent = Agent(page, ScriptedJev({"operation": "read", "r1": "absent", "r2": "synthesis"}, noul=0.0), llm)
     await agent._read(state, await page.capture(), obs)
     state.read_here = True
+    # The reader is asked once more before the run gives up; a second refusal stops it.
+    await agent._recover(state, obs, "repeated a failing action")
+    assert state.directed == (Operation.READ, None)
+    state.directed = None
     with pytest.raises(_Stop) as stopped:
         await agent._recover(state, obs, "repeated a failing action")
     assert stopped.value.status is Status.STUCK
@@ -1263,6 +1267,91 @@ async def test_recovery_cannot_direct_a_finish_while_information_is_unread() -> 
     # What the run did read is what a stuck result hands back.
     partial = agent._partial_result(state.notes, state, state.ledger, Status.STUCK, stopped.value.error)
     assert partial.answer is not None and "This domain is for use in examples." in partial.answer
+
+
+async def test_a_finish_refused_for_an_unbound_value_asks_the_reader_once_more() -> None:
+    """Rows stretch-datepicker-last-sunday (internal-backend, fastbrowse-pool repeat 2, fastbrowse repeat 1) and
+    stretch-datepicker-last-saturday (fastbrowse-pool repeat 0) of the 0.5.21 benchmark: the reader filed the label
+    and the field's value as context, the unchanged page was never read again, and the first recovery that said to
+    finish stopped the run stuck with the date on screen."""
+    state = await run_state()
+    state.task = (
+        "Using Date Picker 2, the dd/mm/yyyy calendar, select the last Sunday of the month after next. Tell me the "
+        "date the field shows."
+    )
+    state.ready_plan = Plan(
+        requirements=(
+            Requirement(
+                id="requirement_1",
+                text="Select the last Sunday of the month after next using Date Picker 2.",
+                kind=RequirementKind.ACTION,
+            ),
+            Requirement(
+                id="requirement_2",
+                text="Find the date value shown in the Date Picker 2 field after selection.",
+                kind=RequirementKind.INFORMATION,
+            ),
+        ),
+        answer_expected=True,
+    )
+    obs = observation(())
+    shown = capture(
+        (BlockKind.HEADING, "Automation Testing Practice"),
+        (BlockKind.PARAGRAPH, "Date Picker 2 (dd/mm/yyyy) :"),
+        (BlockKind.PARAGRAPH, "SelectedDate: 27/12/2026"),
+    )
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"png")
+    page.capture = AsyncMock(return_value=shown)
+    page.artifacts = ()
+    context_only: JsonValue = {
+        "text": "The page displays 'Date Picker 2 (dd/mm/yyyy) :' followed by 'SelectedDate: 27/12/2026'.",
+        "cite": {"first": "s1", "last": "s2"},
+        "requirement_id": None,
+    }
+    bound: JsonValue = {
+        "text": "The Date Picker 2 field shows 27/12/2026.",
+        "cite": {"first": "s2", "last": "s2"},
+        "requirement_id": "requirement_2",
+    }
+    recovery: JsonValue = {
+        "diagnosis": "The date 27/12/2026 is selected in Date Picker 2. All requirements are satisfied.",
+        "next_subgoal": "Finish the task",
+        "give_up": False,
+        "control": None,
+        "operation": "done",
+    }
+    llm = ScriptedLLM([{"claims": [context_only], "answered": False}, recovery, {"claims": [bound], "answered": True}])
+    agent = Agent(page, ScriptedJev({"operation": "read"}, noul=0.0), llm)
+    await agent._read(state, shown, obs)
+    assert not state.notes.evidenced("requirement_2")
+    state.read_here = True
+    reason = "Still missing evidence for requirement_2. Re-reading this unchanged content will not supply it."
+
+    await agent._recover(state, obs, reason)
+
+    assert state.directed == (Operation.READ, None)
+    _, skipped = await agent._read(state, shown, obs)
+    assert not skipped and state.notes.evidenced("requirement_2")
+
+
+async def test_the_answer_audit_is_given_the_runs_date(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A criterion such as "the last Saturday of the month after next" is relative to the day the run read the page.
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r1", text="Find the date shown", kind=RequirementKind.INFORMATION),),
+        answer_checks=("The date shown",),
+        answer_expected=True,
+    )
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    agent._observed = observation(())
+    checked = AsyncMock(return_value=None)
+    monkeypatch.setattr(agent_module, "check_claims", checked)
+    await agent._holds(state, ComposedAnswer(answer="", linked_answer="", claims=()))
+    assert checked.await_args is not None
+    assert checked.await_args.kwargs["today"] == agent._observed.today
 
 
 @pytest.mark.parametrize(("lookup", "recovered"), [(True, False), (False, False), (True, True)])

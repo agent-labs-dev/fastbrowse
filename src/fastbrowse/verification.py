@@ -628,6 +628,7 @@ async def check_answer_outputs(
     bounded: bool = False,
     verified_outputs: list[str] | None = None,
     independent_fields: bool = True,
+    today: str | None = None,
 ) -> bool:
     if independent_fields and isinstance(composed, FieldAnswer):
         passed = []
@@ -655,6 +656,7 @@ async def check_answer_outputs(
                 task=task,
                 audit_cache=audit_cache,
                 bounded=bounded,
+                today=today,
             ):
                 passed.append(check)
         if verified_outputs is not None:
@@ -675,6 +677,7 @@ async def check_answer_outputs(
         audit_cache=audit_cache,
         bounded=bounded,
         independent_fields=independent_fields,
+        today=today,
     )
 
 
@@ -725,6 +728,7 @@ async def _check_answer_outputs(
     audit_cache: OutputAuditCache | None,
     bounded: bool,
     independent_fields: bool = True,
+    today: str | None = None,
 ) -> bool:
     def fit(messages: Sequence[Message], schema: type[BaseModel]) -> None:
         size = sum(len(message.content) for message in messages) + len(json.dumps(schema.model_json_schema()))
@@ -1044,10 +1048,10 @@ async def _check_answer_outputs(
             if isinstance(field, dict):
                 refs.update(identity["url_ref"] for identity in field.get("requested_entities", ()))
             urls = {alias: url for alias, url in context.urls.items() if alias in refs}
-            request = [
-                *messages,
-                Message(role="user", content=json.dumps({"task": task, "criteria": {key: field}, "urls": urls})),
-            ]
+            payload: dict[str, object] = {"task": task, "criteria": {key: field}, "urls": urls}
+            if today is not None:
+                payload["current_date"] = today
+            request = [*messages, Message(role="user", content=json.dumps(payload))]
             if independent_fields and isinstance(composed, FieldAnswer):
                 request[0] = request[0].model_copy(update={"content": request[0].content + "\n\n" + FIELD_CATEGORIES})
             try:
@@ -1098,6 +1102,15 @@ async def _check_answer_outputs(
                 raise result
         return dict(result for result in assessed if not isinstance(result, BaseException))
 
+    # Asked for "the last Saturday of the month after next", the audit saw 26/12/2026 quoted from the field and
+    # refused it for want of today's date, which no page states. The run's clock is code's, not the page's.
+    dated = (
+        " current_date is the run's own date, supplied by code rather than read from a page. Judge a criterion "
+        "relative to today, such as the next Monday or the month after next, against it; the quoted value must "
+        "still be on the page."
+        if today is not None
+        else ""
+    )
     # Seeing the reported value let the audit fill gaps in ambiguous quotes; check sources with assertions withheld.
     source_messages = [
         Message(
@@ -1157,7 +1170,7 @@ async def _check_answer_outputs(
                 "The quoted records must still identify matching entities and filters. Observed page titles provide "
                 "identity context, not missing field "
                 "evidence. Never reconstruct missing table column labels from prior knowledge. Return "
-                "yes/no/uncertain per field and explain missing source values."
+                "yes/no/uncertain per field and explain missing source values." + dated
             ),
         ),
     ]
@@ -1227,7 +1240,7 @@ async def _check_answer_outputs(
                 "may rest on a quoted property. A factual comparative advantage, including highest, lowest "
                 "or best on a measured property, requires all compared operands in that claim's own citations. "
                 "Quotes cited only by another claim cannot supply missing operands or support. "
-                "Preserve uncertainty and explain failures."
+                "Preserve uncertainty and explain failures." + dated
             ),
         ),
     ]
@@ -1276,6 +1289,7 @@ async def check_claims(
     bounded: bool = False,
     verified_fields: list[FieldAnswer] | None = None,
     independent_fields: bool = True,
+    today: str | None = None,
 ) -> ComposedAnswer | None:
     """The answer without any claim a check doubts, or None when a requirement is omitted from what is left or the
     pages where the run committed an action contradict it.
@@ -1328,6 +1342,7 @@ async def check_claims(
             bounded=bounded,
             verified_outputs=verified_outputs,
             independent_fields=independent_fields,
+            today=today,
         ),
         return_exceptions=True,
     )
@@ -1420,6 +1435,7 @@ async def check_claims(
                 audit_cache=audit_cache,
                 bounded=bounded,
                 independent_fields=independent_fields,
+                today=today,
             )
             else None
         )

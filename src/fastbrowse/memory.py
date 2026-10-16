@@ -344,24 +344,50 @@ class Notes:
         evidence = self.evidence
         # Virtualized lists replace visible rows while a tally or comparison still depends on those already read.
         kept = self._tally_records | set(self.comparison_records())
+        # A page that redraws in place shows one state at a time. Reading a wizard's confirmation retired the name its
+        # Review step showed, which the task asked for and no later state shows again, so the two requirements took
+        # turns being open until the run ended stuck. Another requirement's evidence, and the quotes it rests on,
+        # are retired only by a read that evidences that requirement again. A quote shared with this requirement
+        # is this requirement's stale value too, and goes with it.
+        others = {key for key, ids in self._requirements.items() if ids and requirement_id not in ids}
+        resting = set(self.expand_evidence_ids(others))
+        # The quote this read cut is on the page by construction. A confirmation claim that drew on the Review step
+        # it followed was retired along with that step, and the requirement it had just evidenced was open again.
+        own = {
+            key
+            for key, fact in self._facts.items()
+            if fact.evidence is not None and fact.evidence.capture_sha256 == sha256 and fact.tally is None
+        }
+        retired: set[str] = set()
         for key, fact in self._facts.items():
-            if key in kept:
+            if key in kept or key in own:
                 continue
             sources = (
                 (evidence.get(source) for source in self.expand_evidence_ids((key,)))
                 if fact.basis and fact.tally is None
                 else (fact.evidence,)
             )
-            if any(
+            if not any(
                 source is not None
                 and source.capture_sha256 != sha256
                 and _address(source.url) in addresses
                 and not shows(text, source.quote)
                 for source in sources
             ):
-                # Context quotes can contradict a later value even when they never evidenced a requirement.
-                self._retired.add(key)
-                self._requirements[key].clear()
+                continue
+            if key in resting and requirement_id not in self._requirements[key]:
+                continue
+            # Context quotes can contradict a later value even when they never evidenced a requirement.
+            self._retired.add(key)
+            self._requirements[key].clear()
+            retired.add(key)
+        for key in own:
+            fact = self._facts[key]
+            if any(source in retired for source in fact.basis):
+                # The vanished quote stays in the notes as history; the fresh quote no longer rests on it.
+                self._facts[key] = fact.model_copy(
+                    update={"basis": tuple(source for source in fact.basis if source not in retired)}
+                )
 
     def read_for(self, requirement_id: str) -> tuple[Evidence, ...]:
         """The spans read as evidence of a requirement, including those a later read superseded."""

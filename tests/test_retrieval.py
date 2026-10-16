@@ -636,7 +636,7 @@ async def test_excerpt_matching_copies_original_punctuation_and_whitespace() -> 
         "answered": True,
     }
     result = await read(ScriptedLLM([response]), page, "Find price", ["r"], Notes())
-    evidence = result.facts[0].evidence
+    evidence = next(fact for fact in result.facts if fact.requirement_id == "r").evidence
     assert evidence is not None
     assert evidence.quote == passage == page.text[evidence.start : evidence.end]
 

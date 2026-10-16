@@ -11,6 +11,17 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Runs that had found and cited the right answer no longer end `stuck` or `unverified` under a "Partial evidence
+  only" header for four reasons found in the 0.5.21 benchmark, where 36 such runs had a correct answer. A quote
+  cut down to its value, such as "by Marilyn Monroe" or a quote's text without the "C.S. Lewis (god)" line under
+  it, now keeps the record it came from beside it, so the answer check can find the subject it answers for on
+  the page; a record naming someone else still fails. Reading one state of a page that redraws in place, such
+  as a wizard's confirmation, no longer reopens another requirement read off an earlier state, such as the name
+  its Review step showed, nor the requirement the read had just answered. The answer check is told the run's
+  date, so "the last Saturday of the month after next" can be checked against the date the page shows. A finish
+  refused because a requirement was left unread now asks the reader of that page once more before the run
+  stops `stuck`, since a reader can file a value it was asked for as context.
+
 ## [0.5.22] - 2026-10-16
 
 - `FASTBROWSE_LLM_BASE_URL` points the LLM at any OpenAI-compatible chat completions endpoint, such as a local

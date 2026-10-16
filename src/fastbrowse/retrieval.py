@@ -58,6 +58,9 @@ _READ_CONFIDENCE = 0.90
 _NO_NEW_EVIDENCE_CONFIDENCE = 0.80
 # Long passages belong with the reader; bounded spans keep one batched choice cheaper than generation.
 _READ_SPAN_CHARS = 320
+# Ours. A quote card on quotes.toscrape.com runs to about 1,100 characters with its author and tags; a block much
+# longer than this is prose, where the sentence around a value is not what names its subject.
+_CONTEXT_BLOCK_CHARS = 2_000
 # Long passages crowd out other relevance questions, so score bounded windows of neighboring blocks.
 _FOCUS_WINDOW_CHARS = 1500
 # Ours. Near even odds is Jev unable to tell, not relevance: on PyPI's release history the window holding the asked
@@ -494,6 +497,15 @@ def _remember(
             notes.add(context)
             basis.append(fact_id(context))
         evidence = _evidence(capture, block, start, end)
+        # Narrowing one record to its value can discard the subject named beside it in the same block.
+        if (
+            claim.cite is not None
+            and claim.cite.first == claim.cite.last
+            and (context := _block_context(capture, evidence, FactReader.LLM)) is not None
+        ):
+            notes.add(context)
+            if fact_id(context) not in basis:
+                basis.append(fact_id(context))
     # A derived claim cites nothing and rests on its basis; one that cites blocks must cite them correctly.
     if evidence is None and (claim.cite is not None or not basis):
         logger.debug("read rejected claim cite=%s basis=%d", reprlib.repr(claim.cite), len(basis))
@@ -526,6 +538,43 @@ def _remember(
     )
     notes.add(fact)
     return fact
+
+
+def _block_context(capture: Capture, evidence: Evidence, reader: FactReader) -> Fact | None:
+    """The whole block a narrowed quote was cut from, kept beside it as context.
+
+    The answer audit binds a requested subject only to literal quotes it is offered. Cut to "by Marilyn Monroe",
+    or to a quote's text without the "C.S. Lewis (god)" line under it, a correct answer had no quote naming what
+    it answered for, and the run ended unverified with the record that named it in its notes."""
+    block = next(
+        (
+            block
+            for block in capture.blocks
+            if block.frame_id == evidence.frame_id
+            and (block.source_url or capture.url) == evidence.url
+            and block.start <= evidence.start
+            and evidence.end <= block.end
+        ),
+        None,
+    )
+    # A table row already keeps the cells before its value, and the rows after it are other records. A
+    # downloaded file's block is the whole file, which an excerpt must not stand in for. One line of prose names
+    # its subject in the sentence the reader quoted; it is a record's other lines that carry the name.
+    if (
+        block is None
+        or block.kind in (BlockKind.OBSERVATION, BlockKind.TABLE)
+        or block.complete_source
+        or block.source_url is not None
+        or block.end - block.start > _CONTEXT_BLOCK_CHARS
+        or "\n" not in capture.text[block.start : block.end]
+        or (
+            not capture.text[block.start : evidence.start].strip()
+            and not capture.text[evidence.end : block.end].strip()
+        )
+    ):
+        return None
+    span = _evidence(capture, block, block.start, block.end)
+    return Fact(text=span.quote, evidence=span, reader=reader)
 
 
 def _heading_facts(capture: Capture, evidence: Evidence, reader: FactReader) -> tuple[Fact, ...]:
@@ -2690,6 +2739,13 @@ async def _read_choices(
             for candidate in group
             for heading in _heading_facts(capture, candidate.evidence, FactReader.JEV_CHOICE)
         )
+        # A candidate is one line of its block, and a quote's line left its author and tag on the next one.
+        enclosing = {
+            fact_id(block): block
+            for candidate in group
+            if (block := _block_context(capture, candidate.evidence, FactReader.JEV_CHOICE)) is not None
+        }
+        headings = (*headings, *enclosing.values())
         facts.extend((*context, *headings))
         logger.debug("read reader=jev_choice requirement=%s reason=scalar_candidate", requirement.id)
         # The candidate's evidence was cut from this capture by code, so it is kept as selected, not re-found.
