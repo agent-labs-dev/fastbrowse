@@ -17,11 +17,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   it, now keeps the record it came from beside it, so the answer check can find the subject it answers for on
   the page; a record naming someone else still fails. Reading a wizard's confirmation no longer reopens the
   requirement it had just answered, nor one the plan marks as asking what a step the task moves past showed,
-  such as the name its Review step showed. Any other value a page stops showing still reopens its requirement,
+  such as the name its Review step showed, while the run is away from that step; back on it, a name the step no
+  longer shows is retired. Any other value a page stops showing still reopens its requirement,
   so a product page that swaps its name and price cannot be answered with the old name beside the new price. The answer check is told the run's
   date, so "the last Saturday of the month after next" can be checked against the date the page shows. A finish
-  refused because a requirement was left unread now asks the reader of that page once more before the run
-  stops `stuck`, since a reader can file a value it was asked for as context. An excerpt that appears twice in
+  refused because a requirement was left unread now asks the reader of that page once more, once per page,
+  before the run stops `stuck`, since a reader can file a value it was asked for as context. An excerpt that appears twice in
   the blocks a reader cited, such as a confirmation shown in a result panel and again in a toast, is no longer
   refused as ambiguous when it is the whole of exactly one block; the same price under two products still is.
 

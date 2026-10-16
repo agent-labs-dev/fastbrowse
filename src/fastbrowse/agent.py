@@ -409,8 +409,8 @@ class _RunState:
     recoveries: int = 0
     recovered_requirements: set[str] = field(default_factory=set)
     terminal_verification_attempted: bool = False
-    unread_reread: bool = False
-    """A finish refused for an unread requirement has asked the reader of this page once more."""
+    unread_rereads: set[tuple[str, str]] = field(default_factory=set[tuple[str, str]])
+    """Pages, by address and document, whose reader a finish refused for an unread requirement asked once more."""
     blank_opening_checked: bool = False
     recovery_log: deque[str] = field(default_factory=lambda: deque(maxlen=_RECOVERY_RECORDS))
     recovered_at: int = 0
@@ -476,6 +476,8 @@ class _RunState:
     evidenced_at: dict[str, dict[str, str]] = field(default_factory=dict[str, dict[str, str]])
     """By page state, each requirement a read of it evidenced and the capture it read, so a return to that state
     can tell the evidence went stale."""
+    captures_at: dict[str, set[str]] = field(default_factory=dict[str, set[str]])
+    """By page state, every capture a read of it read: a step the run has come back to is no longer history."""
     read_at: dict[str, str] = field(default_factory=dict[str, str])
     """By page state, the capture its last read read, evidence or not: a requirement asked of two pages (the name
     Review showed and the confirmation) is evidenced by neither alone, and Review, reached again after a correction,
@@ -2692,10 +2694,19 @@ class Agent:
         for candidate in state.transaction_candidates:
             candidate.outcome_read = True
         earlier_states = {r.id for r in plan.requirements if r.earlier_state}
+        revisited: set[str] = set()
+        if observation is not None:
+            revisited = state.captures_at.setdefault(state_key(observation), set())
         for requirement in wanted:
             state.notes.supersede(
-                requirement.id, capture.url, capture.sha256, capture.text, earlier_states=earlier_states
+                requirement.id,
+                capture.url,
+                capture.sha256,
+                capture.text,
+                earlier_states=earlier_states,
+                revisited=revisited - {capture.sha256},
             )
+        revisited.add(capture.sha256)
         state.incomplete.update(outcome.incomplete)
         state.tally_readers = outcome.tally_readers
         state.comparisons = outcome.comparisons
@@ -3332,13 +3343,16 @@ class Agent:
             # and each one was refused.
             if state.http_failure is not None and gives_up_as is not Status.NEEDS_INPUT:
                 raise state.http_failure.stop()
-            if state.unread_reread or gives_up_as is not Status.STUCK:
+            # Once per page: a second page can repeat the reader's mistake, but the same page asked twice
+            # answers the same way, and a run must not read it until its recoveries run out.
+            page_read = (observation.url, observation.document_key)
+            if page_read in state.unread_rereads or gives_up_as is not Status.STUCK:
                 raise _Stop(gives_up_as, diagnosis)
             # A reader filed a date picker's "Date Picker 2 (dd/mm/yyyy) : SelectedDate: 27/12/2026" as context for
             # the action rather than as the requested value, the page was not read again because its content had
             # not changed, and three runs stopped stuck on the first recovery with the date on screen. The reader
             # is asked once more; the done check and the answer audit still judge whatever it binds.
-            state.unread_reread = True
+            state.unread_rereads.add(page_read)
             state.reads = {key for key in state.reads if key[0] != observation.document_key}
             state.barren = {key: count for key, count in state.barren.items() if key[0] != observation.document_key}
             generation = generation.model_copy(

@@ -329,7 +329,14 @@ class Notes:
             requirements -= dropped
 
     def supersede(
-        self, requirement_id: str, url: str, sha256: str, text: str, *, earlier_states: Collection[str] = ()
+        self,
+        requirement_id: str,
+        url: str,
+        sha256: str,
+        text: str,
+        *,
+        earlier_states: Collection[str] = (),
+        revisited: Collection[str] = (),
     ) -> None:
         """Once a read of `url` evidences a requirement, earlier reads of that address whose quote the page no
         longer shows stop evidencing it, and stay as context.
@@ -338,7 +345,10 @@ class Notes:
         answer still quoted the old one, since both facts evidenced the requirement.
 
         `earlier_states` names requirements that ask what a step the task moves past showed. Their evidence is
-        retired only by a read that evidences them again; every other vanished value is retired here."""
+        retired only by a read that evidences them again, while the run is away from that step; every other
+        vanished value is retired here. `revisited` holds the earlier captures of the page state this capture
+        shows: evidence read off one of them is back on its own step, and a quote that step no longer shows is
+        stale there like any other."""
         fresh = tuple(
             evidence for evidence in self.supporting_evidence(requirement_id) if evidence.capture_sha256 == sha256
         )
@@ -354,8 +364,19 @@ class Notes:
         # task asks of a step it then leaves: reading a wizard's confirmation retired the name its Review step
         # showed, which no later state shows again, and the two requirements took turns being open until the run
         # ended stuck. A quote shared with this requirement is this requirement's stale value too, and goes with it.
+        # Back on Review after a correction, a read that bound only the confirmation kept the old name as Review's.
+        returned = {
+            key
+            for key in self._facts
+            if any(
+                source is not None and source.capture_sha256 in revisited
+                for source in (evidence.get(item) for item in self.expand_evidence_ids((key,)))
+            )
+        }
         others = {
-            key for key, ids in self._requirements.items() if ids & set(earlier_states) and requirement_id not in ids
+            key
+            for key, ids in self._requirements.items()
+            if ids & set(earlier_states) and requirement_id not in ids and key not in returned
         }
         resting = set(self.expand_evidence_ids(others))
         # The quote this read cut is on the page by construction. A confirmation claim that drew on the Review step

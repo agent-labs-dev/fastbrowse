@@ -1365,6 +1365,87 @@ async def test_a_read_tells_supersede_which_requirements_ask_about_an_earlier_st
     assert all(call.kwargs["earlier_states"] == {"review_name"} for call in superseded.call_args_list)
 
 
+async def test_returning_to_a_step_retires_the_value_it_no_longer_shows() -> None:
+    """Codex on #362: back on Review after a correction, a read that bound only another requirement left the
+    earlier-state requirement answered by the old name, and the run could finish on it."""
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(
+            Requirement(id="submit", text="Submit the form", kind=RequirementKind.ACTION),
+            Requirement(
+                id="review_name",
+                text="Find the first name the Review step showed last",
+                kind=RequirementKind.INFORMATION,
+                earlier_state=True,
+            ),
+            Requirement(id="status", text="Find the form's status line", kind=RequirementKind.INFORMATION),
+        ),
+        answer_expected=True,
+    )
+    review = observation(())
+    first = capture((BlockKind.PARAGRAPH, "Review"), (BlockKind.PARAGRAPH, "Name: Priya Sharma"))
+    corrected = capture(
+        (BlockKind.PARAGRAPH, "Review"),
+        (BlockKind.PARAGRAPH, "Name: Priya Sharman"),
+        (BlockKind.PARAGRAPH, "Status: ready to submit"),
+    )
+    name: JsonValue = {
+        "text": "Name: Priya Sharma",
+        "cite": {"first": "s1", "last": "s1"},
+        "requirement_id": "review_name",
+    }
+    status: JsonValue = {
+        "text": "Status: ready to submit",
+        "cite": {"first": "s2", "last": "s2"},
+        "requirement_id": "status",
+    }
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    llm = ScriptedLLM([{"claims": [name], "answered": False}, {"claims": [status], "answered": False}])
+    agent = Agent(page, ScriptedJev({}), llm)
+    await agent._read(state, first, review)
+    assert state.notes.evidenced("review_name")
+
+    await agent._read(state, corrected, review)
+
+    assert state.notes.evidenced("status")
+    assert not state.notes.evidenced("review_name")
+
+
+@pytest.mark.parametrize("second_page", [True, False])
+async def test_the_extra_read_before_stopping_is_once_per_page(second_page: bool) -> None:
+    """Codex on #362: a run-wide flag gave a second page with the same reader mistake no retry."""
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r1", text="Find the date shown", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    first = observation(()).model_copy(update={"url": "https://example.test/a", "document_key": "a"})
+    second = first.model_copy(update={"url": "https://example.test/b", "document_key": "b"})
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"png")
+    page.artifacts = ()
+    recovery: JsonValue = {
+        "diagnosis": "The date is on screen",
+        "next_subgoal": "Finish",
+        "give_up": False,
+        "control": None,
+        "operation": "done",
+    }
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([recovery] * 3))
+    state.read_here = True
+    await agent._recover(state, first, "missing r1")
+    assert state.directed == (Operation.READ, None)
+    state.directed = None
+    if second_page:
+        await agent._recover(state, second, "missing r1")
+        assert state.directed == (Operation.READ, None)
+    else:
+        with pytest.raises(_Stop) as stopped:
+            await agent._recover(state, first, "missing r1")
+        assert stopped.value.status is Status.STUCK
+
+
 async def test_the_answer_audit_is_given_the_runs_date(monkeypatch: pytest.MonkeyPatch) -> None:
     # A criterion such as "the last Saturday of the month after next" is relative to the day the run read the page.
     state = await run_state()
