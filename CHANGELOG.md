@@ -19,8 +19,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   saying so. JavaScript errors are reported as before.
 - A stop request for a Browser Use Cloud browser that the service could not take is sent again, up to four tries
   in all, where before the browser was left to bill until its timeout, which a benchmark sets at four hours. A
-  browser that still could not be stopped is logged as a warning with its id, where before a run that had already failed, had failed to start or was
-  cancelled dropped that error without a word.
+  throttled stop waits as long as the service asks, by its `Retry-After` header or the `retry_after_seconds` in
+  its reply, since an edge throttle asks for five minutes and a quicker retry is only throttled again; the waits
+  for one teardown come to ten minutes at most. A browser that still could not be stopped is logged as a
+  warning with its id, where before a run that had already failed, had failed to start or was cancelled
+  dropped that error without a word.
 
 ## [0.5.21] - 2026-10-16
 

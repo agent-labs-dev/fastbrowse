@@ -644,6 +644,77 @@ async def test_a_stop_the_cloud_could_not_take_is_sent_again(monkeypatch: pytest
     assert cloud.cost[0].dollars == 0.50
 
 
+class _Waits:
+    """Stands in for the adapter's sleep and clock: records each wait and moves the clock by it, at once."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.now = 0.0
+        self.waits: list[float] = []
+        # Not raising lets the same test run against an adapter with no such seams, and fail on what it waited.
+        monkeypatch.setattr(cloud_adapter, "_sleep", self.sleep, raising=False)
+        monkeypatch.setattr(cloud_adapter, "_clock", lambda: self.now, raising=False)
+
+    async def sleep(self, seconds: float) -> None:
+        self.waits.append(seconds)
+        self.now += seconds
+
+
+def _throttled_then_stopped(throttle: httpx.Response, methods: list[str], *, times: int = 1) -> Any:
+    def respond(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        if request.method == "PATCH" and methods.count("PATCH") <= times:
+            return throttle
+        return httpx.Response(
+            200, json={"id": "created", "cdpUrl": "https://cdp.test", "webSocketDebuggerUrl": "ws://cdp.test"}
+        )
+
+    return respond
+
+
+@pytest.mark.parametrize(
+    "throttle",
+    [
+        # An edge throttle: a header and no budget in the body.
+        httpx.Response(429, headers={"Retry-After": "300"}, json={"error": "rate_limited"}),
+        # A project throttle names its delay in the body.
+        httpx.Response(429, json={"error": "rate_limited", "limit_rps": 25, "retry_after_seconds": 300}),
+    ],
+    ids=["header", "body"],
+)
+async def test_a_throttled_stop_waits_as_long_as_the_cloud_asks(
+    monkeypatch: pytest.MonkeyPatch, throttle: httpx.Response
+) -> None:
+    """A fixed one, two, four second backoff spent every attempt inside a five-minute throttle and gave up."""
+    waits = _Waits(monkeypatch)
+    methods: list[str] = []
+    transport = httpx.MockTransport(_throttled_then_stopped(throttle, methods))
+    async with httpx.AsyncClient(transport=transport) as http, BrowserUseCloudBrowser("key", http=http):
+        pass
+    assert methods == ["POST", "GET", "PATCH", "PATCH"]
+    assert waits.waits == [300.0]
+
+
+async def test_a_throttled_stop_waits_no_longer_than_its_bound(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A service that asks for more and more time cannot hold a run's teardown open past ten minutes."""
+    waits = _Waits(monkeypatch)
+    methods: list[str] = []
+    throttle = httpx.Response(429, headers={"Retry-After": "400"})
+    transport = httpx.MockTransport(_throttled_then_stopped(throttle, methods, times=cloud_adapter._STOP_ATTEMPTS))
+    async with httpx.AsyncClient(transport=transport) as http:
+        with (
+            caplog.at_level("WARNING", logger="fastbrowse.adapters.browser_use_cloud"),
+            pytest.raises(BrowserUseCloudError),
+        ):
+            async with BrowserUseCloudBrowser("key", http=http):
+                pass
+    assert waits.waits == [400.0, 200.0]
+    assert sum(waits.waits) == cloud_adapter._STOP_WAIT_SECONDS
+    assert methods.count("PATCH") == 3
+    assert any("was not stopped" in record.getMessage() for record in caplog.records)
+
+
 @pytest.mark.parametrize("ending", ["failed run", "failed start", "cancelled run"])
 async def test_a_browser_that_could_not_be_stopped_is_logged(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, ending: str
