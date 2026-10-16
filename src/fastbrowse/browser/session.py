@@ -36,7 +36,7 @@ from fastbrowse.datafiles import data_file
 from fastbrowse.models import Artifact, ArtifactKind, ArtifactSink, FrameHandler, Frozen, Unavailable
 from fastbrowse.models import BrowserConnection as BrowserConnectionModel
 from fastbrowse.origins import OriginGrant
-from fastbrowse.page import BrowserError, BrowserUnavailable, Dialog, Tab
+from fastbrowse.page import BrowserError, BrowserUnavailable, ContextLost, Dialog, Tab
 
 logger = logging.getLogger(__name__)
 
@@ -122,12 +122,18 @@ class _HideEndpoint(logging.Filter):
 logging.getLogger("cdp_use.client").addFilter(_HideEndpoint())
 
 
+_SERVER_ERROR = -32000
+"""The code Chrome answers when the document or frame a command addressed is gone, as after a navigation."""
+
+
 def _browser_error(method: str, cause: Exception) -> BrowserError:
     detail = type(cause).__name__
     if cause.args and isinstance(cause.args[0], dict):
         code = cast("dict[str, object]", cause.args[0]).get("code")
         if type(code) is int:
             detail = f"CDP {code}"
+            if code == _SERVER_ERROR:
+                return ContextLost(f"{method} failed ({detail})")
     return BrowserError(f"{method} failed ({detail})")
 
 

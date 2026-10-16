@@ -187,3 +187,14 @@ def test_a_grant_needs_an_origin_and_a_connection_validates_it() -> None:
 )
 def test_a_grant_allows_only_exact_origins(url: str, allowed: bool) -> None:
     assert OriginGrant(["https://a.example"]).allows(url) is allowed
+
+
+def test_a_cdp_server_error_is_a_lost_context_and_keeps_no_page_text() -> None:
+    from fastbrowse.browser.session import _browser_error
+    from fastbrowse.page import ContextLost
+
+    lost = _browser_error("Runtime.evaluate", RuntimeError({"code": -32000, "message": "Cannot find context, secret"}))
+    assert isinstance(lost, ContextLost)
+    assert str(lost) == "Runtime.evaluate failed (CDP -32000)"
+    other = _browser_error("Runtime.evaluate", RuntimeError({"code": -32602, "message": "Invalid parameters"}))
+    assert not isinstance(other, ContextLost) and str(other) == "Runtime.evaluate failed (CDP -32602)"

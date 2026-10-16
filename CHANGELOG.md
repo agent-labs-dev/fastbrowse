@@ -20,6 +20,19 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   reports no price count as unknown cost, never as free, and the CLI's summary line now says when a run
   includes such calls. Contributed by [@imranye](https://github.com/imranye) in
   [#354](https://github.com/agent-labs-dev/fastbrowse/pull/354).
+- A page that replaces itself while it is being read no longer ends the run with `Runtime.evaluate failed (CDP
+  -32000)`. PyPI serves a "Client Challenge" that runs a script and then swaps itself for the project page, and
+  an observation in flight across that swap, which a cloud browser's round trips make likely, ended runs on
+  PyPI as errors. Observations, captures and address reads now wait for the new document to settle and read
+  it again; a page that keeps replacing itself still ends the run, after ten such re-reads, with a message
+  saying so. JavaScript errors are reported as before.
+- A stop request for a Browser Use Cloud browser that the service could not take is sent again, up to four tries
+  in all, where before the browser was left to bill until its timeout, which a benchmark sets at four hours. A
+  throttled stop waits as long as the service asks, by its `Retry-After` header or the `retry_after_seconds` in
+  its reply, since an edge throttle asks for five minutes and a quicker retry is only throttled again; the waits
+  for one teardown come to ten minutes at most. A browser that still could not be stopped is logged as a
+  warning with its id, where before a run that had already failed, had failed to start or was cancelled
+  dropped that error without a word.
 
 ## [0.5.21] - 2026-10-16
 

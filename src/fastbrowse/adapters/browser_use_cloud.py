@@ -6,9 +6,14 @@ cloud.cost  # metered lines, available after exit
 """
 
 import asyncio
+import logging
+import math
+import time
 from collections.abc import Sequence
 from contextlib import suppress
+from datetime import UTC, datetime
 from decimal import Decimal
+from email.utils import parsedate_to_datetime
 from types import TracebackType
 from typing import Self
 from uuid import UUID
@@ -19,10 +24,25 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from fastbrowse.clients.validation import RETRYABLE_STATUS, TRANSIENT_TRANSPORT
 from fastbrowse.models import BrowserConnection, CostBasis, CostComponent, CostLine, Unavailable
 
+logger = logging.getLogger(__name__)
+
 API_V3 = "https://api.browser-use.com/api/v3"
 API_V4 = "https://api.browser-use.com/api/v4"
 # https://docs.browser-use.com/cloud/api-v4/browsers/create-browser-session: "up to 3 ready extensions".
 MAX_EXTENSIONS = 3
+_STOP_ATTEMPTS = 4
+"""A browser whose stop request failed bills until its own timeout, up to four hours, so a stop the service could
+not take (a 5xx, a 429, a dropped connection) is sent again rather than abandoned after one try."""
+_STOP_RETRY_SECONDS = 1.0
+"""The first backoff between stop attempts, doubling after each, when the service names no delay of its own."""
+_STOP_WAIT_SECONDS = 600.0
+"""The most a teardown waits, in all, between stop attempts. A throttled service names its delay and the stop is
+held for it: a project throttle asks for seconds, an edge throttle for five minutes, and a fixed backoff spent every
+attempt inside that window and gave up. The browser bills through the wait either way, so ten minutes, two edge
+delays, is worth spending to stop it; past that the run ends and the browser runs on to its timeout, logged."""
+_sleep = asyncio.sleep
+_clock = time.monotonic
+"""Both swapped in tests, so a five-minute delay the service asks for is checked without being waited out."""
 
 
 class _BrowserView(BaseModel):
@@ -41,6 +61,30 @@ class BrowserUseCloudError(RuntimeError):
 
 class BrowserUseCloudUnavailable(BrowserUseCloudError, Unavailable):
     """Browser Use Cloud could not be reached, or answered with a retryable status."""
+
+    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+        """Seconds the service asked to be left alone for, when it said."""
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    """The delay a throttled response names: `Retry-After` in seconds or as a date, or the JSON body's
+    `retry_after_seconds`, the larger when both are given. A value that does not parse names nothing."""
+    delays: list[float] = []
+    if header := response.headers.get("Retry-After", "").strip():
+        try:
+            delays.append(float(header))
+        except ValueError:
+            with suppress(TypeError, ValueError, OverflowError):
+                delays.append((parsedate_to_datetime(header) - datetime.now(UTC)).total_seconds())
+    with suppress(ValueError):
+        body = response.json()
+        seconds = body.get("retry_after_seconds") if isinstance(body, dict) else None
+        if isinstance(seconds, int | float) and not isinstance(seconds, bool):
+            delays.append(float(seconds))
+    delays = [delay for delay in delays if math.isfinite(delay)]
+    return max(0.0, *delays) if delays else None
 
 
 def _extension_ids(extensions: Sequence[str]) -> list[str]:
@@ -72,6 +116,7 @@ class BrowserUseCloudBrowser:
         self._headers = {"X-Browser-Use-API-Key": api_key}
         # Only the V4 create call takes extensions, so a run that asks for none stays on the V3 path it was built on.
         self._api = API_V4 if extensions else API_V3
+        self._timeout_minutes = timeout_minutes
         self._body: dict[str, str | int | list[str]] = {"timeout": timeout_minutes}
         if extensions:
             self._body["extensionIds"] = _extension_ids(extensions)
@@ -161,10 +206,35 @@ class BrowserUseCloudBrowser:
             return
         self._connection = None
         # Forget the browser only once the stop succeeded, so a failed stop can be retried rather than left billing.
-        response = await self._call("PATCH", f"/browsers/{self._browser_id}", json={"action": "stop"})
+        try:
+            response = await self._request_stop(self._browser_id)
+        except BaseException as error:
+            # A run that already failed, a failed start and a cancelled run all drop this error for the one they
+            # carry, so a browser left running is said here or nowhere.
+            logger.warning(
+                "Browser Use Cloud browser %s was not stopped (%s); it runs until its %d-minute timeout",
+                self._browser_id,
+                str(error) or type(error).__name__,
+                self._timeout_minutes,
+            )
+            raise
         self._browser_id = None
         stopped = _BrowserView.model_validate_json(response.content)
         self._record_cost(stopped)
+
+    async def _request_stop(self, browser_id: str) -> httpx.Response:
+        give_up = _clock() + _STOP_WAIT_SECONDS
+        for attempt in range(_STOP_ATTEMPTS - 1):
+            try:
+                return await self._call("PATCH", f"/browsers/{browser_id}", json={"action": "stop"})
+            except BrowserUseCloudUnavailable as error:
+                remaining = give_up - _clock()
+                if remaining <= 0:
+                    raise
+                # The service's own delay outranks the backoff: retrying a throttle early is only throttled again.
+                delay = _STOP_RETRY_SECONDS * 2**attempt if error.retry_after is None else error.retry_after
+                await _sleep(min(delay, remaining))
+        return await self._call("PATCH", f"/browsers/{browser_id}", json={"action": "stop"})
 
     def _record_cost(self, browser: _BrowserView) -> None:
         self.cost = (
@@ -181,7 +251,9 @@ class BrowserUseCloudBrowser:
         except httpx.HTTPError:
             raise BrowserUseCloudError(f"Browser Use Cloud {method} {path} failed") from None
         if response.status_code in RETRYABLE_STATUS:
-            raise BrowserUseCloudUnavailable(f"Browser Use Cloud {method} {path}: HTTP {response.status_code}")
+            raise BrowserUseCloudUnavailable(
+                f"Browser Use Cloud {method} {path}: HTTP {response.status_code}", retry_after=_retry_after(response)
+            )
         if not response.is_success:
             raise BrowserUseCloudError(f"Browser Use Cloud {method} {path}: HTTP {response.status_code}")
         return response
