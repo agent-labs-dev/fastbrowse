@@ -11,6 +11,15 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- `FASTBROWSE_LLM_BASE_URL` points the LLM at any OpenAI-compatible chat completions endpoint, such as a local
+  vLLM server, instead of OpenRouter or the Vercel AI Gateway. `FASTBROWSE_LLM_API_KEY` is sent to it only when
+  set, and the OpenRouter and gateway keys never are. `FASTBROWSE_LLM_STRICT=0` sends schemas in the model's own
+  form for a server whose strict structured output breaks, and `FASTBROWSE_LLM_EXTRA_BODY` adds request fields
+  such a server needs, refusing any that would replace a field fastbrowse sets. OpenRouter's `reasoning` field
+  goes to such an endpoint only when `FASTBROWSE_LLM_REASONING` is set. Calls to an endpoint that
+  reports no price count as unknown cost, never as free, and the CLI's summary line now says when a run
+  includes such calls. Contributed by [@imranye](https://github.com/imranye) in
+  [#354](https://github.com/agent-labs-dev/fastbrowse/pull/354).
 - A page that replaces itself while it is being read no longer ends the run with `Runtime.evaluate failed (CDP
   -32000)`. PyPI serves a "Client Challenge" that runs a script and then swaps itself for the project page, and
   an observation in flight across that swap, which a cloud browser's round trips make likely, ended runs on
