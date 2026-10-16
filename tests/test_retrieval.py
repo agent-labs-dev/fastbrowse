@@ -636,7 +636,7 @@ async def test_excerpt_matching_copies_original_punctuation_and_whitespace() -> 
         "answered": True,
     }
     result = await read(ScriptedLLM([response]), page, "Find price", ["r"], Notes())
-    evidence = result.facts[0].evidence
+    evidence = next(fact for fact in result.facts if fact.requirement_id == "r").evidence
     assert evidence is not None
     assert evidence.quote == passage == page.text[evidence.start : evidence.end]
 
@@ -5416,3 +5416,62 @@ def test_a_quote_crossing_a_dom_observation_is_not_literal_page_text() -> None:
     page = capture((BlockKind.PARAGRAPH, "Create agent"), (BlockKind.OBSERVATION, "Name: [empty]"))
     assert not _evidence(page, page.blocks[0], 0, len(page.text)).rendered_text
     assert _evidence(page, page.blocks[0], 0, page.blocks[0].end).rendered_text
+
+
+async def test_a_repeated_excerpt_that_is_one_whole_block_names_that_block() -> None:
+    # Live wizard-correction runs on #362: the result panel and its toast both read the confirmation, the excerpt
+    # was refused as ambiguous, and runs that had submitted the form ended stuck without it.
+    message = "Multi-step form submitted successfully."
+    page = capture(
+        (BlockKind.PARAGRAPH, "Validation result panel"),
+        (BlockKind.PARAGRAPH, message),
+        (BlockKind.PARAGRAPH, f"Success toast: {message}"),
+    )
+    response: JsonValue = {
+        "claims": [
+            {
+                "cite": {"first": "s0", "last": "s2"},
+                "excerpt": message,
+                "text": f'The confirmation says "{message}"',
+                "requirement_id": "confirmation",
+            }
+        ],
+        "answered": True,
+    }
+    notes = Notes()
+    result = await read(ScriptedLLM([response]), page, "Find what the confirmation says", ["confirmation"], notes)
+    assert result.rejected_claims == 0 and notes.evidenced("confirmation")
+    fact = next(fact for fact in result.facts if fact.requirement_id == "confirmation")
+    assert fact.evidence is not None and fact.evidence.source_id == "s1" and fact.evidence.quote == message
+
+
+@pytest.mark.parametrize(
+    "parts",
+    [
+        (
+            (BlockKind.PARAGRAPH, "Widget A"),
+            (BlockKind.PARAGRAPH, "GBP 10"),
+            (BlockKind.PARAGRAPH, "Widget B"),
+            (BlockKind.PARAGRAPH, "GBP 10"),
+        ),
+        ((BlockKind.RECORD, "Widget A\nGBP 10"), (BlockKind.RECORD, "Widget B\nGBP 10")),
+    ],
+    ids=["two whole blocks", "inside two records"],
+)
+async def test_a_repeated_excerpt_under_two_products_stays_ambiguous(parts: tuple[tuple[BlockKind, str], ...]) -> None:
+    page = capture(*parts)
+    last = f"s{len(parts) - 1}"
+    response: JsonValue = {
+        "claims": [
+            {
+                "cite": {"first": "s0", "last": last},
+                "excerpt": "GBP 10",
+                "text": "Widget B costs GBP 10",
+                "requirement_id": "price",
+            }
+        ],
+        "answered": True,
+    }
+    notes = Notes()
+    result = await read(ScriptedLLM([response]), page, "Find Widget B's price", ["price"], notes)
+    assert result.rejected_claims == 1 and not notes.evidenced("price")

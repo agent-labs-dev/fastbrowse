@@ -333,7 +333,9 @@ class Notes:
         longer shows stop evidencing it, and stay as context.
 
         After a date picker's choice was corrected from 31/10 to 28/11, a new read quoted the new date, but the
-        answer still quoted the old one, since both facts evidenced the requirement."""
+        answer still quoted the old one, since both facts evidenced the requirement. A product page that swaps its
+        name and price together must not answer with the old name beside the new price either, so a vanished value
+        is retired whichever requirement it answered."""
         fresh = tuple(
             evidence for evidence in self.supporting_evidence(requirement_id) if evidence.capture_sha256 == sha256
         )
@@ -344,24 +346,41 @@ class Notes:
         evidence = self.evidence
         # Virtualized lists replace visible rows while a tally or comparison still depends on those already read.
         kept = self._tally_records | set(self.comparison_records())
+        # The quote this read cut is on the page by construction. A confirmation claim that drew on the Review step
+        # it followed was retired along with that step, and the requirement it had just evidenced was open again.
+        own = {
+            key
+            for key, fact in self._facts.items()
+            if fact.evidence is not None and fact.evidence.capture_sha256 == sha256 and fact.tally is None
+        }
+        retired: set[str] = set()
         for key, fact in self._facts.items():
-            if key in kept:
+            if key in kept or key in own:
                 continue
             sources = (
                 (evidence.get(source) for source in self.expand_evidence_ids((key,)))
                 if fact.basis and fact.tally is None
                 else (fact.evidence,)
             )
-            if any(
+            if not any(
                 source is not None
                 and source.capture_sha256 != sha256
                 and _address(source.url) in addresses
                 and not shows(text, source.quote)
                 for source in sources
             ):
-                # Context quotes can contradict a later value even when they never evidenced a requirement.
-                self._retired.add(key)
-                self._requirements[key].clear()
+                continue
+            # Context quotes can contradict a later value even when they never evidenced a requirement.
+            self._retired.add(key)
+            self._requirements[key].clear()
+            retired.add(key)
+        for key in own:
+            fact = self._facts[key]
+            if any(source in retired for source in fact.basis):
+                # The vanished quote stays in the notes as history; the fresh quote no longer rests on it.
+                self._facts[key] = fact.model_copy(
+                    update={"basis": tuple(source for source in fact.basis if source not in retired)}
+                )
 
     def read_for(self, requirement_id: str) -> tuple[Evidence, ...]:
         """The spans read as evidence of a requirement, including those a later read superseded."""

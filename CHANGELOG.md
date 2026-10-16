@@ -11,6 +11,21 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Runs that had found and cited the right answer no longer end `stuck` or `unverified` under a "Partial evidence
+  only" header for five reasons found in the 0.5.21 benchmark, where 36 such runs had a correct answer. A
+  quote cut down to its value, such as "by Marilyn Monroe" or a quote's text without the "C.S. Lewis (god)" line
+  under it, now keeps the record it came from beside it, so the answer check can find the subject it answers
+  for on the page; a record naming someone else still fails. A quote just read is no longer retired because the
+  claim it supports drew on an earlier state of the page, which reopened a wizard's confirmation as soon as it
+  was read; any value a page stops showing still reopens its requirement, so a product page that swaps its name
+  and price cannot be answered with the old name beside the new price. The answer check is told the run's
+  date, so "the last Saturday of the month after next" can be checked against the date the page shows. A finish
+  refused because a requirement was left unread now asks the reader once more for each state of the page
+  before the run stops `stuck`, since a reader can file a value it was asked for as context. An excerpt that
+  appears twice in the blocks a reader cited, such as a confirmation shown in a result panel and again in a
+  toast, is no longer refused as ambiguous when it is the whole of exactly one block; the same price under two
+  products still is.
+
 ## [0.5.22] - 2026-10-16
 
 - `FASTBROWSE_LLM_BASE_URL` points the LLM at any OpenAI-compatible chat completions endpoint, such as a local

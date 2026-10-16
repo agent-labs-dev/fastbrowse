@@ -34,6 +34,7 @@ from fastbrowse.effects import (
     move,
     reversal,
     state_key,
+    step_key,
 )
 from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, JevClient, JevError, NoulAnswer, NoulQuestion
 from fastbrowse.llm import Generation, LLMClient, LLMError, Message
@@ -409,6 +410,10 @@ class _RunState:
     recoveries: int = 0
     recovered_requirements: set[str] = field(default_factory=set)
     terminal_verification_attempted: bool = False
+    unread_rereads: set[str] = field(default_factory=set[str])
+    """Steps, by `step_key`, whose reader a finish refused for an unread requirement asked once more."""
+    read_step: str | None = None
+    """The `step_key` of the capture the last read read."""
     blank_opening_checked: bool = False
     recovery_log: deque[str] = field(default_factory=lambda: deque(maxlen=_RECOVERY_RECORDS))
     recovered_at: int = 0
@@ -2689,6 +2694,8 @@ class Agent:
                 state.pending_collections.clear()
         for candidate in state.transaction_candidates:
             candidate.outcome_read = True
+        if observation is not None:
+            state.read_step = step_key(observation, capture)
         for requirement in wanted:
             state.notes.supersede(requirement.id, capture.url, capture.sha256, capture.text)
         state.incomplete.update(outcome.incomplete)
@@ -3327,7 +3334,30 @@ class Agent:
             # and each one was refused.
             if state.http_failure is not None and gives_up_as is not Status.NEEDS_INPUT:
                 raise state.http_failure.stop()
-            raise _Stop(gives_up_as, diagnosis)
+            # Once per step: a later step of the same single-page app can repeat the reader's mistake, but the same
+            # step asked twice answers the same way. A page whose shape changes on every capture is still bounded by
+            # max_recoveries, which this recovery has already counted.
+            page_read = state.read_step or f"{observation.url}\n{observation.document_key}"
+            if page_read in state.unread_rereads or gives_up_as is not Status.STUCK:
+                raise _Stop(gives_up_as, diagnosis)
+            # A reader filed a date picker's "Date Picker 2 (dd/mm/yyyy) : SelectedDate: 27/12/2026" as context for
+            # the action rather than as the requested value, the page was not read again because its content had
+            # not changed, and three runs stopped stuck on the first recovery with the date on screen. The reader
+            # is asked once more; the done check and the answer audit still judge whatever it binds.
+            state.unread_rereads.add(page_read)
+            state.reads = {key for key in state.reads if key[0] != observation.document_key}
+            state.barren = {key: count for key, count in state.barren.items() if key[0] != observation.document_key}
+            generation = generation.model_copy(
+                update={
+                    "data": generation.data.model_copy(
+                        update={
+                            "operation": Operation.READ,
+                            "control": None,
+                            "next_subgoal": "Read the page again for the requirements still open.",
+                        }
+                    )
+                }
+            )
         state.hint = self._redactor.redact(generation.data.next_subgoal)
         state.recovery_log.append(
             f"- Reason: {_recovery_text(reason)}. Diagnosis: {_recovery_text(diagnosis)}. "
@@ -3999,6 +4029,7 @@ class Agent:
                 task=state.task,
                 verified_fields=verified_fields if state.oversized_answer and isinstance(answer, FieldAnswer) else None,
                 independent_fields=state.oversized_answer,
+                today=self._observed.today if self._observed is not None else None,
             )
             if verified_fields:
                 partial = verified_fields[0]

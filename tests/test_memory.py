@@ -592,3 +592,53 @@ def test_shared_url_groups_preserve_read_order_and_derived_basis() -> None:
     assert "requirements=comparison derived basis=" in rendered.text
     assert json.dumps(list(derived.basis)) in rendered.text
     assert notes.facts == facts
+
+
+def _wizard_fact(
+    quote: str,
+    sha: str,
+    requirement_id: str | None,
+    basis: tuple[str, ...] = (),
+    url: str = "https://qapracticehub.com/#practice-lab",
+) -> Fact:
+    span = evidence(sha=sha).model_copy(update={"quote": quote, "url": url, "end": len(quote)})
+    return Fact(requirement_id=requirement_id, text=quote, evidence=span, reader=FactReader.LLM, basis=basis)
+
+
+def test_a_fresh_quote_resting_on_a_vanished_step_still_evidences_its_requirement() -> None:
+    """Rows internal-*|stretch-wizard-review in the 0.5.21 benchmark, all four: the confirmation claim drew on the
+    Review step it followed, and retiring that step took the requirement just read with it, so the run ended stuck
+    with "Wizard submitted successfully!" in its notes."""
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import _output_context
+
+    review = _wizard_fact("3. Review\n\nName: Ada Lovelace\n\nEmail: ada.lovelace@example.com", "review", None)
+    heading = _wizard_fact("Automation Practice Lab", "submitted", None)
+    message = _wizard_fact(
+        "Wizard submitted successfully!", "submitted", "get-submission-message", (fact_id(review), fact_id(heading))
+    )
+    notes = Notes((review, heading, message))
+    shown = "Automation Practice Lab\n\nWizard submitted successfully!"
+
+    notes.supersede("get-submission-message", "https://qapracticehub.com/#practice-lab", "submitted", shown)
+
+    assert notes.evidenced("get-submission-message")
+    assert fact_id(review) not in notes.current_evidence()
+    held = next(fact for fact in notes.facts if fact.requirement_id == "get-submission-message")
+    answer = assemble_answer((Claim(text=held.text, evidence_ids=(fact_id(held),)),), notes, ())
+    assert _output_context(answer, notes) is not None
+
+
+def test_a_page_that_replaces_several_values_retires_every_one_it_no_longer_shows() -> None:
+    """A product page that swaps its name and price together, read again for the price alone, must not keep the old
+    name as current beside the new price: the answer would join two states of the page that never coexisted."""
+    url = "https://shop.test/product"
+    name = _wizard_fact("Trail Runner 2", "before", "name", url=url)
+    old_price = _wizard_fact("Price: GBP 80", "before", "price", url=url)
+    new_price = _wizard_fact("Price: GBP 95", "after", "price", url=url)
+    notes = Notes((name, old_price, new_price))
+
+    notes.supersede("price", url, "after", "Trail Runner 3\n\nPrice: GBP 95")
+
+    assert notes.evidenced("price") and not notes.evidenced("name")
+    assert fact_id(name) not in notes.current_evidence()
