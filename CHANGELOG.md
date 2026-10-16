@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.21] - 2026-10-16
+
 - `run_task` takes `cloud_timeout_minutes`, how long a Browser Use Cloud browser it starts may live (15 by
   default, up to the service's 240), so a run that needs longer than a quarter of an hour can ask for it
   instead of losing its browser at minute 15.
@@ -1299,7 +1301,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.20...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.21...HEAD
+[0.5.21]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.21
 [0.5.20]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.20
 [0.5.19]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.19
 [0.5.18]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.18
