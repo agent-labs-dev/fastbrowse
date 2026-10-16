@@ -21,6 +21,7 @@ from cdp_use.client import CDPClient
 from pydantic import ValidationError
 from websockets.exceptions import InvalidMessage
 
+from fastbrowse.adapters import browser_use_cloud as cloud_adapter
 from fastbrowse.adapters.browser_use_cloud import BrowserUseCloudBrowser, BrowserUseCloudError
 from fastbrowse.adapters.local_chrome import async_local_chrome, find_chrome, local_chrome
 from fastbrowse.agent import Agent
@@ -584,7 +585,11 @@ async def test_cloud_cancellation_waits_for_billable_requests(during: str) -> No
 
 
 @pytest.mark.parametrize("stop_fails", [False, True])
-async def test_cloud_teardown_preserves_original_error_and_cost(stop_fails: bool) -> None:
+async def test_cloud_teardown_preserves_original_error_and_cost(
+    stop_fails: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cloud_adapter, "_STOP_RETRY_SECONDS", 0.0)
+
     def respond(request: httpx.Request) -> httpx.Response:
         if request.method == "PATCH" and stop_fails:
             return httpx.Response(503)
@@ -610,6 +615,81 @@ async def test_cloud_teardown_preserves_original_error_and_cost(stop_fails: bool
             with pytest.raises(BrowserUseCloudError):
                 async with BrowserUseCloudBrowser("key", http=http):
                     pass
+
+
+async def test_a_stop_the_cloud_could_not_take_is_sent_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One 503 on the stop left the browser billing until its timeout, four hours for a benchmark run."""
+    monkeypatch.setattr(cloud_adapter, "_STOP_RETRY_SECONDS", 0.0)
+    methods: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        if request.method == "PATCH" and methods.count("PATCH") == 1:
+            return httpx.Response(503)
+        return httpx.Response(
+            200,
+            json={
+                "id": "created",
+                "cdpUrl": "https://cdp.test",
+                "webSocketDebuggerUrl": "ws://cdp.test",
+                "browserCost": "0.25" if request.method == "POST" else "0.50",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+        cloud = BrowserUseCloudBrowser("key", http=http)
+        async with cloud:
+            pass
+    assert methods == ["POST", "GET", "PATCH", "PATCH"]
+    assert cloud.cost[0].dollars == 0.50
+
+
+@pytest.mark.parametrize("ending", ["failed run", "failed start", "cancelled run"])
+async def test_a_browser_that_could_not_be_stopped_is_logged(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, ending: str
+) -> None:
+    """Each of these endings keeps its own error and drops the stop's, which was the only word of a running browser."""
+    monkeypatch.setattr(cloud_adapter, "_STOP_RETRY_SECONDS", 0.0)
+    methods: list[str] = []
+    connected = asyncio.Event()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        if request.method == "GET":
+            connected.set()
+        if request.method == "PATCH":
+            return httpx.Response(503)
+        if request.method == "GET" and ending == "failed start":
+            return httpx.Response(404)
+        return httpx.Response(
+            200, json={"id": "created", "cdpUrl": "https://cdp.test", "webSocketDebuggerUrl": "ws://cdp.test"}
+        )
+
+    async def run(http: httpx.AsyncClient) -> None:
+        async with BrowserUseCloudBrowser("key", http=http, timeout_minutes=240):
+            if ending == "cancelled run":
+                await asyncio.Event().wait()
+            raise RuntimeError("original")
+
+    raised = {
+        "failed run": RuntimeError,
+        "failed start": httpx.HTTPStatusError,
+        "cancelled run": asyncio.CancelledError,
+    }[ending]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+        task = asyncio.create_task(run(http))
+        if ending == "cancelled run":
+            await connected.wait()
+            task.cancel()
+        with caplog.at_level("WARNING", logger="fastbrowse.adapters.browser_use_cloud"), pytest.raises(raised):
+            await task
+    assert methods.count("PATCH") == cloud_adapter._STOP_ATTEMPTS
+    warned = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
+    assert warned == [
+        "Browser Use Cloud browser created was not stopped (Browser Use Cloud PATCH /browsers/created: HTTP 503); "
+        "it runs until its 240-minute timeout"
+    ]
+    assert all("key" not in message for message in warned)
 
 
 EXTENSION_A, EXTENSION_B = "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f", "11111111-2222-4333-8444-555555555555"

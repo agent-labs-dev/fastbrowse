@@ -251,6 +251,13 @@ class BrowserError(RuntimeError):
     """A browser failure a `Page` raises, with a message safe to put in a run result: never page text."""
 
 
+class ContextLost(BrowserError):
+    """CDP's -32000 server error, which Chrome answers when the document a command addressed was replaced while
+    it ran: "Execution context was destroyed", "Cannot find context with specified id", "Inspected target
+    navigated or closed". Only the code is kept, as the message can carry page text, and other -32000 failures
+    share it, so a reader treats it as a navigation only by reading the page again."""
+
+
 class BrowserUnavailable(BrowserError, Unavailable):
     """The browser session no longer has a page available for this run."""
 

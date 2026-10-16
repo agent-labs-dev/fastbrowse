@@ -6,6 +6,7 @@ cloud.cost  # metered lines, available after exit
 """
 
 import asyncio
+import logging
 from collections.abc import Sequence
 from contextlib import suppress
 from decimal import Decimal
@@ -19,10 +20,16 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from fastbrowse.clients.validation import RETRYABLE_STATUS, TRANSIENT_TRANSPORT
 from fastbrowse.models import BrowserConnection, CostBasis, CostComponent, CostLine, Unavailable
 
+logger = logging.getLogger(__name__)
+
 API_V3 = "https://api.browser-use.com/api/v3"
 API_V4 = "https://api.browser-use.com/api/v4"
 # https://docs.browser-use.com/cloud/api-v4/browsers/create-browser-session: "up to 3 ready extensions".
 MAX_EXTENSIONS = 3
+_STOP_ATTEMPTS = 4
+"""A browser whose stop request failed bills until its own timeout, up to four hours, so a stop the service could
+not take (a 5xx, a 429, a dropped connection) is sent again rather than abandoned after one try."""
+_STOP_RETRY_SECONDS = 1.0
 
 
 class _BrowserView(BaseModel):
@@ -72,6 +79,7 @@ class BrowserUseCloudBrowser:
         self._headers = {"X-Browser-Use-API-Key": api_key}
         # Only the V4 create call takes extensions, so a run that asks for none stays on the V3 path it was built on.
         self._api = API_V4 if extensions else API_V3
+        self._timeout_minutes = timeout_minutes
         self._body: dict[str, str | int | list[str]] = {"timeout": timeout_minutes}
         if extensions:
             self._body["extensionIds"] = _extension_ids(extensions)
@@ -161,10 +169,29 @@ class BrowserUseCloudBrowser:
             return
         self._connection = None
         # Forget the browser only once the stop succeeded, so a failed stop can be retried rather than left billing.
-        response = await self._call("PATCH", f"/browsers/{self._browser_id}", json={"action": "stop"})
+        try:
+            response = await self._request_stop(self._browser_id)
+        except BaseException as error:
+            # A run that already failed, a failed start and a cancelled run all drop this error for the one they
+            # carry, so a browser left running is said here or nowhere.
+            logger.warning(
+                "Browser Use Cloud browser %s was not stopped (%s); it runs until its %d-minute timeout",
+                self._browser_id,
+                str(error) or type(error).__name__,
+                self._timeout_minutes,
+            )
+            raise
         self._browser_id = None
         stopped = _BrowserView.model_validate_json(response.content)
         self._record_cost(stopped)
+
+    async def _request_stop(self, browser_id: str) -> httpx.Response:
+        for attempt in range(_STOP_ATTEMPTS - 1):
+            try:
+                return await self._call("PATCH", f"/browsers/{browser_id}", json={"action": "stop"})
+            except BrowserUseCloudUnavailable:
+                await asyncio.sleep(_STOP_RETRY_SECONDS * 2**attempt)
+        return await self._call("PATCH", f"/browsers/{browser_id}", json={"action": "stop"})
 
     def _record_cost(self, browser: _BrowserView) -> None:
         self.cost = (

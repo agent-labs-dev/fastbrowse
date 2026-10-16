@@ -11,6 +11,17 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A page that replaces itself while it is being read no longer ends the run with `Runtime.evaluate failed (CDP
+  -32000)`. PyPI serves a "Client Challenge" that runs a script and then swaps itself for the project page, and
+  an observation in flight across that swap, which a cloud browser's round trips make likely, ended runs on
+  PyPI as errors. Observations, captures and address reads now wait for the new document to settle and read
+  it again; a page that keeps replacing itself still ends the run, after ten such re-reads, with a message
+  saying so. JavaScript errors are reported as before.
+- A stop request for a Browser Use Cloud browser that the service could not take is sent again, up to four tries
+  in all, where before the browser was left to bill until its timeout, which a benchmark sets at four hours. A
+  browser that still could not be stopped is logged as a warning with its id, where before a run that had already failed, had failed to start or was
+  cancelled dropped that error without a word.
+
 ## [0.5.21] - 2026-10-16
 
 - `run_task` takes `cloud_timeout_minutes`, how long a Browser Use Cloud browser it starts may live (15 by

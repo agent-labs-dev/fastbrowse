@@ -13,7 +13,7 @@ import hashlib
 import json
 import re
 import time
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import suppress
 from datetime import UTC, datetime
 from functools import partial
@@ -37,6 +37,7 @@ from fastbrowse.page import (
     BlockKind,
     BrowserError,
     Capture,
+    ContextLost,
     Control,
     Dialog,
     NavigationTimeout,
@@ -250,6 +251,12 @@ _SETTLE_LOADING_SECONDS = 1.5
 # How long a capture waits on a loading indicator an action's settle gave up on. A read of "Loading..." costs a
 # 2 to 3 second LLM call and a second read after it, where the-internet's dynamic loading needs about 5 seconds.
 _CAPTURE_LOADING_SECONDS = 3.0
+_REREADS = 10
+"""How many times one reading of the page starts again after the document it was reading was replaced. A
+self-clearing bot check such as PyPI's "Client Challenge" runs its script and then replaces itself with the page,
+and an observation in flight across that swap failed with CDP -32000 and ended the run as an error. This bounds
+only how often one read follows a document that keeps replacing itself, each try waiting for the next one to
+settle; it is not a limit on the agent, whose steps, time and spend are counted elsewhere and untouched here."""
 _SCREENSHOT_WAIT_SECONDS = 1.0
 _SCREENSHOT_STALL_SECONDS = 5.0
 """How long a background tab gets to paint a frame once its cast is restarted. Nothing else can make it paint
@@ -371,6 +378,40 @@ class CdpPage(Page):
     # -- observe / capture -------------------------------------------------------------------------
 
     async def observe(self) -> Observation:
+        return await self._reread(self._observe_once)
+
+    async def _reread[T](self, read: Callable[[], Awaitable[T]]) -> T:
+        """Run `read`, and again on the next settled document each time a navigation destroys the one it read."""
+        rereads = 0
+        while True:
+            try:
+                return await read()
+            except ContextLost as lost:
+                if rereads == _REREADS:
+                    raise ContextLost(
+                        f"{lost} on {rereads + 1} reads in a row, each after waiting for the page to settle"
+                    ) from lost
+            rereads += 1
+            await self._await_document()
+
+    async def _await_document(self) -> None:
+        """Wait for the document that replaced the one a read lost to be interactive and quiet, as `navigate` does."""
+        session_id = self._session.active_session_id
+
+        async def settle() -> None:
+            if await self._ready(session_id, _SETTLE_SECONDS):
+                # Unsettled by the deadline is still a readable page, as after `navigate`.
+                with suppress(BrowserError):
+                    await self._settled_fingerprint(_SETTLE_SECONDS)
+
+        try:
+            # A dialog the new document opens blocks its renderer; the next read reports the dialog instead.
+            await self._until_dialog(settle())
+        except ContextLost:
+            # The new document can be replaced in turn while this waits; the next read is what counts.
+            await asyncio.sleep(_SETTLE_POLL_SECONDS)
+
+    async def _observe_once(self) -> Observation:
         await self._session.assert_clear()
         dialog = self._session.pending_dialog()
         if dialog is not None:
@@ -409,7 +450,7 @@ class CdpPage(Page):
         self._last = _ObservedState(page_key=page_key, controls=control_state)
 
         title = main.raw.title if main else ""
-        url = main.raw.url if main else await self.origin()
+        url = main.raw.url if main else await self._origin_once()
         viewport_text = main.raw.viewport_text if main else ""
         for download in self._session.pending_download_texts():
             viewport_text += f"\n\n[Downloaded file: {download.name} from {download.url}]\n{download.text}"
@@ -547,6 +588,9 @@ class CdpPage(Page):
         return missing
 
     async def capture(self) -> Capture:
+        return await self._reread(self._capture_once)
+
+    async def _capture_once(self) -> Capture:
         await self._session.assert_clear()
         text_parts: list[str] = []
         blocks: list[Block] = []
@@ -555,7 +599,7 @@ class CdpPage(Page):
         frames = await self._read_frames(self._capture_js, _CaptureSnapshot, wait_loaded=True)
         main = frames.get(_MAIN)
         title = main.raw.title if main else ""
-        url = main.raw.url if main else await self.origin()
+        url = main.raw.url if main else await self._origin_once()
         has_h1 = any(frame.raw.visible_h1 for frame in frames.values())
         unreadable = self._inaccessible_frames(
             {frame.session_id: frame.raw.inaccessible_frames for frame in frames.values()}
@@ -1479,12 +1523,16 @@ class CdpPage(Page):
             await asyncio.gather(capture, return_exceptions=True)
 
     async def origin(self) -> str:
+        return await self._reread(self._origin_once)
+
+    async def _origin_once(self) -> str:
+        # An observation already reading again calls this, so it reads once rather than nesting a second allowance.
         await self._address()  # refuses a document outside the grant before its origin is read
         raw = await self._evaluate(self._session.active_session_id, "location.origin")
         return str(raw) if raw is not None else ""
 
     async def address(self) -> str:
-        return await self._address()
+        return await self._reread(self._address)
 
     async def _address(self) -> str:
         await self._session.check_access()
@@ -1499,11 +1547,15 @@ class CdpPage(Page):
         dialog = self._session.pending_dialog()
         if dialog is not None or observation.dialog is not None:
             return dialog != observation.dialog
-        raw = await self._evaluate(
-            self._session.active_session_id,
-            f"location.href !== {json.dumps(observation.url)} || "
-            f"String(performance.timeOrigin) !== {json.dumps(observation.document_key)}",
-        )
+        try:
+            raw = await self._evaluate(
+                self._session.active_session_id,
+                f"location.href !== {json.dumps(observation.url)} || "
+                f"String(performance.timeOrigin) !== {json.dumps(observation.document_key)}",
+            )
+        except ContextLost:
+            # The document this asks about was replaced while it asked, which is the answer.
+            return True
         return raw is not False
 
     async def _document_response(self) -> _DocumentResponse:
@@ -1526,7 +1578,7 @@ class CdpPage(Page):
 
     async def response_status(self) -> int | None:
         await self._session.assert_clear()
-        return (await self._document_response()).response_status
+        return (await self._reread(self._document_response)).response_status
 
     async def navigate(self, url: str, load_timeout_seconds: float = 15.0, *, back_to: str | None = None) -> None:
         """Setup helper (tests, initial task URL): navigate the active tab and wait until its document is usable.
