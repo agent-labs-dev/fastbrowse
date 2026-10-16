@@ -205,7 +205,9 @@ Override with `FASTBROWSE_LLM_MODEL` (every purpose), `FASTBROWSE_LLM_MODEL_<PUR
 
 `FASTBROWSE_LLM_BASE_URL` sends every LLM call to another OpenAI-compatible chat completions endpoint instead
 of OpenRouter and the gateway, such as a local vLLM server at `http://127.0.0.1:8000/v1`. Name the model it
-serves with `FASTBROWSE_LLM_MODEL`; a run refuses to start without one. `FASTBROWSE_LLM_API_KEY` is its bearer
+serves with `FASTBROWSE_LLM_MODEL`; a run refuses to start without one, and a blank value counts as unset.
+OpenRouter's `reasoning` field is sent to that endpoint only when `FASTBROWSE_LLM_REASONING` is set, since a
+strict server refuses a field it does not know. `FASTBROWSE_LLM_API_KEY` is its bearer
 token, sent only when set, and that endpoint never receives `OPENROUTER_API_KEY` or `AI_GATEWAY_API_KEY`. Two
 settings shape its requests: `FASTBROWSE_LLM_STRICT=0` sends each schema as the model defines it rather than
 in strict form, for a server whose structured output breaks under strict mode, and `FASTBROWSE_LLM_EXTRA_BODY`

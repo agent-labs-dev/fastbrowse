@@ -25,6 +25,8 @@ def no_ambient_keys(monkeypatch: pytest.MonkeyPatch) -> None:
         "FASTBROWSE_LLM_API_KEY",
         "FASTBROWSE_LLM_STRICT",
         "FASTBROWSE_LLM_EXTRA_BODY",
+        "FASTBROWSE_LLM_REASONING",
+        *(f"FASTBROWSE_LLM_MODEL_{purpose.name}" for purpose in LLMPurpose),
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -379,3 +381,41 @@ def test_the_local_settings_read_their_documented_variables(monkeypatch: pytest.
     assert loaded.llm_source() == "local" and loaded.llm_api_key is not None
     assert loaded.llm_api_key.get_secret_value() == "k"
     assert loaded.llm_strict is False and loaded.llm_extra_body == '{"top_k": 20}'
+
+
+async def test_a_local_endpoint_gets_no_reasoning_field_by_default() -> None:
+    seen, _ = await _local_requests(LOCAL)
+    assert "reasoning" not in TypeAdapter(dict[str, JsonValue]).validate_json(seen[0].content)
+
+
+async def test_a_local_endpoint_gets_the_reasoning_effort_that_was_asked_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FASTBROWSE_LLM_REASONING", "high")
+    seen, _ = await _local_requests(LOCAL)
+    assert TypeAdapter(dict[str, JsonValue]).validate_json(seen[0].content)["reasoning"] == {"effort": "high"}
+
+
+async def test_openrouter_still_gets_the_default_reasoning_effort() -> None:
+    request, _ = await _llm_request({"OPENROUTER_API_KEY": "o"})
+    assert TypeAdapter(dict[str, JsonValue]).validate_json(request.content)["reasoning"] == {"effort": "low"}
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+async def test_a_blank_model_on_a_local_endpoint_is_unset(monkeypatch: pytest.MonkeyPatch, blank: str) -> None:
+    monkeypatch.setenv("FASTBROWSE_LLM_MODEL", blank)
+    async with httpx.AsyncClient() as http:
+        with pytest.raises(ConfigurationError, match="FASTBROWSE_LLM_MODEL"):
+            settings(llm_base_url="http://127.0.0.1:8000/v1").llm(http)
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+async def test_a_blank_purpose_pin_falls_back_to_the_global_model_not_a_default(blank: str) -> None:
+    pins = {f"llm_model_{purpose.value}": blank for purpose in LLMPurpose}
+    seen, _ = await _local_requests({**LOCAL, **pins})
+    assert TypeAdapter(dict[str, JsonValue]).validate_json(seen[0].content)["model"] == "qwen"
+
+
+async def test_blank_pins_without_a_global_model_are_unset() -> None:
+    pins = {f"llm_model_{purpose.value}": "qwen" for purpose in LLMPurpose} | {"llm_model_read": " "}
+    async with httpx.AsyncClient() as http:
+        with pytest.raises(ConfigurationError, match="FASTBROWSE_LLM_MODEL"):
+            settings(llm_base_url="http://127.0.0.1:8000/v1", llm_model="", **pins).llm(http)

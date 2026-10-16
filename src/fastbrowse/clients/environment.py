@@ -253,23 +253,35 @@ class Settings(BaseSettings):
             )
         return cast(dict[str, JsonValue], parsed)
 
+    def _local_models(self) -> dict[LLMPurpose, str]:
+        """Per-purpose models for a custom endpoint, with no default to fall back on.
+
+        A default model is an OpenRouter id the endpoint would not serve, which surfaces as a 404 on the first plan
+        rather than as the setting that is missing; a blank `FASTBROWSE_LLM_MODEL=` in a `.env` is unset too.
+        """
+        models: dict[LLMPurpose, str] = {}
+        for purpose in LLMPurpose:
+            model = next((m.strip() for m in (self._purpose_model(purpose), self.llm_model) if m and m.strip()), None)
+            if model is None:
+                raise ConfigurationError("set FASTBROWSE_LLM_MODEL to the model FASTBROWSE_LLM_BASE_URL serves")
+            models[purpose] = model
+        return models
+
     def llm(self, http: httpx.AsyncClient) -> LLMClient:
         return self._llm_client(self.llm_source(), http)
 
     def _llm_client(self, source: LLMSource, http: httpx.AsyncClient) -> LLMClient:
         match source:
             case LLMSource.LOCAL:
-                # A default model is an OpenRouter id the endpoint would not serve, which surfaces as a 404 on
-                # the first plan rather than as the setting that is missing.
-                if self.llm_model is None and any(self._purpose_model(purpose) is None for purpose in LLMPurpose):
-                    raise ConfigurationError("set FASTBROWSE_LLM_MODEL to the model FASTBROWSE_LLM_BASE_URL serves")
                 # Only this endpoint's own key: an OpenRouter or gateway key must never reach another host.
                 return OpenAICompatibleLLM(
                     self.llm_api_key.get_secret_value().strip() if self.llm_api_key else "",
                     http=http,
                     base_url=self.llm_base_url or "",
-                    models=self.models(),
-                    reasoning_effort=self.llm_reasoning,
+                    models=self._local_models(),
+                    # `reasoning` is OpenRouter's field, and a strict server answers HTTP 400 to a field it does
+                    # not know, so the local route sends it only when FASTBROWSE_LLM_REASONING asks for it.
+                    reasoning_effort=self.llm_reasoning if "llm_reasoning" in self.model_fields_set else None,
                     provider_routing=None,
                     strict=self.llm_strict,
                     extra_body=self._extra_body(),

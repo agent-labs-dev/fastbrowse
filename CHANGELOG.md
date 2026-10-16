@@ -15,7 +15,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   vLLM server, instead of OpenRouter or the Vercel AI Gateway. `FASTBROWSE_LLM_API_KEY` is sent to it only when
   set, and the OpenRouter and gateway keys never are. `FASTBROWSE_LLM_STRICT=0` sends schemas in the model's own
   form for a server whose strict structured output breaks, and `FASTBROWSE_LLM_EXTRA_BODY` adds request fields
-  such a server needs, refusing any that would replace a field fastbrowse sets. Calls to an endpoint that
+  such a server needs, refusing any that would replace a field fastbrowse sets. OpenRouter's `reasoning` field
+  goes to such an endpoint only when `FASTBROWSE_LLM_REASONING` is set. Calls to an endpoint that
   reports no price count as unknown cost, never as free, and the CLI's summary line now says when a run
   includes such calls. Contributed by [@imranye](https://github.com/imranye) in
   [#354](https://github.com/agent-labs-dev/fastbrowse/pull/354).
