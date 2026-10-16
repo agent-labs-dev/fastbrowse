@@ -2691,8 +2691,11 @@ class Agent:
                 state.pending_collections.clear()
         for candidate in state.transaction_candidates:
             candidate.outcome_read = True
+        earlier_states = {r.id for r in plan.requirements if r.earlier_state}
         for requirement in wanted:
-            state.notes.supersede(requirement.id, capture.url, capture.sha256, capture.text)
+            state.notes.supersede(
+                requirement.id, capture.url, capture.sha256, capture.text, earlier_states=earlier_states
+            )
         state.incomplete.update(outcome.incomplete)
         state.tally_readers = outcome.tally_readers
         state.comparisons = outcome.comparisons

@@ -1335,6 +1335,36 @@ async def test_a_finish_refused_for_an_unbound_value_asks_the_reader_once_more()
     assert not skipped and state.notes.evidenced("requirement_2")
 
 
+async def test_a_read_tells_supersede_which_requirements_ask_about_an_earlier_step() -> None:
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(
+            Requirement(
+                id="review_name",
+                text="Find the first name the Review step showed last",
+                kind=RequirementKind.INFORMATION,
+                earlier_state=True,
+            ),
+            Requirement(id="confirmation", text="Find what the confirmation says", kind=RequirementKind.INFORMATION),
+        ),
+        answer_expected=True,
+    )
+    shown = capture((BlockKind.PARAGRAPH, "Multi-step form submitted successfully."))
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    claim: JsonValue = {
+        "text": "Multi-step form submitted successfully.",
+        "cite": {"first": "s0", "last": "s0"},
+        "requirement_id": "confirmation",
+    }
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([{"claims": [claim], "answered": True}]))
+    superseded = Mock(wraps=state.notes.supersede)
+    state.notes.supersede = superseded
+    await agent._read(state, shown, None)
+    assert superseded.call_args_list
+    assert all(call.kwargs["earlier_states"] == {"review_name"} for call in superseded.call_args_list)
+
+
 async def test_the_answer_audit_is_given_the_runs_date(monkeypatch: pytest.MonkeyPatch) -> None:
     # A criterion such as "the last Saturday of the month after next" is relative to the day the run read the page.
     state = await run_state()

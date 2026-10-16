@@ -3,7 +3,7 @@
 import hashlib
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from datetime import datetime
 from itertools import groupby
 from typing import Self
@@ -328,12 +328,17 @@ class Notes:
         for requirements in self._requirements.values():
             requirements -= dropped
 
-    def supersede(self, requirement_id: str, url: str, sha256: str, text: str) -> None:
+    def supersede(
+        self, requirement_id: str, url: str, sha256: str, text: str, *, earlier_states: Collection[str] = ()
+    ) -> None:
         """Once a read of `url` evidences a requirement, earlier reads of that address whose quote the page no
         longer shows stop evidencing it, and stay as context.
 
         After a date picker's choice was corrected from 31/10 to 28/11, a new read quoted the new date, but the
-        answer still quoted the old one, since both facts evidenced the requirement."""
+        answer still quoted the old one, since both facts evidenced the requirement.
+
+        `earlier_states` names requirements that ask what a step the task moves past showed. Their evidence is
+        retired only by a read that evidences them again; every other vanished value is retired here."""
         fresh = tuple(
             evidence for evidence in self.supporting_evidence(requirement_id) if evidence.capture_sha256 == sha256
         )
@@ -344,12 +349,14 @@ class Notes:
         evidence = self.evidence
         # Virtualized lists replace visible rows while a tally or comparison still depends on those already read.
         kept = self._tally_records | set(self.comparison_records())
-        # A page that redraws in place shows one state at a time. Reading a wizard's confirmation retired the name its
-        # Review step showed, which the task asked for and no later state shows again, so the two requirements took
-        # turns being open until the run ended stuck. Another requirement's evidence, and the quotes it rests on,
-        # are retired only by a read that evidences that requirement again. A quote shared with this requirement
-        # is this requirement's stale value too, and goes with it.
-        others = {key for key, ids in self._requirements.items() if ids and requirement_id not in ids}
+        # A product page that swaps its name and price together must not answer with the old name beside the new
+        # price, so a vanished value is retired whichever requirement it answered. The exception is a value the
+        # task asks of a step it then leaves: reading a wizard's confirmation retired the name its Review step
+        # showed, which no later state shows again, and the two requirements took turns being open until the run
+        # ended stuck. A quote shared with this requirement is this requirement's stale value too, and goes with it.
+        others = {
+            key for key, ids in self._requirements.items() if ids & set(earlier_states) and requirement_id not in ids
+        }
         resting = set(self.expand_evidence_ids(others))
         # The quote this read cut is on the page by construction. A confirmation claim that drew on the Review step
         # it followed was retired along with that step, and the requirement it had just evidenced was open again.
