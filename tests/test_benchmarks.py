@@ -370,7 +370,7 @@ def test_a_protocol_change_skips_only_the_changed_groups(candidate):
         Candidate.model_validate(changed), base, _bytes(candidate), "Uncapped protocol (#356)", None
     )
     assert [g.id for g in record.groups] == ["internal-hosted"]
-    assert record.archived_figures == "docs/results/benchmarks.test-campaign.json"
+    assert record.archived_figures == "docs/results/benchmarks.test-campaign.504db8b381e7dc26.json"
     regressions(Candidate.model_validate(changed), base, changed={"internal-hosted"})
     # internal-ultrafast kept its protocol, so it is still compared with its published figures.
     task = changed["groups"][1]["task_ids"][0]
@@ -444,8 +444,8 @@ def test_install_archives_the_superseded_figures(candidate, tmp_path, monkeypatc
     approval = tmp_path / "benchmark-approval.json"
     approval.write_text(json.dumps(_approval(new, record)))
     install(staged, approval)
-    assert (results / "benchmarks.test-campaign.json").read_bytes() == old
-    assert (results / "benchmark-approval.test-campaign.json").read_bytes() == old_approval
+    assert (results / "benchmarks.test-campaign.504db8b381e7dc26.json").read_bytes() == old
+    assert (results / "benchmark-approval.test-campaign.504db8b381e7dc26.json").read_bytes() == old_approval
     assert (results / "benchmarks.json").read_bytes() == new
     assert (results / "benchmark-approval.json").read_bytes() == approval.read_bytes()
     with pytest.raises(ValueError, match="not the ones this protocol change supersedes"):
@@ -531,13 +531,13 @@ def test_check_diff_publishes_an_approved_protocol_change_and_keeps_the_archive(
 def test_check_diff_refuses_a_rewritten_archive(candidate, tmp_path, monkeypatch):
     from fastbrowse.evals.benchmarks import check_diff
 
-    archived = {"docs/results/benchmarks.release-0.5.20.json": _bytes(candidate)}
+    archived = {"docs/results/benchmarks.release-0.5.20.c8e3876d5a2959fe.json": _bytes(candidate)}
     _repository(tmp_path, monkeypatch, archived)
     check_diff("base", Path("catalog.json"))
-    (tmp_path / "docs/results/benchmarks.release-0.5.20.json").write_text("{}")
+    (tmp_path / "docs/results/benchmarks.release-0.5.20.c8e3876d5a2959fe.json").write_text("{}")
     with pytest.raises(ValueError, match="archived benchmark figures cannot change"):
         check_diff("base", Path("catalog.json"))
-    (tmp_path / "docs/results/benchmarks.release-0.5.20.json").unlink()
+    (tmp_path / "docs/results/benchmarks.release-0.5.20.c8e3876d5a2959fe.json").unlink()
     with pytest.raises(ValueError, match="archived benchmark figures cannot change"):
         check_diff("base", Path("catalog.json"))
 
@@ -770,19 +770,44 @@ def test_check_diff_refuses_a_receipt_edited_after_the_owner_run(candidate, tmp_
         check_diff("base", Path("catalog.json"))
 
 
-def test_every_valid_campaign_id_names_one_archive(candidate):
-    from fastbrowse.evals.benchmarks import ProtocolChange, archive_paths, protocol_change
+def test_every_valid_campaign_id_names_one_bounded_archive(candidate, tmp_path, monkeypatch):
+    """A readable prefix of at most 64 characters and a digest of the whole id: under the 255-byte name limit for
+    any valid id, and distinct for ids that share a prefix. The record keeps the exact paths it archived to."""
+    from fastbrowse.evals.benchmarks import ProtocolChange, archive_paths, check_diff, install, protocol_change
 
-    for name, encoded in (("release-0.5.20-3c40e6e", "release-0.5.20-3c40e6e"), ("run:2026+a", "run%3A2026+a")):
-        base = Candidate.model_validate({**candidate, "campaign_id": name})
-        figures, approval = archive_paths(base)
-        assert (figures.name, approval.name) == (f"benchmarks.{encoded}.json", f"benchmark-approval.{encoded}.json")
-        record = protocol_change(Candidate.model_validate(_changed(candidate)), base, b"{}", "Note", None)
-        assert ProtocolChange.model_validate(record.model_dump()).archived_figures == str(figures)
-    assert (
-        archive_paths(Candidate.model_validate({**candidate, "campaign_id": "a:b"}))[0]
-        != archive_paths(Candidate.model_validate({**candidate, "campaign_id": "a_b"}))[0]
+    def paths(name: str) -> tuple[Path, Path]:
+        return archive_paths(Candidate.model_validate({**candidate, "campaign_id": name}))
+
+    colons = ":" * 160
+    for path in paths(colons):
+        assert len(path.name.encode()) < 255 and "-" * 64 + "." in path.name and "-" * 65 not in path.name
+    assert paths("release-0.5.20-3c40e6e")[0].name.startswith("benchmarks.release-0.5.20-3c40e6e.")
+    same_prefix = ("a" * 64 + "-one", "a" * 64 + "-two")
+    assert paths(same_prefix[0]) != paths(same_prefix[1])
+    assert paths("a:b") != paths("a-b")
+
+    # Superseding the long-id figures round-trips through --install and check_diff.
+    old_candidate = {**candidate, "campaign_id": colons}
+    old = _bytes(old_candidate)
+    old_approval = json.dumps(_approval(old)).encode()
+    _repository(
+        tmp_path,
+        monkeypatch,
+        {"docs/results/benchmarks.json": old, "docs/results/benchmark-approval.json": old_approval},
     )
+    record = protocol_change(
+        Candidate.model_validate(_changed(candidate)), Candidate.model_validate(old_candidate), old, "Note", None
+    )
+    assert ProtocolChange.model_validate(record.model_dump()).archived_figures == str(paths(colons)[0])
+    new = _bytes(_changed(candidate))
+    staged = tmp_path / "docs/results/benchmark-candidate.json"
+    staged.write_bytes(new)
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(json.dumps(_approval(new, record)))
+    install(staged, receipt)
+    assert Path(record.archived_figures).read_bytes() == old
+    assert Path(record.archived_approval).read_bytes() == old_approval
+    check_diff("base", Path("catalog.json"))
 
 
 def test_a_protocol_change_keeps_comparing_a_retirement_only_group(candidate, tmp_path, monkeypatch):
@@ -831,7 +856,7 @@ def test_check_diff_admits_only_the_archive_pair_an_approved_change_names(candid
         {"docs/results/benchmarks.json": old, "docs/results/benchmark-approval.json": old_approval},
     )
     (tmp_path / "docs/results/benchmark-candidate.json").write_bytes(old)  # the reviewed bytes of the base figures
-    stray = tmp_path / "docs/results/benchmarks.unreferenced.json"
+    stray = tmp_path / "docs/results/benchmarks.unreferenced.0000000000000000.json"
     stray.write_bytes(old)
     with pytest.raises(ValueError, match="not the archive of an approved protocol change"):
         check_diff("base", Path("catalog.json"))

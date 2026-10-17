@@ -10,7 +10,6 @@ import tempfile
 from collections.abc import Collection
 from pathlib import Path
 from typing import Annotated, Literal, Self
-from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -138,6 +137,12 @@ class Candidate(PublicModel):
         return self
 
 
+ARCHIVE_NAME = r"[A-Za-z0-9._+-]{1,64}\.[0-9a-f]{16}"
+"""A campaign's archive name: a readable prefix of its id and a digest of the whole id, at most 81 characters."""
+ARCHIVE_FIGURES = rf"^docs/results/benchmarks\.{ARCHIVE_NAME}\.json$"
+ARCHIVE_APPROVAL = rf"^docs/results/benchmark-approval\.{ARCHIVE_NAME}\.json$"
+
+
 class GroupProtocol(PublicModel):
     """One published group whose protocol the owner changed: what it was measured under, and what it now is."""
 
@@ -156,8 +161,8 @@ class ProtocolChange(PublicModel):
 
     note: Annotated[str, Field(pattern=r"^[A-Za-z0-9 ,.;:()'%+_=#/-]{1,500}$")]
     previous_candidate_sha256: Digest
-    archived_figures: Annotated[str, Field(pattern=r"^docs/results/benchmarks\.[A-Za-z0-9_.+%~-]+\.json$")]
-    archived_approval: Annotated[str, Field(pattern=r"^docs/results/benchmark-approval\.[A-Za-z0-9_.+%~-]+\.json$")]
+    archived_figures: Annotated[str, Field(pattern=ARCHIVE_FIGURES)]
+    archived_approval: Annotated[str, Field(pattern=ARCHIVE_APPROVAL)]
     groups: Annotated[list[GroupProtocol], Field(min_length=1)]
 
 
@@ -281,8 +286,11 @@ def changed_protocols(candidate: Candidate, baseline: Candidate) -> list[GroupPr
 
 def archive_paths(baseline: Candidate) -> tuple[Path, Path]:
     """Where superseded figures and their approval stay published, named by the campaign that measured them."""
-    # Percent-encoded, so every valid campaign id (a `:` included) names exactly one file.
-    name = quote(baseline.campaign_id, safe="+")
+    # Bounded whatever the id: a sanitized prefix to read and the id's digest to tell ids apart. The record keeps the
+    # exact paths, so a reader follows them rather than recomputing names.
+    campaign = baseline.campaign_id
+    prefix = re.sub(r"[^A-Za-z0-9._+-]", "-", campaign)[:64]
+    name = f"{prefix}.{hashlib.sha256(campaign.encode()).hexdigest()[:16]}"
     return RESULTS / f"benchmarks.{name}.json", RESULTS / f"benchmark-approval.{name}.json"
 
 
@@ -462,7 +470,7 @@ def git_names(ref: str, directory: Path) -> list[str]:
     return done.stdout.split() if done.returncode == 0 else []
 
 
-ARCHIVE = re.compile(r"benchmark(s|-approval)\.[A-Za-z0-9_.+%~-]+\.json")
+ARCHIVE = re.compile(rf"benchmark(s|-approval)\.{ARCHIVE_NAME}\.json")
 
 
 def check_archives(base: str, added: set[str]) -> None:

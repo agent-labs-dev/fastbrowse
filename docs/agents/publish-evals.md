@@ -36,6 +36,14 @@ which copies the reviewed candidate to `docs/results/benchmarks.json` and the re
 `docs/results/benchmark-approval.json`. Include both in the reviewed data PR and wait for green CI before
 merging. An upload to Langfuse does not approve publication.
 
+## Retiring a task or changing the protocol
+
+Neither path exists to improve a score. A task is retired only for an external reason that stops it measuring
+any agent, such as a site that no longer exists, and its catalog entry records that reason, with evidence
+(for example, the DNS answers showing the name is gone) and a date. A task is never retired, swapped or
+regraded because of how an agent scored on it, and a protocol change never drops or replaces tasks for that
+reason. A protocol change states its cause in its note, such as #356's uncapped runs.
+
 ## Changing the protocol
 
 A published group is compared only with figures measured under the same protocol: the same catalog digest,
@@ -55,8 +63,10 @@ cannot be compared with their published figures and are published as a fresh bas
 3. The approval carries a `protocol_change` record: the note, the digest of the figures it supersedes, and
    for each changed group its previous and new catalog digest, tasks and limits.
 4. `--install` archives the superseded figures as `docs/results/benchmarks.<campaign>.json` and their
-   approval as `docs/results/benchmark-approval.<campaign>.json`, named by the campaign that measured them
-   (percent-encoded, so a `:` becomes `%3A`), before putting the new figures in place. The record links both, so each approval leads to the figures
+   approval as `docs/results/benchmark-approval.<campaign>.json` before putting the new figures in place.
+   `<campaign>` is the measuring campaign's id, kept to 64 filename-safe characters, then the first 16 hex
+   characters of the full id's SHA256, such as `release-0.5.20-3c40e6e.c9230345698e274a`. Follow the paths the
+   record stores rather than rebuilding them. The record links both, so each approval leads to the figures
    it replaced.
 
 CI accepts changed published figures only when their approval's record names exactly the groups whose protocol
