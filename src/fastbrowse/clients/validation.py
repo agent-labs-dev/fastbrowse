@@ -34,7 +34,7 @@ from fastbrowse.jev import (
     ScoreQuestion,
 )
 from fastbrowse.models import CostBasis, CostComponent, CostLine
-from fastbrowse.telemetry import Ledger, trace
+from fastbrowse.telemetry import Ledger, call_span, trace
 
 logger = logging.getLogger(__name__)
 
@@ -466,6 +466,23 @@ async def post(
     start_attempt: int = 0,
     split_batch: bool = False,
 ) -> httpx.Response:
+    with call_span("jev"):
+        return await _post(
+            http, url, api_key, body, headers, usage=usage, start_attempt=start_attempt, split_batch=split_batch
+        )
+
+
+async def _post(
+    http: httpx.AsyncClient,
+    url: str,
+    api_key: str,
+    body: dict[str, JsonValue],
+    headers: Mapping[str, str] | None = None,
+    *,
+    usage: RequestUsage | None = None,
+    start_attempt: int = 0,
+    split_batch: bool = False,
+) -> httpx.Response:
     # Priced before sending, so a split single or a retry cannot carry the run past its dollar cap.
     check = functools.partial(check_jev_spend, _body_dollars(body))
     check()
@@ -501,11 +518,7 @@ async def post(
         raise
     except httpx.HTTPError as error:
         raise JevError(f"Jev request could not be sent ({type(error).__name__})") from None
-    ended = monotonic()
-    seconds = ended - started
-    # Each call's span, so a run's critical path can be rebuilt from its trace: calls overlap, and summed seconds
-    # per kind of call cannot say which of them the run was waiting on.
-    trace("call", call="jev", began=started, ended=ended)
+    seconds = monotonic() - started
     if seconds > JEV_SLOW_SECONDS:
         # Evals rerun an attempt that saw one, so a slow provider never counts against the agent.
         trace("request_slow", call="jev", seconds=round(seconds, 2))

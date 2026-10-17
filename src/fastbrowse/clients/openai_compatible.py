@@ -26,7 +26,7 @@ from fastbrowse.clients.validation import (
 )
 from fastbrowse.llm import DEFAULT_MAX_OUTPUT_TOKENS, Generation, LLMError, LLMRetriesExhausted, Message
 from fastbrowse.models import CostBasis, CostComponent, CostLine, LLMPurpose, combined_basis
-from fastbrowse.telemetry import BudgetExceeded, Ledger, trace
+from fastbrowse.telemetry import BudgetExceeded, Ledger, call_span
 
 _TRUNCATION_RETRY_FACTOR = 4
 """How much larger the output cap is on the one retry after a response ran into it."""
@@ -399,6 +399,18 @@ class OpenAICompatibleLLM:
         max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
         ledger: Ledger | None = None,
     ) -> Generation[T]:
+        with call_span(f"llm:{purpose.value}", schema=schema.__name__):
+            return await self._generate(purpose, messages, schema, max_output_tokens=max_output_tokens, ledger=ledger)
+
+    async def _generate[T: BaseModel](
+        self,
+        purpose: LLMPurpose,
+        messages: Sequence[Message],
+        schema: type[T],
+        *,
+        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+        ledger: Ledger | None = None,
+    ) -> Generation[T]:
         model = self._models.get(purpose)
         if model is None:
             raise LLMError(f"No model configured for {purpose}")
@@ -518,9 +530,7 @@ class OpenAICompatibleLLM:
                         ]
                     )
                 else:
-                    ended = monotonic()
-                    trace("call", call=f"llm:{purpose.value}", schema=schema.__name__, began=started, ended=ended)
-                    cost = _total_cost(costs, purpose).model_copy(update={"seconds": ended - started})
+                    cost = _total_cost(costs, purpose).model_copy(update={"seconds": monotonic() - started})
                     return Generation(data=data, cost=cost)
         except asyncio.CancelledError:
             if ledger is not None:
