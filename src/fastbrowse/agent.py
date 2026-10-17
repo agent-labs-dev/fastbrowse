@@ -2671,6 +2671,12 @@ class Agent:
             incomplete=state.incomplete,
             require_all_evidence=require_all_evidence or (state.through_end and state.pages > 0),
         )
+        for requirement in wanted:
+            # The first page of a list that goes on, each later page and the closing read all belong to that
+            # requirement's collection, whether or not they held a matching record. Another requirement read
+            # alongside it does not: its audit would be told these pages were its own and held no match.
+            if requirement.id in outcome.continues or requirement.id in state.continuing:
+                state.notes.add_collection_page(requirement.id, capture.url, capture.sha256)
         context_added = False
         if state.oversized_answer and state.open_answer_outputs:
             # A field read can return context while another field or collection is still open. Its quotes
@@ -2778,7 +2784,10 @@ class Agent:
             )
             retried = True
 
-    async def _join_page(self, state: _RunState, page: _PageRead, wanted: Sequence[Requirement]) -> ReadOutcome | None:
+    async def _join_page(
+        self, state: _RunState, page: _PageRead, wanted: Sequence[Requirement], collecting: Sequence[str] = ()
+    ) -> ReadOutcome | None:
+        """`collecting` names the requirements whose list continued onto these pages; the rest are read alongside."""
         try:
             outcome = await page.task
         except LLMError:
@@ -2817,6 +2826,8 @@ class Agent:
         before = len(state.notes.facts)
         state.notes.remember_capture(page.capture)
         outcome.merge_records(state.notes)
+        for requirement_id in collecting:
+            state.notes.add_collection_page(requirement_id, page.capture.url, page.capture.sha256)
         state.record_read_documents.add(page.observation.document_key)
         state.incomplete.update(outcome.incomplete)
         state.history.append(
@@ -2855,6 +2866,8 @@ class Agent:
 
     async def _pipeline_pages(self, state: _RunState, observation: Observation) -> None:
         wanted = [r for r in state.notes.unresolved(state.plan) if r.kind is RequirementKind.INFORMATION]
+        # Every unresolved requirement is read on each page, but only a list that went on is being paged.
+        collecting = tuple(r.id for r in wanted if r.id in state.continuing)
         pending: list[_PageRead] = []
         last_records: _PageRead | None = None
         ended: tuple[str, ...] = ()
@@ -3003,7 +3016,7 @@ class Agent:
                         state, observation, Operation.CLICK, state.hint, target=label, decided_by=Decider.LLM
                     )
             for page in pending:
-                outcome = await self._join_page(state, page, wanted)
+                outcome = await self._join_page(state, page, wanted, collecting)
                 if page is last_records and outcome is not None:
                     ended = outcome.ended
         finally:

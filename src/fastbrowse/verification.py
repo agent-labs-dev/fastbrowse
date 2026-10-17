@@ -11,7 +11,15 @@ from collections.abc import Collection, Iterable, Mapping, Sequence
 from enum import StrEnum
 from typing import Any, Literal, assert_never
 
-from pydantic import BaseModel, Field, JsonValue, ValidationError, create_model
+from pydantic import (
+    BaseModel,
+    Field,
+    JsonValue,
+    SerializerFunctionWrapHandler,
+    ValidationError,
+    create_model,
+    model_serializer,
+)
 
 from fastbrowse.batches import evaluate_batches
 from fastbrowse.config import Config, Thresholds, TokenBudget
@@ -25,7 +33,7 @@ from fastbrowse.jev import (
     Question,
 )
 from fastbrowse.llm import Generation, LLMClient, Message
-from fastbrowse.memory import CollectionFact, Notes, NotesTooLarge, fact_id
+from fastbrowse.memory import CollectionFact, Notes, NotesTooLarge, Standing, fact_id
 from fastbrowse.models import UNTRUSTED, CostLine, Evidence, FactReader, Frozen, LLMPurpose, SourceControl
 from fastbrowse.page import Capture, Control, Observation, cut_text
 from fastbrowse.planner import FIELD_CATEGORIES, Plan, RequirementKind
@@ -443,18 +451,41 @@ class _OutputSource(Frozen):
     control_context: SourceControl | None = None
 
 
-class _OutputCount(Frozen):
+class _CollectionRead(Frozen):
+    read: int
+    """The read's place in reading order, from 1: one address can be read in several states."""
+    url_ref: str
+
+
+class _CollectionMetadata(Frozen):
+    @model_serializer(mode="wrap")
+    def _omit_unset(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        # A single-page list or a lone group has no pages or standing to show; an empty field there would only
+        # tell the audit about a proof that does not apply.
+        return {key: value for key, value in handler(self).items() if key not in _OPTIONAL_METADATA or value}
+
+
+_OPTIONAL_METADATA = frozenset({"standing", "pages_read"})
+
+
+class _OutputCount(_CollectionMetadata):
     scope: str | None
     group: str
     count: int
     complete: bool
     record_indices: tuple[int, ...]
+    standing: Standing | None = None
+    """This group's rank among every group counted in the same scope; None when the scope has one group."""
+    pages_read: tuple[_CollectionRead, ...] = ()
+    """Every read code made of this collection, in order, including reads with no counted record."""
 
 
-class _OutputComparison(Frozen):
+class _OutputComparison(_CollectionMetadata):
     scope: str | None
     complete: bool
     record_indices: tuple[int, ...]
+    pages_read: tuple[_CollectionRead, ...] = ()
+    """Every read code made of this collection, in order, including reads with no compared record."""
 
 
 class _OutputClaim(Frozen):
@@ -530,6 +561,13 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
     requirements = {requirement.id: requirement.text for requirement in composed.requirements}
     urls: dict[str, str] = {}
     claims = []
+
+    def pages_read(requirement_id: str) -> tuple[_CollectionRead, ...]:
+        return tuple(
+            _CollectionRead(read=index, url_ref=urls.setdefault(read.url, f"u{len(urls)}"))
+            for index, read in enumerate(notes.collection_pages(requirement_id), 1)
+        )
+
     for claim in composed.claims:
         expanded = notes.expand_evidence_ids(claim.evidence_ids)
         if any(not notes.current(key) for key in expanded):
@@ -582,6 +620,7 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
                             or comparison.requirement_id in notes.fact_requirements(fact_id(fact))
                         ),
                         record_indices=tuple(dict.fromkeys(positions[record] for record in comparison.records)),
+                        pages_read=pages_read(comparison.requirement_id),
                     )
                 )
             if fact.tally is None or fact_id(fact) not in expanded:
@@ -595,6 +634,8 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
                     count=fact.tally.count,
                     complete=fact.tally.requirement_id in notes.fact_requirements(fact_id(fact)),
                     record_indices=tuple(dict.fromkeys(positions[record] for record in fact.tally.records)),
+                    standing=notes.standing(fact.tally) if claim.ranks else None,
+                    pages_read=pages_read(fact.tally.requirement_id),
                 )
             )
         # Flattening a count or comparison loses its collection scope and whether every page was read.
@@ -860,7 +901,10 @@ async def _check_answer_outputs(
                         "criteria": uncertain,
                         "answer": context.answer,
                         "urls": context.urls,
-                        "sources": {ref: source.model_dump() for ref, source in offered.items()},
+                        # The key is the only handle a binding may name. Shown a source's page block id as
+                        # well, the resolver once filed a correct quote under "s15729" instead of "q0", and a
+                        # right answer failed as an identity missing from its cited sources.
+                        "sources": {ref: source.model_dump(exclude={"source_id"}) for ref, source in offered.items()},
                     }
                 ),
             ),
@@ -1045,6 +1089,12 @@ async def _check_answer_outputs(
             schema = _assessment_schema(key)
             records = field.get("reported_claims", field.get("sources", ())) if isinstance(field, dict) else ()
             refs = {source["url_ref"] for record in records for source in record["cited_sources"]}
+            refs.update(
+                ref
+                for record in records
+                for metadata in (*record.get("counted_records", ()), *record.get("compared_records", ()))
+                for ref in (read["url_ref"] for read in metadata.get("pages_read", ()))
+            )
             if isinstance(field, dict):
                 refs.update(identity["url_ref"] for identity in field.get("requested_entities", ()))
             urls = {alias: url for alias, url in context.urls.items() if alias in refs}
@@ -1160,6 +1210,17 @@ async def _check_answer_outputs(
                 "code-maintained distinct counts, their scope, cited record indices and collection completeness. "
                 "A complete count can rest on its matching quoted records without a page stating the total. "
                 "An incomplete or differently scoped count cannot establish the requested whole-list total. "
+                "A count's standing, given for a claim that states a rank or order, ranks its group among all "
+                "group_count groups code counted in that scope: rank is 1 plus the number of groups with a "
+                "higher count, and tied is how many other groups share its count. groups lists the leading "
+                "groups and those around this one, each with its own rank and code-maintained count; ranks "
+                "between them are left out, not missing. When standing.complete is true, it establishes the "
+                "group's rank and order without citing the other groups' records. When it is false, no rank is "
+                "established. A count without a standing establishes no rank. "
+                "pages_read lists every read code made of the collection, in order, including reads with no "
+                "matching record; one url_ref can appear in several reads when the list loads more or pages in "
+                "place at one address. A listed read with no cited record was read and held no match, so it is "
+                "not missing coverage. "
                 "Compared-record metadata preserves the reader's collection scope, completeness and indices "
                 "into these cited sources. A complete comparison establishes coverage of that scope, not "
                 "missing values, operand associations or the correctness of a conclusion. An incomplete "
@@ -1223,6 +1284,11 @@ async def _check_answer_outputs(
                 "counts and collection completeness, with "
                 "indices into that claim's cited sources. Check the reported count against that matching scope "
                 "and quoted record membership. An incomplete count cannot establish a whole-list total. "
+                "Check a reported rank or order by count against the count's standing, code's ranking of "
+                "every group counted in that scope, and its tied count for a shared rank; it holds only when "
+                "standing.complete is true, and a count without a standing establishes no rank. "
+                "pages_read lists every read code made of the collection, in order; one address can be read "
+                "in several states, and a listed read with no cited record was read and held no match. "
                 "Compared-record metadata preserves the reader's collection scope, completeness and cited "
                 "source indices. Check the conclusion against every compared operand and the matching scope. "
                 "Completeness establishes coverage only, not values, associations or the winning result. "

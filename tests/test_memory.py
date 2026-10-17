@@ -349,7 +349,8 @@ def test_render_keeps_source_quote_once_and_retains_distinct_fact_text(text: str
     notes = Notes((fact,))
     rendered = notes.render_with_ids(2000)
     assert rendered.text.count(json.dumps(quote)) == 1
-    assert text in rendered.text and 'source="s1"' in rendered.text
+    # The bracketed id is the note's only handle; its page block id would be a second one a model could cite.
+    assert text in rendered.text and f"[{fact_id(fact)}]" in rendered.text and '"s1"' not in rendered.text
     assert rendered.evidence_ids == (fact_id(fact),) and notes.evidence[fact_id(fact)] == source
 
 
