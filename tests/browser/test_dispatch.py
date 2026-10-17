@@ -818,21 +818,32 @@ async def test_a_field_under_a_band_is_filled_and_submitted_from_the_keyboard(
     assert (value, submitted, ad_clicks) == ("hunter2", 1, 0)
 
 
-@pytest.mark.parametrize("cover", ["dialog", "full-window"])
+@pytest.mark.parametrize("cover", ["dialog", "menu", "popover", "full-window"])
 async def test_a_fixed_cover_the_page_means_to_be_answered_is_still_reported(
     page: CdpPage, browser_session: BrowserSession, main_site: str, cover: str
 ) -> None:
-    """Only a band floating over the page is routed around. A dialog asks its question first, and a cover over the
-    whole window shows something other than the control, so neither is pressed through, by pointer or keyboard."""
+    """Only a band floating over the page is routed around. A dialog asks its question first, an open menu or
+    popover is the page's to close, and a cover over the whole window shows something other than the control, so
+    none is pressed through, by pointer or keyboard."""
     await page.navigate(main_site)
     session_id = browser_session.active_session_id
     await eval_value(browser_session, session_id, _anchored_form(scrolls=False, band="div"))
-    await eval_value(
-        browser_session,
-        session_id,
-        "document.querySelector('ins').setAttribute('role', 'dialog'); true"
-        if cover == "dialog"
-        else "document.querySelector('ins').style.cssText += ';top:0;height:auto'; true",
+    # A setup script that throws evaluates to nothing, and the cover it meant to draw would never be tested.
+    assert (
+        await eval_value(
+            browser_session,
+            session_id,
+            {
+                "dialog": "document.querySelector('ins').setAttribute('role', 'dialog'); true",
+                "menu": "document.querySelector('ins').setAttribute('role', 'menu'); true",
+                # A shown popover sits in the top layer; its own inset is kept at the window's foot.
+                "popover": "{ const shown = document.querySelector('ins'); shown.setAttribute('popover', 'manual'); "
+                "shown.style.cssText += ';top:auto;margin:0;border:0;padding:0;width:auto'; shown.showPopover(); } "
+                "document.querySelector('ins').matches(':popover-open')",
+                "full-window": "document.querySelector('ins').style.cssText += ';top:0;height:auto'; true",
+            }[cover],
+        )
+        is True
     )
     obs = await page.observe()
     result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Login").id), obs)

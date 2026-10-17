@@ -206,7 +206,11 @@ class Notes:
         fact = Fact(text="", evidence=None, basis=tuple(records), tally=tally, reader=FactReader.LLM)
         key = fact_id(fact)
         previous = self._facts.get(key)
-        records = list(dict.fromkeys((*(previous.basis if previous else ()), *records)))
+        # A recount on the right page keeps the tally's key, so carrying the refused page's records into it would
+        # leave the count resting on them and refused again on every finish.
+        refused = self._discredited.get(tally.requirement_id, set())
+        carried = tuple(record for record in (previous.basis if previous else ()) if record not in refused)
+        records = list(dict.fromkeys((*carried, *records)))
         tally = tally.model_copy(update={"records": tuple(records)})
         fact = fact.model_copy(update={"text": f"{tally.key}: {tally.count}", "basis": tuple(records), "tally": tally})
         self.unevidence((tally.requirement_id,))
@@ -237,9 +241,22 @@ class Notes:
 
     def complete_tallies(self, requirement_id: str) -> None:
         for key, fact in self._facts.items():
-            if fact.tally is not None and fact.tally.requirement_id == requirement_id:
+            if (
+                fact.tally is not None
+                and fact.tally.requirement_id == requirement_id
+                and not self._rests_on_discredited(requirement_id, key, fact.basis)
+            ):
                 self._requirements[key].add(requirement_id)
                 self._facts[key] = fact.model_copy(update={"requirement_id": requirement_id})
+
+    def _rests_on_discredited(self, requirement_id: str, key: str, basis: Iterable[str]) -> bool:
+        """Whether a fact is, or concludes from, one the requirement was refused on as read off the wrong page.
+
+        Every path that lets a fact evidence a requirement asks this, since one that did not reopened the loop
+        `discredit` closes: a count completed from the refused page's records answered the requirement again.
+        """
+        refused = self._discredited.get(requirement_id)
+        return bool(refused) and bool(refused & {key, *self.expand_evidence_ids(basis)})
 
     def add(self, fact: Fact) -> bool:
         """Return whether a new span was added; reused spans still evidence other requirements."""
@@ -247,7 +264,9 @@ class Notes:
         self._retired.discard(key)
         requirements = self._requirements.setdefault(key, set())
         if fact.requirement_id is not None:
-            if not self._discredited.get(fact.requirement_id, set()) & {key, *self.expand_evidence_ids(fact.basis)}:
+            # A re-added fact keeps the basis it had, so the refused quotes are looked for in both.
+            basis = (*(self._facts[key].basis if key in self._facts else ()), *fact.basis)
+            if not self._rests_on_discredited(fact.requirement_id, key, basis):
                 requirements.add(fact.requirement_id)
             self._owners.setdefault(key, set()).add(fact.requirement_id)
         if key in self._facts:
@@ -343,7 +362,11 @@ class Notes:
         dropped = set(requirement_ids)
         for requirement in dropped:
             supporting = self.expand_evidence_ids(key for key, _ in self.supporting(requirement))
-            self._discredited.setdefault(requirement, set()).update(supporting)
+            # A tally is named by its requirement and key, not by what it counted, so a recount on the right page
+            # takes the same name; it is judged by the records it rests on instead.
+            self._discredited.setdefault(requirement, set()).update(
+                key for key in supporting if key not in self._facts or self._facts[key].tally is None
+            )
         self.unevidence(dropped)
 
     def supersede(self, requirement_id: str, url: str, sha256: str, text: str) -> None:

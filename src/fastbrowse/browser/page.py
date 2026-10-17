@@ -119,21 +119,26 @@ _UNCOVER_JS = (
     "return 'covered'; })"
 )
 
-# What covers the control's centre, through its frames: a dialog the page means to be answered first, a band fixed
-# to the window (an anchored ad, a sticky footer, a chat bubble) that floats over whatever is scrolled beneath it,
-# or anything else, such as a full-window backdrop or a panel drawn over the control in the page's own flow. Only a
-# band is routed around; under anything else the page shows something other than the control, and that is the
-# run's to deal with.
+_OBSTRUCTIONS = 'dialog,[role=dialog],[role=alertdialog],[aria-modal="true"],[role=menu],[role=listbox],[popover]'
+"""What a page draws over its content and means to be dealt with first. Naming a cover for recovery and routing
+around one read this one list: a small open menu fixed to the window looked like a band to one of them, and the
+control under it would have been pressed through it."""
+
+# What covers the control's centre, through its frames: an obstruction the page means to be dealt with first (a
+# dialog, an open menu, a popover), a band fixed to the window (an anchored ad, a sticky footer, a chat bubble) that
+# floats over whatever is scrolled beneath it, or anything else, such as a full-window backdrop or a panel drawn over
+# the control in the page's own flow. Only a band is routed around; under anything else the page shows something
+# other than the control, and that is the run's to deal with.
 _COVER_JS = (
     "((id) => { const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return null; "
-    "const MODAL = 'dialog[open],[role=dialog],[role=alertdialog],[aria-modal=\"true\"]'; "
+    "const OBSTRUCTIONS = " + json.dumps(_OBSTRUCTIONS) + "; "
     "const rect = e.getBoundingClientRect(); let x = rect.left + rect.width / 2, y = rect.top + rect.height / 2; "
     "let node = e, doc = e.ownerDocument; while (true) { const view = doc.defaultView; "
     "let hit = doc.elementFromPoint(x, y); "
     "while (hit?.shadowRoot) { const inner = hit.shadowRoot.elementFromPoint(x, y); "
     "if (!inner || inner === hit) break; hit = inner; } "
-    "if (hit && !node.contains(hit)) { const modal = hit.closest(MODAL); "
-    "if (modal && !modal.contains(node)) return 'modal'; "
+    "if (hit && !node.contains(hit)) { const obstruction = hit.closest(OBSTRUCTIONS); "
+    "if (obstruction && !obstruction.contains(node)) return 'obstruction'; "
     "for (let n = hit; n && !n.contains(node); n = n.parentElement) { "
     "if (!['fixed', 'sticky'].includes(view.getComputedStyle(n).position)) continue; "
     "const r = n.getBoundingClientRect(); "
@@ -224,7 +229,7 @@ _FILL_TARGET = TypeAdapter(tuple[int | None, bool, bool | None])
 _KEYS = {"Enter": ("Enter", "\r", 13), "Escape": ("Escape", "", 27), " ": ("Space", " ", 32)}
 """Each key pressed: its code, the text it types and its Windows virtual key code."""
 _POINT = TypeAdapter(tuple[float, float] | Literal["covered"] | None)
-_COVER = TypeAdapter(Literal["modal", "band", "other", "none"] | None)
+_COVER = TypeAdapter(Literal["obstruction", "band", "other", "none"] | None)
 _ACTIVATION_KEY = TypeAdapter(Literal["Enter", " "] | None)
 type _Route = tuple[float, float] | Literal["covered", "keyboard"] | None
 """Where a covered control can be acted on: a point scrolled clear of the cover, the keyboard, or nowhere."""
@@ -951,7 +956,7 @@ class CdpPage(Page):
                 f"{local_id}); "
                 "if (!e) return null; const rect = e.getBoundingClientRect(); "
                 "const hit = e.ownerDocument.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2); "
-                "let cover = hit?.closest('[role=dialog],dialog,[role=menu],[popover]'); "
+                "let cover = hit?.closest(" + json.dumps(_OBSTRUCTIONS) + "); "
                 "if (!cover) for (let node = hit; node && node !== e.ownerDocument.body; node = node.parentElement) { "
                 "if (!node.contains(e) && e.ownerDocument.defaultView.getComputedStyle(node).position === 'fixed' && "
                 "node.querySelector('button,[role=button],a[href]')) { cover = node; break; } } "

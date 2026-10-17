@@ -642,3 +642,36 @@ def test_a_page_that_replaces_several_values_retires_every_one_it_no_longer_show
 
     assert notes.evidenced("price") and not notes.evidenced("name")
     assert fact_id(name) not in notes.current_evidence()
+
+
+def _record(quote: str, sha: str, url: str) -> Fact:
+    return _quoted(quote, sha, url).model_copy(update={"requirement_id": None})
+
+
+def test_a_count_refused_as_read_off_the_wrong_page_cannot_answer_again_but_a_recount_can() -> None:
+    """A count read off a guessed listing was refused, and completing the tallies then put it straight back as the
+    answer, so every finish got the same refusal: the loop `discredit` closes for a quoted fact."""
+    guessed, right = "https://example.test/search?q=guess", "https://example.test/search?tfs=set"
+    old = [_record(f"Order {n}", f"guess-{n}", guessed) for n in "AB"]
+    notes = Notes(old)
+    notes.add_tally(Tally(requirement_id="r1", key="Orders", records=tuple(fact_id(f) for f in old)))
+    notes.complete_tallies("r1")
+    assert notes.evidenced("r1")
+
+    notes.discredit(("r1",))
+    notes.complete_tallies("r1")
+    assert not notes.evidenced("r1")
+    # A reader that counts the refused rows again under the same key is still the refused page.
+    notes.add_tally(Tally(requirement_id="r1", key="Orders", records=(fact_id(old[0]),)))
+    notes.complete_tallies("r1")
+    assert not notes.evidenced("r1")
+
+    # The count on the page the run set up itself answers it, without the refused rows carried into it.
+    fresh = [_record(f"Order {n}", f"right-{n}", right) for n in "CDE"]
+    for fact in fresh:
+        notes.add(fact)
+    tally = notes.add_tally(Tally(requirement_id="r1", key="Orders", records=tuple(fact_id(f) for f in fresh)))
+    notes.complete_tallies("r1")
+    assert notes.evidenced("r1")
+    assert set(tally.basis) == {fact_id(f) for f in fresh}
+    assert tally.tally is not None and tally.tally.count == 3

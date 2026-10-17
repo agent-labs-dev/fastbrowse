@@ -183,5 +183,6 @@ Before a pointer press, the browser waits for a stable target and rechecks its g
 replacement control must match the original semantics and receiving document; ambiguous matches are
 refused. A target covered by a band fixed to the window (an anchored ad, a sticky footer) is scrolled clear of
 it, and one the band still covers is focused and pressed or typed into from the keyboard, so the band is never
-clicked. Any other cover, such as a dialog or a full-window backdrop, is reported as `covered`. Focus and the receiving field are checked before typing. Settling waits for an interactive
+clicked. Any other cover, such as a dialog, an open menu or popover, or a full-window backdrop, is reported as
+`covered`. Focus and the receiving field are checked before typing. Settling waits for an interactive
 document and a quiet DOM, with a bounded extra wait for visible loading indicators.
