@@ -788,3 +788,32 @@ def test_no_constructor_builds_on_a_held_reading_and_each_builds_on_a_legitimate
     assert build(notes, guessed) is on_guess
     notes, _, own = refused()
     assert build(notes, own) is True
+
+
+def test_refusing_one_requirement_leaves_another_requirements_finished_ranking() -> None:
+    """Two requirements: a ranking over rows on the run's own page, and a fare quoted off a guessed page. The ranking
+    took every quote in the notes as its basis, so refusing the unrelated fare reopened it."""
+    from fastbrowse.comparison import NumericComparison, QuotedField, complete_comparison
+
+    rows = [_record(f"Fare {n}: {price}", "own", _OWN) for n, price in (("A", 305), ("B", 340))]
+    notes = Notes((*rows, _quoted("Fare $320", "guess", _GUESSED)))
+    for row in rows:
+        notes.add_continuation("cheapest", fact_id(row))
+    ranking = NumericComparison(
+        order="lowest", limit=1, label=QuotedField(prefix="", suffix=": "), value=QuotedField(prefix=": ", suffix="")
+    )
+    assert complete_comparison(notes, "cheapest", ranking) and notes.evidenced("cheapest")
+    notes.discredit(("r1",), lambda evidence: evidence.url == _GUESSED)
+    assert not notes.evidenced("r1") and notes.evidenced("cheapest")
+
+
+def test_a_list_read_stays_read_for_a_count_whose_rows_are_not_held() -> None:
+    """One capture held a quote refused for r1 and rows another requirement counted. The page read was dropped from
+    that count's reads because r1's quote was held, and its audit saw a list with a page missing."""
+    rows = [_record(f"Order {n}", "shared", _GUESSED) for n in "AB"]
+    notes = Notes((*rows, _quoted("Fare $320", "shared", _GUESSED)))
+    notes.add_tally(Tally(requirement_id="orders", key="Orders", records=tuple(fact_id(f) for f in rows)))
+    notes.add_collection_page("orders", _GUESSED, "shared")
+    notes.discredit(("r1",), lambda evidence: evidence.url == _GUESSED)
+    assert not notes.evidenced("r1")
+    assert [read.url for read in notes.collection_pages("orders")] == [_GUESSED]

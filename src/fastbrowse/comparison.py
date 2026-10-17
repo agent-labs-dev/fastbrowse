@@ -65,14 +65,18 @@ def complete_comparison(notes: Notes, requirement_id: str, comparison: NumericCo
     text = f"{comparison.order.capitalize()} {comparison.limit}:\n" + "\n".join(
         f"{label}: {value}" for _, label, value in rows[: comparison.limit]
     )
-    # Context such as the active category or filter is part of the proof, even when it is outside a record.
+    # Context such as the active category or filter is part of the proof, even when it is outside a record, but only
+    # the context on the pages the records were read from: the whole notes as the basis tied a finished ranking to
+    # every unrelated quote, and a refusal of one of those reopened it.
+    read = {(known[key].url, known[key].capture_sha256) for key in records}
+    context = tuple(key for key, evidence in known.items() if (evidence.url, evidence.capture_sha256) in read)
     notes.add(
         Fact(
             requirement_id=requirement_id,
             comparison=Comparison(requirement_id=requirement_id, records=records, complete=True),
             text=text,
             evidence=None,
-            basis=tuple(known),
+            basis=tuple(dict.fromkeys((*records, *context))),
             reader=FactReader.LLM,
         )
     )

@@ -297,12 +297,19 @@ class Notes:
 
         A page with no matching record leaves no quote, so an audit that judged coverage from the cited records alone
         took that page for unread and refused a comparison code had closed over every page of the list."""
-        # A read whose rows are held was read off a refused guess: shown as read, it would stand for a page covered
-        # while none of its rows is counted.
+        # A read whose rows for this collection are held was read off a refused guess: shown as read, it would stand
+        # for a page covered while none of its rows is counted. A held quote another requirement drew from the same
+        # page says nothing of this collection's rows, and dropping the page for it left a valid count unaudited.
+        rows = set(self.comparison_records(requirement_id)) | {
+            record
+            for fact in self._facts.values()
+            if fact.tally is not None and fact.tally.requirement_id == requirement_id
+            for record in fact.tally.records
+        }
         held = {
             (fact.evidence.url, fact.evidence.capture_sha256)
-            for key, fact in self._facts.items()
-            if fact.evidence is not None and self.held(key)
+            for key in rows
+            if (fact := self._facts.get(key)) is not None and fact.evidence is not None and self.held(key)
         }
         return tuple(
             read
