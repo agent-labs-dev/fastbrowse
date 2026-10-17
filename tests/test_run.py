@@ -114,6 +114,24 @@ async def test_a_browser_that_accepts_the_connection_but_never_answers_is_named_
     assert "approve remote debugging" in result.error
 
 
+async def test_a_browser_connection_that_closes_is_an_outage() -> None:
+    async def closing(ws: ServerConnection) -> None:
+        await ws.recv()
+        await ws.close()
+
+    async with websockets.serve(closing, "127.0.0.1", 0) as server:
+        port = next(iter(server.sockets)).getsockname()[1]
+        result = await run_module.run_task(
+            "read the page",
+            cdp_url=f"ws://127.0.0.1:{port}/devtools/browser/x",
+            attach=True,
+            jev=ScriptedJev({}),
+            llm=ScriptedLLM([]),
+        )
+    assert result.status is Status.UNAVAILABLE
+    assert result.error is not None and "failed (Connection" in result.error
+
+
 async def test_a_devtools_port_without_its_discovery_route_names_the_websocket_to_pass() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(404))) as http:
         result = await run_module.run_task(

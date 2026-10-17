@@ -53,10 +53,21 @@ CDP_COMMAND_SECONDS = 120.0
 """A responsive browser can still leave one document command pending forever."""
 CDP_ALIVE_SECONDS = 10.0
 """`Browser.getVersion` is answered at once by any browser that is there."""
+CDP_DEADLINES_BEFORE_STOP = 2
+"""Command deadlines one connection may meet before its tab's commands fail at once, as `PageUnresponsive`. A read
+that waits out the deadline is often one whose caller treats a failed read as an unreadable page and carries on, so the
+next read waited it out again: one login run met it thirteen times, 26 minutes on a page it could not use.
+Browser-level commands (closing the run's tabs) are still sent."""
 
 
 class BrowserUnresponsive(BrowserError, Unavailable):
     """The browser stopped answering: an outage the same run may not meet again, not a failed task."""
+
+
+class PageUnresponsive(BrowserError):
+    """A tab that stopped answering while the browser behind it still answers: a failure driving the page, which ends
+    the run as its own error. It is not an outage, since the connection and the browser are both there; reporting it
+    as one would leave the run's own failures out of what it is measured on."""
 
 
 class OriginNotAllowed(BrowserError):
@@ -126,8 +137,11 @@ _SERVER_ERROR = -32000
 """The code Chrome answers when the document or frame a command addressed is gone, as after a navigation."""
 
 
-def _browser_error(method: str, cause: Exception) -> BrowserError:
+def _browser_error(method: str, cause: Exception, *, lost_is_outage: bool = True) -> BrowserError:
     detail = type(cause).__name__
+    if lost_is_outage and isinstance(cause, (ConnectionClosed, ConnectionError)):
+        # The connection to the browser is gone: an outage, not the run's failure.
+        return BrowserUnresponsive(f"{method} failed ({detail})")
     if cause.args and isinstance(cause.args[0], dict):
         code = cast("dict[str, object]", cause.args[0]).get("code")
         if type(code) is int:
@@ -171,9 +185,18 @@ class _BrowserClient(CDPClient):
         try:
             await super().stop()
         except Exception as exc:
-            raise _browser_error("CDP.stop", exc) from exc
+            # A connection lost while closing comes after the run's own work, so it is never reported as an outage.
+            raise _browser_error("CDP.stop", exc, lost_is_outage=False) from exc
+
+    _deadlines = 0
+    """Commands on this connection that outlived CDP_COMMAND_SECONDS."""
 
     async def send_raw(self, method: str, params: Any = None, session_id: str | None = None) -> dict[str, Any]:
+        if session_id is not None and self._deadlines >= CDP_DEADLINES_BEFORE_STOP:
+            raise PageUnresponsive(
+                f"{method} not sent: the page stopped answering, {self._deadlines} commands already exceeded their "
+                "deadline while the browser answered"
+            )
         reply = asyncio.ensure_future(super().send_raw(method, params, session_id))
         try:
             try:
@@ -193,8 +216,15 @@ class _BrowserClient(CDPClient):
                     self._answered = True
                     return reply.result()
             except TimeoutError:
-                raise BrowserUnresponsive(f"{method} exceeded its command deadline; the page did not answer") from None
-        except BrowserUnresponsive:
+                # The browser can go during the last wait, after the probe before it answered, so it is asked once
+                # more: only a browser that is still there makes this the page's failure rather than an outage.
+                if not reply.done() and not await self._alive():
+                    raise BrowserUnresponsive(f"{method} got no reply, and the browser stopped answering") from None
+                self._deadlines += 1
+                raise PageUnresponsive(
+                    f"{method} exceeded its command deadline; the page did not answer while the browser did"
+                ) from None
+        except (BrowserUnresponsive, PageUnresponsive):
             raise
         except Exception as exc:
             # CDP error messages can contain evaluated source or page text, including secrets.
@@ -786,20 +816,21 @@ class BrowserSession:
     def popups(self) -> tuple[str, ...]:
         return tuple(self._popups)
 
-    async def follow_popup(self, known: tuple[str, ...], within: float) -> str | None:
+    async def follow_popup(self, known: tuple[str, ...]) -> str | None:
         """Make active the latest tab the active tab opened since `known` once it is adopted, and return its id.
 
         A link that opens its page in a new window left the run on the opener: the next step was spent choosing
-        the new tab, and the read before it credited the opener's heading to the new window.
+        the new tab, and the read before it credited the opener's heading to the new window. Adoption is waited
+        out however long it takes, since each of its commands has its own deadline: a fixed two seconds for it
+        was outlasted on a loaded machine, and the run read the opener while the tab it had opened sat unused.
         """
         opener = self._active_target_id
         fresh = [t for t, (o, _) in self._popups.items() if o == opener and t not in known]
         if not fresh:
             return None
-        with contextlib.suppress(TimeoutError):
-            if await asyncio.wait_for(asyncio.shield(self._popups[fresh[-1]][1]), within) and fresh[-1] in self._tabs:
-                await self.switch_tab(fresh[-1])
-                return fresh[-1]
+        if await asyncio.shield(self._popups[fresh[-1]][1]) and fresh[-1] in self._tabs:
+            await self.switch_tab(fresh[-1])
+            return fresh[-1]
         return None
 
     def _on_target_info_changed(self, event: TargetInfoChangedEvent, session_id: str | None) -> None:
