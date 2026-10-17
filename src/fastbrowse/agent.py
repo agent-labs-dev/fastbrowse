@@ -353,20 +353,21 @@ class _ObservedLink(Frozen):
 
 @dataclass(slots=True)
 class _Lineage:
-    """Whether the page was on the guess, kept per read and per visit rather than once per address.
+    """Whether the page was on the guess, kept per browser history entry and per read, never per address.
 
     A form or single-page app can keep its search outside the address, so a run that left a guessed search and set
-    the same search up itself arrived back at the guessed address, and an address judged once for good held the
-    fresh results guessed. A read is judged by what the run was doing when it read, so a quote read on the guess
-    stays guessed whatever the address later shows.
+    the same search up itself arrived back at the guessed address; an address judged once held the fresh results
+    guessed, and an address judged at each arrival made Back to that rebuilt search guessed again. The browser's
+    own history says which page the run is on: Back, Forward and a reload return to an entry, and its lineage with
+    it. A read is judged by what the run was doing when it read, so a quote read on the guess stays guessed.
     """
 
+    entries: dict[str, bool] = field(default_factory=dict[str, bool])
+    """Each history entry, by whether the run was on the guess when the entry was made."""
     addresses: dict[str, bool] = field(default_factory=dict[str, bool])
-    """Each address by whether the page was on the guess when the run last arrived at it."""
+    """Each address by the lineage of the entry last observed there, for a quote with no recorded reading."""
     captures: dict[tuple[str, str], bool] = field(default_factory=dict[tuple[str, str], bool])
     """Each reading, by source address and capture, by whether it was read on the guess."""
-    at: str | None = None
-    """The address of the last observation, which tells an arrival from a redraw."""
 
     def read(self, capture: str, sources: Iterable[str], *, guessing: bool) -> None:
         # The same page read again off the guess is the page the run reached itself, so that reading stands. Text
@@ -1635,24 +1636,44 @@ class Agent:
         return note, renews, put_back
 
     @staticmethod
+    def _note_lineage(state: _RunState, observation: Observation) -> None:
+        """Set whether the run is on the guess from the history entry the page is.
+
+        | Transition                                  | Entry          | Lineage                                   |
+        | ------------------------------------------- | -------------- | ----------------------------------------- |
+        | Back, Forward, reload, redraw, replaceState | one seen       | restored from that entry                  |
+        | switch back to a tab                        | one seen       | restored from that entry                  |
+        | NAVIGATE, a redirect after it               | new            | guessed if it asked for or landed on one  |
+        |                                             |                | the run built                             |
+        | Back past the start (the caller's page)     | new            | guessed if it landed on one the run built |
+        | click, Enter, pushState, a new tab or popup | new            | inherited from the page it came from      |
+        | the opening, or the front-page fallback     | new            | as the run began (`run` sets it)          |
+        | the browser names no entry                  | none           | as for a new entry, each time             |
+        """
+        last = state.history[-1] if state.history else None
+        executed = last is not None and last.outcome is StepOutcome.EXECUTED
+        address, lineage = _unfragmented(observation.url), state.lineage
+        entry = observation.history_entry
+        built = {_unfragmented(url) for url in state.invented}
+        if entry is not None and entry in lineage.entries:
+            state.guessing = lineage.entries[entry]
+        else:
+            if executed and last is not None and last.operation is Operation.NAVIGATE:
+                # A redirect is the same navigation: what the run asked for decides, as well as where it landed.
+                state.guessing = address in built or _unfragmented(last.target or "") in built
+            elif executed and last is not None and last.operation is Operation.BACK:
+                state.guessing = address in built
+            if entry is not None:
+                lineage.entries[entry] = state.guessing
+        lineage.addresses[address] = state.guessing
+
+    @staticmethod
     def _note_effect(state: _RunState, observation: Observation) -> None:
         """Record on the last action what it did, which the next choice and recovery both read."""
         if state.transaction_candidates and state.transaction_candidates[-1].landed_url is None:
             state.transaction_candidates[-1].landed_url = observation.url
             state.transaction_candidates[-1].landed_status = observation.response_status
-        last = state.history[-1] if state.history else None
-        navigated = (
-            last is not None
-            and last.operation in {Operation.NAVIGATE, Operation.BACK}
-            and last.outcome is StepOutcome.EXECUTED
-        )
-        if navigated:
-            state.guessing = _unfragmented(observation.url) in {_unfragmented(url) for url in state.invented}
-        address, lineage = _unfragmented(observation.url), state.lineage
-        # Each arrival is judged afresh; a redraw of the page the run is on keeps the judgement it arrived with.
-        if navigated or address != lineage.at or address not in lineage.addresses:
-            lineage.addresses[address] = state.guessing
-        lineage.at = address
+        Agent._note_lineage(state, observation)
         # An error document has the requested address too, but never proves the destination loaded.
         if observation.response_status is not None and observation.response_status >= 400:
             state.visited.pop(observation.url, None)

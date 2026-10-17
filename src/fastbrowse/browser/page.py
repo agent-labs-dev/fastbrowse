@@ -498,11 +498,13 @@ class CdpPage(Page):
         if dialog is not None:
             # A JavaScript dialog blocks the renderer, so any page evaluate would hang until it is handled.
             return self._dialog_observation(dialog)
-        history = asyncio.create_task(self._can_go_back())
+        history = asyncio.create_task(self._history())
         snapshot = asyncio.create_task(self._snapshot_all_frames())
         response = asyncio.create_task(self._document_response())
         try:
-            can_go_back, (frames, inaccessible), document = await asyncio.gather(history, snapshot, response)
+            (can_go_back, history_entry), (frames, inaccessible), document = await asyncio.gather(
+                history, snapshot, response
+            )
         finally:
             history.cancel()
             snapshot.cancel()
@@ -556,18 +558,26 @@ class CdpPage(Page):
             dialog=self._session.pending_dialog(),
             inaccessible_frames=inaccessible,
             can_go_back=can_go_back,
+            history_entry=history_entry,
         )
 
-    async def _can_go_back(self) -> bool:
-        # Only whether BACK is offered hangs on this, and BACK reads history again before it goes. A history read
-        # that failed (CDP -32000) as a run's first page opened ended the run at step 0.
+    async def _history(self) -> tuple[bool, str | None]:
+        """Whether BACK is offered, and which history entry of which tab the page is.
+
+        Only these hang on it, and BACK reads history again before it goes. A history read that failed (CDP -32000)
+        as a run's first page opened ended the run at step 0.
+        """
+        session_id = self._session.active_session_id
         try:
-            history = await self._session.client.send.Page.getNavigationHistory(
-                params=None, session_id=self._session.active_session_id
-            )
+            history = await self._session.client.send.Page.getNavigationHistory(params=None, session_id=session_id)
         except BrowserError:
-            return False
-        return self._back_target(history) is not None
+            return False, None
+        entries, index = history["entries"], history["currentIndex"]
+        entry = f"{session_id}:{entries[index]['id']}" if 0 <= index < len(entries) else None
+        return self._back_target(history) is not None, entry
+
+    async def _can_go_back(self) -> bool:
+        return (await self._history())[0]
 
     def _back_target(self, history: GetNavigationHistoryReturns) -> int | str | None:
         """The earlier same-origin history entry's id, else the start page this tab skipped, else None."""
