@@ -906,6 +906,64 @@ async def test_a_control_repurposed_while_scrolled_clear_of_a_band_is_never_pres
     assert (keys, pressed, values, ad_clicks) == (0, None, ["", ""], 0)
 
 
+@pytest.mark.parametrize(
+    ("operation", "label", "role", "band"),
+    [
+        (Operation.CLICK, "Login", "menu", True),
+        (Operation.ENTER, "Username", "dialog", True),
+        (Operation.FILL, "Username", "dialog", True),
+        (Operation.FILL, "Username", "dialog", False),
+    ],
+)
+async def test_nothing_is_sent_through_an_obstruction_that_focusing_the_control_opened(
+    page: CdpPage,
+    browser_session: BrowserSession,
+    main_site: str,
+    operation: Operation,
+    label: str,
+    role: str,
+    band: bool,
+) -> None:
+    """Focusing a control can open a menu or a dialog over it while the control itself stays as it was, so its
+    guard still holds. Keys go to the focused control whatever is drawn over it, and the cover was judged only
+    before focus: Login was pressed through the menu its focus had opened. A field clicked with the pointer, its
+    focus opening a dialog over it, was typed into behind the dialog the same way."""
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    await eval_value(browser_session, session_id, _anchored_form(scrolls=False, band="div"))
+    assert (
+        await eval_value(
+            browser_session,
+            session_id,
+            ("" if band else "document.querySelector('ins').remove(); ")
+            + "window.keys = 0; document.addEventListener('keydown', () => window.keys++, true); "
+            f"const e = document.querySelector({'#go' if label == 'Login' else '[name=user]'!r}); "
+            "e.addEventListener('focus', () => { const r = e.getBoundingClientRect(), o = "
+            f"document.createElement('div'); o.setAttribute('role', {role!r}); o.textContent = 'Opened on focus'; "
+            "o.style.cssText = `position:absolute;z-index:99;background:white;left:${scrollX + r.left - 10}px;"
+            "top:${scrollY + r.top - 10}px;width:${r.width + 20}px;height:${r.height + 20}px`; "
+            "document.body.append(o); }, {once: true}); true",
+        )
+        is True
+    )
+    obs = await page.observe()
+    target = find(obs, label).id
+    action = (
+        Action(operation=operation, target_id=target, text="ada")
+        if operation is Operation.FILL
+        else Action(operation=operation, target_id=target)
+    )
+    result = await page.act(action, obs)
+    assert result.outcome is StepOutcome.COVERED, result.detail
+    assert role in (result.detail or "")
+    keys, pressed, submitted, value = await eval_value(
+        browser_session,
+        session_id,
+        "[window.keys, window.pressed, window.submitted, document.querySelector('[name=user]').value]",
+    )
+    assert (keys, pressed, submitted, value) == (0, None, None, "")
+
+
 async def test_a_full_window_frame_over_the_control_is_reported_with_the_frames_own_controls(
     page: CdpPage, browser_session: BrowserSession, main_site: str, iframe_site: str
 ) -> None:

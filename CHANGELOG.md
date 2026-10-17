@@ -20,7 +20,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   the page cannot move it clear it is pressed or typed into from the keyboard; nothing in the band is ever clicked,
   and the control is checked unchanged before each key, as it is before each click. A run whose form's submit button
   sat under such a band could end `stuck`. A dialog, an open menu or popover, a cover over the whole window or a
-  panel drawn over the control in the page's flow is still reported as covering it. A frame from another site
+  panel drawn over the control in the page's flow is still reported as covering it, and so is one that focusing the
+  control opened: a key or typed text is sent only once nothing has been drawn over the focused control, whether it
+  was reached from the keyboard or clicked. A frame from another site
   covering the whole window, such as a full-screen ad, is now reported with its own close control, so the run can close
   it as a person would; it was reported with none, and the run could only retry the covered control. The frame's
   links are never named.

@@ -1145,11 +1145,31 @@ class CdpPage(Page):
         key = _ACTIVATION_KEY.validate_python(await self._evaluate(session_id, f"({_ACTIVATION_KEY_JS})({local_id})"))
         if key is None or not await self._focus(session_id, local_id):
             return StepOutcome.COVERED, await self._covered_detail(target)
-        # Focus handlers can repurpose it as scroll handlers can.
-        if not await self._guard_holds(target):
-            return StepOutcome.STALE, _CHANGED
+        if refusal := await self._keys_reach(target, guarded=True):
+            return refusal.outcome, refusal.detail
         await self._press_key(session_id, key)
         return StepOutcome.EXECUTED, "Pressed from the keyboard: a band fixed to the window covers it."
+
+    async def _keys_reach(
+        self, target: tuple[str, str, int, list[object] | None], *, guarded: bool, local_id: int | None = None
+    ) -> _Refusal | None:
+        """Why a key or text, sent now, would not go to the control as it was authorized, or None if it would.
+
+        Asked after focusing and right before each key or insertion, on every path that sends one. Focus handlers
+        can repurpose the control as scroll handlers can, and with `guarded` its guard is checked again. They can
+        also open a dialog, a menu or a popover over it without changing the control at all: keys still reach the
+        focused control, so an Enter checked only before focus pressed it through the menu the focus had opened.
+        A band over it does not refuse; that is what the keyboard route is for. `local_id` names the field focus
+        was handed to, when it was.
+        """
+        session_id, frame, own_id, guard = target
+        if guarded and not await self._guard_holds(target):
+            return _Refusal(StepOutcome.STALE, _CHANGED)
+        node = own_id if local_id is None else local_id
+        cover = _COVER.validate_python(await self._evaluate(session_id, f"({_COVER_JS})({node})"))
+        if cover in ("obstruction", "other"):
+            return _Refusal(StepOutcome.COVERED, await self._covered_detail((session_id, frame, node, guard)))
+        return None
 
     async def _guard_holds(self, target: tuple[str, str, int, list[object] | None]) -> bool:
         session_id, _frame, local_id, guard = target
@@ -1251,9 +1271,10 @@ class CdpPage(Page):
                 )
             if not focused:
                 return StepOutcome.FAILED, "target did not receive keyboard focus"
-            # No pointer press rechecked the field, so the text goes only to the field that was authorized.
-            if keyboard and not await self._guard_holds(target):
-                return StepOutcome.STALE, _CHANGED
+            # No pointer press rechecked the field on the keyboard route, so the text goes only to the field that
+            # was authorized, and on either route only to a field nothing has since been drawn over.
+            if refusal := await self._keys_reach(target, guarded=keyboard, local_id=local_id):
+                return refusal.outcome, refusal.detail
             # A secret must be checked and inserted in one renderer task: CDP insertText would leave a
             # navigation/focus race between checking the origin and dispatching the secret to the page.
             script = (
@@ -1425,8 +1446,8 @@ class CdpPage(Page):
                 return route.outcome, route.detail
             if not await self._focus(session_id, local_id):
                 return StepOutcome.FAILED, "target did not receive keyboard focus"
-            if point == "covered" and not await self._guard_holds(target):
-                return StepOutcome.STALE, _CHANGED
+            if refusal := await self._keys_reach(target, guarded=point == "covered"):
+                return refusal.outcome, refusal.detail
         await self._press_key(session_id, key)
         return StepOutcome.EXECUTED, None
 
