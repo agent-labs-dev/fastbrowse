@@ -2393,7 +2393,7 @@ async def test_a_search_at_a_guess_path_is_the_runs_own_only_once_it_navigated_o
 
 
 async def test_a_guessed_address_reached_again_by_the_run_itself_is_judged_by_that_visit() -> None:
-    """A form that keeps its search outside the address can bring a run that left a guessed search back to the very
+    """A form that keeps its search outside the address can bring a run that left a guessed search back to the exact
     address it guessed, now holding the search the run set itself. Judged once per address, the fresh results there
     stayed guessed; the quote read on the guess itself stays guessed whatever the address later shows."""
     guess, start = "https://example.test/flights?q=BRS+to+YRK", "https://example.test/flights"
