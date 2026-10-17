@@ -107,17 +107,34 @@ _HIT_TEST_JS = (
     "if (Array.isArray(point)) return point; } } return 'covered'; })"
 )
 
-# An ad anchored to the window's foot covered a login form's button, and the run ended stuck after clicking the ad's
+_SCROLL_EVENT_SECONDS = 3.0
+"""Longest wait for the scroll event a scrolled window owes before the control is left untouched as unsettled."""
+
+# A band fixed to the window's foot covered a form's submit button, and the run ended stuck after clicking the band's
 # own close control did nothing. A band fixed to the window covers a place on the screen, not a control, so the
 # control is scrolled to each alignment in turn and kept at the first where a point of it is its own again. The guard
 # is checked in the same task: a stale control must never be scrolled into view.
+#
+# It resolves only once the window's own scroll event has been dispatched, when any alignment moved the window: the
+# page's scroll handlers, which can repurpose the control, run before this listener, added after theirs. A wait for a
+# drawn frame gave up after 100ms without one, and comparing only where the window started and ended skipped the wait
+# when 'end' brought it back to the top, so a fill went ahead before the handler ran. A wait with any deadline can lose
+# the race on a loaded machine, so a scroll whose event did not arrive in time, or that a hidden page will only
+# deliver once something shows it, is reported 'unsettled' and nothing is acted on.
 _UNCOVER_JS = (
-    "((id, guard) => { const r = window.__fastbrowse, e = r?.nodes.get(id); "
+    "(async (id, guard) => { const r = window.__fastbrowse, e = r?.nodes.get(id); "
     "if (!e?.isConnected || JSON.stringify(r.guard(e)) !== JSON.stringify(guard)) return null; "
-    "for (const block of ['center', 'start', 'end']) { "
+    "const w = e.ownerDocument.defaultView; let moved = false; "
+    "const dispatched = new Promise(done => w.addEventListener('scroll', done, {once: true})); "
+    "let point = 'covered'; "
+    "for (const block of ['center', 'start', 'end']) { const at = [w.scrollX, w.scrollY]; "
     "e.scrollIntoView({block, inline: 'nearest', behavior: 'instant'}); "
-    "const point = (" + _HIT_TEST_JS + ")(id, false); if (point !== 'covered') return point; } "
-    "return 'covered'; })"
+    "moved ||= w.scrollX !== at[0] || w.scrollY !== at[1]; "
+    "point = (" + _HIT_TEST_JS + ")(id, false); if (point !== 'covered') break; } "
+    "if (moved && (e.ownerDocument.hidden || !await Promise.race(["
+    "dispatched.then(() => true), "
+    f"new Promise(done => setTimeout(() => done(false), {_SCROLL_EVENT_SECONDS * 1000}))]))) return 'unsettled'; "
+    "return point; })"
 )
 
 _OBSTRUCTIONS = 'dialog,[role=dialog],[role=alertdialog],[aria-modal="true"],[role=menu],[role=listbox],[popover]'
@@ -235,7 +252,7 @@ _LANDED = TypeAdapter(tuple[bool, bool])
 _FILL_TARGET = TypeAdapter(tuple[int | None, bool, bool | None])
 _KEYS = {"Enter": ("Enter", "\r", 13), "Escape": ("Escape", "", 27), " ": ("Space", " ", 32)}
 """Each key pressed: its code, the text it types and its Windows virtual key code."""
-_POINT = TypeAdapter(tuple[float, float] | Literal["covered"] | None)
+_POINT = TypeAdapter(tuple[float, float] | Literal["covered", "unsettled"] | None)
 _COVER = TypeAdapter(Literal["obstruction", "band", "other", "none"] | None)
 _ACTIVATION_KEY = TypeAdapter(Literal["Enter", " "] | None)
 _CHANGED = "control changed before keyboard use"
@@ -1016,6 +1033,10 @@ class CdpPage(Page):
         if _COVER.validate_python(await self._evaluate(session_id, f"({_COVER_JS})({local_id})")) != "band":
             return _Refusal(StepOutcome.COVERED, await self._covered_detail(target))
         if scroll:
+            # A page in a background tab draws no frames, so its scroll handlers would run only once the keyboard
+            # route brought it forward to focus the control, after every check here.
+            if await self._evaluate(session_id, "document.hidden") is True:
+                await self._session.bring_to_front()
             point = _POINT.validate_python(
                 await self._evaluate(session_id, f"({_UNCOVER_JS})({local_id}, {json.dumps(guard)})")
             )
@@ -1025,6 +1046,8 @@ class CdpPage(Page):
                 await asyncio.wait_for(self._evaluate(session_id, _PRESENTED_JS), 0.5)
             if point is None:
                 return _Refusal(StepOutcome.STALE, "target disconnected")
+            if point == "unsettled":
+                return _Refusal(StepOutcome.STALE, "page did not finish scrolling the control clear")
             if point != "covered":
                 return point
             # The last alignment can have put the control under something else.
@@ -1333,7 +1356,7 @@ class CdpPage(Page):
             _session_id, _frame, local_id, _guard = target
             if point is None:
                 return StepOutcome.STALE, "target disconnected"
-            # A key needs focus, not the pointer: Enter in a login form under an anchored ad was refused as covered.
+            # A key needs focus, not the pointer: Enter in a field under a band fixed to the window was refused.
             if point == "covered" and isinstance(route := await self._route_around(target, scroll=False), _Refusal):
                 return route.outcome, route.detail
             if not await self._focus(session_id, local_id):

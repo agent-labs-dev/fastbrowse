@@ -16,7 +16,7 @@ from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence, Se
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import Self
-from urllib.parse import parse_qsl, urljoin, urlsplit
+from urllib.parse import SplitResult, parse_qsl, urljoin, urlsplit
 
 from pydantic import BaseModel, Field, JsonValue
 
@@ -373,7 +373,7 @@ class _Lineage:
         # The same page read again off the guess is the page the run reached itself, so that reading stands. Text
         # alone does not name a page: another address drawing identical text released the guessed one's hold.
         for source in sources:
-            key = (_unfragmented(source), capture)
+            key = (_search_address(source), capture)
             if guessing:
                 self.captures.setdefault(key, True)
             else:
@@ -1652,15 +1652,15 @@ class Agent:
         """
         last = state.history[-1] if state.history else None
         executed = last is not None and last.outcome is StepOutcome.EXECUTED
-        address, lineage = _unfragmented(observation.url), state.lineage
+        address, lineage = _search_address(observation.url), state.lineage
         entry = observation.history_entry
-        built = {_unfragmented(url) for url in state.invented}
+        built = {_search_address(url) for url in state.invented}
         if entry is not None and entry in lineage.entries:
             state.guessing = lineage.entries[entry]
         else:
             if executed and last is not None and last.operation is Operation.NAVIGATE:
                 # A redirect is the same navigation: what the run asked for decides, as well as where it landed.
-                state.guessing = address in built or _unfragmented(last.target or "") in built
+                state.guessing = address in built or _search_address(last.target or "") in built
             elif executed and last is not None and last.operation is Operation.BACK:
                 state.guessing = address in built
             if entry is not None:
@@ -4597,12 +4597,12 @@ def _guessed(
 
     A guessed address can load a real page about the wrong thing, so a doubted answer read on one is always shown
     to the verifier. `searches` narrows it to built searches, whose state is in the address (the one built, or the
-    one the site wrote back): a page of the right shape with the wrong results, as a proposed Google Flights address
-    was, is sent to the verifier even when Jev does not doubt it.
+    one the site wrote back): a page of the right shape with the wrong results, as a proposed search address can
+    load, is sent to the verifier even when Jev does not doubt it.
 
-    Matching by path alone held every Google Flights search guessed, since each one lives at /travel/flights: a run
-    refused there went back to the start page, set the search through the form, and its results were refused as
-    the guessed page until it stopped stuck. So a quote read after the run left the guess for an address it did not
+    Matching by path alone held every search guessed on a site whose searches all share one path: a run refused
+    there went back to the start page, set the search through the form, and its results were refused as the
+    guessed page until it stopped stuck. So a quote read after the run left the guess for an address it did not
     build is its own, by its `lineage`. One read on the guess, or never seen by the run, as an address a site wrote
     back into a fact can be, is matched by its path."""
     guessed = _guessed_page(invented, lineage, searches=searches)
@@ -4620,8 +4620,8 @@ def _guessed_page(
     def guessed(evidence: Evidence) -> bool:
         url = evidence.url
         # Lineage only clears a path match, never adds one: a page clicked to off the guess is judged by its path.
-        reading = (_unfragmented(url), evidence.capture_sha256)
-        on_guess = known.captures[reading] if reading in known.captures else known.addresses.get(_unfragmented(url))
+        reading = (_search_address(url), evidence.capture_sha256)
+        on_guess = known.captures[reading] if reading in known.captures else known.addresses.get(_search_address(url))
         return (
             on_guess is not False and _place(url) in places and (not searches or places[_place(url)] or _searched(url))
         )
@@ -4634,12 +4634,19 @@ def _sources(capture: Capture) -> set[str]:
     return {capture.url, *(block.source_url for block in capture.blocks if block.source_url)}
 
 
-def _unfragmented(url: str) -> str:
-    return urlsplit(url)._replace(fragment="").geturl()
+def _search_parts(url: str) -> SplitResult:
+    """An address read for the search state a page keeps in it, its query and its fragment alike. Lineage and
+    `_searched` both read addresses through this: lineage once dropped the fragment, so on a site routing its
+    searches by fragment a corrected `/search#new` matched the built `/search#old` and stayed guessed."""
+    return urlsplit(url)
+
+
+def _search_address(url: str) -> str:
+    return _search_parts(url).geturl()
 
 
 def _searched(url: str) -> bool:
-    parts = urlsplit(url)
+    parts = _search_parts(url)
     return bool(parts.query or parts.fragment)
 
 

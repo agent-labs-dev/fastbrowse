@@ -392,7 +392,7 @@ async def llm_verify(
         "for. Name in ungrounded every requirement whose facts were read from such a page, even when it has "
         "evidence. An address this run built from the task can land on the wrong search: judge such a page by "
         "what it shows, not by how the run reached it. An answer states the terms a value was quoted under, "
-        "such as a round trip."
+        "such as what it covers and the dates it applies to."
     )
     messages = [
         Message(

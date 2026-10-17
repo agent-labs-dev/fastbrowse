@@ -285,7 +285,7 @@ class Notes:
 
     def refused(self, key: str) -> bool:
         """Whether a fact answers nothing and is, or concludes from, a held reading: context the run may see while
-        choosing what to do, never something to cite. Offered to the composer, a held fare was cited in an answer
+        choosing what to do, never something to cite. Offered to the composer, a held value was cited in an answer
         whose requirement it could no longer evidence."""
         if not self._discredited or self._requirements.get(key):
             return False
@@ -409,9 +409,9 @@ class Notes:
         Evidence is held only if it was read while on a built address, and only that reading: `guessed` says
         whether a reading was, and is asked again whenever a hold is checked.
 
-        Reopening alone was not enough on Google Flights: the next read, on the search the run had since rebuilt
-        through the form, concluded the same round-trip fare by drawing on the reopened quotes, and every DONE got
-        the same refusal until the run stopped stuck. Holding more than the guessed readings left requirements open
+        Reopening alone was not enough: the next read, on the search the run had since rebuilt through the form,
+        concluded the refused value again by drawing on the reopened quotes, and every DONE got the same refusal
+        until the run stopped stuck. Holding more than the guessed readings left requirements open
         for good: a quote from a page the run reached itself, refused alongside a guessed one, or the same text read
         again once the run set the search up itself. A conclusion or tally is held through the readings it rests on,
         never by its own name, so a recount on the right page still counts. Held facts stay as context.

@@ -5487,4 +5487,4 @@ async def test_the_composer_keeps_the_terms_a_value_was_quoted_under() -> None:
     llm = ScriptedLLM([{"claims": []}])
     await compose(llm, "Cheapest nonstop fare on 14 November?", plan, Notes())
     system = llm.calls[0][1][0].content
-    assert "the terms a value is quoted under, such as a fare's trip type and dates" in system
+    assert "the terms a value is quoted under, such as what it covers, the dates it applies to" in system

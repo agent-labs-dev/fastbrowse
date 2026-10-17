@@ -2662,6 +2662,32 @@ async def test_back_to_a_search_rebuilt_at_the_guessed_address_stays_the_runs_ow
     assert _guessed(plan, Notes((_fare(_GUESS, "guess"),)), state.invented, lineage=state.lineage) == {"r1"}
 
 
+async def test_a_corrected_search_kept_in_the_fragment_is_the_runs_own() -> None:
+    """A site that routes its searches by fragment keeps the whole search in it. Lineage dropped the fragment while
+    `_searched` read it as the search, so a corrected `/search#new` matched the built `/search#old` and stayed
+    guessed. A reload of the guessed search stays guessed."""
+    old, new = "https://example.test/search#from=BRS&to=YRK", "https://example.test/search#from=BRS&to=LDS"
+    state = await run_state()
+    state.invented, state.guessing = {old}, True
+    Agent._note_effect(state, _entry(old, "t:1"))
+    state.lineage.read("old", (old,), guessing=state.guessing)
+    _did(state, Operation.NAVIGATE, new)
+    Agent._note_effect(state, _entry(new, "t:2"))
+    assert state.guessing is False
+    state.lineage.read("new", (new,), guessing=state.guessing)
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    assert _guessed(plan, Notes((_fare(new, "new"),)), state.invented, lineage=state.lineage) == set()
+    _did(state, Operation.NAVIGATE, old)
+    Agent._note_effect(state, _entry(old, "t:3"))
+    assert state.guessing is True
+    _did(state, Operation.CLICK, None)
+    Agent._note_effect(state, _entry(old, "t:3"))
+    assert state.guessing is True
+    assert _guessed(plan, Notes((_fare(old, "old"),)), state.invented, lineage=state.lineage) == {"r1"}
+
+
 _SHORTCUT = HistoryEntry(operation=None, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
 
 

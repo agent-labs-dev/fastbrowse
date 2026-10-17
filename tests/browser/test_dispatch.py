@@ -894,8 +894,9 @@ async def test_a_control_repurposed_while_scrolled_clear_of_a_band_is_never_pres
     }[control]
     result = await page.act(action, obs)
     assert result.outcome is StepOutcome.STALE, result.detail
-    # Refused by the keyboard route's own check, not by a pointer path the bands never let it take.
-    assert result.detail == "control changed before keyboard use"
+    # Refused by the route around the bands, never by a pointer path they do not let it take: the control changed,
+    # or, on a loaded machine, its scroll had not been seen to finish, so nothing was acted on either way.
+    assert result.detail in {"control changed before keyboard use", "page did not finish scrolling the control clear"}
     keys, pressed, values, ad_clicks = await eval_value(
         browser_session,
         session_id,
