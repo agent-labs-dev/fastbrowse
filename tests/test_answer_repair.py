@@ -61,8 +61,9 @@ async def test_missing_player_reports_are_repaired_from_notes_or_remain_unverifi
     if retained_report:
         responses.extend(
             {"judgments": {f"output_{index}": "yes"}, "reason": "Both player report and author reply are quoted."}
-            for _ in range(2)
+            # The source and assertion audits are queued field by field: each field's source, then its assertion.
             for index in range(2)
+            for _ in range(2)
         )
     llm = ScriptedLLM(responses)
 

@@ -6,6 +6,7 @@ when those answers leave completion uncertain.
 
 import asyncio
 import hashlib
+import itertools
 import json
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from enum import StrEnum
@@ -1102,9 +1103,16 @@ async def _check_answer_outputs(
     # One cap over both audits, which run side by side: the requests in flight stay at the four one audit sent.
     semaphore = asyncio.Semaphore(4)
 
-    async def audit(messages: list[Message], fields: Mapping[str, object], reasons: dict[str, str]) -> dict[str, str]:
+    type _Stage = tuple[list[Message], Mapping[str, object], dict[str, str]]
 
-        async def one(key: str, field: object) -> tuple[str, str]:
+    async def audit(*stages: _Stage) -> list[dict[str, str] | BaseException]:
+        """Each stage's judgments, or the first error that stage raised.
+
+        The fields of every stage are queued at the cap alternately, one stage's field then the next: queued stage
+        by stage, the first stage's fields took every slot of the shared cap, and the stage beside it waited behind
+        all of them as if the two ran one after the other."""
+
+        async def one(messages: list[Message], key: str, field: object, reasons: dict[str, str]) -> tuple[str, str]:
             schema = _assessment_schema(key)
             records = field.get("reported_claims", field.get("sources", ())) if isinstance(field, dict) else ()
             refs = {source["url_ref"] for record in records for source in record["cited_sources"]}
@@ -1164,12 +1172,23 @@ async def _check_answer_outputs(
                 reasons[key] = verdict.reason
                 return key, verdict.judgment
 
+        queues = [
+            [(index, (messages, key, field, reasons)) for key, field in fields.items()]
+            for index, (messages, fields, reasons) in enumerate(stages)
+        ]
+        jobs = [job for row in itertools.zip_longest(*queues) for job in row if job is not None]
         # One field's quoted value cannot answer another field; every receipt settles before an error returns.
-        assessed = await asyncio.gather(*(one(key, field) for key, field in fields.items()), return_exceptions=True)
-        for result in assessed:
+        assessed = await asyncio.gather(*(one(*job) for _, job in jobs), return_exceptions=True)
+        results: list[dict[str, str] | BaseException] = [{} for _ in stages]
+        for (index, _), result in zip(jobs, assessed, strict=True):
+            judged = results[index]
+            if isinstance(judged, BaseException):
+                continue
             if isinstance(result, BaseException):
-                raise result
-        return dict(result for result in assessed if not isinstance(result, BaseException))
+                results[index] = result
+            else:
+                judged[result[0]] = result[1]
+        return results
 
     # Asked for "the last Saturday of the month after next", the audit saw 26/12/2026 quoted from the field and
     # refused it for want of today's date, which no page states. The run's clock is code's, not the page's.
@@ -1335,13 +1354,11 @@ async def _check_answer_outputs(
     # Both settle before either failure propagates, so neither is billed after the check has returned.
     generated: dict[str, str] | BaseException | None = None
     if together:
-        available, generated = await asyncio.gather(
-            audit(source_messages, source_fields, source_reasons),
-            audit(assertion_messages, fields, reasons),
-            return_exceptions=True,
+        available, generated = await audit(
+            (source_messages, source_fields, source_reasons), (assertion_messages, fields, reasons)
         )
     else:
-        available = await audit(source_messages, source_fields, source_reasons)
+        (available,) = await audit((source_messages, source_fields, source_reasons))
     if isinstance(available, BaseException):
         raise available
     absent = [criterion for key, criterion in uncertain.items() if available.get(key) != "yes"]
@@ -1357,8 +1374,8 @@ async def _check_answer_outputs(
             )
         return reject(absent)
     if generated is None:
-        generated = await audit(assertion_messages, fields, reasons)
-    elif isinstance(generated, BaseException):
+        (generated,) = await audit((assertion_messages, fields, reasons))
+    if isinstance(generated, BaseException):
         raise generated
     failed = [
         uncertain[key]

@@ -150,3 +150,31 @@ async def test_an_identity_call_that_finished_is_billed_when_the_check_is_cancel
     with pytest.raises(asyncio.CancelledError):
         await checking
     assert [line.dollars for line in ledger.lines] == [0.7]
+
+
+async def test_both_audits_progress_together_when_their_fields_exceed_the_cap() -> None:
+    """Queued stage by stage, six source fields took all four slots and the assertion audit waited behind them."""
+    notes, answer = _answer()
+    log: list[tuple[str, str]] = []
+
+    class LoggingLLM(AuditLLM):
+        async def generate(self, purpose, messages, schema, **kwargs):
+            if schema.__name__ == "_OutputIdentities":
+                return await super().generate(purpose, messages, schema, **kwargs)
+            stage = _stage(messages)
+            log.append(("start", stage))
+            await asyncio.sleep(0.01)
+            generated = await super().generate(purpose, messages, schema, **kwargs)
+            log.append(("end", stage))
+            return generated
+
+    checks = tuple(f"Report the price, part {index}." for index in range(6))
+    assert await check_answer_outputs(RoutingJev(), LoggingLLM(), answer, notes, checks)
+    first_end = log.index(next(entry for entry in log if entry[0] == "end"))
+    assert {stage for event, stage in log[:first_end] if event == "start"} == {"source", "assertion"}
+    # The cap of four still holds across both stages.
+    in_flight = peak = 0
+    for event, _ in log:
+        in_flight += 1 if event == "start" else -1
+        peak = max(peak, in_flight)
+    assert peak == 4
