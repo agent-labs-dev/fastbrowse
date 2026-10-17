@@ -692,10 +692,12 @@ async def test_covered_target_reports_visible_overlay_controls(
     if detail_race:
         evaluate = page._evaluate
 
-        async def racing_evaluate(session_id: str, expression: str, *, context_id: int | None = None) -> object:
+        async def racing_evaluate(
+            session_id: str, expression: str, *, context_id: int | None = None, unique_context_id: str | None = None
+        ) -> object:
             if "let cover = hit?.closest" in expression:
                 raise BrowserError("Execution context changed while describing the obstruction")
-            return await evaluate(session_id, expression, context_id=context_id)
+            return await evaluate(session_id, expression, context_id=context_id, unique_context_id=unique_context_id)
 
         monkeypatch.setattr(page, "_evaluate", racing_evaluate)
     before = await page.observe()

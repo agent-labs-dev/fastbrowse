@@ -19,6 +19,7 @@ from typing import Any, Self, cast
 from cdp_use.cdp.fetch.events import RequestPausedEvent
 from cdp_use.cdp.fetch.types import RequestPattern
 from cdp_use.cdp.page.events import JavascriptDialogClosedEvent, JavascriptDialogOpeningEvent, ScreencastFrameEvent
+from cdp_use.cdp.runtime.events import ExecutionContextCreatedEvent
 from cdp_use.cdp.target.commands import CreateTargetParameters
 from cdp_use.cdp.target.events import (
     AttachedToTargetEvent,
@@ -132,6 +133,9 @@ class _HideEndpoint(logging.Filter):
 
 logging.getLogger("cdp_use.client").addFilter(_HideEndpoint())
 
+
+STATUS_WORLD = "fastbrowse-status"
+"""The isolated world a tab's HTTP status is read in, out of reach of the page's scripts."""
 
 _SERVER_ERROR = -32000
 """The code Chrome answers when the document or frame a command addressed is gone, as after a navigation."""
@@ -313,6 +317,8 @@ class BrowserSession:
         self._open_before: set[str] = set()
         """Targets already open when an attached session began, which never join the run."""
         self._popups: dict[str, tuple[str, asyncio.Future[bool]]] = {}
+        self._status_contexts: dict[tuple[str, int], str] = {}
+        """(session, context id) -> unique id, for each world named `STATUS_WORLD` Chrome reported creating."""
         """Popup target id -> (opener target id, whether it was adopted), in the order they opened."""
         self._active_target_id = ""
         # A scoped run casts nothing: a frame is pixels of whatever the tab shows, and the browser's reports of
@@ -702,6 +708,7 @@ class BrowserSession:
 
     def _register_events(self) -> None:
         client = self.client
+        client.register.Runtime.executionContextCreated(self._on_context_created)
         client.register.Target.attachedToTarget(self._on_attached)
         client.register.Target.detachedFromTarget(self._on_detached)
         client.register.Target.targetCreated(self._on_target_created)
@@ -727,6 +734,15 @@ class BrowserSession:
         self._background.discard(task)
         if not task.cancelled():
             task.exception()
+
+    def _on_context_created(self, event: ExecutionContextCreatedEvent, session_id: str | None) -> None:
+        context = event["context"]
+        if session_id is not None and context.get("name") == STATUS_WORLD:
+            self._status_contexts[(session_id, context["id"])] = context["uniqueId"]
+
+    def status_context(self, session_id: str, context_id: int) -> str | None:
+        """The unique id of the status world `context_id` names on `session_id`, once, if Chrome reported it."""
+        return self._status_contexts.pop((session_id, context_id), None)
 
     # -- Target/frame tracking -------------------------------------------------------------------------
 

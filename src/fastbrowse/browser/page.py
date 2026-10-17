@@ -12,7 +12,6 @@ import base64
 import hashlib
 import json
 import re
-import secrets
 import time
 from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import suppress
@@ -27,7 +26,7 @@ from cdp_use.cdp.runtime.commands import EvaluateParameters
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from fastbrowse.browser.cursor import CursorFeedback, Geometry
-from fastbrowse.browser.session import BrowserSession, OriginNotAllowed
+from fastbrowse.browser.session import STATUS_WORLD, BrowserSession, OriginNotAllowed
 from fastbrowse.config import Config
 from fastbrowse.datafiles import data_file
 from fastbrowse.models import TARGETED, Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome, Unavailable
@@ -284,8 +283,6 @@ _POINTER_FIRST = frozenset({Operation.CLICK, Operation.FILL, Operation.HOVER})
 """Operations that move the pointer to the point `act` measured before anything else."""
 _MEASURE_DRAWN_SECONDS = 2.0
 """Bound on the measuring call that also waits for a drawn frame, out of the page's reach."""
-_KEPT_WORLD_SECONDS = 2.0
-"""Bound on reading the HTTP status from a kept world, past which a new world is made."""
 _NAVIGATE_ATTEMPTS = 4
 """Two tries a second apart were not enough behind a cloud browser's proxy: in three 0.5.8 evals of about 300 runs,
 a first page failed both, once on a certificate error, twice timing out connecting and once never becoming ready,
@@ -391,8 +388,8 @@ class CdpPage(Page):
         self._back_to: dict[str, str] = {}
         self._unanswered: dict[str, float] = {}
         """Child frame session -> when its last read missed the full deadline."""
-        self._status_worlds: dict[str, tuple[int, str]] = {}
-        """Tab session -> the isolated world its HTTP status is read in, and the nonce that proves the world ours."""
+        self._status_worlds: dict[str, str] = {}
+        """Tab session -> the unique id of the isolated world its HTTP status is read in."""
 
     @property
     def artifacts(self) -> tuple[Artifact, ...]:
@@ -1644,36 +1641,21 @@ class CdpPage(Page):
             "? navigation.responseStatus || null : null}; })()"
         )
         # Making the world took two round trips more than reading it, on every observation, so one is kept until
-        # its document goes. Chrome reuses context ids across renderer processes, so a kept id can name another
-        # document's world, even the page's own; only the world holding this nonce, which no page script can
-        # read, is trusted to be ours.
+        # its document goes. It is kept by the unique id Chrome gives each context, never by its context id: Chrome
+        # reuses context ids across renderer processes, so a kept context id could name another document's world,
+        # even the page's own, while a unique id names this world or nothing.
         if (kept := self._status_worlds.get(session_id)) is not None:
-            context_id, nonce = kept
-            # The marker is read off its descriptor, so a getter the page put there never runs, and from out here
-            # with a deadline, so a world the page controls cannot hold the read either way.
-            with suppress(BrowserError, TimeoutError):
-                async with asyncio.timeout(_KEPT_WORLD_SECONDS):
-                    raw = await self._evaluate(
-                        session_id,
-                        "Object.getOwnPropertyDescriptor(globalThis, '__fastbrowseStatus')?.value === "
-                        f"{json.dumps(nonce)} ? {read} : null",
-                        context_id=context_id,
-                    )
-                if raw is not None:
-                    return _DocumentResponse.model_validate(raw)
+            with suppress(BrowserError):
+                return _DocumentResponse.model_validate(await self._evaluate(session_id, read, unique_context_id=kept))
             del self._status_worlds[session_id]
         tree = await self._session.client.send.Page.getFrameTree(session_id=session_id)
         world = await self._session.client.send.Page.createIsolatedWorld(
-            params={"frameId": tree["frameTree"]["frame"]["id"], "worldName": "fastbrowse-status"},
+            params={"frameId": tree["frameTree"]["frame"]["id"], "worldName": STATUS_WORLD},
             session_id=session_id,
         )
-        nonce = secrets.token_hex(16)
-        raw = await self._evaluate(
-            session_id,
-            f"globalThis.__fastbrowseStatus = {json.dumps(nonce)}; {read}",
-            context_id=world["executionContextId"],
-        )
-        self._status_worlds[session_id] = (world["executionContextId"], nonce)
+        raw = await self._evaluate(session_id, read, context_id=world["executionContextId"])
+        if (unique := self._session.status_context(session_id, world["executionContextId"])) is not None:
+            self._status_worlds[session_id] = unique
         return _DocumentResponse.model_validate(raw)
 
     async def response_status(self) -> int | None:
@@ -1955,10 +1937,14 @@ class CdpPage(Page):
             f"setTimeout(poll, {_SETTLE_POLL_SECONDS * 1000}); }}; poll(); }})"
         )
 
-    async def _evaluate(self, session_id: str, expression: str, *, context_id: int | None = None) -> JsonValue:
+    async def _evaluate(
+        self, session_id: str, expression: str, *, context_id: int | None = None, unique_context_id: str | None = None
+    ) -> JsonValue:
         params: EvaluateParameters = {"expression": expression, "returnByValue": True, "awaitPromise": True}
         if context_id is not None:
             params["contextId"] = context_id
+        if unique_context_id is not None:
+            params["uniqueContextId"] = unique_context_id
         out = await self._session.client.send.Runtime.evaluate(params=params, session_id=session_id)
         if "exceptionDetails" in out:
             raise _ScriptError("Runtime.evaluate failed (JavaScriptError)")

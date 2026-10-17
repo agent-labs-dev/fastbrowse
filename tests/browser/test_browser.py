@@ -1057,41 +1057,37 @@ async def test_http_status_world_is_made_once_per_document(
         assert "Page.createIsolatedWorld" not in calls and "Page.getFrameTree" not in calls
 
 
-async def test_a_reused_context_id_cannot_forge_the_http_status(
-    page: CdpPage, browser_session: BrowserSession, main_site: str
+async def test_the_kept_status_world_is_addressed_only_by_its_unique_id(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    contexts: list[int] = []
-    browser_session.client.register.Runtime.executionContextCreated(
-        lambda event, _session: (
-            contexts.append(event["context"]["id"]) if event["context"].get("auxData", {}).get("isDefault") else None
-        )
-    )
     await page.navigate(main_site)
     assert (await page.observe()).response_status == 200
     session_id = browser_session.active_session_id
-    # Chrome can hand a kept world's id to another document's context; here it names the page's own world.
-    page._status_worlds[session_id] = (contexts[-1], "kept-nonce")
+    kept = page._status_worlds[session_id]
+    sent: list[dict[str, Any]] = []
+    send = browser_session.client.send_raw
+
+    async def recorded(method: str, params: Any = None, session_id: str | None = None) -> dict[str, Any]:
+        if method == "Runtime.evaluate" and params and ("contextId" in params or "uniqueContextId" in params):
+            sent.append(params)
+        return await send(method, params, session_id)
+
+    monkeypatch.setattr(browser_session.client, "send_raw", recorded)
+    # Chrome reuses context ids across renderer processes, so a kept context id could reach the page's own world,
+    # where this forgery would be read; a unique id reaches the status world or nothing.
     await eval_value(
         browser_session,
         session_id,
-        "Object.defineProperty(window, '__fastbrowseStatus', {configurable: true, get: () => 'forged'}); "
         "Performance.prototype.getEntriesByType = performance.getEntriesByType = "
         "() => [{name: location.href, responseStatus: 401}]; true",
     )
     assert (await page.observe()).response_status == 200
-    assert page._status_worlds[session_id][0] != contexts[-1]
-
-    # A getter that never returns is not run: the marker is read off its descriptor.
-    page._status_worlds[session_id] = (contexts[-1], "kept-nonce")
-    await eval_value(
-        browser_session,
-        session_id,
-        "delete window.__fastbrowseStatus; "
-        "Object.defineProperty(window, '__fastbrowseStatus', {configurable: true, get: () => new Promise(() => {})}); "
-        "true",
-    )
-    async with asyncio.timeout(5):
-        assert (await page.observe()).response_status == 200
+    assert sent == [{"expression": sent[0]["expression"], "returnByValue": True, "awaitPromise": True,
+                     "uniqueContextId": kept}]  # fmt: skip
+    # A new document's world replaces the kept one, which then names nothing.
+    await page.navigate(f"{main_site}/http-error/404")
+    assert (await page.observe()).response_status == 404
+    assert page._status_worlds[session_id] != kept
 
 
 async def test_required_radios_use_their_form_group_validity(

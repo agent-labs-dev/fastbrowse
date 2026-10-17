@@ -69,13 +69,15 @@ async def test_a_read_whose_document_was_destroyed_once_reads_the_page_again(
     real = page._evaluate
     failed = 0
 
-    async def once(session_id: str, expression: str, *, context_id: int | None = None) -> JsonValue:
+    async def once(
+        session_id: str, expression: str, *, context_id: int | None = None, unique_context_id: str | None = None
+    ) -> JsonValue:
         nonlocal failed
         # The status read has no fallback of its own, so a single loss there ended the run.
-        if context_id is not None and not failed:
+        if (context_id is not None or unique_context_id is not None) and not failed:
             failed += 1
             raise _destroyed()
-        return await real(session_id, expression, context_id=context_id)
+        return await real(session_id, expression, context_id=context_id, unique_context_id=unique_context_id)
 
     monkeypatch.setattr(page, "_evaluate", once)
     result = await Agent(page, OpenJev(target), ScriptedLLM([_plan(target)])).run(f"Open {target}")
@@ -97,14 +99,20 @@ async def test_a_challenge_that_navigates_during_observation_is_read_as_the_page
             return await eval_value(browser_session, browser_session.active_session_id, "document.title")
         return None
 
-    async def straddling(session_id: str, expression: str, *, context_id: int | None = None) -> JsonValue:
+    async def straddling(
+        session_id: str, expression: str, *, context_id: int | None = None, unique_context_id: str | None = None
+    ) -> JsonValue:
         nonlocal straddled
         # Hold the status read, whose isolated world belongs to the challenge, until the challenge's own script has
         # replaced it: Chrome then refuses the read with -32000, as it did on PyPI across a cloud round trip.
-        if context_id is not None and not straddled and await title() == "Client Challenge":
+        if (
+            (context_id is not None or unique_context_id is not None)
+            and not straddled
+            and await title() == "Client Challenge"
+        ):
             straddled += 1
             await wait_until(lambda: title_is_release(), timeout_seconds=10)
-        return await real(session_id, expression, context_id=context_id)
+        return await real(session_id, expression, context_id=context_id, unique_context_id=unique_context_id)
 
     async def title_is_release() -> bool:
         return await title() == "Release 2.1.0"
@@ -125,12 +133,14 @@ async def test_a_page_that_never_stops_replacing_itself_ends_with_what_happened(
     real = page._evaluate
     status_reads = 0
 
-    async def always(session_id: str, expression: str, *, context_id: int | None = None) -> JsonValue:
+    async def always(
+        session_id: str, expression: str, *, context_id: int | None = None, unique_context_id: str | None = None
+    ) -> JsonValue:
         nonlocal status_reads
         if context_id is not None:
             status_reads += 1
             raise _destroyed()
-        return await real(session_id, expression, context_id=context_id)
+        return await real(session_id, expression, context_id=context_id, unique_context_id=unique_context_id)
 
     monkeypatch.setattr(page, "_evaluate", always)
     with pytest.raises(ContextLost) as lost:
@@ -146,7 +156,9 @@ async def test_a_javascript_error_is_not_read_again(
     await page.navigate(f"{main_site}/release.html")
     reads = 0
 
-    async def throws(session_id: str, expression: str, *, context_id: int | None = None) -> JsonValue:
+    async def throws(
+        session_id: str, expression: str, *, context_id: int | None = None, unique_context_id: str | None = None
+    ) -> JsonValue:
         nonlocal reads
         reads += 1
         raise BrowserError("Runtime.evaluate failed (JavaScriptError)")
