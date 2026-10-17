@@ -199,6 +199,10 @@ class _SnapshotControl(Frozen):
     download: bool | None = None
 
 
+class _ScriptError(BrowserError):
+    """A script this layer evaluated threw in the page, as one can when the page replaced a global it calls."""
+
+
 class _FrameText(Frozen):
     url: str
     title: str
@@ -744,12 +748,13 @@ class CdpPage(Page):
         if self._session.pending_dialog() is None:
             try:
                 # The frame wait runs on the page's own timers, which a page can replace with ones that never
-                # fire; past this bound the point is measured again and the pointer move waits for its frame.
+                # fire; past this bound the point is measured again and the pointer move waits for its own frame.
                 async with asyncio.timeout(_MEASURE_DRAWN_SECONDS if drawn else None):
                     before_fingerprint, live_guard, point, announced = await self._before_action(
                         target, hit_test=action.operation in TARGETED, present=drawn
                     )
-            except TimeoutError:
+            except (TimeoutError, _ScriptError):
+                # A page can also replace those timers with ones that throw; the measurement is made again either way.
                 drawn = False
                 before_fingerprint, live_guard, point, announced = await self._before_action(
                     target, hit_test=action.operation in TARGETED
@@ -1956,7 +1961,7 @@ class CdpPage(Page):
             params["contextId"] = context_id
         out = await self._session.client.send.Runtime.evaluate(params=params, session_id=session_id)
         if "exceptionDetails" in out:
-            raise BrowserError("Runtime.evaluate failed (JavaScriptError)")
+            raise _ScriptError("Runtime.evaluate failed (JavaScriptError)")
         return out["result"].get("value")
 
 
