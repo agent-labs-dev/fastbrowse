@@ -49,17 +49,22 @@ cannot be compared with their published figures and are published as a fresh bas
 2. Dispatch `publish-evals.yml` with `protocol_change` set and a `protocol_note` saying what changed and why.
    The workflow refuses the dispatch when no published group changed protocol. Without the flag, a changed group
    is refused as before. Every published group must still be present, cover the current catalog exactly
-   and pass the fixture receipt; groups whose protocol did not change are still checked for regressions.
+   and pass the fixture receipt; groups whose protocol did not change are still checked for regressions, and a
+   group that differs only by listed retirements is still compared on the tasks it shares and left out of the
+   record.
 3. The approval carries a `protocol_change` record: the note, the digest of the figures it supersedes, and
    for each changed group its previous and new catalog digest, tasks and limits.
 4. `--install` archives the superseded figures as `docs/results/benchmarks.<campaign>.json` and their
-   approval as `docs/results/benchmark-approval.<campaign>.json`, named by the campaign that measured them,
-   before putting the new figures in place. The record links both, so each approval leads to the figures
+   approval as `docs/results/benchmark-approval.<campaign>.json`, named by the campaign that measured them
+   (percent-encoded, so a `:` becomes `%3A`), before putting the new figures in place. The record links both, so each approval leads to the figures
    it replaced.
 
 CI accepts changed published figures only when their approval's record names exactly the groups whose protocol
 changed, from exactly the figures at the base, and the archive holds those figures and their approval byte for
-byte. Archived figures are published results: CI refuses any change to them or their removal.
+byte. A new approval receipt must also be the exact bytes of the `benchmark-approval` artifact its owner run
+produced, so its note and record cannot be edited after download; `--install` copies it unchanged. Archived
+figures are published results: CI refuses any change to them or their removal, and any new archive file other
+than the pair a validated protocol change names.
 
 The website reads the candidate and approval from one resolved fastbrowse commit. It checks the exact-byte
 digest and the completed owner-dispatched workflow receipt before deriving any figure. A changed

@@ -10,6 +10,7 @@ import tempfile
 from collections.abc import Collection
 from pathlib import Path
 from typing import Annotated, Literal, Self
+from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -155,8 +156,8 @@ class ProtocolChange(PublicModel):
 
     note: Annotated[str, Field(pattern=r"^[A-Za-z0-9 ,.;:()'%+_=#/-]{1,500}$")]
     previous_candidate_sha256: Digest
-    archived_figures: Annotated[str, Field(pattern=r"^docs/results/benchmarks\.[A-Za-z0-9_.+-]+\.json$")]
-    archived_approval: Annotated[str, Field(pattern=r"^docs/results/benchmark-approval\.[A-Za-z0-9_.+-]+\.json$")]
+    archived_figures: Annotated[str, Field(pattern=r"^docs/results/benchmarks\.[A-Za-z0-9_.+%~-]+\.json$")]
+    archived_approval: Annotated[str, Field(pattern=r"^docs/results/benchmark-approval\.[A-Za-z0-9_.+%~-]+\.json$")]
     groups: Annotated[list[GroupProtocol], Field(min_length=1)]
 
 
@@ -280,15 +281,20 @@ def changed_protocols(candidate: Candidate, baseline: Candidate) -> list[GroupPr
 
 def archive_paths(baseline: Candidate) -> tuple[Path, Path]:
     """Where superseded figures and their approval stay published, named by the campaign that measured them."""
-    name = baseline.campaign_id
-    if not re.fullmatch(r"[A-Za-z0-9_.+-]+", name):
-        raise ValueError(f"campaign id {name!r} cannot name an archive file")
+    # Percent-encoded, so every valid campaign id (a `:` included) names exactly one file.
+    name = quote(baseline.campaign_id, safe="+")
     return RESULTS / f"benchmarks.{name}.json", RESULTS / f"benchmark-approval.{name}.json"
 
 
-def protocol_change(candidate: Candidate, baseline: Candidate, baseline_bytes: bytes, note: str) -> ProtocolChange:
-    """The record an owner approves to replace `baseline`'s changed groups; refused when no protocol changed."""
-    groups = changed_protocols(candidate, baseline)
+def protocol_change(
+    candidate: Candidate, baseline: Candidate, baseline_bytes: bytes, note: str, catalog: bytes | None
+) -> ProtocolChange:
+    """The record an owner approves to replace `baseline`'s changed groups; refused when no protocol changed.
+
+    A group that differs only by retirements listed in `catalog` is not a protocol change: it stays out of the record
+    and is still compared with its published figures on the tasks they share."""
+    unapproved = unapproved_changes(candidate, baseline, catalog)
+    groups = [g for g in changed_protocols(candidate, baseline) if g.id in unapproved]
     if not groups:
         raise ValueError("no published group changed protocol; publish without a protocol change")
     figures, approval = archive_paths(baseline)
@@ -426,6 +432,29 @@ def check_approval(content: bytes, approval: Approval) -> None:
         raise ValueError("a successful owner dispatch on main is required")
 
 
+def approval_artifact(run_id: int) -> bytes:
+    """The receipt the owner's publish-evals run wrote, as its `benchmark-approval` artifact holds it."""
+    with tempfile.TemporaryDirectory(prefix="benchmark-approval-") as directory:
+        subprocess.run(
+            [
+                "gh",
+                "run",
+                "download",
+                str(run_id),
+                "--repo",
+                "agent-labs-dev/fastbrowse",
+                "--name",
+                "benchmark-approval",
+                "--dir",
+                directory,
+            ],
+            capture_output=True,
+            timeout=60,
+            check=True,
+        )
+        return (Path(directory) / "benchmark-approval.json").read_bytes()
+
+
 def git_names(ref: str, directory: Path) -> list[str]:
     done = subprocess.run(
         ["git", "ls-tree", "--name-only", f"{ref}:{directory}"], capture_output=True, text=True, timeout=30, check=False
@@ -433,17 +462,29 @@ def git_names(ref: str, directory: Path) -> list[str]:
     return done.stdout.split() if done.returncode == 0 else []
 
 
-def check_archives(base: str) -> None:
-    """Archived figures and approvals are published results: once at the base, never rewritten or removed."""
-    for name in git_names(base, RESULTS):
-        if re.fullmatch(r"benchmark(s|-approval)\.[A-Za-z0-9_.+-]+\.json", name):
-            path = RESULTS / name
-            if not path.exists() or path.read_bytes() != git_file(base, str(path)):
-                raise ValueError(f"archived benchmark figures cannot change or disappear: {path}")
+ARCHIVE = re.compile(r"benchmark(s|-approval)\.[A-Za-z0-9_.+%~-]+\.json")
+
+
+def check_archives(base: str, added: set[str]) -> None:
+    """Archived figures and approvals are published results: once at the base, never rewritten or removed. A new
+    archive file is allowed only when it is one of `added`, the pair a validated protocol change names."""
+    archived = {name for name in git_names(base, RESULTS) if ARCHIVE.fullmatch(name)}
+    for name in archived:
+        path = RESULTS / name
+        if not path.exists() or path.read_bytes() != git_file(base, str(path)):
+            raise ValueError(f"archived benchmark figures cannot change or disappear: {path}")
+    for path in sorted(RESULTS.glob("benchmark*.json")):
+        if ARCHIVE.fullmatch(path.name) and path.name not in archived and str(path) not in added:
+            raise ValueError(f"{path} is not the archive of an approved protocol change")
 
 
 def check_protocol_change(
-    candidate: Candidate, baseline: Candidate, baseline_bytes: bytes, base_approval: bytes, approval: Approval
+    candidate: Candidate,
+    baseline: Candidate,
+    baseline_bytes: bytes,
+    base_approval: bytes,
+    approval: Approval,
+    catalog: bytes | None,
 ) -> set[str]:
     """The groups whose protocol the published approval changed, after proving its record names exactly the groups
     that changed, from exactly the figures at the base, and that those figures and their approval are archived."""
@@ -451,7 +492,7 @@ def check_protocol_change(
     if record is None:
         # Without the owner's record nothing is exempt: `regressions` refuses every change but a listed retirement.
         return set()
-    if record != protocol_change(candidate, baseline, baseline_bytes, record.note):
+    if record != protocol_change(candidate, baseline, baseline_bytes, record.note, catalog):
         raise ValueError("the protocol_change record must name exactly the changed groups of the published figures")
     for path, content in ((record.archived_figures, baseline_bytes), (record.archived_approval, base_approval)):
         if not Path(path).exists() or Path(path).read_bytes() != content:
@@ -462,7 +503,7 @@ def check_protocol_change(
 def check_diff(base: str, catalog: Path) -> None:
     published = PUBLISHED
     approval_path = APPROVAL
-    check_archives(base)
+    added: set[str] = set()
     old = git_file(base, str(published))
     old_approval = git_file(base, str(approval_path))
     baseline = None
@@ -489,8 +530,10 @@ def check_diff(base: str, catalog: Path) -> None:
             if not approval_path.exists():
                 raise ValueError("published figures require an owner approval receipt")
             approval = Approval.model_validate_json(approval_path.read_bytes())
-            approved = check_protocol_change(candidate, baseline, old, old_approval, approval)
+            approved = check_protocol_change(candidate, baseline, old, old_approval, approval, catalog.read_bytes())
             regressions(candidate, baseline, catalog.read_bytes(), approved)
+            if approval.protocol_change is not None:
+                added = {approval.protocol_change.archived_figures, approval.protocol_change.archived_approval}
         else:
             # A staged candidate is reviewed, not published: a changed protocol is reported here and refused at
             # approval unless the owner dispatches it as a protocol change. Unchanged groups are still compared.
@@ -501,7 +544,14 @@ def check_diff(base: str, catalog: Path) -> None:
     if published.exists():
         if not approval_path.exists():
             raise ValueError("published figures require an owner approval receipt")
-        check_approval(published.read_bytes(), Approval.model_validate_json(approval_path.read_bytes()))
+        receipt = approval_path.read_bytes()
+        approval = Approval.model_validate_json(receipt)
+        check_approval(published.read_bytes(), approval)
+        # A new receipt is the owner's run's own bytes: its protocol_change note, groups and archive links are the
+        # ones the run recorded, not text edited after download.
+        if receipt != old_approval and approval_artifact(approval.workflow_run) != receipt:
+            raise ValueError("the approval receipt differs from the one the owner's publish-evals run produced")
+    check_archives(base, added)
 
 
 def install(candidate_path: Path, approval_path: Path) -> None:
@@ -556,10 +606,11 @@ def main() -> None:
             baseline_bytes = args.baseline.read_bytes()
             baseline = Candidate.model_validate_json(baseline_bytes)
             if args.protocol_change:
-                # Dropped groups and unchanged groups' regressions are refused before the change is recorded.
-                regressions(candidate, baseline, catalog, {g.id for g in changed_protocols(candidate, baseline)})
+                # Dropped groups and regressions in groups that kept their protocol, a retirement-only group on the
+                # tasks it shares, are refused before the change is recorded.
+                regressions(candidate, baseline, catalog, unapproved_changes(candidate, baseline, catalog))
                 try:
-                    record = protocol_change(candidate, baseline, baseline_bytes, args.protocol_note)
+                    record = protocol_change(candidate, baseline, baseline_bytes, args.protocol_note, catalog)
                 except ValidationError as error:
                     parser.error(f"invalid protocol note: {error}")
                 if args.protocol_record:

@@ -358,7 +358,7 @@ def test_a_changed_protocol_is_refused_without_the_owner_flag(candidate):
         regressions(changed, base)
     # An approval without the owner's record exempts nothing, so the comparison still refuses the change.
     unflagged = Approval.model_validate(_approval(b"x"))
-    assert check_protocol_change(changed, base, _bytes(candidate), b"{}", unflagged) == set()
+    assert check_protocol_change(changed, base, _bytes(candidate), b"{}", unflagged, None) == set()
 
 
 def test_a_protocol_change_skips_only_the_changed_groups(candidate):
@@ -366,7 +366,9 @@ def test_a_protocol_change_skips_only_the_changed_groups(candidate):
 
     base = Candidate.model_validate(candidate)
     changed = _changed(candidate)
-    record = protocol_change(Candidate.model_validate(changed), base, _bytes(candidate), "Uncapped protocol (#356)")
+    record = protocol_change(
+        Candidate.model_validate(changed), base, _bytes(candidate), "Uncapped protocol (#356)", None
+    )
     assert [g.id for g in record.groups] == ["internal-hosted"]
     assert record.archived_figures == "docs/results/benchmarks.test-campaign.json"
     regressions(Candidate.model_validate(changed), base, changed={"internal-hosted"})
@@ -391,7 +393,7 @@ def test_a_protocol_change_needs_a_changed_group(candidate):
     from fastbrowse.evals.benchmarks import protocol_change
 
     with pytest.raises(ValueError, match="no published group changed"):
-        protocol_change(Candidate.model_validate(candidate), Candidate.model_validate(candidate), b"{}", "Note")
+        protocol_change(Candidate.model_validate(candidate), Candidate.model_validate(candidate), b"{}", "Note", None)
 
 
 def test_the_receipt_must_name_exactly_the_changed_groups(candidate, tmp_path, monkeypatch):
@@ -402,12 +404,12 @@ def test_the_receipt_must_name_exactly_the_changed_groups(candidate, tmp_path, m
     old, old_approval = _bytes(candidate), b'{"approval": "old"}\n'
     base = Candidate.model_validate(candidate)
     changed = Candidate.model_validate(_changed(candidate))
-    record = protocol_change(changed, base, old, "Uncapped protocol (#356)")
+    record = protocol_change(changed, base, old, "Uncapped protocol (#356)", None)
     Path(record.archived_figures).write_bytes(old)
     Path(record.archived_approval).write_bytes(old_approval)
-    assert check_protocol_change(changed, base, old, old_approval, Approval.model_validate(_approval(b"", record))) == {
-        "internal-hosted"
-    }
+    assert check_protocol_change(
+        changed, base, old, old_approval, Approval.model_validate(_approval(b"", record)), None
+    ) == {"internal-hosted"}
     wider = record.model_copy(
         update={"groups": [*record.groups, record.groups[0].model_copy(update={"id": "bu-bench"})]}
     )
@@ -420,10 +422,10 @@ def test_the_receipt_must_name_exactly_the_changed_groups(candidate, tmp_path, m
                 Approval.model_validate(_approval(b"", wrong))
             continue
         with pytest.raises(ValueError, match="exactly the changed groups"):
-            check_protocol_change(changed, base, old, old_approval, approval)
+            check_protocol_change(changed, base, old, old_approval, approval, None)
     Path(record.archived_approval).unlink()
     with pytest.raises(ValueError, match="stay published"):
-        check_protocol_change(changed, base, old, old_approval, Approval.model_validate(_approval(b"", record)))
+        check_protocol_change(changed, base, old, old_approval, Approval.model_validate(_approval(b"", record)), None)
 
 
 def test_install_archives_the_superseded_figures(candidate, tmp_path, monkeypatch):
@@ -438,7 +440,7 @@ def test_install_archives_the_superseded_figures(candidate, tmp_path, monkeypatc
     new = _bytes(_changed(candidate))
     staged = results / "benchmark-candidate.json"
     staged.write_bytes(new)
-    record = protocol_change(Candidate.model_validate_json(new), Candidate.model_validate(candidate), old, "Note")
+    record = protocol_change(Candidate.model_validate_json(new), Candidate.model_validate(candidate), old, "Note", None)
     approval = tmp_path / "benchmark-approval.json"
     approval.write_text(json.dumps(_approval(new, record)))
     install(staged, approval)
@@ -480,6 +482,13 @@ def _repository(tmp_path, monkeypatch, base: dict[str, bytes]) -> None:
         "conclusion": "success",
     }
     monkeypatch.setattr(benchmarks, "github_run", lambda _: run)
+    # The owner's run produced the receipt as committed unless a test edits it after this download.
+    artifact = {}
+    monkeypatch.setattr(
+        benchmarks,
+        "approval_artifact",
+        lambda _: artifact.setdefault("bytes", (tmp_path / "docs/results/benchmark-approval.json").read_bytes()),
+    )
 
 
 def _publish(tmp_path, candidate: dict, record) -> None:
@@ -497,7 +506,7 @@ def test_check_diff_publishes_an_approved_protocol_change_and_keeps_the_archive(
     base = {"docs/results/benchmarks.json": old, "docs/results/benchmark-approval.json": old_approval}
     _repository(tmp_path, monkeypatch, base)
     changed = Candidate.model_validate(_changed(candidate))
-    record = protocol_change(changed, Candidate.model_validate(candidate), old, "Uncapped protocol (#356)")
+    record = protocol_change(changed, Candidate.model_validate(candidate), old, "Uncapped protocol (#356)", None)
 
     _publish(tmp_path, candidate, None)
     with pytest.raises(ValueError, match="protocol changed: internal-hosted"):
@@ -734,3 +743,110 @@ def test_internal_fastbrowse_both_retired_and_uncapped_publishes_only_as_a_proto
     assert change["id"] == "internal-fastbrowse" and change["limits"] == ["No arm capped"]
     assert RETIRED in change["previous_task_ids"] and RETIRED not in change["task_ids"]
     assert len(change["previous_task_ids"]) == 54 and len(change["task_ids"]) == 53
+
+
+def test_check_diff_refuses_a_receipt_edited_after_the_owner_run(candidate, tmp_path, monkeypatch):
+    from fastbrowse.evals import benchmarks
+    from fastbrowse.evals.benchmarks import check_diff, protocol_change
+
+    old = _bytes(candidate)
+    old_approval = json.dumps(_approval(old)).encode()
+    _repository(
+        tmp_path,
+        monkeypatch,
+        {"docs/results/benchmarks.json": old, "docs/results/benchmark-approval.json": old_approval},
+    )
+    record = protocol_change(
+        Candidate.model_validate(_changed(candidate)), Candidate.model_validate(candidate), old, "Approved note", None
+    )
+    Path(record.archived_figures).write_bytes(old)
+    Path(record.archived_approval).write_bytes(old_approval)
+    _publish(tmp_path, candidate, record)
+    produced = (tmp_path / "docs/results/benchmark-approval.json").read_bytes()
+    monkeypatch.setattr(benchmarks, "approval_artifact", lambda _: produced)
+    check_diff("base", Path("catalog.json"))
+    _publish(tmp_path, candidate, record.model_copy(update={"note": "A different rationale"}))
+    with pytest.raises(ValueError, match="differs from the one the owner's publish-evals run produced"):
+        check_diff("base", Path("catalog.json"))
+
+
+def test_every_valid_campaign_id_names_one_archive(candidate):
+    from fastbrowse.evals.benchmarks import ProtocolChange, archive_paths, protocol_change
+
+    for name, encoded in (("release-0.5.20-3c40e6e", "release-0.5.20-3c40e6e"), ("run:2026+a", "run%3A2026+a")):
+        base = Candidate.model_validate({**candidate, "campaign_id": name})
+        figures, approval = archive_paths(base)
+        assert (figures.name, approval.name) == (f"benchmarks.{encoded}.json", f"benchmark-approval.{encoded}.json")
+        record = protocol_change(Candidate.model_validate(_changed(candidate)), base, b"{}", "Note", None)
+        assert ProtocolChange.model_validate(record.model_dump()).archived_figures == str(figures)
+    assert (
+        archive_paths(Candidate.model_validate({**candidate, "campaign_id": "a:b"}))[0]
+        != archive_paths(Candidate.model_validate({**candidate, "campaign_id": "a_b"}))[0]
+    )
+
+
+def test_a_protocol_change_keeps_comparing_a_retirement_only_group(candidate, tmp_path, monkeypatch):
+    """internal-hosted changed its limits; internal-fastbrowse only lost a retired task. The flag exempts the first
+    alone: the second is still compared on the tasks it shares, so its regression blocks the publication."""
+    import sys
+
+    from fastbrowse.evals import benchmarks
+
+    catalog = json.loads(CATALOG.read_bytes())
+    old_catalog = _dump(_before(catalog))
+    monkeypatch.setattr(
+        benchmarks, "catalog_at", lambda d: old_catalog if d == hashlib.sha256(old_catalog).hexdigest() else None
+    )
+    groups = [_group(name, old_catalog) for name in ("internal-hosted", "internal-fastbrowse")]
+    published = Candidate.model_validate({**candidate, "schema_version": 4, "groups": groups})
+    hosted, fastbrowse = (_group(name, CATALOG.read_bytes()) for name in ("internal-hosted", "internal-fastbrowse"))
+    hosted["limits"] = ["No arm capped"]
+    baseline, staged, record = tmp_path / "benchmarks.json", tmp_path / "candidate.json", tmp_path / "record.json"
+    baseline.write_text(published.model_dump_json())
+    argv = ["benchmarks", "--candidate", str(staged), "--baseline", str(baseline), "--catalog", str(CATALOG)]
+    flags = ["--protocol-change", "--protocol-note", "Uncapped hosted", "--protocol-record", str(record)]
+    monkeypatch.setattr(sys, "argv", [*argv, *flags])
+
+    staged.write_bytes(_bytes({**candidate, "schema_version": 4, "groups": [hosted, fastbrowse]}))
+    benchmarks.main()
+    assert [g["id"] for g in json.loads(record.read_text())["groups"]] == ["internal-hosted"]
+
+    task = fastbrowse["task_ids"][0]
+    for row in fastbrowse["rows"]:
+        if row["task"] == task:
+            row["score"] = 0.0
+    staged.write_bytes(_bytes({**candidate, "schema_version": 4, "groups": [hosted, fastbrowse]}))
+    with pytest.raises(ValueError, match=f"source-score regression: internal-fastbrowse/{task}"):
+        benchmarks.main()
+
+
+def test_check_diff_admits_only_the_archive_pair_an_approved_change_names(candidate, tmp_path, monkeypatch):
+    from fastbrowse.evals.benchmarks import check_diff, protocol_change
+
+    old = _bytes(candidate)
+    old_approval = json.dumps(_approval(old)).encode()
+    _repository(
+        tmp_path,
+        monkeypatch,
+        {"docs/results/benchmarks.json": old, "docs/results/benchmark-approval.json": old_approval},
+    )
+    (tmp_path / "docs/results/benchmark-candidate.json").write_bytes(old)  # the reviewed bytes of the base figures
+    stray = tmp_path / "docs/results/benchmarks.unreferenced.json"
+    stray.write_bytes(old)
+    with pytest.raises(ValueError, match="not the archive of an approved protocol change"):
+        check_diff("base", Path("catalog.json"))
+
+    record = protocol_change(
+        Candidate.model_validate(_changed(candidate)), Candidate.model_validate(candidate), old, "Note", None
+    )
+    _publish(tmp_path, candidate, record)
+    Path(record.archived_figures).write_bytes(old)
+    Path(record.archived_approval).write_bytes(old_approval)
+    with pytest.raises(ValueError, match="not the archive of an approved protocol change"):
+        check_diff("base", Path("catalog.json"))
+    stray.unlink()
+    check_diff("base", Path("catalog.json"))
+
+    Path(record.archived_approval).write_bytes(b"{}")
+    with pytest.raises(ValueError, match="stay published unchanged"):
+        check_diff("base", Path("catalog.json"))
