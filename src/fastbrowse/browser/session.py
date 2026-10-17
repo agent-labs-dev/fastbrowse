@@ -11,7 +11,7 @@ import base64
 import contextlib
 import json
 import logging
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Self, cast
@@ -30,6 +30,7 @@ from cdp_use.cdp.target.events import (
 )
 from cdp_use.cdp.target.types import TargetInfo
 from cdp_use.client import CDPClient
+from pydantic import JsonValue
 from websockets.exceptions import ConnectionClosed, InvalidMessage, InvalidStatus
 
 from fastbrowse.clients.validation import RETRYABLE_STATUS
@@ -120,9 +121,14 @@ INPUT_NAVIGATION_BINDING = "__fastbrowseInputNavigation"
 # move of whatever click came before it. DOM events and the navigate event reach an isolated world's listeners too.
 INPUT_HISTORY_JS = (
     "(() => { if (globalThis.__watching) return; globalThis.__watching = true; let input = 0; "
+    # Code's own events are not trusted, so code opens the window around them, from this world only: a page that
+    # could open it could pass its own move off as the run's. A window left open closes itself.
+    "const later = () => setTimeout(() => setTimeout(() => { input--; }, 0), 0); "
+    "globalThis.__openInput = () => { input++; return setTimeout(() => { input--; }, 2000); }; "
+    "globalThis.__closeInput = timer => { clearTimeout(timer); later(); }; "
     "for (const type of ['click', 'submit', 'keydown', 'keyup', 'input', 'change', 'pointerup', 'mouseup']) "
-    "addEventListener(type, ev => { if (!ev.isTrusted) return; input++; "
-    "setTimeout(() => setTimeout(() => { input--; }, 0), 0); }, {capture: true, passive: true}); "
+    "addEventListener(type, ev => { if (!ev.isTrusted) return; input++; later(); }, "
+    "{capture: true, passive: true}); "
     "if (globalThis.navigation) navigation.addEventListener('navigate', ev => { "
     "if (!(ev.userInitiated || input > 0)) return; "
     f"const report = globalThis[{INPUT_NAVIGATION_BINDING!r}]; if (typeof report === 'function') report('1'); }}); "
@@ -657,17 +663,46 @@ class BrowserSession:
             return_exceptions=True,
         )
 
-    async def _watch_input_now(self, session_id: str) -> None:
-        """Start the input watch in a document that was already open, in its own isolated world as on a new one."""
+    @contextlib.asynccontextmanager
+    async def input_window(self, session_id: str) -> AsyncGenerator[None]:
+        """Count a move the page makes while code dispatches its own input events as the run's: a select's or a
+        date field's change handler that moved the page is the run's doing, though no event it got was trusted."""
+        context: int | None = None
+        timer: JsonValue = None
+        with contextlib.suppress(Exception):
+            context = await self._input_context(session_id)
+            opened = await self.client.send_raw(
+                "Runtime.evaluate",
+                {"expression": "globalThis.__openInput?.()", "contextId": context, "returnByValue": True},
+                session_id=session_id,
+            )
+            timer = opened.get("result", {}).get("value")
+        try:
+            yield
+        finally:
+            if context is not None:
+                with contextlib.suppress(Exception):
+                    await self.client.send_raw(
+                        "Runtime.evaluate",
+                        {"expression": f"globalThis.__closeInput?.({json.dumps(timer)})", "contextId": context},
+                        session_id=session_id,
+                    )
+
+    async def _input_context(self, session_id: str) -> int:
+        """The input watch's isolated world in the session's main frame; asking by name returns the same world."""
         tree = await self.client.send_raw("Page.getFrameTree", session_id=session_id)
         world = await self.client.send_raw(
             "Page.createIsolatedWorld",
             {"frameId": tree["frameTree"]["frame"]["id"], "worldName": INPUT_WORLD},
             session_id=session_id,
         )
+        return world["executionContextId"]
+
+    async def _watch_input_now(self, session_id: str) -> None:
+        """Start the input watch in a document that was already open, in its own isolated world as on a new one."""
         await self.client.send_raw(
             "Runtime.evaluate",
-            {"expression": INPUT_HISTORY_JS, "contextId": world["executionContextId"]},
+            {"expression": INPUT_HISTORY_JS, "contextId": await self._input_context(session_id)},
             session_id=session_id,
         )
 

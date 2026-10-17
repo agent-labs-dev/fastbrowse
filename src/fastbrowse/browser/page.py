@@ -182,9 +182,14 @@ _COVER_JS = (
     "let hit = doc.elementFromPoint(x, y); "
     "while (hit?.shadowRoot) { const inner = hit.shadowRoot.elementFromPoint(x, y); "
     "if (!inner || inner === hit) break; hit = inner; } "
-    "if (hit && !node.contains(hit)) { const obstruction = hit.closest(OBSTRUCTIONS); "
-    "if (obstruction && !obstruction.contains(node)) return 'obstruction'; "
-    "for (let n = hit; n && !n.contains(node); n = n.parentElement) { "
+    # Up through shadow hosts: an overlay drawn by a custom element keeps its fixed box, or its dialog role, inside
+    # its shadow root, where a walk by parentElement stopped, so a band was refused and a dialog could pass for one.
+    "const up = n => n.parentElement || (n.getRootNode() instanceof ShadowRoot ? n.getRootNode().host : null); "
+    "const holds = (a, b) => { for (let n = b; n; n = up(n)) if (n === a) return true; return false; }; "
+    "if (hit && !holds(node, hit)) { let obstruction = null; "
+    "for (let n = hit; n && !obstruction; n = up(n)) if (n.matches(OBSTRUCTIONS)) obstruction = n; "
+    "if (obstruction && !holds(obstruction, node)) return 'obstruction'; "
+    "for (let n = hit; n && !holds(n, node); n = up(n)) { "
     "if (!['fixed', 'sticky'].includes(view.getComputedStyle(n).position)) continue; "
     "const r = n.getBoundingClientRect(); "
     "return r.width * r.height < view.innerWidth * view.innerHeight / 2 ? 'band' : 'other'; } "
@@ -1428,7 +1433,8 @@ class CdpPage(Page):
             "return e.value === value; })"
             f"({local_id}, {json.dumps(value)})"
         )
-        result = await self._evaluate(session_id, script)
+        async with self._session.input_window(session_id):
+            result = await self._evaluate(session_id, script)
         if result is None:
             return StepOutcome.STALE, "target disconnected"
         if result is not True:
@@ -1492,7 +1498,9 @@ class CdpPage(Page):
             "return e.value === opt.value || (e.selectedOptions[0]?.label ?? ''); })"
             f"({local_id}, {json.dumps(option)})"
         )
-        result = await self._evaluate(session_id, script)
+        # The events are code's own, not trusted, so the window that counts a move as the run's is opened for them.
+        async with self._session.input_window(session_id):
+            result = await self._evaluate(session_id, script)
         if result is None:
             return StepOutcome.STALE, "select target disconnected"
         if result is False:

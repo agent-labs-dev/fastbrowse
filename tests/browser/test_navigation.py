@@ -371,3 +371,23 @@ async def test_the_input_watch_leaves_nothing_the_page_can_see(
         ".test(name)), '__fastbrowseInputNavigation' in window, typeof globalThis.__watching]",
     )
     assert seen == [[], False, "undefined"]
+
+
+@pytest.mark.parametrize(("handler", "moved"), [("history.pushState({}, '', '?trip=one')", True), ("", False)])
+async def test_a_select_whose_change_handler_moves_the_page_is_the_runs_move(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, handler: str, moved: bool
+) -> None:
+    """A choice is set by code and its change event is code's own, not trusted, so a handler that moved the page on
+    the change was never counted as the run's move."""
+    await page.navigate(f"{main_site}/?q=guess")
+    session_id = browser_session.active_session_id
+    select = (
+        f'<select aria-label=Trip onchange="{handler}"><option>Round trip</option><option>One way</option></select>'
+    )
+    assert (
+        await eval_value(browser_session, session_id, f"document.body.innerHTML = {json.dumps(select)}; true") is True
+    )
+    obs = await page.observe()
+    result = await page.act(Action(operation=Operation.SELECT, target_id=find(obs, "Trip").id, text="One way"), obs)
+    assert result.outcome is StepOutcome.EXECUTED
+    assert result.moved is moved

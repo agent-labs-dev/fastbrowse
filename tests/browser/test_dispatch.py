@@ -859,6 +859,40 @@ async def test_a_fixed_cover_the_page_means_to_be_answered_is_still_reported(
     ]
 
 
+@pytest.mark.parametrize(("role", "reached"), [(None, True), ("dialog", False)])
+async def test_a_band_drawn_inside_a_shadow_root_is_classed_as_a_band(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, role: str | None, reached: bool
+) -> None:
+    """Ad overlays are often custom elements: the element itself is fixed and what it draws lives in its shadow root.
+    The walk that classes a cover went up from what was hit and stopped at the shadow root, so the band read as
+    something else and Login was refused; a dialog drawn the same way must still be refused, never pressed through."""
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    await eval_value(browser_session, session_id, _anchored_form(scrolls=False, band="div"))
+    inner = '<div style="height:100%"><button onclick="window.adClicks++">Shop now</button></div>'
+    assert (
+        await eval_value(
+            browser_session,
+            session_id,
+            "{ document.querySelector('ins').remove(); const host = document.createElement('ad-slot'); "
+            "host.style.cssText = 'display:block;position:fixed;left:0;right:0;bottom:0;height:120px;"
+            "background:white;z-index:9'; "
+            + (f"host.setAttribute('role', {role!r}); " if role else "")
+            + f"document.body.append(host); host.attachShadow({{mode: 'open'}}).innerHTML = {inner!r}; "
+            "const r = document.getElementById('go').getBoundingClientRect(); "
+            "document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === host }",
+        )
+        is True
+    )
+    obs = await page.observe()
+    result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Login").id), obs)
+    pressed, ad_clicks = await eval_value(browser_session, session_id, "[window.pressed, window.adClicks]")
+    if reached:
+        assert (result.outcome, pressed, ad_clicks) == (StepOutcome.EXECUTED, 1, 0), result.detail
+    else:
+        assert (result.outcome, pressed, ad_clicks) == (StepOutcome.COVERED, None, 0), result.detail
+
+
 @pytest.mark.parametrize("control", ["button", "field", "date"])
 async def test_a_control_repurposed_while_scrolled_clear_of_a_band_is_never_pressed_or_typed_into(
     page: CdpPage, browser_session: BrowserSession, main_site: str, control: str
