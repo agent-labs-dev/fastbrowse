@@ -137,9 +137,9 @@ _SERVER_ERROR = -32000
 """The code Chrome answers when the document or frame a command addressed is gone, as after a navigation."""
 
 
-def _browser_error(method: str, cause: Exception) -> BrowserError:
+def _browser_error(method: str, cause: Exception, *, lost_is_outage: bool = True) -> BrowserError:
     detail = type(cause).__name__
-    if isinstance(cause, (ConnectionClosed, ConnectionError)):
+    if lost_is_outage and isinstance(cause, (ConnectionClosed, ConnectionError)):
         # The connection to the browser is gone: an outage, not the run's failure.
         return BrowserUnresponsive(f"{method} failed ({detail})")
     if cause.args and isinstance(cause.args[0], dict):
@@ -185,7 +185,8 @@ class _BrowserClient(CDPClient):
         try:
             await super().stop()
         except Exception as exc:
-            raise _browser_error("CDP.stop", exc) from exc
+            # A connection lost while closing ends nothing the run did, so it never turns a finished run into an outage.
+            raise _browser_error("CDP.stop", exc, lost_is_outage=False) from exc
 
     _deadlines = 0
     """Commands on this connection that outlived CDP_COMMAND_SECONDS."""
