@@ -497,3 +497,15 @@ async def test_settling_does_not_wait_on_a_frame_that_never_comes(
             browser_session, browser_session.active_session_id, "document.querySelector('button').textContent = 'Shut'"
         )
         assert await page.redrawn(opened, 1.0)
+
+
+async def test_a_page_whose_timers_never_fire_cannot_hold_the_pointer(
+    page: CdpPage, browser_session: BrowserSession, hung_frame_site: str
+) -> None:
+    await page.navigate(f"{hung_frame_site}no-frames")
+    observation = await page.observe()
+    # The frame wait before the pointer moves runs on page timers, which a page is free to replace.
+    await eval_value(browser_session, browser_session.active_session_id, "window.setTimeout = () => 0; true")
+    async with asyncio.timeout(15):
+        result = await page.act(Action(operation=Operation.HOVER, target_id=find(observation, "Open").id), observation)
+    assert result.outcome is StepOutcome.EXECUTED

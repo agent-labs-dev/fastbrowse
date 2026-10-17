@@ -1074,12 +1074,24 @@ async def test_a_reused_context_id_cannot_forge_the_http_status(
     await eval_value(
         browser_session,
         session_id,
-        "Object.defineProperty(window, '__fastbrowseStatus', {get: () => 'forged'}); "
+        "Object.defineProperty(window, '__fastbrowseStatus', {configurable: true, get: () => 'forged'}); "
         "Performance.prototype.getEntriesByType = performance.getEntriesByType = "
         "() => [{name: location.href, responseStatus: 401}]; true",
     )
     assert (await page.observe()).response_status == 200
     assert page._status_worlds[session_id][0] != contexts[-1]
+
+    # A getter that never returns is not run: the marker is read off its descriptor.
+    page._status_worlds[session_id] = (contexts[-1], "kept-nonce")
+    await eval_value(
+        browser_session,
+        session_id,
+        "delete window.__fastbrowseStatus; "
+        "Object.defineProperty(window, '__fastbrowseStatus', {configurable: true, get: () => new Promise(() => {})}); "
+        "true",
+    )
+    async with asyncio.timeout(5):
+        assert (await page.observe()).response_status == 200
 
 
 async def test_required_radios_use_their_form_group_validity(

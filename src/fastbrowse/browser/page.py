@@ -274,6 +274,10 @@ without bringing its window forward, so past this the run goes on without the im
 _OPENS_TABS = frozenset({Operation.CLICK, Operation.ENTER})
 _POINTER_FIRST = frozenset({Operation.CLICK, Operation.FILL, Operation.HOVER})
 """Operations that move the pointer to the point `act` measured before anything else."""
+_MEASURE_DRAWN_SECONDS = 2.0
+"""Bound on the measuring call that also waits for a drawn frame, out of the page's reach."""
+_KEPT_WORLD_SECONDS = 2.0
+"""Bound on reading the HTTP status from a kept world, past which a new world is made."""
 _NAVIGATE_ATTEMPTS = 4
 """Two tries a second apart were not enough behind a cloud browser's proxy: in three 0.5.8 evals of about 300 runs,
 a first page failed both, once on a certificate error, twice timing out connecting and once never becoming ready,
@@ -730,11 +734,18 @@ class CdpPage(Page):
             action.operation in _POINTER_FIRST and target is not None and target[0] == self._session.active_session_id
         )
         if self._session.pending_dialog() is None:
-            before_fingerprint, live_guard, point, announced = await self._before_action(
-                target,
-                hit_test=action.operation in TARGETED,
-                present=drawn,
-            )
+            try:
+                # The frame wait runs on the page's own timers, which a page can replace with ones that never
+                # fire; past this bound the point is measured again and the pointer move waits for its frame.
+                async with asyncio.timeout(_MEASURE_DRAWN_SECONDS if drawn else None):
+                    before_fingerprint, live_guard, point, announced = await self._before_action(
+                        target, hit_test=action.operation in TARGETED, present=drawn
+                    )
+            except TimeoutError:
+                drawn = False
+                before_fingerprint, live_guard, point, announced = await self._before_action(
+                    target, hit_test=action.operation in TARGETED
+                )
             if target is not None and live_guard != target[3]:
                 return ActResult(
                     outcome=StepOutcome.STALE, page_changed=False, detail="control changed since observation"
@@ -1625,12 +1636,16 @@ class CdpPage(Page):
         # read, is trusted to be ours.
         if (kept := self._status_worlds.get(session_id)) is not None:
             context_id, nonce = kept
-            with suppress(BrowserError):
-                raw = await self._evaluate(
-                    session_id,
-                    f"globalThis.__fastbrowseStatus === {json.dumps(nonce)} ? {read} : null",
-                    context_id=context_id,
-                )
+            # The marker is read off its descriptor, so a getter the page put there never runs, and from out here
+            # with a deadline, so a world the page controls cannot hold the read either way.
+            with suppress(BrowserError, TimeoutError):
+                async with asyncio.timeout(_KEPT_WORLD_SECONDS):
+                    raw = await self._evaluate(
+                        session_id,
+                        "Object.getOwnPropertyDescriptor(globalThis, '__fastbrowseStatus')?.value === "
+                        f"{json.dumps(nonce)} ? {read} : null",
+                        context_id=context_id,
+                    )
                 if raw is not None:
                     return _DocumentResponse.model_validate(raw)
             del self._status_worlds[session_id]
