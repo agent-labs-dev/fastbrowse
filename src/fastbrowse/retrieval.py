@@ -2791,6 +2791,9 @@ async def _read_choices(
 class Claim(Frozen):
     text: str
     evidence_ids: tuple[str, ...]
+    ranks: bool = Field(default=False, description="True if it states a rank or order among counted groups.")
+    """Whether the checks are shown each cited tally's standing among the other groups. A count alone needs only
+    its own tally, and a standing for every tally put hundreds of group labels into each audit question."""
 
 
 class AnswerCorrection(Frozen):
@@ -3017,7 +3020,9 @@ async def compose(
                 "alongside its attribute sources. Reuse "
                 "identifying citations across claims when needed; another claim does not supply them. "
                 "Cite tally ids directly; their counts and descending order are computed in code, and code "
-                "expands their record citations. Never re-list the basis ids inside a tally.\n\n"
+                "expands their record citations. Never re-list the basis ids inside a tally. A rank by count, "
+                "such as the group with the second highest count, cites that group's own tally and sets ranks, "
+                "so code shows the checks its standing; do not cite other groups' tallies.\n\n"
                 f"# Trust\n{UNTRUSTED}"
             ),
         ),
@@ -3145,18 +3150,26 @@ def partial_answer(notes: Notes, max_chars: int) -> ComposedAnswer:
     )
     claims: list[Claim] = []
     counted: set[str] = set()
-    candidates = [fact for fact in notes.facts if fact.tally is not None]
-    candidates.extend(fact for fact in notes.facts if fact.evidence is not None)
-    candidates.sort(key=lambda fact: not bool(notes.fact_requirements(fact_id(fact))))
+    # Every count comes before any quote, highest first. Tallies have no source address, so sharing one turn
+    # listed only the highest count; and a stopped run's counts are incomplete, so ordering by what evidences a
+    # requirement put a quote answering something else first and left no room for any count.
+    tallies = sorted(
+        (fact for fact in notes.facts if fact.tally is not None),
+        key=lambda fact: (-fact.tally.count, fact.tally.requirement_id, fact.tally.key) if fact.tally else (0, "", ""),
+    )
+    quoted = sorted(
+        (fact for fact in notes.facts if fact.evidence is not None),
+        key=lambda fact: not bool(notes.fact_requirements(fact_id(fact))),
+    )
     ranks: dict[str | None, int] = {}
     ranked: list[tuple[int, Fact]] = []
     # Early sources can fill the partial answer before a later target's finding gets a turn.
-    for fact in candidates:
+    for fact in quoted:
         source = fact.evidence.url if fact.evidence is not None else None
         rank = ranks.get(source, 0)
         ranked.append((rank, fact))
         ranks[source] = rank + 1
-    for _, fact in sorted(ranked, key=lambda item: item[0]):
+    for fact in (*tallies, *(fact for _, fact in sorted(ranked, key=lambda item: item[0]))):
         if fact_id(fact) in counted:
             continue
         text = fact.text if fact.tally is not None else fact.evidence.quote if fact.evidence else ""
@@ -3251,11 +3264,15 @@ def claim_check_questions(
         for fact in notes.facts:
             if fact.tally is None or fact_id(fact) not in expanded:
                 continue
+            # A rank among counted groups rests on every group's count, which code holds; one group's line alone
+            # cannot show what it beat.
+            standing = notes.standing(fact.tally) if claim.ranks else None
             metadata = f"TALLY: {json.dumps(fact.text, ensure_ascii=False)} " + json.dumps(
                 {
                     "requirement": requirements.get(fact.tally.requirement_id),
                     "count": fact.tally.count,
                     "complete": fact.tally.requirement_id in notes.fact_requirements(fact_id(fact)),
+                    **({"standing": standing.model_dump(mode="json")} if standing is not None else {}),
                 },
                 ensure_ascii=False,
             )
