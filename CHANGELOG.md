@@ -32,8 +32,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   run stopped `stuck`. Whether a page is the run's own now follows the browser's history entry, not its address, and
   only the readings taken on the shortcut are held: they can no longer answer any requirement, while the
   requirement's other quotes still count, and so does the same page read again off the shortcut. Only an address
-  the run built is a guess: a page the run reached through the site's own controls, such as the search form on the
-  shortcut's page, is the site's, unless it lands on the shortcut again. The verifier judges a shortcut's page by what it shows rather than how it
+  the run built is a guess: a page the run's own action on the site's controls loaded or moved to, such as a search
+  submitted from the shortcut's page, is the site's, unless it lands on the shortcut again. A page that changes its
+  own address later stays a guess, which only has the verifier judge it. The verifier judges a shortcut's page by what it shows rather than how it
   was reached, and an answer keeps the terms a value was quoted under, such as what it covers and the dates it
   applies to.
 

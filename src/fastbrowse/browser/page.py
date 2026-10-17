@@ -873,6 +873,7 @@ class CdpPage(Page):
         ):
             self._cursor.follow(partial(self._cursor_geometry, target[0], observation.document_key), point)
         popups = self._session.popups()
+        document = await self._input_mark()
         try:
             outcome, detail = await self._dispatch(action, target, point)
         except BrowserError:
@@ -895,11 +896,45 @@ class CdpPage(Page):
             ),
         )
         if action.operation in _OPENS_TABS and await self._session.follow_popup(popups, _POPUP_ADOPT_SECONDS):
-            return ActResult(outcome=StepOutcome.EXECUTED, page_changed=True, detail="opened a new tab, now active")
+            return ActResult(
+                outcome=StepOutcome.EXECUTED, page_changed=True, detail="opened a new tab, now active", moved=True
+            )
         unchanged = False
         if action.form_fill and not changed and target is not None and not action.secret:
             unchanged = await self._form_unchanged(target, action.text or "")
-        return ActResult(outcome=StepOutcome.EXECUTED, page_changed=changed, detail=detail, form_unchanged=unchanged)
+        return ActResult(
+            outcome=StepOutcome.EXECUTED,
+            page_changed=changed,
+            detail=detail,
+            form_unchanged=unchanged,
+            moved=await self._moved_by_input(document),
+        )
+
+    async def _input_mark(self) -> str | None:
+        """The page's document before an action, with the count of addresses its input changed set back to none."""
+        if self._session.pending_dialog() is not None:
+            return None
+        with suppress(Exception):
+            value = await self._evaluate(
+                self._session.active_session_id,
+                "(window.__fastbrowseInputHistory = 0, String(performance.timeOrigin))",
+            )
+            return value if isinstance(value, str) else None
+        return None
+
+    async def _moved_by_input(self, document: str | None) -> bool:
+        """Whether the action just taken moved the page: a new document committed after it, or its own input event
+        changed the address. Unknown counts as not moved, which keeps a guessed page guessed, the safe side."""
+        if document is None or self._session.pending_dialog() is not None:
+            return False
+        with suppress(Exception):
+            now = await self._evaluate(
+                self._session.active_session_id,
+                "[String(performance.timeOrigin), window.__fastbrowseInputHistory || 0]",
+            )
+            if isinstance(now, list) and len(now) == 2:
+                return now[0] != document or (isinstance(now[1], int) and now[1] > 0)
+        return False
 
     async def _cursor_geometry(
         self, expected_session: str | None = None, expected_document: str | None = None

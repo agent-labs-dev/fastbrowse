@@ -1,6 +1,7 @@
 """Directed navigation to a caller-supplied address, through the real browser."""
 
 import asyncio
+import json
 from collections.abc import Mapping
 
 import pytest
@@ -236,3 +237,43 @@ async def test_a_push_state_between_history_and_snapshot_never_pairs_a_page_with
         assert observed.history_entry is not None and observed.history_entry == (await page.observe()).history_entry
     else:
         assert observed.history_entry is None
+
+
+@pytest.mark.parametrize(
+    ("handler", "moved"),
+    [
+        # A form submitted to the same path loads a new document after the click.
+        ("this.form.submit()", True),
+        # A single-page app answering the click in its own task, its promise reactions included.
+        ("history.pushState({}, '', '?q=corrected')", True),
+        ("Promise.resolve().then(() => history.pushState({}, '', '?q=corrected'))", True),
+        ("history.replaceState({}, '', '?q=corrected')", True),
+        # A rewrite the page makes later, on a timer or after a fetch, cannot be tied to the click.
+        ("setTimeout(() => history.pushState({}, '', '?q=later'), 40)", False),
+        ("", False),
+    ],
+)
+async def test_an_action_reports_only_the_moves_it_made_itself(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, handler: str, moved: bool
+) -> None:
+    """A guessed page that rewrote its own address on a timer just after a click was taken for the site answering
+    the click, and the guess was cleared. Only a new document after the action, or an address its own input event
+    changed, is a move the action made."""
+    await page.navigate(f"{main_site}/?q=guess")
+    session_id = browser_session.active_session_id
+    form = (
+        '<form action="/" method=get><input name=q value=corrected>'
+        f'<button type=button onclick="{handler}">Search</button></form>'
+    )
+    assert (
+        await eval_value(
+            browser_session,
+            session_id,
+            f"document.body.innerHTML = {json.dumps(form)}; true",
+        )
+        is True
+    )
+    obs = await page.observe()
+    result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Search").id), obs)
+    assert result.outcome is StepOutcome.EXECUTED
+    assert result.moved is moved

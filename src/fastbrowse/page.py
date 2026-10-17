@@ -288,6 +288,9 @@ class ActResult(Frozen):
     page_changed: bool
     detail: str | None = None
     form_unchanged: bool = False
+    moved: bool = False
+    """The action itself took the page elsewhere: a new document committed after it, a tab it opened, or an address
+    its own input event changed. A page rewriting its address on its own time is not this."""
 
 
 class Page(Protocol):

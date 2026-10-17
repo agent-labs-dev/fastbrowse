@@ -106,6 +106,17 @@ _KEEP_PAINTING: dict[str, object] = {
 }
 _TRACK_DOCUMENT_JS = data_file("browser", "snapshot.js").read_text(encoding="utf-8") + "('fingerprint')"
 _REFUSE_COOKIES_JS = data_file("browser", "autoconsent", "autoconsent.standalone.js").read_text(encoding="utf-8")
+# Whether the run's own input moved the page to another address on the same document: a trusted event's task, its
+# promise reactions included, changed the address. A page that rewrites its address later, on a timer or after a
+# fetch, is not counted, so it is never mistaken for the site answering the run. Nothing on the page is wrapped.
+INPUT_HISTORY_JS = (
+    "(() => { if (window.__fastbrowseInputWatch) return; window.__fastbrowseInputWatch = true; "
+    "for (const type of ['click', 'submit', 'keydown', 'keyup', 'input', 'change', 'pointerup', 'mouseup']) "
+    "addEventListener(type, ev => { if (!ev.isTrusted) return; const was = location.href; "
+    "setTimeout(() => { if (location.href !== was) "
+    "window.__fastbrowseInputHistory = (window.__fastbrowseInputHistory || 0) + 1; }, 0); }, "
+    "{capture: true, passive: true}); })()"
+)
 """DuckDuckGo's autoconsent (MPL-2.0, unmodified): refuses consent banners on known platforms and hides them
 before they paint, so neither the agent's steps nor a recording are spent on one."""
 
@@ -269,7 +280,9 @@ class BrowserSession:
         if self._grant is not None:
             origins = json.dumps(sorted(self._grant.origins))
             track = _TRACK_DOCUMENT_JS.removesuffix("('fingerprint')") + f"('fingerprint', {origins})"
-        self._new_document_scripts = (track, _REFUSE_COOKIES_JS) if refuse_cookie_banners else (track,)
+        self._new_document_scripts = (
+            (track, INPUT_HISTORY_JS, _REFUSE_COOKIES_JS) if refuse_cookie_banners else (track, INPUT_HISTORY_JS)
+        )
         self._client: CDPClient | None = None
         self._tabs: dict[str, _TabState] = {}
         self._owned: set[str] = set()

@@ -8,12 +8,14 @@ Guessed addresses, readings and holds keep to these invariants; `_Lineage`, `Age
 
 - What makes a page guessed: only an address the run built from the task (`invented`). The run is on the guess
   on a history entry it reached by NAVIGATE to, or a redirect from, a built address, by opening on one, or by
-  Back past the start onto one, and on an entry the page made by itself from a guessed one (its own pushState,
-  address rewrite or tab).
+  Back past the start onto one, and on any entry or address reached from a guessed one by a move the run did not
+  itself cause (the page's own pushState or rewrite, on a timer or after a fetch, or a tab it opened). Staying on
+  the guess only has the verifier judge the page; it never blocks a reading.
 - What clears it: an entry, or a new address on the same entry, that the run's own executed action on the
-  site's controls produced, unless it is a built address again; a NAVIGATE, or Back past the start, onto an
-  address the run did not build; the front-page fallback. Back, Forward and a reload return to an entry and to
-  its lineage.
+  site's controls produced, as the page shows (a new document after it, a tab it opened, or an address its own
+  input event changed), unless it is a built address again; a NAVIGATE, or Back past the start, onto an address
+  the run did not build; the front-page fallback. A move the run cannot tie to its action clears nothing. Back,
+  Forward and a reload return to an entry and to its lineage.
 - A reading is guessed if it was taken while on the guess, keyed by its source address and capture. The same
   page read again off the guess is the run's own, and that frees the guessed reading of the same text there.
 - What a hold blocks: a reading the verifier refused as read off a built address, while the lineage still says
@@ -510,6 +512,8 @@ class _RunState:
     address the run did not build, and no action of the run's on the site's controls has led elsewhere."""
     lineage: _Lineage = field(default_factory=_Lineage)
     """Whether each visit and each read was on the guess."""
+    moved_by_action: bool = False
+    """The last action itself took the page elsewhere, as the page reports it; read by the next observation only."""
     downloads_forbidden: bool | None = None
     """Jev's word that the task rules out downloading, asked once a control the page says downloads is in play."""
     owes_read: bool = False
@@ -1387,6 +1391,7 @@ class Agent:
             if act.outcome is StepOutcome.EXECUTED and action.text is not None:
                 typed = "<secret>" if action.secret else self._redactor.mask(action.text)
             changed = act.page_changed
+            state.moved_by_action = act.outcome is StepOutcome.EXECUTED and act.moved
             if act.outcome is StepOutcome.EXECUTED:
                 typing = decision.operation in {Operation.FILL, Operation.SELECT} and not changed
                 seen = _seen(observation)
@@ -1665,10 +1670,13 @@ class Agent:
     def _note_lineage(state: _RunState, observation: Observation) -> None:
         """Set whether the run is on the guess from the history entry the page is.
 
-        One rule: only an address the run built is a guess. An entry the run's own action on the site's controls
-        produced is the site's, whatever its path, unless it landed on a built address again. Recovery that edited
-        the search form on a guessed results page and submitted it got results that inherited the guess, and every
-        quote from the corrected search could be held.
+        Only an address the run built is a guess, and a page leaves it only by a move the run can show it made. An
+        entry, or a new address on an entry, that the run's own action on the site's controls produced, as the page
+        reports it (`ActResult.moved`: a new document after the action, a tab it opened, or an address its own
+        input event changed), is the site's, whatever its path, unless it landed on a built address again. A move
+        the run cannot tie to its action, such as a single-page app rewriting its address after a fetch, stays on
+        the guess: that only asks the verifier to judge the page, which a correct page passes, and holds attach to
+        readings, so the refused reading never blocks a new one.
 
         | Transition                                      | Entry      | Lineage                                    |
         | ----------------------------------------------- | ---------- | ------------------------------------------ |
@@ -1677,10 +1685,10 @@ class Agent:
         | NAVIGATE, a redirect after it                   | new        | guessed if it asked for or landed on one   |
         |                                                 |            | the run built                              |
         | Back past the start (the caller's page)         | new        | guessed if it landed on one the run built  |
-        | click, Enter, fill, select, drag, upload, hover | new, or a  | the site's: off the guess, unless it       |
-        | or a dialog, executed                           | new address| landed on an address the run built         |
-        | pushState or a new tab with no action of the    | new        | inherited from the page it came from       |
-        | run's, such as a page rewriting its address     |            |                                            |
+        | a click, Enter, fill, select, drag, upload,     | new, or a  | the site's: off the guess, unless it       |
+        | hover or dialog that itself moved the page      | new address| landed on an address the run built         |
+        | any other pushState, rewrite or new tab, such   | new, or a  | inherited from the page it came from       |
+        | as one on a timer or after a fetch              | new address|                                            |
         | the opening, or the front-page fallback         | new        | as the run began (`run` sets it)           |
         | the browser names no entry                      | none       | as for a new entry, each time              |
         """
@@ -1689,9 +1697,11 @@ class Agent:
         address, lineage = search_address(observation.url), state.lineage
         entry = observation.history_entry
         built = {search_address(url) for url in state.invented}
-        acted = executed and last is not None and last.operation in _SITE_ACTIONS
-        # The same address again, reached through the site's controls, is the guess resubmitted, not a new search.
-        site = acted and address not in built
+        # Only a move the action itself made is the site's answer: a guessed page that rewrote its own address on a
+        # timer just after a click cleared the guess, and its own document was read as the run's. The same address
+        # again, reached through the site's controls, is the guess resubmitted, not a new search.
+        caused, state.moved_by_action = state.moved_by_action, False
+        site = executed and last is not None and last.operation in _SITE_ACTIONS and caused and address not in built
         if entry is not None and entry in lineage.entries:
             moved = lineage.entry_addresses.get(entry) != address
             state.guessing = False if site and moved else lineage.entries[entry]
