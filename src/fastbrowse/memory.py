@@ -220,7 +220,10 @@ class Notes:
                 occurrence = {}
                 occurrences.append(occurrence)
             occurrence[sha] = key
-            canonical = next(iter(occurrence.values()))
+            # One row read twice names one record, and it must never be a held reading while another stands: a
+            # recount on the run's own page with a new banner joined the refused row and was refused with it.
+            readings = list(occurrence.values())
+            canonical = next((k for k in readings if not self.held(tally.requirement_id, k)), readings[0])
             records.append(canonical)
             self._tally_records.add(key)
         fact = Fact(text="", evidence=None, basis=tuple(records), tally=tally, reader=FactReader.LLM)

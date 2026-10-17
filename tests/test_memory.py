@@ -730,6 +730,21 @@ def _builds_comparison(notes: Notes, key: str) -> bool:
     return complete_comparison(notes, "r1", ranking) and notes.evidenced("r1")
 
 
+def _builds_recount(notes: Notes, key: str) -> bool:
+    # The same row counted once, then counted again at the same address in a capture that changed elsewhere (a
+    # banner, a timestamp): that later reading was taken off the guess.
+    notes.add_tally(Tally(requirement_id="r1", key="Fares", records=(key,)))
+    first = next(f for f in notes.facts if fact_id(f) == key)
+    assert first.evidence is not None
+    again = first.model_copy(
+        update={"requirement_id": None, "evidence": first.evidence.model_copy(update={"capture_sha256": "recount"})}
+    )
+    notes.add(again)
+    notes.add_tally(Tally(requirement_id="r1", key="Fares", records=(fact_id(again),)))
+    notes.complete_tallies("r1")
+    return notes.evidenced("r1")
+
+
 def _offers_values(notes: Notes, key: str) -> bool:
     return key in notes.current_evidence() and key in notes.usable_evidence("r1")
 
@@ -740,12 +755,21 @@ def _offers_to_cite(notes: Notes, key: str) -> bool:
 
 
 @pytest.mark.parametrize(
-    "build",
-    [_builds_quote, _builds_conclusion, _builds_tally, _builds_comparison, _offers_values, _offers_to_cite],
-    ids=["quote", "conclusion", "tally", "comparison", "values-offered", "cited"],
+    ("build", "on_guess"),
+    [
+        (_builds_quote, False),
+        (_builds_conclusion, False),
+        (_builds_tally, False),
+        (_builds_comparison, False),
+        (_offers_values, False),
+        (_offers_to_cite, False),
+        # Read again off the guess, the guessed row is the run's own reading too, and counts.
+        (_builds_recount, True),
+    ],
+    ids=["quote", "conclusion", "tally", "comparison", "values-offered", "cited", "recount"],
 )
 def test_no_constructor_builds_on_a_held_reading_and_each_builds_on_a_legitimate_one(
-    build: Callable[[Notes, str], bool],
+    build: Callable[[Notes, str], bool], on_guess: bool
 ) -> None:
     """Every way a quote becomes evidence, a conclusion, a count, a ranking or an offer to a reader ignores a reading
     held as refused off a guessed page, and builds on the run's own reading of the same kind. A ranking that took
@@ -755,10 +779,11 @@ def test_no_constructor_builds_on_a_held_reading_and_each_builds_on_a_legitimate
         guessed = _quoted("BA: $320", "guess", _GUESSED)
         own = _quoted("VS: $305", "own", _OWN).model_copy(update={"requirement_id": None})
         notes = Notes((guessed, own))
-        notes.discredit(("r1",), lambda evidence: evidence.url == _GUESSED)
+        # Held by reading, as the run's lineage holds them: the guessed capture, not every capture of its address.
+        notes.discredit(("r1",), lambda evidence: evidence.capture_sha256 == "guess")
         return notes, fact_id(guessed), fact_id(own)
 
     notes, guessed, _ = refused()
-    assert build(notes, guessed) is False
+    assert build(notes, guessed) is on_guess
     notes, _, own = refused()
     assert build(notes, own) is True
