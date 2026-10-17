@@ -116,26 +116,47 @@ _SCROLL_EVENT_SECONDS = 3.0
 # control is scrolled to each alignment in turn and kept at the first where a point of it is its own again. The guard
 # is checked in the same task: a stale control must never be scrolled into view.
 #
-# It resolves only once the window's own scroll event has been dispatched, when any alignment moved the window: the
-# page's scroll handlers, which can repurpose the control, run before this listener, added after theirs. A wait for a
-# drawn frame gave up after 100ms without one, and comparing only where the window started and ended skipped the wait
-# when 'end' brought it back to the top, so a fill went ahead before the handler ran. A wait with any deadline can lose
-# the race on a loaded machine, so a scroll whose event did not arrive in time, or that a hidden page will only
-# deliver once something shows it, is reported 'unsettled' and nothing is acted on.
+# It resolves only once every scroll it caused has been delivered and the page has gone a frame and a task without
+# another, when any alignment moved the window or a container the control sits in: the page's scroll handlers, which
+# can repurpose the control, have run by then. A container's scroll event does not reach the window, so a route that
+# waited on the window alone, with only a scrolled list moving, went ahead before the list's handler ran. One capture
+# listener on each document sees every element's scroll and the window's. A wait for a drawn frame gave up after 100ms
+# without one, and comparing only where the window started and ended skipped the wait when 'end' brought it back to
+# the top. A wait with any deadline can lose the race on a loaded machine, so a scroll whose events did not arrive and
+# go quiet in time, or that a hidden page will only deliver once something shows it, is reported 'unsettled' and
+# nothing is acted on.
 _UNCOVER_JS = (
     "(async (id, guard) => { const r = window.__fastbrowse, e = r?.nodes.get(id); "
     "if (!e?.isConnected || JSON.stringify(r.guard(e)) !== JSON.stringify(guard)) return null; "
-    "const w = e.ownerDocument.defaultView; let moved = false; "
-    "const dispatched = new Promise(done => w.addEventListener('scroll', done, {once: true})); "
-    "let point = 'covered'; "
-    "for (const block of ['center', 'start', 'end']) { const at = [w.scrollX, w.scrollY]; "
-    "e.scrollIntoView({block, inline: 'nearest', behavior: 'instant'}); "
-    "moved ||= w.scrollX !== at[0] || w.scrollY !== at[1]; "
+    "const docs = [], scrollers = []; "
+    # The scrolling element reports the window's scroll, whose events and scrollend go to the document instead.
+    "for (let n = e; n; ) { if (n !== n.ownerDocument.scrollingElement) scrollers.push(n); "
+    "const root = n.getRootNode(); "
+    "if (n.parentElement) n = n.parentElement; else if (root instanceof ShadowRoot) n = root.host; "
+    "else { const view = n.ownerDocument.defaultView; docs.push(n.ownerDocument); "
+    "try { n = view.frameElement; } catch { n = null; } } } "
+    "const at = t => t instanceof Document ? [t.defaultView.scrollX, t.defaultView.scrollY].join() "
+    ": [t.scrollLeft, t.scrollTop].join(); const targets = [...docs, ...scrollers]; "
+    "const where = () => targets.map(at).join(';'); const before = targets.map(at); "
+    "let seen = 0; const ends = new Set(); const mark = () => { seen++; }; const end = ev => ends.add(ev.target); "
+    "for (const d of docs) { d.addEventListener('scroll', mark, {capture: true, passive: true}); "
+    "d.addEventListener('scrollend', end, {capture: true, passive: true}); } "
+    "try { let moved = false, point = 'covered'; "
+    "for (const block of ['center', 'start', 'end']) { const was = where(); "
+    "e.scrollIntoView({block, inline: 'nearest', behavior: 'instant'}); moved ||= where() !== was; "
     "point = (" + _HIT_TEST_JS + ")(id, false); if (point !== 'covered') break; } "
-    "if (moved && (e.ownerDocument.hidden || !await Promise.race(["
-    "dispatched.then(() => true), "
-    f"new Promise(done => setTimeout(() => done(false), {_SCROLL_EVENT_SECONDS * 1000}))]))) return 'unsettled'; "
-    "return point; })"
+    "if (!moved) return point; if (e.ownerDocument.hidden) return 'unsettled'; "
+    # A scroller that ends somewhere new owes its scrollend too, where the browser sends one: a carousel that
+    # settles on its scrollend swaps the card, and the button in it, after the scroll events have gone quiet.
+    "const due = 'onscrollend' in window ? targets.filter((t, i) => at(t) !== before[i]) : []; "
+    f"const deadline = performance.now() + {_SCROLL_EVENT_SECONDS * 1000}; "
+    "const turn = () => Promise.race(["
+    "new Promise(done => requestAnimationFrame(() => setTimeout(() => done(true), 0))), "
+    "new Promise(done => setTimeout(() => done(false), Math.max(0, deadline - performance.now())))]); "
+    "while (!seen || due.some(t => !ends.has(t))) if (!await turn()) return 'unsettled'; "
+    "for (let last = -1; last !== seen; ) { last = seen; if (!await turn()) return 'unsettled'; } "
+    "return point; } finally { for (const d of docs) { d.removeEventListener('scroll', mark, {capture: true}); "
+    "d.removeEventListener('scrollend', end, {capture: true}); } } })"
 )
 
 _OBSTRUCTIONS = 'dialog,[role=dialog],[role=alertdialog],[aria-modal="true"],[role=menu],[role=listbox],[popover]'

@@ -1,6 +1,7 @@
 """Pointer handlers can invalidate a target before its press or replace an editor before typing."""
 
 import asyncio
+import json
 from collections.abc import Coroutine
 from unittest.mock import AsyncMock
 
@@ -9,6 +10,7 @@ import pytest
 from fastbrowse.agent import Agent
 from fastbrowse.browser import BrowserSession, CdpPage
 from fastbrowse.browser import page as page_module
+from fastbrowse.browser.page import _UNCOVER_JS
 from fastbrowse.effects import effect
 from fastbrowse.models import Operation, StepOutcome
 from fastbrowse.page import Action, BrowserError
@@ -904,6 +906,73 @@ async def test_a_control_repurposed_while_scrolled_clear_of_a_band_is_never_pres
         "window.adClicks]",
     )
     assert (keys, pressed, values, ad_clicks) == (0, None, ["", ""], 0)
+
+
+@pytest.mark.parametrize("event", ["scroll", "scrollend"])
+@pytest.mark.parametrize("operation", [Operation.CLICK, Operation.FILL])
+async def test_a_control_repurposed_when_its_container_scrolls_clear_of_a_band_is_never_acted_on(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, operation: Operation, event: str
+) -> None:
+    """A list that scrolls inside the page, not the window, moved the control clear of a band while the window
+    stayed put, and its scroll events never reach the window. The route only waited on the window's, so it went
+    ahead before the list's handler ran; one that settles a carousel on its scrollend swapped an authorized Login
+    for "Delete account". A later frame wait happened to cover for it unless a frame stalled, so the click case pins
+    the route's own contract, and the fill case the whole action."""
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    assert (
+        await eval_value(
+            browser_session,
+            session_id,
+            "window.adClicks = 0; window.keys = 0; document.addEventListener('keydown', () => window.keys++, true); "
+            "document.body.style.cssText = 'margin:0;height:100vh;overflow:hidden'; "
+            "document.body.innerHTML = '<div id=list style=\"position:fixed;left:0;right:0;bottom:0;height:400px;"
+            'overflow:auto"><div style="height:330px"></div><form onsubmit="event.preventDefault()">'
+            "<input name=user aria-label=Username> <button id=go type=button "
+            'onclick="window.pressed = this.textContent">Login</button></form>'
+            '<div style="height:2000px"></div></div>\'; '
+            "const band = document.createElement('ins'); band.style.cssText = 'display:block;position:fixed;"
+            "left:0;right:0;bottom:0;height:120px;background:white;z-index:9'; "
+            "band.addEventListener('mousedown', () => window.adClicks++); document.body.append(band); "
+            f"document.getElementById('list').addEventListener({event!r}, () => {{ "
+            "document.getElementById('go').textContent = 'Delete account'; "
+            "document.querySelector('[name=user]').setAttribute('aria-label', 'Card number'); }, {once: true}); "
+            "(r => document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === band)"
+            "(document.getElementById('go').getBoundingClientRect())",
+        )
+        is True
+    )
+    obs = await page.observe()
+    action = (
+        Action(operation=operation, target_id=find(obs, "Username").id, text="ada")
+        if operation is Operation.FILL
+        else Action(operation=operation, target_id=find(obs, "Login").id)
+    )
+    if operation is Operation.CLICK:
+        # The route's own contract, which nothing later in the action stands in for: once it hands back a place
+        # to act, every handler the scroll it made owes has run. On 11e07f2 it returned before the list's scroll
+        # was delivered at all, leaving a later frame wait with a 100ms fallback to cover for it.
+        assert page._last is not None
+        _session, _frame, local_id, guard = page._last.controls[find(obs, "Login").id]
+        out = await browser_session.client.send.Runtime.evaluate(
+            params={
+                "expression": f"(async () => {{ await ({_UNCOVER_JS})({local_id}, {json.dumps(guard)}); "
+                "return document.getElementById('go').textContent; })()",
+                "awaitPromise": True,
+                "returnByValue": True,
+            },
+            session_id=session_id,
+        )
+        assert out["result"].get("value") == "Delete account"
+        return
+    result = await page.act(action, obs)
+    assert result.outcome is StepOutcome.STALE, result.detail
+    pressed, value, keys, ad_clicks = await eval_value(
+        browser_session,
+        session_id,
+        "[window.pressed, document.querySelector('[name=user]').value, window.keys, window.adClicks]",
+    )
+    assert (pressed, value, keys, ad_clicks) == (None, "", 0, 0)
 
 
 @pytest.mark.parametrize(
