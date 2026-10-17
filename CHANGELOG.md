@@ -22,9 +22,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   shortcut were refused as the shortcut's page, and each read concluded the refused fare again from its quotes,
   until the run stopped `stuck`. Pages reached after the run navigates off a shortcut are its own, and quotes read
   on the shortcut can no longer answer a requirement refused for them, while the requirement's other quotes still
-  do; a click on the shortcut's page still keeps it a guess. The verifier judges a shortcut's page by what it shows
-  rather than how it was reached, and an answer keeps the terms a value was quoted under, such as a round trip and
-  its return date.
+  do, and the same text read again off the shortcut counts; a click on the shortcut's page still keeps it a guess.
+  The verifier judges a shortcut's page by what it shows rather than how it was reached, and an answer keeps the
+  terms a value was quoted under, such as a round trip and its return date.
 
 ## [0.5.22] - 2026-10-16
 

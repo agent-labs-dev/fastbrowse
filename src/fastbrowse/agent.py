@@ -692,10 +692,11 @@ class Agent:
                     history, invented = (
                         ([], set[str]()) if opening is None else await self._open(task, opening, ledger, proposing)
                     )
+                    fell_back = False
                     if start is None and opening is not None:
                         # The caller gave a goal and no page, so this address was worked out from the task too.
                         invented.add(opening)
-                        await self._front_page_if_blank(opening)
+                        fell_back = await self._front_page_if_blank(opening)
                     state = _RunState(
                         task, inputs or {}, tuple(attachments), authorization or Authorization(), ledger, head.planning
                     )
@@ -705,7 +706,10 @@ class Agent:
                         state.start_landing_url = await self._page.address()
                     state.history.extend(history)
                     state.invented = invented
-                    state.guessing = bool(invented)
+                    # The run begins on the guess only if the guess is still the page open: a guessed path that
+                    # opened nothing was left for the site's front page, and a form there led back to the same
+                    # path with every read of it held guessed.
+                    state.guessing = bool(invented) and not fell_back
                     if opening is not None:
                         # A shortcut leaves the start page before the loop observes anything.
                         state.visited[opening] = None
@@ -1146,7 +1150,7 @@ class Agent:
         trace("start_page", url=opening)
         return opening
 
-    async def _front_page_if_blank(self, opened: str) -> None:
+    async def _front_page_if_blank(self, opened: str) -> bool:
         """Go to the site's front page when the address this run chose for itself opened nothing.
 
         A start page worked out from the task is a guess at an address, and a guess can name a path the site
@@ -1154,22 +1158,23 @@ class Agent:
         it, learns nothing, and spends its recovery discovering it is stuck: three empty reads and a
         navigation, in the run that prompted this. Only the path was ever in doubt, so the front page of the
         site already chosen is where to be. A start page the caller gave is left alone: that address is not
-        a guess and this run is not entitled to second-guess it.
+        a guess and this run is not entitled to second-guess it. Returns whether it went there.
         """
         proposed = urlsplit(opened)
         if proposed.path in ("", "/"):
-            return
+            return False
         observation = await self._observe()
         if _drew_something(observation):
-            return
+            return False
         # A page built by script is observable before it draws: navigation returns at `readyState`, and
         # hydration follows. Waiting is what the loop already does before calling an empty page stuck, and
         # without it a deep route that was right would be abandoned for being slow.
         if await self._outwait(observation) and _drew_something(await self._observe()):
-            return
+            return False
         front = f"{proposed.scheme}://{proposed.netloc}"
         trace("start_page_blank", proposed=opened, front=front)
         await self._page.navigate(front)
+        return True
 
     async def _open(
         self, task: str, start: str, ledger: Ledger, proposing: asyncio.Task[Shortcut] | None
@@ -2794,6 +2799,8 @@ class Agent:
     async def _page_records(
         self, state: _RunState, capture: Capture, wanted: Sequence[Requirement], *, reuse: bool = True
     ) -> ReadOutcome:
+        # Pages read in a run of pages never pass through `_read`, and their readings are judged the same way.
+        state.lineage.read(capture.sha256, guessing=state.guessing)
         if reuse and (counted := read_tallies(capture, state.tally_readers, [r.id for r in wanted])) is not None:
             return counted
         costs: list[CostLine] = []

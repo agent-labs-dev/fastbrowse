@@ -857,13 +857,14 @@ async def test_a_fixed_cover_the_page_means_to_be_answered_is_still_reported(
     ]
 
 
-@pytest.mark.parametrize("operation", [Operation.CLICK, Operation.FILL])
+@pytest.mark.parametrize("control", ["button", "field", "date"])
 async def test_a_control_repurposed_while_scrolled_clear_of_a_band_is_never_pressed_or_typed_into(
-    page: CdpPage, browser_session: BrowserSession, main_site: str, operation: Operation
+    page: CdpPage, browser_session: BrowserSession, main_site: str, control: str
 ) -> None:
     """Scrolling a control out from under a band runs the page's scroll handlers. One that turned an authorized
     Login into "Delete account", or a username field into a card number field, would have had the keyboard act on
-    what was never classified or authorized; the pointer path rechecks before every press, and so does this one."""
+    what was never classified or authorized; the pointer path rechecks before every press, and so does this one. A
+    date field's value is set without a key, and that branch once returned before the check could run."""
     await page.navigate(main_site)
     session_id = browser_session.active_session_id
     await eval_value(browser_session, session_id, _anchored_form(scrolls=True, band="div"))
@@ -876,25 +877,29 @@ async def test_a_control_repurposed_while_scrolled_clear_of_a_band_is_never_pres
             "for (const top of ['0px', 'calc(50% - 60px)']) { const band = foot.cloneNode(true); "
             "band.style.top = top; band.style.bottom = 'auto'; band.addEventListener('mousedown', () => "
             "window.adClicks++); document.body.append(band); } } "
+            "document.getElementById('login').insertAdjacentHTML('beforeend', "
+            "'<input type=date name=when aria-label=Departure>'); "
             "window.keys = 0; document.addEventListener('keydown', () => window.keys++, true); "
             "addEventListener('scroll', () => { document.getElementById('go').textContent = 'Delete account'; "
-            "document.querySelector('[name=user]').setAttribute('aria-label', 'Card number'); }, {once: true}); true",
+            "document.querySelector('[name=user]').setAttribute('aria-label', 'Card number'); "
+            "document.querySelector('[name=when]').setAttribute('aria-label', 'Return date'); }, {once: true}); true",
         )
         is True
     )
     obs = await page.observe()
-    action = (
-        Action(operation=Operation.CLICK, target_id=find(obs, "Login").id)
-        if operation is Operation.CLICK
-        else Action(operation=Operation.FILL, target_id=find(obs, "Username").id, text="ada")
-    )
+    action = {
+        "button": Action(operation=Operation.CLICK, target_id=find(obs, "Login").id),
+        "field": Action(operation=Operation.FILL, target_id=find(obs, "Username").id, text="ada"),
+        "date": Action(operation=Operation.FILL, target_id=find(obs, "Departure").id, text="2026-11-14"),
+    }[control]
     result = await page.act(action, obs)
     assert result.outcome is StepOutcome.STALE, result.detail
     # Refused by the keyboard route's own check, not by a pointer path the bands never let it take.
-    assert result.detail in {"control changed before keyboard press", "control changed before typing"}
-    keys, pressed, value, ad_clicks = await eval_value(
+    assert result.detail == "control changed before keyboard use"
+    keys, pressed, values, ad_clicks = await eval_value(
         browser_session,
         session_id,
-        "[window.keys, window.pressed, document.querySelector('[name=user]').value, window.adClicks]",
+        "[window.keys, window.pressed, ['user', 'when'].map(n => document.querySelector(`[name=${n}]`).value), "
+        "window.adClicks]",
     )
-    assert (keys, pressed, value, ad_clicks) == (0, None, "", 0)
+    assert (keys, pressed, values, ad_clicks) == (0, None, ["", ""], 0)

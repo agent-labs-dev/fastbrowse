@@ -15,6 +15,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 from typing import Literal, assert_never
@@ -237,8 +238,17 @@ _KEYS = {"Enter": ("Enter", "\r", 13), "Escape": ("Escape", "", 27), " ": ("Spac
 _POINT = TypeAdapter(tuple[float, float] | Literal["covered"] | None)
 _COVER = TypeAdapter(Literal["obstruction", "band", "other", "none"] | None)
 _ACTIVATION_KEY = TypeAdapter(Literal["Enter", " "] | None)
-type _Route = tuple[float, float] | Literal["covered", "keyboard"] | None
-"""Where a covered control can be acted on: a point scrolled clear of the cover, the keyboard, or nowhere."""
+_CHANGED = "control changed before keyboard use"
+
+
+@dataclass(frozen=True, slots=True)
+class _Refusal:
+    outcome: StepOutcome
+    detail: str | None
+
+
+type _Route = tuple[float, float] | Literal["keyboard"] | _Refusal
+"""Where a covered control can be acted on: a point scrolled clear of the cover, the keyboard, or why nowhere."""
 
 
 class _SnapshotControl(Frozen):
@@ -987,10 +997,14 @@ class CdpPage(Page):
         Only a band fixed to the window is routed around: it is first scrolled clear of, and a control it still
         covers is left to the keyboard. A dialog, a full-window backdrop or a panel over the control in the page's
         own flow is reported as covering it, as before.
+
+        This is the one way onto the keyboard route, and it hands that route on only while the control's guard
+        still holds: a date field's value is set without a key, and that branch returned before a check placed
+        further on could run. Each key or insertion checks again after focusing.
         """
         session_id, _frame, local_id, guard = target
         if _COVER.validate_python(await self._evaluate(session_id, f"({_COVER_JS})({local_id})")) != "band":
-            return "covered"
+            return _Refusal(StepOutcome.COVERED, await self._covered_detail(target))
         if scroll:
             point = _POINT.validate_python(
                 await self._evaluate(session_id, f"({_UNCOVER_JS})({local_id}, {json.dumps(guard)})")
@@ -999,11 +1013,17 @@ class CdpPage(Page):
             # must see what they did.
             with suppress(Exception):
                 await asyncio.wait_for(self._evaluate(session_id, _PRESENTED_JS), 0.5)
+            if point is None:
+                return _Refusal(StepOutcome.STALE, "target disconnected")
             if point != "covered":
                 return point
             # The last alignment can have put the control under something else.
             if _COVER.validate_python(await self._evaluate(session_id, f"({_COVER_JS})({local_id})")) != "band":
-                return "covered"
+                return _Refusal(StepOutcome.COVERED, await self._covered_detail(target))
+        # Scroll handlers, run by now, can have repurposed the control: an authorized "Save" turned "Delete account"
+        # would have had the new action pressed unclassified.
+        if not await self._guard_holds(target):
+            return _Refusal(StepOutcome.STALE, _CHANGED)
         return "keyboard"
 
     async def _click(
@@ -1015,10 +1035,8 @@ class CdpPage(Page):
             return StepOutcome.STALE, "target disconnected"
         if point == "covered":
             route = await self._route_around(target)
-            if route is None:
-                return StepOutcome.STALE, "target disconnected"
-            if route == "covered":
-                return StepOutcome.COVERED, await self._covered_detail(target)
+            if isinstance(route, _Refusal):
+                return route.outcome, route.detail
             if route == "keyboard":
                 return await self._press(target)
             point = route
@@ -1027,16 +1045,12 @@ class CdpPage(Page):
     async def _press(self, target: tuple[str, str, int, list[object] | None]) -> tuple[StepOutcome, str | None]:
         """Activate a control from the keyboard: focus it and press the key its semantics answer to."""
         session_id, _frame, local_id, _guard = target
-        # Scrolling the control clear of the band ran the page's scroll handlers, and a page that turned an
-        # authorized "Save" into "Delete account" there would have had the new action pressed unclassified.
-        if not await self._guard_holds(target):
-            return StepOutcome.STALE, "control changed before keyboard press"
         key = _ACTIVATION_KEY.validate_python(await self._evaluate(session_id, f"({_ACTIVATION_KEY_JS})({local_id})"))
         if key is None or not await self._focus(session_id, local_id):
             return StepOutcome.COVERED, await self._covered_detail(target)
-        # Focus handlers can repurpose it as well.
+        # Focus handlers can repurpose it as scroll handlers can.
         if not await self._guard_holds(target):
-            return StepOutcome.STALE, "control changed before keyboard press"
+            return StepOutcome.STALE, _CHANGED
         await self._press_key(session_id, key)
         return StepOutcome.EXECUTED, "Pressed from the keyboard: a band fixed to the window covers it."
 
@@ -1099,13 +1113,9 @@ class CdpPage(Page):
             return StepOutcome.STALE, "target disconnected"
         if secret and not secret_origin:
             return StepOutcome.FAILED, "secret fill requires an authorized origin"
-        route: _Route = point
-        if point == "covered":
-            route = await self._route_around(target)
-            if route is None:
-                return StepOutcome.STALE, "target disconnected"
-            if route == "covered":
-                return StepOutcome.COVERED, await self._covered_detail(target)
+        route: _Route = point if point != "covered" else await self._route_around(target)
+        if isinstance(route, _Refusal):
+            return route.outcome, route.detail
         # A field a band still covers is focused and typed into, as a keyboard user would; there is nothing of its
         # own to click, and a click there lands on the band.
         keyboard = route == "keyboard"
@@ -1137,8 +1147,6 @@ class CdpPage(Page):
         local_id = handed
         if not secret and native_date:
             return await self._fill_native_date(session_id, local_id, text)
-        if keyboard and not await self._guard_holds(target):
-            return StepOutcome.STALE, "control changed before typing"
         for attempt in range(2):
             if attempt or focused is None:
                 focused = await self._focus(
@@ -1148,7 +1156,7 @@ class CdpPage(Page):
                 return StepOutcome.FAILED, "target did not receive keyboard focus"
             # No pointer press rechecked the field, so the text goes only to the field that was authorized.
             if keyboard and not await self._guard_holds(target):
-                return StepOutcome.STALE, "control changed before typing"
+                return StepOutcome.STALE, _CHANGED
             # A secret must be checked and inserted in one renderer task: CDP insertText would leave a
             # navigation/focus race between checking the origin and dispatching the secret to the page.
             script = (
@@ -1285,11 +1293,8 @@ class CdpPage(Page):
         if point is None:
             return StepOutcome.STALE, "target disconnected"
         # The choice is set without the pointer, so only a cover the page means to be dealt with first refuses it.
-        if point == "covered":
-            if await self._route_around(target, scroll=False) != "keyboard":
-                return StepOutcome.COVERED, await self._covered_detail(target)
-            if not await self._guard_holds(target):
-                return StepOutcome.STALE, "control changed before selecting"
+        if point == "covered" and isinstance(route := await self._route_around(target, scroll=False), _Refusal):
+            return route.outcome, route.detail
         script = (
             "((id, label) => { const e = window.__fastbrowse?.nodes.get(id); "
             "if (!e?.isConnected || e.tagName !== 'SELECT') return null; "
@@ -1319,12 +1324,12 @@ class CdpPage(Page):
             if point is None:
                 return StepOutcome.STALE, "target disconnected"
             # A key needs focus, not the pointer: Enter in a login form under an anchored ad was refused as covered.
-            if point == "covered" and await self._route_around(target, scroll=False) != "keyboard":
-                return StepOutcome.COVERED, await self._covered_detail(target)
+            if point == "covered" and isinstance(route := await self._route_around(target, scroll=False), _Refusal):
+                return route.outcome, route.detail
             if not await self._focus(session_id, local_id):
                 return StepOutcome.FAILED, "target did not receive keyboard focus"
             if point == "covered" and not await self._guard_holds(target):
-                return StepOutcome.STALE, "control changed before keyboard press"
+                return StepOutcome.STALE, _CHANGED
         await self._press_key(session_id, key)
         return StepOutcome.EXECUTED, None
 

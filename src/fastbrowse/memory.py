@@ -115,7 +115,10 @@ class Notes:
         self._owners: dict[str, set[str]] = {}
         self._retired: set[str] = set()
         self._discredited: dict[str, set[str]] = {}
-        """Per requirement, the facts it was refused on as read off the wrong page; they cannot evidence it again."""
+        """Per requirement, the readings it was refused on as read off the wrong page."""
+        self._on_guess: Callable[[Evidence], bool] | None = None
+        """Whether a reading was taken on the guess, asked afresh each time, since a later reading off the guess of
+        the same text frees it."""
         self._tally_records: set[str] = set()
         self._record_ids: dict[tuple[str, str, str], list[dict[str, str]]] = {}
         self._continuation_records: dict[str, set[str]] = {}
@@ -208,8 +211,9 @@ class Notes:
         previous = self._facts.get(key)
         # A recount on the right page keeps the tally's key, so carrying the refused page's records into it would
         # leave the count resting on them and refused again on every finish.
-        refused = self._discredited.get(tally.requirement_id, set())
-        carried = tuple(record for record in (previous.basis if previous else ()) if record not in refused)
+        carried = tuple(
+            record for record in (previous.basis if previous else ()) if not self._held(tally.requirement_id, record)
+        )
         records = list(dict.fromkeys((*carried, *records)))
         tally = tally.model_copy(update={"records": tuple(records)})
         fact = fact.model_copy(update={"text": f"{tally.key}: {tally.count}", "basis": tuple(records), "tally": tally})
@@ -255,8 +259,25 @@ class Notes:
         Every path that lets a fact evidence a requirement asks this, since one that did not reopened the loop
         `discredit` closes: a count completed from the refused page's records answered the requirement again.
         """
-        refused = self._discredited.get(requirement_id)
-        return bool(refused) and bool(refused & {key, *self.expand_evidence_ids(basis)})
+        if not self._discredited.get(requirement_id):
+            return False
+        return any(self._held(requirement_id, source) for source in {key, *self.expand_evidence_ids(basis)})
+
+    def _held(self, requirement_id: str, key: str) -> bool:
+        """Whether a reading the requirement was refused on is still a reading taken only on the guess.
+
+        Held by its fact id alone, a reading never came back: a page that keeps its search outside the address,
+        reached again by the run itself, drew the same text, cut the same fact and was refused for good. A hold is
+        the refused reading while nothing has read the same text off the guess.
+        """
+        fact = self._facts.get(key)
+        return (
+            key in self._discredited.get(requirement_id, ())
+            and fact is not None
+            and fact.evidence is not None
+            and self._on_guess is not None
+            and self._on_guess(fact.evidence)
+        )
 
     def add(self, fact: Fact) -> bool:
         """Return whether a new span was added; reused spans still evidence other requirements."""
@@ -326,6 +347,7 @@ class Notes:
         scoped._owners = {key: set(self._owners.get(key, ())) for key in scoped._facts}
         scoped._retired = self._retired & kept
         scoped._discredited = {requirement: set(keys) for requirement, keys in self._discredited.items()}
+        scoped._on_guess = self._on_guess
         scoped._tally_records = self._tally_records & kept
         scoped._continuation_records = {
             requirement: records & kept for requirement, records in self._continuation_records.items()
@@ -352,17 +374,20 @@ class Notes:
             requirements -= dropped
 
     def discredit(self, requirement_ids: Iterable[str], guessed: Callable[[Evidence], bool]) -> None:
-        """Reopen requirements read off the wrong page, and keep the quotes read on it from answering them again.
+        """Reopen requirements read off the wrong page, and keep the readings taken there from answering them again.
+
+        Evidence is held only if it was read while on a built address, and only that reading: `guessed` says
+        whether a reading was, and is asked again whenever a hold is checked.
 
         Reopening alone was not enough on Google Flights: the next read, on the search the run had since rebuilt
-        through the form, concluded the same round-trip fare by drawing on the reopened quotes, the requirement
-        rested on the guessed page again, and every DONE got the same refusal until the run stopped stuck. Only
-        quotes read where `guessed` says the run was on the guess are held: a requirement also cited from a page the
-        run reached itself was refused for its guessed half, and blocking the other half too left it open for good.
-        A conclusion or tally is held by the quotes it rests on, never by its own name, so a recount on the right
-        page still counts. The held facts stay as context; any other quote goes on evidencing the requirement.
+        through the form, concluded the same round-trip fare by drawing on the reopened quotes, and every DONE got
+        the same refusal until the run stopped stuck. Holding more than the guessed readings left requirements open
+        for good: a quote from a page the run reached itself, refused alongside a guessed one, or the same text read
+        again once the run set the search up itself. A conclusion or tally is held through the readings it rests on,
+        never by its own name, so a recount on the right page still counts. Held facts stay as context.
         """
         dropped = set(requirement_ids)
+        self._on_guess = guessed
         for requirement in dropped:
             supporting = self.expand_evidence_ids(key for key, _ in self.supporting(requirement))
             self._discredited.setdefault(requirement, set()).update(

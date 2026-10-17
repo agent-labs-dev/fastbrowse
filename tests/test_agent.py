@@ -19,6 +19,7 @@ from fastbrowse.agent import (
     _code_decision,
     _follow_recovery,
     _guessed,
+    _guessed_page,
     _history,
     _next_value,
     _plan_ids,
@@ -2415,6 +2416,119 @@ async def test_a_guessed_address_reached_again_by_the_run_itself_is_judged_by_th
     # A redraw of the page the run is on, with no new arrival, keeps the judgement it arrived with.
     Agent._note_effect(state, _at(guess))
     assert state.lineage.addresses[guess] is False
+
+
+async def test_a_refused_reading_is_freed_when_the_run_reads_the_same_text_off_the_guess() -> None:
+    """A search page that keeps its state outside the address, reached again by the run itself, drew the same text,
+    cut the same fact, and was held for good because the hold was keyed by the fact. Evidence is held only if it was
+    read while on a built address, and only that reading: one reading off the guess frees it."""
+    guess, start = "https://example.test/flights?q=BRS+to+YRK", "https://example.test/flights"
+    state = await run_state()
+    state.invented, state.guessing = {guess}, True
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    Agent._note_effect(state, _at(guess))
+    state.lineage.read("same", guessing=state.guessing)
+    fare = _fare(guess, "same")
+    state.notes.add(fare)
+    state.notes.discredit(("r1",), _guessed_page(state.invented, state.lineage))
+    state.notes.add(fare)
+    assert state.notes.unresolved(plan) == plan.requirements
+
+    for operation, landed in ((Operation.NAVIGATE, start), (Operation.CLICK, guess)):
+        state.history.append(
+            HistoryEntry(operation=operation, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
+        )
+        Agent._note_effect(state, _at(landed))
+    state.lineage.read("same", guessing=state.guessing)
+    state.notes.add(fare)
+    assert state.notes.unresolved(plan) == ()
+    assert _guessed(plan, state.notes, state.invented, lineage=state.lineage) == set()
+
+
+@pytest.mark.parametrize("left_by", [Operation.NAVIGATE, Operation.BACK])
+async def test_leaving_a_guess_for_the_callers_page_by_any_navigation_makes_later_reads_the_runs_own(
+    left_by: Operation,
+) -> None:
+    """Back from a shortcut returns to the page the caller named; reads after it are no more guessed than after a
+    navigation there."""
+    guess, start = "https://example.test/flights?q=BRS+to+YRK", "https://example.test/flights"
+    state = await run_state()
+    state.invented, state.guessing = {guess}, True
+    Agent._note_effect(state, _at(guess))
+    for operation, landed in ((left_by, start), (Operation.CLICK, "https://example.test/flights?tfs=set")):
+        state.history.append(
+            HistoryEntry(operation=operation, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
+        )
+        Agent._note_effect(state, _at(landed))
+    state.lineage.read("set", guessing=state.guessing)
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    notes = Notes((_fare("https://example.test/flights?tfs=set", "set"),))
+    assert _guessed(plan, notes, state.invented, lineage=state.lineage) == set()
+
+
+async def test_a_guessed_start_that_fell_back_to_the_front_page_leaves_the_run_off_the_guess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A start page worked out from the task opened nothing and the run went to the site's front page, yet began
+    as if on the guess, so a form there that led back to the guessed path had every read of it held guessed."""
+    guessed, front = "https://shop.test/search/kettles", "https://shop.test"
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    page.navigate = AsyncMock()
+    page.observe = AsyncMock(return_value=_at(guessed))
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    monkeypatch.setattr(agent, "_first_page", AsyncMock(return_value=guessed))
+    monkeypatch.setattr(agent, "_open", AsyncMock(return_value=([], set())))
+    monkeypatch.setattr(agent, "_outwait", AsyncMock(return_value=False))
+    monkeypatch.setattr(agent_module, "_propose", AsyncMock(return_value=Shortcut(url=None)))
+    seen: list[set[str]] = []
+
+    async def loop(state: _RunState, output_schema: object, until: object) -> RunResult:
+        Agent._note_effect(state, _at(front))
+        state.history.append(
+            HistoryEntry(operation=Operation.CLICK, target="Search", outcome=StepOutcome.EXECUTED, page_changed=True)
+        )
+        Agent._note_effect(state, _at(guessed))
+        state.lineage.read("results", guessing=state.guessing)
+        plan = Plan(
+            requirements=(Requirement(id="r1", text="Kettle", kind=RequirementKind.INFORMATION),), answer_expected=True
+        )
+        seen.append(_guessed(plan, Notes((_fare(guessed, "results"),)), state.invented, lineage=state.lineage))
+        raise _Stop(Status.STUCK, "checked")
+
+    monkeypatch.setattr(agent, "_loop", loop)
+    await agent.run("Find the cheapest kettle", choose_start=True)
+    page.navigate.assert_awaited_once_with(front)
+    assert seen == [set()]
+
+
+async def test_a_page_read_in_a_run_of_pages_is_judged_by_where_the_run_read_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pages read one after another never pass through `_read`. Text read on the guess and then again on a page the
+    run paged to itself kept only the guessed reading, so the later one was held with it."""
+    from fastbrowse.retrieval import ReadOutcome
+
+    page_url = "https://example.test/flights?tfs=page-2"
+    state = await run_state()
+    state.invented = {"https://example.test/flights?q=BRS+to+YRK"}
+    state.lineage.read(capture().sha256, guessing=True)
+    state.guessing = False
+    monkeypatch.setattr(
+        agent_module,
+        "read",
+        AsyncMock(return_value=ReadOutcome(facts=(), coverage=(), rejected_claims=0, cost_lines=())),
+    )
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    await agent._page_records(state, capture(), (), reuse=False)
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    assert _guessed(plan, Notes((_fare(page_url, capture().sha256),)), state.invented, lineage=state.lineage) == set()
 
 
 _SHORTCUT = HistoryEntry(operation=None, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
