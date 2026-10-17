@@ -18,8 +18,8 @@ Schemas 2 and 3 record each group's agent and runner commits and require them to
 CI validates the candidate's exact coverage and compares matched scores, time and cost with the previous
 approved candidate. A group whose catalog differs from the approved one only by tasks listed under the catalog's
 `retired` (a site that is gone) is compared on the tasks both ran; the earlier catalog is found in Git history by
-its digest. Any other catalog, task or limit difference is a protocol change and needs a matched baseline. Unresolved costs, missing grades, incomplete coverage and a failed fixture workflow
-block publication. These checks detect recorded regressions; they do not prove that every website or
+its digest. Any other catalog, task or limit difference is a protocol change and needs a matched baseline.
+Unresolved costs, missing grades, incomplete coverage and a failed fixture workflow block publication. These checks detect recorded regressions; they do not prove that every website or
 grader is free of bugs. Review unexpected outcomes before approving.
 
 To approve reviewed results, dispatch `publish-evals.yml` on `main` with the SHA256 of the exact candidate
