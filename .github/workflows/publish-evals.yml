@@ -11,6 +11,16 @@ on:
         required: true
         type: boolean
         default: false
+      protocol_change:
+        description: Approve publishing groups whose catalog, tasks or limits changed as a fresh baseline
+        required: true
+        type: boolean
+        default: false
+      protocol_note:
+        description: Why the protocol changed (required with protocol_change; recorded in the approval)
+        required: false
+        type: string
+        default: ''
 permissions: {}
 jobs:
   approve:
@@ -31,9 +41,14 @@ jobs:
         env:
           GH_TOKEN: '${{ github.token }}'
           BOOTSTRAP: '${{ inputs.allow_first_publication }}'
+          PROTOCOL_CHANGE: '${{ inputs.protocol_change }}'
+          PROTOCOL_NOTE: '${{ inputs.protocol_note }}'
         run: |
           args=()
           if [ "$BOOTSTRAP" = true ]; then args+=(--bootstrap); fi
+          if [ "$PROTOCOL_CHANGE" = true ]; then
+            args+=(--protocol-change --protocol-note "$PROTOCOL_NOTE" --protocol-record protocol-change.json)
+          fi
           uv run python -m fastbrowse.evals.benchmarks --candidate docs/results/benchmark-candidate.json \
             --baseline docs/results/benchmarks.json --verify-fixture "${args[@]}"
       - name: Bind approval to the reviewed bytes
@@ -44,7 +59,8 @@ jobs:
           import hashlib, json, os
           from datetime import UTC, datetime
           from pathlib import Path
-          from fastbrowse.evals.benchmarks import Approval
+          from fastbrowse.evals.benchmarks import Approval, ProtocolChange
+          record = Path('protocol-change.json')
           content = Path('docs/results/benchmark-candidate.json').read_bytes()
           digest = hashlib.sha256(content).hexdigest()
           if digest != os.environ['CANDIDATE_DIGEST']:
@@ -55,6 +71,7 @@ jobs:
               head_sha=os.environ['GITHUB_SHA'],
               approved_by=os.environ['GITHUB_ACTOR'],
               approved_at=datetime.now(UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
+              protocol_change=ProtocolChange.model_validate_json(record.read_bytes()) if record.exists() else None,
           )
           Path('benchmark-approval.json').write_text(receipt.model_dump_json(indent=2) + '\n')
           PY
