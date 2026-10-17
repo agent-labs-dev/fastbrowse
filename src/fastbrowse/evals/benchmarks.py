@@ -212,7 +212,8 @@ def _retirement_only(group: Group, old: Group, catalog: bytes | None) -> bool:
         return False
     before = catalog_at(old.source_sha256)
     newly = None if before is None else retired_between(before, catalog)
-    return newly is not None and set(group.task_ids) == set(old.task_ids) - newly
+    # A catalog that only moved its task-source hashes retired nothing; that is a protocol change, not a retirement.
+    return bool(newly) and set(group.task_ids) == set(old.task_ids) - newly
 
 
 def regressions(candidate: Candidate, baseline: Candidate, catalog: bytes | None = None) -> None:

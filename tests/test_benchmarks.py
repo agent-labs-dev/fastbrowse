@@ -444,3 +444,12 @@ def test_the_shipped_catalog_retires_exactly_from_the_one_before() -> None:
     catalog = json.loads(CATALOG.read_bytes())
     assert retired_between(_dump(_before(catalog)), CATALOG.read_bytes()) == {RETIRED}
     assert retired_between(CATALOG.read_bytes(), CATALOG.read_bytes()) == set()
+
+
+@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+def test_a_source_digest_change_that_retires_nothing_is_a_protocol_change(candidate, monkeypatch, name):
+    catalog = json.loads(CATALOG.read_bytes())
+    moved = copy.deepcopy(catalog)
+    moved["task_sources"] = {source: "0" * 64 for source in moved["task_sources"]}
+    with pytest.raises(ValueError, match="protocol changed"):
+        _transition(candidate, monkeypatch, name, catalog, moved)
