@@ -167,7 +167,60 @@ def check_catalog(candidate: Candidate, path: Path) -> None:
             raise ValueError("internal rows must cover the exact fastbrowse catalog")
 
 
-def regressions(candidate: Candidate, baseline: Candidate) -> None:
+CATALOG_PATH = "src/fastbrowse/evals/benchmark-catalog.json"
+
+
+def catalog_at(digest: str) -> bytes | None:
+    """The committed catalog whose bytes hash to `digest`, found in this checkout's history of the catalog."""
+    done = subprocess.run(
+        ["git", "log", "--format=%H", "--", CATALOG_PATH], capture_output=True, text=True, timeout=30, check=False
+    )
+    for commit in done.stdout.split():
+        raw = git_file(commit, CATALOG_PATH)
+        if raw is not None and hashlib.sha256(raw).hexdigest() == digest:
+            return raw
+    return None
+
+
+def retired_between(before: bytes, after: bytes) -> set[str] | None:
+    """The tasks `after` retires from `before` when listed retirements are the whole difference, else None.
+
+    Every task left keeps its exact entry (version, fingerprint, arms, category, expectation), as do the arms and
+    models; a retirement stays listed once made. Only the task-source hashes may also move, since removing a task
+    edits those sources."""
+    old, new = json.loads(before), json.loads(after)
+    old_retired = {r["id"]: r for r in old.get("retired", [])}
+    new_retired = {r["id"]: r for r in new.get("retired", [])}
+    if any(new_retired.get(task) != entry for task, entry in old_retired.items()):
+        return None
+    newly = set(new_retired) - set(old_retired)
+    where = {t["id"]: name for name, tasks in old["suites"].items() for t in tasks}
+    if any(where.get(task) != new_retired[task]["suite"] for task in newly):
+        return None
+    left = {name: [t for t in tasks if t["id"] not in newly] for name, tasks in old["suites"].items()}
+    ignored = ("task_sources", "suites", "retired")
+    if left != new["suites"] or {k: v for k, v in old.items() if k not in ignored} != {
+        k: v for k, v in new.items() if k not in ignored
+    }:
+        return None
+    return newly
+
+
+def _retirement_only(group: Group, old: Group, catalog: bytes | None) -> bool:
+    """Whether `group` is `old` on the current catalog less tasks retired since, under the same limits."""
+    if catalog is None or hashlib.sha256(catalog).hexdigest() != group.source_sha256 or group.limits != old.limits:
+        return False
+    before = catalog_at(old.source_sha256)
+    newly = None if before is None else retired_between(before, catalog)
+    return newly is not None and set(group.task_ids) == set(old.task_ids) - newly
+
+
+def regressions(candidate: Candidate, baseline: Candidate, catalog: bytes | None = None) -> None:
+    """Refuse a candidate that drops a published group, changes its protocol or regresses on a matched task.
+
+    `catalog` is the current catalog's bytes. With it, a group whose only difference from the published one is
+    tasks the catalog lists as retired since is compared on the tasks they share; anything else is a protocol
+    change that needs a matched baseline measurement."""
     if candidate.schema_version < baseline.schema_version:
         raise ValueError("publication schema cannot downgrade the approved evidence checks")
     previous = {g.id: g for g in baseline.groups}
@@ -181,7 +234,7 @@ def regressions(candidate: Candidate, baseline: Candidate) -> None:
             old.source_sha256,
             sorted(old.task_ids),
             old.limits,
-        ):
+        ) and not _retirement_only(group, old, catalog):
             raise ValueError(f"protocol changed: {group.id}; matched baseline measurement is required")
         for task in group.task_ids:
             now = [r for r in group.rows if r.arm == "fastbrowse" and r.task == task]
@@ -308,7 +361,7 @@ def check_diff(base: str, catalog: Path) -> None:
         check_catalog(candidate, catalog)
         check_fixture(candidate)
         if baseline is not None:
-            regressions(candidate, baseline)
+            regressions(candidate, baseline, catalog.read_bytes())
     if published.exists():
         if not approval_path.exists():
             raise ValueError("published figures require an owner approval receipt")
@@ -332,7 +385,7 @@ def main() -> None:
     check_catalog(candidate, args.catalog)
     if args.baseline:
         if args.baseline.exists():
-            regressions(candidate, read(args.baseline))
+            regressions(candidate, read(args.baseline), args.catalog.read_bytes())
         elif not args.bootstrap:
             parser.error("the first publication requires explicit --bootstrap approval")
     if args.verify_fixture:

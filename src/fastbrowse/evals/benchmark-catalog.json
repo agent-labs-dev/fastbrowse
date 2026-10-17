@@ -5,7 +5,7 @@
   "owner": "parallax",
   "task_sources": {
     "live_tasks.py": "06d337b829ae9293b554e6617dd52d593a8459b369ab75a563dfa575d52655a3",
-    "more_tasks.py": "408942e0a03304060b8b0e0cddd587d2df6074c97d4b4f47f12bc74655abd41e",
+    "more_tasks.py": "b1c86caf693e37c42aab44433c401fba5db33b533574d4a292d7b77aa60dba42",
     "versions.json": "70384f4a2b6e779ce475155644adc995ee1ce46cec28409fa3e2d431ce14805e"
   },
   "suites": {
@@ -734,5 +734,13 @@
       "default": false
     }
   },
-  "ultrafast_text_model": "inception/mercury-2.5"
+  "ultrafast_text_model": "inception/mercury-2.5",
+  "retired": [
+    {
+      "id": "stretch-wizard-correction",
+      "suite": "stretch-dev",
+      "date": "2026-10-17",
+      "reason": "site removed from DNS: lab.hakdogan.com answers NXDOMAIN (zone SOA serial 2026101610)"
+    }
+  ]
 }

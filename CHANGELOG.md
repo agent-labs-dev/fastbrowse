@@ -62,7 +62,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - The internal benchmark catalog drops `stretch-wizard-correction`, whose site, `lab.hakdogan.com`, no longer
   exists: public DNS resolvers answer NXDOMAIN for it, so every agent's run ended unavailable and no comparison
   including it could ever be published. The fastbrowse-only and backend comparisons now cover 53 tasks and the
-  comparison with the Browser Use agent 46. Figures already published keep the task.
+  comparison with the Browser Use agent 46. Figures already published keep the task. The catalog now lists
+  retired tasks with their date and reason, and the publication gate compares a new group with a published one
+  that ran a retired task on the tasks they share, but only when the catalog changed by nothing but listed
+  retirements: any other removal, an added task or a changed task version still needs a matched measurement.
 - The publication gate judges each benchmark row by the browser its own arm ran in, read from the campaign's
   per-arm browser record, and admits the hosted fastbrowse pool and Browser Use's hosted browser, each only
   for the arm that runs in it, so a swapped record cannot publish one backend under another's name. Before,

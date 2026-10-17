@@ -316,3 +316,131 @@ def test_fixture_claims_are_checked_against_the_actual_artifact(candidate, monke
     rows.pop()
     with pytest.raises(ValueError, match="artifact coverage"):
         benchmarks.check_fixture(parsed)
+
+
+# A retirement: the catalog before it carried the task in its suite and listed nothing retired; the shipped catalog
+# lists it. The published group ran it; a new group cannot, and is compared on the tasks they share.
+RETIRED = "stretch-wizard-correction"
+RETIRED_ENTRY = {
+    "category": "checkout",
+    "expect": "complete",
+    "source_fingerprint": "2dc76be2b1f49207",
+    "task_version": 8,
+}
+GROUP_ARMS = {
+    "internal-fastbrowse": ("fastbrowse",),
+    "internal-hosted": ("fastbrowse", "browser-use"),
+    "internal-backend": ("fastbrowse", "fastbrowse-pool"),
+}
+
+
+def _dump(catalog: dict) -> bytes:
+    return (json.dumps(catalog, indent=2) + "\n").encode()
+
+
+def _before(catalog: dict) -> dict:
+    before = copy.deepcopy(catalog)
+    before.pop("retired")
+    arms = ["fastbrowse", "browser-use", "fastbrowse-pool", "cua-codex"]
+    before["suites"]["stretch-dev"].insert(4, {"id": RETIRED, **RETIRED_ENTRY, "arms": arms})
+    return before
+
+
+def _group(name: str, catalog: bytes) -> dict:
+    arms = GROUP_ARMS[name]
+    ids = sorted(
+        t["id"] for suite in json.loads(catalog)["suites"].values() for t in suite if set(arms) <= set(t["arms"])
+    )
+    row = {"status": "complete", "completed": True, "score": 1.0, "seconds": 10.0, "dollars": 0.01, "physical_runs": 1}
+    return {
+        "id": name,
+        "agent_sha": "a" * 40,
+        "runner_sha": "b" * 40,
+        "metric": "task-success",
+        "source_sha256": hashlib.sha256(catalog).hexdigest(),
+        "task_ids": ids,
+        "repeats": 3,
+        "limits": ["Matched recorded limits"],
+        "rows": [{"task": t, "repeat": r, "arm": a, **row} for t in ids for r in range(3) for a in arms],
+    }
+
+
+def _published(candidate: dict, name: str, catalog: bytes) -> Candidate:
+    return Candidate.model_validate({**candidate, "schema_version": 4, "groups": [_group(name, catalog)]})
+
+
+def _transition(candidate: dict, monkeypatch, name: str, before: dict, after: dict, ids: list[str] | None = None):
+    from fastbrowse.evals import benchmarks
+
+    old, new = _dump(before), _dump(after)
+    monkeypatch.setattr(
+        benchmarks, "catalog_at", lambda digest: old if digest == hashlib.sha256(old).hexdigest() else None
+    )
+    group = _group(name, new)
+    if ids is not None:
+        arms = GROUP_ARMS[name]
+        template = group["rows"][0]
+        group["task_ids"] = ids
+        group["rows"] = [{**template, "task": t, "repeat": r, "arm": a} for t in ids for r in range(3) for a in arms]
+    published = _published(candidate, name, old)
+    regressions(Candidate.model_validate({**candidate, "schema_version": 4, "groups": [group]}), published, new)
+
+
+@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+def test_a_group_may_drop_exactly_the_listed_retired_tasks(candidate, monkeypatch, name):
+    catalog = json.loads(CATALOG.read_bytes())
+    assert [r["id"] for r in catalog["retired"]] == [RETIRED]
+    _transition(candidate, monkeypatch, name, _before(catalog), catalog)
+
+
+@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+def test_the_published_group_ran_the_retired_task(candidate, name):
+    published = _published(candidate, name, _dump(_before(json.loads(CATALOG.read_bytes()))))
+    assert RETIRED in published.groups[0].task_ids
+
+
+@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+def test_an_unlisted_removal_is_a_protocol_change(candidate, monkeypatch, name):
+    catalog = json.loads(CATALOG.read_bytes())
+    unlisted = {**catalog, "retired": []}
+    with pytest.raises(ValueError, match="protocol changed"):
+        _transition(candidate, monkeypatch, name, _before(catalog), unlisted)
+
+
+@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+def test_a_retirement_with_a_changed_task_version_is_a_protocol_change(candidate, monkeypatch, name):
+    catalog = json.loads(CATALOG.read_bytes())
+    bumped = copy.deepcopy(catalog)
+    bumped["suites"]["core"][0]["task_version"] += 1
+    with pytest.raises(ValueError, match="protocol changed"):
+        _transition(candidate, monkeypatch, name, _before(catalog), bumped)
+
+
+@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+def test_a_retirement_with_an_added_task_is_a_protocol_change(candidate, monkeypatch, name):
+    catalog = json.loads(CATALOG.read_bytes())
+    added = copy.deepcopy(catalog)
+    new = {**RETIRED_ENTRY, "id": "stretch-new-task", "arms": ["fastbrowse", "browser-use", "fastbrowse-pool"]}
+    added["suites"]["stretch-dev"].append(new)
+    ids = sorted({*_group(name, _dump(catalog))["task_ids"], "stretch-new-task"})
+    with pytest.raises(ValueError, match="protocol changed"):
+        _transition(candidate, monkeypatch, name, _before(catalog), added, ids)
+
+
+@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+def test_a_retirement_without_the_catalog_or_with_new_limits_is_a_protocol_change(candidate, monkeypatch, name):
+    catalog = json.loads(CATALOG.read_bytes())
+    with pytest.raises(ValueError, match="protocol changed"):
+        _transition(candidate, monkeypatch, name, _before(catalog), {**catalog, "arms": {}})
+    before = _published(candidate, name, _dump(_before(catalog)))
+    after = Candidate.model_validate({**candidate, "schema_version": 4, "groups": [_group(name, _dump(catalog))]})
+    with pytest.raises(ValueError, match="protocol changed"):
+        regressions(after, before)
+
+
+def test_the_shipped_catalog_retires_exactly_from_the_one_before() -> None:
+    from fastbrowse.evals.benchmarks import retired_between
+
+    catalog = json.loads(CATALOG.read_bytes())
+    assert retired_between(_dump(_before(catalog)), CATALOG.read_bytes()) == {RETIRED}
+    assert retired_between(CATALOG.read_bytes(), CATALOG.read_bytes()) == set()
