@@ -65,6 +65,10 @@ def _record(url: str, quote: str) -> Fact:
     return Fact(text=quote, evidence=span, reader=FactReader.LLM)
 
 
+def _urls(notes: Notes, requirement_id: str) -> list[str]:
+    return [read.url for read in notes.collection_pages(requirement_id)]
+
+
 def _author(quote: str) -> str:
     match = re.search(r"\nby (.+?) \(about\)", quote)
     assert match is not None
@@ -82,7 +86,7 @@ def counted_authors(*, complete: bool, continued: bool = True) -> tuple[Notes, d
         if continued:
             notes.add_continuation(AUTHORS.id, fact_id(record))
         groups.setdefault(_author(item["quote"]), []).append(fact_id(record))
-        notes.add_collection_page(AUTHORS.id, item["url"])
+        notes.add_collection_page(AUTHORS.id, item["url"], f"sha-{item['url']}")
     tallies = {
         author: notes.add_tally(Tally(requirement_id=AUTHORS.id, key=author, records=tuple(records)))
         for author, records in groups.items()
@@ -211,7 +215,7 @@ def cheapest_five_star(*, pages: bool) -> tuple[Notes, Fact]:
             notes.add(record)
             records.append(fact_id(record))
         if pages:
-            notes.add_collection_page(CHEAPEST.id, url)
+            notes.add_collection_page(CHEAPEST.id, url, f"sha-{url}")
     winner = Fact(
         requirement_id=CHEAPEST.id,
         comparison=Comparison(requirement_id=CHEAPEST.id, records=tuple(records), complete=True),
@@ -235,8 +239,8 @@ async def test_a_page_with_no_matching_record_still_counts_as_read(pages: bool) 
     (compared,) = context.claims[0].compared_records
     cited = {context.urls[source.url_ref] for source in context.claims[0].cited_sources}
     assert NONFICTION + "page-4.html" not in cited
-    assert [context.urls[ref] for ref in compared.pages_read] == (
-        [NONFICTION + page for page in FIVE_STAR] if pages else []
+    assert [(read.read, context.urls[read.url_ref]) for read in compared.pages_read] == (
+        list(enumerate((NONFICTION + page for page in FIVE_STAR), 1)) if pages else []
     )
 
     sent: list[dict] = []
@@ -256,11 +260,11 @@ async def test_a_page_with_no_matching_record_still_counts_as_read(pages: bool) 
 
 def test_scoped_notes_keep_their_requirements_pages() -> None:
     notes, _ = cheapest_five_star(pages=True)
-    notes.add_collection_page("other", "https://example.test/")
+    notes.add_collection_page("other", "https://example.test/", "sha")
 
     scoped = notes.for_requirements((CHEAPEST.id,))
 
-    assert scoped.collection_pages(CHEAPEST.id) == tuple(NONFICTION + page for page in FIVE_STAR)
+    assert _urls(scoped, CHEAPEST.id) == [NONFICTION + page for page in FIVE_STAR]
     assert scoped.collection_pages("other") == ()
 
 
@@ -311,7 +315,7 @@ async def test_every_page_of_a_continuing_list_is_recorded_whether_or_not_it_mat
     for index, captured in enumerate(pages):
         following = (_link("next", "next", urls[index + 1]),) if index < 2 else ()
         await agent._read(state, captured, _at(captured.url, *following))
-    assert state.notes.collection_pages(CHEAPEST.id) == tuple(urls[:3])
+    assert _urls(state.notes, CHEAPEST.id) == urls[:3]
 
     # A page the pipeline read ahead of the loop belongs to the same collection.
     async def nothing_matched() -> ReadOutcome:
@@ -319,8 +323,10 @@ async def test_every_page_of_a_continuing_list_is_recorded_whether_or_not_it_mat
 
     done = asyncio.create_task(nothing_matched())
     fourth = capture((BlockKind.PARAGRAPH, "110 results - showing 61 to 80."), url=urls[3])
-    await agent._join_page(state, _PageRead(fourth, _at(urls[3]), done, time.monotonic(), None), [CHEAPEST])
-    assert state.notes.collection_pages(CHEAPEST.id) == tuple(urls)
+    await agent._join_page(
+        state, _PageRead(fourth, _at(urls[3]), done, time.monotonic(), None), [CHEAPEST], [CHEAPEST.id]
+    )
+    assert _urls(state.notes, CHEAPEST.id) == urls
 
 
 def test_a_stopped_run_lists_every_count_before_a_quote_that_answers_another_requirement() -> None:
@@ -346,3 +352,83 @@ def test_a_stopped_run_lists_every_count_before_a_quote_that_answers_another_req
     counts = [line for line in answer.splitlines() if re.fullmatch(r".+: \d+", line)]
     assert len(counts) == len({_author(item["quote"]) for item in QUOTES[:4]})
     assert "word word" not in answer
+
+
+async def test_pages_paged_for_one_requirement_are_not_credited_to_another_read_alongside() -> None:
+    """Every unresolved requirement is read on each paged page. Crediting those pages to a requirement whose own
+    list never continued told its audit they were part of its collection and held no uncited match."""
+    from fastbrowse.planner import Requirement
+    from tests.test_agent import _pipeline_fixture
+
+    contact = Requirement(id="r2", text="The shop's contact email", kind=RequirementKind.INFORMATION)
+    agent, state, _, observations, captures, llm = await _pipeline_fixture(also_wanted=(contact,))
+    assert {r.id for r in state.notes.unresolved(state.plan)} == {"r1", "r2"}
+    # The paged pages hold none of the contact requirement's records.
+    for response in llm.responses[:2]:
+        assert isinstance(response, dict)
+        continues = response["continues"]
+        assert isinstance(continues, list)
+        response["continues"] = [*continues, {"requirement_id": "r2", "records": []}]
+
+    await agent._pipeline_pages(state, observations[0])
+
+    assert len(state.notes.collection_pages("r2")) == 0
+    assert _urls(state.notes, "r1") == [c.url for c in captures]
+
+
+async def test_a_list_that_loads_more_at_one_address_keeps_each_read() -> None:
+    """Load more and in-place paging keep the URL. Keyed by address, every read after the first folded into it,
+    so a state with no matching record was in neither the cited records nor the reads listed."""
+    from unittest.mock import AsyncMock, Mock
+
+    from fastbrowse.agent import Agent
+    from fastbrowse.models import StepOutcome
+    from fastbrowse.page import ActResult, BlockKind, Page
+    from fastbrowse.planner import Plan
+    from tests.test_agent import _at, run_state
+    from tests.test_policy import ScriptedJev
+    from tests.test_retrieval import capture
+
+    state = await run_state()
+    state.ready_plan = Plan(requirements=(CHEAPEST,), answer_expected=True)
+    url = NONFICTION + "index.html"
+    shown = [
+        capture((BlockKind.RECORD, "Agnostic: A Spirited Manifesto \u00a312.51 (Five stars)"), url=url),
+        capture((BlockKind.RECORD, "Reasons to Stay Alive \u00a326.41 (Two stars)"), url=url),
+        capture((BlockKind.RECORD, "Mother, Can You Not? \u00a316.89 (Five stars)"), url=url),
+    ]
+    more = {"requirement_id": CHEAPEST.id, "records": [{"first": "s0", "last": "s0"}]}
+    reads: list = [
+        {"claims": [], "answered": False, "continues": [more]},
+        {"claims": [], "answered": False, "continues": [{"requirement_id": CHEAPEST.id, "records": []}]},
+        {
+            "claims": [
+                {
+                    "requirement_id": CHEAPEST.id,
+                    "text": "Agnostic: A Spirited Manifesto is the cheapest five-star book at 12.51.",
+                    "cite": {"first": "s0", "last": "s0"},
+                }
+            ],
+            "answered": True,
+        },
+    ]
+    page = Mock(spec=Page)
+    page.act = AsyncMock(return_value=ActResult(outcome=StepOutcome.EXECUTED, page_changed=True))
+    # The list goes on below a Load more button, so the quote choice cannot settle it: the reader reads.
+    agent = Agent(page, ScriptedJev({CHEAPEST.id: "synthesis"}), ScriptedLLM(reads))
+    for captured in shown:
+        await agent._read(state, captured, _at(url))
+
+    reads_made = state.notes.collection_pages(CHEAPEST.id)
+    assert len(reads_made) == 3
+    assert _urls(state.notes, CHEAPEST.id) == [url] * 3
+
+    # The audit is shown each read of the one address in order, the one with no match among them.
+    notes, winner = cheapest_five_star(pages=False)
+    for index in range(3):
+        notes.add_collection_page(CHEAPEST.id, url, f"state-{index}")
+    claim = Claim(text="Agnostic: A Spirited Manifesto is the cheapest at 12.51.", evidence_ids=(fact_id(winner),))
+    context = _output_context(assemble_answer((claim,), notes, (CHEAPEST,)), notes)
+    assert context is not None
+    (compared,) = context.claims[0].compared_records
+    assert [(read.read, context.urls[read.url_ref]) for read in compared.pages_read] == [(1, url), (2, url), (3, url)]

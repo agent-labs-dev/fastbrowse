@@ -43,6 +43,12 @@ class Standing(Frozen):
     """Whether every group counted for the requirement is complete, not only the groups shown."""
 
 
+class CollectionRead(Frozen):
+    url: str
+    capture_sha256: str
+    """Which state of the address was read: a list that loads more or pages in place keeps its URL."""
+
+
 class Comparison(Frozen):
     requirement_id: str
     records: tuple[str, ...]
@@ -133,7 +139,7 @@ class Notes:
         self._tally_records: set[str] = set()
         self._record_ids: dict[tuple[str, str, str], list[dict[str, str]]] = {}
         self._continuation_records: dict[str, set[str]] = {}
-        self._collection_pages: dict[str, dict[str, None]] = {}
+        self._collection_pages: dict[str, dict[CollectionRead, None]] = {}
         self._pages: dict[tuple[str, str, datetime], CapturedPage] = {}
         for fact in facts:
             self.add(fact)
@@ -232,11 +238,14 @@ class Notes:
     def add_continuation(self, requirement_id: str, record_id: str) -> None:
         self._continuation_records.setdefault(requirement_id, set()).add(record_id)
 
-    def add_collection_page(self, requirement_id: str, url: str) -> None:
-        self._collection_pages.setdefault(requirement_id, {})[url] = None
+    def add_collection_page(self, requirement_id: str, url: str, capture_sha256: str) -> None:
+        # Keyed by what was read, not where: Load more and in-place paging show new rows at one address, and keying
+        # by URL folded every later state into the first, so a state with no match left no trace of being read.
+        read = CollectionRead(url=url, capture_sha256=capture_sha256)
+        self._collection_pages.setdefault(requirement_id, {})[read] = None
 
-    def collection_pages(self, requirement_id: str) -> tuple[str, ...]:
-        """Every page read for a list that went on past one page, in reading order, matching records or not.
+    def collection_pages(self, requirement_id: str) -> tuple[CollectionRead, ...]:
+        """Every read of a list that went on past one page, in reading order, matching records or not.
 
         A page with no matching record leaves no quote, so an audit that judged coverage from the cited records alone
         took that page for unread and refused a comparison code had closed over every page of the list."""

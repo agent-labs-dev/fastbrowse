@@ -4352,12 +4352,17 @@ def _continued(*, through_end: bool = True) -> dict[str, Any]:
 
 
 async def _pipeline_fixture(
-    *, config: Config | None = None, limits: Limits | None = None, through_end: bool = True
+    *,
+    config: Config | None = None,
+    limits: Limits | None = None,
+    through_end: bool = True,
+    also_wanted: tuple[Requirement, ...] = (),
 ) -> tuple[Agent, _RunState, Mock, list[Observation], list[Capture], ScriptedLLM]:
     state = await run_state()
     state.task = "Find the cheapest item across the entire list"
     state.ready_plan = Plan(
-        requirements=(Requirement(id="r1", text=state.task, kind=RequirementKind.INFORMATION),), answer_expected=True
+        requirements=(Requirement(id="r1", text=state.task, kind=RequirementKind.INFORMATION), *also_wanted),
+        answer_expected=True,
     )
     state.ledger.limits = limits or Limits()
     observations = [
