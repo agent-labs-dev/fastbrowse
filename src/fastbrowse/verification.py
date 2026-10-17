@@ -24,7 +24,7 @@ from fastbrowse.jev import (
     NoulQuestion,
     Question,
 )
-from fastbrowse.llm import Generation, LLMClient, Message
+from fastbrowse.llm import Generation, LLMClient, Message, recorded
 from fastbrowse.memory import CollectionFact, Notes, NotesTooLarge, fact_id
 from fastbrowse.models import UNTRUSTED, CostLine, Evidence, FactReader, Frozen, LLMPurpose, SourceControl
 from fastbrowse.page import Capture, Control, Observation, cut_text
@@ -906,8 +906,11 @@ async def _check_answer_outputs(
             resolved = cached
         else:
             fit(messages, _identity_schema(uncertain))
-            identifying = llm.generate(
-                LLMPurpose.VERIFY, messages, _identity_schema(uncertain), max_output_tokens=8000, ledger=ledger
+            identifying = recorded(
+                llm.generate(
+                    LLMPurpose.VERIFY, messages, _identity_schema(uncertain), max_output_tokens=8000, ledger=ledger
+                ),
+                ledger,
             )
             if together:
                 # The claim selection reads only the answer, never the identities, so it runs beside the identity
@@ -916,15 +919,11 @@ async def _check_answer_outputs(
                 generated, chosen = await asyncio.gather(identifying, select(), return_exceptions=True)
                 if isinstance(generated, BaseException):
                     raise generated
-                if ledger is not None:
-                    ledger.record(generated.cost)
                 if isinstance(chosen, BaseException):
                     raise chosen
                 selection, selection_pending = chosen, False
             else:
                 generated = await identifying
-                if ledger is not None:
-                    ledger.record(generated.cost)
             payload = generated.data.model_dump()
             shared: dict[str, _QuotedIdentity] = {}
             for entry in payload["identities"]:

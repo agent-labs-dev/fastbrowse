@@ -119,3 +119,34 @@ async def test_under_a_cap_each_audit_call_reserves_after_the_receipts_it_used_t
     assert order == ["selection after 1 llm receipt(s): 1 line(s)"]
     # The source refusal decides before the assertion audit is ever sent.
     assert llm.stages == ["source"]
+
+
+async def test_an_identity_call_that_finished_is_billed_when_the_check_is_cancelled() -> None:
+    """The selection beside it was still running when the run's time ran out."""
+    notes, answer = _answer()
+    ledger = Ledger(Limits())
+    identified, selecting = asyncio.Event(), asyncio.Event()
+
+    class IdentityLLM(AuditLLM):
+        async def generate(self, purpose, messages, schema, **kwargs):
+            generated = await super().generate(purpose, messages, schema, **kwargs)
+            if schema.__name__ == "_OutputIdentities":
+                generated = generated.model_copy(update={"cost": generated.cost.model_copy(update={"dollars": 0.7})})
+                identified.set()
+            return generated
+
+    class StalledJev(RoutingJev):
+        async def evaluate(self, state, questions):
+            selecting.set()
+            await asyncio.Event().wait()
+            raise AssertionError("the selection should have been cancelled")
+
+    checking = asyncio.create_task(
+        check_answer_outputs(StalledJev(), IdentityLLM(), answer, notes, ("Report the price.",), ledger=ledger)
+    )
+    await asyncio.wait_for(asyncio.gather(identified.wait(), selecting.wait()), _TOGETHER_SECONDS)
+    await asyncio.sleep(0.01)
+    checking.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await checking
+    assert [line.dollars for line in ledger.lines] == [0.7]

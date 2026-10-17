@@ -5,11 +5,12 @@ import json
 from collections.abc import Mapping
 from unittest.mock import Mock
 
+import pytest
 from pydantic import JsonValue
 
 from fastbrowse.agent import Agent, HeadStart
 from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, Evaluation, NoulAnswer, Question
-from fastbrowse.llm import Generation
+from fastbrowse.llm import Generation, LLMError
 from fastbrowse.models import CostBasis, CostComponent, CostLine, Limits, LLMPurpose, Status
 from fastbrowse.page import Page
 from fastbrowse.planner import Plan, Requirement, RequirementKind
@@ -186,3 +187,33 @@ async def test_under_a_cap_the_plan_is_taken_with_its_checks() -> None:
     taken = await state.await_plan()
     assert taken.answer_checks == ("Report the price of the item.",)
     assert state.checks_ready and len(state.ledger.lines) == 2
+
+
+async def test_a_verifier_that_finished_is_billed_when_the_audit_beside_it_fails() -> None:
+    verified = asyncio.Event()
+
+    class LLM(ScriptedLLM):
+        async def generate(self, purpose, messages, schema, **kwargs):
+            kwargs["ledger"].reserve(CostComponent.LLM)
+            if schema.__name__ == "LLMVerdict":
+                verified.set()
+                return Generation(
+                    data=schema.model_validate({"missing": [], "complete": True}),
+                    cost=CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0.5, purpose=purpose),
+                )
+            await asyncio.wait_for(verified.wait(), _TOGETHER_SECONDS)
+            # Give the finished verifier its turn before this audit fails.
+            await asyncio.sleep(0.01)
+            raise LLMError("audit provider failed")
+
+    state = await run_state()
+    agent, on = await _finishing(state, LLM([]), noul=0.0)
+    agent._jev = _Jev({})
+    state.ready_plan = state.plan.model_copy(
+        update={"answer_expected": True, "answer_checks": ("Report the cheapest nonstop fare.",)}
+    )
+    state.invented = {on.url}
+    state.notes.add(_fare(on.url, "fare"))
+    with pytest.raises(LLMError):
+        await agent._finish(state, None, None)
+    assert [line.dollars for line in state.ledger.lines].count(0.5) == 1

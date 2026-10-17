@@ -37,7 +37,7 @@ from fastbrowse.effects import (
     step_key,
 )
 from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, JevClient, JevError, NoulAnswer, NoulQuestion
-from fastbrowse.llm import Generation, LLMClient, LLMError, Message
+from fastbrowse.llm import Generation, LLMClient, LLMError, Message, recorded
 from fastbrowse.memory import CollectionFact, Fact, Notes, NotesTooLarge, evidence_id, fact_id, shows
 from fastbrowse.models import (
     SCROLLING,
@@ -3810,7 +3810,6 @@ class Agent:
                         )
                     )
                 judged = await verifying
-                state.ledger.record(judged.cost)
                 accepted = _verified(judged.data, state.plan, state.notes, state.invented)
                 # Asked to open httpx's project page, a run picked DONE on pypi.org before acting, Jev held the one
                 # requirement unmet, and flash-lite called it complete. Only an action can do what Jev says is
@@ -3891,7 +3890,9 @@ class Agent:
                     await _discard(pending)
 
     async def _verify_done(self, state: _RunState, fresh: Observation, check: DoneCheck) -> Generation[LLMVerdict]:
-        return await llm_verify(
+        """The verifier's verdict, billed as it arrives: run beside the audit, it can finish before a failure there
+        discards it."""
+        verifying = llm_verify(
             self._llm,
             state.task,
             state.plan,
@@ -3905,6 +3906,7 @@ class Agent:
             config=self._config,
             ledger=state.ledger,
         )
+        return await recorded(verifying, state.ledger)
 
     async def _answer(self, state: _RunState, prepared: _Prepared) -> tuple[ComposedAnswer, bool]:
         """Return the checked draft, or compose an answer and check its claims."""
