@@ -13,7 +13,7 @@ from typing import Any, Literal, assert_never
 
 from pydantic import BaseModel, Field, JsonValue, ValidationError, create_model
 
-from fastbrowse.batches import evaluate_batches
+from fastbrowse.batches import Answered, evaluate_batches
 from fastbrowse.config import Config, Thresholds, TokenBudget
 from fastbrowse.jev import (
     MAX_CHOICE_OPTIONS,
@@ -814,6 +814,34 @@ async def _check_answer_outputs(
         return True
     if llm is None:
         return False
+    choices = {f"claim_{index}": claim.text for index, claim in enumerate(context.claims)}
+    choices["all"] = "The requested output spans multiple claims; no single claim states all of it."
+    choices["none"] = "The requested output is missing from the actual answer."
+    selecting = {
+        key: ChoiceQuestion(
+            instructions=(
+                f"{UNTRUSTED} Select the claim that explicitly states the requested output for the correct entity. "
+                "Preserve the original task's each-item and all-item scope. One item's value cannot discharge "
+                "a field requested for several items. A truthful statement about another item does not report "
+                "that field for the requested item. "
+                "Select all only when the criterion needs multiple claims, and none when absent or only implied. "
+                f"Task: {task}\nCriterion: {criterion}"
+            ),
+            criteria=choices,
+        )
+        for key, criterion in uncertain.items()
+    }
+
+    async def select() -> Answered | None:
+        # Large list answers exceed Jev's option ceiling; the source and assertion audits still check every claim.
+        if len(choices) > MAX_CHOICE_OPTIONS or isinstance(composed, FieldAnswer):
+            return None
+        return await evaluate_batches(
+            jev, {"answer": composed.answer}, selecting, tokens=tokens, ledger=ledger, allow_failed_batches=False
+        )
+
+    selection: Answered | None = None
+    selection_pending = True
     identities: dict[str, list[dict[str, JsonValue]]] = {}
     if context.claims:
         offered = {}
@@ -876,11 +904,23 @@ async def _check_answer_outputs(
             resolved = cached
         else:
             fit(messages, _identity_schema(uncertain))
-            generated = await llm.generate(
-                LLMPurpose.VERIFY, messages, _identity_schema(uncertain), max_output_tokens=8000, ledger=ledger
+            # The claim selection reads only the answer, never the identities, so it runs beside the identity call
+            # rather than after it, where it added a Jev round trip to every audited answer. Both settle before
+            # either failure propagates, so neither is billed after the check has returned.
+            generated, chosen = await asyncio.gather(
+                llm.generate(
+                    LLMPurpose.VERIFY, messages, _identity_schema(uncertain), max_output_tokens=8000, ledger=ledger
+                ),
+                select(),
+                return_exceptions=True,
             )
+            if isinstance(generated, BaseException):
+                raise generated
             if ledger is not None:
                 ledger.record(generated.cost)
+            if isinstance(chosen, BaseException):
+                raise chosen
+            selection, selection_pending = chosen, False
             payload = generated.data.model_dump()
             shared: dict[str, _QuotedIdentity] = {}
             for entry in payload["identities"]:
@@ -931,31 +971,7 @@ async def _check_answer_outputs(
                         control_context=source.control_context.model_dump(mode="json"),
                     )
                 identities[key].append(identity)
-    choices = {f"claim_{index}": claim.text for index, claim in enumerate(context.claims)}
-    choices["all"] = "The requested output spans multiple claims; no single claim states all of it."
-    choices["none"] = "The requested output is missing from the actual answer."
-    selecting = {
-        key: ChoiceQuestion(
-            instructions=(
-                f"{UNTRUSTED} Select the claim that explicitly states the requested output for the correct entity. "
-                "Preserve the original task's each-item and all-item scope. One item's value cannot discharge "
-                "a field requested for several items. A truthful statement about another item does not report "
-                "that field for the requested item. "
-                "Select all only when the criterion needs multiple claims, and none when absent or only implied. "
-                f"Task: {task}\nCriterion: {criterion}"
-            ),
-            criteria=choices,
-        )
-        for key, criterion in uncertain.items()
-    }
-    # Large list answers exceed Jev's option ceiling; the source and assertion audits still check every claim.
-    selected = (
-        await evaluate_batches(
-            jev, {"answer": composed.answer}, selecting, tokens=tokens, ledger=ledger, allow_failed_batches=False
-        )
-        if len(choices) <= MAX_CHOICE_OPTIONS and not isinstance(composed, FieldAnswer)
-        else None
-    )
+    selected = await select() if selection_pending else selection
     if selected is not None and any(not isinstance(selected.answers.get(key), ChoiceAnswer) for key in selecting):
         return False
     fields = {}
@@ -1036,10 +1052,10 @@ async def _check_answer_outputs(
             "counterevidence": fields[key]["counterevidence"],
         }
 
-    reasons: dict[str, str] = {}
+    # One cap over both audits, which run side by side: the requests in flight stay at the four one audit sent.
+    semaphore = asyncio.Semaphore(4)
 
-    async def audit(messages: list[Message], fields: Mapping[str, object]) -> dict[str, str]:
-        semaphore = asyncio.Semaphore(4)
+    async def audit(messages: list[Message], fields: Mapping[str, object], reasons: dict[str, str]) -> dict[str, str]:
 
         async def one(key: str, field: object) -> tuple[str, str]:
             schema = _assessment_schema(key)
@@ -1174,17 +1190,6 @@ async def _check_answer_outputs(
             ),
         ),
     ]
-    available = await audit(source_messages, source_fields)
-    absent = [criterion for key, criterion in uncertain.items() if available.get(key) != "yes"]
-    if absent:
-        if corrections is not None:
-            # A selected claim can omit a quote already in the notes; rereading cannot repair its citations.
-            corrections.extend(
-                AnswerCorrection(stage="source", criterion=criterion, claims=selected_claims[key], reason=reasons[key])
-                for key, criterion in uncertain.items()
-                if available.get(key) != "yes"
-            )
-        return reject(absent)
     assertion_messages = [
         Message(
             role="system",
@@ -1253,7 +1258,33 @@ async def _check_answer_outputs(
                 "reported_claims": [claim.model_dump(exclude={"cited_sources": {"__all__": {"page_title"}}})],
                 "counterevidence": counterevidence((claim,)),
             }
-    generated = await audit(assertion_messages, fields)
+    source_reasons: dict[str, str] = {}
+    reasons: dict[str, str] = {}
+    # Neither audit reads the other's verdict: the source audit withholds the assertions, and the assertion audit
+    # judges them from the same quotes. Run one after the other, they were two model round trips on every audited
+    # answer. A source failure still decides first, so the assertion verdict is only ever used when sources hold.
+    # Both settle before either failure propagates, so neither is billed after the check has returned.
+    available, generated = await asyncio.gather(
+        audit(source_messages, source_fields, source_reasons),
+        audit(assertion_messages, fields, reasons),
+        return_exceptions=True,
+    )
+    if isinstance(available, BaseException):
+        raise available
+    absent = [criterion for key, criterion in uncertain.items() if available.get(key) != "yes"]
+    if absent:
+        if corrections is not None:
+            # A selected claim can omit a quote already in the notes; rereading cannot repair its citations.
+            corrections.extend(
+                AnswerCorrection(
+                    stage="source", criterion=criterion, claims=selected_claims[key], reason=source_reasons[key]
+                )
+                for key, criterion in uncertain.items()
+                if available.get(key) != "yes"
+            )
+        return reject(absent)
+    if isinstance(generated, BaseException):
+        raise generated
     failed = [
         uncertain[key]
         if key in uncertain
