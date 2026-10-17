@@ -658,7 +658,7 @@ def test_a_count_refused_as_read_off_the_wrong_page_cannot_answer_again_but_a_re
     notes.complete_tallies("r1")
     assert notes.evidenced("r1")
 
-    notes.discredit(("r1",), lambda url: url == guessed)
+    notes.discredit(("r1",), lambda evidence: evidence.url == guessed)
     notes.complete_tallies("r1")
     assert not notes.evidenced("r1")
     # A reader that counts the refused rows again under the same key is still the refused page.
@@ -685,7 +685,7 @@ def test_a_refusal_holds_only_the_quotes_read_on_the_guess() -> None:
     notes = Notes((on_guess, on_right))
     assert {key for key, _ in notes.supporting("r1")} == {fact_id(on_guess), fact_id(on_right)}
 
-    notes.discredit(("r1",), lambda url: url == guessed)
+    notes.discredit(("r1",), lambda evidence: evidence.url == guessed)
     # The verifier was shown only the guessed quote as guessed, so only that one stops evidencing the requirement.
     assert {key for key, _ in notes.supporting("r1")} == {fact_id(on_right)}
 

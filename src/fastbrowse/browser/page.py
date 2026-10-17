@@ -150,6 +150,12 @@ _COVER_JS = (
     "y = frame.y + (node.clientTop + y) * frame.height / node.offsetHeight; doc = node.ownerDocument; } })"
 )
 
+# The pointer path rechecks a control's guard before every press (`_stable_point`); the keyboard path asks this.
+_GUARD_HOLDS_JS = (
+    "((id, guard) => { const r = window.__fastbrowse, e = r?.nodes.get(id); "
+    "return !!e?.isConnected && !!r.guard && JSON.stringify(r.guard(e)) === JSON.stringify(guard); })"
+)
+
 # Keys go to the focused control whatever is drawn over it, so a control a band still covers is pressed from the
 # keyboard, as a keyboard user would press it, and nothing in the band is ever touched. The key is the one the
 # control's own semantics answer to; a control that names none is not pressed.
@@ -989,6 +995,10 @@ class CdpPage(Page):
             point = _POINT.validate_python(
                 await self._evaluate(session_id, f"({_UNCOVER_JS})({local_id}, {json.dumps(guard)})")
             )
+            # Scroll handlers run at the next frame, and one can repurpose the control; every check after this
+            # must see what they did.
+            with suppress(Exception):
+                await asyncio.wait_for(self._evaluate(session_id, _PRESENTED_JS), 0.5)
             if point != "covered":
                 return point
             # The last alignment can have put the control under something else.
@@ -1017,11 +1027,22 @@ class CdpPage(Page):
     async def _press(self, target: tuple[str, str, int, list[object] | None]) -> tuple[StepOutcome, str | None]:
         """Activate a control from the keyboard: focus it and press the key its semantics answer to."""
         session_id, _frame, local_id, _guard = target
+        # Scrolling the control clear of the band ran the page's scroll handlers, and a page that turned an
+        # authorized "Save" into "Delete account" there would have had the new action pressed unclassified.
+        if not await self._guard_holds(target):
+            return StepOutcome.STALE, "control changed before keyboard press"
         key = _ACTIVATION_KEY.validate_python(await self._evaluate(session_id, f"({_ACTIVATION_KEY_JS})({local_id})"))
         if key is None or not await self._focus(session_id, local_id):
             return StepOutcome.COVERED, await self._covered_detail(target)
+        # Focus handlers can repurpose it as well.
+        if not await self._guard_holds(target):
+            return StepOutcome.STALE, "control changed before keyboard press"
         await self._press_key(session_id, key)
         return StepOutcome.EXECUTED, "Pressed from the keyboard: a band fixed to the window covers it."
+
+    async def _guard_holds(self, target: tuple[str, str, int, list[object] | None]) -> bool:
+        session_id, _frame, local_id, guard = target
+        return (await self._evaluate(session_id, f"({_GUARD_HOLDS_JS})({local_id}, {json.dumps(guard)})")) is True
 
     async def _hover(
         self, target: tuple[str, str, int, list[object] | None] | None, point: _Point
@@ -1116,6 +1137,8 @@ class CdpPage(Page):
         local_id = handed
         if not secret and native_date:
             return await self._fill_native_date(session_id, local_id, text)
+        if keyboard and not await self._guard_holds(target):
+            return StepOutcome.STALE, "control changed before typing"
         for attempt in range(2):
             if attempt or focused is None:
                 focused = await self._focus(
@@ -1123,6 +1146,9 @@ class CdpPage(Page):
                 )
             if not focused:
                 return StepOutcome.FAILED, "target did not receive keyboard focus"
+            # No pointer press rechecked the field, so the text goes only to the field that was authorized.
+            if keyboard and not await self._guard_holds(target):
+                return StepOutcome.STALE, "control changed before typing"
             # A secret must be checked and inserted in one renderer task: CDP insertText would leave a
             # navigation/focus race between checking the origin and dispatching the secret to the page.
             script = (
@@ -1259,8 +1285,11 @@ class CdpPage(Page):
         if point is None:
             return StepOutcome.STALE, "target disconnected"
         # The choice is set without the pointer, so only a cover the page means to be dealt with first refuses it.
-        if point == "covered" and await self._route_around(target, scroll=False) != "keyboard":
-            return StepOutcome.COVERED, await self._covered_detail(target)
+        if point == "covered":
+            if await self._route_around(target, scroll=False) != "keyboard":
+                return StepOutcome.COVERED, await self._covered_detail(target)
+            if not await self._guard_holds(target):
+                return StepOutcome.STALE, "control changed before selecting"
         script = (
             "((id, label) => { const e = window.__fastbrowse?.nodes.get(id); "
             "if (!e?.isConnected || e.tagName !== 'SELECT') return null; "
@@ -1294,6 +1323,8 @@ class CdpPage(Page):
                 return StepOutcome.COVERED, await self._covered_detail(target)
             if not await self._focus(session_id, local_id):
                 return StepOutcome.FAILED, "target did not receive keyboard focus"
+            if point == "covered" and not await self._guard_holds(target):
+                return StepOutcome.STALE, "control changed before keyboard press"
         await self._press_key(session_id, key)
         return StepOutcome.EXECUTED, None
 

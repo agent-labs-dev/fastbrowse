@@ -351,7 +351,7 @@ class Notes:
         for requirements in self._requirements.values():
             requirements -= dropped
 
-    def discredit(self, requirement_ids: Iterable[str], guessed: Callable[[str], bool]) -> None:
+    def discredit(self, requirement_ids: Iterable[str], guessed: Callable[[Evidence], bool]) -> None:
         """Reopen requirements read off the wrong page, and keep the quotes read on it from answering them again.
 
         Reopening alone was not enough on Google Flights: the next read, on the search the run had since rebuilt
@@ -368,9 +368,7 @@ class Notes:
             self._discredited.setdefault(requirement, set()).update(
                 key
                 for key in supporting
-                if (fact := self._facts.get(key)) is not None
-                and fact.evidence is not None
-                and guessed(fact.evidence.url)
+                if (fact := self._facts.get(key)) is not None and fact.evidence is not None and guessed(fact.evidence)
             )
         # Only what rests on a held quote is reopened: a quote from a page the run reached itself was never doubted,
         # and reopening it too left the requirement open until a reread happened to cite it again.

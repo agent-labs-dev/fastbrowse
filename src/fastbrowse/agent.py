@@ -352,6 +352,31 @@ class _ObservedLink(Frozen):
 
 
 @dataclass(slots=True)
+class _Lineage:
+    """Whether the page was on the guess, kept per read and per visit rather than once per address.
+
+    A form or single-page app can keep its search outside the address, so a run that left a guessed search and set
+    the same search up itself arrived back at the guessed address, and an address judged once for good held the
+    fresh results guessed. A read is judged by what the run was doing when it read, so a quote read on the guess
+    stays guessed whatever the address later shows.
+    """
+
+    addresses: dict[str, bool] = field(default_factory=dict[str, bool])
+    """Each address by whether the page was on the guess when the run last arrived at it."""
+    captures: dict[str, bool] = field(default_factory=dict[str, bool])
+    """Each capture read, by whether it was read on the guess; one read off the guess is never guessed."""
+    at: str | None = None
+    """The address of the last observation, which tells an arrival from a redraw."""
+
+    def read(self, capture: str, *, guessing: bool) -> None:
+        # The same text read off the guess is the same page the run reached itself, so that reading stands.
+        if guessing:
+            self.captures.setdefault(capture, True)
+        else:
+            self.captures[capture] = False
+
+
+@dataclass(slots=True)
 class _RunState:
     task: str
     inputs: Mapping[str, str]
@@ -453,8 +478,8 @@ class _RunState:
     guessing: bool = False
     """The page descends from an invented address: nothing since has navigated to an address the run did not build
     from the task. A click on a guessed search keeps its guessed parameters, so only a navigation ends it."""
-    first_seen: dict[str, bool] = field(default_factory=dict[str, bool])
-    """Each address observed, by whether the page was `guessing` when it first appeared."""
+    lineage: _Lineage = field(default_factory=_Lineage)
+    """Whether each visit and each read was on the guess."""
     downloads_forbidden: bool | None = None
     """Jev's word that the task rules out downloading, asked once a control the page says downloads is in play."""
     owes_read: bool = False
@@ -1608,13 +1633,18 @@ class Agent:
             state.transaction_candidates[-1].landed_url = observation.url
             state.transaction_candidates[-1].landed_status = observation.response_status
         last = state.history[-1] if state.history else None
-        if (
+        navigated = (
             last is not None
             and last.operation in {Operation.NAVIGATE, Operation.BACK}
             and last.outcome is StepOutcome.EXECUTED
-        ):
+        )
+        if navigated:
             state.guessing = _unfragmented(observation.url) in {_unfragmented(url) for url in state.invented}
-        state.first_seen.setdefault(_unfragmented(observation.url), state.guessing)
+        address, lineage = _unfragmented(observation.url), state.lineage
+        # Each arrival is judged afresh; a redraw of the page the run is on keeps the judgement it arrived with.
+        if navigated or address != lineage.at or address not in lineage.addresses:
+            lineage.addresses[address] = state.guessing
+        lineage.at = address
         # An error document has the requested address too, but never proves the destination loaded.
         if observation.response_status is not None and observation.response_status >= 400:
             state.visited.pop(observation.url, None)
@@ -2577,6 +2607,7 @@ class Agent:
     ) -> tuple[bool, bool]:
         """Return (added evidence, skipped duplicate), since only new evidence makes a read progress."""
         capture = capture or await self._capture()
+        state.lineage.read(capture.sha256, guessing=state.guessing)
         plan = await state.await_plan()
         if _lookup(plan):
             # Reader-selected excerpts cannot decide whether the full sources fit together in one prompt.
@@ -3672,9 +3703,9 @@ class Agent:
             unmet=list(check.unmet),
             requirements={r.id: r.text for r in state.plan.requirements},
         )
-        guessed = _guessed(state.plan, state.notes, state.invented, first_seen=state.first_seen)
+        guessed = _guessed(state.plan, state.notes, state.invented, lineage=state.lineage)
         if check.verdict is DoneVerdict.ACCEPT and _guessed(
-            state.plan, state.notes, state.invented, searches=True, first_seen=state.first_seen
+            state.plan, state.notes, state.invented, searches=True, lineage=state.lineage
         ):
             # Jev judges the notes, not where they were read, so only the verifier is shown the guessed searches.
             check = check.model_copy(update={"verdict": DoneVerdict.VERIFY})
@@ -3733,7 +3764,7 @@ class Agent:
                     ledger=state.ledger,
                 )
                 state.ledger.record(verdict.cost)
-                accepted = _verified(verdict.data, state.plan, state.notes, state.invented, state.first_seen)
+                accepted = _verified(verdict.data, state.plan, state.notes, state.invented, state.lineage)
                 # Asked to open httpx's project page, a run picked DONE on pypi.org before acting, Jev held the one
                 # requirement unmet, and flash-lite called it complete. Only an action can do what Jev says is
                 # undone, so a run that has taken none cannot be talked past it. The history, not the steps, since
@@ -3746,7 +3777,7 @@ class Agent:
                 undone = {r.id for r in state.plan.requirements if r.kind is RequirementKind.ACTION} & set(check.unmet)
                 accepted = accepted and not (idle and undone)
                 missing = verdict.data.missing
-                misread = _misread(verdict.data, state.plan, state.notes, state.invented, state.first_seen)
+                misread = _misread(verdict.data, state.plan, state.notes, state.invented, state.lineage)
                 trace(
                     "verify",
                     complete=verdict.data.complete,
@@ -3787,7 +3818,7 @@ class Agent:
                     + ", an address built from the task, not the page it describes)"
                     for key in sorted(misread)
                 ]
-                state.notes.discredit(misread, _guessed_page(state.invented, state.first_seen))
+                state.notes.discredit(misread, _guessed_page(state.invented, state.lineage))
                 unmet += [f"Answer output not verified: {output}" for output in state.missing_answer_outputs]
                 reason = self._redactor.redact(f"DONE rejected: {'; '.join(unmet) or 'completion not confirmed'}")
                 state.history.append(
@@ -4529,7 +4560,7 @@ def _guessed(
     invented: Set[str],
     *,
     searches: bool = False,
-    first_seen: Mapping[str, bool] | None = None,
+    lineage: _Lineage | None = None,
 ) -> set[str]:
     """The requirements with a fact read on an address the run built from the task rather than clicked to.
 
@@ -4540,26 +4571,31 @@ def _guessed(
 
     Matching by path alone held every Google Flights search guessed, since each one lives at /travel/flights: a run
     refused there went back to the start page, set the search through the form, and its results were refused as
-    the guessed page until it stopped stuck. So an address `first_seen` after the run left the guess for an address
-    it did not build is its own. One first seen while still on the guess, or never observed, as an address a site
-    wrote back into a fact can be, is matched by its path."""
-    guessed = _guessed_page(invented, first_seen, searches=searches)
-    return {r.id for r in plan.requirements if any(guessed(item.url) for item in notes.supporting_evidence(r.id))}
+    the guessed page until it stopped stuck. So a quote read after the run left the guess for an address it did not
+    build is its own, by its `lineage`. One read on the guess, or never seen by the run, as an address a site wrote
+    back into a fact can be, is matched by its path."""
+    guessed = _guessed_page(invented, lineage, searches=searches)
+    return {r.id for r in plan.requirements if any(guessed(item) for item in notes.supporting_evidence(r.id))}
 
 
 def _guessed_page(
-    invented: Set[str], first_seen: Mapping[str, bool] | None = None, *, searches: bool = False
-) -> Callable[[str], bool]:
+    invented: Set[str], lineage: _Lineage | None = None, *, searches: bool = False
+) -> Callable[[Evidence], bool]:
     """Whether a fact read at an address was read on the guess, judged as `_guessed` judges it, so what a refusal
     blocks is exactly what the verifier was shown as guessed."""
     places = {_place(url): _searched(url) for url in invented}
-    seen = first_seen or {}
+    known = lineage or _Lineage()
 
-    def guessed(url: str) -> bool:
+    def guessed(evidence: Evidence) -> bool:
+        url = evidence.url
+        # Lineage only clears a path match, never adds one: a page clicked to off the guess is judged by its path.
+        on_guess = (
+            known.captures[evidence.capture_sha256]
+            if evidence.capture_sha256 in known.captures
+            else known.addresses.get(_unfragmented(url))
+        )
         return (
-            seen.get(_unfragmented(url)) is not False
-            and _place(url) in places
-            and (not searches or places[_place(url)] or _searched(url))
+            on_guess is not False and _place(url) in places and (not searches or places[_place(url)] or _searched(url))
         )
 
     return guessed
@@ -4575,7 +4611,7 @@ def _searched(url: str) -> bool:
 
 
 def _misread(
-    verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str], first_seen: Mapping[str, bool] | None = None
+    verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str], lineage: _Lineage | None = None
 ) -> set[str]:
     """The requirements the verifier says were read off the wrong page, where that page was a guessed address.
 
@@ -4583,7 +4619,7 @@ def _misread(
     address opened a flights summary, the reader quoted a price from it, and the requirement counted as cited.
     A page reached by clicking was chosen off the site itself, so there the verifier's doubt is only doubt.
     """
-    return _plan_ids(verdict.ungrounded, plan) & _guessed(plan, notes, invented, first_seen=first_seen)
+    return _plan_ids(verdict.ungrounded, plan) & _guessed(plan, notes, invented, lineage=lineage)
 
 
 def _plan_ids(ids: Iterable[str], plan: Plan) -> set[str]:
@@ -4603,7 +4639,7 @@ def _plan_ids(ids: Iterable[str], plan: Plan) -> set[str]:
 
 
 def _verified(
-    verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str], first_seen: Mapping[str, bool] | None = None
+    verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str], lineage: _Lineage | None = None
 ) -> bool:
     """Whether the verifier's doubts leave the run finished.
 
@@ -4613,7 +4649,7 @@ def _verified(
     on a guessed address is not excused, since that is the wrong page the citing check cannot see.
     """
     cited = {r.id for r in plan.requirements if r.kind is RequirementKind.INFORMATION and notes.evidenced(r.id)}
-    misread = _misread(verdict, plan, notes, invented, first_seen)
+    misread = _misread(verdict, plan, notes, invented, lineage)
     named = _plan_ids(verdict.missing, plan) | _plan_ids(verdict.ungrounded, plan)
     doubted = named - (cited - misread)
     return not doubted and (verdict.complete or bool(named))

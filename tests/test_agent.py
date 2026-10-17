@@ -2387,9 +2387,34 @@ async def test_a_search_at_a_guess_path_is_the_runs_own_only_once_it_navigated_o
         requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
     )
     notes = Notes((_fare(later, "later"),))
-    assert _guessed(plan, notes, state.invented, first_seen=state.first_seen) == ({"r1"} if guessed else set())
+    assert _guessed(plan, notes, state.invented, lineage=state.lineage) == ({"r1"} if guessed else set())
     # The guess itself never stops being one.
-    assert _guessed(plan, Notes((_fare(guess, "guess"),)), state.invented, first_seen=state.first_seen) == {"r1"}
+    assert _guessed(plan, Notes((_fare(guess, "guess"),)), state.invented, lineage=state.lineage) == {"r1"}
+
+
+async def test_a_guessed_address_reached_again_by_the_run_itself_is_judged_by_that_visit() -> None:
+    """A form that keeps its search outside the address can bring a run that left a guessed search back to the very
+    address it guessed, now holding the search the run set itself. Judged once per address, the fresh results there
+    stayed guessed; the quote read on the guess itself stays guessed whatever the address later shows."""
+    guess, start = "https://example.test/flights?q=BRS+to+YRK", "https://example.test/flights"
+    state = await run_state()
+    state.invented, state.guessing = {guess}, True
+    Agent._note_effect(state, _at(guess))
+    state.lineage.read("guess", guessing=state.guessing)
+    for operation, landed in ((Operation.NAVIGATE, start), (Operation.CLICK, guess)):
+        state.history.append(
+            HistoryEntry(operation=operation, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
+        )
+        Agent._note_effect(state, _at(landed))
+    state.lineage.read("fresh", guessing=state.guessing)
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    assert _guessed(plan, Notes((_fare(guess, "fresh"),)), state.invented, lineage=state.lineage) == set()
+    assert _guessed(plan, Notes((_fare(guess, "guess"),)), state.invented, lineage=state.lineage) == {"r1"}
+    # A redraw of the page the run is on, with no new arrival, keeps the judgement it arrived with.
+    Agent._note_effect(state, _at(guess))
+    assert state.lineage.addresses[guess] is False
 
 
 _SHORTCUT = HistoryEntry(operation=None, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)

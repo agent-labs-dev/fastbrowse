@@ -12,11 +12,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 ## [Unreleased]
 
 - A click, fill or Enter whose target sits under a band fixed to the window, such as an ad anchored to its foot, a
-  sticky footer or a chat bubble, no longer stops as `covered`. The control is scrolled clear of the band, and
-  where the page cannot move it clear it is pressed or typed into from the keyboard; nothing in the band is ever
-  clicked. A login form under an anchored ad ended `stuck` this way in one run in three. A dialog, an open menu
-  or popover, a cover over the whole window or a panel drawn over the control in the page's flow is still reported
-  as covering it.
+  sticky footer or a chat bubble, no longer stops as `covered`. The control is scrolled clear of the band, and where
+  the page cannot move it clear it is pressed or typed into from the keyboard; nothing in the band is ever clicked,
+  and the control is checked unchanged before each key, as it is before each click. A login form under an anchored
+  ad ended `stuck` this way in one run in three. A dialog, an open menu or popover, a cover over the whole window or
+  a panel drawn over the control in the page's flow is still reported as covering it.
 - A run whose opening shortcut was refused as the wrong search can now finish from the search it sets up itself.
   Every Google Flights search lives at one path, so the results a run reached through the form after leaving the
   shortcut were refused as the shortcut's page, and each read concluded the refused fare again from its quotes,
