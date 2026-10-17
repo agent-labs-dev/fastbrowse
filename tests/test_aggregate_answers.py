@@ -561,3 +561,26 @@ async def test_identity_resolution_sees_only_the_source_keys_it_may_name() -> No
     assert not any("source_id" in source for source in sources.values())
     assert not block_ids & {value for source in sources.values() for value in source.values() if isinstance(value, str)}
     assert passed is False and missing == [check]
+
+
+def test_a_count_and_a_page_read_off_a_refused_guess_take_no_part_in_a_ranking() -> None:
+    """A group counted on a guessed page that was refused kept its count among the groups a rank is judged
+    against, and the guessed page stayed listed as read, as if a page none of whose rows is counted were covered."""
+    guess, own = "https://example.test/list?q=guess", "https://example.test/list?page=1"
+    notes = Notes()
+    groups = {"Ada": (own, 2), "Grace": (own, 1), "Edsger": (guess, 3)}
+    tallies = {}
+    for name, (url, count) in groups.items():
+        rows = [_record(url, f"{name} row {n}") for n in range(count)]
+        for row in rows:
+            notes.add(row)
+        tallies[name] = notes.add_tally(Tally(requirement_id="r", key=name, records=tuple(fact_id(r) for r in rows)))
+        notes.add_collection_page("r", url, f"sha-{url}")
+    for fact in tallies.values():
+        notes.add(fact.model_copy(update={"requirement_id": "r"}))
+    notes.discredit(("r",), lambda item: item.url == guess)
+    ada = tallies["Ada"].tally
+    assert ada is not None
+    standing = notes.standing(ada)
+    assert standing is not None and standing.rank == 1 and standing.group_count == 2
+    assert [read.url for read in notes.collection_pages("r")] == [own]

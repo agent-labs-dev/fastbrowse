@@ -379,6 +379,26 @@ def test_the_same_text_read_off_the_guess_at_another_fragment_answers_again() ->
     assert [item.url for item in notes.supporting_evidence("r1")] == ["https://example.test/search#new"]
 
 
+def test_the_claim_check_shows_no_held_quote_as_a_claims_source() -> None:
+    """Jev's claim check was shown a held quote as the cited source while the audit refused it, so the two checks
+    of one claim disagreed about what it rests on."""
+    from fastbrowse.retrieval import Claim, ComposedAnswer, claim_check_questions
+
+    quote = evidence(sha="guess").model_copy(update={"quote": "Fare $320"})
+    notes = Notes()
+    notes.add(Fact(reader=FactReader.LLM, requirement_id="r1", text="Fare $320", evidence=quote))
+    key = fact_id(Fact(reader=FactReader.LLM, text="", evidence=quote))
+    notes.discredit(("r1",), lambda item: item.capture_sha256 == "guess")
+    composed = ComposedAnswer(
+        answer="$320.",
+        linked_answer="$320.",
+        claims=(Claim(text="It costs $320.", evidence_ids=(key,)),),
+        requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),),
+    )
+    instructions = claim_check_questions(composed, notes, check_omission=False)["unsupported_0"].instructions
+    assert f"MISSING: {key}" in instructions and "Fare $320" not in instructions
+
+
 def test_a_hold_that_comes_back_takes_the_requirement_with_it() -> None:
     """Lifted by a reading off the guess, a held quote answered its requirement again; once the run read the guessed
     page again the hold was back, and the requirement still counted as answered by a quote no claim could cite."""

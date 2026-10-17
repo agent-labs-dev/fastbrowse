@@ -297,7 +297,18 @@ class Notes:
 
         A page with no matching record leaves no quote, so an audit that judged coverage from the cited records alone
         took that page for unread and refused a comparison code had closed over every page of the list."""
-        return tuple(self._collection_pages.get(requirement_id, ()))
+        # A read whose rows are held was read off a refused guess: shown as read, it would stand for a page covered
+        # while none of its rows is counted.
+        held = {
+            (fact.evidence.url, fact.evidence.capture_sha256)
+            for key, fact in self._facts.items()
+            if fact.evidence is not None and self.held(key)
+        }
+        return tuple(
+            read
+            for read in self._collection_pages.get(requirement_id, ())
+            if (read.url, read.capture_sha256) not in held
+        )
 
     def standing(self, tally: Tally) -> Standing | None:
         """Where a counted group ranks among every group counted for its requirement; None for a lone group.
@@ -310,13 +321,16 @@ class Notes:
             (
                 (fact.tally, fact.tally.requirement_id in self._requirements.get(key, ()))
                 for key, fact in self._facts.items()
-                if fact.tally is not None and fact.tally.requirement_id == tally.requirement_id
+                # A count resting on a held reading ranks against nothing: it is no count of the right page.
+                if fact.tally is not None
+                and fact.tally.requirement_id == tally.requirement_id
+                and not self.refused(key)
             ),
             key=lambda item: (-item[0].count, item[0].key),
         )
-        if len(tallies) < 2:
+        position = next((index for index, (counted, _) in enumerate(tallies) if counted.key == tally.key), None)
+        if len(tallies) < 2 or position is None:
             return None
-        position = next(index for index, (counted, _) in enumerate(tallies) if counted.key == tally.key)
         shown = sorted(
             {*range(min(_LEADING_GROUPS, len(tallies)))}
             | {*range(max(0, position - _NEIGHBOUR_GROUPS), min(len(tallies), position + _NEIGHBOUR_GROUPS + 1))}

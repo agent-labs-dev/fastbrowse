@@ -3258,7 +3258,8 @@ def claim_check_questions(
     check_omission: bool = True,
 ) -> Mapping[str, NoulQuestion]:
     questions: dict[str, NoulQuestion] = {}
-    known = notes.evidence
+    # A refused quote backs no claim here either: shown as a source, it let Jev pass a claim the audit then refused.
+    known = {key: evidence for key, evidence in notes.evidence.items() if not notes.refused(key)}
     # A counted record is shown as its tally's line: code checked each quote against the group when it was read and
     # counted them, and a ranking citing every record put a hundred quotes into each of its questions.
     compared = set(notes.comparison_records())
