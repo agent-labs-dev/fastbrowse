@@ -364,6 +364,21 @@ async def test_completion_sheds_optional_draft_before_required_source_quotes() -
     assert len(json.dumps(jev.state)) + max(len(q.model_dump_json()) for q in jev.questions.values()) <= 48000
 
 
+def test_the_same_text_read_off_the_guess_at_another_fragment_answers_again() -> None:
+    """A search routed by fragment was guessed at /search#old and refused, then rebuilt by the run at /search#new
+    with byte-identical text. A fact's id ignores the fragment while lineage keeps it, so the fresh reading mapped
+    onto the held fact and kept its guessed address, and the requirement stayed open."""
+    old = evidence(sha="same").model_copy(update={"url": "https://example.test/search#old", "quote": "Fare $320"})
+    new = old.model_copy(update={"url": "https://example.test/search#new"})
+    notes = Notes()
+    notes.add(Fact(reader=FactReader.LLM, requirement_id="r1", text="Fare $320", evidence=old))
+    notes.discredit(("r1",), lambda item: item.url.endswith("#old"))
+    assert not notes.evidenced("r1")
+    notes.add(Fact(reader=FactReader.LLM, requirement_id="r1", text="Fare $320", evidence=new))
+    assert notes.evidenced("r1")
+    assert [item.url for item in notes.supporting_evidence("r1")] == ["https://example.test/search#new"]
+
+
 def test_a_hold_that_comes_back_takes_the_requirement_with_it() -> None:
     """Lifted by a reading off the guess, a held quote answered its requirement again; once the run read the guessed
     page again the hold was back, and the requirement still counted as answered by a quote no claim could cite."""

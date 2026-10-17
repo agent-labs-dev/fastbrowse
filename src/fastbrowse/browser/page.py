@@ -504,6 +504,8 @@ class CdpPage(Page):
         self._session = session
         self._config = config
         self._last: _ObservedState | None = None
+        self._marked: str | None = None
+        """The document the last action began on, which a dialog it opened leaves the page unable to report."""
         self._back_to: dict[str, str] = {}
 
     @property
@@ -873,7 +875,10 @@ class CdpPage(Page):
         ):
             self._cursor.follow(partial(self._cursor_geometry, target[0], observation.document_key), point)
         popups = self._session.popups()
-        document = await self._input_mark()
+        # A dialog blocks the page, and an observation taken under it reads no document, so the mark taken before
+        # the action that opened it stands: accepting a confirm that navigates is a move the run made, and without
+        # a mark it was never reported as one.
+        document = await self._input_mark() or (self._marked if action.operation is Operation.DIALOG else None)
         try:
             outcome, detail = await self._dispatch(action, target, point)
         except BrowserError:
@@ -919,7 +924,8 @@ class CdpPage(Page):
                 self._session.active_session_id,
                 "(window.__fastbrowseInputHistory = 0, String(performance.timeOrigin))",
             )
-            return value if isinstance(value, str) else None
+            self._marked = value if isinstance(value, str) else None
+            return self._marked
         return None
 
     async def _moved_by_input(self, document: str | None) -> bool:

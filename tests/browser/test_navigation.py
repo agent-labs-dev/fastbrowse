@@ -277,3 +277,23 @@ async def test_an_action_reports_only_the_moves_it_made_itself(
     result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Search").id), obs)
     assert result.outcome is StepOutcome.EXECUTED
     assert result.moved is moved
+
+
+async def test_accepting_a_dialog_that_navigates_is_a_move_the_run_made(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    """A dialog blocks the page, so no mark of its document could be taken before accepting it, and a confirm that
+    navigated once accepted was never reported as the run's move."""
+    await page.navigate(f"{main_site}/?q=guess")
+    session_id = browser_session.active_session_id
+    form = "<button onclick=\"if (confirm('Search again?')) location.href = '/inner.html'\">Search</button>"
+    assert await eval_value(browser_session, session_id, f"document.body.innerHTML = {json.dumps(form)}; true") is True
+    obs = await page.observe()
+    clicked = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Search").id), obs)
+    assert clicked.outcome is StepOutcome.EXECUTED
+    await wait_until(lambda: browser_session.pending_dialog() is not None)
+    confirm = await page.observe()
+    async with asyncio.timeout(10):
+        accepted = await page.act(Action(operation=Operation.DIALOG, accept_dialog=True), confirm)
+    assert accepted.outcome is StepOutcome.EXECUTED
+    assert accepted.moved is True

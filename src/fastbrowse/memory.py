@@ -318,6 +318,17 @@ class Notes:
         """Return whether a new span was added; reused spans still evidence other requirements."""
         key = fact_id(fact)
         self._retired.discard(key)
+        if (
+            key in self._facts
+            and fact.evidence is not None
+            and self.held(key)
+            and self._on_guess is not None
+            and not self._on_guess(fact.evidence)
+        ):
+            # The same text read off the guess at an address that differs only in its fragment has this id, since
+            # an id ignores the fragment while lineage keeps it: a search routed by fragment, rebuilt with identical
+            # text, stayed held on the old address. The reading the run took itself stands in its place.
+            self._facts[key] = self._facts[key].model_copy(update={"evidence": fact.evidence})
         requirements = self._requirements.setdefault(key, set())
         if fact.requirement_id is not None:
             # A re-added fact keeps the basis it had, so the refused quotes are looked for in both.
