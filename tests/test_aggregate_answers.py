@@ -111,7 +111,11 @@ def test_the_fixture_is_the_sites_whole_collection() -> None:
 @pytest.mark.parametrize("complete", [True, False])
 def test_a_rank_by_count_is_shown_against_every_group_counted(complete: bool) -> None:
     notes, tallies = counted_authors(complete=complete)
-    claim = Claim(text="J.K. Rowling has the second most quotes, 9.", evidence_ids=(fact_id(tallies["J.K. Rowling"]),))
+    claim = Claim(
+        text="J.K. Rowling has the second most quotes, 9.",
+        evidence_ids=(fact_id(tallies["J.K. Rowling"]),),
+        ranks=True,
+    )
     context = _output_context(assemble_answer((claim,), notes, (AUTHORS,)), notes)
 
     assert context is not None
@@ -119,11 +123,12 @@ def test_a_rank_by_count_is_shown_against_every_group_counted(complete: bool) ->
     assert count.standing is not None
     assert count.standing.rank == 2
     assert count.standing.complete is complete
-    # The groups at or above nine, then the next one down; the long tail of single quotes is left out.
-    assert [(group.group, group.count) for group in count.standing.groups] == [
-        ("Albert Einstein", 10),
-        ("J.K. Rowling", 9),
-        ("Marilyn Monroe", 7),
+    # The leading groups and two either side of second place; the long tail of single quotes is left out.
+    assert [(group.rank, group.group, group.count) for group in count.standing.groups] == [
+        (1, "Albert Einstein", 10),
+        (2, "J.K. Rowling", 9),
+        (3, "Marilyn Monroe", 7),
+        (4, "Dr. Seuss", 6),
     ]
     assert count.standing.group_count == len({_author(item["quote"]) for item in QUOTES})
     # Only her own nine quotes are cited: the ranking does not need the other ninety-one.
@@ -156,7 +161,9 @@ def test_a_single_group_has_no_standing() -> None:
 async def test_the_rank_audit_receives_code_counts_and_their_completeness(complete: bool) -> None:
     notes, tallies = counted_authors(complete=complete)
     check = "Report the author with the second most quotes and the count."
-    claim = Claim(text="J.K. Rowling ranks second with 9 quotes.", evidence_ids=(fact_id(tallies["J.K. Rowling"]),))
+    claim = Claim(
+        text="J.K. Rowling ranks second with 9 quotes.", evidence_ids=(fact_id(tallies["J.K. Rowling"]),), ranks=True
+    )
     answer = assemble_answer((claim,), notes, (AUTHORS,))
     seen: list[dict] = []
 
@@ -181,6 +188,7 @@ async def test_the_rank_audit_receives_code_counts_and_their_completeness(comple
     assert missing == ([] if complete else [check])
     standing = seen[0]["sources"][0]["counted_records"][0]["standing"]
     assert standing["group_count"] > 3 and standing["groups"][0] == {
+        "rank": 1,
         "group": "Albert Einstein",
         "count": 10,
         "complete": complete,
@@ -190,7 +198,9 @@ async def test_the_rank_audit_receives_code_counts_and_their_completeness(comple
 def test_the_claim_check_sees_a_tallys_standing() -> None:
     # Records that are not also a comparison's operands are shown to the claim check as their tally's line.
     notes, tallies = counted_authors(complete=True, continued=False)
-    claim = Claim(text="Marilyn Monroe ranks third with 7 quotes.", evidence_ids=(fact_id(tallies["Marilyn Monroe"]),))
+    claim = Claim(
+        text="Marilyn Monroe ranks third with 7 quotes.", evidence_ids=(fact_id(tallies["Marilyn Monroe"]),), ranks=True
+    )
     questions = claim_check_questions(assemble_answer((claim,), notes, (AUTHORS,)), notes, check_omission=False)
 
     assert '"standing": {"rank": 3' in questions["unsupported_0"].instructions
@@ -432,3 +442,82 @@ async def test_a_list_that_loads_more_at_one_address_keeps_each_read() -> None:
     assert context is not None
     (compared,) = context.claims[0].compared_records
     assert [(read.read, context.urls[read.url_ref]) for read in compared.pages_read] == [(1, url), (2, url), (3, url)]
+
+
+MANY = Requirement(
+    id="per_group", text="Count the entries in every group and rank the groups.", kind=RequirementKind.INFORMATION
+)
+
+
+def many_groups() -> tuple[Notes, list[Fact]]:
+    """Five hundred groups with long labels, a hundred at each count from five down to one."""
+    _OFFSETS.clear()
+    notes = Notes()
+    tallies = []
+    for index in range(500):
+        label = f"Group {index:03d} " + "with a long descriptive label " * 10
+        records = []
+        for entry in range(5 - index // 100):
+            record = _record(f"https://example.test/groups/{index // 50}", f"{label}: entry {entry}")
+            notes.add(record)
+            records.append(fact_id(record))
+        tallies.append(notes.add_tally(Tally(requirement_id=MANY.id, key=label, records=tuple(records))))
+    notes.complete_tallies(MANY.id)
+    return notes, tallies
+
+
+def test_a_low_ranked_groups_standing_stays_bounded() -> None:
+    notes, tallies = many_groups()
+    last = tallies[-1]
+    claim = Claim(text="Group 499 ranks 401st with 1 entry.", evidence_ids=(fact_id(last),), ranks=True)
+    context = _output_context(assemble_answer((claim,), notes, (MANY,)), notes)
+
+    assert context is not None
+    standing = context.claims[0].counted_records[0].standing
+    assert standing is not None
+    # Rank, ties and the group count stay exact while the list shown stays a fixed handful.
+    assert (standing.rank, standing.tied, standing.group_count, standing.complete) == (401, 99, 500, True)
+    assert [group.rank for group in standing.groups] == [1, 1, 1, 401, 401, 401]
+    # The cited group's own label is kept whole; it is the claim's subject.
+    assert last.tally is not None and standing.groups[-1].group == last.tally.key
+    assert len(standing.model_dump_json()) < 3000
+    question = claim_check_questions(assemble_answer((claim,), notes, (MANY,)), notes, check_omission=False)
+    assert len(question["unsupported_0"].instructions) < 6000
+
+
+@pytest.mark.parametrize(("stated", "passes"), [(401, True), (400, False)])
+async def test_a_low_ranked_claim_is_judged_on_its_exact_rank(stated: int, passes: bool) -> None:
+    notes, tallies = many_groups()
+    claim = Claim(text=f"Group 499 ranks {stated} with 1 entry.", evidence_ids=(fact_id(tallies[-1]),), ranks=True)
+    answer = assemble_answer((claim,), notes, (MANY,))
+    check = "Report the rank of Group 499."
+
+    class RankJudge(ScriptedLLM):
+        """Answers as the audit's rules read: the stated rank must be the standing's code-computed rank."""
+
+        async def generate(self, purpose, messages, schema, **kwargs):
+            if schema.__name__ != "_OutputIdentities":
+                payload = json.loads(messages[-1].content)
+                ((key, field),) = payload["criteria"].items()
+                if "reported_claims" in field:
+                    reported = field["reported_claims"][0]
+                    standing = reported["counted_records"][0]["standing"]
+                    holds = standing["complete"] and f"ranks {standing['rank']} " in reported["text"]
+                else:
+                    holds = field["sources"][0]["counted_records"][0]["standing"]["complete"]
+                self.responses.append({"judgments": {key: "yes" if holds else "no"}, "reason": "Code rank."})
+            return await super().generate(purpose, messages, schema, **kwargs)
+
+    assert await check_answer_outputs(RoutingJev(), RankJudge([]), answer, notes, (check,)) is passes
+
+
+def test_a_count_alone_carries_no_standing() -> None:
+    notes, tallies = many_groups()
+    claim = Claim(text="Group 499 has 1 entry.", evidence_ids=(fact_id(tallies[-1]),))
+    answer = assemble_answer((claim,), notes, (MANY,))
+
+    context = _output_context(answer, notes)
+    assert context is not None
+    assert "standing" not in context.claims[0].model_dump()["counted_records"][0]
+    question = claim_check_questions(answer, notes, check_omission=False)["unsupported_0"].instructions
+    assert '"standing"' not in question and '"count": 1' in question

@@ -14,9 +14,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - A ranking, count or comparison computed across a paginated list can now be verified when it is right. A
   claim ranking one counted group, such as the group with the second highest count, cited only that group's
   records, so the answer check could not see what it beat, and citing every group's records instead could
-  overflow its budget; runs that had counted correctly ended `stuck` or `unverified`. The check is now shown
-  each counted group's rank among all the groups code counted, with their counts and whether the count is
-  complete, and every page code read for the list, so a page with no matching record no longer reads as unread.
+  overflow its budget; runs that had counted correctly ended `stuck` or `unverified`. For a claim that states a
+  rank, the check is now shown that group's exact rank among all the groups code counted, with the leading
+  groups and its neighbours, their counts and whether the count is complete; the list stays a fixed size however
+  many groups there are. It is also shown every read code made of the list, in order, so a page or a loaded
+  batch with no matching record no longer reads as unread.
   A ranking over a count that is not complete still fails, as does a wrong rank. When a run cannot finish, its
   partial answer now lists every counted group before any quote.
 

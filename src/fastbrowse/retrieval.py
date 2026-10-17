@@ -2791,6 +2791,9 @@ async def _read_choices(
 class Claim(Frozen):
     text: str
     evidence_ids: tuple[str, ...]
+    ranks: bool = Field(default=False, description="True if it states a rank or order among counted groups.")
+    """Whether the checks are shown each cited tally's standing among the other groups. A count alone needs only
+    its own tally, and a standing for every tally put hundreds of group labels into each audit question."""
 
 
 class AnswerCorrection(Frozen):
@@ -3018,8 +3021,8 @@ async def compose(
                 "identifying citations across claims when needed; another claim does not supply them. "
                 "Cite tally ids directly; their counts and descending order are computed in code, and code "
                 "expands their record citations. Never re-list the basis ids inside a tally. A rank by count, "
-                "such as the group with the second highest count, cites that group's own tally: code shows the checks "
-                "every group's count, so do not cite other groups' tallies or a note summarizing them.\n\n"
+                "such as the group with the second highest count, cites that group's own tally and sets ranks, "
+                "so code shows the checks its standing; do not cite other groups' tallies.\n\n"
                 f"# Trust\n{UNTRUSTED}"
             ),
         ),
@@ -3263,7 +3266,7 @@ def claim_check_questions(
                 continue
             # A rank among counted groups rests on every group's count, which code holds; one group's line alone
             # cannot show what it beat.
-            standing = notes.standing(fact.tally)
+            standing = notes.standing(fact.tally) if claim.ranks else None
             metadata = f"TALLY: {json.dumps(fact.text, ensure_ascii=False)} " + json.dumps(
                 {
                     "requirement": requirements.get(fact.tally.requirement_id),

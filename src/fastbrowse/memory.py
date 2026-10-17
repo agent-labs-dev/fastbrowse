@@ -28,6 +28,7 @@ class Tally(Frozen):
 
 
 class CountedGroup(Frozen):
+    rank: int
     group: str
     count: int
     complete: bool
@@ -36,11 +37,20 @@ class CountedGroup(Frozen):
 class Standing(Frozen):
     rank: int
     """1 plus the number of groups counted for the same requirement with a higher count; equal counts tie."""
+    tied: int
+    """How many other groups share this count, shown or not."""
     groups: tuple[CountedGroup, ...]
-    """The groups at or above this count, highest first, and the next group below it."""
+    """The leading groups and those around this one, highest first; ranks between them are left out."""
     group_count: int
     complete: bool
     """Whether every group counted for the requirement is complete, not only the groups shown."""
+
+
+# A standing shows the leading groups and a few either side of the cited one. Listing every group above a
+# low-ranked one put hundreds of labels into each audit question, past the LLM's and Jev's input budgets.
+_LEADING_GROUPS = 3
+_NEIGHBOUR_GROUPS = 2
+_GROUP_LABEL_CHARS = 160
 
 
 class CollectionRead(Frozen):
@@ -258,29 +268,38 @@ class Notes:
         the audit that group's records and nothing they beat, and citing every group's records instead can overflow
         the audit's budget.
         Each count here is code's, over records add_tally checked were captured spans."""
-        groups = sorted(
+        tallies = sorted(
             (
-                CountedGroup(
-                    group=fact.tally.key,
-                    count=fact.tally.count,
-                    complete=fact.tally.requirement_id in self._requirements.get(key, ()),
-                )
+                (fact.tally, fact.tally.requirement_id in self._requirements.get(key, ()))
                 for key, fact in self._facts.items()
                 if fact.tally is not None and fact.tally.requirement_id == tally.requirement_id
             ),
-            key=lambda group: (-group.count, group.group),
+            key=lambda item: (-item[0].count, item[0].key),
         )
-        if len(groups) < 2:
+        if len(tallies) < 2:
             return None
-        above = sum(group.count > tally.count for group in groups)
-        # The groups at or above this count settle the rank; the next one below shows the margin. Groups further
-        # down cannot change it, and a long tail would crowd the quotes out of the audit's budget.
-        shown = sum(group.count >= tally.count for group in groups) + 1
+        position = next(index for index, (counted, _) in enumerate(tallies) if counted.key == tally.key)
+        shown = sorted(
+            {*range(min(_LEADING_GROUPS, len(tallies)))}
+            | {*range(max(0, position - _NEIGHBOUR_GROUPS), min(len(tallies), position + _NEIGHBOUR_GROUPS + 1))}
+        )
         return Standing(
-            rank=above + 1,
-            groups=tuple(groups[:shown]),
-            group_count=len(groups),
-            complete=all(group.complete for group in groups),
+            rank=1 + sum(counted.count > tally.count for counted, _ in tallies),
+            tied=sum(counted.count == tally.count for counted, _ in tallies) - 1,
+            groups=tuple(
+                CountedGroup(
+                    rank=1 + sum(other.count > tallies[index][0].count for other, _ in tallies),
+                    # Only the cited group's label is its claim's subject; a long neighbour's label is context.
+                    group=tallies[index][0].key
+                    if index == position or len(tallies[index][0].key) <= _GROUP_LABEL_CHARS
+                    else tallies[index][0].key[: _GROUP_LABEL_CHARS - 3] + "...",
+                    count=tallies[index][0].count,
+                    complete=tallies[index][1],
+                )
+                for index in shown
+            ),
+            group_count=len(tallies),
+            complete=all(complete for _, complete in tallies),
         )
 
     def comparison_records(self, requirement_id: str | None = None) -> tuple[str, ...]:

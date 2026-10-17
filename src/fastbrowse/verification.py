@@ -634,7 +634,7 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
                     count=fact.tally.count,
                     complete=fact.tally.requirement_id in notes.fact_requirements(fact_id(fact)),
                     record_indices=tuple(dict.fromkeys(positions[record] for record in fact.tally.records)),
-                    standing=notes.standing(fact.tally),
+                    standing=notes.standing(fact.tally) if claim.ranks else None,
                     pages_read=pages_read(fact.tally.requirement_id),
                 )
             )
@@ -1207,11 +1207,13 @@ async def _check_answer_outputs(
                 "code-maintained distinct counts, their scope, cited record indices and collection completeness. "
                 "A complete count can rest on its matching quoted records without a page stating the total. "
                 "An incomplete or differently scoped count cannot establish the requested whole-list total. "
-                "A count's standing ranks its group among all group_count groups code counted in that scope: "
-                "rank is 1 plus the number of groups with a higher count, and groups lists those at or above "
-                "it with the next one below, each with its code-maintained count. When standing.complete is "
-                "true, it establishes the group's rank and order without citing the other groups' records; "
-                "equal counts are a tie. When it is false, no rank is established. "
+                "A count's standing, given for a claim that states a rank or order, ranks its group among all "
+                "group_count groups code counted in that scope: rank is 1 plus the number of groups with a "
+                "higher count, and tied is how many other groups share its count. groups lists the leading "
+                "groups and those around this one, each with its own rank and code-maintained count; ranks "
+                "between them are left out, not missing. When standing.complete is true, it establishes the "
+                "group's rank and order without citing the other groups' records. When it is false, no rank is "
+                "established. A count without a standing establishes no rank. "
                 "pages_read lists every read code made of the collection, in order, including reads with no "
                 "matching record; one url_ref can appear in several reads when the list loads more or pages in "
                 "place at one address. A listed read with no cited record was read and held no match, so it is "
@@ -1280,7 +1282,8 @@ async def _check_answer_outputs(
                 "indices into that claim's cited sources. Check the reported count against that matching scope "
                 "and quoted record membership. An incomplete count cannot establish a whole-list total. "
                 "Check a reported rank or order by count against the count's standing, code's ranking of "
-                "every group counted in that scope; it holds only when standing.complete is true. "
+                "every group counted in that scope, and its tied count for a shared rank; it holds only when "
+                "standing.complete is true, and a count without a standing establishes no rank. "
                 "pages_read lists every read code made of the collection, in order; one address can be read "
                 "in several states, and a listed read with no cited record was read and held no match. "
                 "Compared-record metadata preserves the reader's collection scope, completeness and cited "
