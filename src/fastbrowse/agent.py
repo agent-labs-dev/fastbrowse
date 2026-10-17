@@ -15,7 +15,7 @@ from collections import deque
 from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence, Set
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
-from typing import Self
+from typing import Any, Self
 from urllib.parse import parse_qsl, urljoin, urlsplit
 
 from pydantic import BaseModel, Field, JsonValue
@@ -83,11 +83,13 @@ from fastbrowse.page import (
     pager_link,
 )
 from fastbrowse.planner import (
+    CheckedPlan,
     OutputTarget,
     Plan,
     Requirement,
     RequirementKind,
     RunReport,
+    answer_checks,
     make_plan,
     partition_plan,
 )
@@ -135,6 +137,7 @@ from fastbrowse.shortcut import Shortcut, accept, accept_start, propose_shortcut
 from fastbrowse.telemetry import BudgetExceeded, Ledger, trace
 from fastbrowse.tripwires import Tripped, Tripwire, repeated_action, stagnant_plan
 from fastbrowse.verification import (
+    DoneCheck,
     DoneVerdict,
     Extraction,
     LLMVerdict,
@@ -359,6 +362,9 @@ class _RunState:
     authorization: Authorization
     ledger: Ledger
     planning: asyncio.Task[Generation[Plan]]
+    checking: asyncio.Task[CheckedPlan] | None = None
+    """Normalizes the plan's answer checks while the run browses; None when `planning` already did."""
+    checks_ready: bool = False
     notes: Notes = field(default_factory=Notes)
     finish_partitions: tuple[Plan, ...] = ()
     output_targets: Mapping[str, OutputTarget] = field(default_factory=dict)
@@ -538,7 +544,10 @@ class _RunState:
             # Shielded: a caller cancelled mid-wait (a fill a redraw abandoned) must not cancel the one plan every
             # later step needs. Teardown still cancels the task itself.
             planned = await asyncio.shield(self.planning)
-            self.ready_plan = planned.data
+            # Draft checks have not been normalized yet, and nothing before finishing may use them.
+            self.ready_plan = (
+                planned.data if self.checking is None else planned.data.model_copy(update={"answer_checks": ()})
+            )
             self.ledger.record(planned.cost)
             trace(
                 "plan_shape",
@@ -548,6 +557,18 @@ class _RunState:
                 ],
             )
         return self.ready_plan
+
+    async def await_checks(self) -> Plan:
+        """The plan with its normalized answer checks, which only finishing and answering read."""
+        plan = await self.await_plan()
+        if self.checking is not None and not self.checks_ready:
+            checked = await asyncio.shield(self.checking)
+            # Marked taken before recording, which can raise over budget: teardown bills an untaken receipt again.
+            self.checks_ready = True
+            self.ready_plan = plan = plan.model_copy(update={"answer_checks": checked.data.answer_checks})
+            if checked.cost is not None:
+                self.ledger.record(checked.cost)
+        return plan
 
 
 @dataclass
@@ -565,6 +586,7 @@ class HeadStart:
     start: str | None
     planning: asyncio.Task[Generation[Plan]]
     proposing: asyncio.Task[Shortcut] | None
+    checking: asyncio.Task[CheckedPlan] | None = None
 
     @classmethod
     def begin(cls, llm: LLMClient, task: str, *, start: str | None = None, limits: Limits | None = None) -> Self:
@@ -574,13 +596,20 @@ class HeadStart:
         ledger.started = math.inf
         # The plan is needed to read, to judge DONE and to answer, and the start page, the first fills and clicks
         # all come before those, so it is written from the task while they run.
-        planning = asyncio.create_task(make_plan(llm, task, start=start, ledger=ledger))
+        # The answer checks are normalized in a second call, which only finishing reads: chained after the plan
+        # rather than inside it, the first read no longer waits on a call that does not change discovery.
+        planning = asyncio.create_task(make_plan(llm, task, start=start, ledger=ledger, normalize_checks=False))
+        checking = asyncio.create_task(_normalize_checks(llm, task, planning, ledger))
         proposing = None if start is None else asyncio.create_task(_propose(llm, task, start, ledger))
-        return cls(ledger, task, start, planning, proposing)
+        return cls(ledger, task, start, planning, proposing, checking)
+
+    @property
+    def tasks(self) -> tuple[asyncio.Task[Any], ...]:
+        return tuple(task for task in (self.planning, self.checking, self.proposing) if task is not None)
 
     async def discard(self) -> None:
         """Cancel what is still being written, so nothing bills a run that has already ended."""
-        tasks = (self.planning,) if self.proposing is None else (self.planning, self.proposing)
+        tasks = self.tasks
         # One transport can take time to close, so cancel every paid call before joining any cleanup.
         for task in tasks:
             task.cancel()
@@ -591,7 +620,29 @@ class HeadStart:
         await self.discard()
         if not self.planning.cancelled() and self.planning.exception() is None:
             self.ledger.lines.append(self.planning.result().cost)
+        self.bill_checks()
         return tuple(self.ledger.lines)
+
+    def bill_checks(self, state: "_RunState | None" = None) -> None:
+        """A finished normalization the run never awaited still bills, as a finished plan does."""
+        checking = self.checking
+        if checking is None or (state is not None and state.checks_ready):
+            return
+        if (
+            checking.done()
+            and not checking.cancelled()
+            and checking.exception() is None
+            and (cost := checking.result().cost) is not None
+        ):
+            self.ledger.lines.append(cost)
+
+
+async def _normalize_checks(
+    llm: LLMClient, task: str, planning: asyncio.Task[Generation[Plan]], ledger: Ledger
+) -> CheckedPlan:
+    # Shielded so that this task's cancellation leaves the plan to its own owner.
+    planned = await asyncio.shield(planning)
+    return await answer_checks(llm, task, planned.data, ledger=ledger)
 
 
 class Agent:
@@ -667,7 +718,13 @@ class Agent:
                         invented.add(opening)
                         await self._front_page_if_blank(opening)
                     state = _RunState(
-                        task, inputs or {}, tuple(attachments), authorization or Authorization(), ledger, head.planning
+                        task,
+                        inputs or {},
+                        tuple(attachments),
+                        authorization or Authorization(),
+                        ledger,
+                        head.planning,
+                        head.checking,
                     )
                     state.started_url = opening
                     state.caller_start = start
@@ -736,11 +793,7 @@ class Agent:
                 if loop_returned:
                     try:
                         async with asyncio.timeout_at(deadline.when()):
-                            await asyncio.gather(
-                                head.planning,
-                                *([head.proposing] if head.proposing is not None else []),
-                                return_exceptions=True,
-                            )
+                            await asyncio.gather(*head.tasks, return_exceptions=True)
                     except TimeoutError:
                         assert ledger.limits.max_seconds is not None
                         await head.discard()
@@ -761,6 +814,7 @@ class Agent:
                 ):
                     # First observation can fail before the completed plan is consumed, but its receipt still bills.
                     ledger.lines.append(head.planning.result().cost)
+                head.bill_checks(state)
         # Startup calls can settle during teardown, after the loop has made its last budget check.
         try:
             ledger.check_spend()
@@ -3427,6 +3481,7 @@ class Agent:
         output_schema: type[BaseModel] | None,
         until: UntilCheck | None,
     ) -> RunResult | None:
+        await state.await_checks()
         if not state.finish_partitions:
             if not state.oversized_answer:
                 try:
@@ -3605,7 +3660,7 @@ class Agent:
             raise _HttpFailure(url=fresh.url, status=fresh.response_status).stop()
         if failed := await self._failed_submission(state):
             raise failed.stop()
-        await state.await_plan()
+        await state.await_checks()
         state.reset_answer_check()
         if state.open_answer_outputs and state.rejected_answer_evidence == _answer_evidence(state.notes):
             # Re-reading the same partial quotes must not buy another completion check or reset recovery.
@@ -3637,14 +3692,36 @@ class Agent:
             if draft is not None and not state.plan.answer_checks
             else None
         )
+        verifying: asyncio.Task[Generation[LLMVerdict]] | None = None
         try:
             check = await checking
             state.ledger.record(check.cost)
+            verdict = check.verdict
+            guessed = _guessed(state.plan, state.notes, state.invented)
+            if verdict is DoneVerdict.ACCEPT and _guessed(state.plan, state.notes, state.invented, searches=True):
+                # Jev judges the notes, not where they were read, so only the verifier is shown the guessed searches.
+                verdict = DoneVerdict.VERIFY
+            elif verdict is DoneVerdict.VERIFY and not check.unmet and not guessed and _lookup(state.plan):
+                # A doubted lookup reaches here with every requirement cited, and the verifier excuses a cited
+                # requirement (`_verified`), so all it could still do was refuse naming nothing, which it never did
+                # in 76 0.5.7 verifications. It cost a screenshot and a vision call, 3 to 8s, on half of all runs.
+                # Every claim of the answer is still checked against its quotes.
+                verdict = DoneVerdict.ACCEPT
             held = None
             if claiming is not None:
                 held = await claiming
             elif check.answer is not None and check.verdict is not DoneVerdict.REJECT:
+                if verdict is DoneVerdict.VERIFY:
+                    # The verifier judges completion from the page and the notes, and the audit judges the draft's
+                    # claims against their quotes; neither reads the other's verdict. Asked one after the other,
+                    # the verifier's vision call waited on the audit's model calls every time Jev doubted a run
+                    # whose draft was ready.
+                    verifying = asyncio.create_task(self._verify_done(state, fresh, check))
                 held = await self._holds(state, check.answer)
+        except BaseException:
+            if verifying is not None:
+                await _discard(verifying)
+            raise
         finally:
             for pending in (checking, claiming):
                 if pending is not None:
@@ -3658,16 +3735,7 @@ class Agent:
             unmet=list(check.unmet),
             requirements={r.id: r.text for r in state.plan.requirements},
         )
-        guessed = _guessed(state.plan, state.notes, state.invented)
-        if check.verdict is DoneVerdict.ACCEPT and _guessed(state.plan, state.notes, state.invented, searches=True):
-            # Jev judges the notes, not where they were read, so only the verifier is shown the guessed searches.
-            check = check.model_copy(update={"verdict": DoneVerdict.VERIFY})
-        elif check.verdict is DoneVerdict.VERIFY and not check.unmet and not guessed and _lookup(state.plan):
-            # A doubted lookup reaches here with every requirement cited, and the verifier excuses a cited
-            # requirement (`_verified`), so all it could still do was refuse naming nothing, which it never did in
-            # 76 0.5.7 verifications. It cost a screenshot and a vision call, 3 to 8s, on half of all runs. Every
-            # claim of the answer is still checked against its quotes.
-            check = check.model_copy(update={"verdict": DoneVerdict.ACCEPT})
+        check = check.model_copy(update={"verdict": verdict})
         accepted = check.verdict is DoneVerdict.ACCEPT
         missing: tuple[str, ...] = ()
         misread: set[str] = set()
@@ -3678,6 +3746,7 @@ class Agent:
         # ledger for a run that has already produced its result.
         try:
             if check.verdict is DoneVerdict.VERIFY:
+                verifying = verifying or asyncio.create_task(self._verify_done(state, fresh, check))
                 # Write the answer while the verifier is still deciding. Both read the same finished
                 # notes, and every accepted run wants an answer, so the whole cost of guessing wrong is
                 # one discarded call on the branch that was going back to work anyway.
@@ -3702,22 +3771,9 @@ class Agent:
                             else None,
                         )
                     )
-                verdict = await llm_verify(
-                    self._llm,
-                    state.task,
-                    state.plan,
-                    fresh,
-                    await self._screenshots(),
-                    state.notes,
-                    _record(state.history, self._config.observation),
-                    doubted=check.doubted,
-                    invented=sorted(state.invented),
-                    visited=_visited(state.visited, self._config.observation, self._redactor.redact),
-                    config=self._config,
-                    ledger=state.ledger,
-                )
-                state.ledger.record(verdict.cost)
-                accepted = _verified(verdict.data, state.plan, state.notes, state.invented)
+                judged = await verifying
+                state.ledger.record(judged.cost)
+                accepted = _verified(judged.data, state.plan, state.notes, state.invented)
                 # Asked to open httpx's project page, a run picked DONE on pypi.org before acting, Jev held the one
                 # requirement unmet, and flash-lite called it complete. Only an action can do what Jev says is
                 # undone, so a run that has taken none cannot be talked past it. The history, not the steps, since
@@ -3729,12 +3785,12 @@ class Agent:
                 )
                 undone = {r.id for r in state.plan.requirements if r.kind is RequirementKind.ACTION} & set(check.unmet)
                 accepted = accepted and not (idle and undone)
-                missing, misread = verdict.data.missing, _misread(verdict.data, state.plan, state.notes, state.invented)
+                missing, misread = judged.data.missing, _misread(judged.data, state.plan, state.notes, state.invented)
                 trace(
                     "verify",
-                    complete=verdict.data.complete,
-                    missing=list(verdict.data.missing),
-                    ungrounded=list(verdict.data.ungrounded),
+                    complete=judged.data.complete,
+                    missing=list(judged.data.missing),
+                    ungrounded=list(judged.data.ungrounded),
                 )
             result = None
             if accepted:
@@ -3792,8 +3848,25 @@ class Agent:
                 return None
             return result
         finally:
-            if drafting is not None:
-                await _discard(drafting)
+            for pending in (drafting, verifying):
+                if pending is not None:
+                    await _discard(pending)
+
+    async def _verify_done(self, state: _RunState, fresh: Observation, check: DoneCheck) -> Generation[LLMVerdict]:
+        return await llm_verify(
+            self._llm,
+            state.task,
+            state.plan,
+            fresh,
+            await self._screenshots(),
+            state.notes,
+            _record(state.history, self._config.observation),
+            doubted=check.doubted,
+            invented=sorted(state.invented),
+            visited=_visited(state.visited, self._config.observation, self._redactor.redact),
+            config=self._config,
+            ledger=state.ledger,
+        )
 
     async def _answer(self, state: _RunState, prepared: _Prepared) -> tuple[ComposedAnswer, bool]:
         """Return the checked draft, or compose an answer and check its claims."""
