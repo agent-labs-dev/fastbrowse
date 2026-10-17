@@ -504,10 +504,11 @@ class CdpPage(Page):
         self._session = session
         self._config = config
         self._last: _ObservedState | None = None
-        self._marked: tuple[str, str] | None = None
-        """The document, and its address, the last action began on. A dialog blocks the page, so accepting one is
-        judged against this mark, and only when the dialog came from that same address: a dialog a page opened as
-        it loaded after a navigation is not the action's, and accepting it moved nothing."""
+        self._marked: tuple[int, str] | None = None
+        """The count of navigations the run's input had begun, and the page's address, when the last action began.
+        A dialog blocks the page, so accepting one is judged against this mark, and only when the dialog came from
+        that same address: a dialog a page opened as it loaded after a navigation is not the action's, and
+        accepting it moved nothing."""
         self._back_to: dict[str, str] = {}
 
     @property
@@ -922,36 +923,37 @@ class CdpPage(Page):
             moved=await self._moved_by_input(document),
         )
 
-    async def _input_mark(self) -> str | None:
-        """The page's document before an action, with the count of addresses its input changed set back to none."""
+    async def _input_mark(self) -> int | None:
+        """The navigations the run's input had begun before an action, with the page's count of addresses its input
+        changed set back to none."""
         if self._session.pending_dialog() is not None:
             self._marked = None
             return None
+        begun = self._session.input_navigations
         with suppress(Exception):
-            value = await self._evaluate(
-                self._session.active_session_id,
-                "(window.__fastbrowseInputHistory = 0, [String(performance.timeOrigin), location.href])",
+            href = await self._evaluate(
+                self._session.active_session_id, "(window.__fastbrowseInputHistory = 0, location.href)"
             )
-            if isinstance(value, list) and len(value) == 2:
-                document, href = value
-                if isinstance(document, str) and isinstance(href, str):
-                    self._marked = (document, href)
-                    return document
+            if isinstance(href, str):
+                self._marked = (begun, href)
+                return begun
         self._marked = None
         return None
 
-    async def _moved_by_input(self, document: str | None) -> bool:
-        """Whether the action just taken moved the page: a new document committed after it, or its own input event
-        changed the address. Unknown counts as not moved, which keeps a guessed page guessed, the safe side."""
-        if document is None or self._session.pending_dialog() is not None:
+    async def _moved_by_input(self, begun: int | None) -> bool:
+        """Whether the action just taken moved the page: its input began a navigation to another document, or
+        changed the address on the same one. A new document alone proves nothing, since a page can move itself on
+        a timer; unknown counts as not moved, which keeps a guessed page guessed, the safe side."""
+        if begun is None:
+            return False
+        if self._session.input_navigations > begun:
+            return True
+        if self._session.pending_dialog() is not None:
             return False
         with suppress(Exception):
-            now = await self._evaluate(
-                self._session.active_session_id,
-                "[String(performance.timeOrigin), window.__fastbrowseInputHistory || 0]",
-            )
-            if isinstance(now, list) and len(now) == 2:
-                return now[0] != document or (isinstance(now[1], int) and now[1] > 0)
+            return (
+                await self._evaluate(self._session.active_session_id, "(window.__fastbrowseInputHistory || 0) > 0")
+            ) is True
         return False
 
     async def _cursor_geometry(

@@ -289,8 +289,8 @@ class ActResult(Frozen):
     detail: str | None = None
     form_unchanged: bool = False
     moved: bool = False
-    """The action itself took the page elsewhere: a new document committed after it, a tab it opened, or an address
-    its own input event changed. A page rewriting its address on its own time is not this."""
+    """The action itself took the page elsewhere: its own input event began a navigation or changed the address,
+    or it opened a tab. A page that moves on its own time, even to a new document just after the action, is not."""
 
 
 class Page(Protocol):

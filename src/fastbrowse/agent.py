@@ -12,10 +12,10 @@ Guessed addresses, readings and holds keep to these invariants; `_Lineage`, `Age
   itself cause (the page's own pushState or rewrite, on a timer or after a fetch, or a tab it opened). Staying on
   the guess only has the verifier judge the page; it never blocks a reading.
 - What clears it: an entry, or a new address on the same entry, that the run's own executed action on the
-  site's controls produced, as the page shows (a new document after it, a tab it opened, or an address its own
-  input event changed), unless it is a built address again; a NAVIGATE, or Back past the start, onto an address
-  the run did not build; the front-page fallback. A move the run cannot tie to its action clears nothing. Back,
-  Forward and a reload return to an entry and to its lineage.
+  site's controls produced, as the page shows (a navigation its own input event began, a tab it opened, or an
+  address its input event changed), unless it is a built address again; a NAVIGATE, or Back past the start,
+  onto an address the run did not build; the front-page fallback. A move the run cannot tie to its action clears
+  nothing. Back, Forward and a reload return to an entry and to its lineage.
 - A reading is guessed if it was taken while on the guess, keyed by its source address and capture. The same
   page read again off the guess is the run's own, and that frees the guessed reading of the same text there.
 - What a hold blocks: a reading the verifier refused as read off a built address, while the lineage still says
@@ -1672,7 +1672,7 @@ class Agent:
 
         Only an address the run built is a guess, and a page leaves it only by a move the run can show it made. An
         entry, or a new address on an entry, that the run's own action on the site's controls produced, as the page
-        reports it (`ActResult.moved`: a new document after the action, a tab it opened, or an address its own
+        reports it (`ActResult.moved`: a navigation its own input event began, a tab it opened, or an address its
         input event changed), is the site's, whatever its path, unless it landed on a built address again. A move
         the run cannot tie to its action, such as a single-page app rewriting its address after a fetch, stays on
         the guess: that only asks the verifier to judge the page, which a correct page passes, and holds attach to

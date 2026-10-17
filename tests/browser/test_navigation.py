@@ -316,3 +316,35 @@ async def test_accepting_a_dialog_a_new_page_opened_as_it_loaded_is_no_move_of_t
         accepted = await page.act(Action(operation=Operation.DIALOG, accept_dialog=True), alert)
     assert accepted.outcome is StepOutcome.EXECUTED
     assert accepted.moved is False
+
+
+@pytest.mark.parametrize(
+    ("markup", "moved"),
+    [
+        ('<a href="/inner.html">Go</a>', True),
+        ('<form action="/inner.html"><button>Go</button></form>', True),
+        ("<button onclick=\"location.href = '/inner.html'\">Go</button>", True),
+        # The page sends itself elsewhere later, on a timer or after a fetch, not as the click's own doing.
+        ("<button onclick=\"setTimeout(() => location.href = '/inner.html', 60)\">Go</button>", False),
+    ],
+)
+async def test_only_a_navigation_the_runs_input_began_is_its_move(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, markup: str, moved: bool
+) -> None:
+    """A page script that set its location after a delay loaded a new document during an unrelated click, and the
+    new document was read as the click's move, so a guess could be cleared."""
+    await page.navigate(f"{main_site}/?q=guess")
+    session_id = browser_session.active_session_id
+    assert (
+        await eval_value(
+            browser_session,
+            session_id,
+            "{ const range = document.createRange(); range.selectNode(document.body); "
+            f"document.body.replaceChildren(range.createContextualFragment({json.dumps(markup)})); }} true",
+        )
+        is True
+    )
+    obs = await page.observe()
+    result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Go").id), obs)
+    assert result.outcome is StepOutcome.EXECUTED
+    assert result.moved is moved

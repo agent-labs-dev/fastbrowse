@@ -19,6 +19,7 @@ from typing import Any, Self, cast
 from cdp_use.cdp.fetch.events import RequestPausedEvent
 from cdp_use.cdp.fetch.types import RequestPattern
 from cdp_use.cdp.page.events import JavascriptDialogClosedEvent, JavascriptDialogOpeningEvent, ScreencastFrameEvent
+from cdp_use.cdp.runtime.events import BindingCalledEvent
 from cdp_use.cdp.target.commands import CreateTargetParameters
 from cdp_use.cdp.target.events import (
     AttachedToTargetEvent,
@@ -106,16 +107,26 @@ _KEEP_PAINTING: dict[str, object] = {
 }
 _TRACK_DOCUMENT_JS = data_file("browser", "snapshot.js").read_text(encoding="utf-8") + "('fingerprint')"
 _REFUSE_COOKIES_JS = data_file("browser", "autoconsent", "autoconsent.standalone.js").read_text(encoding="utf-8")
-# Whether the run's own input moved the page to another address on the same document: a trusted event's task, its
-# promise reactions included, changed the address. A page that rewrites its address later, on a timer or after a
-# fetch, is not counted, so it is never mistaken for the site answering the run. Nothing on the page is wrapped.
+INPUT_NAVIGATION_BINDING = "__fastbrowseInputNavigation"
+"""The binding a document calls, before it unloads, when the run's own input sent it to another document."""
+# Whether the run's own input moved the page. A trusted input event's task, its promise reactions included, and the
+# task after it are the run's: an address it changed on the same document is counted here, and a navigation to
+# another document it began, or a link or form the user agent itself followed, is reported through the binding,
+# since the count dies with the document. A page that moves later, on a timer or after a fetch, is not counted: a
+# script that set its location after a delay was once read as the move of whatever click came before it. Nothing on
+# the page is wrapped.
 INPUT_HISTORY_JS = (
-    "(() => { if (window.__fastbrowseInputWatch) return; window.__fastbrowseInputWatch = true; "
+    "(() => { if (window.__fastbrowseInputWatch) return; window.__fastbrowseInputWatch = true; let input = 0; "
     "for (const type of ['click', 'submit', 'keydown', 'keyup', 'input', 'change', 'pointerup', 'mouseup']) "
-    "addEventListener(type, ev => { if (!ev.isTrusted) return; const was = location.href; "
-    "setTimeout(() => { if (location.href !== was) "
-    "window.__fastbrowseInputHistory = (window.__fastbrowseInputHistory || 0) + 1; }, 0); }, "
-    "{capture: true, passive: true}); })()"
+    "addEventListener(type, ev => { if (!ev.isTrusted) return; const was = location.href; input++; "
+    # Two turns, not one: a form's submit() is planned as a task of its own, queued after this one's timer.
+    "setTimeout(() => setTimeout(() => { input--; if (location.href !== was) "
+    "window.__fastbrowseInputHistory = (window.__fastbrowseInputHistory || 0) + 1; }, 0), 0); }, "
+    "{capture: true, passive: true}); "
+    "if (window.navigation) navigation.addEventListener('navigate', ev => { "
+    "if (ev.destination.sameDocument || !(ev.userInitiated || input > 0)) return; "
+    f"const report = window[{INPUT_NAVIGATION_BINDING!r}]; if (typeof report === 'function') report('1'); }}); "
+    "})()"
 )
 """DuckDuckGo's autoconsent (MPL-2.0, unmodified): refuses consent banners on known platforms and hides them
 before they paint, so neither the agent's steps nor a recording are spent on one."""
@@ -315,6 +326,7 @@ class BrowserSession:
         """How many of them an observation has already shown, so each is shown to the run once."""
         self._dialogs: dict[str, Dialog] = {}
         self._dialog_urls: dict[str, str] = {}
+        self._input_navigations = 0
         """The address of the document each pending dialog came from, which `Dialog` does not carry."""
         """Pending JS dialog per tab session id; cleared once handled."""
         self._dialog_opened = asyncio.Event()
@@ -683,6 +695,7 @@ class BrowserSession:
         # These domains are independent, but all must be ready before the session can be used.
         await _together(
             *(self.client.send_raw(f"{domain}.enable", session_id=session_id) for domain in _ENABLE_DOMAINS),
+            self.client.send_raw("Runtime.addBinding", {"name": INPUT_NAVIGATION_BINDING}, session_id=session_id),
             self.client.send_raw(
                 "Target.setAutoAttach",
                 {"autoAttach": True, "waitForDebuggerOnStart": scoped, "flatten": True},
@@ -718,6 +731,7 @@ class BrowserSession:
         client.register.Target.targetInfoChanged(self._on_target_info_changed)
         client.register.Target.targetDestroyed(self._on_target_destroyed)
         client.register.Page.javascriptDialogOpening(self._on_dialog)
+        client.register.Runtime.bindingCalled(self._on_binding)
         client.register.Page.javascriptDialogClosed(self._on_dialog_closed)
         # A background run casts without a frame handler too, and a frame nobody acks stalls the cast that sent it.
         if self._on_frame is not None or not self._connection.foreground:
@@ -951,6 +965,15 @@ class BrowserSession:
             params["promptText"] = prompt_text
         await self.client.send.Page.handleJavaScriptDialog(params=params, session_id=session_id)  # ty: ignore[invalid-argument-type]
         self._dialogs.pop(session_id, None)
+
+    def _on_binding(self, event: BindingCalledEvent, session_id: str | None) -> None:
+        if event["name"] == INPUT_NAVIGATION_BINDING:
+            self._input_navigations += 1
+
+    @property
+    def input_navigations(self) -> int:
+        """How many navigations to another document the run's own input has begun, on any page, so far."""
+        return self._input_navigations
 
     def _on_dialog_closed(self, event: JavascriptDialogClosedEvent, session_id: str | None) -> None:
         # Navigation can dismiss a dialog without going through handle_dialog.
