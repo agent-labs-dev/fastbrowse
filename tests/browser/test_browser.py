@@ -255,6 +255,23 @@ async def test_a_click_that_opens_a_tab_continues_there(loaded_page: CdpPage, br
     assert find(await loaded_page.observe(), "Open popup")
 
 
+async def test_a_new_tab_slow_to_set_up_is_still_followed(
+    loaded_page: CdpPage, browser_session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    obs = await loaded_page.observe()
+    prepare = browser_session._prepare_session
+
+    async def slow(session_id: str) -> None:
+        # A loaded browser took seconds to answer a new tab's setup, past any fixed allowance for it.
+        await asyncio.sleep(2.5)
+        await prepare(session_id)
+
+    monkeypatch.setattr(browser_session, "_prepare_session", slow)
+    result = await loaded_page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Open popup").id), obs)
+    assert result.outcome is StepOutcome.EXECUTED and result.detail == "opened a new tab, now active"
+    assert find(await loaded_page.observe(), "Popup button")
+
+
 async def test_confirm_dialog_handled_via_dialog_operation(
     loaded_page: CdpPage, browser_session: BrowserSession
 ) -> None:
@@ -1019,6 +1036,50 @@ async def test_page_javascript_cannot_forge_the_http_status(
     )
     assert (await page.observe()).response_status == 200
     assert await page.response_status() == 200
+
+
+async def test_http_status_world_is_made_once_per_document(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    send = browser_session.client.send_raw
+
+    async def counted(method: str, params: Any = None, session_id: str | None = None) -> dict[str, Any]:
+        calls.append(method)
+        return await send(method, params, session_id)
+
+    monkeypatch.setattr(browser_session.client, "send_raw", counted)
+    for path, status in (("", 200), ("/http-error/404", 404), ("", 200)):
+        await page.navigate(f"{main_site}{path}")
+        assert (await page.observe()).response_status == status
+        calls.clear()
+        assert (await page.observe()).response_status == status
+        assert "Page.createIsolatedWorld" not in calls and "Page.getFrameTree" not in calls
+
+
+async def test_a_reused_context_id_cannot_forge_the_http_status(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    contexts: list[int] = []
+    browser_session.client.register.Runtime.executionContextCreated(
+        lambda event, _session: (
+            contexts.append(event["context"]["id"]) if event["context"].get("auxData", {}).get("isDefault") else None
+        )
+    )
+    await page.navigate(main_site)
+    assert (await page.observe()).response_status == 200
+    session_id = browser_session.active_session_id
+    # Chrome can hand a kept world's id to another document's context; here it names the page's own world.
+    page._status_worlds[session_id] = (contexts[-1], "kept-nonce")
+    await eval_value(
+        browser_session,
+        session_id,
+        "Object.defineProperty(window, '__fastbrowseStatus', {get: () => 'forged'}); "
+        "Performance.prototype.getEntriesByType = performance.getEntriesByType = "
+        "() => [{name: location.href, responseStatus: 401}]; true",
+    )
+    assert (await page.observe()).response_status == 200
+    assert page._status_worlds[session_id][0] != contexts[-1]
 
 
 async def test_required_radios_use_their_form_group_validity(

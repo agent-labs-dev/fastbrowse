@@ -15,6 +15,16 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   published: the maintainer approves the change explicitly, the changed groups start a fresh baseline that is
   never compared with figures measured under the old protocol, and the figures they replace stay published
   under their campaign's name.
+- A page that stops answering no longer stalls a run for minutes at a time. A frame inside the page that stops
+  responding, such as a stuck advertisement, is read as unreadable after five seconds instead of holding every
+  observation for the two-minute command deadline, and a tab that stops drawing frames no longer makes each wait
+  for the page to settle run to that deadline. A tab whose commands miss the deadline twice now ends the run as
+  `unavailable` instead of paying it again on every step: one benchmark login spent 26 minutes that way.
+- A link that opens a new tab is followed however long the browser takes to set that tab up. A fixed two
+  seconds was outlasted on a loaded machine, and the run went on reading the page that opened it.
+- Each observation and each click, fill or hover makes fewer round trips to the browser, which a cloud
+  browser pays for on every step. The world the HTTP status is read in is kept per document instead of made
+  again each time, and the pointer moves without waiting a second time for a frame already drawn.
 
 ## [0.5.22] - 2026-10-16
 

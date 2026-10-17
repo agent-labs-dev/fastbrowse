@@ -53,6 +53,11 @@ CDP_COMMAND_SECONDS = 120.0
 """A responsive browser can still leave one document command pending forever."""
 CDP_ALIVE_SECONDS = 10.0
 """`Browser.getVersion` is answered at once by any browser that is there."""
+CDP_DEADLINES_BEFORE_OUTAGE = 2
+"""Command deadlines one connection may meet before its tab's commands fail at once. A read that waits out the
+deadline is often one whose caller treats a failed read as an unreadable page and carries on, so the next read waited
+it out again: one login run met it thirteen times, 26 minutes on a page it could not use. Browser-level commands
+(closing the run's tabs) are still sent."""
 
 
 class BrowserUnresponsive(BrowserError, Unavailable):
@@ -173,7 +178,14 @@ class _BrowserClient(CDPClient):
         except Exception as exc:
             raise _browser_error("CDP.stop", exc) from exc
 
+    _deadlines = 0
+    """Commands on this connection that outlived CDP_COMMAND_SECONDS."""
+
     async def send_raw(self, method: str, params: Any = None, session_id: str | None = None) -> dict[str, Any]:
+        if session_id is not None and self._deadlines >= CDP_DEADLINES_BEFORE_OUTAGE:
+            raise BrowserUnresponsive(
+                f"{method} not sent: {self._deadlines} page commands already exceeded their deadline"
+            )
         reply = asyncio.ensure_future(super().send_raw(method, params, session_id))
         try:
             try:
@@ -193,6 +205,7 @@ class _BrowserClient(CDPClient):
                     self._answered = True
                     return reply.result()
             except TimeoutError:
+                self._deadlines += 1
                 raise BrowserUnresponsive(f"{method} exceeded its command deadline; the page did not answer") from None
         except BrowserUnresponsive:
             raise
@@ -786,20 +799,21 @@ class BrowserSession:
     def popups(self) -> tuple[str, ...]:
         return tuple(self._popups)
 
-    async def follow_popup(self, known: tuple[str, ...], within: float) -> str | None:
+    async def follow_popup(self, known: tuple[str, ...]) -> str | None:
         """Make active the latest tab the active tab opened since `known` once it is adopted, and return its id.
 
         A link that opens its page in a new window left the run on the opener: the next step was spent choosing
-        the new tab, and the read before it credited the opener's heading to the new window.
+        the new tab, and the read before it credited the opener's heading to the new window. Adoption is waited
+        out however long it takes, since each of its commands has its own deadline: a fixed two seconds for it
+        was outlasted on a loaded machine, and the run read the opener while the tab it had opened sat unused.
         """
         opener = self._active_target_id
         fresh = [t for t, (o, _) in self._popups.items() if o == opener and t not in known]
         if not fresh:
             return None
-        with contextlib.suppress(TimeoutError):
-            if await asyncio.wait_for(asyncio.shield(self._popups[fresh[-1]][1]), within) and fresh[-1] in self._tabs:
-                await self.switch_tab(fresh[-1])
-                return fresh[-1]
+        if await asyncio.shield(self._popups[fresh[-1]][1]) and fresh[-1] in self._tabs:
+            await self.switch_tab(fresh[-1])
+            return fresh[-1]
         return None
 
     def _on_target_info_changed(self, event: TargetInfoChangedEvent, session_id: str | None) -> None:

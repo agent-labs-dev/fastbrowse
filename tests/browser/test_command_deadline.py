@@ -21,3 +21,21 @@ async def test_unanswered_command_from_live_browser_has_a_deadline(monkeypatch: 
                 await session.client.send_raw("Runtime.evaluate", {"expression": "aPromiseThatNeverSettles()"})
     assert "Browser.getVersion" in transport.calls
     assert "Runtime.evaluate" in transport.finished
+
+
+async def test_repeated_command_deadlines_stop_the_tab_instead_of_recurring(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = CdpTransport(monkeypatch)
+    monkeypatch.setattr(browser_session, "CDP_REPLY_SECONDS", 0.01)
+    monkeypatch.setattr(browser_session, "CDP_COMMAND_SECONDS", 0.05, raising=False)
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+        transport.blocked["Runtime.evaluate"] = asyncio.Event()
+        for _ in range(browser_session.CDP_DEADLINES_BEFORE_OUTAGE):
+            with pytest.raises(browser_session.BrowserUnresponsive, match="command deadline"):
+                await session.client.send_raw("Runtime.evaluate", {"expression": "1"}, session_id="session")
+        sent = len(transport.calls)
+        async with asyncio.timeout(0.02):
+            with pytest.raises(browser_session.BrowserUnresponsive, match="already exceeded"):
+                await session.client.send_raw("Runtime.evaluate", {"expression": "1"}, session_id="session")
+        assert len(transport.calls) == sent, "a tab command after repeated deadlines is not sent to wait again"
+        # Closing the run's tabs is still possible.
+        await session.client.send_raw("Target.getTargets")

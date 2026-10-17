@@ -411,3 +411,89 @@ async def test_observe_waits_for_loading_before_reading_controls(
     )
     observation = await page.observe()
     assert [control.label for control in observation.controls] == ["Nonstop result"]
+
+
+@pytest.fixture(scope="module")
+def hung_frame_site() -> Iterator[str]:
+    """A page whose cross-site frame stops answering: its renderer spins once the test asks it to."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+        def do_GET(self) -> None:
+            if self.path == "/no-frames":
+                # A tab that has stopped drawing calls no animation frame callback, however long it is waited on.
+                body = (
+                    b"<!doctype html><script>window.requestAnimationFrame = () => 0;</script>"
+                    b"<button onclick=\"this.textContent = 'Opened'\">Open</button>"
+                )
+            elif self.path == "/frame":
+                body = (
+                    b"<!doctype html><p>Advertisement</p><script>"
+                    b"window.addEventListener('message', () => { while (true) {} });</script>"
+                )
+            else:
+                body = (
+                    b"<!doctype html><title>Sign in</title><label>Email <input id=email></label>"
+                    b"<button>Sign in</button><iframe src='http://localhost:"
+                    + str(port).encode()
+                    + b"/frame'></iframe>"
+                )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{port}/"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+async def test_a_frame_that_stops_answering_costs_one_short_deadline(
+    page: CdpPage, browser_session: BrowserSession, hung_frame_site: str
+) -> None:
+    await page.navigate(hung_frame_site)
+    await wait_until(lambda: bool(browser_session.frame_sessions()))
+    await observe_until(page, "Sign in")
+    # The frame's renderer is busy from here on, as a stuck advertisement's is.
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.querySelector('iframe').contentWindow.postMessage(1, '*')",
+    )
+    started = time.monotonic()
+    observation = await page.observe()
+    assert time.monotonic() - started < page_module._FRAME_READ_SECONDS + 2
+    # The page's own controls are still read, and the frame is reported unread rather than silently empty.
+    assert find(observation, "Sign in") and observation.inaccessible_frames == 1
+    capture = await page.capture()
+    assert "Sign in" in capture.text and capture.inaccessible_frames == 1
+    # Once a frame has missed its deadline, later reads do not wait on it again.
+    started = time.monotonic()
+    await page.observe()
+    assert time.monotonic() - started < 1.5
+
+
+async def test_settling_does_not_wait_on_a_frame_that_never_comes(
+    page: CdpPage, browser_session: BrowserSession, hung_frame_site: str
+) -> None:
+    async with asyncio.timeout(15):
+        await page.navigate(f"{hung_frame_site}no-frames")
+        observation = await page.observe()
+        result = await page.act(Action(operation=Operation.CLICK, target_id=find(observation, "Open").id), observation)
+        assert result.outcome is StepOutcome.EXECUTED and result.page_changed
+        opened = await page.observe()
+        assert find(opened, "Opened")
+        await eval_value(
+            browser_session, browser_session.active_session_id, "document.querySelector('button').textContent = 'Shut'"
+        )
+        assert await page.redrawn(opened, 1.0)
