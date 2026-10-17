@@ -3,7 +3,7 @@
 import hashlib
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from itertools import groupby
 from typing import Self
@@ -351,23 +351,33 @@ class Notes:
         for requirements in self._requirements.values():
             requirements -= dropped
 
-    def discredit(self, requirement_ids: Iterable[str]) -> None:
-        """Reopen requirements read off the wrong page, and keep the facts they rested on from answering them again.
+    def discredit(self, requirement_ids: Iterable[str], guessed: Callable[[str], bool]) -> None:
+        """Reopen requirements read off the wrong page, and keep the quotes read on it from answering them again.
 
         Reopening alone was not enough on Google Flights: the next read, on the search the run had since rebuilt
         through the form, concluded the same round-trip fare by drawing on the reopened quotes, the requirement
-        rested on the guessed page again, and every DONE got the same refusal until the run stopped stuck. The
-        facts stay as context; a fresh quote from another page still evidences the requirement.
+        rested on the guessed page again, and every DONE got the same refusal until the run stopped stuck. Only
+        quotes read where `guessed` says the run was on the guess are held: a requirement also cited from a page the
+        run reached itself was refused for its guessed half, and blocking the other half too left it open for good.
+        A conclusion or tally is held by the quotes it rests on, never by its own name, so a recount on the right
+        page still counts. The held facts stay as context; any other quote goes on evidencing the requirement.
         """
         dropped = set(requirement_ids)
         for requirement in dropped:
             supporting = self.expand_evidence_ids(key for key, _ in self.supporting(requirement))
-            # A tally is named by its requirement and key, not by what it counted, so a recount on the right page
-            # takes the same name; it is judged by the records it rests on instead.
             self._discredited.setdefault(requirement, set()).update(
-                key for key in supporting if key not in self._facts or self._facts[key].tally is None
+                key
+                for key in supporting
+                if (fact := self._facts.get(key)) is not None
+                and fact.evidence is not None
+                and guessed(fact.evidence.url)
             )
-        self.unevidence(dropped)
+        # Only what rests on a held quote is reopened: a quote from a page the run reached itself was never doubted,
+        # and reopening it too left the requirement open until a reread happened to cite it again.
+        for key, requirements in self._requirements.items():
+            fact = self._facts.get(key)
+            basis = fact.basis if fact is not None else ()
+            requirements -= {r for r in dropped & requirements if self._rests_on_discredited(r, key, basis)}
 
     def supersede(self, requirement_id: str, url: str, sha256: str, text: str) -> None:
         """Once a read of `url` evidences a requirement, earlier reads of that address whose quote the page no

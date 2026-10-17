@@ -658,7 +658,7 @@ def test_a_count_refused_as_read_off_the_wrong_page_cannot_answer_again_but_a_re
     notes.complete_tallies("r1")
     assert notes.evidenced("r1")
 
-    notes.discredit(("r1",))
+    notes.discredit(("r1",), lambda url: url == guessed)
     notes.complete_tallies("r1")
     assert not notes.evidenced("r1")
     # A reader that counts the refused rows again under the same key is still the refused page.
@@ -675,3 +675,26 @@ def test_a_count_refused_as_read_off_the_wrong_page_cannot_answer_again_but_a_re
     assert notes.evidenced("r1")
     assert set(tally.basis) == {fact_id(f) for f in fresh}
     assert tally.tally is not None and tally.tally.count == 3
+
+
+def test_a_refusal_holds_only_the_quotes_read_on_the_guess() -> None:
+    """A requirement cited from a guessed search and from a page the run reached itself was refused for its guessed
+    half. Holding every supporting quote also held the good one, so no reread could ever answer it again."""
+    guessed, right = "https://example.test/search?q=guess", "https://example.test/search?tfs=set"
+    on_guess, on_right = _quoted("Fare $320", "guess", guessed), _quoted("Fare $305", "right", right)
+    notes = Notes((on_guess, on_right))
+    assert {key for key, _ in notes.supporting("r1")} == {fact_id(on_guess), fact_id(on_right)}
+
+    notes.discredit(("r1",), lambda url: url == guessed)
+    # The verifier was shown only the guessed quote as guessed, so only that one stops evidencing the requirement.
+    assert {key for key, _ in notes.supporting("r1")} == {fact_id(on_right)}
+
+    notes.add(on_guess)
+    notes.add(on_right)
+    assert {key for key, _ in notes.supporting("r1")} == {fact_id(on_right)}
+    # A conclusion drawing on the good quote alone answers it; one drawing on the guessed quote does not.
+    concluded = Fact(requirement_id="r1", text="$305", evidence=None, basis=(fact_id(on_right),), reader=FactReader.LLM)
+    mixed = Fact(requirement_id="r1", text="$320", evidence=None, basis=(fact_id(on_guess),), reader=FactReader.LLM)
+    notes.add(concluded)
+    notes.add(mixed)
+    assert {key for key, _ in notes.supporting("r1")} == {fact_id(on_right), fact_id(concluded)}

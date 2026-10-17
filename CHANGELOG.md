@@ -20,10 +20,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - A run whose opening shortcut was refused as the wrong search can now finish from the search it sets up itself.
   Every Google Flights search lives at one path, so the results a run reached through the form after leaving the
   shortcut were refused as the shortcut's page, and each read concluded the refused fare again from its quotes,
-  until the run stopped `stuck`. Pages reached after the run navigates off a shortcut are its own, and quotes a
-  requirement was refused on can no longer answer it again; a click on the shortcut's page still keeps it a
-  guess. The verifier judges a shortcut's page by what it shows rather than how it was reached, and an answer
-  keeps the terms a value was quoted under, such as a round trip and its return date.
+  until the run stopped `stuck`. Pages reached after the run navigates off a shortcut are its own, and quotes read
+  on the shortcut can no longer answer a requirement refused for them, while the requirement's other quotes still
+  do; a click on the shortcut's page still keeps it a guess. The verifier judges a shortcut's page by what it shows
+  rather than how it was reached, and an answer keeps the terms a value was quoted under, such as a round trip and
+  its return date.
 
 ## [0.5.22] - 2026-10-16
 

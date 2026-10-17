@@ -3787,7 +3787,7 @@ class Agent:
                     + ", an address built from the task, not the page it describes)"
                     for key in sorted(misread)
                 ]
-                state.notes.discredit(misread)
+                state.notes.discredit(misread, _guessed_page(state.invented, state.first_seen))
                 unmet += [f"Answer output not verified: {output}" for output in state.missing_answer_outputs]
                 reason = self._redactor.redact(f"DONE rejected: {'; '.join(unmet) or 'completion not confirmed'}")
                 state.history.append(
@@ -4543,6 +4543,15 @@ def _guessed(
     the guessed page until it stopped stuck. So an address `first_seen` after the run left the guess for an address
     it did not build is its own. One first seen while still on the guess, or never observed, as an address a site
     wrote back into a fact can be, is matched by its path."""
+    guessed = _guessed_page(invented, first_seen, searches=searches)
+    return {r.id for r in plan.requirements if any(guessed(item.url) for item in notes.supporting_evidence(r.id))}
+
+
+def _guessed_page(
+    invented: Set[str], first_seen: Mapping[str, bool] | None = None, *, searches: bool = False
+) -> Callable[[str], bool]:
+    """Whether a fact read at an address was read on the guess, judged as `_guessed` judges it, so what a refusal
+    blocks is exactly what the verifier was shown as guessed."""
     places = {_place(url): _searched(url) for url in invented}
     seen = first_seen or {}
 
@@ -4553,7 +4562,7 @@ def _guessed(
             and (not searches or places[_place(url)] or _searched(url))
         )
 
-    return {r.id for r in plan.requirements if any(guessed(item.url) for item in notes.supporting_evidence(r.id))}
+    return guessed
 
 
 def _unfragmented(url: str) -> str:
