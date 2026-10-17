@@ -36,8 +36,10 @@ class AuditWriter(ScriptedLLM):
     def __init__(self, verdict="yes"):
         super().__init__([])
         self.verdict = verdict
+        self.schemas: list[str] = []
 
     async def generate(self, purpose, messages, schema, **kwargs):
+        self.schemas.append(schema.__name__)
         if schema.__name__ == "_OutputIdentities":
             return await super().generate(purpose, messages, schema, **kwargs)
         fields = json.loads(messages[-1].content)["criteria"]
@@ -98,7 +100,11 @@ async def test_changed_audit_context_cannot_reuse_a_previous_verdict(change):
         answer = assemble_answer((Claim(text="Member price 12", evidence_ids=(fact_id(fact),)),), notes, ())
     before = len(writer.calls)
     assert await check_answer_outputs(RoutingJev(), writer, answer, notes, checks, task=task, audit_cache=cache)
-    assert len(writer.calls) - before == 3
+    audits = [schema for schema in writer.schemas[before:] if schema != "_OutputIdentities"]
+    # Both verdicts are judged afresh. Identity resolution is not shown a source's page block id, so a change
+    # to that id alone reuses its binding, which names the source by its key and is resolved again here.
+    assert len(audits) == 2
+    assert len(writer.calls) - before == (2 if change == "source" else 3)
 
 
 async def test_repeated_rejected_assertion_replays_its_correction_and_reason():
