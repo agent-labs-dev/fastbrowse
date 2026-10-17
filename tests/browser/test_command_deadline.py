@@ -42,3 +42,23 @@ async def test_repeated_command_deadlines_stop_the_tab_instead_of_recurring(monk
         assert len(transport.calls) == sent, "a tab command after repeated deadlines is not sent to wait again"
         # Closing the run's tabs is still possible.
         await session.client.send_raw("Target.getTargets")
+
+
+async def test_a_browser_gone_by_the_command_deadline_is_an_outage(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = CdpTransport(monkeypatch)
+    monkeypatch.setattr(browser_session, "CDP_REPLY_SECONDS", 0.2)
+    monkeypatch.setattr(browser_session, "CDP_COMMAND_SECONDS", 0.3, raising=False)
+    monkeypatch.setattr(browser_session, "CDP_ALIVE_SECONDS", 0.05)
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+        transport.blocked["Runtime.evaluate"] = asyncio.Event()
+
+        async def leave() -> None:
+            # The probe after the first wait answers; the browser goes before the deadline ends the second.
+            await asyncio.sleep(0.25)
+            transport.blocked["Browser.getVersion"] = asyncio.Event()
+
+        gone = asyncio.create_task(leave())
+        with pytest.raises(browser_session.BrowserUnresponsive, match="stopped answering") as raised:
+            await session.client.send_raw("Runtime.evaluate", {"expression": "1"}, session_id="session")
+        await gone
+    assert isinstance(raised.value, Unavailable)

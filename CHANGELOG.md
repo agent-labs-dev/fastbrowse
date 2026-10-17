@@ -23,7 +23,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - A page that stops answering while the browser still does now ends the run as `error`, its own failure, where a
   single missed command deadline used to end it `unavailable` as if the browser had gone. `unavailable` is kept for
   a browser that stops answering or a connection to it that closes during the run, which a closed connection now
-  also reports; one that closes while the run is shutting down leaves the run's own status as it was.
+  also reports. A connection that closes while the run shuts down still ends it as `error`, as before.
 - A link that opens a new tab is followed however long the browser takes to set that tab up. A fixed two
   seconds was outlasted on a loaded machine, and the run went on reading the page that opened it.
 - Each observation and each click, fill or hover makes fewer round trips to the browser, which a cloud

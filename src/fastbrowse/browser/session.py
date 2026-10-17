@@ -185,7 +185,7 @@ class _BrowserClient(CDPClient):
         try:
             await super().stop()
         except Exception as exc:
-            # A connection lost while closing ends nothing the run did, so it never turns a finished run into an outage.
+            # A connection lost while closing comes after the run's own work, so it is never reported as an outage.
             raise _browser_error("CDP.stop", exc, lost_is_outage=False) from exc
 
     _deadlines = 0
@@ -216,8 +216,11 @@ class _BrowserClient(CDPClient):
                     self._answered = True
                     return reply.result()
             except TimeoutError:
+                # The browser can go during the last wait, after the probe before it answered, so it is asked once
+                # more: only a browser that is still there makes this the page's failure rather than an outage.
+                if not reply.done() and not await self._alive():
+                    raise BrowserUnresponsive(f"{method} got no reply, and the browser stopped answering") from None
                 self._deadlines += 1
-                # The liveness probe answered throughout, so the browser is there and only this page is not.
                 raise PageUnresponsive(
                     f"{method} exceeded its command deadline; the page did not answer while the browser did"
                 ) from None
