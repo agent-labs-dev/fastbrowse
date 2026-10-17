@@ -459,7 +459,7 @@ def hung_frame_site() -> Iterator[str]:
 
 
 async def test_a_frame_that_stops_answering_costs_one_short_deadline(
-    page: CdpPage, browser_session: BrowserSession, hung_frame_site: str
+    page: CdpPage, browser_session: BrowserSession, hung_frame_site: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     await page.navigate(hung_frame_site)
     await wait_until(lambda: bool(browser_session.frame_sessions()))
@@ -481,6 +481,12 @@ async def test_a_frame_that_stops_answering_costs_one_short_deadline(
     started = time.monotonic()
     await page.observe()
     assert time.monotonic() - started < 1.5
+    # Past the recheck window it gets the full budget again, so a frame that recovered slow is still read.
+    monkeypatch.setattr(page_module, "_FRAME_RECHECK_SECONDS", 0.0)
+    monkeypatch.setattr(page_module, "_FRAME_READ_SECONDS", 2.0)
+    started = time.monotonic()
+    await page.observe()
+    assert time.monotonic() - started >= 2.0
 
 
 async def test_settling_does_not_wait_on_a_frame_that_never_comes(

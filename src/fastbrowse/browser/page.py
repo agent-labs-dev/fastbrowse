@@ -266,7 +266,11 @@ answering (an advertisement's renderer stuck in a loop) left every observation w
 deadline, two minutes, and one login run spent 26 minutes that way while the page it was signing into answered at
 once. A frame past this is reported unread, as a cross-origin frame that cannot be read is."""
 _FRAME_RETRY_SECONDS = 0.5
-"""What a frame that already missed `_FRAME_READ_SECONDS` gets on later reads, until it answers again."""
+"""What a frame that missed `_FRAME_READ_SECONDS` gets on later reads, until it answers again or
+`_FRAME_RECHECK_SECONDS` have passed."""
+_FRAME_RECHECK_SECONDS = 30.0
+"""How long a frame that missed its deadline keeps the short budget. A frame that recovers but still answers slowly,
+as over a distant cloud connection, would otherwise never be read again for the rest of the run."""
 _SCREENSHOT_WAIT_SECONDS = 1.0
 _SCREENSHOT_STALL_SECONDS = 5.0
 """How long a background tab gets to paint a frame once its cast is restarted. Nothing else can make it paint
@@ -381,8 +385,8 @@ class CdpPage(Page):
         self._config = config
         self._last: _ObservedState | None = None
         self._back_to: dict[str, str] = {}
-        self._unanswered: set[str] = set()
-        """Child frame sessions whose last read missed its deadline."""
+        self._unanswered: dict[str, float] = {}
+        """Child frame session -> when its last read missed the full deadline."""
         self._status_worlds: dict[str, tuple[int, str]] = {}
         """Tab session -> the isolated world its HTTP status is read in, and the nonce that proves the world ours."""
 
@@ -597,19 +601,23 @@ class CdpPage(Page):
                 result[key] = frame
         if main := result.get(_MAIN):
             self._session.set_tab_info(target_id, main.raw.url, main.raw.title)
-        self._unanswered.intersection_update(self._session.frame_sessions().values())
+        live = set(self._session.frame_sessions().values())
+        self._unanswered = {session_id: at for session_id, at in self._unanswered.items() if session_id in live}
         return result
 
     async def _frame_evaluate(self, session_id: str, script: str) -> JsonValue:
         """Evaluate in a child frame within its deadline; past it, the frame reads as unreadable (`None`)."""
-        budget = _FRAME_RETRY_SECONDS if session_id in self._unanswered else _FRAME_READ_SECONDS
+        missed = self._unanswered.get(session_id)
+        short = missed is not None and time.monotonic() - missed < _FRAME_RECHECK_SECONDS
+        budget = _FRAME_RETRY_SECONDS if short else _FRAME_READ_SECONDS
         try:
             async with asyncio.timeout(budget):
                 raw = await self._evaluate(session_id, script)
         except TimeoutError:
-            self._unanswered.add(session_id)
+            if not short:
+                self._unanswered[session_id] = time.monotonic()
             return None
-        self._unanswered.discard(session_id)
+        self._unanswered.pop(session_id, None)
         return raw
 
     def _inaccessible_frames(self, coverage: dict[str, int]) -> int:
