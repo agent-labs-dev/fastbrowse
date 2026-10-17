@@ -20,12 +20,41 @@ block publication. These checks detect recorded regressions; they do not prove t
 grader is free of bugs. Review unexpected outcomes before approving.
 
 To approve reviewed results, dispatch `publish-evals.yml` on `main` with the SHA256 of the exact candidate
-bytes. For the first publication, also approve establishing the initial baseline. Changed task or judge
-protocols require a matched baseline; changing a limit note cannot skip regression checks.
-Only the maintainer can issue this approval. The workflow revalidates coverage and the fixture
-receipt and returns a `benchmark-approval` artifact. Download `benchmark-approval.json`, copy the reviewed candidate to `docs/results/benchmarks.json` and include both in
-the reviewed data PR and wait for green CI before merging. An upload to Langfuse does not approve
-publication.
+bytes. For the first publication, also approve establishing the initial baseline. Only the maintainer can issue
+this approval. The workflow revalidates coverage and the fixture receipt and returns a `benchmark-approval`
+artifact. Download `benchmark-approval.json` and install it with
+
+```sh
+uv run python -m fastbrowse.evals.benchmarks --candidate docs/results/benchmark-candidate.json --install benchmark-approval.json
+```
+
+which copies the reviewed candidate to `docs/results/benchmarks.json` and the receipt to
+`docs/results/benchmark-approval.json`. Include both in the reviewed data PR and wait for green CI before
+merging. An upload to Langfuse does not approve publication.
+
+## Changing the protocol
+
+A published group is compared only with figures measured under the same protocol: the same catalog digest,
+tasks and limits. Changing a limit note cannot skip regression checks. When the protocol changes on
+purpose (a task or grader version, an arm, a limit, such as the uncapped protocol of #356), the changed groups
+cannot be compared with their published figures and are published as a fresh baseline instead:
+
+1. Stage the candidate as usual. CI reports each staged group whose protocol changed and still compares the
+   others.
+2. Dispatch `publish-evals.yml` with `protocol_change` set and a `protocol_note` saying what changed and why.
+   The workflow refuses the dispatch when no published group changed protocol. Without the flag, a changed group
+   is refused as before. Every published group must still be present, cover the current catalog exactly
+   and pass the fixture receipt; groups whose protocol did not change are still checked for regressions.
+3. The approval carries a `protocol_change` record: the note, the digest of the figures it supersedes, and
+   for each changed group its previous and new catalog digest, tasks and limits.
+4. `--install` archives the superseded figures as `docs/results/benchmarks.<campaign>.json` and their
+   approval as `docs/results/benchmark-approval.<campaign>.json`, named by the campaign that measured them,
+   before putting the new figures in place. The record links both, so each approval leads to the figures
+   it replaced.
+
+CI accepts changed published figures only when their approval's record names exactly the groups whose protocol
+changed, from exactly the figures at the base, and the archive holds those figures and their approval byte for
+byte. Archived figures are published results: CI refuses any change to them or their removal.
 
 The website reads the candidate and approval from one resolved fastbrowse commit. It checks the exact-byte
 digest and the completed owner-dispatched workflow receipt before deriving any figure. A changed
