@@ -27,6 +27,22 @@ class Tally(Frozen):
         return len(set(self.records))
 
 
+class CountedGroup(Frozen):
+    group: str
+    count: int
+    complete: bool
+
+
+class Standing(Frozen):
+    rank: int
+    """1 plus the number of groups counted for the same requirement with a higher count; equal counts tie."""
+    groups: tuple[CountedGroup, ...]
+    """The groups at or above this count, highest first, and the next group below it."""
+    group_count: int
+    complete: bool
+    """Whether every group counted for the requirement is complete, not only the groups shown."""
+
+
 class Comparison(Frozen):
     requirement_id: str
     records: tuple[str, ...]
@@ -117,6 +133,7 @@ class Notes:
         self._tally_records: set[str] = set()
         self._record_ids: dict[tuple[str, str, str], list[dict[str, str]]] = {}
         self._continuation_records: dict[str, set[str]] = {}
+        self._collection_pages: dict[str, dict[str, None]] = {}
         self._pages: dict[tuple[str, str, datetime], CapturedPage] = {}
         for fact in facts:
             self.add(fact)
@@ -215,6 +232,47 @@ class Notes:
     def add_continuation(self, requirement_id: str, record_id: str) -> None:
         self._continuation_records.setdefault(requirement_id, set()).add(record_id)
 
+    def add_collection_page(self, requirement_id: str, url: str) -> None:
+        self._collection_pages.setdefault(requirement_id, {})[url] = None
+
+    def collection_pages(self, requirement_id: str) -> tuple[str, ...]:
+        """Every page read for a list that went on past one page, in reading order, matching records or not.
+
+        A page with no matching record leaves no quote, so the audit of the cheapest five-star books saw page 4
+        missing from the cited records and refused a comparison code had read across all six pages."""
+        return tuple(self._collection_pages.get(requirement_id, ()))
+
+    def standing(self, tally: Tally) -> Standing | None:
+        """Where a counted group ranks among every group counted for its requirement; None for a lone group.
+
+        A rank is decided by every other group's count. A claim citing the second-ranked author's tally showed the
+        audit nine quotes and nothing they beat, and citing every group's records instead overflowed its budget.
+        Each count here is code's, over records add_tally checked were captured spans."""
+        groups = sorted(
+            (
+                CountedGroup(
+                    group=fact.tally.key,
+                    count=fact.tally.count,
+                    complete=fact.tally.requirement_id in self._requirements.get(key, ()),
+                )
+                for key, fact in self._facts.items()
+                if fact.tally is not None and fact.tally.requirement_id == tally.requirement_id
+            ),
+            key=lambda group: (-group.count, group.group),
+        )
+        if len(groups) < 2:
+            return None
+        above = sum(group.count > tally.count for group in groups)
+        # The groups at or above this count settle the rank; the next one below shows the margin. Groups further
+        # down cannot change it, and a long tail would crowd the quotes out of the audit's budget.
+        shown = sum(group.count >= tally.count for group in groups) + 1
+        return Standing(
+            rank=above + 1,
+            groups=tuple(groups[:shown]),
+            group_count=len(groups),
+            complete=all(group.complete for group in groups),
+        )
+
     def comparison_records(self, requirement_id: str | None = None) -> tuple[str, ...]:
         records = (
             set().union(*self._continuation_records.values())
@@ -306,6 +364,9 @@ class Notes:
         scoped._tally_records = self._tally_records & kept
         scoped._continuation_records = {
             requirement: records & kept for requirement, records in self._continuation_records.items()
+        }
+        scoped._collection_pages = {
+            requirement: dict(pages) for requirement, pages in self._collection_pages.items() if requirement in wanted
         }
         scoped._record_ids = {
             identity: [dict(occurrence) for occurrence in occurrences]

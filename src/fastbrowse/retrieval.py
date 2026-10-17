@@ -3017,7 +3017,9 @@ async def compose(
                 "alongside its attribute sources. Reuse "
                 "identifying citations across claims when needed; another claim does not supply them. "
                 "Cite tally ids directly; their counts and descending order are computed in code, and code "
-                "expands their record citations. Never re-list the basis ids inside a tally.\n\n"
+                "expands their record citations. Never re-list the basis ids inside a tally. A rank by count, "
+                "such as the second most quoted author, cites that group's own tally: code shows the checks "
+                "every group's count, so do not cite other groups' tallies or a note summarizing them.\n\n"
                 f"# Trust\n{UNTRUSTED}"
             ),
         ),
@@ -3145,13 +3147,21 @@ def partial_answer(notes: Notes, max_chars: int) -> ComposedAnswer:
     )
     claims: list[Claim] = []
     counted: set[str] = set()
-    candidates = [fact for fact in notes.facts if fact.tally is not None]
+    candidates = sorted(
+        (fact for fact in notes.facts if fact.tally is not None),
+        key=lambda fact: (fact.tally.requirement_id, -fact.tally.count, fact.tally.key) if fact.tally else ("", 0, ""),
+    )
     candidates.extend(fact for fact in notes.facts if fact.evidence is not None)
     candidates.sort(key=lambda fact: not bool(notes.fact_requirements(fact_id(fact))))
     ranks: dict[str | None, int] = {}
     ranked: list[tuple[int, Fact]] = []
     # Early sources can fill the partial answer before a later target's finding gets a turn.
     for fact in candidates:
+        if fact.tally is not None:
+            # Every tally shared the one sourceless turn, so only the top author's count came before a page of
+            # quotes filled the answer: "Albert Einstein: 10" stood alone with the second and third left out.
+            ranked.append((0, fact))
+            continue
         source = fact.evidence.url if fact.evidence is not None else None
         rank = ranks.get(source, 0)
         ranked.append((rank, fact))
@@ -3251,11 +3261,15 @@ def claim_check_questions(
         for fact in notes.facts:
             if fact.tally is None or fact_id(fact) not in expanded:
                 continue
+            # A rank among counted groups rests on every group's count, which code holds; one group's line alone
+            # cannot show what it beat.
+            standing = notes.standing(fact.tally)
             metadata = f"TALLY: {json.dumps(fact.text, ensure_ascii=False)} " + json.dumps(
                 {
                     "requirement": requirements.get(fact.tally.requirement_id),
                     "count": fact.tally.count,
                     "complete": fact.tally.requirement_id in notes.fact_requirements(fact_id(fact)),
+                    **({"standing": standing.model_dump(mode="json")} if standing is not None else {}),
                 },
                 ensure_ascii=False,
             )

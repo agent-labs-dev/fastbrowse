@@ -2671,6 +2671,11 @@ class Agent:
             incomplete=state.incomplete,
             require_all_evidence=require_all_evidence or (state.through_end and state.pages > 0),
         )
+        for requirement in wanted:
+            # The first page of a list that goes on, each later page and the closing read all belong to the
+            # collection, whether or not they held a matching record. A detail page read later does not.
+            if requirement.id in outcome.continues or requirement.id in state.continuing or require_all_evidence:
+                state.notes.add_collection_page(requirement.id, capture.url)
         context_added = False
         if state.oversized_answer and state.open_answer_outputs:
             # A field read can return context while another field or collection is still open. Its quotes
@@ -2817,6 +2822,8 @@ class Agent:
         before = len(state.notes.facts)
         state.notes.remember_capture(page.capture)
         outcome.merge_records(state.notes)
+        for requirement in wanted:
+            state.notes.add_collection_page(requirement.id, page.capture.url)
         state.record_read_documents.add(page.observation.document_key)
         state.incomplete.update(outcome.incomplete)
         state.history.append(
