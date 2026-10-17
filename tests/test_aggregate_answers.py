@@ -14,8 +14,9 @@ from pathlib import Path
 import pytest
 
 from fastbrowse.config import Config
+from fastbrowse.llm import Generation
 from fastbrowse.memory import Comparison, Fact, Notes, Tally, fact_id
-from fastbrowse.models import Evidence, FactReader
+from fastbrowse.models import CostBasis, CostComponent, CostLine, Evidence, FactReader
 from fastbrowse.planner import Requirement, RequirementKind
 from fastbrowse.retrieval import Claim, assemble_answer, claim_check_questions, partial_answer
 from fastbrowse.verification import _output_context, check_answer_outputs
@@ -521,3 +522,42 @@ def test_a_count_alone_carries_no_standing() -> None:
     assert "standing" not in context.claims[0].model_dump()["counted_records"][0]
     question = claim_check_questions(answer, notes, check_omission=False)["unsupported_0"].instructions
     assert '"standing"' not in question and '"count": 1' in question
+
+
+async def test_identity_resolution_sees_only_the_source_keys_it_may_name() -> None:
+    """A live resolver filed a correct quote under the cited record's page block id instead of its source key, and
+    a right answer failed as an identity missing from its cited sources. The block id is no longer shown; a reply
+    that still names something other than a key is refused, as before."""
+    notes, tallies = many_groups()
+    last = tallies[-1]
+    assert last.tally is not None
+    claim = Claim(text="Group 499 ranks 401 with 1 entry.", evidence_ids=(fact_id(last),), ranks=True)
+    answer = assemble_answer((claim,), notes, (MANY,))
+    block_ids = {notes.evidence[key].source_id for key in last.basis}
+    shown: list[dict] = []
+
+    class BlockIdResolver(ScriptedLLM):
+        async def generate(self, purpose, messages, schema, **kwargs):
+            payload = json.loads(messages[-1].content)
+            if schema.__name__ == "_OutputIdentities":
+                shown.append(payload["sources"])
+                identities = [{"id": "i0", "source_ref": next(iter(block_ids)), "quote": "Group 499"}]
+                bindings = {key: {"scope": "entities", "identity_ids": ["i0"]} for key in payload["criteria"]}
+                return Generation(
+                    data=schema.model_validate({"identities": identities, "bindings": bindings}),
+                    cost=CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0.0),
+                )
+            self.responses.append({"judgments": {k: "yes" for k in payload["criteria"]}, "reason": "Read."})
+            return await super().generate(purpose, messages, schema, **kwargs)
+
+    missing: list[str] = []
+    check = "Report the rank of Group 499."
+    passed = await check_answer_outputs(
+        RoutingJev(), BlockIdResolver([]), answer, notes, (check,), missing_outputs=missing
+    )
+
+    sources = shown[0]
+    assert sources and all(ref.startswith("q") for ref in sources)
+    assert not any("source_id" in source for source in sources.values())
+    assert not block_ids & {value for source in sources.values() for value in source.values() if isinstance(value, str)}
+    assert passed is False and missing == [check]

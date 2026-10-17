@@ -901,7 +901,10 @@ async def _check_answer_outputs(
                         "criteria": uncertain,
                         "answer": context.answer,
                         "urls": context.urls,
-                        "sources": {ref: source.model_dump() for ref, source in offered.items()},
+                        # The key is the only handle a binding may name. Shown a source's page block id as
+                        # well, the resolver once filed a correct quote under "s15729" instead of "q0", and a
+                        # right answer failed as an identity missing from its cited sources.
+                        "sources": {ref: source.model_dump(exclude={"source_id"}) for ref, source in offered.items()},
                     }
                 ),
             ),

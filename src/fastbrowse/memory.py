@@ -615,11 +615,13 @@ class Notes:
                     f"requirements={','.join(sorted(self._requirements[key])) or '-'} "
                     f"tally_for={fact.tally.requirement_id}{basis_text(fact)} urls={json.dumps(urls)}"
                 )
+            # A note's bracketed id is the only handle a model may cite. Its page block id beside it was a second
+            # one: a composer or field reader could cite it and lose the claim, and a reader could take an earlier
+            # page's "s3" for the live block [s3] of the page it is reading.
             source = (
                 "derived"
                 if fact.evidence is None
-                else f"source={json.dumps(fact.evidence.source_id)} "
-                + ("" if shared_url else f"url={json.dumps(fact.evidence.url)} ")
+                else ("" if shared_url else f"url={json.dumps(fact.evidence.url)} ")
                 + f"quote={json.dumps(fact.evidence.quote, ensure_ascii=False)}"
             )
             if fact.evidence is not None and fact.evidence.control_context is not None:
