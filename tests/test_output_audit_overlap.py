@@ -7,8 +7,9 @@ import pytest
 
 from fastbrowse.jev import ChoiceQuestion
 from fastbrowse.llm import Generation
-from fastbrowse.models import CostBasis, CostComponent, CostLine
+from fastbrowse.models import CostBasis, CostComponent, CostLine, Limits
 from fastbrowse.retrieval import Claim, assemble_answer
+from fastbrowse.telemetry import Ledger
 from fastbrowse.verification import check_answer_outputs
 from tests.test_answer_repair import RoutingJev, price_notes
 from tests.test_retrieval import scripted_identities
@@ -98,3 +99,23 @@ async def test_claim_selection_runs_beside_the_identity_call() -> None:
             return await super().evaluate(state, questions)
 
     assert await check_answer_outputs(SelectingJev(), llm, answer, notes, ("Report the price.",))
+
+
+async def test_under_a_cap_each_audit_call_reserves_after_the_receipts_it_used_to_follow() -> None:
+    """Side by side, both audits reserve before either records, so a cap would not count the sibling's spend."""
+    notes, answer = _answer("Price 99")
+    ledger = Ledger(Limits(max_dollars=1.0))
+    llm = AuditLLM(source="no")
+    order: list[str] = []
+
+    class OrderedJev(RoutingJev):
+        async def evaluate(self, state, questions):
+            if any(isinstance(question, ChoiceQuestion) for question in questions.values()):
+                # The identity call's receipt is in the ledger before the selection is sent.
+                order.append(f"selection after {ledger.llm_calls} llm receipt(s): {len(ledger.lines)} line(s)")
+            return await super().evaluate(state, questions)
+
+    assert not await check_answer_outputs(OrderedJev(), llm, answer, notes, ("Report the price.",), ledger=ledger)
+    assert order == ["selection after 1 llm receipt(s): 1 line(s)"]
+    # The source refusal decides before the assertion audit is ever sent.
+    assert llm.stages == ["source"]

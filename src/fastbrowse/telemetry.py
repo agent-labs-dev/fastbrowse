@@ -64,6 +64,14 @@ class Ledger:
         elif component is CostComponent.LLM:
             self.llm_calls += calls
 
+    @property
+    def capped(self) -> bool:
+        """Whether a dollar or call cap is set. A call is checked against the receipts recorded when it reserves,
+        so two calls sent side by side each pass before either records: under a cap, a call that waited on a
+        sibling's receipt must keep waiting, or the sibling's spend goes uncounted."""
+        limits = self.limits
+        return any(cap is not None for cap in (limits.max_dollars, limits.max_llm_calls, limits.max_jev_calls))
+
     def check(self, extra_dollars: float = 0.0) -> None:
         limits = self.limits
         if limits.max_seconds is not None and monotonic() - self.started > limits.max_seconds:

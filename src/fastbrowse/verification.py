@@ -842,6 +842,8 @@ async def _check_answer_outputs(
 
     selection: Answered | None = None
     selection_pending = True
+    # Under a cap each call must see the receipts of the calls it used to follow; see `Ledger.capped`.
+    together = ledger is None or not ledger.capped
     identities: dict[str, list[dict[str, JsonValue]]] = {}
     if context.claims:
         offered = {}
@@ -904,23 +906,25 @@ async def _check_answer_outputs(
             resolved = cached
         else:
             fit(messages, _identity_schema(uncertain))
-            # The claim selection reads only the answer, never the identities, so it runs beside the identity call
-            # rather than after it, where it added a Jev round trip to every audited answer. Both settle before
-            # either failure propagates, so neither is billed after the check has returned.
-            generated, chosen = await asyncio.gather(
-                llm.generate(
-                    LLMPurpose.VERIFY, messages, _identity_schema(uncertain), max_output_tokens=8000, ledger=ledger
-                ),
-                select(),
-                return_exceptions=True,
+            identifying = llm.generate(
+                LLMPurpose.VERIFY, messages, _identity_schema(uncertain), max_output_tokens=8000, ledger=ledger
             )
-            if isinstance(generated, BaseException):
-                raise generated
-            if ledger is not None:
-                ledger.record(generated.cost)
-            if isinstance(chosen, BaseException):
-                raise chosen
-            selection, selection_pending = chosen, False
+            if together:
+                # The claim selection reads only the answer, never the identities, so it runs beside the identity
+                # call rather than after it, where it added a Jev round trip to every audited answer. Both settle
+                # before either failure propagates, so neither is billed after the check has returned.
+                generated, chosen = await asyncio.gather(identifying, select(), return_exceptions=True)
+                if isinstance(generated, BaseException):
+                    raise generated
+                if ledger is not None:
+                    ledger.record(generated.cost)
+                if isinstance(chosen, BaseException):
+                    raise chosen
+                selection, selection_pending = chosen, False
+            else:
+                generated = await identifying
+                if ledger is not None:
+                    ledger.record(generated.cost)
             payload = generated.data.model_dump()
             shared: dict[str, _QuotedIdentity] = {}
             for entry in payload["identities"]:
@@ -1264,11 +1268,15 @@ async def _check_answer_outputs(
     # judges them from the same quotes. Run one after the other, they were two model round trips on every audited
     # answer. A source failure still decides first, so the assertion verdict is only ever used when sources hold.
     # Both settle before either failure propagates, so neither is billed after the check has returned.
-    available, generated = await asyncio.gather(
-        audit(source_messages, source_fields, source_reasons),
-        audit(assertion_messages, fields, reasons),
-        return_exceptions=True,
-    )
+    generated: dict[str, str] | BaseException | None = None
+    if together:
+        available, generated = await asyncio.gather(
+            audit(source_messages, source_fields, source_reasons),
+            audit(assertion_messages, fields, reasons),
+            return_exceptions=True,
+        )
+    else:
+        available = await audit(source_messages, source_fields, source_reasons)
     if isinstance(available, BaseException):
         raise available
     absent = [criterion for key, criterion in uncertain.items() if available.get(key) != "yes"]
@@ -1283,7 +1291,9 @@ async def _check_answer_outputs(
                 if available.get(key) != "yes"
             )
         return reject(absent)
-    if isinstance(generated, BaseException):
+    if generated is None:
+        generated = await audit(assertion_messages, fields, reasons)
+    elif isinstance(generated, BaseException):
         raise generated
     failed = [
         uncertain[key]

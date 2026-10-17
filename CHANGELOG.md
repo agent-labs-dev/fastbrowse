@@ -19,7 +19,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   and the claim selection runs beside the call that binds each output to its subject, where each used to wait
   for the one before; the completion verifier runs beside the draft's audit instead of after it; and the
   answer checks, which only finishing reads, are written while the run browses rather than before its first
-  read. A wrong or uncited answer still fails exactly as before. Each model call's start and end is now in the
+  read. A run with a dollar or call cap keeps the old order, so every call is still checked against the
+  receipts of the calls it used to follow. A wrong or uncited answer still fails exactly as before. Each model call's start and end is now in the
   run's trace, so a run's critical path can be rebuilt from its events.
 
 ## [0.5.22] - 2026-10-16

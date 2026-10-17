@@ -365,6 +365,8 @@ class _RunState:
     checking: asyncio.Task[CheckedPlan] | None = None
     """Normalizes the plan's answer checks while the run browses; None when `planning` already did."""
     checks_ready: bool = False
+    plan_billed: bool = False
+    """The plan's receipt reached the ledger as the plan arrived, so taking the plan must not record it again."""
     notes: Notes = field(default_factory=Notes)
     finish_partitions: tuple[Plan, ...] = ()
     output_targets: Mapping[str, OutputTarget] = field(default_factory=dict)
@@ -540,6 +542,14 @@ class _RunState:
         return self.ready_plan
 
     async def await_plan(self) -> Plan:
+        plan = await self._take_plan()
+        if self.ledger.capped and self.checking is not None and not self.checks_ready:
+            # Under a cap the checks are taken with the plan, as before they were deferred: browsing calls sent beside
+            # the normalization would reserve without its receipt (see `Ledger.capped`).
+            return await self.await_checks()
+        return plan
+
+    async def _take_plan(self) -> Plan:
         if self.ready_plan is None:
             # Shielded: a caller cancelled mid-wait (a fill a redraw abandoned) must not cancel the one plan every
             # later step needs. Teardown still cancels the task itself.
@@ -548,7 +558,11 @@ class _RunState:
             self.ready_plan = (
                 planned.data if self.checking is None else planned.data.model_copy(update={"answer_checks": ()})
             )
-            self.ledger.record(planned.cost)
+            if self.plan_billed:
+                # Billed on arrival; a receipt that broke a limit still stops the run here.
+                self.ledger.check()
+            else:
+                self.ledger.record(planned.cost)
             trace(
                 "plan_shape",
                 requirements=[
@@ -560,7 +574,7 @@ class _RunState:
 
     async def await_checks(self) -> Plan:
         """The plan with its normalized answer checks, which only finishing and answering read."""
-        plan = await self.await_plan()
+        plan = await self._take_plan()
         if self.checking is not None and not self.checks_ready:
             checked = await asyncio.shield(self.checking)
             # Marked taken before recording, which can raise over budget: teardown bills an untaken receipt again.
@@ -587,6 +601,7 @@ class HeadStart:
     planning: asyncio.Task[Generation[Plan]]
     proposing: asyncio.Task[Shortcut] | None
     checking: asyncio.Task[CheckedPlan] | None = None
+    plan_billed: bool = False
 
     @classmethod
     def begin(cls, llm: LLMClient, task: str, *, start: str | None = None, limits: Limits | None = None) -> Self:
@@ -599,9 +614,15 @@ class HeadStart:
         # The answer checks are normalized in a second call, which only finishing reads: chained after the plan
         # rather than inside it, the first read no longer waits on a call that does not change discovery.
         planning = asyncio.create_task(make_plan(llm, task, start=start, ledger=ledger, normalize_checks=False))
-        checking = asyncio.create_task(_normalize_checks(llm, task, planning, ledger))
+        # The normalization reserves against the ledger as soon as the plan arrives. Recorded only when the run took
+        # the plan, the plan's receipt was missing from that reservation, and a dollar cap the plan alone had spent
+        # let a second paid request through. The receipt is billed once, by whichever comes first: the plan's own
+        # completion, or the normalization about to reserve.
+        bill = _PlanBill(ledger)
+        planning.add_done_callback(bill)
+        checking = asyncio.create_task(_normalize_checks(llm, task, planning, ledger, bill))
         proposing = None if start is None else asyncio.create_task(_propose(llm, task, start, ledger))
-        return cls(ledger, task, start, planning, proposing, checking)
+        return cls(ledger, task, start, planning, proposing, checking, plan_billed=True)
 
     @property
     def tasks(self) -> tuple[asyncio.Task[Any], ...]:
@@ -618,7 +639,7 @@ class HeadStart:
     async def abandon(self) -> tuple[CostLine, ...]:
         """What a run that never began spent: a shortcut bills itself, and a plan that finished is billed here."""
         await self.discard()
-        if not self.planning.cancelled() and self.planning.exception() is None:
+        if not self.plan_billed and not self.planning.cancelled() and self.planning.exception() is None:
             self.ledger.lines.append(self.planning.result().cost)
         self.bill_checks()
         return tuple(self.ledger.lines)
@@ -637,11 +658,26 @@ class HeadStart:
             self.ledger.lines.append(cost)
 
 
+@dataclass(slots=True)
+class _PlanBill:
+    """Puts a finished plan's receipt in the ledger exactly once."""
+
+    ledger: Ledger
+    billed: bool = False
+
+    def __call__(self, planning: asyncio.Task[Generation[Plan]]) -> None:
+        if not self.billed and planning.done() and not planning.cancelled() and planning.exception() is None:
+            self.billed = True
+            self.ledger.lines.append(planning.result().cost)
+
+
 async def _normalize_checks(
-    llm: LLMClient, task: str, planning: asyncio.Task[Generation[Plan]], ledger: Ledger
+    llm: LLMClient, task: str, planning: asyncio.Task[Generation[Plan]], ledger: Ledger, bill: _PlanBill
 ) -> CheckedPlan:
     # Shielded so that this task's cancellation leaves the plan to its own owner.
     planned = await asyncio.shield(planning)
+    # A plan finished before this task first ran wakes it ahead of the plan's own completion callback.
+    bill(planning)
     return await answer_checks(llm, task, planned.data, ledger=ledger)
 
 
@@ -725,6 +761,7 @@ class Agent:
                         ledger,
                         head.planning,
                         head.checking,
+                        plan_billed=head.plan_billed,
                     )
                     state.started_url = opening
                     state.caller_start = start
@@ -809,6 +846,7 @@ class Agent:
                     await head.discard()
                 if (
                     (state is None or state.ready_plan is None)
+                    and not head.plan_billed
                     and not head.planning.cancelled()
                     and head.planning.exception() is None
                 ):
@@ -3711,11 +3749,11 @@ class Agent:
             if claiming is not None:
                 held = await claiming
             elif check.answer is not None and check.verdict is not DoneVerdict.REJECT:
-                if verdict is DoneVerdict.VERIFY:
+                if verdict is DoneVerdict.VERIFY and not state.ledger.capped:
                     # The verifier judges completion from the page and the notes, and the audit judges the draft's
                     # claims against their quotes; neither reads the other's verdict. Asked one after the other,
                     # the verifier's vision call waited on the audit's model calls every time Jev doubted a run
-                    # whose draft was ready.
+                    # whose draft was ready. Under a cap it still waits, so it reserves against the audit's receipts.
                     verifying = asyncio.create_task(self._verify_done(state, fresh, check))
                 held = await self._holds(state, check.answer)
         except BaseException:
