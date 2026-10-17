@@ -6,7 +6,8 @@ The file contains sanitized per-run grades, completion, time and cost. Official 
 their source meaning. Internal hosted and Ultrafast comparisons use separate matched task groups.
 
 Schema 1 requires all four original groups. Schema 2 accepts nonempty subsets of those four groups.
-Schema 3 also supports `internal-fastbrowse`: all 54 supported internal tasks, three repeats each, with
+Schema 3 also supports `internal-fastbrowse`: every supported internal task in the current catalog (53 since
+`stretch-wizard-correction` was retired; figures approved earlier ran 54), three repeats each, with
 fastbrowse alone. The fastbrowse-only group does not require comparator reruns. Official
 fastbrowse suites do not require new comparator runs. Previously published comparator figures can be linked
 as references with their task and build differences stated. Every group inside one candidate still comes
@@ -15,8 +16,10 @@ regression checks; results from different builds cannot be combined under one bu
 Schemas 2 and 3 record each group's agent and runner commits and require them to match the candidate's build.
 
 CI validates the candidate's exact coverage and compares matched scores, time and cost with the previous
-approved candidate. Unresolved costs, missing grades, incomplete coverage and a failed fixture workflow
-block publication. These checks detect recorded regressions; they do not prove that every website or
+approved candidate. A group whose catalog differs from the approved one only by tasks listed under the catalog's
+`retired` (a site that is gone) is compared on the tasks both ran; the earlier catalog is found in Git history by
+its digest. Any other catalog, task or limit difference is a protocol change and needs a matched baseline.
+Unresolved costs, missing grades, incomplete coverage and a failed fixture workflow block publication. These checks detect recorded regressions; they do not prove that every website or
 grader is free of bugs. Review unexpected outcomes before approving.
 
 To approve reviewed results, dispatch `publish-evals.yml` on `main` with the SHA256 of the exact candidate
