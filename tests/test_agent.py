@@ -2401,13 +2401,13 @@ async def test_a_guessed_address_reached_again_by_the_run_itself_is_judged_by_th
     state = await run_state()
     state.invented, state.guessing = {guess}, True
     Agent._note_effect(state, _at(guess))
-    state.lineage.read("guess", guessing=state.guessing)
+    state.lineage.read("guess", (guess,), guessing=state.guessing)
     for operation, landed in ((Operation.NAVIGATE, start), (Operation.CLICK, guess)):
         state.history.append(
             HistoryEntry(operation=operation, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
         )
         Agent._note_effect(state, _at(landed))
-    state.lineage.read("fresh", guessing=state.guessing)
+    state.lineage.read("fresh", (guess,), guessing=state.guessing)
     plan = Plan(
         requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
     )
@@ -2429,7 +2429,7 @@ async def test_a_refused_reading_is_freed_when_the_run_reads_the_same_text_off_t
         requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
     )
     Agent._note_effect(state, _at(guess))
-    state.lineage.read("same", guessing=state.guessing)
+    state.lineage.read("same", (guess,), guessing=state.guessing)
     fare = _fare(guess, "same")
     state.notes.add(fare)
     state.notes.discredit(("r1",), _guessed_page(state.invented, state.lineage))
@@ -2441,7 +2441,7 @@ async def test_a_refused_reading_is_freed_when_the_run_reads_the_same_text_off_t
             HistoryEntry(operation=operation, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
         )
         Agent._note_effect(state, _at(landed))
-    state.lineage.read("same", guessing=state.guessing)
+    state.lineage.read("same", (guess,), guessing=state.guessing)
     state.notes.add(fare)
     assert state.notes.unresolved(plan) == ()
     assert _guessed(plan, state.notes, state.invented, lineage=state.lineage) == set()
@@ -2462,7 +2462,7 @@ async def test_leaving_a_guess_for_the_callers_page_by_any_navigation_makes_late
             HistoryEntry(operation=operation, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
         )
         Agent._note_effect(state, _at(landed))
-    state.lineage.read("set", guessing=state.guessing)
+    state.lineage.read("set", ("https://example.test/flights?tfs=set",), guessing=state.guessing)
     plan = Plan(
         requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
     )
@@ -2493,7 +2493,7 @@ async def test_a_guessed_start_that_fell_back_to_the_front_page_leaves_the_run_o
             HistoryEntry(operation=Operation.CLICK, target="Search", outcome=StepOutcome.EXECUTED, page_changed=True)
         )
         Agent._note_effect(state, _at(guessed))
-        state.lineage.read("results", guessing=state.guessing)
+        state.lineage.read("results", (guessed,), guessing=state.guessing)
         plan = Plan(
             requirements=(Requirement(id="r1", text="Kettle", kind=RequirementKind.INFORMATION),), answer_expected=True
         )
@@ -2516,7 +2516,8 @@ async def test_a_page_read_in_a_run_of_pages_is_judged_by_where_the_run_read_it(
     page_url = "https://example.test/flights?tfs=page-2"
     state = await run_state()
     state.invented = {"https://example.test/flights?q=BRS+to+YRK"}
-    state.lineage.read(capture().sha256, guessing=True)
+    paged = capture(url=page_url)
+    state.lineage.read(paged.sha256, (page_url,), guessing=True)
     state.guessing = False
     monkeypatch.setattr(
         agent_module,
@@ -2524,11 +2525,34 @@ async def test_a_page_read_in_a_run_of_pages_is_judged_by_where_the_run_read_it(
         AsyncMock(return_value=ReadOutcome(facts=(), coverage=(), rejected_claims=0, cost_lines=())),
     )
     agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
-    await agent._page_records(state, capture(), (), reuse=False)
+    await agent._page_records(state, paged, (), reuse=False)
     plan = Plan(
         requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
     )
-    assert _guessed(plan, Notes((_fare(page_url, capture().sha256),)), state.invented, lineage=state.lineage) == set()
+    assert _guessed(plan, Notes((_fare(page_url, paged.sha256),)), state.invented, lineage=state.lineage) == set()
+
+
+async def test_identical_text_at_another_address_does_not_free_a_guessed_reading() -> None:
+    """Text alone does not name a page: a page the run reached itself drew byte-identical text to the guessed one,
+    and reading it released the guessed page's hold. Only a reading of the same page off the guess frees it."""
+    guess, own = "https://example.test/flights?q=BRS+to+YRK", "https://example.test/flights?tfs=set"
+    state = await run_state()
+    state.invented, state.guessing = {guess}, True
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    state.lineage.read("same", (guess,), guessing=True)
+    on_guess = _fare(guess, "same")
+    state.notes.add(on_guess)
+    state.notes.discredit(("r1",), _guessed_page(state.invented, state.lineage))
+
+    state.guessing = False
+    state.lineage.read("same", (own,), guessing=False)
+    state.notes.add(on_guess)
+    assert state.notes.unresolved(plan) == plan.requirements
+    on_own = _fare(own, "same")
+    state.notes.add(on_own)
+    assert {key for key, _ in state.notes.supporting("r1")} == {fact_id(on_own)}
 
 
 _SHORTCUT = HistoryEntry(operation=None, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)

@@ -363,17 +363,20 @@ class _Lineage:
 
     addresses: dict[str, bool] = field(default_factory=dict[str, bool])
     """Each address by whether the page was on the guess when the run last arrived at it."""
-    captures: dict[str, bool] = field(default_factory=dict[str, bool])
-    """Each capture read, by whether it was read on the guess; one read off the guess is never guessed."""
+    captures: dict[tuple[str, str], bool] = field(default_factory=dict[tuple[str, str], bool])
+    """Each reading, by source address and capture, by whether it was read on the guess."""
     at: str | None = None
     """The address of the last observation, which tells an arrival from a redraw."""
 
-    def read(self, capture: str, *, guessing: bool) -> None:
-        # The same text read off the guess is the same page the run reached itself, so that reading stands.
-        if guessing:
-            self.captures.setdefault(capture, True)
-        else:
-            self.captures[capture] = False
+    def read(self, capture: str, sources: Iterable[str], *, guessing: bool) -> None:
+        # The same page read again off the guess is the page the run reached itself, so that reading stands. Text
+        # alone does not name a page: another address drawing identical text released the guessed one's hold.
+        for source in sources:
+            key = (_unfragmented(source), capture)
+            if guessing:
+                self.captures.setdefault(key, True)
+            else:
+                self.captures[key] = False
 
 
 @dataclass(slots=True)
@@ -2612,7 +2615,7 @@ class Agent:
     ) -> tuple[bool, bool]:
         """Return (added evidence, skipped duplicate), since only new evidence makes a read progress."""
         capture = capture or await self._capture()
-        state.lineage.read(capture.sha256, guessing=state.guessing)
+        state.lineage.read(capture.sha256, _sources(capture), guessing=state.guessing)
         plan = await state.await_plan()
         if _lookup(plan):
             # Reader-selected excerpts cannot decide whether the full sources fit together in one prompt.
@@ -2800,7 +2803,7 @@ class Agent:
         self, state: _RunState, capture: Capture, wanted: Sequence[Requirement], *, reuse: bool = True
     ) -> ReadOutcome:
         # Pages read in a run of pages never pass through `_read`, and their readings are judged the same way.
-        state.lineage.read(capture.sha256, guessing=state.guessing)
+        state.lineage.read(capture.sha256, _sources(capture), guessing=state.guessing)
         if reuse and (counted := read_tallies(capture, state.tally_readers, [r.id for r in wanted])) is not None:
             return counted
         costs: list[CostLine] = []
@@ -4596,16 +4599,18 @@ def _guessed_page(
     def guessed(evidence: Evidence) -> bool:
         url = evidence.url
         # Lineage only clears a path match, never adds one: a page clicked to off the guess is judged by its path.
-        on_guess = (
-            known.captures[evidence.capture_sha256]
-            if evidence.capture_sha256 in known.captures
-            else known.addresses.get(_unfragmented(url))
-        )
+        reading = (_unfragmented(url), evidence.capture_sha256)
+        on_guess = known.captures[reading] if reading in known.captures else known.addresses.get(_unfragmented(url))
         return (
             on_guess is not False and _place(url) in places and (not searches or places[_place(url)] or _searched(url))
         )
 
     return guessed
+
+
+def _sources(capture: Capture) -> set[str]:
+    """Every address a quote cut from this capture can cite: the page's, and each child frame's own."""
+    return {capture.url, *(block.source_url for block in capture.blocks if block.source_url)}
 
 
 def _unfragmented(url: str) -> str:
