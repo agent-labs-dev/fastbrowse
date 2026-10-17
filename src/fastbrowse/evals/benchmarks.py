@@ -67,16 +67,19 @@ class Group(PublicModel):
 
     @model_validator(mode="after")
     def coverage(self) -> Self:
+        # Each count the approved protocol has had. Retiring stretch-wizard-correction, whose site left DNS, took
+        # one task from the internal catalog; figures approved before then keep their count. A new candidate is
+        # held to the exact current catalog by `check_catalog`.
         spec = {
-            "internal-fastbrowse": (54, 3, "task-success", {"fastbrowse"}),
-            "internal-hosted": (47, 3, "task-success", {"fastbrowse", "browser-use"}),
-            "internal-ultrafast": (6, 3, "task-success", {"fastbrowse", "jev-ultrafast"}),
-            "internal-backend": (54, 3, "task-success", {"fastbrowse", "fastbrowse-pool"}),
-            "bu-bench": (200, 1, "weighted-rubric", {"fastbrowse"}),
-            "online-mind2web": (300, 1, "full-task-success", {"fastbrowse"}),
+            "internal-fastbrowse": ({53, 54}, 3, "task-success", {"fastbrowse"}),
+            "internal-hosted": ({46, 47}, 3, "task-success", {"fastbrowse", "browser-use"}),
+            "internal-ultrafast": ({6}, 3, "task-success", {"fastbrowse", "jev-ultrafast"}),
+            "internal-backend": ({53, 54}, 3, "task-success", {"fastbrowse", "fastbrowse-pool"}),
+            "bu-bench": ({200}, 1, "weighted-rubric", {"fastbrowse"}),
+            "online-mind2web": ({300}, 1, "full-task-success", {"fastbrowse"}),
         }
-        count, repeats, metric, arms = spec[self.id]
-        if len(self.task_ids) != count or len(set(self.task_ids)) != count:
+        counts, repeats, metric, arms = spec[self.id]
+        if len(self.task_ids) not in counts or len(set(self.task_ids)) != len(self.task_ids):
             raise ValueError("task coverage differs from the approved full protocol")
         if self.repeats != repeats or self.metric != metric or not self.limits:
             raise ValueError("repeats, metric and recorded limits are required")

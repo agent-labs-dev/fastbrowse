@@ -6,7 +6,8 @@ The file contains sanitized per-run grades, completion, time and cost. Official 
 their source meaning. Internal hosted and Ultrafast comparisons use separate matched task groups.
 
 Schema 1 requires all four original groups. Schema 2 accepts nonempty subsets of those four groups.
-Schema 3 also supports `internal-fastbrowse`: all 54 supported internal tasks, three repeats each, with
+Schema 3 also supports `internal-fastbrowse`: every supported internal task in the current catalog (53 since
+`stretch-wizard-correction` was retired; figures approved earlier ran 54), three repeats each, with
 fastbrowse alone. The fastbrowse-only group does not require comparator reruns. Official
 fastbrowse suites do not require new comparator runs. Previously published comparator figures can be linked
 as references with their task and build differences stated. Every group inside one candidate still comes

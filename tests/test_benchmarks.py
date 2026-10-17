@@ -144,6 +144,24 @@ def test_internal_fastbrowse_group_rejects_a_missing_catalog_slot(candidate):
         Candidate.model_validate(candidate)
 
 
+def test_figures_approved_before_a_task_was_retired_still_read() -> None:
+    """The published baseline ran 54 tasks before stretch-wizard-correction was retired; the gate reads it back."""
+    published = Candidate.model_validate_json((CATALOG.parents[3] / "docs/results/benchmarks.json").read_bytes())
+    assert {len(g.task_ids) for g in published.groups if g.id == "internal-fastbrowse"} == {54}
+
+
+def test_a_new_candidate_cannot_keep_a_retired_task(candidate):
+    group = candidate["groups"][0]
+    group["task_ids"].append("stretch-wizard-correction")
+    for repeat in range(3):
+        for arm in ("fastbrowse", "browser-use"):
+            group["rows"].append(
+                {**group["rows"][0], "task": "stretch-wizard-correction", "repeat": repeat, "arm": arm}
+            )
+    with pytest.raises(ValueError, match="exact matched catalog"):
+        check_catalog(Candidate.model_validate(candidate), CATALOG)
+
+
 def test_legacy_schema_still_requires_all_four_groups(candidate):
     candidate["groups"] = [candidate["groups"][2]]
     with pytest.raises(ValidationError, match="all four"):
