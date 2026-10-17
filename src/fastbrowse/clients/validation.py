@@ -501,7 +501,11 @@ async def post(
         raise
     except httpx.HTTPError as error:
         raise JevError(f"Jev request could not be sent ({type(error).__name__})") from None
-    seconds = monotonic() - started
+    ended = monotonic()
+    seconds = ended - started
+    # Each call's span, so a run's critical path can be rebuilt from its trace: calls overlap, and summed seconds
+    # per kind of call cannot say which of them the run was waiting on.
+    trace("call", call="jev", began=started, ended=ended)
     if seconds > JEV_SLOW_SECONDS:
         # Evals rerun an attempt that saw one, so a slow provider never counts against the agent.
         trace("request_slow", call="jev", seconds=round(seconds, 2))
