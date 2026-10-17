@@ -735,3 +735,112 @@ async def test_covered_target_does_not_offer_its_fixed_parent_controls(
     assert result.outcome is StepOutcome.COVERED
     assert "Unrelated action" not in (result.detail or "")
     assert "One way" not in (result.detail or "")
+
+
+def _anchored_form(*, scrolls: bool, band: str) -> str:
+    """A login form whose button sits under a band fixed to the window's foot, as an anchored ad does."""
+    body = (
+        '<form id=login onsubmit="event.preventDefault(); window.submitted = (window.submitted || 0) + 1" '
+        'style="position:absolute;left:20px;bottom:30px">'
+        "<input name=user aria-label=Username><input name=pass type=password aria-label=Password>"
+        '<button id=go onclick="window.pressed = (window.pressed || 0) + 1">Login</button></form>'
+    )
+    inside = (
+        '<iframe aria-label=Advertisement srcdoc="<p>Ad</p>" style="width:100%;height:100%;border:0"></iframe>'
+        if band == "iframe"
+        else '<button onclick="window.adClicks++">Shop now</button>'
+    )
+    return (
+        "window.adClicks = 0; document.documentElement.style.height = '100%'; "
+        "document.body.style.cssText = 'margin:0;position:relative;height:"
+        + ("3000px" if scrolls else "100%;overflow:hidden")
+        + "'; "
+        f"document.body.innerHTML = {body!r}; "
+        "const band = document.createElement('ins'); "
+        "band.style.cssText = 'display:block;position:fixed;left:0;right:0;bottom:0;height:120px;"
+        "background:white;z-index:9'; "
+        "band.addEventListener('mousedown', () => window.adClicks++); "
+        f"band.innerHTML = {inside!r}; document.body.append(band); "
+        # The form starts in the band's place on the first screen, whatever the page's length.
+        "document.getElementById('login').style.top = (innerHeight - 70) + 'px'; "
+        "document.getElementById('login').style.bottom = ''; true"
+    )
+
+
+@pytest.mark.parametrize("band", ["div", "iframe"])
+@pytest.mark.parametrize("scrolls", [True, False])
+async def test_a_control_under_a_band_fixed_to_the_window_is_reached_without_touching_the_band(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, scrolls: bool, band: str
+) -> None:
+    """expandtesting-login: an ad anchored to the window's foot covered Login twice and the run ended stuck. A
+    person scrolls the button clear of it; where the page cannot scroll, Login is pressed from the keyboard."""
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    await eval_value(browser_session, session_id, _anchored_form(scrolls=scrolls, band=band))
+    assert (
+        await eval_value(
+            browser_session,
+            session_id,
+            "(r => document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.id)"
+            "(document.getElementById('go').getBoundingClientRect())",
+        )
+        != "go"
+    ), "the fixture must start with Login under the band"
+    obs = await page.observe()
+    result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Login").id), obs)
+    assert result.outcome is StepOutcome.EXECUTED, result.detail
+    # A page that scrolls has Login clicked where it was scrolled clear of the band; the keyboard is the fallback.
+    assert (result.detail is None) is scrolls
+    pressed, submitted, ad_clicks = await eval_value(
+        browser_session, session_id, "[window.pressed, window.submitted, window.adClicks]"
+    )
+    assert (pressed, submitted, ad_clicks) == (1, 1, 0)
+
+
+async def test_a_field_under_a_band_is_filled_and_submitted_from_the_keyboard(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    """The same ad covered the password field once the run had typed the username, so Enter was refused too."""
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    await eval_value(browser_session, session_id, _anchored_form(scrolls=False, band="div"))
+    obs = await page.observe()
+    filled = await page.act(Action(operation=Operation.FILL, target_id=find(obs, "Password").id, text="hunter2"), obs)
+    assert filled.outcome is StepOutcome.EXECUTED, filled.detail
+    obs = await page.observe()
+    entered = await page.act(Action(operation=Operation.ENTER, target_id=find(obs, "Password").id), obs)
+    assert entered.outcome is StepOutcome.EXECUTED, entered.detail
+    value, submitted, ad_clicks = await eval_value(
+        browser_session,
+        session_id,
+        "[document.querySelector('[name=pass]').value, window.submitted, window.adClicks]",
+    )
+    assert (value, submitted, ad_clicks) == ("hunter2", 1, 0)
+
+
+@pytest.mark.parametrize("cover", ["dialog", "full-window"])
+async def test_a_fixed_cover_the_page_means_to_be_answered_is_still_reported(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, cover: str
+) -> None:
+    """Only a band floating over the page is routed around. A dialog asks its question first, and a cover over the
+    whole window shows something other than the control, so neither is pressed through, by pointer or keyboard."""
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    await eval_value(browser_session, session_id, _anchored_form(scrolls=False, band="div"))
+    await eval_value(
+        browser_session,
+        session_id,
+        "document.querySelector('ins').setAttribute('role', 'dialog'); true"
+        if cover == "dialog"
+        else "document.querySelector('ins').style.cssText += ';top:0;height:auto'; true",
+    )
+    obs = await page.observe()
+    result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Login").id), obs)
+    assert result.outcome is StepOutcome.COVERED
+    entered = await page.act(Action(operation=Operation.ENTER, target_id=find(obs, "Password").id), obs)
+    assert entered.outcome is StepOutcome.COVERED
+    assert await eval_value(browser_session, session_id, "[window.pressed, window.submitted, window.adClicks]") == [
+        None,
+        None,
+        0,
+    ]

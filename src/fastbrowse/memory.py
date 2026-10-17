@@ -114,6 +114,8 @@ class Notes:
         self._requirements: dict[str, set[str]] = {}
         self._owners: dict[str, set[str]] = {}
         self._retired: set[str] = set()
+        self._discredited: dict[str, set[str]] = {}
+        """Per requirement, the facts it was refused on as read off the wrong page; they cannot evidence it again."""
         self._tally_records: set[str] = set()
         self._record_ids: dict[tuple[str, str, str], list[dict[str, str]]] = {}
         self._continuation_records: dict[str, set[str]] = {}
@@ -245,7 +247,8 @@ class Notes:
         self._retired.discard(key)
         requirements = self._requirements.setdefault(key, set())
         if fact.requirement_id is not None:
-            requirements.add(fact.requirement_id)
+            if not self._discredited.get(fact.requirement_id, set()) & {key, *self.expand_evidence_ids(fact.basis)}:
+                requirements.add(fact.requirement_id)
             self._owners.setdefault(key, set()).add(fact.requirement_id)
         if key in self._facts:
             previous = self._facts[key]
@@ -303,6 +306,7 @@ class Notes:
         scoped._requirements = {key: set(self._requirements[key]) for key in scoped._facts}
         scoped._owners = {key: set(self._owners.get(key, ())) for key in scoped._facts}
         scoped._retired = self._retired & kept
+        scoped._discredited = {requirement: set(keys) for requirement, keys in self._discredited.items()}
         scoped._tally_records = self._tally_records & kept
         scoped._continuation_records = {
             requirement: records & kept for requirement, records in self._continuation_records.items()
@@ -327,6 +331,20 @@ class Notes:
         dropped = set(requirement_ids)
         for requirements in self._requirements.values():
             requirements -= dropped
+
+    def discredit(self, requirement_ids: Iterable[str]) -> None:
+        """Reopen requirements read off the wrong page, and keep the facts they rested on from answering them again.
+
+        Reopening alone was not enough on Google Flights: the next read, on the search the run had since rebuilt
+        through the form, concluded the same round-trip fare by drawing on the reopened quotes, the requirement
+        rested on the guessed page again, and every DONE got the same refusal until the run stopped stuck. The
+        facts stay as context; a fresh quote from another page still evidences the requirement.
+        """
+        dropped = set(requirement_ids)
+        for requirement in dropped:
+            supporting = self.expand_evidence_ids(key for key, _ in self.supporting(requirement))
+            self._discredited.setdefault(requirement, set()).update(supporting)
+        self.unevidence(dropped)
 
     def supersede(self, requirement_id: str, url: str, sha256: str, text: str) -> None:
         """Once a read of `url` evidences a requirement, earlier reads of that address whose quote the page no

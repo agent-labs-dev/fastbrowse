@@ -2331,6 +2331,67 @@ async def test_a_requirement_read_off_a_guessed_address_reopens_until_the_right_
     assert result is not None and result.status is Status.COMPLETE
 
 
+async def test_a_search_set_through_the_form_after_leaving_a_guess_finishes_at_the_guess_path() -> None:
+    """google-flights: a proposed /travel/flights?q=... showed round-trip fares and was rightly refused. The run went
+    back to the start page and set the search through the form, but every search there lives at /travel/flights, and
+    each read concluded the old fare again from the refused quotes, so every DONE got the same refusal until the run
+    stopped stuck."""
+    guess, start, rebuilt = (
+        "https://example.test/flights?q=BRS+to+YRK",
+        "https://example.test/flights",
+        "https://example.test/flights?tfs=one-way",
+    )
+    state = await run_state()
+    state.invented, state.guessing = {guess}, True
+    refused = _fare(guess, "guess")
+    state.notes.add(refused)
+    recovery: JsonValue = {"diagnosis": "a guessed search", "next_subgoal": "Set the search", "give_up": False}
+    doubted: JsonValue = {"missing": [], "ungrounded": ["r1"], "complete": False}
+    agent, _ = await _finishing(state, ScriptedLLM([doubted, recovery, doubted]), noul=0.5)
+    assert await agent._finish(state, None, None) is None
+
+    # A read elsewhere concluded the refused fare again from its quote; that is the same wrong page.
+    concluded = Fact(reader=FactReader.LLM, requirement_id="r1", text="$320", evidence=None, basis=(fact_id(refused),))
+    state.notes.add(concluded)
+    assert state.notes.unresolved(state.plan) == state.plan.requirements
+
+    for operation, landed in ((Operation.NAVIGATE, start), (Operation.CLICK, rebuilt)):
+        state.history.append(
+            HistoryEntry(operation=operation, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
+        )
+        Agent._note_effect(state, _at(landed))
+    state.notes.add(_fare(rebuilt, "rebuilt"))
+    # The verifier's doubt about a page the run set up itself is only doubt: the fare there is cited.
+    result = await agent._finish(state, None, None)
+    assert result is not None and result.status is Status.COMPLETE
+
+
+@pytest.mark.parametrize(("left_by", "guessed"), [(Operation.CLICK, True), (Operation.NAVIGATE, False)])
+async def test_a_search_at_a_guess_path_is_the_runs_own_only_once_it_navigated_off_the_guess(
+    left_by: Operation, guessed: bool
+) -> None:
+    """A click on a guessed search keeps its guessed parameters: a sort tab on a proposed round-trip search still
+    showed round-trip fares, so only a navigation to an address the run did not build ends the guess."""
+    guess, later = "https://example.test/flights?q=BRS+to+YRK", "https://example.test/flights?tfs=sorted"
+    state = await run_state()
+    state.invented, state.guessing = {guess}, True
+    Agent._note_effect(state, _at(guess))
+    state.history.append(HistoryEntry(operation=left_by, target=None, outcome=StepOutcome.EXECUTED, page_changed=True))
+    Agent._note_effect(state, _at("https://example.test/" if left_by is Operation.NAVIGATE else later))
+    if left_by is Operation.NAVIGATE:
+        state.history.append(
+            HistoryEntry(operation=Operation.CLICK, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
+        )
+        Agent._note_effect(state, _at(later))
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    notes = Notes((_fare(later, "later"),))
+    assert _guessed(plan, notes, state.invented, first_seen=state.first_seen) == ({"r1"} if guessed else set())
+    # The guess itself never stops being one.
+    assert _guessed(plan, Notes((_fare(guess, "guess"),)), state.invented, first_seen=state.first_seen) == {"r1"}
+
+
 _SHORTCUT = HistoryEntry(operation=None, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
 
 

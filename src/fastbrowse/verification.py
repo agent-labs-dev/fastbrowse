@@ -390,8 +390,9 @@ async def llm_verify(
         "task described unless it shows that task's own query, filters, dates, sort or category in force. A "
         "summary, preview, default or related listing can show prices or rows that are not the ones asked "
         "for. Name in ungrounded every requirement whose facts were read from such a page, even when it has "
-        "evidence. Addresses this run built from the task rather than reached by clicking are the ones to "
-        "weigh hardest, since a guessed address can land on a page of the right shape and the wrong search."
+        "evidence. An address this run built from the task can land on the wrong search: judge such a page by "
+        "what it shows, not by how the run reached it. An answer states the terms a value was quoted under, "
+        "such as a round trip."
     )
     messages = [
         Message(

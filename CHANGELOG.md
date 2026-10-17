@@ -11,6 +11,19 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A click, fill or Enter whose target sits under a band fixed to the window, such as an ad anchored to its foot, a
+  sticky footer or a chat bubble, no longer stops as `covered`. The control is scrolled clear of the band, and
+  where the page cannot move it clear it is pressed or typed into from the keyboard; nothing in the band is ever
+  clicked. A login form under an anchored ad ended `stuck` this way in one run in three. A dialog, a cover over
+  the whole window or a panel drawn over the control in the page's flow is still reported as covering it.
+- A run whose opening shortcut was refused as the wrong search can now finish from the search it sets up itself.
+  Every Google Flights search lives at one path, so the results a run reached through the form after leaving the
+  shortcut were refused as the shortcut's page, and each read concluded the refused fare again from its quotes,
+  until the run stopped `stuck`. Pages reached after the run navigates off a shortcut are its own, and quotes a
+  requirement was refused on can no longer answer it again; a click on the shortcut's page still keeps it a
+  guess. The verifier judges a shortcut's page by what it shows rather than how it was reached, and an answer
+  keeps the terms a value was quoted under, such as a round trip and its return date.
+
 ## [0.5.22] - 2026-10-16
 
 - Runs that had found and cited the right answer no longer end `stuck` or `unverified` under a "Partial evidence

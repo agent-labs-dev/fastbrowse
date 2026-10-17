@@ -106,6 +106,59 @@ _HIT_TEST_JS = (
     "if (Array.isArray(point)) return point; } } return 'covered'; })"
 )
 
+# An ad anchored to the window's foot covered a login form's button, and the run ended stuck after clicking the ad's
+# own close control did nothing. A band fixed to the window covers a place on the screen, not a control, so the
+# control is scrolled to each alignment in turn and kept at the first where a point of it is its own again. The guard
+# is checked in the same task: a stale control must never be scrolled into view.
+_UNCOVER_JS = (
+    "((id, guard) => { const r = window.__fastbrowse, e = r?.nodes.get(id); "
+    "if (!e?.isConnected || JSON.stringify(r.guard(e)) !== JSON.stringify(guard)) return null; "
+    "for (const block of ['center', 'start', 'end']) { "
+    "e.scrollIntoView({block, inline: 'nearest', behavior: 'instant'}); "
+    "const point = (" + _HIT_TEST_JS + ")(id, false); if (point !== 'covered') return point; } "
+    "return 'covered'; })"
+)
+
+# What covers the control's centre, through its frames: a dialog the page means to be answered first, a band fixed
+# to the window (an anchored ad, a sticky footer, a chat bubble) that floats over whatever is scrolled beneath it,
+# or anything else, such as a full-window backdrop or a panel drawn over the control in the page's own flow. Only a
+# band is routed around; under anything else the page shows something other than the control, and that is the
+# run's to deal with.
+_COVER_JS = (
+    "((id) => { const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return null; "
+    "const MODAL = 'dialog[open],[role=dialog],[role=alertdialog],[aria-modal=\"true\"]'; "
+    "const rect = e.getBoundingClientRect(); let x = rect.left + rect.width / 2, y = rect.top + rect.height / 2; "
+    "let node = e, doc = e.ownerDocument; while (true) { const view = doc.defaultView; "
+    "let hit = doc.elementFromPoint(x, y); "
+    "while (hit?.shadowRoot) { const inner = hit.shadowRoot.elementFromPoint(x, y); "
+    "if (!inner || inner === hit) break; hit = inner; } "
+    "if (hit && !node.contains(hit)) { const modal = hit.closest(MODAL); "
+    "if (modal && !modal.contains(node)) return 'modal'; "
+    "for (let n = hit; n && !n.contains(node); n = n.parentElement) { "
+    "if (!['fixed', 'sticky'].includes(view.getComputedStyle(n).position)) continue; "
+    "const r = n.getBoundingClientRect(); "
+    "return r.width * r.height < view.innerWidth * view.innerHeight / 2 ? 'band' : 'other'; } "
+    "return 'other'; } "
+    "if (doc === document) return 'none'; node = view.frameElement; if (!node) return 'none'; "
+    "const frame = node.getBoundingClientRect(); "
+    "x = frame.x + (node.clientLeft + x) * frame.width / node.offsetWidth; "
+    "y = frame.y + (node.clientTop + y) * frame.height / node.offsetHeight; doc = node.ownerDocument; } })"
+)
+
+# Keys go to the focused control whatever is drawn over it, so a control a band still covers is pressed from the
+# keyboard, as a keyboard user would press it, and nothing in the band is ever touched. The key is the one the
+# control's own semantics answer to; a control that names none is not pressed.
+_ACTIVATION_KEY_JS = (
+    "((id) => { const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return null; "
+    "const role = e.getAttribute('role'); "
+    "if (e.tagName === 'INPUT' && ['checkbox', 'radio'].includes(e.type)) return ' '; "
+    "if (['checkbox', 'radio', 'switch', 'menuitemcheckbox', 'menuitemradio'].includes(role)) return ' '; "
+    "if (e.matches('button,a[href],summary,input[type=submit],input[type=button],input[type=reset],"
+    "input[type=image]')) return 'Enter'; "
+    "if (['button', 'link', 'tab', 'menuitem', 'option', 'treeitem'].includes(role)) return 'Enter'; "
+    "return null; })"
+)
+
 _GEOMETRY_JS = (
     "[window.screenX, window.screenY, window.outerWidth, window.outerHeight, window.innerWidth, window.innerHeight, "
     "window.visualViewport ? window.visualViewport.scale : 1, document.visibilityState === 'visible', "
@@ -168,6 +221,13 @@ _SETTLED = TypeAdapter(tuple[bool, str | None])
 _NODE_ID = TypeAdapter(int | None)
 _LANDED = TypeAdapter(tuple[bool, bool])
 _FILL_TARGET = TypeAdapter(tuple[int | None, bool, bool | None])
+_KEYS = {"Enter": ("Enter", "\r", 13), "Escape": ("Escape", "", 27), " ": ("Space", " ", 32)}
+"""Each key pressed: its code, the text it types and its Windows virtual key code."""
+_POINT = TypeAdapter(tuple[float, float] | Literal["covered"] | None)
+_COVER = TypeAdapter(Literal["modal", "band", "other", "none"] | None)
+_ACTIVATION_KEY = TypeAdapter(Literal["Enter", " "] | None)
+type _Route = tuple[float, float] | Literal["covered", "keyboard"] | None
+"""Where a covered control can be acted on: a point scrolled clear of the cover, the keyboard, or nowhere."""
 
 
 class _SnapshotControl(Frozen):
@@ -910,6 +970,27 @@ class CdpPage(Page):
             else "Target is covered."
         )
 
+    async def _route_around(self, target: tuple[str, str, int, list[object] | None], *, scroll: bool = True) -> _Route:
+        """Where a covered control can still be acted on without touching what covers it.
+
+        Only a band fixed to the window is routed around: it is first scrolled clear of, and a control it still
+        covers is left to the keyboard. A dialog, a full-window backdrop or a panel over the control in the page's
+        own flow is reported as covering it, as before.
+        """
+        session_id, _frame, local_id, guard = target
+        if _COVER.validate_python(await self._evaluate(session_id, f"({_COVER_JS})({local_id})")) != "band":
+            return "covered"
+        if scroll:
+            point = _POINT.validate_python(
+                await self._evaluate(session_id, f"({_UNCOVER_JS})({local_id}, {json.dumps(guard)})")
+            )
+            if point != "covered":
+                return point
+            # The last alignment can have put the control under something else.
+            if _COVER.validate_python(await self._evaluate(session_id, f"({_COVER_JS})({local_id})")) != "band":
+                return "covered"
+        return "keyboard"
+
     async def _click(
         self, target: tuple[str, str, int, list[object] | None] | None, point: _Point
     ) -> tuple[StepOutcome, str | None]:
@@ -918,8 +999,24 @@ class CdpPage(Page):
         if point is None:
             return StepOutcome.STALE, "target disconnected"
         if point == "covered":
-            return StepOutcome.COVERED, await self._covered_detail(target)
+            route = await self._route_around(target)
+            if route is None:
+                return StepOutcome.STALE, "target disconnected"
+            if route == "covered":
+                return StepOutcome.COVERED, await self._covered_detail(target)
+            if route == "keyboard":
+                return await self._press(target)
+            point = route
         return await self._click_point(target, point)
+
+    async def _press(self, target: tuple[str, str, int, list[object] | None]) -> tuple[StepOutcome, str | None]:
+        """Activate a control from the keyboard: focus it and press the key its semantics answer to."""
+        session_id, _frame, local_id, _guard = target
+        key = _ACTIVATION_KEY.validate_python(await self._evaluate(session_id, f"({_ACTIVATION_KEY_JS})({local_id})"))
+        if key is None or not await self._focus(session_id, local_id):
+            return StepOutcome.COVERED, await self._covered_detail(target)
+        await self._press_key(session_id, key)
+        return StepOutcome.EXECUTED, "Pressed from the keyboard: a band fixed to the window covers it."
 
     async def _hover(
         self, target: tuple[str, str, int, list[object] | None] | None, point: _Point
@@ -974,25 +1071,41 @@ class CdpPage(Page):
         session_id, _frame, local_id, _guard = target
         if point is None:
             return StepOutcome.STALE, "target disconnected"
-        if point == "covered":
-            return StepOutcome.COVERED, await self._covered_detail(target)
         if secret and not secret_origin:
             return StepOutcome.FAILED, "secret fill requires an authorized origin"
-        # Ported from browser-use/jev-ultrafast (MIT), browser.py: fill clicks before typing.
-        # Focus alone bypasses pointer handlers that open autocomplete and calendar pickers.
-        outcome, detail = await self._click_point(target, point, prepare_fill=True)
-        if outcome is not StepOutcome.EXECUTED:
-            return outcome, detail
-        handed, native_date, focused = _FILL_TARGET.validate_python(
-            await self._evaluate(
-                session_id,
-                f"({_HANDED_FOCUS_JS})({local_id}, {json.dumps(secret)}).then(async id => {{ "
-                f"const native = {json.dumps(_DATE_INPUT_TYPES)}.includes(window.__fastbrowse?.nodes.get(id)?.type); "
-                f"const focused = id === null || (native && !{json.dumps(secret)}) ? false : "
-                f"await ({self._focus_script(prepare_fill=True, secret=secret)})(id, false); "
-                "return [id, native, focused]; })",
+        route: _Route = point
+        if point == "covered":
+            route = await self._route_around(target)
+            if route is None:
+                return StepOutcome.STALE, "target disconnected"
+            if route == "covered":
+                return StepOutcome.COVERED, await self._covered_detail(target)
+        # A field a band still covers is focused and typed into, as a keyboard user would; there is nothing of its
+        # own to click, and a click there lands on the band.
+        keyboard = route == "keyboard"
+        if isinstance(route, tuple):
+            # Ported from browser-use/jev-ultrafast (MIT), browser.py: fill clicks before typing.
+            # Focus alone bypasses pointer handlers that open autocomplete and calendar pickers.
+            outcome, detail = await self._click_point(target, route, prepare_fill=True)
+            if outcome is not StepOutcome.EXECUTED:
+                return outcome, detail
+            handed, native_date, focused = _FILL_TARGET.validate_python(
+                await self._evaluate(
+                    session_id,
+                    f"({_HANDED_FOCUS_JS})({local_id}, {json.dumps(secret)}).then(async id => {{ "
+                    f"const native = {json.dumps(_DATE_INPUT_TYPES)}.includes("
+                    "window.__fastbrowse?.nodes.get(id)?.type); "
+                    f"const focused = id === null || (native && !{json.dumps(secret)}) ? false : "
+                    f"await ({self._focus_script(prepare_fill=True, secret=secret)})(id, false); "
+                    "return [id, native, focused]; })",
+                )
             )
-        )
+        else:
+            native = await self._evaluate(
+                session_id,
+                f"{json.dumps(_DATE_INPUT_TYPES)}.includes(window.__fastbrowse?.nodes.get({local_id})?.type)",
+            )
+            handed, native_date, focused = local_id, native is True, None
         if handed is None:
             return StepOutcome.FAILED, "clicked field has no replacement in the same document and position"
         local_id = handed
@@ -1040,9 +1153,11 @@ class CdpPage(Page):
                 break
             # An editor that took focus after the hand-off looked, and so never got the text, is typed into
             # once more, as a person would on seeing the text had gone nowhere.
+            # A keyboard fill never clicked, so no editor was handed focus and a hand-off left by an earlier fill
+            # must not be followed.
             handed = (
                 local_id
-                if secret
+                if secret or keyboard
                 else _NODE_ID.validate_python(
                     await self._evaluate(session_id, f"({_HANDED_FOCUS_JS})({local_id}, false)")
                 )
@@ -1138,8 +1253,9 @@ class CdpPage(Page):
         session_id, _frame, local_id, _guard = target
         if point is None:
             return StepOutcome.STALE, "target disconnected"
-        if point == "covered":
-            return StepOutcome.COVERED, None
+        # The choice is set without the pointer, so only a cover the page means to be dealt with first refuses it.
+        if point == "covered" and await self._route_around(target, scroll=False) != "keyboard":
+            return StepOutcome.COVERED, await self._covered_detail(target)
         script = (
             "((id, label) => { const e = window.__fastbrowse?.nodes.get(id); "
             "if (!e?.isConnected || e.tagName !== 'SELECT') return null; "
@@ -1168,24 +1284,34 @@ class CdpPage(Page):
             _session_id, _frame, local_id, _guard = target
             if point is None:
                 return StepOutcome.STALE, "target disconnected"
-            if point == "covered":
-                return StepOutcome.COVERED, None
+            # A key needs focus, not the pointer: Enter in a login form under an anchored ad was refused as covered.
+            if point == "covered" and await self._route_around(target, scroll=False) != "keyboard":
+                return StepOutcome.COVERED, await self._covered_detail(target)
             if not await self._focus(session_id, local_id):
                 return StepOutcome.FAILED, "target did not receive keyboard focus"
-        code, virtual_key = {"Enter": ("\r", 13), "Escape": ("", 27)}[key]
-        await self._input(
-            self._session.client.send.Input.dispatchKeyEvent(
-                params={"type": "keyDown", "key": key, "code": key, "text": code, "windowsVirtualKeyCode": virtual_key},
-                session_id=session_id,
-            )
-        )
-        await self._input(
-            self._session.client.send.Input.dispatchKeyEvent(
-                params={"type": "keyUp", "key": key, "code": key, "windowsVirtualKeyCode": virtual_key},
-                session_id=session_id,
-            )
-        )
+        await self._press_key(session_id, key)
         return StepOutcome.EXECUTED, None
+
+    async def _press_key(self, session_id: str, key: str) -> None:
+        code, text, virtual_key = _KEYS[key]
+        await self._input(
+            self._session.client.send.Input.dispatchKeyEvent(
+                params={
+                    "type": "keyDown",
+                    "key": key,
+                    "code": code,
+                    "text": text,
+                    "windowsVirtualKeyCode": virtual_key,
+                },
+                session_id=session_id,
+            )
+        )
+        await self._input(
+            self._session.client.send.Input.dispatchKeyEvent(
+                params={"type": "keyUp", "key": key, "code": code, "windowsVirtualKeyCode": virtual_key},
+                session_id=session_id,
+            )
+        )
 
     async def _scroll(self, operation: Operation) -> None:
         session_id = self._session.active_session_id

@@ -245,6 +245,11 @@ async def test_the_verifier_is_told_where_each_requirement_was_read_and_which_ad
     page = prompt[prompt.index("## Page\n") :]
     assert page.startswith(f"## Page\n{_PAGE.url}\n{_PAGE.viewport_text}")
     assert guessed not in page
+    # google-flights: told only to weigh a built address hardest, the verifier refused a loaded search for how
+    # the run reached it. It judges what the page shows, and an answer keeps the terms its value was quoted under.
+    instructions = " ".join(message.content for message in llm.calls[0][1])
+    assert "judge such a page by what it shows, not by how the run reached it" in instructions
+    assert "states the terms a value was quoted under" in instructions
 
 
 async def test_a_verifier_told_of_no_guessed_address_is_asked_nothing_extra() -> None:

@@ -450,6 +450,11 @@ class _RunState:
     """Addresses this run built from the task rather than reached by clicking: an accepted shortcut, or a start
     page worked out from the task. These are the ones that can land on a page of the right shape and the wrong
     search, so the verifier is told which they were."""
+    guessing: bool = False
+    """The page descends from an invented address: nothing since has navigated to an address the run did not build
+    from the task. A click on a guessed search keeps its guessed parameters, so only a navigation ends it."""
+    first_seen: dict[str, bool] = field(default_factory=dict[str, bool])
+    """Each address observed, by whether the page was `guessing` when it first appeared."""
     downloads_forbidden: bool | None = None
     """Jev's word that the task rules out downloading, asked once a control the page says downloads is in play."""
     owes_read: bool = False
@@ -675,6 +680,7 @@ class Agent:
                         state.start_landing_url = await self._page.address()
                     state.history.extend(history)
                     state.invented = invented
+                    state.guessing = bool(invented)
                     if opening is not None:
                         # A shortcut leaves the start page before the loop observes anything.
                         state.visited[opening] = None
@@ -1601,6 +1607,14 @@ class Agent:
         if state.transaction_candidates and state.transaction_candidates[-1].landed_url is None:
             state.transaction_candidates[-1].landed_url = observation.url
             state.transaction_candidates[-1].landed_status = observation.response_status
+        last = state.history[-1] if state.history else None
+        if (
+            last is not None
+            and last.operation in {Operation.NAVIGATE, Operation.BACK}
+            and last.outcome is StepOutcome.EXECUTED
+        ):
+            state.guessing = _unfragmented(observation.url) in {_unfragmented(url) for url in state.invented}
+        state.first_seen.setdefault(_unfragmented(observation.url), state.guessing)
         # An error document has the requested address too, but never proves the destination loaded.
         if observation.response_status is not None and observation.response_status >= 400:
             state.visited.pop(observation.url, None)
@@ -3658,8 +3672,10 @@ class Agent:
             unmet=list(check.unmet),
             requirements={r.id: r.text for r in state.plan.requirements},
         )
-        guessed = _guessed(state.plan, state.notes, state.invented)
-        if check.verdict is DoneVerdict.ACCEPT and _guessed(state.plan, state.notes, state.invented, searches=True):
+        guessed = _guessed(state.plan, state.notes, state.invented, first_seen=state.first_seen)
+        if check.verdict is DoneVerdict.ACCEPT and _guessed(
+            state.plan, state.notes, state.invented, searches=True, first_seen=state.first_seen
+        ):
             # Jev judges the notes, not where they were read, so only the verifier is shown the guessed searches.
             check = check.model_copy(update={"verdict": DoneVerdict.VERIFY})
         elif check.verdict is DoneVerdict.VERIFY and not check.unmet and not guessed and _lookup(state.plan):
@@ -3717,7 +3733,7 @@ class Agent:
                     ledger=state.ledger,
                 )
                 state.ledger.record(verdict.cost)
-                accepted = _verified(verdict.data, state.plan, state.notes, state.invented)
+                accepted = _verified(verdict.data, state.plan, state.notes, state.invented, state.first_seen)
                 # Asked to open httpx's project page, a run picked DONE on pypi.org before acting, Jev held the one
                 # requirement unmet, and flash-lite called it complete. Only an action can do what Jev says is
                 # undone, so a run that has taken none cannot be talked past it. The history, not the steps, since
@@ -3729,7 +3745,8 @@ class Agent:
                 )
                 undone = {r.id for r in state.plan.requirements if r.kind is RequirementKind.ACTION} & set(check.unmet)
                 accepted = accepted and not (idle and undone)
-                missing, misread = verdict.data.missing, _misread(verdict.data, state.plan, state.notes, state.invented)
+                missing = verdict.data.missing
+                misread = _misread(verdict.data, state.plan, state.notes, state.invented, state.first_seen)
                 trace(
                     "verify",
                     complete=verdict.data.complete,
@@ -3770,7 +3787,7 @@ class Agent:
                     + ", an address built from the task, not the page it describes)"
                     for key in sorted(misread)
                 ]
-                state.notes.unevidence(misread)
+                state.notes.discredit(misread)
                 unmet += [f"Answer output not verified: {output}" for output in state.missing_answer_outputs]
                 reason = self._redactor.redact(f"DONE rejected: {'; '.join(unmet) or 'completion not confirmed'}")
                 state.history.append(
@@ -4506,22 +4523,41 @@ def _place(url: str) -> tuple[str, str]:
     return origin_of(url), urlsplit(url).path or "/"
 
 
-def _guessed(plan: Plan, notes: Notes, invented: Set[str], *, searches: bool = False) -> set[str]:
+def _guessed(
+    plan: Plan,
+    notes: Notes,
+    invented: Set[str],
+    *,
+    searches: bool = False,
+    first_seen: Mapping[str, bool] | None = None,
+) -> set[str]:
     """The requirements with a fact read on an address the run built from the task rather than clicked to.
 
     A guessed address can load a real page about the wrong thing, so a doubted answer read on one is always shown
     to the verifier. `searches` narrows it to built searches, whose state is in the address (the one built, or the
     one the site wrote back): a page of the right shape with the wrong results, as a proposed Google Flights address
-    was, is sent to the verifier even when Jev does not doubt it."""
+    was, is sent to the verifier even when Jev does not doubt it.
+
+    Matching by path alone held every Google Flights search guessed, since each one lives at /travel/flights: a run
+    refused there went back to the start page, set the search through the form, and its results were refused as
+    the guessed page until it stopped stuck. So an address `first_seen` after the run left the guess for an address
+    it did not build is its own. One first seen while still on the guess, or never observed, as an address a site
+    wrote back into a fact can be, is matched by its path."""
     places = {_place(url): _searched(url) for url in invented}
-    return {
-        r.id
-        for r in plan.requirements
-        if any(
-            _place(item.url) in places and (not searches or places[_place(item.url)] or _searched(item.url))
-            for item in notes.supporting_evidence(r.id)
+    seen = first_seen or {}
+
+    def guessed(url: str) -> bool:
+        return (
+            seen.get(_unfragmented(url)) is not False
+            and _place(url) in places
+            and (not searches or places[_place(url)] or _searched(url))
         )
-    }
+
+    return {r.id for r in plan.requirements if any(guessed(item.url) for item in notes.supporting_evidence(r.id))}
+
+
+def _unfragmented(url: str) -> str:
+    return urlsplit(url)._replace(fragment="").geturl()
 
 
 def _searched(url: str) -> bool:
@@ -4529,14 +4565,16 @@ def _searched(url: str) -> bool:
     return bool(parts.query or parts.fragment)
 
 
-def _misread(verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str]) -> set[str]:
+def _misread(
+    verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str], first_seen: Mapping[str, bool] | None = None
+) -> set[str]:
     """The requirements the verifier says were read off the wrong page, where that page was a guessed address.
 
     A guessed address is the one that can land on a page of the right shape and the wrong search: a proposed
     address opened a flights summary, the reader quoted a price from it, and the requirement counted as cited.
     A page reached by clicking was chosen off the site itself, so there the verifier's doubt is only doubt.
     """
-    return _plan_ids(verdict.ungrounded, plan) & _guessed(plan, notes, invented)
+    return _plan_ids(verdict.ungrounded, plan) & _guessed(plan, notes, invented, first_seen=first_seen)
 
 
 def _plan_ids(ids: Iterable[str], plan: Plan) -> set[str]:
@@ -4555,7 +4593,9 @@ def _plan_ids(ids: Iterable[str], plan: Plan) -> set[str]:
     return found
 
 
-def _verified(verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str]) -> bool:
+def _verified(
+    verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str], first_seen: Mapping[str, bool] | None = None
+) -> bool:
     """Whether the verifier's doubts leave the run finished.
 
     An information requirement the notes cite facts for is not left open by the verifier: the answer's claims are
@@ -4564,7 +4604,7 @@ def _verified(verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str])
     on a guessed address is not excused, since that is the wrong page the citing check cannot see.
     """
     cited = {r.id for r in plan.requirements if r.kind is RequirementKind.INFORMATION and notes.evidenced(r.id)}
-    misread = _misread(verdict, plan, notes, invented)
+    misread = _misread(verdict, plan, notes, invented, first_seen)
     named = _plan_ids(verdict.missing, plan) | _plan_ids(verdict.ungrounded, plan)
     doubted = named - (cited - misread)
     return not doubted and (verdict.complete or bool(named))
