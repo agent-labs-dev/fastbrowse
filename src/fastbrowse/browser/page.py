@@ -504,8 +504,10 @@ class CdpPage(Page):
         self._session = session
         self._config = config
         self._last: _ObservedState | None = None
-        self._marked: str | None = None
-        """The document the last action began on, which a dialog it opened leaves the page unable to report."""
+        self._marked: tuple[str, str] | None = None
+        """The document, and its address, the last action began on. A dialog blocks the page, so accepting one is
+        judged against this mark, and only when the dialog came from that same address: a dialog a page opened as
+        it loaded after a navigation is not the action's, and accepting it moved nothing."""
         self._back_to: dict[str, str] = {}
 
     @property
@@ -878,7 +880,12 @@ class CdpPage(Page):
         # A dialog blocks the page, and an observation taken under it reads no document, so the mark taken before
         # the action that opened it stands: accepting a confirm that navigates is a move the run made, and without
         # a mark it was never reported as one.
-        document = await self._input_mark() or (self._marked if action.operation is Operation.DIALOG else None)
+        if action.operation is Operation.DIALOG:
+            marked, self._marked = self._marked, None
+            opened_here = marked is not None and self._session.pending_dialog_url() == marked[1]
+            document = marked[0] if marked is not None and opened_here else None
+        else:
+            document = await self._input_mark()
         try:
             outcome, detail = await self._dispatch(action, target, point)
         except BrowserError:
@@ -918,14 +925,19 @@ class CdpPage(Page):
     async def _input_mark(self) -> str | None:
         """The page's document before an action, with the count of addresses its input changed set back to none."""
         if self._session.pending_dialog() is not None:
+            self._marked = None
             return None
         with suppress(Exception):
             value = await self._evaluate(
                 self._session.active_session_id,
-                "(window.__fastbrowseInputHistory = 0, String(performance.timeOrigin))",
+                "(window.__fastbrowseInputHistory = 0, [String(performance.timeOrigin), location.href])",
             )
-            self._marked = value if isinstance(value, str) else None
-            return self._marked
+            if isinstance(value, list) and len(value) == 2:
+                document, href = value
+                if isinstance(document, str) and isinstance(href, str):
+                    self._marked = (document, href)
+                    return document
+        self._marked = None
         return None
 
     async def _moved_by_input(self, document: str | None) -> bool:
@@ -1944,6 +1956,8 @@ class CdpPage(Page):
         await self._session.check_access()
         if (grant := self._session.grant) and not grant.allows(url):
             raise OriginNotAllowed
+        # A dialog the new document opens is not the last action's.
+        self._marked = None
         session_id = self._session.active_session_id
         if back_to is None:
             self._back_to.pop(session_id, None)

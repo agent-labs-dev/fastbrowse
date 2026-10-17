@@ -297,3 +297,22 @@ async def test_accepting_a_dialog_that_navigates_is_a_move_the_run_made(
         accepted = await page.act(Action(operation=Operation.DIALOG, accept_dialog=True), confirm)
     assert accepted.outcome is StepOutcome.EXECUTED
     assert accepted.moved is True
+
+
+async def test_accepting_a_dialog_a_new_page_opened_as_it_loaded_is_no_move_of_the_runs(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    """A click led to a page that opened an alert as it loaded. Accepting it was judged against the mark taken on the
+    page the click left, so the new document read as a move the acceptance made, and a guess could be cleared."""
+    await page.navigate(f"{main_site}/?q=guess")
+    session_id = browser_session.active_session_id
+    link = '<a href="/alert-on-load.html">Results</a>'
+    assert await eval_value(browser_session, session_id, f"document.body.innerHTML = {json.dumps(link)}; true") is True
+    obs = await page.observe()
+    await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Results").id), obs)
+    await wait_until(lambda: browser_session.pending_dialog() is not None)
+    alert = await page.observe()
+    async with asyncio.timeout(10):
+        accepted = await page.act(Action(operation=Operation.DIALOG, accept_dialog=True), alert)
+    assert accepted.outcome is StepOutcome.EXECUTED
+    assert accepted.moved is False

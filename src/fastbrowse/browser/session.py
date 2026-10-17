@@ -314,6 +314,8 @@ class BrowserSession:
         self._download_texts_shown = 0
         """How many of them an observation has already shown, so each is shown to the run once."""
         self._dialogs: dict[str, Dialog] = {}
+        self._dialog_urls: dict[str, str] = {}
+        """The address of the document each pending dialog came from, which `Dialog` does not carry."""
         """Pending JS dialog per tab session id; cleared once handled."""
         self._dialog_opened = asyncio.Event()
         self._background: set[asyncio.Task[None]] = set()
@@ -456,6 +458,17 @@ class BrowserSession:
         return next(
             (
                 self._dialogs[sid]
+                for sid in (self.active_session_id, *self.frame_sessions().values())
+                if sid in self._dialogs
+            ),
+            None,
+        )
+
+    def pending_dialog_url(self) -> str | None:
+        """The address of the document the pending dialog came from, if one is pending."""
+        return next(
+            (
+                self._dialog_urls.get(sid)
                 for sid in (self.active_session_id, *self.frame_sessions().values())
                 if sid in self._dialogs
             ),
@@ -926,6 +939,7 @@ class BrowserSession:
         self._dialogs[session_id] = Dialog(
             kind=event["type"], message=event["message"], default_prompt=event.get("defaultPrompt")
         )
+        self._dialog_urls[session_id] = event.get("url", "")
         self._dialog_opened.set()
 
     async def handle_dialog(self, accept: bool, prompt_text: str | None = None) -> None:
@@ -942,6 +956,7 @@ class BrowserSession:
         # Navigation can dismiss a dialog without going through handle_dialog.
         if session_id is not None:
             self._dialogs.pop(session_id, None)
+            self._dialog_urls.pop(session_id, None)
 
     # -- Downloads ------------------------------------------------------------------------------------
 

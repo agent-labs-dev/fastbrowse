@@ -399,6 +399,38 @@ def test_the_claim_check_shows_no_held_quote_as_a_claims_source() -> None:
     assert f"MISSING: {key}" in instructions and "Fare $320" not in instructions
 
 
+def _in_set_order(first_is_quote_requirement: bool) -> tuple[str, str]:
+    """Two requirement ids a set yields in the chosen order in this process, so both orders of a refusal are tried
+    whatever the string hash seed."""
+    for n in range(100):
+        quoted, concluded = f"q{n}", f"c{n}"
+        if (next(iter({quoted, concluded})) == quoted) is first_is_quote_requirement:
+            return quoted, concluded
+    raise AssertionError("no pair in that order")
+
+
+@pytest.mark.parametrize("r1_first", [True, False])
+def test_a_refusal_of_two_requirements_holds_every_guessed_reading_either_way_round(r1_first: bool) -> None:
+    """r1 rests on guessed quote A, r2 on a conclusion over A and guessed quote B, and both were refused at once.
+    Holding r1's readings first refused the conclusion, r2's support then came back empty, and B was never held,
+    so it could answer r2 again."""
+    r1, r2 = _in_set_order(r1_first)
+    a = evidence(sha="guess").model_copy(update={"quote": "Fare $320"})
+    b = evidence(sha="guess").model_copy(update={"quote": "Departs 08:00", "start": 40, "end": 53})
+    notes = Notes()
+    notes.add(Fact(reader=FactReader.LLM, requirement_id=r1, text="Fare $320", evidence=a))
+    quote_a = fact_id(Fact(reader=FactReader.LLM, text="", evidence=a))
+    quote_b = fact_id(Fact(reader=FactReader.LLM, text="", evidence=b))
+    notes.add(Fact(reader=FactReader.LLM, text="Departs 08:00", evidence=b))
+    notes.add(
+        Fact(reader=FactReader.LLM, requirement_id=r2, text="$320 at 08:00", evidence=None, basis=(quote_a, quote_b))
+    )
+    notes.discredit((r1, r2), lambda item: item.capture_sha256 == "guess")
+    assert notes.held(quote_a) and notes.held(quote_b)
+    notes.add(Fact(reader=FactReader.LLM, requirement_id=r2, text="Departs 08:00", evidence=b))
+    assert not notes.evidenced(r2)
+
+
 def test_a_hold_that_comes_back_takes_the_requirement_with_it() -> None:
     """Lifted by a reading off the guess, a held quote answered its requirement again; once the run read the guessed
     page again the hold was back, and the requirement still counted as answered by a quote no claim could cite."""

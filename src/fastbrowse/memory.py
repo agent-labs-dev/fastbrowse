@@ -542,13 +542,17 @@ class Notes:
         is answered again from a fresh reading, off the guess, the way the refused one is.
         """
         self._on_guess = guessed
-        for requirement in set(requirement_ids):
-            supporting = self.expand_evidence_ids(key for key, _ in self.supporting(requirement))
-            self._discredited.update(
-                key
-                for key in supporting
-                if (fact := self._facts.get(key)) is not None and fact.evidence is not None and guessed(fact.evidence)
-            )
+        # Every refused requirement's support is gathered before any hold is applied: holding one requirement's
+        # readings first refused a conclusion another rested on, its support came back empty, and a guessed quote
+        # only that conclusion drew on was never held.
+        supporting = self.expand_evidence_ids(
+            key for requirement in set(requirement_ids) for key, _ in self.supporting(requirement)
+        )
+        self._discredited.update(
+            key
+            for key in supporting
+            if (fact := self._facts.get(key)) is not None and fact.evidence is not None and guessed(fact.evidence)
+        )
         # Only what rests on a held quote is reopened: a quote from a page the run reached itself was never doubted,
         # and reopening it too left the requirement open until a reread happened to cite it again.
         for key, requirements in self._requirements.items():
