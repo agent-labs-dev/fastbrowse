@@ -195,3 +195,44 @@ async def test_the_history_entry_a_page_is_follows_the_browser_not_the_address(
     await wait_until(lambda: entry_is(second))
     await eval_value(browser_session, session_id, "history.forward()")
     await wait_until(lambda: entry_is(pushed))
+
+
+@pytest.mark.parametrize("pushes", [1, 10])
+async def test_a_push_state_between_history_and_snapshot_never_pairs_a_page_with_another_entry(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, monkeypatch: pytest.MonkeyPatch, pushes: int
+) -> None:
+    """History and the snapshot are read at once. A pushState landing between them paired the new page with the old
+    entry, which then took the new page's lineage. The pair is read again until both name one address, and a pair
+    that never agrees names no entry."""
+    session_id = browser_session.active_session_id
+    await page.navigate(f"{main_site}/dispatch.html")
+    read_history, snapshot = page._history, page._snapshot_all_frames
+    snapped = asyncio.Event()
+    pushed = 0
+
+    async def snapshot_first() -> object:
+        result = await snapshot()
+        snapped.set()
+        return result
+
+    async def history_after_a_push() -> tuple[bool, str | None, str | None]:
+        nonlocal pushed
+        await snapped.wait()
+        snapped.clear()
+        if pushed < pushes:
+            pushed += 1
+            await eval_value(
+                browser_session, session_id, f"history.pushState({{}}, '', '/dispatch.html?step={pushed}')"
+            )
+        return await read_history()
+
+    monkeypatch.setattr(page, "_snapshot_all_frames", snapshot_first)
+    monkeypatch.setattr(page, "_history", history_after_a_push)
+    observed = await page.observe()
+    monkeypatch.undo()
+    if pushes == 1:
+        # Read again once the push had landed: the page and its entry agree.
+        assert observed.url.endswith("/dispatch.html?step=1")
+        assert observed.history_entry is not None and observed.history_entry == (await page.observe()).history_entry
+    else:
+        assert observed.history_entry is None

@@ -16,10 +16,11 @@ from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence, Se
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import Self
-from urllib.parse import SplitResult, parse_qsl, urljoin, urlsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit
 
 from pydantic import BaseModel, Field, JsonValue
 
+from fastbrowse.addresses import search_address, searched
 from fastbrowse.batches import evaluate_batches
 from fastbrowse.citations import ANSWER_LINK, text_fragment
 from fastbrowse.clients.validation import jev_spend
@@ -373,7 +374,7 @@ class _Lineage:
         # The same page read again off the guess is the page the run reached itself, so that reading stands. Text
         # alone does not name a page: another address drawing identical text released the guessed one's hold.
         for source in sources:
-            key = (_search_address(source), capture)
+            key = (search_address(source), capture)
             if guessing:
                 self.captures.setdefault(key, True)
             else:
@@ -1652,15 +1653,15 @@ class Agent:
         """
         last = state.history[-1] if state.history else None
         executed = last is not None and last.outcome is StepOutcome.EXECUTED
-        address, lineage = _search_address(observation.url), state.lineage
+        address, lineage = search_address(observation.url), state.lineage
         entry = observation.history_entry
-        built = {_search_address(url) for url in state.invented}
+        built = {search_address(url) for url in state.invented}
         if entry is not None and entry in lineage.entries:
             state.guessing = lineage.entries[entry]
         else:
             if executed and last is not None and last.operation is Operation.NAVIGATE:
                 # A redirect is the same navigation: what the run asked for decides, as well as where it landed.
-                state.guessing = address in built or _search_address(last.target or "") in built
+                state.guessing = address in built or search_address(last.target or "") in built
             elif executed and last is not None and last.operation is Operation.BACK:
                 state.guessing = address in built
             if entry is not None:
@@ -4620,8 +4621,8 @@ def _guessed_page(
     def guessed(evidence: Evidence) -> bool:
         url = evidence.url
         # Lineage only clears a path match, never adds one: a page clicked to off the guess is judged by its path.
-        reading = (_search_address(url), evidence.capture_sha256)
-        on_guess = known.captures[reading] if reading in known.captures else known.addresses.get(_search_address(url))
+        reading = (search_address(url), evidence.capture_sha256)
+        on_guess = known.captures[reading] if reading in known.captures else known.addresses.get(search_address(url))
         return (
             on_guess is not False and _place(url) in places and (not searches or places[_place(url)] or _searched(url))
         )
@@ -4634,20 +4635,8 @@ def _sources(capture: Capture) -> set[str]:
     return {capture.url, *(block.source_url for block in capture.blocks if block.source_url)}
 
 
-def _search_parts(url: str) -> SplitResult:
-    """An address read for the search state a page keeps in it, its query and its fragment alike. Lineage and
-    `_searched` both read addresses through this: lineage once dropped the fragment, so on a site routing its
-    searches by fragment a corrected `/search#new` matched the built `/search#old` and stayed guessed."""
-    return urlsplit(url)
-
-
-def _search_address(url: str) -> str:
-    return _search_parts(url).geturl()
-
-
 def _searched(url: str) -> bool:
-    parts = _search_parts(url)
-    return bool(parts.query or parts.fragment)
+    return searched(url)
 
 
 def _misread(

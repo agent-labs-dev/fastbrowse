@@ -26,6 +26,7 @@ from cdp_use.cdp.page.commands import CaptureScreenshotParameters, GetNavigation
 from cdp_use.cdp.runtime.commands import EvaluateParameters
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
+from fastbrowse.addresses import search_address
 from fastbrowse.browser.cursor import CursorFeedback, Geometry
 from fastbrowse.browser.session import BrowserSession, OriginNotAllowed
 from fastbrowse.config import Config
@@ -250,6 +251,8 @@ _SETTLED = TypeAdapter(tuple[bool, str | None])
 _NODE_ID = TypeAdapter(int | None)
 _LANDED = TypeAdapter(tuple[bool, bool])
 _FILL_TARGET = TypeAdapter(tuple[int | None, bool, bool | None])
+_HISTORY_REREADS = 2
+"""Times an observation is read again when its history entry and its snapshot name different addresses."""
 _KEYS = {"Enter": ("Enter", "\r", 13), "Escape": ("Escape", "", 27), " ": ("Space", " ", 32)}
 """Each key pressed: its code, the text it types and its Windows virtual key code."""
 _POINT = TypeAdapter(tuple[float, float] | Literal["covered", "unsettled"] | None)
@@ -509,7 +512,7 @@ class CdpPage(Page):
             # The new document can be replaced in turn while this waits; the next read is what counts.
             await asyncio.sleep(_SETTLE_POLL_SECONDS)
 
-    async def _observe_once(self) -> Observation:
+    async def _observe_once(self, attempt: int = 0) -> Observation:
         await self._session.assert_clear()
         dialog = self._session.pending_dialog()
         if dialog is not None:
@@ -519,7 +522,7 @@ class CdpPage(Page):
         snapshot = asyncio.create_task(self._snapshot_all_frames())
         response = asyncio.create_task(self._document_response())
         try:
-            (can_go_back, history_entry), (frames, inaccessible), document = await asyncio.gather(
+            (can_go_back, history_entry, entry_url), (frames, inaccessible), document = await asyncio.gather(
                 history, snapshot, response
             )
         finally:
@@ -528,6 +531,13 @@ class CdpPage(Page):
             response.cancel()
             await asyncio.gather(history, snapshot, response, return_exceptions=True)
         main = frames.get(_MAIN)
+        # History and the snapshot are read at once, so a pushState between them paired the new page with the old
+        # entry, whose lineage the new page then overwrote. Both are read again until they name one address; a
+        # pair that never agrees names no entry, which lineage judges as a new entry.
+        if main and entry_url is not None and search_address(entry_url) != search_address(main.raw.url):
+            if attempt < _HISTORY_REREADS:
+                return await self._observe_once(attempt + 1)
+            history_entry = None
         controls: list[Control] = []
         control_state: dict[str, tuple[str, str, int, list[object] | None]] = {}
         for frame_key, frame in frames.items():
@@ -578,8 +588,8 @@ class CdpPage(Page):
             history_entry=history_entry,
         )
 
-    async def _history(self) -> tuple[bool, str | None]:
-        """Whether BACK is offered, and which history entry of which tab the page is.
+    async def _history(self) -> tuple[bool, str | None, str | None]:
+        """Whether BACK is offered, which history entry of which tab the page is, and that entry's address.
 
         Only these hang on it, and BACK reads history again before it goes. A history read that failed (CDP -32000)
         as a run's first page opened ended the run at step 0.
@@ -588,10 +598,11 @@ class CdpPage(Page):
         try:
             history = await self._session.client.send.Page.getNavigationHistory(params=None, session_id=session_id)
         except BrowserError:
-            return False, None
+            return False, None, None
         entries, index = history["entries"], history["currentIndex"]
-        entry = f"{session_id}:{entries[index]['id']}" if 0 <= index < len(entries) else None
-        return self._back_target(history) is not None, entry
+        if not 0 <= index < len(entries):
+            return self._back_target(history) is not None, None, None
+        return self._back_target(history) is not None, f"{session_id}:{entries[index]['id']}", entries[index]["url"]
 
     async def _can_go_back(self) -> bool:
         return (await self._history())[0]

@@ -527,7 +527,6 @@ type OutputAuditCache = dict[str, OutputAuditVerdict | _OutputIdentities]
 
 
 def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | None:
-    known = notes.current_evidence()
     requirements = {requirement.id: requirement.text for requirement in composed.requirements}
     urls: dict[str, str] = {}
     claims = []
@@ -535,6 +534,9 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
         expanded = notes.expand_evidence_ids(claim.evidence_ids)
         if any(not notes.current(key) for key in expanded):
             return None
+        # Each claim's sources are judged for the requirements it answers: a quote held for one requirement and
+        # still answering another was left out for every claim, and a valid answer was refused as non-current.
+        known = notes.usable_citations(expanded)
         keys = tuple(key for key in expanded if key in known)
         if not keys:
             return None

@@ -148,21 +148,41 @@ class Notes:
         return {key: fact.evidence for key, fact in self._facts.items() if fact.evidence is not None}
 
     def usable_evidence(self, requirement_id: str | None = None) -> dict[str, Evidence]:
-        """The quotes anything may build on: current, and not a reading held for the requirement (for any, if None).
+        """The quotes anything may build on: current, and not held for the requirement it is for.
+
+        Holds belong to a requirement. For `requirement_id`, a reading held for it is left out; with none, only a
+        refused fact is, one answering nothing that is or rests on a held reading. A quote held for one requirement
+        can still answer another, and leaving it out everywhere refused a valid answer citing it for that other.
 
         Every constructor that gathers quotes it was not handed, such as a comparison taking the whole notes as its
         proof, starts here. One that took `evidence` instead swept a held guessed reading into a legitimate rebuilt
         ranking, and the ranking was refused for resting on it every time.
         """
-        held = (
-            {key for key in self._facts if self.held(requirement_id, key)}
-            if requirement_id is not None
-            else {key for requirement in self._discredited for key in self._facts if self.held(requirement, key)}
-        )
         return {
             key: fact.evidence
             for key, fact in self._facts.items()
-            if fact.evidence is not None and self.current(key) and key not in held
+            if fact.evidence is not None
+            and self.current(key)
+            and not (self.held(requirement_id, key) if requirement_id is not None else self.refused(key))
+        }
+
+    def usable_citations(self, keys: Iterable[str]) -> dict[str, Evidence]:
+        """The quotes among `keys` a claim citing them may rest on, judged for the requirements that claim answers.
+
+        A claim names no requirement, but the facts it cites answer some, and a quote held for every one of those
+        is the refused reading the claim must not rest on. One held for another requirement only is not.
+        """
+        cited = tuple(keys)
+        answered = {requirement for key in cited for requirement in self._requirements.get(key, ())}
+        return {
+            key: fact.evidence
+            for key in cited
+            if (fact := self._facts.get(key)) is not None
+            and fact.evidence is not None
+            and self.current(key)
+            and (
+                any(not self.held(requirement, key) for requirement in answered) if answered else not self.refused(key)
+            )
         }
 
     def current_evidence(self, capture: Capture | None = None) -> dict[str, Evidence]:

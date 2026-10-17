@@ -362,3 +362,29 @@ async def test_completion_sheds_optional_draft_before_required_source_quotes() -
     assert isinstance(jev.state, dict) and "draft" not in jev.state
     assert quote in str(jev.state) and "draft_needs_writing" not in jev.questions
     assert len(json.dumps(jev.state)) + max(len(q.model_dump_json()) for q in jev.questions.values()) <= 48000
+
+
+@pytest.mark.parametrize(("answers", "verifies"), [(("r1", "r2"), True), (("r1",), False)])
+def test_a_quote_refused_for_one_requirement_still_answers_another(answers: tuple[str, ...], verifies: bool) -> None:
+    """One quote answered two requirements and was refused, read off a guessed page, for one of them. Holds were
+    applied to every requirement at once, so an answer citing it for the other was refused as citing non-current
+    evidence. A quote that answers nothing once refused is still refused."""
+    from fastbrowse.retrieval import Claim, ComposedAnswer
+    from fastbrowse.verification import _output_context
+
+    quote = evidence(sha="guess").model_copy(update={"quote": "Departs 08:00, $320"})
+    notes = Notes()
+    for requirement in answers:
+        notes.add(Fact(reader=FactReader.LLM, requirement_id=requirement, text="Departs 08:00, $320", evidence=quote))
+    key = fact_id(Fact(reader=FactReader.LLM, text="", evidence=quote))
+    notes.discredit(("r1",), lambda item: item.capture_sha256 == "guess")
+    composed = ComposedAnswer(
+        answer="It departs at 08:00.",
+        linked_answer="It departs at 08:00.",
+        claims=(Claim(text="It departs at 08:00.", evidence_ids=(key,)),),
+        requirements=tuple(
+            Requirement(id=r, text=f"{r} detail", kind=RequirementKind.INFORMATION) for r in ("r1", "r2")
+        ),
+    )
+    context = _output_context(composed, notes)
+    assert (context is not None and context.claims[0].cited_sources[0].quote == quote.quote) is verifies
