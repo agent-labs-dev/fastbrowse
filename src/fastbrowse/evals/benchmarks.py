@@ -73,16 +73,19 @@ class Group(PublicModel):
 
     @model_validator(mode="after")
     def coverage(self) -> Self:
+        # Each count the approved protocol has had. Retiring stretch-wizard-correction, whose site left DNS, took
+        # one task from the internal catalog; figures approved before then keep their count. A new candidate is
+        # held to the exact current catalog by `check_catalog`.
         spec = {
-            "internal-fastbrowse": (54, 3, "task-success", {"fastbrowse"}),
-            "internal-hosted": (47, 3, "task-success", {"fastbrowse", "browser-use"}),
-            "internal-ultrafast": (6, 3, "task-success", {"fastbrowse", "jev-ultrafast"}),
-            "internal-backend": (54, 3, "task-success", {"fastbrowse", "fastbrowse-pool"}),
-            "bu-bench": (200, 1, "weighted-rubric", {"fastbrowse"}),
-            "online-mind2web": (300, 1, "full-task-success", {"fastbrowse"}),
+            "internal-fastbrowse": ({53, 54}, 3, "task-success", {"fastbrowse"}),
+            "internal-hosted": ({46, 47}, 3, "task-success", {"fastbrowse", "browser-use"}),
+            "internal-ultrafast": ({6}, 3, "task-success", {"fastbrowse", "jev-ultrafast"}),
+            "internal-backend": ({53, 54}, 3, "task-success", {"fastbrowse", "fastbrowse-pool"}),
+            "bu-bench": ({200}, 1, "weighted-rubric", {"fastbrowse"}),
+            "online-mind2web": ({300}, 1, "full-task-success", {"fastbrowse"}),
         }
-        count, repeats, metric, arms = spec[self.id]
-        if len(self.task_ids) != count or len(set(self.task_ids)) != count:
+        counts, repeats, metric, arms = spec[self.id]
+        if len(self.task_ids) not in counts or len(set(self.task_ids)) != len(self.task_ids):
             raise ValueError("task coverage differs from the approved full protocol")
         if self.repeats != repeats or self.metric != metric or not self.limits:
             raise ValueError("repeats, metric and recorded limits are required")
@@ -194,6 +197,67 @@ def check_catalog(candidate: Candidate, path: Path) -> None:
             raise ValueError("internal rows must cover the exact fastbrowse catalog")
 
 
+CATALOG_PATH = "src/fastbrowse/evals/benchmark-catalog.json"
+
+
+def catalog_at(digest: str) -> bytes | None:
+    """The committed catalog whose bytes hash to `digest`, found in this checkout's history of the catalog."""
+    done = subprocess.run(
+        ["git", "log", "--format=%H", "--", CATALOG_PATH], capture_output=True, text=True, timeout=30, check=False
+    )
+    for commit in done.stdout.split():
+        raw = git_file(commit, CATALOG_PATH)
+        if raw is not None and hashlib.sha256(raw).hexdigest() == digest:
+            return raw
+    return None
+
+
+def retired_between(before: bytes, after: bytes) -> set[str] | None:
+    """The tasks `after` retires from `before` when listed retirements are the whole difference, else None.
+
+    Every task left keeps its exact entry (version, fingerprint, arms, category, expectation), as do the arms and
+    models; a retirement stays listed once made. Only the task-source hashes may also move, since removing a task
+    edits those sources."""
+    old, new = json.loads(before), json.loads(after)
+    old_retired = {r["id"]: r for r in old.get("retired", [])}
+    new_retired = {r["id"]: r for r in new.get("retired", [])}
+    if any(new_retired.get(task) != entry for task, entry in old_retired.items()):
+        return None
+    newly = set(new_retired) - set(old_retired)
+    where = {t["id"]: name for name, tasks in old["suites"].items() for t in tasks}
+    if any(where.get(task) != new_retired[task]["suite"] for task in newly):
+        return None
+    left = {name: [t for t in tasks if t["id"] not in newly] for name, tasks in old["suites"].items()}
+    ignored = ("task_sources", "suites", "retired")
+    if left != new["suites"] or {k: v for k, v in old.items() if k not in ignored} != {
+        k: v for k, v in new.items() if k not in ignored
+    }:
+        return None
+    return newly
+
+
+def _retirement_only(group: Group, old: Group, catalog: bytes | None) -> bool:
+    """Whether `group` is `old` on the current catalog less tasks retired since, under the same limits."""
+    if catalog is None or hashlib.sha256(catalog).hexdigest() != group.source_sha256 or group.limits != old.limits:
+        return False
+    before = catalog_at(old.source_sha256)
+    newly = None if before is None else retired_between(before, catalog)
+    # A catalog that only moved its task-source hashes retired nothing; that is a protocol change, not a retirement.
+    return bool(newly) and set(group.task_ids) == set(old.task_ids) - newly
+
+
+def unapproved_changes(candidate: Candidate, baseline: Candidate, catalog: bytes | None) -> set[str]:
+    """The published groups whose difference is more than a listed retirement: a protocol change only the owner's
+    protocol_change approval can publish."""
+    previous = {g.id: g for g in baseline.groups}
+    groups = {g.id: g for g in candidate.groups}
+    return {
+        change.id
+        for change in changed_protocols(candidate, baseline)
+        if not _retirement_only(groups[change.id], previous[change.id], catalog)
+    }
+
+
 def changed_protocols(candidate: Candidate, baseline: Candidate) -> list[GroupProtocol]:
     """The published groups `candidate` measures under a different catalog, task list or limits."""
     previous = {g.id: g for g in baseline.groups}
@@ -237,11 +301,15 @@ def protocol_change(candidate: Candidate, baseline: Candidate, baseline_bytes: b
     )
 
 
-def regressions(candidate: Candidate, baseline: Candidate, changed: Collection[str] = ()) -> None:
+def regressions(
+    candidate: Candidate, baseline: Candidate, catalog: bytes | None = None, changed: Collection[str] = ()
+) -> None:
     """Refuse a dropped group, a schema downgrade, an unapproved protocol change or a matched regression.
 
-    `changed` names groups whose protocol change the owner approved: they are a fresh baseline and are not compared
-    with the figures they replace. Every other published group is compared as before."""
+    `catalog` is the current catalog's bytes. With it, a group whose only difference from the published one is
+    tasks the catalog lists as retired since is compared on the tasks they share. `changed` names groups whose
+    protocol change the owner approved: they are a fresh baseline and are not compared with the figures they
+    replace. Any other difference is a protocol change that needs the owner's approval."""
     if candidate.schema_version < baseline.schema_version:
         raise ValueError("publication schema cannot downgrade the approved evidence checks")
     previous = {g.id: g for g in baseline.groups}
@@ -255,7 +323,7 @@ def regressions(candidate: Candidate, baseline: Candidate, changed: Collection[s
             old.source_sha256,
             sorted(old.task_ids),
             old.limits,
-        ):
+        ) and not _retirement_only(group, old, catalog):
             raise ValueError(f"protocol changed: {group.id}; matched baseline measurement is required")
         for task in group.task_ids:
             now = [r for r in group.rows if r.arm == "fastbrowse" and r.task == task]
@@ -379,12 +447,9 @@ def check_protocol_change(
 ) -> set[str]:
     """The groups whose protocol the published approval changed, after proving its record names exactly the groups
     that changed, from exactly the figures at the base, and that those figures and their approval are archived."""
-    changed = changed_protocols(candidate, baseline)
     record = approval.protocol_change
     if record is None:
-        if changed:
-            names = ", ".join(g.id for g in changed)
-            raise ValueError(f"protocol changed: {names}; publish it with the owner's protocol_change approval")
+        # Without the owner's record nothing is exempt: `regressions` refuses every change but a listed retirement.
         return set()
     if record != protocol_change(candidate, baseline, baseline_bytes, record.note):
         raise ValueError("the protocol_change record must name exactly the changed groups of the published figures")
@@ -424,14 +489,15 @@ def check_diff(base: str, catalog: Path) -> None:
             if not approval_path.exists():
                 raise ValueError("published figures require an owner approval receipt")
             approval = Approval.model_validate_json(approval_path.read_bytes())
-            regressions(candidate, baseline, check_protocol_change(candidate, baseline, old, old_approval, approval))
+            approved = check_protocol_change(candidate, baseline, old, old_approval, approval)
+            regressions(candidate, baseline, catalog.read_bytes(), approved)
         else:
             # A staged candidate is reviewed, not published: a changed protocol is reported here and refused at
             # approval unless the owner dispatches it as a protocol change. Unchanged groups are still compared.
-            changed = {g.id for g in changed_protocols(candidate, baseline)}
+            changed = unapproved_changes(candidate, baseline, catalog.read_bytes())
             if changed:
                 print(f"Staged protocol change for {', '.join(sorted(changed))}: needs the owner's protocol_change")
-            regressions(candidate, baseline, changed)
+            regressions(candidate, baseline, catalog.read_bytes(), changed)
     if published.exists():
         if not approval_path.exists():
             raise ValueError("published figures require an owner approval receipt")
@@ -486,11 +552,12 @@ def main() -> None:
     check_catalog(candidate, args.catalog)
     if args.baseline:
         if args.baseline.exists():
+            catalog = args.catalog.read_bytes()
             baseline_bytes = args.baseline.read_bytes()
             baseline = Candidate.model_validate_json(baseline_bytes)
             if args.protocol_change:
                 # Dropped groups and unchanged groups' regressions are refused before the change is recorded.
-                regressions(candidate, baseline, {g.id for g in changed_protocols(candidate, baseline)})
+                regressions(candidate, baseline, catalog, {g.id for g in changed_protocols(candidate, baseline)})
                 try:
                     record = protocol_change(candidate, baseline, baseline_bytes, args.protocol_note)
                 except ValidationError as error:
@@ -499,7 +566,7 @@ def main() -> None:
                     args.protocol_record.write_text(record.model_dump_json(indent=2) + "\n")
                 print(f"Protocol change for {', '.join(g.id for g in record.groups)}: a fresh baseline")
             else:
-                regressions(candidate, baseline)
+                regressions(candidate, baseline, catalog)
         elif args.protocol_change:
             parser.error("a protocol change needs a published baseline; use --bootstrap for the first publication")
         elif not args.bootstrap:
