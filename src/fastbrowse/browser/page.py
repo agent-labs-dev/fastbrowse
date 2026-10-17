@@ -128,19 +128,24 @@ _SCROLL_EVENT_SECONDS = 3.0
 _UNCOVER_JS = (
     "(async (id, guard) => { const r = window.__fastbrowse, e = r?.nodes.get(id); "
     "if (!e?.isConnected || JSON.stringify(r.guard(e)) !== JSON.stringify(guard)) return null; "
-    "const docs = [], scrollers = []; "
+    "const docs = [], scrollers = [], roots = []; "
     # The scrolling element reports the window's scroll, whose events and scrollend go to the document instead.
     "for (let n = e; n; ) { if (n !== n.ownerDocument.scrollingElement) scrollers.push(n); "
-    "const root = n.getRootNode(); "
+    "const root = n.getRootNode(); if (root instanceof ShadowRoot && !roots.includes(root)) roots.push(root); "
     "if (n.parentElement) n = n.parentElement; else if (root instanceof ShadowRoot) n = root.host; "
     "else { const view = n.ownerDocument.defaultView; docs.push(n.ownerDocument); "
     "try { n = view.frameElement; } catch { n = null; } } } "
     "const at = t => t instanceof Document ? [t.defaultView.scrollX, t.defaultView.scrollY].join() "
     ": [t.scrollLeft, t.scrollTop].join(); const targets = [...docs, ...scrollers]; "
     "const where = () => targets.map(at).join(';'); const before = targets.map(at); "
-    "let seen = 0; const ends = new Set(); const mark = () => { seen++; }; const end = ev => ends.add(ev.target); "
-    "for (const d of docs) { d.addEventListener('scroll', mark, {capture: true, passive: true}); "
-    "d.addEventListener('scrollend', end, {capture: true, passive: true}); } "
+    # A scroll event is not composed, so one inside a shadow root, open or closed, never reaches the document: a
+    # list scrolled there was waited on until the deadline and refused a control it had exposed. Every document,
+    # every shadow root on the way and every scroller listens, and an event heard twice counts once.
+    "const heard = new WeakSet(), ends = new Set(); let seen = 0; "
+    "const mark = ev => { if (!heard.has(ev)) { heard.add(ev); seen++; } }; const end = ev => ends.add(ev.target); "
+    "const listeners = [...docs, ...roots, ...scrollers]; "
+    "for (const l of listeners) { l.addEventListener('scroll', mark, {capture: true, passive: true}); "
+    "l.addEventListener('scrollend', end, {capture: true, passive: true}); } "
     "try { let moved = false, point = 'covered'; "
     "for (const block of ['center', 'start', 'end']) { const was = where(); "
     "e.scrollIntoView({block, inline: 'nearest', behavior: 'instant'}); moved ||= where() !== was; "
@@ -155,8 +160,8 @@ _UNCOVER_JS = (
     "new Promise(done => setTimeout(() => done(false), Math.max(0, deadline - performance.now())))]); "
     "while (!seen || due.some(t => !ends.has(t))) if (!await turn()) return 'unsettled'; "
     "for (let last = -1; last !== seen; ) { last = seen; if (!await turn()) return 'unsettled'; } "
-    "return point; } finally { for (const d of docs) { d.removeEventListener('scroll', mark, {capture: true}); "
-    "d.removeEventListener('scrollend', end, {capture: true}); } } })"
+    "return point; } finally { for (const l of listeners) { l.removeEventListener('scroll', mark, {capture: true}); "
+    "l.removeEventListener('scrollend', end, {capture: true}); } } })"
 )
 
 _OBSTRUCTIONS = 'dialog,[role=dialog],[role=alertdialog],[aria-modal="true"],[role=menu],[role=listbox],[popover]'

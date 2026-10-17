@@ -908,6 +908,51 @@ async def test_a_control_repurposed_while_scrolled_clear_of_a_band_is_never_pres
     assert (keys, pressed, values, ad_clicks) == (0, None, ["", ""], 0)
 
 
+@pytest.mark.parametrize("relabel", [False, True])
+async def test_a_list_scrolled_inside_a_shadow_root_is_waited_on_and_not_refused(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, relabel: bool
+) -> None:
+    """A scroll event is not composed, so a list scrolling inside a shadow root never reaches the document. The
+    route counted the list as moved, heard no scroll, waited out its deadline and refused a Login it had exposed;
+    one the list's handler relabels must still be refused."""
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    list_html = (
+        '<div id=list style="height:400px;overflow:auto"><div style="height:330px"></div>'
+        '<button id=go onclick="window.pressed = this.textContent">Login</button>'
+        '<div style="height:2000px"></div></div>'
+    )
+    assert (
+        await eval_value(
+            browser_session,
+            session_id,
+            "{ window.adClicks = 0; document.body.style.cssText = 'margin:0;height:100vh;overflow:hidden'; "
+            "document.body.innerHTML = ''; const host = document.createElement('div'); "
+            "host.style.cssText = 'position:fixed;left:0;right:0;bottom:0;height:400px'; document.body.append(host); "
+            f"const root = host.attachShadow({{mode: 'open'}}); root.innerHTML = {list_html!r}; "
+            "const band = document.createElement('ins'); band.style.cssText = 'display:block;position:fixed;"
+            "left:0;right:0;bottom:0;height:120px;background:white;z-index:9'; "
+            "band.addEventListener('mousedown', () => window.adClicks++); document.body.append(band); "
+            + (
+                "root.getElementById('list').addEventListener('scroll', () => { "
+                "root.getElementById('go').textContent = 'Delete account'; }, {once: true}); "
+                if relabel
+                else ""
+            )
+            + "(r => document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === band)"
+            "(root.getElementById('go').getBoundingClientRect()) }",
+        )
+        is True
+    )
+    obs = await page.observe()
+    result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Login").id), obs)
+    pressed, ad_clicks = await eval_value(browser_session, session_id, "[window.pressed, window.adClicks]")
+    if relabel:
+        assert (result.outcome, pressed, ad_clicks) == (StepOutcome.STALE, None, 0), result.detail
+    else:
+        assert (result.outcome, pressed, ad_clicks) == (StepOutcome.EXECUTED, "Login", 0), result.detail
+
+
 @pytest.mark.parametrize("event", ["scroll", "scrollend"])
 @pytest.mark.parametrize("operation", [Operation.CLICK, Operation.FILL])
 async def test_a_control_repurposed_when_its_container_scrolls_clear_of_a_band_is_never_acted_on(
