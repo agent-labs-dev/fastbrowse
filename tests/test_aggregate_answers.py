@@ -321,3 +321,28 @@ async def test_every_page_of_a_continuing_list_is_recorded_whether_or_not_it_mat
     fourth = capture((BlockKind.PARAGRAPH, "110 results - showing 61 to 80."), url=urls[3])
     await agent._join_page(state, _PageRead(fourth, _at(urls[3]), done, time.monotonic(), None), [CHEAPEST])
     assert state.notes.collection_pages(CHEAPEST.id) == tuple(urls)
+
+
+def test_a_stopped_run_lists_every_count_before_a_quote_that_answers_another_requirement() -> None:
+    """A run stopped mid-pagination has counts that are not complete, while a quote elsewhere already evidences
+    another requirement. Ordering by what evidences a requirement put that quote first, and under a tight budget
+    it left no room for a single count."""
+    _OFFSETS.clear()
+    quote = _record("https://quotes.toscrape.com/", QUOTES[0]["quote"] + " " + "word " * 300).model_copy(
+        update={"requirement_id": "about_page"}
+    )
+    notes = Notes((quote,))
+    for item in QUOTES[:4]:
+        record = _record(item["url"], item["quote"])
+        notes.add(record)
+        notes.add_tally(Tally(requirement_id=AUTHORS.id, key=_author(item["quote"]), records=(fact_id(record),)))
+    assert notes.fact_requirements(fact_id(quote)) == ("about_page",)
+    assert not any(notes.fact_requirements(fact_id(f)) for f in notes.facts if f.tally is not None)
+
+    quote_only = partial_answer(Notes((quote,)), 10**6).linked_answer
+    # Room for the quote alone or for every count alone, never both.
+    answer = partial_answer(notes, len(quote_only) + 10).answer
+
+    counts = [line for line in answer.splitlines() if re.fullmatch(r".+: \d+", line)]
+    assert len(counts) == len({_author(item["quote"]) for item in QUOTES[:4]})
+    assert "word word" not in answer

@@ -3147,26 +3147,26 @@ def partial_answer(notes: Notes, max_chars: int) -> ComposedAnswer:
     )
     claims: list[Claim] = []
     counted: set[str] = set()
-    candidates = sorted(
+    # Every count comes before any quote, highest first. Sharing one sourceless turn left "Albert Einstein: 10"
+    # alone, and a stopped run's counts are incomplete, so ranking by what evidences a requirement put a quote
+    # answering something else first and left no room for any count.
+    tallies = sorted(
         (fact for fact in notes.facts if fact.tally is not None),
-        key=lambda fact: (fact.tally.requirement_id, -fact.tally.count, fact.tally.key) if fact.tally else ("", 0, ""),
+        key=lambda fact: (-fact.tally.count, fact.tally.requirement_id, fact.tally.key) if fact.tally else (0, "", ""),
     )
-    candidates.extend(fact for fact in notes.facts if fact.evidence is not None)
-    candidates.sort(key=lambda fact: not bool(notes.fact_requirements(fact_id(fact))))
+    quoted = sorted(
+        (fact for fact in notes.facts if fact.evidence is not None),
+        key=lambda fact: not bool(notes.fact_requirements(fact_id(fact))),
+    )
     ranks: dict[str | None, int] = {}
     ranked: list[tuple[int, Fact]] = []
     # Early sources can fill the partial answer before a later target's finding gets a turn.
-    for fact in candidates:
-        if fact.tally is not None:
-            # Every tally shared the one sourceless turn, so only the top author's count came before a page of
-            # quotes filled the answer: "Albert Einstein: 10" stood alone with the second and third left out.
-            ranked.append((0, fact))
-            continue
+    for fact in quoted:
         source = fact.evidence.url if fact.evidence is not None else None
         rank = ranks.get(source, 0)
         ranked.append((rank, fact))
         ranks[source] = rank + 1
-    for _, fact in sorted(ranked, key=lambda item: item[0]):
+    for fact in (*tallies, *(fact for _, fact in sorted(ranked, key=lambda item: item[0]))):
         if fact_id(fact) in counted:
             continue
         text = fact.text if fact.tally is not None else fact.evidence.quote if fact.evidence else ""
