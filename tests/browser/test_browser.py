@@ -8,9 +8,10 @@ import inspect
 import json
 import os
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from cdp_use.cdp.target.events import TargetCreatedEvent, TargetInfoChangedEvent
 from cdp_use.client import CDPClient
 
 from fastbrowse.adapters.local_chrome import find_chrome, local_chrome
@@ -268,6 +269,86 @@ async def test_a_new_tab_slow_to_set_up_is_still_followed(
 
     monkeypatch.setattr(browser_session, "_prepare_session", slow)
     result = await loaded_page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Open popup").id), obs)
+    assert result.outcome is StepOutcome.EXECUTED and result.detail == "opened a new tab, now active"
+    assert find(await loaded_page.observe(), "Popup button")
+
+
+def _announce_late(browser_session: BrowserSession, seconds: float) -> None:
+    """Hold back Chrome's announcement of new targets, as a loaded machine did for over two seconds."""
+    loop = asyncio.get_running_loop()
+    created, changed = browser_session._on_target_created, browser_session._on_target_info_changed
+
+    def late_created(event: TargetCreatedEvent, session_id: str | None) -> None:
+        loop.call_later(seconds, created, event, session_id)
+
+    def late_changed(event: TargetInfoChangedEvent, session_id: str | None) -> None:
+        loop.call_later(seconds, changed, event, session_id)
+
+    browser_session.client.register.Target.targetCreated(late_created)
+    browser_session.client.register.Target.targetInfoChanged(late_changed)
+
+
+@pytest.mark.parametrize("opener", ["window.open", "link"])
+async def test_a_new_tab_announced_late_is_still_followed(
+    loaded_page: CdpPage, browser_session: BrowserSession, opener: str
+) -> None:
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.body.insertAdjacentHTML('beforeend', "
+        '\'<a href="/popup.html" target="_blank">New window link</a>\')',
+    )
+    obs = await loaded_page.observe()
+    _announce_late(browser_session, 2.5)
+    if opener == "link":
+        # The link names a new browsing context, which is enough to wait for its tab without Chrome saying so.
+        browser_session.client.register.Page.windowOpen(lambda event, session_id: None)
+    label = "Open popup" if opener == "window.open" else "New window link"
+    result = await loaded_page.act(Action(operation=Operation.CLICK, target_id=find(obs, label).id), obs)
+    assert result.outcome is StepOutcome.EXECUTED and result.detail == "opened a new tab, now active"
+    assert find(await loaded_page.observe(), "Popup button")
+
+
+async def test_a_new_tab_whose_opener_is_reported_late_is_still_followed(
+    loaded_page: CdpPage, browser_session: BrowserSession
+) -> None:
+    obs = await loaded_page.observe()
+    created = browser_session._on_target_created
+
+    def without_opener(event: TargetCreatedEvent, session_id: str | None) -> None:
+        info = {k: v for k, v in event["targetInfo"].items() if k != "openerId"}
+        created(cast("TargetCreatedEvent", {"targetInfo": info}), session_id)
+
+    # Chrome can name the opener only in a later update of the target's info.
+    browser_session.client.register.Target.targetCreated(without_opener)
+    result = await loaded_page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Open popup").id), obs)
+    assert result.outcome is StepOutcome.EXECUTED and result.detail == "opened a new tab, now active"
+
+
+async def test_a_click_that_opens_no_window_does_not_wait_for_one(
+    loaded_page: CdpPage, browser_session: BrowserSession
+) -> None:
+    obs = await loaded_page.observe()
+    _announce_late(browser_session, 2.5)
+    started = asyncio.get_running_loop().time()
+    result = await loaded_page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Shadow button").id), obs)
+    assert result.outcome is StepOutcome.EXECUTED and result.detail is None
+    assert asyncio.get_running_loop().time() - started < 2.0
+
+
+async def test_a_tab_opened_from_a_cross_site_frame_is_followed(
+    loaded_page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await wait_until(lambda: bool(browser_session.frame_sessions()))
+    frame_session = next(iter(browser_session.frame_sessions().values()))
+    await eval_value(
+        browser_session,
+        frame_session,
+        f'document.body.insertAdjacentHTML(\'beforeend\', \'<a href="{main_site}/popup.html" target="_blank">'
+        "Frame window link</a>')",
+    )
+    obs = await observe_until(loaded_page, "Frame window link")
+    result = await loaded_page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Frame window link").id), obs)
     assert result.outcome is StepOutcome.EXECUTED and result.detail == "opened a new tab, now active"
     assert find(await loaded_page.observe(), "Popup button")
 

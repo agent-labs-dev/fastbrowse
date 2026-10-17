@@ -18,7 +18,12 @@ from typing import Any, Self, cast
 
 from cdp_use.cdp.fetch.events import RequestPausedEvent
 from cdp_use.cdp.fetch.types import RequestPattern
-from cdp_use.cdp.page.events import JavascriptDialogClosedEvent, JavascriptDialogOpeningEvent, ScreencastFrameEvent
+from cdp_use.cdp.page.events import (
+    JavascriptDialogClosedEvent,
+    JavascriptDialogOpeningEvent,
+    ScreencastFrameEvent,
+    WindowOpenEvent,
+)
 from cdp_use.cdp.runtime.events import ExecutionContextCreatedEvent
 from cdp_use.cdp.target.commands import CreateTargetParameters
 from cdp_use.cdp.target.events import (
@@ -133,6 +138,11 @@ class _HideEndpoint(logging.Filter):
 
 logging.getLogger("cdp_use.client").addFilter(_HideEndpoint())
 
+
+POPUP_ANNOUNCE_SECONDS = 5.0
+"""How long a click that is opening a window waits for Chrome to announce its tab. In ten runs of a link opening a new
+window, the tab was announced from 0.08 to 2.5 seconds after the click, and the one a loaded machine announced later
+than the settle after the click was never followed: the run read the page that opened it."""
 
 STATUS_WORLD = "fastbrowse-status"
 """The isolated world a tab's HTTP status is read in, out of reach of the page's scripts."""
@@ -317,6 +327,10 @@ class BrowserSession:
         self._open_before: set[str] = set()
         """Targets already open when an attached session began, which never join the run."""
         self._popups: dict[str, tuple[str, asyncio.Future[bool]]] = {}
+        self.window_opens = 0
+        """`Page.windowOpen` events from the run's pages: each one is a window on its way, announced or not."""
+        self._popup_signal = asyncio.Event()
+        """Set, and replaced, each time a popup is begun, so a wait for one wakes as it is announced."""
         self._status_contexts: dict[tuple[str, int], str] = {}
         """(session, context id) -> unique id, for each world named `STATUS_WORLD` Chrome reported creating."""
         """Popup target id -> (opener target id, whether it was adopted), in the order they opened."""
@@ -709,6 +723,7 @@ class BrowserSession:
     def _register_events(self) -> None:
         client = self.client
         client.register.Runtime.executionContextCreated(self._on_context_created)
+        client.register.Page.windowOpen(self._on_window_open)
         client.register.Target.attachedToTarget(self._on_attached)
         client.register.Target.detachedFromTarget(self._on_detached)
         client.register.Target.targetCreated(self._on_target_created)
@@ -734,6 +749,9 @@ class BrowserSession:
         self._background.discard(task)
         if not task.cancelled():
             task.exception()
+
+    def _on_window_open(self, event: WindowOpenEvent, session_id: str | None) -> None:
+        self.window_opens += 1
 
     def _on_context_created(self, event: ExecutionContextCreatedEvent, session_id: str | None) -> None:
         context = event["context"]
@@ -809,9 +827,13 @@ class BrowserSession:
         return None
 
     def _begin_popup(self, target_id: str, opener_id: str, session_id: str | None = None) -> None:
+        if target_id in self._popups:
+            return
         if opener_id in self._owned:
             self._owned.add(target_id)
         self._popups[target_id] = (opener_id, asyncio.get_running_loop().create_future())
+        self._popup_signal.set()
+        self._popup_signal = asyncio.Event()
         self._spawn(self._adopt_popup(target_id, opener_id, session_id))
 
     async def _adopt_popup(self, target_id: str, opener_id: str, session_id: str | None = None) -> None:
@@ -837,18 +859,27 @@ class BrowserSession:
     def popups(self) -> tuple[str, ...]:
         return tuple(self._popups)
 
-    async def follow_popup(self, known: tuple[str, ...]) -> str | None:
+    async def follow_popup(self, known: tuple[str, ...], *, expected: bool = False) -> str | None:
         """Make active the latest tab the active tab opened since `known` once it is adopted, and return its id.
 
         A link that opens its page in a new window left the run on the opener: the next step was spent choosing
         the new tab, and the read before it credited the opener's heading to the new window. Adoption is waited
         out however long it takes, since each of its commands has its own deadline: a fixed two seconds for it
         was outlasted on a loaded machine, and the run read the opener while the tab it had opened sat unused.
+
+        With `expected`, the click is known to be opening a window (it named a new browsing context, or Chrome
+        reported a window opening since `known` was taken), so a tab not announced yet is waited for, up to
+        `POPUP_ANNOUNCE_SECONDS`; any other click returns at once when nothing has been announced.
         """
         opener = self._active_target_id
-        fresh = [t for t, (o, _) in self._popups.items() if o == opener and t not in known]
-        if not fresh:
-            return None
+        deadline = asyncio.get_running_loop().time() + (POPUP_ANNOUNCE_SECONDS if expected else 0)
+        while not (fresh := [t for t, (o, _) in self._popups.items() if o == opener and t not in known]):
+            signal = self._popup_signal
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return None
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(signal.wait(), remaining)
         if await asyncio.shield(self._popups[fresh[-1]][1]) and fresh[-1] in self._tabs:
             await self.switch_tab(fresh[-1])
             return fresh[-1]
@@ -858,6 +889,14 @@ class BrowserSession:
         info = event["targetInfo"]
         if info["targetId"] in self._tabs:
             self.set_tab_info(info["targetId"], info["url"], info["title"])
+        # An opener Chrome reports only after the target was created makes it the run's popup from then on.
+        elif (
+            self._grant is None
+            and info.get("openerId")
+            and info["targetId"] not in self._popups
+            and (opener := self._popup_opener(info)) is not None
+        ):
+            self._begin_popup(info["targetId"], opener)
 
     def _on_target_destroyed(self, event: TargetDestroyedEvent, session_id: str | None) -> None:
         target_id = event["targetId"]

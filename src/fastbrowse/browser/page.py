@@ -162,8 +162,8 @@ _HANDED_FOCUS_JS = (
     "if (was.doc.hidden) start(); else requestAnimationFrame(() => setTimeout(start, 0)); }))"
 )
 type _Point = tuple[float, float] | Literal["covered"] | None
-_TARGET_STATE = TypeAdapter(tuple[str, list[object] | None, _Point, bool])
-"""[fingerprint, live guard, hit-test point, popup announced] from the pre-action check."""
+_TARGET_STATE = TypeAdapter(tuple[str, list[object] | None, _Point, bool, bool])
+"""[fingerprint, live guard, hit-test point, popup announced, opens a window] from the pre-action check."""
 _SETTLED = TypeAdapter(tuple[bool, str | None])
 _NODE_ID = TypeAdapter(int | None)
 _LANDED = TypeAdapter(tuple[bool, bool])
@@ -736,7 +736,7 @@ class CdpPage(Page):
         # A pending dialog already blocks the renderer's main thread; evaluating now would hang.
         before_fingerprint = ""
         point: _Point = None
-        announced = False
+        announced = opens = False
         # The pointer must move only once the browser has drawn the layout the point was measured in. Waiting for
         # that frame inside the measuring call saves the pointer move a round trip of its own.
         drawn = (
@@ -747,13 +747,13 @@ class CdpPage(Page):
                 # The frame wait runs on the page's own timers, which a page can replace with ones that never
                 # fire; past this bound the point is measured again and the pointer move waits for its own frame.
                 async with asyncio.timeout(_MEASURE_DRAWN_SECONDS if drawn else None):
-                    before_fingerprint, live_guard, point, announced = await self._before_action(
+                    before_fingerprint, live_guard, point, announced, opens = await self._before_action(
                         target, hit_test=action.operation in TARGETED, present=drawn
                     )
             except (TimeoutError, _ScriptError):
                 # A page can also replace those timers with ones that throw; the measurement is made again either way.
                 drawn = False
-                before_fingerprint, live_guard, point, announced = await self._before_action(
+                before_fingerprint, live_guard, point, announced, opens = await self._before_action(
                     target, hit_test=action.operation in TARGETED
                 )
             if target is not None and live_guard != target[3]:
@@ -771,6 +771,7 @@ class CdpPage(Page):
         ):
             self._cursor.follow(partial(self._cursor_geometry, target[0], observation.document_key), point)
         popups = self._session.popups()
+        window_opens = self._session.window_opens
         try:
             outcome, detail = await self._dispatch(action, target, point, drawn=drawn)
         except BrowserError:
@@ -792,7 +793,9 @@ class CdpPage(Page):
                 )
             ),
         )
-        if action.operation in _OPENS_TABS and await self._session.follow_popup(popups):
+        if action.operation in _OPENS_TABS and await self._session.follow_popup(
+            popups, expected=opens or self._session.window_opens != window_opens
+        ):
             return ActResult(outcome=StepOutcome.EXECUTED, page_changed=True, detail="opened a new tab, now active")
         unchanged = False
         if action.form_fill and not changed and target is not None and not action.secret:
@@ -1381,7 +1384,7 @@ class CdpPage(Page):
                 await asyncio.wait({check, dialog}, return_when=asyncio.FIRST_COMPLETED)
                 if self._session.pending_dialog() is not None:
                     return StepOutcome.FAILED, "pointer movement opened a dialog before press", point
-                _, guard, fresh, _ = check.result()
+                _, guard, fresh, _, _ = check.result()
             finally:
                 check.cancel()
                 dialog.cancel()
@@ -1427,7 +1430,7 @@ class CdpPage(Page):
             return StepOutcome.FAILED, "drag source and drop target are the same control"
         # The drop target is hit-tested exactly as the source is: its point is only computed when the live guard
         # still matches the observed one, so a target that moved or was covered since the observation is stale.
-        _, _, drop_point, _ = await self._before_action(drop, hit_test=True)
+        _, _, drop_point, _, _ = await self._before_action(drop, hit_test=True)
         if drop_point is None or drop_point == "covered":
             return StepOutcome.STALE, "drop target disconnected"
         # Finding the destination can scroll the source away. Scrolling back would invalidate the drop point.
@@ -1435,7 +1438,7 @@ class CdpPage(Page):
         if outcome is not StepOutcome.EXECUTED:
             return outcome, detail
         # Pointer entry on the source can repurpose the destination after its first guard check.
-        _, _, drop_point, _ = await self._before_action(drop, hit_test=True, scroll=False)
+        _, _, drop_point, _, _ = await self._before_action(drop, hit_test=True, scroll=False)
         if drop_point is None or drop_point == "covered":
             return StepOutcome.STALE, "drop target changed before pointer press"
         session_id = target[0]
@@ -1466,7 +1469,7 @@ class CdpPage(Page):
             )
             await asyncio.sleep(_DRAG_STEP_SECONDS)
             if step == 1:
-                _, _, landed, _ = await self._before_action(drop, hit_test=True, scroll=False)
+                _, _, landed, _, _ = await self._before_action(drop, hit_test=True, scroll=False)
                 if not isinstance(landed, tuple):
                     await self._cancel_drag(session_id, (start_x, start_y))
                     return StepOutcome.STALE, "drop target changed during the drag"
@@ -1481,7 +1484,7 @@ class CdpPage(Page):
             for _ in range(2):
                 await self._drag_move(session_id, *at)
                 await asyncio.sleep(_DRAG_STEP_SECONDS)
-            _, _, landed, _ = await self._before_action(drop, hit_test=True, scroll=False)
+            _, _, landed, _, _ = await self._before_action(drop, hit_test=True, scroll=False)
             if not isinstance(landed, tuple):
                 break
             if landed == at:
@@ -1803,9 +1806,9 @@ class CdpPage(Page):
         after_move: bool = False,
         scroll: bool = True,
         present: bool = False,
-    ) -> tuple[str, list[object] | None, _Point, bool]:
+    ) -> tuple[str, list[object] | None, _Point, bool, bool]:
         if target is None:
-            return await self._fingerprint(), None, None, False
+            return await self._fingerprint(), None, None, False, False
         session_id, _frame, local_id, guard = target
         same_session = session_id == self._session.active_session_id
         # Input routing uses the top frame's drawn layout. An OOPIF cannot wait for that frame in its own
@@ -1813,7 +1816,7 @@ class CdpPage(Page):
         if after_move and not same_session:
             await self._evaluate(self._session.active_session_id, _PRESENTED_JS)
 
-        async def target_state() -> tuple[str, list[object] | None, _Point, bool]:
+        async def target_state() -> tuple[str, list[object] | None, _Point, bool, bool]:
             # Guard validation and hit testing share a renderer task, so no page script can swap the
             # verified control between them. Stale controls must never be scrolled into view.
             result = await self._evaluate(
@@ -1842,7 +1845,16 @@ class CdpPage(Page):
                 "const announced = !!e && e.getAttribute('aria-expanded') !== 'true' && "
                 "(!!e.getAttribute('aria-haspopup') || e.getAttribute('aria-expanded') === 'false' || "
                 "!!e.getAttribute('aria-controls') || !!e.getAttribute('aria-owns')); "
-                "return [fingerprint, guard, point, announced]; })()",
+                # A link, area or submit that names a new browsing context opens a window whatever its handlers do.
+                "const fresh = name => { name = (name ?? '').trim(); return !!name && "
+                "!['_self', '_parent', '_top'].includes(name.toLowerCase()) && "
+                "![...e.ownerDocument.querySelectorAll('iframe,frame')].some(f => f.name === name); }; "
+                "const link = e?.closest('a[href],area[href]'); "
+                "const opens = !!e && ((!!link && fresh(link.hasAttribute('target') ? link.getAttribute('target') "
+                ": e.ownerDocument.querySelector('base[target]')?.getAttribute('target'))) || "
+                "(!!e.form && ['submit', 'image'].includes(e.type) && "
+                "fresh(e.getAttribute('formtarget') ?? e.form.getAttribute('target')))); "
+                "return [fingerprint, guard, point, announced, opens]; })()",
             )
             return _TARGET_STATE.validate_python(result)
 
@@ -1851,8 +1863,8 @@ class CdpPage(Page):
         fingerprint_task = asyncio.create_task(self._fingerprint())
         target_task = asyncio.create_task(target_state())
         try:
-            fingerprint, (_, live_guard, point, announced) = await asyncio.gather(fingerprint_task, target_task)
-            return fingerprint, live_guard, point, announced
+            fingerprint, (_, live_guard, point, announced, opens) = await asyncio.gather(fingerprint_task, target_task)
+            return fingerprint, live_guard, point, announced, opens
         finally:
             fingerprint_task.cancel()
             target_task.cancel()

@@ -35,8 +35,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   single missed command deadline used to end it `unavailable` as if the browser had gone. `unavailable` is kept for
   a browser that stops answering or a connection to it that closes during the run, which a closed connection now
   also reports. A connection that closes while the run shuts down still ends it as `error`, as before.
-- A link that opens a new tab is followed however long the browser takes to set that tab up. A fixed two
-  seconds was outlasted on a loaded machine, and the run went on reading the page that opened it.
+- A click that opens a new tab is followed even when the browser is slow to announce or set up that tab. A
+  tab announced after the page had settled was missed, as was one set up in over a fixed two seconds, and the run
+  went on reading the page that opened it. A click on a link or button that names a new window, or one the
+  browser reports opening a window, now waits up to five seconds for the tab to be announced, and then for its
+  setup however long it takes; a click that opens nothing does not wait. A tab whose opener the browser names only
+  after creating it is followed too.
 - Each observation and each click, fill or hover makes fewer round trips to the browser, which a cloud
   browser pays for on every step. The world the HTTP status is read in is kept per document instead of made
   again each time, and the pointer moves without waiting a second time for a frame already drawn.
