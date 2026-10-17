@@ -11,6 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Benchmark figures measured under a deliberately changed protocol, such as the uncapped runs, can now be
+  published: the maintainer approves the change explicitly, the changed groups start a fresh baseline that is
+  never compared with figures measured under the old protocol, and the figures they replace stay published
+  under their campaign's name.
+
 ## [0.5.22] - 2026-10-16
 
 - Runs that had found and cited the right answer no longer end `stuck` or `unverified` under a "Partial evidence
