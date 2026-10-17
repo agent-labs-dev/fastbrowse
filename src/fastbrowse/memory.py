@@ -27,6 +27,38 @@ class Tally(Frozen):
         return len(set(self.records))
 
 
+class CountedGroup(Frozen):
+    rank: int
+    group: str
+    count: int
+    complete: bool
+
+
+class Standing(Frozen):
+    rank: int
+    """1 plus the number of groups counted for the same requirement with a higher count; equal counts tie."""
+    tied: int
+    """How many other groups share this count, shown or not."""
+    groups: tuple[CountedGroup, ...]
+    """The leading groups and those around this one, highest first; ranks between them are left out."""
+    group_count: int
+    complete: bool
+    """Whether every group counted for the requirement is complete, not only the groups shown."""
+
+
+# A standing shows the leading groups and a few either side of the cited one. Listing every group above a
+# low-ranked one put hundreds of labels into each audit question, past the LLM's and Jev's input budgets.
+_LEADING_GROUPS = 3
+_NEIGHBOUR_GROUPS = 2
+_GROUP_LABEL_CHARS = 160
+
+
+class CollectionRead(Frozen):
+    url: str
+    capture_sha256: str
+    """Which state of the address was read: a list that loads more or pages in place keeps its URL."""
+
+
 class Comparison(Frozen):
     requirement_id: str
     records: tuple[str, ...]
@@ -117,6 +149,7 @@ class Notes:
         self._tally_records: set[str] = set()
         self._record_ids: dict[tuple[str, str, str], list[dict[str, str]]] = {}
         self._continuation_records: dict[str, set[str]] = {}
+        self._collection_pages: dict[str, dict[CollectionRead, None]] = {}
         self._pages: dict[tuple[str, str, datetime], CapturedPage] = {}
         for fact in facts:
             self.add(fact)
@@ -215,6 +248,60 @@ class Notes:
     def add_continuation(self, requirement_id: str, record_id: str) -> None:
         self._continuation_records.setdefault(requirement_id, set()).add(record_id)
 
+    def add_collection_page(self, requirement_id: str, url: str, capture_sha256: str) -> None:
+        # Keyed by what was read, not where: Load more and in-place paging show new rows at one address, and keying
+        # by URL folded every later state into the first, so a state with no match left no trace of being read.
+        read = CollectionRead(url=url, capture_sha256=capture_sha256)
+        self._collection_pages.setdefault(requirement_id, {})[read] = None
+
+    def collection_pages(self, requirement_id: str) -> tuple[CollectionRead, ...]:
+        """Every read of a list that went on past one page, in reading order, matching records or not.
+
+        A page with no matching record leaves no quote, so an audit that judged coverage from the cited records alone
+        took that page for unread and refused a comparison code had closed over every page of the list."""
+        return tuple(self._collection_pages.get(requirement_id, ()))
+
+    def standing(self, tally: Tally) -> Standing | None:
+        """Where a counted group ranks among every group counted for its requirement; None for a lone group.
+
+        A rank is decided by every other group's count. A ranking claim that cites only its own group's tally shows
+        the audit that group's records and nothing they beat, and citing every group's records instead can overflow
+        the audit's budget.
+        Each count here is code's, over records add_tally checked were captured spans."""
+        tallies = sorted(
+            (
+                (fact.tally, fact.tally.requirement_id in self._requirements.get(key, ()))
+                for key, fact in self._facts.items()
+                if fact.tally is not None and fact.tally.requirement_id == tally.requirement_id
+            ),
+            key=lambda item: (-item[0].count, item[0].key),
+        )
+        if len(tallies) < 2:
+            return None
+        position = next(index for index, (counted, _) in enumerate(tallies) if counted.key == tally.key)
+        shown = sorted(
+            {*range(min(_LEADING_GROUPS, len(tallies)))}
+            | {*range(max(0, position - _NEIGHBOUR_GROUPS), min(len(tallies), position + _NEIGHBOUR_GROUPS + 1))}
+        )
+        return Standing(
+            rank=1 + sum(counted.count > tally.count for counted, _ in tallies),
+            tied=sum(counted.count == tally.count for counted, _ in tallies) - 1,
+            groups=tuple(
+                CountedGroup(
+                    rank=1 + sum(other.count > tallies[index][0].count for other, _ in tallies),
+                    # Only the cited group's label is its claim's subject; a long neighbour's label is context.
+                    group=tallies[index][0].key
+                    if index == position or len(tallies[index][0].key) <= _GROUP_LABEL_CHARS
+                    else tallies[index][0].key[: _GROUP_LABEL_CHARS - 3] + "...",
+                    count=tallies[index][0].count,
+                    complete=tallies[index][1],
+                )
+                for index in shown
+            ),
+            group_count=len(tallies),
+            complete=all(complete for _, complete in tallies),
+        )
+
     def comparison_records(self, requirement_id: str | None = None) -> tuple[str, ...]:
         records = (
             set().union(*self._continuation_records.values())
@@ -306,6 +393,9 @@ class Notes:
         scoped._tally_records = self._tally_records & kept
         scoped._continuation_records = {
             requirement: records & kept for requirement, records in self._continuation_records.items()
+        }
+        scoped._collection_pages = {
+            requirement: dict(pages) for requirement, pages in self._collection_pages.items() if requirement in wanted
         }
         scoped._record_ids = {
             identity: [dict(occurrence) for occurrence in occurrences]
@@ -525,11 +615,13 @@ class Notes:
                     f"requirements={','.join(sorted(self._requirements[key])) or '-'} "
                     f"tally_for={fact.tally.requirement_id}{basis_text(fact)} urls={json.dumps(urls)}"
                 )
+            # A note's bracketed id is the only handle a model may cite. Its page block id beside it was a second
+            # one: a composer or field reader could cite it and lose the claim, and a reader could take an earlier
+            # page's "s3" for the live block [s3] of the page it is reading.
             source = (
                 "derived"
                 if fact.evidence is None
-                else f"source={json.dumps(fact.evidence.source_id)} "
-                + ("" if shared_url else f"url={json.dumps(fact.evidence.url)} ")
+                else ("" if shared_url else f"url={json.dumps(fact.evidence.url)} ")
                 + f"quote={json.dumps(fact.evidence.quote, ensure_ascii=False)}"
             )
             if fact.evidence is not None and fact.evidence.control_context is not None:
