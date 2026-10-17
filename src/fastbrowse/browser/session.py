@@ -218,7 +218,12 @@ class _BrowserClient(CDPClient):
             except TimeoutError:
                 # The browser can go during the last wait, after the probe before it answered, so it is asked once
                 # more: only a browser that is still there makes this the page's failure rather than an outage.
-                if not reply.done() and not await self._alive():
+                alive = reply.done() or await self._alive()
+                if reply.done() and not reply.cancelled():
+                    # The page answered while the browser was being asked: the command is done, however late.
+                    self._answered = True
+                    return reply.result()
+                if not alive:
                     raise BrowserUnresponsive(f"{method} got no reply, and the browser stopped answering") from None
                 self._deadlines += 1
                 raise PageUnresponsive(

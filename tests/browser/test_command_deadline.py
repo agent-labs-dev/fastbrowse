@@ -62,3 +62,16 @@ async def test_a_browser_gone_by_the_command_deadline_is_an_outage(monkeypatch: 
             await session.client.send_raw("Runtime.evaluate", {"expression": "1"}, session_id="session")
         await gone
     assert isinstance(raised.value, Unavailable)
+
+
+async def test_a_reply_that_lands_during_the_deadline_probe_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = CdpTransport(monkeypatch)
+    monkeypatch.setattr(browser_session, "CDP_REPLY_SECONDS", 0.2)
+    monkeypatch.setattr(browser_session, "CDP_COMMAND_SECONDS", 0.3, raising=False)
+    monkeypatch.setattr(browser_session, "CDP_ALIVE_SECONDS", 0.3)
+    async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
+        # The probe at the deadline waits on a browser slow to answer, and the page's reply lands meanwhile.
+        transport.blocked["Browser.getVersion"] = asyncio.Event()
+        transport.delays["Runtime.evaluate"] = 0.4
+        reply = await session.client.send_raw("Runtime.evaluate", {"expression": "1"}, session_id="session")
+    assert reply == {"result": {"value": "loading"}}
