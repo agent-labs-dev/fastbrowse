@@ -19,7 +19,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   responding, such as a stuck advertisement, is read as unreadable after five seconds instead of holding every
   observation for the two-minute command deadline, and a tab that stops drawing frames no longer makes each wait
   for the page to settle run to that deadline. A tab whose commands miss the deadline twice now ends the run as
-  `unavailable` instead of paying it again on every step: one benchmark login spent 26 minutes that way.
+  `error` instead of paying it again on every step: one benchmark login spent 26 minutes that way.
+- A page that stops answering while the browser still does now ends the run as `error`, its own failure, where a
+  single missed command deadline used to end it `unavailable` as if the browser had gone. `unavailable` is kept for
+  a browser that stops answering or a connection to it that closes, which a closed connection now also reports.
 - A link that opens a new tab is followed however long the browser takes to set that tab up. A fixed two
   seconds was outlasted on a loaded machine, and the run went on reading the page that opened it.
 - Each observation and each click, fill or hover makes fewer round trips to the browser, which a cloud

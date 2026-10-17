@@ -6,6 +6,7 @@ import pytest
 
 from fastbrowse.browser import BrowserSession
 from fastbrowse.browser import session as browser_session
+from fastbrowse.models import Unavailable
 from tests.browser.conftest import RecordingArtifactSink
 from tests.browser.test_lifecycle import CONNECTION, CdpTransport
 
@@ -17,8 +18,10 @@ async def test_unanswered_command_from_live_browser_has_a_deadline(monkeypatch: 
     async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
         transport.blocked["Runtime.evaluate"] = asyncio.Event()
         async with asyncio.timeout(1):
-            with pytest.raises(browser_session.BrowserUnresponsive, match="command deadline"):
+            with pytest.raises(browser_session.PageUnresponsive, match="command deadline") as raised:
                 await session.client.send_raw("Runtime.evaluate", {"expression": "aPromiseThatNeverSettles()"})
+    # The browser answered throughout, so the page stopping is the run's failure, never an outage.
+    assert not isinstance(raised.value, Unavailable)
     assert "Browser.getVersion" in transport.calls
     assert "Runtime.evaluate" in transport.finished
 
@@ -29,12 +32,12 @@ async def test_repeated_command_deadlines_stop_the_tab_instead_of_recurring(monk
     monkeypatch.setattr(browser_session, "CDP_COMMAND_SECONDS", 0.05, raising=False)
     async with BrowserSession(CONNECTION, RecordingArtifactSink()) as session:
         transport.blocked["Runtime.evaluate"] = asyncio.Event()
-        for _ in range(browser_session.CDP_DEADLINES_BEFORE_OUTAGE):
-            with pytest.raises(browser_session.BrowserUnresponsive, match="command deadline"):
+        for _ in range(browser_session.CDP_DEADLINES_BEFORE_STOP):
+            with pytest.raises(browser_session.PageUnresponsive, match="command deadline"):
                 await session.client.send_raw("Runtime.evaluate", {"expression": "1"}, session_id="session")
         sent = len(transport.calls)
         async with asyncio.timeout(0.02):
-            with pytest.raises(browser_session.BrowserUnresponsive, match="already exceeded"):
+            with pytest.raises(browser_session.PageUnresponsive, match="already exceeded"):
                 await session.client.send_raw("Runtime.evaluate", {"expression": "1"}, session_id="session")
         assert len(transport.calls) == sent, "a tab command after repeated deadlines is not sent to wait again"
         # Closing the run's tabs is still possible.

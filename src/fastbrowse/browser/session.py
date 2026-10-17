@@ -53,15 +53,21 @@ CDP_COMMAND_SECONDS = 120.0
 """A responsive browser can still leave one document command pending forever."""
 CDP_ALIVE_SECONDS = 10.0
 """`Browser.getVersion` is answered at once by any browser that is there."""
-CDP_DEADLINES_BEFORE_OUTAGE = 2
-"""Command deadlines one connection may meet before its tab's commands fail at once. A read that waits out the
-deadline is often one whose caller treats a failed read as an unreadable page and carries on, so the next read waited
-it out again: one login run met it thirteen times, 26 minutes on a page it could not use. Browser-level commands
-(closing the run's tabs) are still sent."""
+CDP_DEADLINES_BEFORE_STOP = 2
+"""Command deadlines one connection may meet before its tab's commands fail at once, as `PageUnresponsive`. A read
+that waits out the deadline is often one whose caller treats a failed read as an unreadable page and carries on, so the
+next read waited it out again: one login run met it thirteen times, 26 minutes on a page it could not use.
+Browser-level commands (closing the run's tabs) are still sent."""
 
 
 class BrowserUnresponsive(BrowserError, Unavailable):
     """The browser stopped answering: an outage the same run may not meet again, not a failed task."""
+
+
+class PageUnresponsive(BrowserError):
+    """A tab that stopped answering while the browser behind it still answers: a failure driving the page, which ends
+    the run as its own error. It is not an outage, since the connection and the browser are both there; reporting it
+    as one would leave the run's own failures out of what it is measured on."""
 
 
 class OriginNotAllowed(BrowserError):
@@ -133,6 +139,9 @@ _SERVER_ERROR = -32000
 
 def _browser_error(method: str, cause: Exception) -> BrowserError:
     detail = type(cause).__name__
+    if isinstance(cause, (ConnectionClosed, ConnectionError)):
+        # The connection to the browser is gone: an outage, not the run's failure.
+        return BrowserUnresponsive(f"{method} failed ({detail})")
     if cause.args and isinstance(cause.args[0], dict):
         code = cast("dict[str, object]", cause.args[0]).get("code")
         if type(code) is int:
@@ -182,9 +191,10 @@ class _BrowserClient(CDPClient):
     """Commands on this connection that outlived CDP_COMMAND_SECONDS."""
 
     async def send_raw(self, method: str, params: Any = None, session_id: str | None = None) -> dict[str, Any]:
-        if session_id is not None and self._deadlines >= CDP_DEADLINES_BEFORE_OUTAGE:
-            raise BrowserUnresponsive(
-                f"{method} not sent: {self._deadlines} page commands already exceeded their deadline"
+        if session_id is not None and self._deadlines >= CDP_DEADLINES_BEFORE_STOP:
+            raise PageUnresponsive(
+                f"{method} not sent: the page stopped answering, {self._deadlines} commands already exceeded their "
+                "deadline while the browser answered"
             )
         reply = asyncio.ensure_future(super().send_raw(method, params, session_id))
         try:
@@ -206,8 +216,11 @@ class _BrowserClient(CDPClient):
                     return reply.result()
             except TimeoutError:
                 self._deadlines += 1
-                raise BrowserUnresponsive(f"{method} exceeded its command deadline; the page did not answer") from None
-        except BrowserUnresponsive:
+                # The liveness probe answered throughout, so the browser is there and only this page is not.
+                raise PageUnresponsive(
+                    f"{method} exceeded its command deadline; the page did not answer while the browser did"
+                ) from None
+        except (BrowserUnresponsive, PageUnresponsive):
             raise
         except Exception as exc:
             # CDP error messages can contain evaluated source or page text, including secrets.
