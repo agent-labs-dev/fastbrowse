@@ -370,7 +370,9 @@ def test_a_protocol_change_skips_only_the_changed_groups(candidate):
         Candidate.model_validate(changed), base, _bytes(candidate), "Uncapped protocol (#356)", None
     )
     assert [g.id for g in record.groups] == ["internal-hosted"]
-    assert record.archived_figures == "docs/results/benchmarks.test-campaign.504db8b381e7dc26.json"
+    digest = hashlib.sha256(_bytes(candidate)).hexdigest()[:16]
+    assert record.archived_figures == f"docs/results/benchmarks.test-campaign.{digest}.json"
+    assert record.archived_approval == f"docs/results/benchmark-approval.test-campaign.{digest}.json"
     regressions(Candidate.model_validate(changed), base, changed={"internal-hosted"})
     # internal-ultrafast kept its protocol, so it is still compared with its published figures.
     task = changed["groups"][1]["task_ids"][0]
@@ -444,8 +446,8 @@ def test_install_archives_the_superseded_figures(candidate, tmp_path, monkeypatc
     approval = tmp_path / "benchmark-approval.json"
     approval.write_text(json.dumps(_approval(new, record)))
     install(staged, approval)
-    assert (results / "benchmarks.test-campaign.504db8b381e7dc26.json").read_bytes() == old
-    assert (results / "benchmark-approval.test-campaign.504db8b381e7dc26.json").read_bytes() == old_approval
+    assert Path(record.archived_figures).read_bytes() == old
+    assert Path(record.archived_approval).read_bytes() == old_approval
     assert (results / "benchmarks.json").read_bytes() == new
     assert (results / "benchmark-approval.json").read_bytes() == approval.read_bytes()
     with pytest.raises(ValueError, match="not the ones this protocol change supersedes"):
@@ -531,13 +533,13 @@ def test_check_diff_publishes_an_approved_protocol_change_and_keeps_the_archive(
 def test_check_diff_refuses_a_rewritten_archive(candidate, tmp_path, monkeypatch):
     from fastbrowse.evals.benchmarks import check_diff
 
-    archived = {"docs/results/benchmarks.release-0.5.20.c8e3876d5a2959fe.json": _bytes(candidate)}
-    _repository(tmp_path, monkeypatch, archived)
+    path = f"docs/results/benchmarks.release-0.5.20.{hashlib.sha256(_bytes(candidate)).hexdigest()[:16]}.json"
+    _repository(tmp_path, monkeypatch, {path: _bytes(candidate)})
     check_diff("base", Path("catalog.json"))
-    (tmp_path / "docs/results/benchmarks.release-0.5.20.c8e3876d5a2959fe.json").write_text("{}")
+    (tmp_path / path).write_text("{}")
     with pytest.raises(ValueError, match="archived benchmark figures cannot change"):
         check_diff("base", Path("catalog.json"))
-    (tmp_path / "docs/results/benchmarks.release-0.5.20.c8e3876d5a2959fe.json").unlink()
+    (tmp_path / path).unlink()
     with pytest.raises(ValueError, match="archived benchmark figures cannot change"):
         check_diff("base", Path("catalog.json"))
 
@@ -771,12 +773,13 @@ def test_check_diff_refuses_a_receipt_edited_after_the_owner_run(candidate, tmp_
 
 
 def test_every_valid_campaign_id_names_one_bounded_archive(candidate, tmp_path, monkeypatch):
-    """A readable prefix of at most 64 characters and a digest of the whole id: under the 255-byte name limit for
+    """A readable prefix of at most 64 characters and a digest of the figures: under the 255-byte name limit for
     any valid id, and distinct for ids that share a prefix. The record keeps the exact paths it archived to."""
     from fastbrowse.evals.benchmarks import ProtocolChange, archive_paths, check_diff, install, protocol_change
 
     def paths(name: str) -> tuple[Path, Path]:
-        return archive_paths(Candidate.model_validate({**candidate, "campaign_id": name}))
+        figures = {**candidate, "campaign_id": name}
+        return archive_paths(Candidate.model_validate(figures), _bytes(figures))
 
     colons = ":" * 160
     for path in paths(colons):
@@ -856,7 +859,7 @@ def test_check_diff_admits_only_the_archive_pair_an_approved_change_names(candid
         {"docs/results/benchmarks.json": old, "docs/results/benchmark-approval.json": old_approval},
     )
     (tmp_path / "docs/results/benchmark-candidate.json").write_bytes(old)  # the reviewed bytes of the base figures
-    stray = tmp_path / "docs/results/benchmarks.unreferenced.0000000000000000.json"
+    stray = tmp_path / f"docs/results/benchmarks.unreferenced.{hashlib.sha256(old).hexdigest()[:16]}.json"
     stray.write_bytes(old)
     with pytest.raises(ValueError, match="not the archive of an approved protocol change"):
         check_diff("base", Path("catalog.json"))
@@ -874,4 +877,46 @@ def test_check_diff_admits_only_the_archive_pair_an_approved_change_names(candid
 
     Path(record.archived_approval).write_bytes(b"{}")
     with pytest.raises(ValueError, match="stay published unchanged"):
+        check_diff("base", Path("catalog.json"))
+
+
+def test_a_reused_campaign_id_with_other_figures_archives_beside_the_first(candidate, tmp_path, monkeypatch):
+    """Names follow the figures, not the campaign id: a second publication under the same id archives to its own
+    path, and an archive whose name does not match its content is refused."""
+    from fastbrowse.evals.benchmarks import archive_paths, check_diff, install, protocol_change
+
+    first = _bytes(candidate)
+    rerun = copy.deepcopy(candidate)
+    rerun["groups"][0]["rows"][0]["seconds"] = 11.0
+    second = _bytes(rerun)
+    assert archive_paths(Candidate.model_validate(candidate), first) != archive_paths(
+        Candidate.model_validate(rerun), second
+    )
+
+    # The first figures were already archived under this campaign id; superseding the rerun leaves them untouched.
+    earlier = archive_paths(Candidate.model_validate(candidate), first)
+    approval = json.dumps(_approval(second)).encode()
+    base = {
+        "docs/results/benchmarks.json": second,
+        "docs/results/benchmark-approval.json": approval,
+        str(earlier[0]): first,
+        str(earlier[1]): b'{"approval": "first"}\n',
+    }
+    _repository(tmp_path, monkeypatch, base)
+    record = protocol_change(
+        Candidate.model_validate(_changed(candidate)), Candidate.model_validate(rerun), second, "Note", None
+    )
+    assert record.archived_figures != str(earlier[0])
+    new = _bytes(_changed(candidate))
+    staged = tmp_path / "docs/results/benchmark-candidate.json"
+    staged.write_bytes(new)
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(json.dumps(_approval(new, record)))
+    install(staged, receipt)
+    assert Path(earlier[0]).read_bytes() == first and Path(record.archived_figures).read_bytes() == second
+    check_diff("base", Path("catalog.json"))
+
+    misnamed = tmp_path / f"docs/results/benchmarks.test-campaign.{'0' * 16}.json"
+    misnamed.write_bytes(first)
+    with pytest.raises(ValueError, match="not named by the digest"):
         check_diff("base", Path("catalog.json"))

@@ -65,8 +65,9 @@ cannot be compared with their published figures and are published as a fresh bas
 4. `--install` archives the superseded figures as `docs/results/benchmarks.<campaign>.json` and their
    approval as `docs/results/benchmark-approval.<campaign>.json` before putting the new figures in place.
    `<campaign>` is the measuring campaign's id, kept to 64 filename-safe characters, then the first 16 hex
-   characters of the full id's SHA256, such as `release-0.5.20-3c40e6e.c9230345698e274a`. Follow the paths the
-   record stores rather than rebuilding them. The record links both, so each approval leads to the figures
+   characters of the superseded figures' own SHA256, so a reused campaign id with other figures gets its own
+   name and CI can check each archived file against its name. Follow the paths the record stores rather than
+   rebuilding them. The record links both, so each approval leads to the figures
    it replaced.
 
 CI accepts changed published figures only when their approval's record names exactly the groups whose protocol

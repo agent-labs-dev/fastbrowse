@@ -138,7 +138,8 @@ class Candidate(PublicModel):
 
 
 ARCHIVE_NAME = r"[A-Za-z0-9._+-]{1,64}\.[0-9a-f]{16}"
-"""A campaign's archive name: a readable prefix of its id and a digest of the whole id, at most 81 characters."""
+"""An archive name: a readable prefix of the campaign id and 16 hex of the archived figures' SHA256, at most 81
+characters."""
 ARCHIVE_FIGURES = rf"^docs/results/benchmarks\.{ARCHIVE_NAME}\.json$"
 ARCHIVE_APPROVAL = rf"^docs/results/benchmark-approval\.{ARCHIVE_NAME}\.json$"
 
@@ -284,13 +285,13 @@ def changed_protocols(candidate: Candidate, baseline: Candidate) -> list[GroupPr
     ]
 
 
-def archive_paths(baseline: Candidate) -> tuple[Path, Path]:
-    """Where superseded figures and their approval stay published, named by the campaign that measured them."""
-    # Bounded whatever the id: a sanitized prefix to read and the id's digest to tell ids apart. The record keeps the
-    # exact paths, so a reader follows them rather than recomputing names.
-    campaign = baseline.campaign_id
-    prefix = re.sub(r"[^A-Za-z0-9._+-]", "-", campaign)[:64]
-    name = f"{prefix}.{hashlib.sha256(campaign.encode()).hexdigest()[:16]}"
+def archive_paths(baseline: Candidate, figures: bytes) -> tuple[Path, Path]:
+    """Where superseded figures and their approval stay published: the measuring campaign's id, sanitized and cut
+    to 64 characters to stay readable, then the first 16 hex of the figures' own SHA256. The name is bounded whatever
+    the id, a reused id with other figures gets another name, and the name can be checked against the content. The
+    record keeps the exact paths, so a reader follows them rather than recomputing names."""
+    prefix = re.sub(r"[^A-Za-z0-9._+-]", "-", baseline.campaign_id)[:64]
+    name = f"{prefix}.{hashlib.sha256(figures).hexdigest()[:16]}"
     return RESULTS / f"benchmarks.{name}.json", RESULTS / f"benchmark-approval.{name}.json"
 
 
@@ -305,7 +306,7 @@ def protocol_change(
     groups = [g for g in changed_protocols(candidate, baseline) if g.id in unapproved]
     if not groups:
         raise ValueError("no published group changed protocol; publish without a protocol change")
-    figures, approval = archive_paths(baseline)
+    figures, approval = archive_paths(baseline, baseline_bytes)
     return ProtocolChange(
         note=note,
         previous_candidate_sha256=hashlib.sha256(baseline_bytes).hexdigest(),
@@ -481,6 +482,11 @@ def check_archives(base: str, added: set[str]) -> None:
         path = RESULTS / name
         if not path.exists() or path.read_bytes() != git_file(base, str(path)):
             raise ValueError(f"archived benchmark figures cannot change or disappear: {path}")
+    for path in sorted(RESULTS.glob("benchmarks.*.json")):
+        if ARCHIVE.fullmatch(path.name) and not path.name.endswith(
+            f".{hashlib.sha256(path.read_bytes()).hexdigest()[:16]}.json"
+        ):
+            raise ValueError(f"{path} is not named by the digest of the figures it holds")
     for path in sorted(RESULTS.glob("benchmark*.json")):
         if ARCHIVE.fullmatch(path.name) and path.name not in archived and str(path) not in added:
             raise ValueError(f"{path} is not the archive of an approved protocol change")
