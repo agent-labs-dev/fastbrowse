@@ -34,10 +34,12 @@ class NumericComparison(Frozen):
 
 
 def complete_comparison(notes: Notes, requirement_id: str, comparison: NumericComparison) -> bool:
-    records = notes.comparison_records(requirement_id)
+    # Only quotes the requirement may still rest on: a held guessed row, or the whole notes taken as context with
+    # it, left a rebuilt ranking refused for good.
+    known = notes.usable_evidence(requirement_id)
+    records = tuple(key for key in notes.comparison_records(requirement_id) if not notes.held(requirement_id, key))
     if not records:
         return False
-    known = notes.evidence
     rows: list[tuple[Decimal, str, str]] = []
     units: set[str] = set()
     for key in records:

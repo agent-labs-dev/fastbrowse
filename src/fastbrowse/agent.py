@@ -3973,7 +3973,7 @@ class Agent:
     async def _transaction_evidence_ids(self, state: _RunState) -> tuple[str, ...]:
         if not state.authorization.irreversible_actions or not state.transaction_candidates:
             return ()
-        evidence = state.notes.evidence
+        evidence = state.notes.usable_evidence()
         urls = {item.url for item in evidence.values()}
         pending = {
             f"irreversible_{index}": candidate

@@ -147,15 +147,32 @@ class Notes:
     def evidence(self) -> dict[str, Evidence]:
         return {key: fact.evidence for key, fact in self._facts.items() if fact.evidence is not None}
 
+    def usable_evidence(self, requirement_id: str | None = None) -> dict[str, Evidence]:
+        """The quotes anything may build on: current, and not a reading held for the requirement (for any, if None).
+
+        Every constructor that gathers quotes it was not handed, such as a comparison taking the whole notes as its
+        proof, starts here. One that took `evidence` instead swept a held guessed reading into a legitimate rebuilt
+        ranking, and the ranking was refused for resting on it every time.
+        """
+        held = (
+            {key for key in self._facts if self.held(requirement_id, key)}
+            if requirement_id is not None
+            else {key for requirement in self._discredited for key in self._facts if self.held(requirement, key)}
+        )
+        return {
+            key: fact.evidence
+            for key, fact in self._facts.items()
+            if fact.evidence is not None and self.current(key) and key not in held
+        }
+
     def current_evidence(self, capture: Capture | None = None) -> dict[str, Evidence]:
-        """The evidence a later read has not superseded, and a quote the given capture still shows on its address.
+        """The usable evidence a later read has not superseded, and a quote the given capture still shows there.
 
         A superseded fact stays as context but is not a current value, so offering it would let the extraction
-        copy a price the final page corrected; a quote from another page still stands.
+        copy a price the final page corrected; a quote from another page still stands. A held reading is not
+        offered either: readers, extraction and the answer would only build on it again.
         """
-        current = {
-            key: fact.evidence for key, fact in self._facts.items() if fact.evidence is not None and self.current(key)
-        }
+        current = self.usable_evidence()
         if capture is None:
             return current
         return {
@@ -212,7 +229,7 @@ class Notes:
         # A recount on the right page keeps the tally's key, so carrying the refused page's records into it would
         # leave the count resting on them and refused again on every finish.
         carried = tuple(
-            record for record in (previous.basis if previous else ()) if not self._held(tally.requirement_id, record)
+            record for record in (previous.basis if previous else ()) if not self.held(tally.requirement_id, record)
         )
         records = list(dict.fromkeys((*carried, *records)))
         tally = tally.model_copy(update={"records": tuple(records)})
@@ -261,9 +278,19 @@ class Notes:
         """
         if not self._discredited.get(requirement_id):
             return False
-        return any(self._held(requirement_id, source) for source in {key, *self.expand_evidence_ids(basis)})
+        return any(self.held(requirement_id, source) for source in {key, *self.expand_evidence_ids(basis)})
 
-    def _held(self, requirement_id: str, key: str) -> bool:
+    def refused(self, key: str) -> bool:
+        """Whether a fact answers nothing and is, or concludes from, a held reading: context the run may see while
+        choosing what to do, never something to cite. Offered to the composer, a held fare was cited in an answer
+        whose requirement it could no longer evidence."""
+        if not self._discredited or self._requirements.get(key):
+            return False
+        fact = self._facts.get(key)
+        basis = fact.basis if fact is not None else ()
+        return any(self._rests_on_discredited(requirement, key, basis) for requirement in self._discredited)
+
+    def held(self, requirement_id: str, key: str) -> bool:
         """Whether a reading the requirement was refused on is still a reading taken only on the guess.
 
         Held by its fact id alone, a reading never came back: a page that keeps its search outside the address,
@@ -632,7 +659,12 @@ class Notes:
             # A JSON state escapes quotes and newlines; its notes budget must count those extra characters.
             return len(json.dumps(text)) - len('""') if json_encoded else len(text)
 
-        visible = {key: fact for key, fact in self._facts.items() if key not in summarized or self._requirements[key]}
+        # A refused fact is never offered to cite, whatever reads these notes: a reader, the composer, a verdict.
+        visible = {
+            key: fact
+            for key, fact in self._facts.items()
+            if (key not in summarized or self._requirements[key]) and not self.refused(key)
+        }
         # Counts are ranked in code; the reader need only select the output the task asked for.
         ranked = sorted(
             visible.items(),
@@ -669,7 +701,7 @@ class Notes:
 
         complete = render(ranked)
         if size(complete) <= max_chars:
-            return RenderedNotes(text=complete, evidence_ids=tuple(self._facts))
+            return RenderedNotes(text=complete, evidence_ids=tuple(key for key in self._facts if not self.refused(key)))
         required = set(self.expand_evidence_ids(key for key, ids in self._requirements.items() if ids))
         ordered = sorted(ranked, key=lambda item: item[0] not in required)
         keys = tuple(key for key, _ in ordered)

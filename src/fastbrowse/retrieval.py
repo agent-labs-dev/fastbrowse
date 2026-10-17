@@ -1385,7 +1385,9 @@ async def read(
             )
         except ValueError as error:
             raise NotesTooLarge(f"The {room} character reader notes budget cannot report omitted evidence") from error
-        if require_all_evidence and {fact_id(fact) for fact in so_far.facts} - set(offered.evidence_ids):
+        # A refused fact is withheld from every prompt by design, so it is not a record this budget lost.
+        offerable = {key for key in (fact_id(fact) for fact in so_far.facts) if not so_far.refused(key)}
+        if require_all_evidence and offerable - set(offered.evidence_ids):
             raise NotesTooLarge("The final page cannot fit every earlier record in its collected evidence")
         messages[-1] = _read_message(capture, part, question, requirement_ids, offered.text)
         if records_only:

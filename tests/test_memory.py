@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import pytest
@@ -698,3 +699,66 @@ def test_a_refusal_holds_only_the_quotes_read_on_the_guess() -> None:
     notes.add(concluded)
     notes.add(mixed)
     assert {key for key, _ in notes.supporting("r1")} == {fact_id(on_right), fact_id(concluded)}
+
+
+_GUESSED, _OWN = "https://example.test/search?q=guess", "https://example.test/search?tfs=set"
+
+
+def _builds_quote(notes: Notes, key: str) -> bool:
+    notes.add(notes.facts[[fact_id(f) for f in notes.facts].index(key)].model_copy(update={"requirement_id": "r1"}))
+    return notes.evidenced("r1")
+
+
+def _builds_conclusion(notes: Notes, key: str) -> bool:
+    notes.add(Fact(requirement_id="r1", text="Cheapest", evidence=None, basis=(key,), reader=FactReader.LLM))
+    return notes.evidenced("r1")
+
+
+def _builds_tally(notes: Notes, key: str) -> bool:
+    notes.add_tally(Tally(requirement_id="r1", key="Fares", records=(key,)))
+    notes.complete_tallies("r1")
+    return notes.evidenced("r1")
+
+
+def _builds_comparison(notes: Notes, key: str) -> bool:
+    from fastbrowse.comparison import NumericComparison, QuotedField, complete_comparison
+
+    notes.add_continuation("r1", key)
+    ranking = NumericComparison(
+        order="lowest", limit=1, label=QuotedField(prefix="", suffix=": "), value=QuotedField(prefix=": ", suffix="")
+    )
+    return complete_comparison(notes, "r1", ranking) and notes.evidenced("r1")
+
+
+def _offers_values(notes: Notes, key: str) -> bool:
+    return key in notes.current_evidence() and key in notes.usable_evidence("r1")
+
+
+def _offers_to_cite(notes: Notes, key: str) -> bool:
+    # What a reader may draw on and the composer may cite: an answer once cited a held fare this way.
+    return key in notes.render_with_ids(10**6).evidence_ids
+
+
+@pytest.mark.parametrize(
+    "build",
+    [_builds_quote, _builds_conclusion, _builds_tally, _builds_comparison, _offers_values, _offers_to_cite],
+    ids=["quote", "conclusion", "tally", "comparison", "values-offered", "cited"],
+)
+def test_no_constructor_builds_on_a_held_reading_and_each_builds_on_a_legitimate_one(
+    build: Callable[[Notes, str], bool],
+) -> None:
+    """Every way a quote becomes evidence, a conclusion, a count, a ranking or an offer to a reader ignores a reading
+    held as refused off a guessed page, and builds on the run's own reading of the same kind. A ranking that took
+    the whole notes as its proof swept the held reading in and was refused for good."""
+
+    def refused() -> tuple[Notes, str, str]:
+        guessed = _quoted("BA: $320", "guess", _GUESSED)
+        own = _quoted("VS: $305", "own", _OWN).model_copy(update={"requirement_id": None})
+        notes = Notes((guessed, own))
+        notes.discredit(("r1",), lambda evidence: evidence.url == _GUESSED)
+        return notes, fact_id(guessed), fact_id(own)
+
+    notes, guessed, _ = refused()
+    assert build(notes, guessed) is False
+    notes, _, own = refused()
+    assert build(notes, own) is True
