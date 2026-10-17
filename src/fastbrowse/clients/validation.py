@@ -34,7 +34,7 @@ from fastbrowse.jev import (
     ScoreQuestion,
 )
 from fastbrowse.models import CostBasis, CostComponent, CostLine
-from fastbrowse.telemetry import Ledger, trace
+from fastbrowse.telemetry import Ledger, call_span, trace
 
 logger = logging.getLogger(__name__)
 
@@ -456,6 +456,23 @@ async def _send(
 
 
 async def post(
+    http: httpx.AsyncClient,
+    url: str,
+    api_key: str,
+    body: dict[str, JsonValue],
+    headers: Mapping[str, str] | None = None,
+    *,
+    usage: RequestUsage | None = None,
+    start_attempt: int = 0,
+    split_batch: bool = False,
+) -> httpx.Response:
+    with call_span("jev"):
+        return await _post(
+            http, url, api_key, body, headers, usage=usage, start_attempt=start_attempt, split_batch=split_batch
+        )
+
+
+async def _post(
     http: httpx.AsyncClient,
     url: str,
     api_key: str,

@@ -1,5 +1,6 @@
 """Spend and call accounting against `Limits`, checked before each call rather than discovered after."""
 
+import asyncio
 import logging
 from collections.abc import Generator, Iterable
 from contextlib import contextmanager
@@ -7,6 +8,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from decimal import Decimal
 from time import monotonic
+from typing import Literal
 
 from fastbrowse.models import BudgetStop, CostBreakdown, CostComponent, CostLine, Limits, Status
 
@@ -63,6 +65,14 @@ class Ledger:
             self.jev_calls += calls
         elif component is CostComponent.LLM:
             self.llm_calls += calls
+
+    @property
+    def capped(self) -> bool:
+        """Whether a dollar or call cap is set. A call is checked against the receipts recorded when it reserves,
+        so two calls sent side by side each pass before either records: under a cap, a call that waited on a
+        sibling's receipt must keep waiting, or the sibling's spend goes uncounted."""
+        limits = self.limits
+        return any(cap is not None for cap in (limits.max_dollars, limits.max_llm_calls, limits.max_jev_calls))
 
     def check(self, extra_dollars: float = 0.0) -> None:
         limits = self.limits
@@ -161,3 +171,26 @@ def transient_seconds(events: Iterable[object], began: float, ended: float) -> f
             total += end - start
             reach = end
     return total
+
+
+type CallOutcome = Literal["ok", "error", "cancelled"]
+
+
+@contextmanager
+def call_span(call: str, **fields: object) -> Generator[None]:
+    """Trace one model call's span on every exit, with how it ended.
+
+    Calls overlap, so summed seconds per kind of call cannot say which of them a run was waiting on; each span
+    can. A failed or cancelled call is billed too, and left out of the trace it made the time look free."""
+    began = monotonic()
+    outcome: CallOutcome = "ok"
+    try:
+        yield
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        raise
+    except BaseException:
+        outcome = "error"
+        raise
+    finally:
+        trace("call", call=call, **fields, began=began, ended=monotonic(), outcome=outcome)

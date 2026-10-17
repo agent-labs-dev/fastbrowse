@@ -67,7 +67,9 @@ async def test_identical_audit_reuses_positive_and_negative_verdicts_without_bil
         results.append((result, missing, corrections))
     assert results[0] == results[1]
     assert results[0][0] is (verdict == "yes")
-    assert len(writer.calls) == (3 if verdict == "yes" else 2)
+    # Identities, then the source and assertion audits side by side: a rejected source still bills the assertion
+    # audit it ran beside, once, and the second check bills neither.
+    assert len(writer.calls) == 3
     assert ledger.llm_calls == len(writer.calls)
     assert sum(line.component is CostComponent.LLM for line in ledger.lines) == len(writer.calls)
 
