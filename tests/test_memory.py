@@ -746,7 +746,7 @@ def _builds_recount(notes: Notes, key: str) -> bool:
 
 
 def _offers_values(notes: Notes, key: str) -> bool:
-    return key in notes.current_evidence() and key in notes.usable_evidence("r1")
+    return key in notes.current_evidence() and key in notes.usable_evidence()
 
 
 def _offers_to_cite(notes: Notes, key: str) -> bool:

@@ -904,3 +904,31 @@ async def test_a_control_repurposed_while_scrolled_clear_of_a_band_is_never_pres
         "window.adClicks]",
     )
     assert (keys, pressed, values, ad_clicks) == (0, None, ["", ""], 0)
+
+
+async def test_a_full_window_frame_over_the_control_is_reported_with_the_frames_own_controls(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, iframe_site: str
+) -> None:
+    """A full-window ad frame (an interstitial) covered a login form. Its close button lives in its own,
+    cross-origin document, so the report named no controls, and recovery closed another ad while this one stayed.
+    Nothing is pressed through a cover the size of the window; the frame's close control is named so it can be
+    closed, and its links are not, so recovery is never offered the ad itself."""
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    await eval_value(browser_session, session_id, _anchored_form(scrolls=False, band="div"))
+    assert (
+        await eval_value(
+            browser_session,
+            session_id,
+            "{ const shown = document.querySelector('ins'); shown.style.cssText += ';top:0;height:auto'; "
+            f'shown.innerHTML = \'<iframe aria-label=Advertisement src="{iframe_site}/interstitial.html" '
+            'style="width:100%;height:100%;border:0"></iframe>\'; } true',
+        )
+        is True
+    )
+    obs = await observe_until(page, "Close ad")
+    result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Login").id), obs)
+    assert result.outcome is StepOutcome.COVERED
+    detail = result.detail or ""
+    assert "Advertisement" in detail and "Close ad" in detail and "spring offer" not in detail
+    assert await eval_value(browser_session, session_id, "[window.pressed, window.submitted]") == [None, None]

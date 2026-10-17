@@ -4065,6 +4065,9 @@ class Agent:
                 {
                     "facts": sorted(_answer_evidence(state.notes), key=repr),
                     "sources": {key: source.model_dump(mode="json") for key, source in state.notes.evidence.items()},
+                    # A hold changes what may be cited without changing any source, and a check cached before it
+                    # passed an answer resting on the refused quote.
+                    "refused": state.notes.refused_ids(),
                 },
                 sort_keys=True,
             ).encode()
@@ -4488,6 +4491,7 @@ def _partition_proof(plan: Plan, notes: Notes, invented: Set[str]) -> str:
                     }
                 ),
                 "invented": sorted(url for url in invented if _place(url) in places),
+                "refused": notes.refused_ids(),
             },
             sort_keys=True,
         ).encode()

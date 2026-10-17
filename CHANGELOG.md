@@ -20,13 +20,16 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   the page cannot move it clear it is pressed or typed into from the keyboard; nothing in the band is ever clicked,
   and the control is checked unchanged before each key, as it is before each click. A run whose form's submit button
   sat under such a band could end `stuck`. A dialog, an open menu or popover, a cover over the whole window or a
-  panel drawn over the control in the page's flow is still reported as covering it.
+  panel drawn over the control in the page's flow is still reported as covering it. A frame from another site
+  covering the whole window, such as a full-screen ad, is now reported with its own close control, so the run can close
+  it as a person would; it was reported with none, and the run could only retry the covered control. The frame's
+  links are never named.
 - A run whose opening shortcut was refused as the wrong search can now finish from the search it sets up itself. On
   a site whose searches all share one path, the results a run reached through the form after leaving the shortcut
   were refused as the shortcut's page, and each read concluded the refused value again from its quotes, until the
   run stopped `stuck`. Whether a page is the run's own now follows the browser's history entry, not its address, and
-  only the readings taken on the shortcut are held: they can no longer answer a requirement refused for them, while
-  the requirement's other quotes still count, and so does the same page read again off the shortcut. A click on the
+  only the readings taken on the shortcut are held: they can no longer answer any requirement, while the
+  requirement's other quotes still count, and so does the same page read again off the shortcut. A click on the
   shortcut's page still keeps it a guess. The verifier judges a shortcut's page by what it shows rather than how it
   was reached, and an answer keeps the terms a value was quoted under, such as what it covers and the dates it
   applies to.

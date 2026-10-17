@@ -417,13 +417,24 @@ class _FrameObservation[T: _FrameText]:
         self.raw = raw
 
 
+# What a person reads as closing a cover rather than following it, judged by its label alone.
+_DISMISS = re.compile(r"\b(close|dismiss|skip|hide|no,? thanks|not now)\b|^\s*[x\u00d7\u2715\u2716]\s*$", re.IGNORECASE)
+
+
 class _ObservedState:
     """What `act` needs to re-find and freshness-check the exact control an `Observation` named."""
 
-    def __init__(self, page_key: str, controls: dict[str, tuple[str, str, int, list[object] | None]]) -> None:
+    def __init__(
+        self,
+        page_key: str,
+        controls: dict[str, tuple[str, str, int, list[object] | None]],
+        labels: dict[str, list[str]] | None = None,
+    ) -> None:
         self.page_key = page_key
         # control_id -> (session_id, frame_key, local_node_id, guard snapshot)
         self.controls = controls
+        # frame_key -> the labels of the controls observed in that frame, for naming what a covering frame offers
+        self.labels = labels or {}
 
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
@@ -555,9 +566,12 @@ class CdpPage(Page):
         kept = _capped(onscreen + offscreen, limits.max_controls)
         omitted += len(onscreen) + len(offscreen) - len(kept)
         control_state = {c.id: control_state[c.id] for c in kept}
+        labels: dict[str, list[str]] = {}
+        for c in kept:
+            labels.setdefault(control_state[c.id][1], []).append(c.label)
 
         page_key = _combine_page_keys([f.raw.page_key for f in frames.values()])
-        self._last = _ObservedState(page_key=page_key, controls=control_state)
+        self._last = _ObservedState(page_key=page_key, controls=control_state, labels=labels)
 
         title = main.raw.title if main else ""
         url = main.raw.url if main else await self._origin_once()
@@ -1023,11 +1037,50 @@ class CdpPage(Page):
                 "return JSON.stringify({role:cover.getAttribute('role') || cover.tagName.toLowerCase(), "
                 "label:cover.getAttribute('aria-label') || cover.getAttribute('title') || null, controls}); })()",
             )
+        # A frame drawn over the control keeps its controls in its own document, which a cross-origin frame does not
+        # share: a full-window ad was reported with no controls, so recovery closed another ad and stayed covered.
+        # Only a control that closes the frame is named; naming the rest offered recovery the ad's own links.
+        if detail:
+            # Best effort: naming the frame's controls helps recovery, and failing to must not lose the report.
+            with suppress(Exception):
+                inside = [label for label in await self._frame_controls(session_id, local_id) if _DISMISS.search(label)]
+                if inside:
+                    described = json.loads(str(detail))
+                    described["controls"] = list(dict.fromkeys([*described.get("controls", []), *inside]))[:8]
+                    detail = json.dumps(described)
         return (
             f"Target is covered by {detail}. Dismiss an observed obstruction before retrying."
             if detail
             else "Target is covered."
         )
+
+    async def _frame_controls(self, session_id: str, local_id: int) -> list[str]:
+        """The labels of the controls observed inside the frame drawn over the control's centre, if a frame is."""
+        out = await self._session.client.send.Runtime.evaluate(
+            params={
+                "expression": "(() => { const e = window.__fastbrowse?.nodes.get("
+                f"{local_id}); "
+                "if (!e) return null; const r = e.getBoundingClientRect(); "
+                "const hit = e.ownerDocument.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); "
+                "return hit?.tagName === 'IFRAME' || hit?.tagName === 'FRAME' ? hit : null; })()",
+                "returnByValue": False,
+            },
+            session_id=session_id,
+        )
+        handle = out["result"].get("objectId")
+        if handle is None:
+            return []
+        try:
+            node = await self._session.client.send.DOM.describeNode(params={"objectId": handle}, session_id=session_id)
+        finally:
+            with suppress(BrowserError):
+                await self._session.client.send.Runtime.releaseObject(
+                    params={"objectId": handle}, session_id=session_id
+                )
+        frame_id = node["node"].get("frameId")
+        if not frame_id or self._last is None:
+            return []
+        return [label for key in self._session.frame_family(frame_id) for label in self._last.labels.get(key, [])]
 
     async def _route_around(self, target: tuple[str, str, int, list[object] | None], *, scroll: bool = True) -> _Route:
         """Where a covered control can still be acted on without touching what covers it.

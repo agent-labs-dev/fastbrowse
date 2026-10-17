@@ -534,8 +534,8 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
         expanded = notes.expand_evidence_ids(claim.evidence_ids)
         if any(not notes.current(key) for key in expanded):
             return None
-        # Each claim's sources are judged for the requirements it answers: a quote held for one requirement and
-        # still answering another was left out for every claim, and a valid answer was refused as non-current.
+        # A refused quote is dropped from what the audit is shown, so a claim resting on it alone has no source and
+        # one resting on it beside a valid quote is judged against the valid quote only.
         known = notes.usable_citations(expanded)
         keys = tuple(key for key in expanded if key in known)
         if not keys:
