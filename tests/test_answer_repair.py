@@ -226,7 +226,8 @@ async def test_large_advisory_feedback_cannot_displace_required_quotes() -> None
         "Report the requested value",
         plan,
         notes,
-        tokens=TokenBudget(state_plus_largest_question=1500),
+        # Room for the composer's prompt and the quote, never for the corrections as well.
+        tokens=TokenBudget(state_plus_largest_question=1600),
         corrections=(correction,),
     )
     prompt = llm.calls[0][1][-1].content
