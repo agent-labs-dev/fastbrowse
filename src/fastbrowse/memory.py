@@ -238,15 +238,16 @@ class Notes:
     def collection_pages(self, requirement_id: str) -> tuple[str, ...]:
         """Every page read for a list that went on past one page, in reading order, matching records or not.
 
-        A page with no matching record leaves no quote, so the audit of the cheapest five-star books saw page 4
-        missing from the cited records and refused a comparison code had read across all six pages."""
+        A page with no matching record leaves no quote, so an audit that judged coverage from the cited records alone
+        took that page for unread and refused a comparison code had closed over every page of the list."""
         return tuple(self._collection_pages.get(requirement_id, ()))
 
     def standing(self, tally: Tally) -> Standing | None:
         """Where a counted group ranks among every group counted for its requirement; None for a lone group.
 
-        A rank is decided by every other group's count. A claim citing the second-ranked author's tally showed the
-        audit nine quotes and nothing they beat, and citing every group's records instead overflowed its budget.
+        A rank is decided by every other group's count. A ranking claim that cites only its own group's tally shows
+        the audit that group's records and nothing they beat, and citing every group's records instead can overflow
+        the audit's budget.
         Each count here is code's, over records add_tally checked were captured spans."""
         groups = sorted(
             (

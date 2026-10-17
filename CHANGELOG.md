@@ -11,15 +11,14 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- A ranking, count or comparison computed across a paginated list can now be verified when it is right. Asked
-  for the three authors with the most quotes across a site's ten pages, runs counted every quote correctly and
-  still ended `stuck` with "Albert Einstein: 10" alone: the answer check saw only the cited author's own quotes,
-  so it could not tell that nine ranks second, and citing every author's quotes instead overflowed its budget.
-  The check is now shown each counted group's rank among all the groups code counted, with their counts and
-  whether the count is complete, and every page code read for the list, so a page with no matching record,
-  such as a category page with no five-star book, no longer reads as unread. A ranking over a count that is not
-  complete still fails, as does a wrong rank. When a run cannot finish, its partial answer now lists every
-  counted group before any quote.
+- A ranking, count or comparison computed across a paginated list can now be verified when it is right. A
+  claim ranking one counted group, such as the group with the second highest count, cited only that group's
+  records, so the answer check could not see what it beat, and citing every group's records instead could
+  overflow its budget; runs that had counted correctly ended `stuck` or `unverified`. The check is now shown
+  each counted group's rank among all the groups code counted, with their counts and whether the count is
+  complete, and every page code read for the list, so a page with no matching record no longer reads as unread.
+  A ranking over a count that is not complete still fails, as does a wrong rank. When a run cannot finish, its
+  partial answer now lists every counted group before any quote.
 
 ## [0.5.22] - 2026-10-16
 

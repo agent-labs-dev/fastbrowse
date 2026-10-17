@@ -3018,7 +3018,7 @@ async def compose(
                 "identifying citations across claims when needed; another claim does not supply them. "
                 "Cite tally ids directly; their counts and descending order are computed in code, and code "
                 "expands their record citations. Never re-list the basis ids inside a tally. A rank by count, "
-                "such as the second most quoted author, cites that group's own tally: code shows the checks "
+                "such as the group with the second highest count, cites that group's own tally: code shows the checks "
                 "every group's count, so do not cite other groups' tallies or a note summarizing them.\n\n"
                 f"# Trust\n{UNTRUSTED}"
             ),
@@ -3147,9 +3147,9 @@ def partial_answer(notes: Notes, max_chars: int) -> ComposedAnswer:
     )
     claims: list[Claim] = []
     counted: set[str] = set()
-    # Every count comes before any quote, highest first. Sharing one sourceless turn left "Albert Einstein: 10"
-    # alone, and a stopped run's counts are incomplete, so ranking by what evidences a requirement put a quote
-    # answering something else first and left no room for any count.
+    # Every count comes before any quote, highest first. Tallies have no source address, so sharing one turn
+    # listed only the highest count; and a stopped run's counts are incomplete, so ordering by what evidences a
+    # requirement put a quote answering something else first and left no room for any count.
     tallies = sorted(
         (fact for fact in notes.facts if fact.tally is not None),
         key=lambda fact: (-fact.tally.count, fact.tally.requirement_id, fact.tally.key) if fact.tally else (0, "", ""),
