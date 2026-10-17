@@ -361,6 +361,25 @@ class BrowserSession:
 
         return {fid: sid for fid, sid in self._frame_sessions.items() if belongs(sid)}
 
+    def frame_family(self, frame_id: str) -> set[str]:
+        """`frame_id` and every frame drawn inside it, whose sessions descend from that frame's session."""
+        root = self._frame_sessions.get(frame_id)
+        if root is None:
+            return set()
+
+        def inside(session_id: str) -> bool:
+            seen: set[str] = set()
+            while session_id not in seen:
+                if session_id == root:
+                    return True
+                seen.add(session_id)
+                if session_id not in self._frame_parents:
+                    return False
+                session_id = self._frame_parents[session_id]
+            return False
+
+        return {fid for fid, sid in self.frame_sessions().items() if inside(sid)}
+
     @property
     def artifacts(self) -> tuple[Artifact, ...]:
         return tuple(self._artifacts)

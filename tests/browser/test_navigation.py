@@ -11,7 +11,7 @@ from fastbrowse.browser import BrowserSession, CdpPage
 from fastbrowse.jev import Evaluation, NoulAnswer, Question
 from fastbrowse.models import BrowserConnection, Limits, Operation, Status, StepOutcome
 from fastbrowse.page import Action
-from tests.browser.test_browser import find, wait_until
+from tests.browser.test_browser import eval_value, find, wait_until
 from tests.browser.test_safety import scoped
 from tests.test_policy import ScriptedJev
 from tests.test_retrieval import ScriptedLLM
@@ -159,3 +159,80 @@ async def test_navigation_does_not_swallow_a_lost_browser(
     monkeypatch.setattr(page, "navigate", closed)
     with pytest.raises(BrowserUnavailable):
         await page.act(Action(operation=Operation.NAVIGATE, url=f"{main_site}/other"), before)
+
+
+async def test_the_history_entry_a_page_is_follows_the_browser_not_the_address(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    """The run's lineage table (`Agent._note_lineage`) rests on these: a navigation and pushState make an entry,
+    a reload and replaceState keep it, and Back and Forward return to the entries they left."""
+    session_id = browser_session.active_session_id
+
+    async def entry() -> str | None:
+        return (await page.observe()).history_entry
+
+    async def entry_is(expected: str | None) -> bool:
+        return await entry() == expected
+
+    async def settled(script: str) -> None:
+        await eval_value(browser_session, session_id, "window.marker = 1; " + script)
+        await wait_until(lambda: eval_value(browser_session, session_id, "window.marker === undefined"))
+
+    await page.navigate(main_site)
+    first = await entry()
+    await page.navigate(f"{main_site}/dispatch.html")
+    second = await entry()
+    assert first and second and first != second
+    await settled("location.reload()")
+    assert await entry() == second
+    await eval_value(browser_session, session_id, "history.pushState({}, '', '/dispatch.html?pushed')")
+    pushed = await entry()
+    assert pushed not in {first, second}
+    await eval_value(browser_session, session_id, "history.replaceState({}, '', '/dispatch.html?replaced')")
+    assert await entry() == pushed
+    observed = await page.observe()
+    assert (await page.act(Action(operation=Operation.BACK), observed)).outcome is StepOutcome.EXECUTED
+    await wait_until(lambda: entry_is(second))
+    await eval_value(browser_session, session_id, "history.forward()")
+    await wait_until(lambda: entry_is(pushed))
+
+
+@pytest.mark.parametrize("pushes", [1, 10])
+async def test_a_push_state_between_history_and_snapshot_never_pairs_a_page_with_another_entry(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, monkeypatch: pytest.MonkeyPatch, pushes: int
+) -> None:
+    """History and the snapshot are read at once. A pushState landing between them paired the new page with the old
+    entry, which then took the new page's lineage. The pair is read again until both name one address, and a pair
+    that never agrees names no entry."""
+    session_id = browser_session.active_session_id
+    await page.navigate(f"{main_site}/dispatch.html")
+    read_history, snapshot = page._history, page._snapshot_all_frames
+    snapped = asyncio.Event()
+    pushed = 0
+
+    async def snapshot_first() -> object:
+        result = await snapshot()
+        snapped.set()
+        return result
+
+    async def history_after_a_push() -> tuple[bool, str | None, str | None]:
+        nonlocal pushed
+        await snapped.wait()
+        snapped.clear()
+        if pushed < pushes:
+            pushed += 1
+            await eval_value(
+                browser_session, session_id, f"history.pushState({{}}, '', '/dispatch.html?step={pushed}')"
+            )
+        return await read_history()
+
+    monkeypatch.setattr(page, "_snapshot_all_frames", snapshot_first)
+    monkeypatch.setattr(page, "_history", history_after_a_push)
+    observed = await page.observe()
+    monkeypatch.undo()
+    if pushes == 1:
+        # Read again once the push had landed: the page and its entry agree.
+        assert observed.url.endswith("/dispatch.html?step=1")
+        assert observed.history_entry is not None and observed.history_entry == (await page.observe()).history_entry
+    else:
+        assert observed.history_entry is None

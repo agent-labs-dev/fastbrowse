@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import pytest
@@ -642,3 +643,147 @@ def test_a_page_that_replaces_several_values_retires_every_one_it_no_longer_show
 
     assert notes.evidenced("price") and not notes.evidenced("name")
     assert fact_id(name) not in notes.current_evidence()
+
+
+def _record(quote: str, sha: str, url: str) -> Fact:
+    return _quoted(quote, sha, url).model_copy(update={"requirement_id": None})
+
+
+def test_a_count_refused_as_read_off_the_wrong_page_cannot_answer_again_but_a_recount_can() -> None:
+    """A count read off a guessed listing was refused, and completing the tallies then put it straight back as the
+    answer, so every finish got the same refusal: the loop `discredit` closes for a quoted fact."""
+    guessed, right = "https://example.test/search?q=guess", "https://example.test/search?tfs=set"
+    old = [_record(f"Order {n}", f"guess-{n}", guessed) for n in "AB"]
+    notes = Notes(old)
+    notes.add_tally(Tally(requirement_id="r1", key="Orders", records=tuple(fact_id(f) for f in old)))
+    notes.complete_tallies("r1")
+    assert notes.evidenced("r1")
+
+    notes.discredit(("r1",), lambda evidence: evidence.url == guessed)
+    notes.complete_tallies("r1")
+    assert not notes.evidenced("r1")
+    # A reader that counts the refused rows again under the same key is still the refused page.
+    notes.add_tally(Tally(requirement_id="r1", key="Orders", records=(fact_id(old[0]),)))
+    notes.complete_tallies("r1")
+    assert not notes.evidenced("r1")
+
+    # The count on the page the run set up itself answers it, without the refused rows carried into it.
+    fresh = [_record(f"Order {n}", f"right-{n}", right) for n in "CDE"]
+    for fact in fresh:
+        notes.add(fact)
+    tally = notes.add_tally(Tally(requirement_id="r1", key="Orders", records=tuple(fact_id(f) for f in fresh)))
+    notes.complete_tallies("r1")
+    assert notes.evidenced("r1")
+    assert set(tally.basis) == {fact_id(f) for f in fresh}
+    assert tally.tally is not None and tally.tally.count == 3
+
+
+def test_a_refusal_holds_only_the_quotes_read_on_the_guess() -> None:
+    """A requirement cited from a guessed search and from a page the run reached itself was refused for its guessed
+    half. Holding every supporting quote also held the good one, so no reread could ever answer it again."""
+    guessed, right = "https://example.test/search?q=guess", "https://example.test/search?tfs=set"
+    on_guess, on_right = _quoted("Fare $320", "guess", guessed), _quoted("Fare $305", "right", right)
+    notes = Notes((on_guess, on_right))
+    assert {key for key, _ in notes.supporting("r1")} == {fact_id(on_guess), fact_id(on_right)}
+
+    notes.discredit(("r1",), lambda evidence: evidence.url == guessed)
+    # The verifier was shown only the guessed quote as guessed, so only that one stops evidencing the requirement.
+    assert {key for key, _ in notes.supporting("r1")} == {fact_id(on_right)}
+
+    notes.add(on_guess)
+    notes.add(on_right)
+    assert {key for key, _ in notes.supporting("r1")} == {fact_id(on_right)}
+    # A conclusion drawing on the good quote alone answers it; one drawing on the guessed quote does not.
+    concluded = Fact(requirement_id="r1", text="$305", evidence=None, basis=(fact_id(on_right),), reader=FactReader.LLM)
+    mixed = Fact(requirement_id="r1", text="$320", evidence=None, basis=(fact_id(on_guess),), reader=FactReader.LLM)
+    notes.add(concluded)
+    notes.add(mixed)
+    assert {key for key, _ in notes.supporting("r1")} == {fact_id(on_right), fact_id(concluded)}
+
+
+_GUESSED, _OWN = "https://example.test/search?q=guess", "https://example.test/search?tfs=set"
+
+
+def _builds_quote(notes: Notes, key: str) -> bool:
+    notes.add(notes.facts[[fact_id(f) for f in notes.facts].index(key)].model_copy(update={"requirement_id": "r1"}))
+    return notes.evidenced("r1")
+
+
+def _builds_conclusion(notes: Notes, key: str) -> bool:
+    notes.add(Fact(requirement_id="r1", text="Cheapest", evidence=None, basis=(key,), reader=FactReader.LLM))
+    return notes.evidenced("r1")
+
+
+def _builds_tally(notes: Notes, key: str) -> bool:
+    notes.add_tally(Tally(requirement_id="r1", key="Fares", records=(key,)))
+    notes.complete_tallies("r1")
+    return notes.evidenced("r1")
+
+
+def _builds_comparison(notes: Notes, key: str) -> bool:
+    from fastbrowse.comparison import NumericComparison, QuotedField, complete_comparison
+
+    notes.add_continuation("r1", key)
+    ranking = NumericComparison(
+        order="lowest", limit=1, label=QuotedField(prefix="", suffix=": "), value=QuotedField(prefix=": ", suffix="")
+    )
+    return complete_comparison(notes, "r1", ranking) and notes.evidenced("r1")
+
+
+def _builds_recount(notes: Notes, key: str) -> bool:
+    # The same row counted once, then counted again at the same address in a capture that changed elsewhere (a
+    # banner, a timestamp): that later reading was taken off the guess.
+    notes.add_tally(Tally(requirement_id="r1", key="Fares", records=(key,)))
+    first = next(f for f in notes.facts if fact_id(f) == key)
+    assert first.evidence is not None
+    again = first.model_copy(
+        update={"requirement_id": None, "evidence": first.evidence.model_copy(update={"capture_sha256": "recount"})}
+    )
+    notes.add(again)
+    notes.add_tally(Tally(requirement_id="r1", key="Fares", records=(fact_id(again),)))
+    notes.complete_tallies("r1")
+    return notes.evidenced("r1")
+
+
+def _offers_values(notes: Notes, key: str) -> bool:
+    return key in notes.current_evidence() and key in notes.usable_evidence()
+
+
+def _offers_to_cite(notes: Notes, key: str) -> bool:
+    # What a reader may draw on and the composer may cite: an answer once cited a held fare this way.
+    return key in notes.render_with_ids(10**6).evidence_ids
+
+
+@pytest.mark.parametrize(
+    ("build", "on_guess"),
+    [
+        (_builds_quote, False),
+        (_builds_conclusion, False),
+        (_builds_tally, False),
+        (_builds_comparison, False),
+        (_offers_values, False),
+        (_offers_to_cite, False),
+        # Read again off the guess, the guessed row is the run's own reading too, and counts.
+        (_builds_recount, True),
+    ],
+    ids=["quote", "conclusion", "tally", "comparison", "values-offered", "cited", "recount"],
+)
+def test_no_constructor_builds_on_a_held_reading_and_each_builds_on_a_legitimate_one(
+    build: Callable[[Notes, str], bool], on_guess: bool
+) -> None:
+    """Every way a quote becomes evidence, a conclusion, a count, a ranking or an offer to a reader ignores a reading
+    held as refused off a guessed page, and builds on the run's own reading of the same kind. A ranking that took
+    the whole notes as its proof swept the held reading in and was refused for good."""
+
+    def refused() -> tuple[Notes, str, str]:
+        guessed = _quoted("BA: $320", "guess", _GUESSED)
+        own = _quoted("VS: $305", "own", _OWN).model_copy(update={"requirement_id": None})
+        notes = Notes((guessed, own))
+        # Held by reading, as the run's lineage holds them: the guessed capture, not every capture of its address.
+        notes.discredit(("r1",), lambda evidence: evidence.capture_sha256 == "guess")
+        return notes, fact_id(guessed), fact_id(own)
+
+    notes, guessed, _ = refused()
+    assert build(notes, guessed) is on_guess
+    notes, _, own = refused()
+    assert build(notes, own) is True

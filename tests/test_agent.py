@@ -19,6 +19,7 @@ from fastbrowse.agent import (
     _code_decision,
     _follow_recovery,
     _guessed,
+    _guessed_page,
     _history,
     _next_value,
     _plan_ids,
@@ -2329,6 +2330,362 @@ async def test_a_requirement_read_off_a_guessed_address_reopens_until_the_right_
     state.notes.add(_fare("https://example.test/flights/results?from=BRS", "results"))
     result = await agent._finish(state, None, None)
     assert result is not None and result.status is Status.COMPLETE
+
+
+async def test_a_search_set_through_the_form_after_leaving_a_guess_finishes_at_the_guess_path() -> None:
+    """google-flights: a proposed /travel/flights?q=... showed round-trip fares and was rightly refused. The run went
+    back to the start page and set the search through the form, but every search there lives at /travel/flights, and
+    each read concluded the old fare again from the refused quotes, so every DONE got the same refusal until the run
+    stopped stuck."""
+    guess, start, rebuilt = (
+        "https://example.test/flights?q=BRS+to+YRK",
+        "https://example.test/flights",
+        "https://example.test/flights?tfs=one-way",
+    )
+    state = await run_state()
+    state.invented, state.guessing = {guess}, True
+    refused = _fare(guess, "guess")
+    state.notes.add(refused)
+    recovery: JsonValue = {"diagnosis": "a guessed search", "next_subgoal": "Set the search", "give_up": False}
+    doubted: JsonValue = {"missing": [], "ungrounded": ["r1"], "complete": False}
+    agent, _ = await _finishing(state, ScriptedLLM([doubted, recovery, doubted]), noul=0.5)
+    assert await agent._finish(state, None, None) is None
+
+    # A read elsewhere concluded the refused fare again from its quote; that is the same wrong page.
+    concluded = Fact(reader=FactReader.LLM, requirement_id="r1", text="$320", evidence=None, basis=(fact_id(refused),))
+    state.notes.add(concluded)
+    assert state.notes.unresolved(state.plan) == state.plan.requirements
+
+    for operation, landed in ((Operation.NAVIGATE, start), (Operation.CLICK, rebuilt)):
+        state.history.append(
+            HistoryEntry(operation=operation, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
+        )
+        Agent._note_effect(state, _at(landed))
+    state.notes.add(_fare(rebuilt, "rebuilt"))
+    # The verifier's doubt about a page the run set up itself is only doubt: the fare there is cited.
+    result = await agent._finish(state, None, None)
+    assert result is not None and result.status is Status.COMPLETE
+
+
+@pytest.mark.parametrize(("left_by", "guessed"), [(Operation.CLICK, True), (Operation.NAVIGATE, False)])
+async def test_a_search_at_a_guess_path_is_the_runs_own_only_once_it_navigated_off_the_guess(
+    left_by: Operation, guessed: bool
+) -> None:
+    """A click on a guessed search keeps its guessed parameters: a sort tab on a proposed round-trip search still
+    showed round-trip fares, so only a navigation to an address the run did not build ends the guess."""
+    guess, later = "https://example.test/flights?q=BRS+to+YRK", "https://example.test/flights?tfs=sorted"
+    state = await run_state()
+    state.invented, state.guessing = {guess}, True
+    Agent._note_effect(state, _at(guess))
+    state.history.append(HistoryEntry(operation=left_by, target=None, outcome=StepOutcome.EXECUTED, page_changed=True))
+    Agent._note_effect(state, _at("https://example.test/" if left_by is Operation.NAVIGATE else later))
+    if left_by is Operation.NAVIGATE:
+        state.history.append(
+            HistoryEntry(operation=Operation.CLICK, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
+        )
+        Agent._note_effect(state, _at(later))
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    notes = Notes((_fare(later, "later"),))
+    assert _guessed(plan, notes, state.invented, lineage=state.lineage) == ({"r1"} if guessed else set())
+    # The guess itself never stops being one.
+    assert _guessed(plan, Notes((_fare(guess, "guess"),)), state.invented, lineage=state.lineage) == {"r1"}
+
+
+async def test_a_guessed_address_reached_again_by_the_run_itself_is_judged_by_that_visit() -> None:
+    """A form that keeps its search outside the address can bring a run that left a guessed search back to the exact
+    address it guessed, now holding the search the run set itself. Judged once per address, the fresh results there
+    stayed guessed; the quote read on the guess itself stays guessed whatever the address later shows."""
+    guess, start = "https://example.test/flights?q=BRS+to+YRK", "https://example.test/flights"
+    state = await run_state()
+    state.invented, state.guessing = {guess}, True
+    Agent._note_effect(state, _at(guess))
+    state.lineage.read("guess", (guess,), guessing=state.guessing)
+    for operation, landed in ((Operation.NAVIGATE, start), (Operation.CLICK, guess)):
+        state.history.append(
+            HistoryEntry(operation=operation, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
+        )
+        Agent._note_effect(state, _at(landed))
+    state.lineage.read("fresh", (guess,), guessing=state.guessing)
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    assert _guessed(plan, Notes((_fare(guess, "fresh"),)), state.invented, lineage=state.lineage) == set()
+    assert _guessed(plan, Notes((_fare(guess, "guess"),)), state.invented, lineage=state.lineage) == {"r1"}
+    # A redraw of the page the run is on, with no new arrival, keeps the judgement it arrived with.
+    Agent._note_effect(state, _at(guess))
+    assert state.lineage.addresses[guess] is False
+
+
+async def test_a_refused_reading_is_freed_when_the_run_reads_the_same_text_off_the_guess() -> None:
+    """A search page that keeps its state outside the address, reached again by the run itself, drew the same text,
+    cut the same fact, and was held for good because the hold was keyed by the fact. Evidence is held only if it was
+    read while on a built address, and only that reading: one reading off the guess frees it."""
+    guess, start = "https://example.test/flights?q=BRS+to+YRK", "https://example.test/flights"
+    state = await run_state()
+    state.invented, state.guessing = {guess}, True
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    Agent._note_effect(state, _at(guess))
+    state.lineage.read("same", (guess,), guessing=state.guessing)
+    fare = _fare(guess, "same")
+    state.notes.add(fare)
+    state.notes.discredit(("r1",), _guessed_page(state.invented, state.lineage))
+    state.notes.add(fare)
+    assert state.notes.unresolved(plan) == plan.requirements
+
+    for operation, landed in ((Operation.NAVIGATE, start), (Operation.CLICK, guess)):
+        state.history.append(
+            HistoryEntry(operation=operation, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
+        )
+        Agent._note_effect(state, _at(landed))
+    state.lineage.read("same", (guess,), guessing=state.guessing)
+    state.notes.add(fare)
+    assert state.notes.unresolved(plan) == ()
+    assert _guessed(plan, state.notes, state.invented, lineage=state.lineage) == set()
+
+
+@pytest.mark.parametrize("left_by", [Operation.NAVIGATE, Operation.BACK])
+async def test_leaving_a_guess_for_the_callers_page_by_any_navigation_makes_later_reads_the_runs_own(
+    left_by: Operation,
+) -> None:
+    """Back from a shortcut returns to the page the caller named; reads after it are no more guessed than after a
+    navigation there."""
+    guess, start = "https://example.test/flights?q=BRS+to+YRK", "https://example.test/flights"
+    state = await run_state()
+    state.invented, state.guessing = {guess}, True
+    Agent._note_effect(state, _at(guess))
+    for operation, landed in ((left_by, start), (Operation.CLICK, "https://example.test/flights?tfs=set")):
+        state.history.append(
+            HistoryEntry(operation=operation, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
+        )
+        Agent._note_effect(state, _at(landed))
+    state.lineage.read("set", ("https://example.test/flights?tfs=set",), guessing=state.guessing)
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    notes = Notes((_fare("https://example.test/flights?tfs=set", "set"),))
+    assert _guessed(plan, notes, state.invented, lineage=state.lineage) == set()
+
+
+async def test_a_guessed_start_that_fell_back_to_the_front_page_leaves_the_run_off_the_guess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A start page worked out from the task opened nothing and the run went to the site's front page, yet began
+    as if on the guess, so a form there that led back to the guessed path had every read of it held guessed."""
+    guessed, front = "https://shop.test/search/kettles", "https://shop.test"
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    page.navigate = AsyncMock()
+    page.observe = AsyncMock(return_value=_at(guessed))
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    monkeypatch.setattr(agent, "_first_page", AsyncMock(return_value=guessed))
+    monkeypatch.setattr(agent, "_open", AsyncMock(return_value=([], set())))
+    monkeypatch.setattr(agent, "_outwait", AsyncMock(return_value=False))
+    monkeypatch.setattr(agent_module, "_propose", AsyncMock(return_value=Shortcut(url=None)))
+    seen: list[set[str]] = []
+
+    async def loop(state: _RunState, output_schema: object, until: object) -> RunResult:
+        Agent._note_effect(state, _at(front))
+        state.history.append(
+            HistoryEntry(operation=Operation.CLICK, target="Search", outcome=StepOutcome.EXECUTED, page_changed=True)
+        )
+        Agent._note_effect(state, _at(guessed))
+        state.lineage.read("results", (guessed,), guessing=state.guessing)
+        plan = Plan(
+            requirements=(Requirement(id="r1", text="Kettle", kind=RequirementKind.INFORMATION),), answer_expected=True
+        )
+        seen.append(_guessed(plan, Notes((_fare(guessed, "results"),)), state.invented, lineage=state.lineage))
+        raise _Stop(Status.STUCK, "checked")
+
+    monkeypatch.setattr(agent, "_loop", loop)
+    await agent.run("Find the cheapest kettle", choose_start=True)
+    page.navigate.assert_awaited_once_with(front)
+    assert seen == [set()]
+
+
+async def test_a_page_read_in_a_run_of_pages_is_judged_by_where_the_run_read_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pages read one after another never pass through `_read`. Text read on the guess and then again on a page the
+    run paged to itself kept only the guessed reading, so the later one was held with it."""
+    from fastbrowse.retrieval import ReadOutcome
+
+    page_url = "https://example.test/flights?tfs=page-2"
+    state = await run_state()
+    state.invented = {"https://example.test/flights?q=BRS+to+YRK"}
+    paged = capture(url=page_url)
+    state.lineage.read(paged.sha256, (page_url,), guessing=True)
+    state.guessing = False
+    monkeypatch.setattr(
+        agent_module,
+        "read",
+        AsyncMock(return_value=ReadOutcome(facts=(), coverage=(), rejected_claims=0, cost_lines=())),
+    )
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    await agent._page_records(state, paged, (), reuse=False)
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    assert _guessed(plan, Notes((_fare(page_url, paged.sha256),)), state.invented, lineage=state.lineage) == set()
+
+
+async def test_identical_text_at_another_address_does_not_free_a_guessed_reading() -> None:
+    """Text alone does not name a page: a page the run reached itself drew byte-identical text to the guessed one,
+    and reading it released the guessed page's hold. Only a reading of the same page off the guess frees it."""
+    guess, own = "https://example.test/flights?q=BRS+to+YRK", "https://example.test/flights?tfs=set"
+    state = await run_state()
+    state.invented, state.guessing = {guess}, True
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    state.lineage.read("same", (guess,), guessing=True)
+    on_guess = _fare(guess, "same")
+    state.notes.add(on_guess)
+    state.notes.discredit(("r1",), _guessed_page(state.invented, state.lineage))
+
+    state.guessing = False
+    state.lineage.read("same", (own,), guessing=False)
+    state.notes.add(on_guess)
+    assert state.notes.unresolved(plan) == plan.requirements
+    on_own = _fare(own, "same")
+    state.notes.add(on_own)
+    assert {key for key, _ in state.notes.supporting("r1")} == {fact_id(on_own)}
+
+
+def _entry(url: str, entry: str | None) -> Observation:
+    return _at(url).model_copy(update={"history_entry": entry})
+
+
+def _did(state: _RunState, operation: Operation | None, target: str | None = None) -> None:
+    state.history.append(
+        HistoryEntry(operation=operation, target=target, outcome=StepOutcome.EXECUTED, page_changed=True)
+    )
+
+
+_GUESS, _START = "https://example.test/flights?q=BRS+to+YRK", "https://example.test/flights"
+
+
+@pytest.mark.parametrize(
+    ("steps", "guessing"),
+    [
+        # Back to an entry made on the guess restores it; Forward to one made off it restores that.
+        pytest.param(
+            [
+                (Operation.CLICK, None, f"{_GUESS}&sort=price", "t:2"),
+                (Operation.NAVIGATE, _START, _START, "t:3"),
+                (Operation.BACK, None, f"{_GUESS}&sort=price", "t:2"),
+            ],
+            True,
+            id="back-to-guess",
+        ),
+        pytest.param(
+            [
+                (Operation.NAVIGATE, _START, _START, "t:2"),
+                (Operation.BACK, None, _GUESS, "t:1"),
+                (None, None, _START, "t:2"),
+            ],
+            False,
+            id="forward-off-guess",
+        ),
+        # Back past the start loads the caller's page afresh; it was never built.
+        pytest.param([(Operation.BACK, None, _START, "t:0")], False, id="back-past-start"),
+        # A reload or a redraw is the same entry.
+        pytest.param([(Operation.CLICK, None, _GUESS, "t:1")], True, id="reload-on-guess"),
+        pytest.param(
+            [(Operation.NAVIGATE, _START, _START, "t:2"), (Operation.CLICK, None, _START, "t:2")],
+            False,
+            id="reload-off-guess",
+        ),
+        # A redirect is the navigation it follows: what the run asked for decides, as well as where it landed.
+        pytest.param([(Operation.NAVIGATE, _GUESS, "https://example.test/moved", "t:2")], True, id="redirect-of-guess"),
+        pytest.param([(Operation.NAVIGATE, _START, "https://example.test/home", "t:2")], False, id="redirect-of-own"),
+        # pushState makes an entry that inherits the page it came from; replaceState keeps the entry.
+        pytest.param([(Operation.CLICK, None, f"{_GUESS}&page=2", "t:2")], True, id="pushstate-on-guess"),
+        pytest.param(
+            [(Operation.NAVIGATE, _START, _START, "t:2"), (Operation.CLICK, None, _GUESS, "t:3")],
+            False,
+            id="pushstate-off-guess",
+        ),
+        pytest.param([(Operation.CLICK, None, "https://example.test/other", "t:1")], True, id="replacestate"),
+        # A new tab or popup inherits the page that opened it; switching back restores the opener's entry.
+        pytest.param([(Operation.CLICK, None, "https://example.test/popup", "u:1")], True, id="popup-from-guess"),
+        pytest.param(
+            [
+                (Operation.NAVIGATE, _START, _START, "t:2"),
+                (Operation.CLICK, None, "https://example.test/popup", "u:1"),
+                (Operation.SWITCH_TAB, None, _GUESS, "t:1"),
+            ],
+            True,
+            id="switch-back-to-guess",
+        ),
+        # A browser that names no entry is judged as a new entry each time.
+        pytest.param([(Operation.NAVIGATE, _START, _START, None)], False, id="no-entry"),
+    ],
+)
+async def test_lineage_follows_the_browser_history_entry(
+    steps: list[tuple[Operation | None, str | None, str, str | None]], guessing: bool
+) -> None:
+    """Each way the page the run is on can change, as the table in `Agent._note_lineage` lists them."""
+    state = await run_state()
+    state.invented, state.guessing = {_GUESS}, True
+    Agent._note_effect(state, _entry(_GUESS, "t:1"))
+    for operation, target, url, entry in steps:
+        _did(state, operation, target)
+        Agent._note_effect(state, _entry(url, entry))
+    assert state.guessing is guessing
+
+
+async def test_back_to_a_search_rebuilt_at_the_guessed_address_stays_the_runs_own() -> None:
+    """The guess was refused, the run set the same search up itself at the same address, opened a result and
+    went Back. Judged by its address, the rebuilt search became the guess again; it is its own history entry."""
+    state = await run_state()
+    state.invented, state.guessing = {_GUESS}, True
+    Agent._note_effect(state, _entry(_GUESS, "t:1"))
+    state.lineage.read("guess", (_GUESS,), guessing=state.guessing)
+    for operation, target, url, entry in (
+        (Operation.NAVIGATE, _START, _START, "t:2"),
+        (Operation.CLICK, "Search", _GUESS, "t:3"),
+        (Operation.CLICK, "Cheapest result", "https://example.test/flights/result/1", "t:4"),
+        (Operation.BACK, None, _GUESS, "t:3"),
+    ):
+        _did(state, operation, target)
+        Agent._note_effect(state, _entry(url, entry))
+    assert state.guessing is False
+    state.lineage.read("rebuilt", (_GUESS,), guessing=state.guessing)
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    assert _guessed(plan, Notes((_fare(_GUESS, "rebuilt"),)), state.invented, lineage=state.lineage) == set()
+    assert _guessed(plan, Notes((_fare(_GUESS, "guess"),)), state.invented, lineage=state.lineage) == {"r1"}
+
+
+async def test_a_corrected_search_kept_in_the_fragment_is_the_runs_own() -> None:
+    """A site that routes its searches by fragment keeps the whole search in it. Lineage dropped the fragment while
+    `_searched` read it as the search, so a corrected `/search#new` matched the built `/search#old` and stayed
+    guessed. A reload of the guessed search stays guessed."""
+    old, new = "https://example.test/search#from=BRS&to=YRK", "https://example.test/search#from=BRS&to=LDS"
+    state = await run_state()
+    state.invented, state.guessing = {old}, True
+    Agent._note_effect(state, _entry(old, "t:1"))
+    state.lineage.read("old", (old,), guessing=state.guessing)
+    _did(state, Operation.NAVIGATE, new)
+    Agent._note_effect(state, _entry(new, "t:2"))
+    assert state.guessing is False
+    state.lineage.read("new", (new,), guessing=state.guessing)
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
+    )
+    assert _guessed(plan, Notes((_fare(new, "new"),)), state.invented, lineage=state.lineage) == set()
+    _did(state, Operation.NAVIGATE, old)
+    Agent._note_effect(state, _entry(old, "t:3"))
+    assert state.guessing is True
+    _did(state, Operation.CLICK, None)
+    Agent._note_effect(state, _entry(old, "t:3"))
+    assert state.guessing is True
+    assert _guessed(plan, Notes((_fare(old, "old"),)), state.invented, lineage=state.lineage) == {"r1"}
 
 
 _SHORTCUT = HistoryEntry(operation=None, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
