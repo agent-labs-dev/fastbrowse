@@ -348,3 +348,26 @@ async def test_only_a_navigation_the_runs_input_began_is_its_move(
     result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Go").id), obs)
     assert result.outcome is StepOutcome.EXECUTED
     assert result.moved is moved
+
+
+async def test_the_input_watch_leaves_nothing_the_page_can_see(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    """A binding or a global in the page's own world is a fingerprint any site can read; the input watch and its
+    binding live in an isolated world, and still report a move the run's click made."""
+    await page.navigate(f"{main_site}/?q=guess")
+    session_id = browser_session.active_session_id
+    button = "<button onclick=\"history.pushState({}, '', '?q=corrected')\">Go</button>"
+    assert (
+        await eval_value(browser_session, session_id, f"document.body.innerHTML = {json.dumps(button)}; true") is True
+    )
+    obs = await page.observe()
+    result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Go").id), obs)
+    assert result.moved is True
+    seen = await eval_value(
+        browser_session,
+        session_id,
+        "[Object.getOwnPropertyNames(window).filter(name => /input|watching/i.test(name) && /fastbrowse|watching/i"
+        ".test(name)), '__fastbrowseInputNavigation' in window, typeof globalThis.__watching]",
+    )
+    assert seen == [[], False, "undefined"]

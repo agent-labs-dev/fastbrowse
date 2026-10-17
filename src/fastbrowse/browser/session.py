@@ -107,25 +107,25 @@ _KEEP_PAINTING: dict[str, object] = {
 }
 _TRACK_DOCUMENT_JS = data_file("browser", "snapshot.js").read_text(encoding="utf-8") + "('fingerprint')"
 _REFUSE_COOKIES_JS = data_file("browser", "autoconsent", "autoconsent.standalone.js").read_text(encoding="utf-8")
+INPUT_WORLD = "fastbrowse-input"
+"""The isolated world the input watch runs in: the page's own scripts cannot see a global, a listener or a binding
+there, and a binding or listener in the page's world is a fingerprint any site can read."""
 INPUT_NAVIGATION_BINDING = "__fastbrowseInputNavigation"
-"""The binding a document calls, before it unloads, when the run's own input sent it to another document."""
+"""The binding the input watch calls, from its isolated world only, when the run's own input moved the page."""
 # Whether the run's own input moved the page. A trusted input event's task, its promise reactions included, and the
-# task after it are the run's: an address it changed on the same document is counted here, and a navigation to
-# another document it began, or a link or form the user agent itself followed, is reported through the binding,
-# since the count dies with the document. A page that moves later, on a timer or after a fetch, is not counted: a
-# script that set its location after a delay was once read as the move of whatever click came before it. Nothing on
-# the page is wrapped.
+# task after it are the run's: a form's submit() is planned as a task of its own, queued after the first timer. A
+# navigation the Navigation API reports in that window, or one the user agent began for a link or form itself, to
+# another document or on the same one, is reported through the binding, which outlives the document. A page that
+# moves later, on a timer or after a fetch, is not: a script that set its location after a delay was once read as the
+# move of whatever click came before it. DOM events and the navigate event reach an isolated world's listeners too.
 INPUT_HISTORY_JS = (
-    "(() => { if (window.__fastbrowseInputWatch) return; window.__fastbrowseInputWatch = true; let input = 0; "
+    "(() => { if (globalThis.__watching) return; globalThis.__watching = true; let input = 0; "
     "for (const type of ['click', 'submit', 'keydown', 'keyup', 'input', 'change', 'pointerup', 'mouseup']) "
-    "addEventListener(type, ev => { if (!ev.isTrusted) return; const was = location.href; input++; "
-    # Two turns, not one: a form's submit() is planned as a task of its own, queued after this one's timer.
-    "setTimeout(() => setTimeout(() => { input--; if (location.href !== was) "
-    "window.__fastbrowseInputHistory = (window.__fastbrowseInputHistory || 0) + 1; }, 0), 0); }, "
-    "{capture: true, passive: true}); "
-    "if (window.navigation) navigation.addEventListener('navigate', ev => { "
-    "if (ev.destination.sameDocument || !(ev.userInitiated || input > 0)) return; "
-    f"const report = window[{INPUT_NAVIGATION_BINDING!r}]; if (typeof report === 'function') report('1'); }}); "
+    "addEventListener(type, ev => { if (!ev.isTrusted) return; input++; "
+    "setTimeout(() => setTimeout(() => { input--; }, 0), 0); }, {capture: true, passive: true}); "
+    "if (globalThis.navigation) navigation.addEventListener('navigate', ev => { "
+    "if (!(ev.userInitiated || input > 0)) return; "
+    f"const report = globalThis[{INPUT_NAVIGATION_BINDING!r}]; if (typeof report === 'function') report('1'); }}); "
     "})()"
 )
 """DuckDuckGo's autoconsent (MPL-2.0, unmodified): refuses consent banners on known platforms and hides them
@@ -291,9 +291,7 @@ class BrowserSession:
         if self._grant is not None:
             origins = json.dumps(sorted(self._grant.origins))
             track = _TRACK_DOCUMENT_JS.removesuffix("('fingerprint')") + f"('fingerprint', {origins})"
-        self._new_document_scripts = (
-            (track, INPUT_HISTORY_JS, _REFUSE_COOKIES_JS) if refuse_cookie_banners else (track, INPUT_HISTORY_JS)
-        )
+        self._new_document_scripts = (track, _REFUSE_COOKIES_JS) if refuse_cookie_banners else (track,)
         self._client: CDPClient | None = None
         self._tabs: dict[str, _TabState] = {}
         self._owned: set[str] = set()
@@ -655,7 +653,22 @@ class BrowserSession:
                 self.client.send.Runtime.evaluate(params={"expression": source}, session_id=session_id)
                 for source in self._new_document_scripts
             ),
+            self._watch_input_now(session_id),
             return_exceptions=True,
+        )
+
+    async def _watch_input_now(self, session_id: str) -> None:
+        """Start the input watch in a document that was already open, in its own isolated world as on a new one."""
+        tree = await self.client.send_raw("Page.getFrameTree", session_id=session_id)
+        world = await self.client.send_raw(
+            "Page.createIsolatedWorld",
+            {"frameId": tree["frameTree"]["frame"]["id"], "worldName": INPUT_WORLD},
+            session_id=session_id,
+        )
+        await self.client.send_raw(
+            "Runtime.evaluate",
+            {"expression": INPUT_HISTORY_JS, "contextId": world["executionContextId"]},
+            session_id=session_id,
         )
 
     async def _open_owned_tab(self, url: str) -> str:
@@ -695,7 +708,16 @@ class BrowserSession:
         # These domains are independent, but all must be ready before the session can be used.
         await _together(
             *(self.client.send_raw(f"{domain}.enable", session_id=session_id) for domain in _ENABLE_DOMAINS),
-            self.client.send_raw("Runtime.addBinding", {"name": INPUT_NAVIGATION_BINDING}, session_id=session_id),
+            self.client.send_raw(
+                "Runtime.addBinding",
+                {"name": INPUT_NAVIGATION_BINDING, "executionContextName": INPUT_WORLD},
+                session_id=session_id,
+            ),
+            self.client.send_raw(
+                "Page.addScriptToEvaluateOnNewDocument",
+                {"source": INPUT_HISTORY_JS, "worldName": INPUT_WORLD},
+                session_id=session_id,
+            ),
             self.client.send_raw(
                 "Target.setAutoAttach",
                 {"autoAttach": True, "waitForDebuggerOnStart": scoped, "flatten": True},

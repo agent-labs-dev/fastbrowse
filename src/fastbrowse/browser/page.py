@@ -920,41 +920,28 @@ class CdpPage(Page):
             page_changed=changed,
             detail=detail,
             form_unchanged=unchanged,
-            moved=await self._moved_by_input(document),
+            moved=self._moved_by_input(document),
         )
 
     async def _input_mark(self) -> int | None:
-        """The navigations the run's input had begun before an action, with the page's count of addresses its input
-        changed set back to none."""
+        """How many moves the run's input had made before an action, as the input watch reports them."""
         if self._session.pending_dialog() is not None:
             self._marked = None
             return None
         begun = self._session.input_navigations
         with suppress(Exception):
-            href = await self._evaluate(
-                self._session.active_session_id, "(window.__fastbrowseInputHistory = 0, location.href)"
-            )
+            href = await self._evaluate(self._session.active_session_id, "location.href")
             if isinstance(href, str):
                 self._marked = (begun, href)
                 return begun
         self._marked = None
         return None
 
-    async def _moved_by_input(self, begun: int | None) -> bool:
-        """Whether the action just taken moved the page: its input began a navigation to another document, or
-        changed the address on the same one. A new document alone proves nothing, since a page can move itself on
-        a timer; unknown counts as not moved, which keeps a guessed page guessed, the safe side."""
-        if begun is None:
-            return False
-        if self._session.input_navigations > begun:
-            return True
-        if self._session.pending_dialog() is not None:
-            return False
-        with suppress(Exception):
-            return (
-                await self._evaluate(self._session.active_session_id, "(window.__fastbrowseInputHistory || 0) > 0")
-            ) is True
-        return False
+    def _moved_by_input(self, begun: int | None) -> bool:
+        """Whether the action just taken moved the page: its own input began a navigation, to another document or on
+        the same one. A new document alone proves nothing, since a page can move itself on a timer; unknown counts
+        as not moved, which keeps a guessed page guessed, the safe side."""
+        return begun is not None and self._session.input_navigations > begun
 
     async def _cursor_geometry(
         self, expected_session: str | None = None, expected_document: str | None = None
