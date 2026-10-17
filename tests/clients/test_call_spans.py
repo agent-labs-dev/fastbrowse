@@ -7,7 +7,9 @@ import httpx
 import pytest
 
 from fastbrowse.clients.openai_compatible import OpenAICompatibleLLM
-from fastbrowse.clients.validation import post
+from fastbrowse.clients.typesafe import TypeSafeJevClient
+from fastbrowse.clients.vercel import VercelGatewayJevClient
+from fastbrowse.jev import JevError, NoulQuestion
 from fastbrowse.llm import LLMError, Message
 from fastbrowse.models import Frozen, LLMPurpose
 from fastbrowse.telemetry import traced
@@ -55,13 +57,28 @@ async def test_llm_calls_are_traced_when_they_fail_or_are_cancelled(monkeypatch:
     assert _spans(events) == [("llm:read", "error"), ("llm:read", "cancelled")]
 
 
-async def test_jev_calls_are_traced_when_they_fail_or_are_cancelled() -> None:
+async def test_jev_calls_are_traced_when_they_fail_are_cancelled_or_answer_invalidly() -> None:
+    """A 200 whose body is not a valid answer is a failed call, not a successful one."""
+    question = {"q": NoulQuestion(instructions="Is it?", true="Yes.", false="No.")}
+    valid = {"answers": {"q": {"type": "noul", "noul": 1}}, "usage": {"input_tokens": 10, "output_tokens": 1}}
+
+    def direct(transport) -> TypeSafeJevClient:
+        return TypeSafeJevClient("key", http=httpx.AsyncClient(transport=transport), base_url="https://jev.test")
+
     with traced() as events:
-        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(401))) as http:
-            with pytest.raises(Exception, match="Jev request failed"):
-                await post(http, "https://jev.test/v1", "key", {})
-        async with httpx.AsyncClient(transport=httpx.MockTransport(_hang)) as http:
-            await _cancelled(post(http, "https://jev.test/v1", "key", {}))
-        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={}))) as http:
-            await post(http, "https://jev.test/v1", "key", {})
-    assert _spans(events) == [("jev", "error"), ("jev", "cancelled"), ("jev", "ok")]
+        with pytest.raises(JevError):
+            await direct(httpx.MockTransport(lambda _: httpx.Response(401))).evaluate({}, question)
+        with pytest.raises(JevError):
+            await direct(httpx.MockTransport(lambda _: httpx.Response(200, json={"answers": "x"}))).evaluate(
+                {}, question
+            )
+        gateway = VercelGatewayJevClient(
+            "key",
+            http=httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, text="not json"))),
+            base_url="https://gateway.test",
+        )
+        with pytest.raises(JevError):
+            await gateway.evaluate({}, question)
+        await _cancelled(direct(httpx.MockTransport(_hang)).evaluate({}, question))
+        await direct(httpx.MockTransport(lambda _: httpx.Response(200, json=valid))).evaluate({}, question)
+    assert _spans(events) == [("jev", "error"), ("jev", "error"), ("jev", "error"), ("jev", "cancelled"), ("jev", "ok")]
