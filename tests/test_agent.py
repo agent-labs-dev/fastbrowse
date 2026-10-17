@@ -2367,29 +2367,38 @@ async def test_a_search_set_through_the_form_after_leaving_a_guess_finishes_at_t
     assert result is not None and result.status is Status.COMPLETE
 
 
-@pytest.mark.parametrize(("left_by", "guessed"), [(Operation.CLICK, True), (Operation.NAVIGATE, False)])
-async def test_a_search_at_a_guess_path_is_the_runs_own_only_once_it_navigated_off_the_guess(
-    left_by: Operation, guessed: bool
-) -> None:
-    """A click on a guessed search keeps its guessed parameters: a sort tab on a proposed round-trip search still
-    showed round-trip fares, so only a navigation to an address the run did not build ends the guess."""
-    guess, later = "https://example.test/flights?q=BRS+to+YRK", "https://example.test/flights?tfs=sorted"
+async def test_a_search_corrected_through_the_form_on_the_guessed_page_finishes() -> None:
+    """Recovery refilled the search form on the guessed results page and submitted it, and the corrected results
+    came back at the same path. The new entry inherited the guess, so the fare read there was held as the guess's
+    and the requirement could stay open for good. Only an address the run built is a guess; this one the site made."""
+    guess, corrected = "https://example.test/flights?q=BRS+to+YRK", "https://example.test/flights?tfs=one-way"
     state = await run_state()
     state.invented, state.guessing = {guess}, True
-    Agent._note_effect(state, _at(guess))
-    state.history.append(HistoryEntry(operation=left_by, target=None, outcome=StepOutcome.EXECUTED, page_changed=True))
-    Agent._note_effect(state, _at("https://example.test/" if left_by is Operation.NAVIGATE else later))
-    if left_by is Operation.NAVIGATE:
-        state.history.append(
-            HistoryEntry(operation=Operation.CLICK, target=None, outcome=StepOutcome.EXECUTED, page_changed=True)
-        )
-        Agent._note_effect(state, _at(later))
+    Agent._note_effect(state, _entry(guess, "t:1"))
+    state.lineage.read("guess", (guess,), guessing=state.guessing)
+    refused = _fare(guess, "guess")
+    state.notes.add(refused)
+    recovery: JsonValue = {"diagnosis": "a guessed search", "next_subgoal": "Correct the search", "give_up": False}
+    doubted: JsonValue = {"missing": [], "ungrounded": ["r1"], "complete": False}
+    agent, _ = await _finishing(state, ScriptedLLM([doubted, recovery, doubted]), noul=0.5)
+    assert await agent._finish(state, None, None) is None
+    assert state.notes.unresolved(state.plan) == state.plan.requirements
+
+    for operation, target, landed, entry in (
+        (Operation.FILL, "Trip type", guess, "t:1"),
+        (Operation.CLICK, "Search", corrected, "t:2"),
+    ):
+        _did(state, operation, target)
+        Agent._note_effect(state, _entry(landed, entry))
+    assert state.guessing is False
+    state.lineage.read("corrected", (corrected,), guessing=state.guessing)
+    state.notes.add(_fare(corrected, "corrected"))
+    result = await agent._finish(state, None, None)
+    assert result is not None and result.status is Status.COMPLETE
+    # The guessed reading stays held.
     plan = Plan(
         requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),), answer_expected=True
     )
-    notes = Notes((_fare(later, "later"),))
-    assert _guessed(plan, notes, state.invented, lineage=state.lineage) == ({"r1"} if guessed else set())
-    # The guess itself never stops being one.
     assert _guessed(plan, Notes((_fare(guess, "guess"),)), state.invented, lineage=state.lineage) == {"r1"}
 
 
@@ -2566,6 +2575,7 @@ def _did(state: _RunState, operation: Operation | None, target: str | None = Non
 
 
 _GUESS, _START = "https://example.test/flights?q=BRS+to+YRK", "https://example.test/flights"
+_OTHER_GUESS = "https://example.test/flights?q=BRS+to+YRK+one+way"
 
 
 @pytest.mark.parametrize(
@@ -2573,11 +2583,7 @@ _GUESS, _START = "https://example.test/flights?q=BRS+to+YRK", "https://example.t
     [
         # Back to an entry made on the guess restores it; Forward to one made off it restores that.
         pytest.param(
-            [
-                (Operation.CLICK, None, f"{_GUESS}&sort=price", "t:2"),
-                (Operation.NAVIGATE, _START, _START, "t:3"),
-                (Operation.BACK, None, f"{_GUESS}&sort=price", "t:2"),
-            ],
+            [(Operation.NAVIGATE, _START, _START, "t:2"), (Operation.BACK, None, _GUESS, "t:1")],
             True,
             id="back-to-guess",
         ),
@@ -2602,16 +2608,27 @@ _GUESS, _START = "https://example.test/flights?q=BRS+to+YRK", "https://example.t
         # A redirect is the navigation it follows: what the run asked for decides, as well as where it landed.
         pytest.param([(Operation.NAVIGATE, _GUESS, "https://example.test/moved", "t:2")], True, id="redirect-of-guess"),
         pytest.param([(Operation.NAVIGATE, _START, "https://example.test/home", "t:2")], False, id="redirect-of-own"),
-        # pushState makes an entry that inherits the page it came from; replaceState keeps the entry.
-        pytest.param([(Operation.CLICK, None, f"{_GUESS}&page=2", "t:2")], True, id="pushstate-on-guess"),
+        # An entry the run's action on the site's controls made is the site's, whatever its path, unless it is a
+        # built address again; one the page made by itself inherits the page it came from.
+        pytest.param([(Operation.CLICK, "Search", f"{_START}?q=BRS+to+LDS", "t:2")], False, id="site-search"),
+        pytest.param([(Operation.CLICK, None, f"{_GUESS}&sort=price", "t:2")], False, id="site-sort"),
+        pytest.param([(Operation.CLICK, "Search", _GUESS, "t:2")], True, id="site-resubmits-guess"),
+        pytest.param([(None, None, f"{_GUESS}&page=2", "t:2")], True, id="page-pushstate-on-guess"),
+        # A NAVIGATE to another address the run built is still a guess.
+        pytest.param([(Operation.NAVIGATE, _OTHER_GUESS, _OTHER_GUESS, "t:2")], True, id="navigate-to-other-guess"),
         pytest.param(
             [(Operation.NAVIGATE, _START, _START, "t:2"), (Operation.CLICK, None, _GUESS, "t:3")],
             False,
             id="pushstate-off-guess",
         ),
-        pytest.param([(Operation.CLICK, None, "https://example.test/other", "t:1")], True, id="replacestate"),
-        # A new tab or popup inherits the page that opened it; switching back restores the opener's entry.
-        pytest.param([(Operation.CLICK, None, "https://example.test/popup", "u:1")], True, id="popup-from-guess"),
+        # replaceState keeps the entry: the page rewriting its own address keeps its lineage, and the site moving it
+        # elsewhere after the run's action is the site's.
+        pytest.param([(None, None, "https://example.test/other", "t:1")], True, id="page-replacestate"),
+        pytest.param([(Operation.CLICK, None, "https://example.test/other", "t:1")], False, id="site-replacestate"),
+        # A tab the page opened by itself inherits the page that opened it, one the run's click opened is the
+        # site's, and switching back restores the opener's entry.
+        pytest.param([(None, None, "https://example.test/popup", "u:1")], True, id="page-popup-from-guess"),
+        pytest.param([(Operation.CLICK, None, "https://example.test/popup", "u:1")], False, id="site-popup"),
         pytest.param(
             [
                 (Operation.NAVIGATE, _START, _START, "t:2"),
@@ -2630,7 +2647,7 @@ async def test_lineage_follows_the_browser_history_entry(
 ) -> None:
     """Each way the page the run is on can change, as the table in `Agent._note_lineage` lists them."""
     state = await run_state()
-    state.invented, state.guessing = {_GUESS}, True
+    state.invented, state.guessing = {_GUESS, _OTHER_GUESS}, True
     Agent._note_effect(state, _entry(_GUESS, "t:1"))
     for operation, target, url, entry in steps:
         _did(state, operation, target)

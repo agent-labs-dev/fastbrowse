@@ -31,8 +31,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   were refused as the shortcut's page, and each read concluded the refused value again from its quotes, until the
   run stopped `stuck`. Whether a page is the run's own now follows the browser's history entry, not its address, and
   only the readings taken on the shortcut are held: they can no longer answer any requirement, while the
-  requirement's other quotes still count, and so does the same page read again off the shortcut. A click on the
-  shortcut's page still keeps it a guess. The verifier judges a shortcut's page by what it shows rather than how it
+  requirement's other quotes still count, and so does the same page read again off the shortcut. Only an address
+  the run built is a guess: a page the run reached through the site's own controls, such as the search form on the
+  shortcut's page, is the site's, unless it lands on the shortcut again. The verifier judges a shortcut's page by what it shows rather than how it
   was reached, and an answer keeps the terms a value was quoted under, such as what it covers and the dates it
   applies to.
 

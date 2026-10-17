@@ -2,6 +2,26 @@
 
 Only `Status.COMPLETE` is success. Anything the loop cannot prove (an answer whose claims fail their checks,
 a DONE the verifier rejects at the end of the budget) is reported as what it is rather than rounded up.
+
+Guessed addresses, readings and holds keep to these invariants; `_Lineage`, `Agent._note_lineage` and
+`Notes.discredit` hold the detail.
+
+- What makes a page guessed: only an address the run built from the task (`invented`). The run is on the guess
+  on a history entry it reached by NAVIGATE to, or a redirect from, a built address, by opening on one, or by
+  Back past the start onto one, and on an entry the page made by itself from a guessed one (its own pushState,
+  address rewrite or tab).
+- What clears it: an entry, or a new address on the same entry, that the run's own executed action on the
+  site's controls produced, unless it is a built address again; a NAVIGATE, or Back past the start, onto an
+  address the run did not build; the front-page fallback. Back, Forward and a reload return to an entry and to
+  its lineage.
+- A reading is guessed if it was taken while on the guess, keyed by its source address and capture. The same
+  page read again off the guess is the run's own, and that frees the guessed reading of the same text there.
+- What a hold blocks: a reading the verifier refused as read off a built address, while the lineage still says
+  it was taken only on the guess. A held reading, and every fact that is or rests on one, answers no requirement,
+  is offered to no reader or composer, backs no claim, and is counted in no tally or comparison, for any
+  requirement. Caches of checked answers key on what is refused, so a hold that comes back is seen.
+- What reopens a requirement: a refusal reopens every requirement a fact resting on a held reading answered,
+  and nothing else. A requirement is answered again only from readings that are not held.
 """
 
 import asyncio
@@ -42,6 +62,7 @@ from fastbrowse.llm import Generation, LLMClient, LLMError, Message
 from fastbrowse.memory import CollectionFact, Fact, Notes, NotesTooLarge, evidence_id, fact_id, shows
 from fastbrowse.models import (
     SCROLLING,
+    TARGETED,
     UNTRUSTED,
     Attachment,
     Authorization,
@@ -160,6 +181,8 @@ _INTERSTITIAL_POLL_SECONDS = 0.5
 _REDRAW_WATCH_SECONDS = 10.0
 """Longer than deciding takes: a watch ends with the work it watches, and this only bounds a stuck one."""
 _NOT_ACTING = frozenset({Operation.READ, Operation.DONE})
+_SITE_ACTIONS = TARGETED | {Operation.DIALOG}
+"""What the run does through the page's own controls, so what follows is the site's doing, not the run's guess."""
 _REPEATS_BEFORE_CYCLE = 2
 """Times one action may be taken from one page and still count as progress. Scrolling is exempt: a long page
 takes many scrolls, each of which shows something new."""
@@ -365,6 +388,8 @@ class _Lineage:
 
     entries: dict[str, bool] = field(default_factory=dict[str, bool])
     """Each history entry, by whether the run was on the guess when the entry was made."""
+    entry_addresses: dict[str, str] = field(default_factory=dict[str, str])
+    """Each history entry's address when last observed, so a site action that moved it there is told apart."""
     addresses: dict[str, bool] = field(default_factory=dict[str, bool])
     """Each address by the lineage of the entry last observed there, for a quote with no recorded reading."""
     captures: dict[tuple[str, str], bool] = field(default_factory=dict[tuple[str, str], bool])
@@ -481,8 +506,8 @@ class _RunState:
     page worked out from the task. These are the ones that can land on a page of the right shape and the wrong
     search, so the verifier is told which they were."""
     guessing: bool = False
-    """The page descends from an invented address: nothing since has navigated to an address the run did not build
-    from the task. A click on a guessed search keeps its guessed parameters, so only a navigation ends it."""
+    """The page is an invented address, or one the page itself moved to from one: nothing since has navigated to an
+    address the run did not build, and no action of the run's on the site's controls has led elsewhere."""
     lineage: _Lineage = field(default_factory=_Lineage)
     """Whether each visit and each read was on the guess."""
     downloads_forbidden: bool | None = None
@@ -1640,32 +1665,47 @@ class Agent:
     def _note_lineage(state: _RunState, observation: Observation) -> None:
         """Set whether the run is on the guess from the history entry the page is.
 
-        | Transition                                  | Entry          | Lineage                                   |
-        | ------------------------------------------- | -------------- | ----------------------------------------- |
-        | Back, Forward, reload, redraw, replaceState | one seen       | restored from that entry                  |
-        | switch back to a tab                        | one seen       | restored from that entry                  |
-        | NAVIGATE, a redirect after it               | new            | guessed if it asked for or landed on one  |
-        |                                             |                | the run built                             |
-        | Back past the start (the caller's page)     | new            | guessed if it landed on one the run built |
-        | click, Enter, pushState, a new tab or popup | new            | inherited from the page it came from      |
-        | the opening, or the front-page fallback     | new            | as the run began (`run` sets it)          |
-        | the browser names no entry                  | none           | as for a new entry, each time             |
+        One rule: only an address the run built is a guess. An entry the run's own action on the site's controls
+        produced is the site's, whatever its path, unless it landed on a built address again. Recovery that edited
+        the search form on a guessed results page and submitted it got results that inherited the guess, and every
+        quote from the corrected search could be held.
+
+        | Transition                                      | Entry      | Lineage                                    |
+        | ----------------------------------------------- | ---------- | ------------------------------------------ |
+        | Back, Forward, reload, redraw, page rewrites    | one seen   | restored from that entry                   |
+        | switch back to a tab                            | one seen   | restored from that entry                   |
+        | NAVIGATE, a redirect after it                   | new        | guessed if it asked for or landed on one   |
+        |                                                 |            | the run built                              |
+        | Back past the start (the caller's page)         | new        | guessed if it landed on one the run built  |
+        | click, Enter, fill, select, drag, upload, hover | new, or a  | the site's: off the guess, unless it       |
+        | or a dialog, executed                           | new address| landed on an address the run built         |
+        | pushState or a new tab with no action of the    | new        | inherited from the page it came from       |
+        | run's, such as a page rewriting its address     |            |                                            |
+        | the opening, or the front-page fallback         | new        | as the run began (`run` sets it)           |
+        | the browser names no entry                      | none       | as for a new entry, each time              |
         """
         last = state.history[-1] if state.history else None
         executed = last is not None and last.outcome is StepOutcome.EXECUTED
         address, lineage = search_address(observation.url), state.lineage
         entry = observation.history_entry
         built = {search_address(url) for url in state.invented}
+        acted = executed and last is not None and last.operation in _SITE_ACTIONS
+        # The same address again, reached through the site's controls, is the guess resubmitted, not a new search.
+        site = acted and address not in built
         if entry is not None and entry in lineage.entries:
-            state.guessing = lineage.entries[entry]
+            moved = lineage.entry_addresses.get(entry) != address
+            state.guessing = False if site and moved else lineage.entries[entry]
         else:
             if executed and last is not None and last.operation is Operation.NAVIGATE:
                 # A redirect is the same navigation: what the run asked for decides, as well as where it landed.
                 state.guessing = address in built or search_address(last.target or "") in built
             elif executed and last is not None and last.operation is Operation.BACK:
                 state.guessing = address in built
-            if entry is not None:
-                lineage.entries[entry] = state.guessing
+            elif site:
+                state.guessing = False
+        if entry is not None:
+            lineage.entries[entry] = state.guessing
+            lineage.entry_addresses[entry] = address
         lineage.addresses[address] = state.guessing
 
     @staticmethod
