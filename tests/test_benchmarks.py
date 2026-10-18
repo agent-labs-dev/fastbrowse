@@ -318,7 +318,7 @@ def test_fixture_claims_are_checked_against_the_actual_artifact(candidate, monke
         benchmarks.check_fixture(parsed)
 
 
-def test_a_fixture_receipt_from_another_branch_counts_only_on_the_measured_commit(candidate, monkeypatch):
+def test_a_fixture_receipt_from_another_branch_counts_only_at_a_main_commit_it_measured(candidate, monkeypatch):
     from fastbrowse.evals import benchmarks
     from fastbrowse.evals.runner import _tasks
 
@@ -332,6 +332,8 @@ def test_a_fixture_receipt_from_another_branch_counts_only_on_the_measured_commi
         "event": "workflow_dispatch",
     }
     monkeypatch.setattr(benchmarks, "github_run", lambda _: run)
+    history = {"a" * 40}
+    monkeypatch.setattr(benchmarks, "on_main", lambda sha: sha in history)
     tasks, _ = _tasks([], ["local", "mock"])
     rows = [
         {"task": task.id, "repeat": repeat, "passed": True, "run": {"git_sha": "a" * 40, "git_dirty": False}}
@@ -351,6 +353,10 @@ def test_a_fixture_receipt_from_another_branch_counts_only_on_the_measured_commi
         benchmarks.check_fixture(parsed)
     run["head_sha"] = "a" * 40
     run["event"] = "schedule"
+    with pytest.raises(ValueError, match="fixture workflow receipt"):
+        benchmarks.check_fixture(parsed)
+    run["event"] = "workflow_dispatch"
+    history.clear()
     with pytest.raises(ValueError, match="fixture workflow receipt"):
         benchmarks.check_fixture(parsed)
 
