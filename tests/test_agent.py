@@ -82,7 +82,7 @@ from fastbrowse.page import (
     Page,
     SiteUnreachable,
 )
-from fastbrowse.planner import OutputTarget, Plan, Requirement, RequirementKind, RunReport
+from fastbrowse.planner import CheckedPlan, OutputTarget, Plan, Requirement, RequirementKind, RunReport
 from fastbrowse.policy import Decision, HistoryEntry, ReadAssessment, build_request, decide
 from fastbrowse.retrieval import TRANSACTION_CONTRADICTED, ComposedAnswer
 from fastbrowse.safety import Redactor, ScopedSecrets
@@ -2387,7 +2387,11 @@ async def test_the_page_a_run_began_on_is_shown_to_the_checks_after_a_shortcut_l
     async def planned(*args: object, **kwargs: object) -> Generation[Plan]:
         return Generation(data=plan, cost=FREE)
 
+    async def checked(*args: object, **kwargs: object) -> CheckedPlan:
+        return CheckedPlan(data=plan, cost=None)
+
     monkeypatch.setattr(agent_module, "make_plan", planned)
+    monkeypatch.setattr(agent_module, "answer_checks", checked)
     on = _at(release)
     page = Mock(spec=Page)
     page.artifacts = ()
@@ -2396,7 +2400,15 @@ async def test_the_page_a_run_began_on_is_shown_to_the_checks_after_a_shortcut_l
     page.response_status = AsyncMock(return_value=200)
     page.observe = AsyncMock(return_value=on)
     page.screenshot = AsyncMock(return_value=b"")
-    llm = ScriptedLLM(
+
+    class Verifying(ScriptedLLM):
+        async def generate(self, purpose, messages, schema, **kwargs):
+            if purpose is LLMPurpose.COMPOSE:
+                # The answer written beside the verifier is still being written when it refuses.
+                await asyncio.Event().wait()
+            return await super().generate(purpose, messages, schema, **kwargs)
+
+    llm = Verifying(
         [{"missing": ["req-1"], "complete": False}, {"diagnosis": "", "next_subgoal": "", "give_up": False}]
     )
     agent = Agent(page, ScriptedJev({}, noul=0.5), llm)
@@ -3241,6 +3253,7 @@ async def test_plan_receipt_is_not_billed_twice_when_recording_exceeds_budget(
 
     async def consume(state: _RunState, output_schema: object, until: object) -> RunResult:
         await state.await_plan()
+        await state.await_checks()
         raise AssertionError("Recording the plan must exceed the budget")
 
     monkeypatch.setattr(agent, "_loop", consume)

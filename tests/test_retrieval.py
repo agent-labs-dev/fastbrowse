@@ -4248,10 +4248,12 @@ async def test_atomic_outputs_use_source_audits_instead_of_confidence_alone(
     page = capture((BlockKind.PARAGRAPH, "Price £12"))
     notes = Notes((Fact(reader=FactReader.LLM, text="£12", evidence=block_evidence(page, "s0")),))
     answer = assemble_answer((Claim(text="It costs £12.", evidence_ids=tuple(notes.evidence)),), notes, ())
-    llm = ScriptedLLM([{"judgments": {"output_0": judgment or "uncertain"}, "reason": "test"}] * (2 if expected else 1))
+    llm = ScriptedLLM([{"judgments": {"output_0": judgment or "uncertain"}, "reason": "test"}] * 2)
     held = await check_answer_outputs(Jev(), llm, answer, notes, ("Report the price.",))
     assert held is expected
-    assert len(llm.calls) == (3 if expected else 1 + int(probability is not None))
+    # The source and assertion audits run side by side once a claim is selected, so a rejected source still sent
+    # both; an unanswered selection stops after the identity call it ran beside.
+    assert len(llm.calls) == (3 if probability is not None else 1)
 
 
 async def test_atomic_output_context_keeps_cited_sources_without_uncited_metadata() -> None:
@@ -4543,7 +4545,8 @@ async def test_source_availability_audit_withholds_reported_values() -> None:
     assert "text" not in source
     assert source["cited_sources"][0]["quote"] == "| Ports | 1 | 3 |"
     assert missing == ["Report Device Beta's port count."]
-    assert len(llm.calls) == 2
+    # Identities, then the source audit beside the assertion audit, whose verdict a failed source never uses.
+    assert len(llm.calls) == 3
 
 
 def test_large_headerless_tables_repeat_real_context_without_inventing_headers() -> None:
