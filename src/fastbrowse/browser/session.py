@@ -18,7 +18,13 @@ from typing import Any, Self, cast
 
 from cdp_use.cdp.fetch.events import RequestPausedEvent
 from cdp_use.cdp.fetch.types import RequestPattern
-from cdp_use.cdp.page.events import JavascriptDialogClosedEvent, JavascriptDialogOpeningEvent, ScreencastFrameEvent
+from cdp_use.cdp.page.events import (
+    JavascriptDialogClosedEvent,
+    JavascriptDialogOpeningEvent,
+    ScreencastFrameEvent,
+    WindowOpenEvent,
+)
+from cdp_use.cdp.runtime.events import ExecutionContextCreatedEvent
 from cdp_use.cdp.target.commands import CreateTargetParameters
 from cdp_use.cdp.target.events import (
     AttachedToTargetEvent,
@@ -53,10 +59,21 @@ CDP_COMMAND_SECONDS = 120.0
 """A responsive browser can still leave one document command pending forever."""
 CDP_ALIVE_SECONDS = 10.0
 """`Browser.getVersion` is answered at once by any browser that is there."""
+CDP_DEADLINES_BEFORE_STOP = 2
+"""Command deadlines one connection may meet before its tab's commands fail at once, as `PageUnresponsive`. A read
+that waits out the deadline is often one whose caller treats a failed read as an unreadable page and carries on, so the
+next read waited it out again: one login run met it thirteen times, 26 minutes on a page it could not use.
+Browser-level commands (closing the run's tabs) are still sent."""
 
 
 class BrowserUnresponsive(BrowserError, Unavailable):
     """The browser stopped answering: an outage the same run may not meet again, not a failed task."""
+
+
+class PageUnresponsive(BrowserError):
+    """A tab that stopped answering while the browser behind it still answers: a failure driving the page, which ends
+    the run as its own error. It is not an outage, since the connection and the browser are both there; reporting it
+    as one would leave the run's own failures out of what it is measured on."""
 
 
 class OriginNotAllowed(BrowserError):
@@ -122,12 +139,23 @@ class _HideEndpoint(logging.Filter):
 logging.getLogger("cdp_use.client").addFilter(_HideEndpoint())
 
 
+POPUP_ANNOUNCE_SECONDS = 5.0
+"""How long a click that is opening a window waits for Chrome to announce its tab. In ten runs of a link opening a new
+window, the tab was announced from 0.08 to 2.5 seconds after the click, and the one a loaded machine announced later
+than the settle after the click was never followed: the run read the page that opened it."""
+
+STATUS_WORLD = "fastbrowse-status"
+"""The isolated world a tab's HTTP status is read in, out of reach of the page's scripts."""
+
 _SERVER_ERROR = -32000
 """The code Chrome answers when the document or frame a command addressed is gone, as after a navigation."""
 
 
-def _browser_error(method: str, cause: Exception) -> BrowserError:
+def _browser_error(method: str, cause: Exception, *, lost_is_outage: bool = True) -> BrowserError:
     detail = type(cause).__name__
+    if lost_is_outage and isinstance(cause, (ConnectionClosed, ConnectionError)):
+        # The connection to the browser is gone: an outage, not the run's failure.
+        return BrowserUnresponsive(f"{method} failed ({detail})")
     if cause.args and isinstance(cause.args[0], dict):
         code = cast("dict[str, object]", cause.args[0]).get("code")
         if type(code) is int:
@@ -171,9 +199,18 @@ class _BrowserClient(CDPClient):
         try:
             await super().stop()
         except Exception as exc:
-            raise _browser_error("CDP.stop", exc) from exc
+            # A connection lost while closing comes after the run's own work, so it is never reported as an outage.
+            raise _browser_error("CDP.stop", exc, lost_is_outage=False) from exc
+
+    _deadlines = 0
+    """Commands on this connection that outlived CDP_COMMAND_SECONDS."""
 
     async def send_raw(self, method: str, params: Any = None, session_id: str | None = None) -> dict[str, Any]:
+        if session_id is not None and self._deadlines >= CDP_DEADLINES_BEFORE_STOP:
+            raise PageUnresponsive(
+                f"{method} not sent: the page stopped answering, {self._deadlines} commands already exceeded their "
+                "deadline while the browser answered"
+            )
         reply = asyncio.ensure_future(super().send_raw(method, params, session_id))
         try:
             try:
@@ -193,8 +230,20 @@ class _BrowserClient(CDPClient):
                     self._answered = True
                     return reply.result()
             except TimeoutError:
-                raise BrowserUnresponsive(f"{method} exceeded its command deadline; the page did not answer") from None
-        except BrowserUnresponsive:
+                # The browser can go during the last wait, after the probe before it answered, so it is asked once
+                # more: only a browser that is still there makes this the page's failure rather than an outage.
+                alive = reply.done() or await self._alive()
+                if reply.done() and not reply.cancelled():
+                    # The page answered while the browser was being asked: the command is done, however late.
+                    self._answered = True
+                    return reply.result()
+                if not alive:
+                    raise BrowserUnresponsive(f"{method} got no reply, and the browser stopped answering") from None
+                self._deadlines += 1
+                raise PageUnresponsive(
+                    f"{method} exceeded its command deadline; the page did not answer while the browser did"
+                ) from None
+        except (BrowserUnresponsive, PageUnresponsive):
             raise
         except Exception as exc:
             # CDP error messages can contain evaluated source or page text, including secrets.
@@ -278,6 +327,12 @@ class BrowserSession:
         self._open_before: set[str] = set()
         """Targets already open when an attached session began, which never join the run."""
         self._popups: dict[str, tuple[str, asyncio.Future[bool]]] = {}
+        self.window_opens = 0
+        """`Page.windowOpen` events from the run's pages: each one is a window on its way, announced or not."""
+        self._popup_signal = asyncio.Event()
+        """Set, and replaced, each time a popup is begun, so a wait for one wakes as it is announced."""
+        self._status_contexts: dict[tuple[str, int], str] = {}
+        """(session, context id) -> unique id, for each world named `STATUS_WORLD` Chrome reported creating."""
         """Popup target id -> (opener target id, whether it was adopted), in the order they opened."""
         self._active_target_id = ""
         # A scoped run casts nothing: a frame is pixels of whatever the tab shows, and the browser's reports of
@@ -667,6 +722,8 @@ class BrowserSession:
 
     def _register_events(self) -> None:
         client = self.client
+        client.register.Runtime.executionContextCreated(self._on_context_created)
+        client.register.Page.windowOpen(self._on_window_open)
         client.register.Target.attachedToTarget(self._on_attached)
         client.register.Target.detachedFromTarget(self._on_detached)
         client.register.Target.targetCreated(self._on_target_created)
@@ -692,6 +749,18 @@ class BrowserSession:
         self._background.discard(task)
         if not task.cancelled():
             task.exception()
+
+    def _on_window_open(self, event: WindowOpenEvent, session_id: str | None) -> None:
+        self.window_opens += 1
+
+    def _on_context_created(self, event: ExecutionContextCreatedEvent, session_id: str | None) -> None:
+        context = event["context"]
+        if session_id is not None and context.get("name") == STATUS_WORLD:
+            self._status_contexts[(session_id, context["id"])] = context["uniqueId"]
+
+    def status_context(self, session_id: str, context_id: int) -> str | None:
+        """The unique id of the status world `context_id` names on `session_id`, once, if Chrome reported it."""
+        return self._status_contexts.pop((session_id, context_id), None)
 
     # -- Target/frame tracking -------------------------------------------------------------------------
 
@@ -758,9 +827,13 @@ class BrowserSession:
         return None
 
     def _begin_popup(self, target_id: str, opener_id: str, session_id: str | None = None) -> None:
+        if target_id in self._popups:
+            return
         if opener_id in self._owned:
             self._owned.add(target_id)
         self._popups[target_id] = (opener_id, asyncio.get_running_loop().create_future())
+        self._popup_signal.set()
+        self._popup_signal = asyncio.Event()
         self._spawn(self._adopt_popup(target_id, opener_id, session_id))
 
     async def _adopt_popup(self, target_id: str, opener_id: str, session_id: str | None = None) -> None:
@@ -786,26 +859,44 @@ class BrowserSession:
     def popups(self) -> tuple[str, ...]:
         return tuple(self._popups)
 
-    async def follow_popup(self, known: tuple[str, ...], within: float) -> str | None:
+    async def follow_popup(self, known: tuple[str, ...], *, expected: bool = False) -> str | None:
         """Make active the latest tab the active tab opened since `known` once it is adopted, and return its id.
 
         A link that opens its page in a new window left the run on the opener: the next step was spent choosing
-        the new tab, and the read before it credited the opener's heading to the new window.
+        the new tab, and the read before it credited the opener's heading to the new window. Adoption is waited
+        out however long it takes, since each of its commands has its own deadline: a fixed two seconds for it
+        was outlasted on a loaded machine, and the run read the opener while the tab it had opened sat unused.
+
+        With `expected`, the click is known to be opening a window (it named a new browsing context, or Chrome
+        reported a window opening since `known` was taken), so a tab not announced yet is waited for, up to
+        `POPUP_ANNOUNCE_SECONDS`; any other click returns at once when nothing has been announced.
         """
         opener = self._active_target_id
-        fresh = [t for t, (o, _) in self._popups.items() if o == opener and t not in known]
-        if not fresh:
-            return None
-        with contextlib.suppress(TimeoutError):
-            if await asyncio.wait_for(asyncio.shield(self._popups[fresh[-1]][1]), within) and fresh[-1] in self._tabs:
-                await self.switch_tab(fresh[-1])
-                return fresh[-1]
+        deadline = asyncio.get_running_loop().time() + (POPUP_ANNOUNCE_SECONDS if expected else 0)
+        while not (fresh := [t for t, (o, _) in self._popups.items() if o == opener and t not in known]):
+            signal = self._popup_signal
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return None
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(signal.wait(), remaining)
+        if await asyncio.shield(self._popups[fresh[-1]][1]) and fresh[-1] in self._tabs:
+            await self.switch_tab(fresh[-1])
+            return fresh[-1]
         return None
 
     def _on_target_info_changed(self, event: TargetInfoChangedEvent, session_id: str | None) -> None:
         info = event["targetInfo"]
         if info["targetId"] in self._tabs:
             self.set_tab_info(info["targetId"], info["url"], info["title"])
+        # An opener Chrome reports only after the target was created makes it the run's popup from then on.
+        elif (
+            self._grant is None
+            and info.get("openerId")
+            and info["targetId"] not in self._popups
+            and (opener := self._popup_opener(info)) is not None
+        ):
+            self._begin_popup(info["targetId"], opener)
 
     def _on_target_destroyed(self, event: TargetDestroyedEvent, session_id: str | None) -> None:
         target_id = event["targetId"]

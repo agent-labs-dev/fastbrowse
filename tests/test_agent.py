@@ -33,6 +33,7 @@ from fastbrowse.agent import (
     _without_missing,
 )
 from fastbrowse.batches import evaluate_batches
+from fastbrowse.browser.session import BrowserUnresponsive, PageUnresponsive
 from fastbrowse.citations import text_fragment
 from fastbrowse.clients.openai_compatible import OpenAICompatibleLLM
 from fastbrowse.clients.typesafe import TypeSafeJevClient
@@ -4117,6 +4118,22 @@ async def test_a_page_nobody_read_is_read_before_it_is_scrolled() -> None:
     assert len(llm.calls) == 1
     # Once this document is read, scrolling it is how the rest of a lazily drawn list comes in.
     assert not await agent._read_before_interaction(state, obs, decision)
+
+
+@pytest.mark.parametrize(
+    ("failed", "status"),
+    [(PageUnresponsive, Status.ERROR), (BrowserUnresponsive, Status.UNAVAILABLE)],
+)
+async def test_a_page_that_stops_answering_is_the_runs_failure_and_a_lost_browser_an_outage(
+    failed: type[BrowserError], status: Status
+) -> None:
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    page.navigate = AsyncMock()
+    page.observe = AsyncMock(side_effect=failed("Runtime.evaluate exceeded its command deadline"))
+    llm = ScriptedLLM([{"url": None}, {"url": None}])
+    result = await Agent(page, ScriptedJev({}), llm).run("Sign in", start="https://example.test")
+    assert result.status is status
 
 
 @pytest.mark.parametrize("failed", [NavigationTimeout, SiteUnreachable, BrowserUnavailable])

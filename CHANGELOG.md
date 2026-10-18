@@ -11,6 +11,24 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A page that stops answering no longer stalls a run for minutes at a time. A frame inside the page that stops
+  responding, such as a stuck advertisement, is read as unreadable after five seconds instead of holding every
+  observation for the two-minute command deadline, and a tab that stops drawing frames no longer makes each wait
+  for the page to settle run to that deadline. A tab whose commands miss the deadline twice now ends the run as
+  `error` instead of paying it again on every step: one benchmark login spent 26 minutes that way.
+- A page that stops answering while the browser still does now ends the run as `error`, its own failure, where a
+  single missed command deadline used to end it `unavailable` as if the browser had gone. `unavailable` is kept for
+  a browser that stops answering or a connection to it that closes during the run, which a closed connection now
+  also reports. A connection that closes while the run shuts down still ends it as `error`, as before.
+- A click that opens a new tab is followed even when the browser is slow to announce or set up that tab. A
+  tab announced after the page had settled was missed, as was one set up in over a fixed two seconds, and the run
+  went on reading the page that opened it. A click on a link or button that names a new window, or one the
+  browser reports opening a window, now waits up to five seconds for the tab to be announced, and then for its
+  setup however long it takes; a click that opens nothing does not wait. A tab whose opener the browser names only
+  after creating it is followed too.
+- Each observation and each click, fill or hover makes fewer round trips to the browser, which a cloud
+  browser pays for on every step. The world the HTTP status is read in is kept per document instead of made
+  again each time, and the pointer moves without waiting a second time for a frame already drawn.
 - Benchmark figures measured under a deliberately changed protocol, such as the uncapped runs, can now be
   published: the maintainer approves the change explicitly, the changed groups start a fresh baseline that is
   never compared with figures measured under the old protocol, and the figures they replace stay published
