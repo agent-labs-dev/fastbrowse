@@ -26,7 +26,7 @@ from cdp_use.cdp.runtime.commands import EvaluateParameters
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from fastbrowse.browser.cursor import CursorFeedback, Geometry
-from fastbrowse.browser.session import STATUS_WORLD, BrowserSession, OriginNotAllowed
+from fastbrowse.browser.session import STATUS_WORLD, BrowserSession, OriginNotAllowed, PageUnresponsive
 from fastbrowse.config import Config
 from fastbrowse.datafiles import data_file
 from fastbrowse.models import TARGETED, Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome, Unavailable
@@ -750,8 +750,11 @@ class CdpPage(Page):
                     before_fingerprint, live_guard, point, announced, opens = await self._before_action(
                         target, hit_test=action.operation in TARGETED, present=drawn
                     )
-            except (TimeoutError, _ScriptError):
-                # A page can also replace those timers with ones that throw; the measurement is made again either way.
+            except TimeoutError as exc:
+                # The renderer may be synchronously blocked. Do not queue a second evaluation behind it.
+                raise PageUnresponsive("page did not draw the measured layout before the deadline") from exc
+            except _ScriptError:
+                # A page can replace those timers with ones that throw while leaving the renderer responsive.
                 drawn = False
                 before_fingerprint, live_guard, point, announced, opens = await self._before_action(
                     target, hit_test=action.operation in TARGETED
@@ -1846,9 +1849,7 @@ class CdpPage(Page):
                 "(!!e.getAttribute('aria-haspopup') || e.getAttribute('aria-expanded') === 'false' || "
                 "!!e.getAttribute('aria-controls') || !!e.getAttribute('aria-owns')); "
                 # A link, area or submit that names a new browsing context opens a window whatever its handlers do.
-                "const fresh = name => { name = (name ?? '').trim(); return !!name && "
-                "!['_self', '_parent', '_top'].includes(name.toLowerCase()) && "
-                "![...e.ownerDocument.querySelectorAll('iframe,frame')].some(f => f.name === name); }; "
+                "const fresh = name => (name ?? '').trim().toLowerCase() === '_blank'; "
                 "const link = e?.closest('a[href],area[href]'); "
                 "const opens = !!e && ((!!link && fresh(link.hasAttribute('target') ? link.getAttribute('target') "
                 ": e.ownerDocument.querySelector('base[target]')?.getAttribute('target'))) || "

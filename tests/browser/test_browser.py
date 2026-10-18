@@ -16,7 +16,7 @@ from cdp_use.client import CDPClient
 
 from fastbrowse.adapters.local_chrome import find_chrome, local_chrome
 from fastbrowse.browser.page import CdpPage
-from fastbrowse.browser.session import BrowserSession
+from fastbrowse.browser.session import BrowserSession, PageUnresponsive
 from fastbrowse.clients.environment import load_settings
 from fastbrowse.config import Config, ObservationLimits
 from fastbrowse.effects import effect
@@ -334,6 +334,23 @@ async def test_a_click_that_opens_no_window_does_not_wait_for_one(
     result = await loaded_page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Shadow button").id), obs)
     assert result.outcome is StepOutcome.EXECUTED and result.detail is None
     assert asyncio.get_running_loop().time() - started < 2.0
+
+
+async def test_a_draw_wait_timeout_does_not_queue_a_second_page_evaluation(
+    loaded_page: CdpPage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    obs = await loaded_page.observe()
+    calls = 0
+
+    async def timed_out(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        raise TimeoutError
+
+    monkeypatch.setattr(loaded_page, "_before_action", timed_out)
+    with pytest.raises(PageUnresponsive, match="did not draw"):
+        await loaded_page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Shadow button").id), obs)
+    assert calls == 1
 
 
 async def test_a_tab_opened_from_a_cross_site_frame_is_followed(
