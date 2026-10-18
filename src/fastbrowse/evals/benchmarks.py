@@ -373,9 +373,10 @@ def check_fixture(candidate: Candidate) -> None:
         or run["status"] != "completed"
         or run["path"] != ".github/workflows/evals.yml"
         or run["repository"]["full_name"] != "agent-labs-dev/fastbrowse"
-        or run["head_branch"] != "main"
         or run["event"] != "workflow_dispatch"
     ):
+        # Any branch: the receipt binds the measured commit by head_sha and every row's clean git_sha, so a
+        # maintainer can produce it for a measured build that main has since moved past.
         raise ValueError("a successful fixture workflow receipt on the measured build is required")
     from fastbrowse.evals.runner import _tasks
 
