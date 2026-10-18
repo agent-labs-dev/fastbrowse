@@ -26,7 +26,7 @@ from cdp_use.cdp.runtime.commands import EvaluateParameters
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from fastbrowse.browser.cursor import CursorFeedback, Geometry
-from fastbrowse.browser.session import STATUS_WORLD, BrowserSession, OriginNotAllowed, PageUnresponsive
+from fastbrowse.browser.session import STATUS_WORLD, BrowserSession, OriginNotAllowed
 from fastbrowse.config import Config
 from fastbrowse.datafiles import data_file
 from fastbrowse.models import TARGETED, Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome, Unavailable
@@ -750,9 +750,12 @@ class CdpPage(Page):
                     before_fingerprint, live_guard, point, announced, opens = await self._before_action(
                         target, hit_test=action.operation in TARGETED, present=drawn
                     )
-            except TimeoutError as exc:
-                # The renderer may be synchronously blocked. Do not queue a second evaluation behind it.
-                raise PageUnresponsive("page did not draw the measured layout before the deadline") from exc
+            except TimeoutError:
+                # A page can replace its timers without blocking the renderer; remeasure without waiting for its frame.
+                drawn = False
+                before_fingerprint, live_guard, point, announced, opens = await self._before_action(
+                    target, hit_test=action.operation in TARGETED
+                )
             except _ScriptError:
                 # A page can replace those timers with ones that throw while leaving the renderer responsive.
                 drawn = False
