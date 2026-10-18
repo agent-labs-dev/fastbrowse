@@ -41,6 +41,10 @@
     return true;
   };
   const registry = (window.__fastbrowse ||= { ids: new WeakMap(), nodes: new Map(), next: 1 });
+  // Keep the page's own timer overrides from holding a browser-side frame wait open.
+  registry.nativeSetTimeout ||= window.setTimeout.bind(window);
+  registry.nativeClearTimeout ||= window.clearTimeout.bind(window);
+  registry.nativeRequestAnimationFrame ||= window.requestAnimationFrame.bind(window);
   // What was offered to be acted on; `ids` also names hover targets and fingerprinted nodes.
   registry.controls ||= new WeakSet();
   // A visible loading indicator means the page is still fetching what it will draw, which network idle and a

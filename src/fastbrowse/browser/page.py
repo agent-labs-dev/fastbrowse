@@ -26,7 +26,7 @@ from cdp_use.cdp.runtime.commands import EvaluateParameters
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from fastbrowse.browser.cursor import CursorFeedback, Geometry
-from fastbrowse.browser.session import STATUS_WORLD, BrowserSession, OriginNotAllowed
+from fastbrowse.browser.session import STATUS_WORLD, BrowserSession, OriginNotAllowed, PageUnresponsive
 from fastbrowse.config import Config
 from fastbrowse.datafiles import data_file
 from fastbrowse.models import TARGETED, Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome, Unavailable
@@ -123,9 +123,9 @@ _DRAG_STEP_SECONDS = 0.01
 # A guard resumed inside an animation callback can miss other callbacks in that same frame. Resolve in the
 # next task so a combined frame wait and hit test sees their DOM changes too.
 _PRESENTED_JS = (
-    "new Promise(done => { const t = setTimeout(done, 100); "
-    "requestAnimationFrame(() => requestAnimationFrame(() => "
-    "setTimeout(() => { clearTimeout(t); done(); }, 0))); })"
+    "new Promise(done => { const r = window.__fastbrowse; const t = r.nativeSetTimeout(done, 100); "
+    "r.nativeRequestAnimationFrame(() => r.nativeRequestAnimationFrame(() => "
+    "r.nativeSetTimeout(() => { r.nativeClearTimeout(t); done(); }, 0))); })"
 )
 """Resolves once the page has drawn a frame, or after 100ms where a hidden page never draws one."""
 
@@ -750,12 +750,9 @@ class CdpPage(Page):
                     before_fingerprint, live_guard, point, announced, opens = await self._before_action(
                         target, hit_test=action.operation in TARGETED, present=drawn
                     )
-            except TimeoutError:
-                # A page can replace its timers without blocking the renderer; remeasure without waiting for its frame.
-                drawn = False
-                before_fingerprint, live_guard, point, announced, opens = await self._before_action(
-                    target, hit_test=action.operation in TARGETED
-                )
+            except TimeoutError as exc:
+                # The renderer may be synchronously blocked. Do not queue a second evaluation behind it.
+                raise PageUnresponsive("page did not draw the measured layout before the deadline") from exc
             except _ScriptError:
                 # A page can replace those timers with ones that throw while leaving the renderer responsive.
                 drawn = False
@@ -1954,7 +1951,12 @@ class CdpPage(Page):
         )
 
     async def _evaluate(
-        self, session_id: str, expression: str, *, context_id: int | None = None, unique_context_id: str | None = None
+        self,
+        session_id: str,
+        expression: str,
+        *,
+        context_id: int | None = None,
+        unique_context_id: str | None = None,
     ) -> JsonValue:
         params: EvaluateParameters = {"expression": expression, "returnByValue": True, "awaitPromise": True}
         if context_id is not None:
