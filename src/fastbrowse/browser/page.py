@@ -15,6 +15,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 from typing import Literal, assert_never
@@ -25,6 +26,7 @@ from cdp_use.cdp.page.commands import CaptureScreenshotParameters, GetNavigation
 from cdp_use.cdp.runtime.commands import EvaluateParameters
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
+from fastbrowse.addresses import search_address
 from fastbrowse.browser.cursor import CursorFeedback, Geometry
 from fastbrowse.browser.session import STATUS_WORLD, BrowserSession, OriginNotAllowed, PageUnresponsive
 from fastbrowse.config import Config
@@ -106,6 +108,118 @@ _HIT_TEST_JS = (
     "if (Array.isArray(point)) return point; } } return 'covered'; })"
 )
 
+_SCROLL_EVENT_SECONDS = 3.0
+"""Longest wait for the scroll event a scrolled window owes before the control is left untouched as unsettled."""
+
+# A band fixed to the window's foot covered a form's submit button, and the run ended stuck after clicking the band's
+# own close control did nothing. A band fixed to the window covers a place on the screen, not a control, so the
+# control is scrolled to each alignment in turn and kept at the first where a point of it is its own again. The guard
+# is checked in the same task: a stale control must never be scrolled into view.
+#
+# It resolves only once every scroll it caused has been delivered and the page has gone a frame and a task without
+# another, when any alignment moved the window or a container the control sits in: the page's scroll handlers, which
+# can repurpose the control, have run by then. A container's scroll event does not reach the window, so a route that
+# waited on the window alone, with only a scrolled list moving, went ahead before the list's handler ran. One capture
+# listener on each document sees every element's scroll and the window's. A wait for a drawn frame gave up after 100ms
+# without one, and comparing only where the window started and ended skipped the wait when 'end' brought it back to
+# the top. A wait with any deadline can lose the race on a loaded machine, so a scroll whose events did not arrive and
+# go quiet in time, or that a hidden page will only deliver once something shows it, is reported 'unsettled' and
+# nothing is acted on.
+_UNCOVER_JS = (
+    "(async (id, guard) => { const r = window.__fastbrowse, e = r?.nodes.get(id); "
+    "if (!e?.isConnected || JSON.stringify(r.guard(e)) !== JSON.stringify(guard)) return null; "
+    "const docs = [], scrollers = [], roots = []; "
+    # The scrolling element reports the window's scroll, whose events and scrollend go to the document instead.
+    "for (let n = e; n; ) { if (n !== n.ownerDocument.scrollingElement) scrollers.push(n); "
+    "const root = n.getRootNode(); if (root instanceof ShadowRoot && !roots.includes(root)) roots.push(root); "
+    "if (n.parentElement) n = n.parentElement; else if (root instanceof ShadowRoot) n = root.host; "
+    "else { const view = n.ownerDocument.defaultView; docs.push(n.ownerDocument); "
+    "try { n = view.frameElement; } catch { n = null; } } } "
+    "const at = t => t instanceof Document ? [t.defaultView.scrollX, t.defaultView.scrollY].join() "
+    ": [t.scrollLeft, t.scrollTop].join(); const targets = [...docs, ...scrollers]; "
+    "const where = () => targets.map(at).join(';'); const before = targets.map(at); "
+    # A scroll event is not composed, so one inside a shadow root, open or closed, never reaches the document: a
+    # list scrolled there was waited on until the deadline and refused a control it had exposed. Every document,
+    # every shadow root on the way and every scroller listens, and an event heard twice counts once.
+    "const heard = new WeakSet(), ends = new Set(); let seen = 0; "
+    "const mark = ev => { if (!heard.has(ev)) { heard.add(ev); seen++; } }; const end = ev => ends.add(ev.target); "
+    "const listeners = [...docs, ...roots, ...scrollers]; "
+    "for (const l of listeners) { l.addEventListener('scroll', mark, {capture: true, passive: true}); "
+    "l.addEventListener('scrollend', end, {capture: true, passive: true}); } "
+    "try { let moved = false, point = 'covered'; "
+    "for (const block of ['center', 'start', 'end']) { const was = where(); "
+    "e.scrollIntoView({block, inline: 'nearest', behavior: 'instant'}); moved ||= where() !== was; "
+    "point = (" + _HIT_TEST_JS + ")(id, false); if (point !== 'covered') break; } "
+    "if (!moved) return point; if (e.ownerDocument.hidden) return 'unsettled'; "
+    # A scroller that ends somewhere new owes its scrollend too, where the browser sends one: a carousel that
+    # settles on its scrollend swaps the card, and the button in it, after the scroll events have gone quiet.
+    "const due = 'onscrollend' in window ? targets.filter((t, i) => at(t) !== before[i]) : []; "
+    f"const deadline = performance.now() + {_SCROLL_EVENT_SECONDS * 1000}; "
+    "const turn = () => Promise.race(["
+    "new Promise(done => requestAnimationFrame(() => setTimeout(() => done(true), 0))), "
+    "new Promise(done => setTimeout(() => done(false), Math.max(0, deadline - performance.now())))]); "
+    "while (!seen || due.some(t => !ends.has(t))) if (!await turn()) return 'unsettled'; "
+    "for (let last = -1; last !== seen; ) { last = seen; if (!await turn()) return 'unsettled'; } "
+    "return point; } finally { for (const l of listeners) { l.removeEventListener('scroll', mark, {capture: true}); "
+    "l.removeEventListener('scrollend', end, {capture: true}); } } })"
+)
+
+_OBSTRUCTIONS = 'dialog,[role=dialog],[role=alertdialog],[aria-modal="true"],[role=menu],[role=listbox],[popover]'
+"""What a page draws over its content and means to be dealt with first. Naming a cover for recovery and routing
+around one read this one list: a small open menu fixed to the window looked like a band to one of them, and the
+control under it would have been pressed through it."""
+
+# What covers the control's centre, through its frames: an obstruction the page means to be dealt with first (a
+# dialog, an open menu, a popover), a band fixed to the window (an anchored ad, a sticky footer, a chat bubble) that
+# floats over whatever is scrolled beneath it, or anything else, such as a full-window backdrop or a panel drawn over
+# the control in the page's own flow. Only a band is routed around; under anything else the page shows something
+# other than the control, and that is the run's to deal with.
+_COVER_JS = (
+    "((id) => { const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return null; "
+    "const OBSTRUCTIONS = " + json.dumps(_OBSTRUCTIONS) + "; "
+    "const rect = e.getBoundingClientRect(); let x = rect.left + rect.width / 2, y = rect.top + rect.height / 2; "
+    "let node = e, doc = e.ownerDocument; while (true) { const view = doc.defaultView; "
+    "let hit = doc.elementFromPoint(x, y); "
+    "while (hit?.shadowRoot) { const inner = hit.shadowRoot.elementFromPoint(x, y); "
+    "if (!inner || inner === hit) break; hit = inner; } "
+    # Up through shadow hosts: an overlay drawn by a custom element keeps its fixed box, or its dialog role, inside
+    # its shadow root, where a walk by parentElement stopped, so a band was refused and a dialog could pass for one.
+    "const up = n => n.parentElement || (n.getRootNode() instanceof ShadowRoot ? n.getRootNode().host : null); "
+    "const holds = (a, b) => { for (let n = b; n; n = up(n)) if (n === a) return true; return false; }; "
+    "if (hit && !holds(node, hit)) { let obstruction = null; "
+    "for (let n = hit; n && !obstruction; n = up(n)) if (n.matches(OBSTRUCTIONS)) obstruction = n; "
+    "if (obstruction && !holds(obstruction, node)) return 'obstruction'; "
+    "let band = false; for (let n = hit; n && !holds(n, node); n = up(n)) { "
+    "if (!['fixed', 'sticky'].includes(view.getComputedStyle(n).position)) continue; "
+    "const r = n.getBoundingClientRect(); "
+    "if (r.width * r.height >= view.innerWidth * view.innerHeight / 2) return 'other'; band = true; } "
+    "return band ? 'band' : 'other'; } "
+    "if (doc === document) return 'none'; node = view.frameElement; if (!node) return 'none'; "
+    "const frame = node.getBoundingClientRect(); "
+    "x = frame.x + (node.clientLeft + x) * frame.width / node.offsetWidth; "
+    "y = frame.y + (node.clientTop + y) * frame.height / node.offsetHeight; doc = node.ownerDocument; } })"
+)
+
+# The pointer path rechecks a control's guard before every press (`_stable_point`); the keyboard path asks this.
+_GUARD_HOLDS_JS = (
+    "((id, guard) => { const r = window.__fastbrowse, e = r?.nodes.get(id); "
+    "return !!e?.isConnected && !!r.guard && JSON.stringify(r.guard(e)) === JSON.stringify(guard); })"
+)
+
+# Keys go to the focused control whatever is drawn over it, so a control a band still covers is pressed from the
+# keyboard, as a keyboard user would press it, and nothing in the band is ever touched. The key is the one the
+# control's own semantics answer to; a control that names none is not pressed.
+_ACTIVATION_KEY_JS = (
+    "((id) => { const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return null; "
+    "const role = e.getAttribute('role'); "
+    "if (e.tagName === 'INPUT' && ['checkbox', 'radio'].includes(e.type)) return ' '; "
+    "if (['checkbox', 'radio', 'switch', 'menuitemcheckbox', 'menuitemradio'].includes(role)) return ' '; "
+    "if (e.matches('button,a[href],summary,input[type=submit],input[type=button],input[type=reset],"
+    "input[type=image]')) return 'Enter'; "
+    "if (['button', 'link', 'tab', 'menuitem', 'option', 'treeitem'].includes(role)) return 'Enter'; "
+    "return null; })"
+)
+
 _GEOMETRY_JS = (
     "[window.screenX, window.screenY, window.outerWidth, window.outerHeight, window.innerWidth, window.innerHeight, "
     "window.visualViewport ? window.visualViewport.scale : 1, document.visibilityState === 'visible', "
@@ -168,6 +282,24 @@ _SETTLED = TypeAdapter(tuple[bool, str | None])
 _NODE_ID = TypeAdapter(int | None)
 _LANDED = TypeAdapter(tuple[bool, bool])
 _FILL_TARGET = TypeAdapter(tuple[int | None, bool, bool | None])
+_HISTORY_REREADS = 2
+"""Times an observation is read again when its history entry and its snapshot name different addresses."""
+_KEYS = {"Enter": ("Enter", "\r", 13), "Escape": ("Escape", "", 27), " ": ("Space", " ", 32)}
+"""Each key pressed: its code, the text it types and its Windows virtual key code."""
+_POINT = TypeAdapter(tuple[float, float] | Literal["covered", "unsettled"] | None)
+_COVER = TypeAdapter(Literal["obstruction", "band", "other", "none"] | None)
+_ACTIVATION_KEY = TypeAdapter(Literal["Enter", " "] | None)
+_CHANGED = "control changed before keyboard use"
+
+
+@dataclass(frozen=True, slots=True)
+class _Refusal:
+    outcome: StepOutcome
+    detail: str | None
+
+
+type _Route = tuple[float, float] | Literal["keyboard"] | _Refusal
+"""Where a covered control can be acted on: a point scrolled clear of the cover, the keyboard, or why nowhere."""
 
 
 class _SnapshotControl(Frozen):
@@ -335,13 +467,24 @@ class _FrameObservation[T: _FrameText]:
         self.raw = raw
 
 
+# What a person reads as closing a cover rather than following it, judged by its label alone.
+_DISMISS = re.compile(r"\b(close|dismiss|skip|hide|no,? thanks|not now)\b|^\s*[x\u00d7\u2715\u2716]\s*$", re.IGNORECASE)
+
+
 class _ObservedState:
     """What `act` needs to re-find and freshness-check the exact control an `Observation` named."""
 
-    def __init__(self, page_key: str, controls: dict[str, tuple[str, str, int, list[object] | None]]) -> None:
+    def __init__(
+        self,
+        page_key: str,
+        controls: dict[str, tuple[str, str, int, list[object] | None]],
+        labels: dict[str, list[str]] | None = None,
+    ) -> None:
         self.page_key = page_key
         # control_id -> (session_id, frame_key, local_node_id, guard snapshot)
         self.controls = controls
+        # frame_key -> the labels of the controls observed in that frame, for naming what a covering frame offers
+        self.labels = labels or {}
 
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
@@ -385,6 +528,11 @@ class CdpPage(Page):
         self._session = session
         self._config = config
         self._last: _ObservedState | None = None
+        self._marked: tuple[int, str] | None = None
+        """The count of navigations the run's input had begun, and the page's address, when the last action began.
+        A dialog blocks the page, so accepting one is judged against this mark, and only when the dialog came from
+        that same address: a dialog a page opened as it loaded after a navigation is not the action's, and
+        accepting it moved nothing."""
         self._back_to: dict[str, str] = {}
         self._unanswered: dict[str, float] = {}
         """Child frame session -> when its last read missed the full deadline."""
@@ -434,23 +582,32 @@ class CdpPage(Page):
             # The new document can be replaced in turn while this waits; the next read is what counts.
             await asyncio.sleep(_SETTLE_POLL_SECONDS)
 
-    async def _observe_once(self) -> Observation:
+    async def _observe_once(self, attempt: int = 0) -> Observation:
         await self._session.assert_clear()
         dialog = self._session.pending_dialog()
         if dialog is not None:
             # A JavaScript dialog blocks the renderer, so any page evaluate would hang until it is handled.
             return self._dialog_observation(dialog)
-        history = asyncio.create_task(self._can_go_back())
+        history = asyncio.create_task(self._history())
         snapshot = asyncio.create_task(self._snapshot_all_frames())
         response = asyncio.create_task(self._document_response())
         try:
-            can_go_back, (frames, inaccessible), document = await asyncio.gather(history, snapshot, response)
+            (can_go_back, history_entry, entry_url), (frames, inaccessible), document = await asyncio.gather(
+                history, snapshot, response
+            )
         finally:
             history.cancel()
             snapshot.cancel()
             response.cancel()
             await asyncio.gather(history, snapshot, response, return_exceptions=True)
         main = frames.get(_MAIN)
+        # History and the snapshot are read at once, so a pushState between them paired the new page with the old
+        # entry, whose lineage the new page then overwrote. Both are read again until they name one address; a
+        # pair that never agrees names no entry, which lineage judges as a new entry.
+        if main and entry_url is not None and search_address(entry_url) != search_address(main.raw.url):
+            if attempt < _HISTORY_REREADS:
+                return await self._observe_once(attempt + 1)
+            history_entry = None
         controls: list[Control] = []
         control_state: dict[str, tuple[str, str, int, list[object] | None]] = {}
         for frame_key, frame in frames.items():
@@ -468,9 +625,12 @@ class CdpPage(Page):
         kept = _capped(onscreen + offscreen, limits.max_controls)
         omitted += len(onscreen) + len(offscreen) - len(kept)
         control_state = {c.id: control_state[c.id] for c in kept}
+        labels: dict[str, list[str]] = {}
+        for c in kept:
+            labels.setdefault(control_state[c.id][1], []).append(c.label)
 
         page_key = _combine_page_keys([f.raw.page_key for f in frames.values()])
-        self._last = _ObservedState(page_key=page_key, controls=control_state)
+        self._last = _ObservedState(page_key=page_key, controls=control_state, labels=labels)
 
         title = main.raw.title if main else ""
         url = main.raw.url if main else await self._origin_once()
@@ -498,18 +658,27 @@ class CdpPage(Page):
             dialog=self._session.pending_dialog(),
             inaccessible_frames=inaccessible,
             can_go_back=can_go_back,
+            history_entry=history_entry,
         )
 
-    async def _can_go_back(self) -> bool:
-        # Only whether BACK is offered hangs on this, and BACK reads history again before it goes. A history read
-        # that failed (CDP -32000) as a run's first page opened ended the run at step 0.
+    async def _history(self) -> tuple[bool, str | None, str | None]:
+        """Whether BACK is offered, which history entry of which tab the page is, and that entry's address.
+
+        Only these hang on it, and BACK reads history again before it goes. A history read that failed (CDP -32000)
+        as a run's first page opened ended the run at step 0.
+        """
+        session_id = self._session.active_session_id
         try:
-            history = await self._session.client.send.Page.getNavigationHistory(
-                params=None, session_id=self._session.active_session_id
-            )
+            history = await self._session.client.send.Page.getNavigationHistory(params=None, session_id=session_id)
         except BrowserError:
-            return False
-        return self._back_target(history) is not None
+            return False, None, None
+        entries, index = history["entries"], history["currentIndex"]
+        if not 0 <= index < len(entries):
+            return self._back_target(history) is not None, None, None
+        return self._back_target(history) is not None, f"{session_id}:{entries[index]['id']}", entries[index]["url"]
+
+    async def _can_go_back(self) -> bool:
+        return (await self._history())[0]
 
     def _back_target(self, history: GetNavigationHistoryReturns) -> int | str | None:
         """The earlier same-origin history entry's id, else the start page this tab skipped, else None."""
@@ -774,6 +943,15 @@ class CdpPage(Page):
         ):
             self._cursor.follow(partial(self._cursor_geometry, target[0], observation.document_key), point)
         popups = self._session.popups()
+        # A dialog blocks the page, and an observation taken under it reads no document, so the mark taken before
+        # the action that opened it stands: accepting a confirm that navigates is a move the run made, and without
+        # a mark it was never reported as one.
+        if action.operation is Operation.DIALOG:
+            marked, self._marked = self._marked, None
+            opened_here = marked is not None and self._session.pending_dialog_url() == marked[1]
+            document = marked[0] if marked is not None and opened_here else None
+        else:
+            document = await self._input_mark()
         window_opens = self._session.window_opens
         try:
             outcome, detail = await self._dispatch(action, target, point, drawn=drawn)
@@ -799,11 +977,39 @@ class CdpPage(Page):
         if action.operation in _OPENS_TABS and await self._session.follow_popup(
             popups, expected=opens or self._session.window_opens != window_opens
         ):
-            return ActResult(outcome=StepOutcome.EXECUTED, page_changed=True, detail="opened a new tab, now active")
+            return ActResult(
+                outcome=StepOutcome.EXECUTED, page_changed=True, detail="opened a new tab, now active", moved=True
+            )
         unchanged = False
         if action.form_fill and not changed and target is not None and not action.secret:
             unchanged = await self._form_unchanged(target, action.text or "")
-        return ActResult(outcome=StepOutcome.EXECUTED, page_changed=changed, detail=detail, form_unchanged=unchanged)
+        return ActResult(
+            outcome=StepOutcome.EXECUTED,
+            page_changed=changed,
+            detail=detail,
+            form_unchanged=unchanged,
+            moved=self._moved_by_input(document),
+        )
+
+    async def _input_mark(self) -> int | None:
+        """How many moves the run's input had made before an action, as the input watch reports them."""
+        if self._session.pending_dialog() is not None:
+            self._marked = None
+            return None
+        begun = self._session.input_navigations
+        with suppress(Exception):
+            href = await self._evaluate(self._session.active_session_id, "location.href")
+            if isinstance(href, str):
+                self._marked = (begun, href)
+                return begun
+        self._marked = None
+        return None
+
+    def _moved_by_input(self, begun: int | None) -> bool:
+        """Whether the action just taken moved the page: its own input began a navigation, to another document or on
+        the same one. A new document alone proves nothing, since a page can move itself on a timer; unknown counts
+        as not moved, which keeps a guessed page guessed, the safe side."""
+        return begun is not None and self._session.input_navigations > begun
 
     async def _cursor_geometry(
         self, expected_session: str | None = None, expected_document: str | None = None
@@ -964,7 +1170,7 @@ class CdpPage(Page):
                 f"{local_id}); "
                 "if (!e) return null; const rect = e.getBoundingClientRect(); "
                 "const hit = e.ownerDocument.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2); "
-                "let cover = hit?.closest('[role=dialog],dialog,[role=menu],[popover]'); "
+                "let cover = hit?.closest(" + json.dumps(_OBSTRUCTIONS) + "); "
                 "if (!cover) for (let node = hit; node && node !== e.ownerDocument.body; node = node.parentElement) { "
                 "if (!node.contains(e) && e.ownerDocument.defaultView.getComputedStyle(node).position === 'fixed' && "
                 "node.querySelector('button,[role=button],a[href]')) { cover = node; break; } } "
@@ -977,11 +1183,91 @@ class CdpPage(Page):
                 "return JSON.stringify({role:cover.getAttribute('role') || cover.tagName.toLowerCase(), "
                 "label:cover.getAttribute('aria-label') || cover.getAttribute('title') || null, controls}); })()",
             )
+        # A frame drawn over the control keeps its controls in its own document, which a cross-origin frame does not
+        # share: a full-window ad was reported with no controls, so recovery closed another ad and stayed covered.
+        # Only a control that closes the frame is named; naming the rest offered recovery the ad's own links.
+        if detail:
+            # Best effort: naming the frame's controls helps recovery, and failing to must not lose the report.
+            with suppress(Exception):
+                inside = [label for label in await self._frame_controls(session_id, local_id) if _DISMISS.search(label)]
+                if inside:
+                    described = json.loads(str(detail))
+                    described["controls"] = list(dict.fromkeys([*described.get("controls", []), *inside]))[:8]
+                    detail = json.dumps(described)
         return (
             f"Target is covered by {detail}. Dismiss an observed obstruction before retrying."
             if detail
             else "Target is covered."
         )
+
+    async def _frame_controls(self, session_id: str, local_id: int) -> list[str]:
+        """The labels of the controls observed inside the frame drawn over the control's centre, if a frame is."""
+        out = await self._session.client.send.Runtime.evaluate(
+            params={
+                "expression": "(() => { const e = window.__fastbrowse?.nodes.get("
+                f"{local_id}); "
+                "if (!e) return null; const r = e.getBoundingClientRect(); "
+                "const hit = e.ownerDocument.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); "
+                "return hit?.tagName === 'IFRAME' || hit?.tagName === 'FRAME' ? hit : null; })()",
+                "returnByValue": False,
+            },
+            session_id=session_id,
+        )
+        handle = out["result"].get("objectId")
+        if handle is None:
+            return []
+        try:
+            node = await self._session.client.send.DOM.describeNode(params={"objectId": handle}, session_id=session_id)
+        finally:
+            with suppress(BrowserError):
+                await self._session.client.send.Runtime.releaseObject(
+                    params={"objectId": handle}, session_id=session_id
+                )
+        frame_id = node["node"].get("frameId")
+        if not frame_id or self._last is None:
+            return []
+        return [label for key in self._session.frame_family(frame_id) for label in self._last.labels.get(key, [])]
+
+    async def _route_around(self, target: tuple[str, str, int, list[object] | None], *, scroll: bool = True) -> _Route:
+        """Where a covered control can still be acted on without touching what covers it.
+
+        Only a band fixed to the window is routed around: it is first scrolled clear of, and a control it still
+        covers is left to the keyboard. A dialog, a full-window backdrop or a panel over the control in the page's
+        own flow is reported as covering it, as before.
+
+        This is the one way onto the keyboard route, and it hands that route on only while the control's guard
+        still holds: a date field's value is set without a key, and that branch returned before a check placed
+        further on could run. Each key or insertion checks again after focusing.
+        """
+        session_id, _frame, local_id, guard = target
+        if _COVER.validate_python(await self._evaluate(session_id, f"({_COVER_JS})({local_id})")) != "band":
+            return _Refusal(StepOutcome.COVERED, await self._covered_detail(target))
+        if scroll:
+            # A page in a background tab draws no frames, so its scroll handlers would run only once the keyboard
+            # route brought it forward to focus the control, after every check here.
+            if await self._evaluate(session_id, "document.hidden") is True:
+                await self._session.bring_to_front()
+            point = _POINT.validate_python(
+                await self._evaluate(session_id, f"({_UNCOVER_JS})({local_id}, {json.dumps(guard)})")
+            )
+            # Scroll handlers run at the next frame, and one can repurpose the control; every check after this
+            # must see what they did.
+            with suppress(Exception):
+                await asyncio.wait_for(self._evaluate(session_id, _PRESENTED_JS), 0.5)
+            if point is None:
+                return _Refusal(StepOutcome.STALE, "target disconnected")
+            if point == "unsettled":
+                return _Refusal(StepOutcome.STALE, "page did not finish scrolling the control clear")
+            if point != "covered":
+                return point
+            # The last alignment can have put the control under something else.
+            if _COVER.validate_python(await self._evaluate(session_id, f"({_COVER_JS})({local_id})")) != "band":
+                return _Refusal(StepOutcome.COVERED, await self._covered_detail(target))
+        # Scroll handlers, run by now, can have repurposed the control: an authorized "Save" turned "Delete account"
+        # would have had the new action pressed unclassified.
+        if not await self._guard_holds(target):
+            return _Refusal(StepOutcome.STALE, _CHANGED)
+        return "keyboard"
 
     async def _click(
         self, target: tuple[str, str, int, list[object] | None] | None, point: _Point, *, drawn: bool = False
@@ -991,8 +1277,49 @@ class CdpPage(Page):
         if point is None:
             return StepOutcome.STALE, "target disconnected"
         if point == "covered":
-            return StepOutcome.COVERED, await self._covered_detail(target)
+            route = await self._route_around(target)
+            if isinstance(route, _Refusal):
+                return route.outcome, route.detail
+            if route == "keyboard":
+                return await self._press(target)
+            point = route
         return await self._click_point(target, point, drawn=drawn)
+
+    async def _press(self, target: tuple[str, str, int, list[object] | None]) -> tuple[StepOutcome, str | None]:
+        """Activate a control from the keyboard: focus it and press the key its semantics answer to."""
+        session_id, _frame, local_id, _guard = target
+        key = _ACTIVATION_KEY.validate_python(await self._evaluate(session_id, f"({_ACTIVATION_KEY_JS})({local_id})"))
+        if key is None or not await self._focus(session_id, local_id):
+            return StepOutcome.COVERED, await self._covered_detail(target)
+        if refusal := await self._keys_reach(target, guarded=True):
+            return refusal.outcome, refusal.detail
+        await self._press_key(session_id, key)
+        return StepOutcome.EXECUTED, "Pressed from the keyboard: a band fixed to the window covers it."
+
+    async def _keys_reach(
+        self, target: tuple[str, str, int, list[object] | None], *, guarded: bool, local_id: int | None = None
+    ) -> _Refusal | None:
+        """Why a key or text, sent now, would not go to the control as it was authorized, or None if it would.
+
+        Asked after focusing and right before each key or insertion, on every path that sends one. Focus handlers
+        can repurpose the control as scroll handlers can, and with `guarded` its guard is checked again. They can
+        also open a dialog, a menu or a popover over it without changing the control at all: keys still reach the
+        focused control, so an Enter checked only before focus pressed it through the menu the focus had opened.
+        A band over it does not refuse; that is what the keyboard route is for. `local_id` names the field focus
+        was handed to, when it was.
+        """
+        session_id, frame, own_id, guard = target
+        if guarded and not await self._guard_holds(target):
+            return _Refusal(StepOutcome.STALE, _CHANGED)
+        node = own_id if local_id is None else local_id
+        cover = _COVER.validate_python(await self._evaluate(session_id, f"({_COVER_JS})({node})"))
+        if cover in ("obstruction", "other"):
+            return _Refusal(StepOutcome.COVERED, await self._covered_detail((session_id, frame, node, guard)))
+        return None
+
+    async def _guard_holds(self, target: tuple[str, str, int, list[object] | None]) -> bool:
+        session_id, _frame, local_id, guard = target
+        return (await self._evaluate(session_id, f"({_GUARD_HOLDS_JS})({local_id}, {json.dumps(guard)})")) is True
 
     async def _hover(
         self, target: tuple[str, str, int, list[object] | None] | None, point: _Point, *, drawn: bool = False
@@ -1048,25 +1375,37 @@ class CdpPage(Page):
         session_id, _frame, local_id, _guard = target
         if point is None:
             return StepOutcome.STALE, "target disconnected"
-        if point == "covered":
-            return StepOutcome.COVERED, await self._covered_detail(target)
         if secret and not secret_origin:
             return StepOutcome.FAILED, "secret fill requires an authorized origin"
-        # Ported from browser-use/jev-ultrafast (MIT), browser.py: fill clicks before typing.
-        # Focus alone bypasses pointer handlers that open autocomplete and calendar pickers.
-        outcome, detail = await self._click_point(target, point, prepare_fill=True, drawn=drawn)
-        if outcome is not StepOutcome.EXECUTED:
-            return outcome, detail
-        handed, native_date, focused = _FILL_TARGET.validate_python(
-            await self._evaluate(
-                session_id,
-                f"({_HANDED_FOCUS_JS})({local_id}, {json.dumps(secret)}).then(async id => {{ "
-                f"const native = {json.dumps(_DATE_INPUT_TYPES)}.includes(window.__fastbrowse?.nodes.get(id)?.type); "
-                f"const focused = id === null || (native && !{json.dumps(secret)}) ? false : "
-                f"await ({self._focus_script(prepare_fill=True, secret=secret)})(id, false); "
-                "return [id, native, focused]; })",
+        route: _Route = point if point != "covered" else await self._route_around(target)
+        if isinstance(route, _Refusal):
+            return route.outcome, route.detail
+        # A field a band still covers is focused and typed into, as a keyboard user would; there is nothing of its
+        # own to click, and a click there lands on the band.
+        keyboard = route == "keyboard"
+        if isinstance(route, tuple):
+            # Ported from browser-use/jev-ultrafast (MIT), browser.py: fill clicks before typing.
+            # Focus alone bypasses pointer handlers that open autocomplete and calendar pickers.
+            outcome, detail = await self._click_point(target, route, prepare_fill=True, drawn=drawn)
+            if outcome is not StepOutcome.EXECUTED:
+                return outcome, detail
+            handed, native_date, focused = _FILL_TARGET.validate_python(
+                await self._evaluate(
+                    session_id,
+                    f"({_HANDED_FOCUS_JS})({local_id}, {json.dumps(secret)}).then(async id => {{ "
+                    f"const native = {json.dumps(_DATE_INPUT_TYPES)}.includes("
+                    "window.__fastbrowse?.nodes.get(id)?.type); "
+                    f"const focused = id === null || (native && !{json.dumps(secret)}) ? false : "
+                    f"await ({self._focus_script(prepare_fill=True, secret=secret)})(id, false); "
+                    "return [id, native, focused]; })",
+                )
             )
-        )
+        else:
+            native = await self._evaluate(
+                session_id,
+                f"{json.dumps(_DATE_INPUT_TYPES)}.includes(window.__fastbrowse?.nodes.get({local_id})?.type)",
+            )
+            handed, native_date, focused = local_id, native is True, None
         if handed is None:
             return StepOutcome.FAILED, "clicked field has no replacement in the same document and position"
         local_id = handed
@@ -1079,6 +1418,10 @@ class CdpPage(Page):
                 )
             if not focused:
                 return StepOutcome.FAILED, "target did not receive keyboard focus"
+            # No pointer press rechecked the field on the keyboard route, so the text goes only to the field that
+            # was authorized, and on either route only to a field nothing has since been drawn over.
+            if refusal := await self._keys_reach(target, guarded=keyboard, local_id=local_id):
+                return refusal.outcome, refusal.detail
             # A secret must be checked and inserted in one renderer task: CDP insertText would leave a
             # navigation/focus race between checking the origin and dispatching the secret to the page.
             script = (
@@ -1114,9 +1457,11 @@ class CdpPage(Page):
                 break
             # An editor that took focus after the hand-off looked, and so never got the text, is typed into
             # once more, as a person would on seeing the text had gone nowhere.
+            # A keyboard fill never clicked, so no editor was handed focus and a hand-off left by an earlier fill
+            # must not be followed.
             handed = (
                 local_id
-                if secret
+                if secret or keyboard
                 else _NODE_ID.validate_python(
                     await self._evaluate(session_id, f"({_HANDED_FOCUS_JS})({local_id}, false)")
                 )
@@ -1162,7 +1507,8 @@ class CdpPage(Page):
             "return e.value === value; })"
             f"({local_id}, {json.dumps(value)})"
         )
-        result = await self._evaluate(session_id, script)
+        async with self._session.input_window(session_id):
+            result = await self._evaluate(session_id, script)
         if result is None:
             return StepOutcome.STALE, "target disconnected"
         if result is not True:
@@ -1212,8 +1558,9 @@ class CdpPage(Page):
         session_id, _frame, local_id, _guard = target
         if point is None:
             return StepOutcome.STALE, "target disconnected"
-        if point == "covered":
-            return StepOutcome.COVERED, None
+        # The choice is set without the pointer, so only a cover the page means to be dealt with first refuses it.
+        if point == "covered" and isinstance(route := await self._route_around(target, scroll=False), _Refusal):
+            return route.outcome, route.detail
         script = (
             "((id, label) => { const e = window.__fastbrowse?.nodes.get(id); "
             "if (!e?.isConnected || e.tagName !== 'SELECT') return null; "
@@ -1225,7 +1572,9 @@ class CdpPage(Page):
             "return e.value === opt.value || (e.selectedOptions[0]?.label ?? ''); })"
             f"({local_id}, {json.dumps(option)})"
         )
-        result = await self._evaluate(session_id, script)
+        # The events are code's own, not trusted, so the window that counts a move as the run's is opened for them.
+        async with self._session.input_window(session_id):
+            result = await self._evaluate(session_id, script)
         if result is None:
             return StepOutcome.STALE, "select target disconnected"
         if result is False:
@@ -1242,24 +1591,36 @@ class CdpPage(Page):
             _session_id, _frame, local_id, _guard = target
             if point is None:
                 return StepOutcome.STALE, "target disconnected"
-            if point == "covered":
-                return StepOutcome.COVERED, None
+            # A key needs focus, not the pointer: Enter in a field under a band fixed to the window was refused.
+            if point == "covered" and isinstance(route := await self._route_around(target, scroll=False), _Refusal):
+                return route.outcome, route.detail
             if not await self._focus(session_id, local_id):
                 return StepOutcome.FAILED, "target did not receive keyboard focus"
-        code, virtual_key = {"Enter": ("\r", 13), "Escape": ("", 27)}[key]
-        await self._input(
-            self._session.client.send.Input.dispatchKeyEvent(
-                params={"type": "keyDown", "key": key, "code": key, "text": code, "windowsVirtualKeyCode": virtual_key},
-                session_id=session_id,
-            )
-        )
-        await self._input(
-            self._session.client.send.Input.dispatchKeyEvent(
-                params={"type": "keyUp", "key": key, "code": key, "windowsVirtualKeyCode": virtual_key},
-                session_id=session_id,
-            )
-        )
+            if refusal := await self._keys_reach(target, guarded=point == "covered"):
+                return refusal.outcome, refusal.detail
+        await self._press_key(session_id, key)
         return StepOutcome.EXECUTED, None
+
+    async def _press_key(self, session_id: str, key: str) -> None:
+        code, text, virtual_key = _KEYS[key]
+        await self._input(
+            self._session.client.send.Input.dispatchKeyEvent(
+                params={
+                    "type": "keyDown",
+                    "key": key,
+                    "code": code,
+                    "text": text,
+                    "windowsVirtualKeyCode": virtual_key,
+                },
+                session_id=session_id,
+            )
+        )
+        await self._input(
+            self._session.client.send.Input.dispatchKeyEvent(
+                params={"type": "keyUp", "key": key, "code": code, "windowsVirtualKeyCode": virtual_key},
+                session_id=session_id,
+            )
+        )
 
     async def _scroll(self, operation: Operation) -> None:
         session_id = self._session.active_session_id
@@ -1680,6 +2041,8 @@ class CdpPage(Page):
         await self._session.check_access()
         if (grant := self._session.grant) and not grant.allows(url):
             raise OriginNotAllowed
+        # A dialog the new document opens is not the last action's.
+        self._marked = None
         session_id = self._session.active_session_id
         if back_to is None:
             self._back_to.pop(session_id, None)

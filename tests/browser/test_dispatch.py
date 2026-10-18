@@ -1,6 +1,7 @@
 """Pointer handlers can invalidate a target before its press or replace an editor before typing."""
 
 import asyncio
+import json
 from collections.abc import Coroutine
 from unittest.mock import AsyncMock
 
@@ -9,6 +10,7 @@ import pytest
 from fastbrowse.agent import Agent
 from fastbrowse.browser import BrowserSession, CdpPage
 from fastbrowse.browser import page as page_module
+from fastbrowse.browser.page import _UNCOVER_JS
 from fastbrowse.effects import effect
 from fastbrowse.models import Operation, StepOutcome
 from fastbrowse.page import Action, BrowserError
@@ -739,3 +741,404 @@ async def test_covered_target_does_not_offer_its_fixed_parent_controls(
     assert result.outcome is StepOutcome.COVERED
     assert "Unrelated action" not in (result.detail or "")
     assert "One way" not in (result.detail or "")
+
+
+def _anchored_form(*, scrolls: bool, band: str) -> str:
+    """A login form whose button sits under a band fixed to the window's foot, as an anchored ad does."""
+    body = (
+        '<form id=login onsubmit="event.preventDefault(); window.submitted = (window.submitted || 0) + 1" '
+        'style="position:absolute;left:20px;bottom:30px">'
+        "<input name=user aria-label=Username><input name=pass type=password aria-label=Password>"
+        '<button id=go onclick="window.pressed = (window.pressed || 0) + 1">Login</button></form>'
+    )
+    inside = (
+        '<iframe aria-label=Advertisement srcdoc="<p>Ad</p>" style="width:100%;height:100%;border:0"></iframe>'
+        if band == "iframe"
+        else '<button onclick="window.adClicks++">Shop now</button>'
+    )
+    return (
+        "window.adClicks = 0; document.documentElement.style.height = '100%'; "
+        "document.body.style.cssText = 'margin:0;position:relative;height:"
+        + ("3000px" if scrolls else "100%;overflow:hidden")
+        + "'; "
+        f"document.body.innerHTML = {body!r}; "
+        "const band = document.createElement('ins'); "
+        "band.style.cssText = 'display:block;position:fixed;left:0;right:0;bottom:0;height:120px;"
+        "background:white;z-index:9'; "
+        "band.addEventListener('mousedown', () => window.adClicks++); "
+        f"band.innerHTML = {inside!r}; document.body.append(band); "
+        # The form starts in the band's place on the first screen, whatever the page's length.
+        "document.getElementById('login').style.top = (innerHeight - 70) + 'px'; "
+        "document.getElementById('login').style.bottom = ''; true"
+    )
+
+
+@pytest.mark.parametrize("band", ["div", "iframe"])
+@pytest.mark.parametrize("scrolls", [True, False])
+async def test_a_control_under_a_band_fixed_to_the_window_is_reached_without_touching_the_band(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, scrolls: bool, band: str
+) -> None:
+    """expandtesting-login: an ad anchored to the window's foot covered Login twice and the run ended stuck. A
+    person scrolls the button clear of it; where the page cannot scroll, Login is pressed from the keyboard."""
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    await eval_value(browser_session, session_id, _anchored_form(scrolls=scrolls, band=band))
+    assert (
+        await eval_value(
+            browser_session,
+            session_id,
+            "(r => document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.id)"
+            "(document.getElementById('go').getBoundingClientRect())",
+        )
+        != "go"
+    ), "the fixture must start with Login under the band"
+    obs = await page.observe()
+    result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Login").id), obs)
+    assert result.outcome is StepOutcome.EXECUTED, result.detail
+    # A page that scrolls has Login clicked where it was scrolled clear of the band; the keyboard is the fallback.
+    assert (result.detail is None) is scrolls
+    pressed, submitted, ad_clicks = await eval_value(
+        browser_session, session_id, "[window.pressed, window.submitted, window.adClicks]"
+    )
+    assert (pressed, submitted, ad_clicks) == (1, 1, 0)
+
+
+async def test_a_field_under_a_band_is_filled_and_submitted_from_the_keyboard(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    """The same ad covered the password field once the run had typed the username, so Enter was refused too."""
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    await eval_value(browser_session, session_id, _anchored_form(scrolls=False, band="div"))
+    obs = await page.observe()
+    filled = await page.act(Action(operation=Operation.FILL, target_id=find(obs, "Password").id, text="hunter2"), obs)
+    assert filled.outcome is StepOutcome.EXECUTED, filled.detail
+    obs = await page.observe()
+    entered = await page.act(Action(operation=Operation.ENTER, target_id=find(obs, "Password").id), obs)
+    assert entered.outcome is StepOutcome.EXECUTED, entered.detail
+    value, submitted, ad_clicks = await eval_value(
+        browser_session,
+        session_id,
+        "[document.querySelector('[name=pass]').value, window.submitted, window.adClicks]",
+    )
+    assert (value, submitted, ad_clicks) == ("hunter2", 1, 0)
+
+
+@pytest.mark.parametrize("cover", ["dialog", "menu", "popover", "full-window"])
+async def test_a_fixed_cover_the_page_means_to_be_answered_is_still_reported(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, cover: str
+) -> None:
+    """Only a band floating over the page is routed around. A dialog asks its question first, an open menu or
+    popover is the page's to close, and a cover over the whole window shows something other than the control, so
+    none is pressed through, by pointer or keyboard."""
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    await eval_value(browser_session, session_id, _anchored_form(scrolls=False, band="div"))
+    # A setup script that throws evaluates to nothing, and the cover it meant to draw would never be tested.
+    assert (
+        await eval_value(
+            browser_session,
+            session_id,
+            {
+                "dialog": "document.querySelector('ins').setAttribute('role', 'dialog'); true",
+                "menu": "document.querySelector('ins').setAttribute('role', 'menu'); true",
+                # A shown popover sits in the top layer; its own inset is kept at the window's foot.
+                "popover": "{ const shown = document.querySelector('ins'); shown.setAttribute('popover', 'manual'); "
+                "shown.style.cssText += ';top:auto;margin:0;border:0;padding:0;width:auto'; shown.showPopover(); } "
+                "document.querySelector('ins').matches(':popover-open')",
+                "full-window": "document.querySelector('ins').style.cssText += ';top:0;height:auto'; true",
+            }[cover],
+        )
+        is True
+    )
+    obs = await page.observe()
+    result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Login").id), obs)
+    assert result.outcome is StepOutcome.COVERED
+    entered = await page.act(Action(operation=Operation.ENTER, target_id=find(obs, "Password").id), obs)
+    assert entered.outcome is StepOutcome.COVERED
+    assert await eval_value(browser_session, session_id, "[window.pressed, window.submitted, window.adClicks]") == [
+        None,
+        None,
+        0,
+    ]
+
+
+@pytest.mark.parametrize(("role", "reached"), [(None, True), ("dialog", False)])
+async def test_a_band_drawn_inside_a_shadow_root_is_classed_as_a_band(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, role: str | None, reached: bool
+) -> None:
+    """Ad overlays are often custom elements: the element itself is fixed and what it draws lives in its shadow root.
+    The walk that classes a cover went up from what was hit and stopped at the shadow root, so the band read as
+    something else and Login was refused; a dialog drawn the same way must still be refused, never pressed through."""
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    await eval_value(browser_session, session_id, _anchored_form(scrolls=False, band="div"))
+    inner = '<div style="height:100%"><button onclick="window.adClicks++">Shop now</button></div>'
+    assert (
+        await eval_value(
+            browser_session,
+            session_id,
+            "{ document.querySelector('ins').remove(); const host = document.createElement('ad-slot'); "
+            "host.style.cssText = 'display:block;position:fixed;left:0;right:0;bottom:0;height:120px;"
+            "background:white;z-index:9'; "
+            + (f"host.setAttribute('role', {role!r}); " if role else "")
+            + f"document.body.append(host); host.attachShadow({{mode: 'open'}}).innerHTML = {inner!r}; "
+            "const r = document.getElementById('go').getBoundingClientRect(); "
+            "document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === host }",
+        )
+        is True
+    )
+    obs = await page.observe()
+    result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Login").id), obs)
+    pressed, ad_clicks = await eval_value(browser_session, session_id, "[window.pressed, window.adClicks]")
+    if reached:
+        assert (result.outcome, pressed, ad_clicks) == (StepOutcome.EXECUTED, 1, 0), result.detail
+    else:
+        assert (result.outcome, pressed, ad_clicks) == (StepOutcome.COVERED, None, 0), result.detail
+
+
+@pytest.mark.parametrize("control", ["button", "field", "date"])
+async def test_a_control_repurposed_while_scrolled_clear_of_a_band_is_never_pressed_or_typed_into(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, control: str
+) -> None:
+    """Scrolling a control out from under a band runs the page's scroll handlers. One that turned an authorized
+    Login into "Delete account", or a username field into a card number field, would have had the keyboard act on
+    what was never classified or authorized; the pointer path rechecks before every press, and so does this one. A
+    date field's value is set without a key, and that branch once returned before the check could run."""
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    await eval_value(browser_session, session_id, _anchored_form(scrolls=True, band="div"))
+    # Bands at the top, middle and foot of the window leave no alignment where the control is clear of them.
+    assert (
+        await eval_value(
+            browser_session,
+            session_id,
+            "{ const foot = document.querySelector('ins'); "
+            "for (const top of ['0px', 'calc(50% - 60px)']) { const band = foot.cloneNode(true); "
+            "band.style.top = top; band.style.bottom = 'auto'; band.addEventListener('mousedown', () => "
+            "window.adClicks++); document.body.append(band); } } "
+            "document.getElementById('login').insertAdjacentHTML('beforeend', "
+            "'<input type=date name=when aria-label=Departure>'); "
+            "window.keys = 0; document.addEventListener('keydown', () => window.keys++, true); "
+            "addEventListener('scroll', () => { document.getElementById('go').textContent = 'Delete account'; "
+            "document.querySelector('[name=user]').setAttribute('aria-label', 'Card number'); "
+            "document.querySelector('[name=when]').setAttribute('aria-label', 'Return date'); }, {once: true}); true",
+        )
+        is True
+    )
+    obs = await page.observe()
+    action = {
+        "button": Action(operation=Operation.CLICK, target_id=find(obs, "Login").id),
+        "field": Action(operation=Operation.FILL, target_id=find(obs, "Username").id, text="ada"),
+        "date": Action(operation=Operation.FILL, target_id=find(obs, "Departure").id, text="2026-11-14"),
+    }[control]
+    result = await page.act(action, obs)
+    assert result.outcome is StepOutcome.STALE, result.detail
+    # Refused by the route around the bands, never by a pointer path they do not let it take: the control changed,
+    # or, on a loaded machine, its scroll had not been seen to finish, so nothing was acted on either way.
+    assert result.detail in {"control changed before keyboard use", "page did not finish scrolling the control clear"}
+    keys, pressed, values, ad_clicks = await eval_value(
+        browser_session,
+        session_id,
+        "[window.keys, window.pressed, ['user', 'when'].map(n => document.querySelector(`[name=${n}]`).value), "
+        "window.adClicks]",
+    )
+    assert (keys, pressed, values, ad_clicks) == (0, None, ["", ""], 0)
+
+
+@pytest.mark.parametrize("relabel", [False, True])
+async def test_a_list_scrolled_inside_a_shadow_root_is_waited_on_and_not_refused(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, relabel: bool
+) -> None:
+    """A scroll event is not composed, so a list scrolling inside a shadow root never reaches the document. The
+    route counted the list as moved, heard no scroll, waited out its deadline and refused a Login it had exposed;
+    one the list's handler relabels must still be refused."""
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    list_html = (
+        '<div id=list style="height:400px;overflow:auto"><div style="height:330px"></div>'
+        '<button id=go onclick="window.pressed = this.textContent">Login</button>'
+        '<div style="height:2000px"></div></div>'
+    )
+    assert (
+        await eval_value(
+            browser_session,
+            session_id,
+            "{ window.adClicks = 0; document.body.style.cssText = 'margin:0;height:100vh;overflow:hidden'; "
+            "document.body.innerHTML = ''; const host = document.createElement('div'); "
+            "host.style.cssText = 'position:fixed;left:0;right:0;bottom:0;height:400px'; document.body.append(host); "
+            f"const root = host.attachShadow({{mode: 'open'}}); root.innerHTML = {list_html!r}; "
+            "const band = document.createElement('ins'); band.style.cssText = 'display:block;position:fixed;"
+            "left:0;right:0;bottom:0;height:120px;background:white;z-index:9'; "
+            "band.addEventListener('mousedown', () => window.adClicks++); document.body.append(band); "
+            + (
+                "root.getElementById('list').addEventListener('scroll', () => { "
+                "root.getElementById('go').textContent = 'Delete account'; }, {once: true}); "
+                if relabel
+                else ""
+            )
+            + "(r => document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === band)"
+            "(root.getElementById('go').getBoundingClientRect()) }",
+        )
+        is True
+    )
+    obs = await page.observe()
+    result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Login").id), obs)
+    pressed, ad_clicks = await eval_value(browser_session, session_id, "[window.pressed, window.adClicks]")
+    if relabel:
+        assert (result.outcome, pressed, ad_clicks) == (StepOutcome.STALE, None, 0), result.detail
+    else:
+        assert (result.outcome, pressed, ad_clicks) == (StepOutcome.EXECUTED, "Login", 0), result.detail
+
+
+@pytest.mark.parametrize("event", ["scroll", "scrollend"])
+@pytest.mark.parametrize("operation", [Operation.CLICK, Operation.FILL])
+async def test_a_control_repurposed_when_its_container_scrolls_clear_of_a_band_is_never_acted_on(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, operation: Operation, event: str
+) -> None:
+    """A list that scrolls inside the page, not the window, moved the control clear of a band while the window
+    stayed put, and its scroll events never reach the window. The route only waited on the window's, so it went
+    ahead before the list's handler ran; one that settles a carousel on its scrollend swapped an authorized Login
+    for "Delete account". A later frame wait happened to cover for it unless a frame stalled, so the click case pins
+    the route's own contract, and the fill case the whole action."""
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    assert (
+        await eval_value(
+            browser_session,
+            session_id,
+            "window.adClicks = 0; window.keys = 0; document.addEventListener('keydown', () => window.keys++, true); "
+            "document.body.style.cssText = 'margin:0;height:100vh;overflow:hidden'; "
+            "document.body.innerHTML = '<div id=list style=\"position:fixed;left:0;right:0;bottom:0;height:400px;"
+            'overflow:auto"><div style="height:330px"></div><form onsubmit="event.preventDefault()">'
+            "<input name=user aria-label=Username> <button id=go type=button "
+            'onclick="window.pressed = this.textContent">Login</button></form>'
+            '<div style="height:2000px"></div></div>\'; '
+            "const band = document.createElement('ins'); band.style.cssText = 'display:block;position:fixed;"
+            "left:0;right:0;bottom:0;height:120px;background:white;z-index:9'; "
+            "band.addEventListener('mousedown', () => window.adClicks++); document.body.append(band); "
+            f"document.getElementById('list').addEventListener({event!r}, () => {{ "
+            "document.getElementById('go').textContent = 'Delete account'; "
+            "document.querySelector('[name=user]').setAttribute('aria-label', 'Card number'); }, {once: true}); "
+            "(r => document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === band)"
+            "(document.getElementById('go').getBoundingClientRect())",
+        )
+        is True
+    )
+    obs = await page.observe()
+    action = (
+        Action(operation=operation, target_id=find(obs, "Username").id, text="ada")
+        if operation is Operation.FILL
+        else Action(operation=operation, target_id=find(obs, "Login").id)
+    )
+    if operation is Operation.CLICK:
+        # The route's own contract, which nothing later in the action stands in for: once it hands back a place
+        # to act, every handler the scroll it made owes has run. On 11e07f2 it returned before the list's scroll
+        # was delivered at all, leaving a later frame wait with a 100ms fallback to cover for it.
+        assert page._last is not None
+        _session, _frame, local_id, guard = page._last.controls[find(obs, "Login").id]
+        out = await browser_session.client.send.Runtime.evaluate(
+            params={
+                "expression": f"(async () => {{ await ({_UNCOVER_JS})({local_id}, {json.dumps(guard)}); "
+                "return document.getElementById('go').textContent; })()",
+                "awaitPromise": True,
+                "returnByValue": True,
+            },
+            session_id=session_id,
+        )
+        assert out["result"].get("value") == "Delete account"
+        return
+    result = await page.act(action, obs)
+    assert result.outcome is StepOutcome.STALE, result.detail
+    pressed, value, keys, ad_clicks = await eval_value(
+        browser_session,
+        session_id,
+        "[window.pressed, document.querySelector('[name=user]').value, window.keys, window.adClicks]",
+    )
+    assert (pressed, value, keys, ad_clicks) == (None, "", 0, 0)
+
+
+@pytest.mark.parametrize(
+    ("operation", "label", "role", "band"),
+    [
+        (Operation.CLICK, "Login", "menu", True),
+        (Operation.ENTER, "Username", "dialog", True),
+        (Operation.FILL, "Username", "dialog", True),
+        (Operation.FILL, "Username", "dialog", False),
+    ],
+)
+async def test_nothing_is_sent_through_an_obstruction_that_focusing_the_control_opened(
+    page: CdpPage,
+    browser_session: BrowserSession,
+    main_site: str,
+    operation: Operation,
+    label: str,
+    role: str,
+    band: bool,
+) -> None:
+    """Focusing a control can open a menu or a dialog over it while the control itself stays as it was, so its
+    guard still holds. Keys go to the focused control whatever is drawn over it, and the cover was judged only
+    before focus: Login was pressed through the menu its focus had opened. A field clicked with the pointer, its
+    focus opening a dialog over it, was typed into behind the dialog the same way."""
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    await eval_value(browser_session, session_id, _anchored_form(scrolls=False, band="div"))
+    assert (
+        await eval_value(
+            browser_session,
+            session_id,
+            ("" if band else "document.querySelector('ins').remove(); ")
+            + "window.keys = 0; document.addEventListener('keydown', () => window.keys++, true); "
+            f"const e = document.querySelector({'#go' if label == 'Login' else '[name=user]'!r}); "
+            "e.addEventListener('focus', () => { const r = e.getBoundingClientRect(), o = "
+            f"document.createElement('div'); o.setAttribute('role', {role!r}); o.textContent = 'Opened on focus'; "
+            "o.style.cssText = `position:absolute;z-index:99;background:white;left:${scrollX + r.left - 10}px;"
+            "top:${scrollY + r.top - 10}px;width:${r.width + 20}px;height:${r.height + 20}px`; "
+            "document.body.append(o); }, {once: true}); true",
+        )
+        is True
+    )
+    obs = await page.observe()
+    target = find(obs, label).id
+    action = (
+        Action(operation=operation, target_id=target, text="ada")
+        if operation is Operation.FILL
+        else Action(operation=operation, target_id=target)
+    )
+    result = await page.act(action, obs)
+    assert result.outcome is StepOutcome.COVERED, result.detail
+    assert role in (result.detail or "")
+    keys, pressed, submitted, value = await eval_value(
+        browser_session,
+        session_id,
+        "[window.keys, window.pressed, window.submitted, document.querySelector('[name=user]').value]",
+    )
+    assert (keys, pressed, submitted, value) == (0, None, None, "")
+
+
+async def test_a_full_window_frame_over_the_control_is_reported_with_the_frames_own_controls(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, iframe_site: str
+) -> None:
+    """A full-window ad frame (an interstitial) covered a login form. Its close button lives in its own,
+    cross-origin document, so the report named no controls, and recovery closed another ad while this one stayed.
+    Nothing is pressed through a cover the size of the window; the frame's close control is named so it can be
+    closed, and its links are not, so recovery is never offered the ad itself."""
+    await page.navigate(main_site)
+    session_id = browser_session.active_session_id
+    await eval_value(browser_session, session_id, _anchored_form(scrolls=False, band="div"))
+    assert (
+        await eval_value(
+            browser_session,
+            session_id,
+            "{ const shown = document.querySelector('ins'); shown.style.cssText += ';top:0;height:auto'; "
+            f'shown.innerHTML = \'<iframe aria-label=Advertisement src="{iframe_site}/interstitial.html" '
+            'style="width:100%;height:100%;border:0"></iframe>\'; } true',
+        )
+        is True
+    )
+    obs = await observe_until(page, "Close ad")
+    result = await page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Login").id), obs)
+    assert result.outcome is StepOutcome.COVERED
+    detail = result.detail or ""
+    assert "Advertisement" in detail and "Close ad" in detail and "spring offer" not in detail
+    assert await eval_value(browser_session, session_id, "[window.pressed, window.submitted]") == [None, None]

@@ -1385,7 +1385,9 @@ async def read(
             )
         except ValueError as error:
             raise NotesTooLarge(f"The {room} character reader notes budget cannot report omitted evidence") from error
-        if require_all_evidence and {fact_id(fact) for fact in so_far.facts} - set(offered.evidence_ids):
+        # A refused fact is withheld from every prompt by design, so it is not a record this budget lost.
+        offerable = {key for key in (fact_id(fact) for fact in so_far.facts) if not so_far.refused(key)}
+        if require_all_evidence and offerable - set(offered.evidence_ids):
             raise NotesTooLarge("The final page cannot fit every earlier record in its collected evidence")
         messages[-1] = _read_message(capture, part, question, requirement_ids, offered.text)
         if records_only:
@@ -3007,7 +3009,10 @@ async def compose(
                 "Do not write those reports or cite page notes for them.\n\n"
                 "# Evidence scope\nThe notes' prose may contain an unsupported inference. Verify each value "
                 "against its original quoted basis, not another note's conclusion. Preserve source conditions "
-                "on eligibility, location and configuration. A component maximum is not an aggregate maximum; "
+                "on eligibility, location and configuration, and the terms a value is quoted under, such as what "
+                "it covers, the dates it applies to, or its unit (per person, per night, before tax): a value "
+                "written under other terms than it was quoted under is a different claim. A component maximum "
+                "is not an aggregate maximum; "
                 "independent maxima cannot be added without explicit quoted support for simultaneous addition. "
                 "Do not turn compatibility with several items into simultaneous operation or a subjective "
                 "preference into a measured advantage. State what remains unsupported instead of supplying "
@@ -3253,7 +3258,8 @@ def claim_check_questions(
     check_omission: bool = True,
 ) -> Mapping[str, NoulQuestion]:
     questions: dict[str, NoulQuestion] = {}
-    known = notes.evidence
+    # A refused quote backs no claim here either: shown as a source, it let Jev pass a claim the audit then refused.
+    known = {key: evidence for key, evidence in notes.evidence.items() if not notes.refused(key)}
     # A counted record is shown as its tally's line: code checked each quote against the group when it was read and
     # counted them, and a ranking citing every record put a hundred quotes into each of its questions.
     compared = set(notes.comparison_records())

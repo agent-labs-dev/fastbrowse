@@ -399,8 +399,9 @@ async def llm_verify(
         "task described unless it shows that task's own query, filters, dates, sort or category in force. A "
         "summary, preview, default or related listing can show prices or rows that are not the ones asked "
         "for. Name in ungrounded every requirement whose facts were read from such a page, even when it has "
-        "evidence. Addresses this run built from the task rather than reached by clicking are the ones to "
-        "weigh hardest, since a guessed address can land on a page of the right shape and the wrong search."
+        "evidence. An address this run built from the task can land on the wrong search: judge such a page by "
+        "what it shows, not by how the run reached it. An answer states the terms a value was quoted under, "
+        "such as what it covers and the dates it applies to."
     )
     messages = [
         Message(
@@ -558,7 +559,6 @@ type OutputAuditCache = dict[str, OutputAuditVerdict | _OutputIdentities]
 
 
 def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | None:
-    known = notes.current_evidence()
     requirements = {requirement.id: requirement.text for requirement in composed.requirements}
     urls: dict[str, str] = {}
     claims = []
@@ -573,6 +573,9 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
         expanded = notes.expand_evidence_ids(claim.evidence_ids)
         if any(not notes.current(key) for key in expanded):
             return None
+        # A refused quote is dropped from what the audit is shown, so a claim resting on it alone has no source and
+        # one resting on it beside a valid quote is judged against the valid quote only.
+        known = notes.usable_citations(expanded)
         keys = tuple(key for key in expanded if key in known)
         if not keys:
             return None

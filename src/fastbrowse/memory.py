@@ -3,7 +3,7 @@
 import hashlib
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from itertools import groupby
 from typing import Self
@@ -146,6 +146,11 @@ class Notes:
         self._requirements: dict[str, set[str]] = {}
         self._owners: dict[str, set[str]] = {}
         self._retired: set[str] = set()
+        self._discredited: set[str] = set()
+        """The readings a requirement was refused on as read off the wrong page, held from every requirement."""
+        self._on_guess: Callable[[Evidence], bool] | None = None
+        """Whether a reading was taken on the guess, asked afresh each time, since a later reading off the guess of
+        the same text frees it."""
         self._tally_records: set[str] = set()
         self._record_ids: dict[tuple[str, str, str], list[dict[str, str]]] = {}
         self._continuation_records: dict[str, set[str]] = {}
@@ -175,15 +180,42 @@ class Notes:
     def evidence(self) -> dict[str, Evidence]:
         return {key: fact.evidence for key, fact in self._facts.items() if fact.evidence is not None}
 
+    def usable_evidence(self) -> dict[str, Evidence]:
+        """The quotes anything may build on: current, and not refused.
+
+        Every constructor that gathers quotes it was not handed, such as a comparison taking the whole notes as its
+        proof, starts here. One that took `evidence` instead swept a held guessed reading into a legitimate rebuilt
+        ranking, and the ranking was refused for resting on it every time.
+        """
+        return {
+            key: fact.evidence
+            for key, fact in self._facts.items()
+            if fact.evidence is not None and self.current(key) and not self.refused(key)
+        }
+
+    def usable_citations(self, keys: Iterable[str]) -> dict[str, Evidence]:
+        """The quotes among `keys` a claim citing them may rest on: current, and not refused.
+
+        A claim names no requirement, so a hold cannot be judged per requirement there: one quote can carry a
+        provider name that stands and a price from the wrong dates, and a claim stating both while citing it got
+        past a hold kept for the price alone. A refused reading is refused for every claim instead.
+        """
+        usable = self.usable_evidence()
+        return {key: usable[key] for key in keys if key in usable}
+
+    def refused_ids(self) -> tuple[str, ...]:
+        """The facts refused now, for anything that caches a judgement of the notes: a hold changes what may be
+        cited without changing a single fact, so a cache keyed on the facts alone kept a refused answer."""
+        return tuple(sorted(key for key in self._facts if self.refused(key)))
+
     def current_evidence(self, capture: Capture | None = None) -> dict[str, Evidence]:
-        """The evidence a later read has not superseded, and a quote the given capture still shows on its address.
+        """The usable evidence a later read has not superseded, and a quote the given capture still shows there.
 
         A superseded fact stays as context but is not a current value, so offering it would let the extraction
-        copy a price the final page corrected; a quote from another page still stands.
+        copy a price the final page corrected; a quote from another page still stands. A held reading is not
+        offered either: readers, extraction and the answer would only build on it again.
         """
-        current = {
-            key: fact.evidence for key, fact in self._facts.items() if fact.evidence is not None and self.current(key)
-        }
+        current = self.usable_evidence()
         if capture is None:
             return current
         return {
@@ -231,13 +263,19 @@ class Notes:
                 occurrence = {}
                 occurrences.append(occurrence)
             occurrence[sha] = key
-            canonical = next(iter(occurrence.values()))
+            # One row read twice names one record, and it must never be a held reading while another stands: a
+            # recount on the run's own page with a new banner joined the refused row and was refused with it.
+            readings = list(occurrence.values())
+            canonical = next((k for k in readings if not self.refused(k)), readings[0])
             records.append(canonical)
             self._tally_records.add(key)
         fact = Fact(text="", evidence=None, basis=tuple(records), tally=tally, reader=FactReader.LLM)
         key = fact_id(fact)
         previous = self._facts.get(key)
-        records = list(dict.fromkeys((*(previous.basis if previous else ()), *records)))
+        # A recount on the right page keeps the tally's key, so carrying the refused page's records into it would
+        # leave the count resting on them and refused again on every finish.
+        carried = tuple(record for record in (previous.basis if previous else ()) if not self.refused(record))
+        records = list(dict.fromkeys((*carried, *records)))
         tally = tally.model_copy(update={"records": tuple(records)})
         fact = fact.model_copy(update={"text": f"{tally.key}: {tally.count}", "basis": tuple(records), "tally": tally})
         self.unevidence((tally.requirement_id,))
@@ -259,7 +297,25 @@ class Notes:
 
         A page with no matching record leaves no quote, so an audit that judged coverage from the cited records alone
         took that page for unread and refused a comparison code had closed over every page of the list."""
-        return tuple(self._collection_pages.get(requirement_id, ()))
+        # A read whose rows for this collection are held was read off a refused guess: shown as read, it would stand
+        # for a page covered while none of its rows is counted. A held quote another requirement drew from the same
+        # page says nothing of this collection's rows, and dropping the page for it left a valid count unaudited.
+        rows = set(self.comparison_records(requirement_id)) | {
+            record
+            for fact in self._facts.values()
+            if fact.tally is not None and fact.tally.requirement_id == requirement_id
+            for record in fact.tally.records
+        }
+        held = {
+            (fact.evidence.url, fact.evidence.capture_sha256)
+            for key in rows
+            if (fact := self._facts.get(key)) is not None and fact.evidence is not None and self.held(key)
+        }
+        return tuple(
+            read
+            for read in self._collection_pages.get(requirement_id, ())
+            if (read.url, read.capture_sha256) not in held
+        )
 
     def standing(self, tally: Tally) -> Standing | None:
         """Where a counted group ranks among every group counted for its requirement; None for a lone group.
@@ -272,13 +328,16 @@ class Notes:
             (
                 (fact.tally, fact.tally.requirement_id in self._requirements.get(key, ()))
                 for key, fact in self._facts.items()
-                if fact.tally is not None and fact.tally.requirement_id == tally.requirement_id
+                # A count resting on a held reading ranks against nothing: it is no count of the right page.
+                if fact.tally is not None
+                and fact.tally.requirement_id == tally.requirement_id
+                and not self.refused(key)
             ),
             key=lambda item: (-item[0].count, item[0].key),
         )
-        if len(tallies) < 2:
+        position = next((index for index, (counted, _) in enumerate(tallies) if counted.key == tally.key), None)
+        if len(tallies) < 2 or position is None:
             return None
-        position = next(index for index, (counted, _) in enumerate(tallies) if counted.key == tally.key)
         shown = sorted(
             {*range(min(_LEADING_GROUPS, len(tallies)))}
             | {*range(max(0, position - _NEIGHBOUR_GROUPS), min(len(tallies), position + _NEIGHBOUR_GROUPS + 1))}
@@ -322,17 +381,68 @@ class Notes:
 
     def complete_tallies(self, requirement_id: str) -> None:
         for key, fact in self._facts.items():
-            if fact.tally is not None and fact.tally.requirement_id == requirement_id:
+            if (
+                fact.tally is not None
+                and fact.tally.requirement_id == requirement_id
+                and not self._rests_on_held(key, fact.basis)
+            ):
                 self._requirements[key].add(requirement_id)
                 self._facts[key] = fact.model_copy(update={"requirement_id": requirement_id})
+
+    def _rests_on_held(self, key: str, basis: Iterable[str]) -> bool:
+        """Whether a fact is, or concludes from, a held reading.
+
+        Every path that lets a fact evidence a requirement asks this, since one that did not reopened the loop
+        `discredit` closes: a count completed from the refused page's records answered the requirement again.
+        """
+        if not self._discredited:
+            return False
+        return any(self.held(source) for source in {key, *self.expand_evidence_ids(basis)})
+
+    def refused(self, key: str) -> bool:
+        """Whether a fact is, or concludes from, a held reading: context the run may see while choosing what to
+        do, never something to cite or build on. Offered to the composer, a held value was cited in an answer
+        whose requirement it could no longer evidence."""
+        fact = self._facts.get(key)
+        return self._rests_on_held(key, fact.basis if fact is not None else ())
+
+    def held(self, key: str) -> bool:
+        """Whether a reading some requirement was refused on is still a reading taken only on the guess.
+
+        Held by its fact id alone, a reading never came back: a page that keeps its search outside the address,
+        reached again by the run itself, drew the same text, cut the same fact and was refused for good. A hold is
+        the refused reading while nothing has read the same text off the guess.
+        """
+        fact = self._facts.get(key)
+        return (
+            key in self._discredited
+            and fact is not None
+            and fact.evidence is not None
+            and self._on_guess is not None
+            and self._on_guess(fact.evidence)
+        )
 
     def add(self, fact: Fact) -> bool:
         """Return whether a new span was added; reused spans still evidence other requirements."""
         key = fact_id(fact)
         self._retired.discard(key)
+        if (
+            key in self._facts
+            and fact.evidence is not None
+            and self.held(key)
+            and self._on_guess is not None
+            and not self._on_guess(fact.evidence)
+        ):
+            # The same text read off the guess at an address that differs only in its fragment has this id, since
+            # an id ignores the fragment while lineage keeps it: a search routed by fragment, rebuilt with identical
+            # text, stayed held on the old address. The reading the run took itself stands in its place.
+            self._facts[key] = self._facts[key].model_copy(update={"evidence": fact.evidence})
         requirements = self._requirements.setdefault(key, set())
         if fact.requirement_id is not None:
-            requirements.add(fact.requirement_id)
+            # A re-added fact keeps the basis it had, so the refused quotes are looked for in both.
+            basis = (*(self._facts[key].basis if key in self._facts else ()), *fact.basis)
+            if not self._rests_on_held(key, basis):
+                requirements.add(fact.requirement_id)
             self._owners.setdefault(key, set()).add(fact.requirement_id)
         if key in self._facts:
             previous = self._facts[key]
@@ -390,6 +500,8 @@ class Notes:
         scoped._requirements = {key: set(self._requirements[key]) for key in scoped._facts}
         scoped._owners = {key: set(self._owners.get(key, ())) for key in scoped._facts}
         scoped._retired = self._retired & kept
+        scoped._discredited = set(self._discredited)
+        scoped._on_guess = self._on_guess
         scoped._tally_records = self._tally_records & kept
         scoped._continuation_records = {
             requirement: records & kept for requirement, records in self._continuation_records.items()
@@ -406,7 +518,7 @@ class Notes:
         return scoped
 
     def evidenced(self, requirement_id: str) -> bool:
-        return any(requirement_id in requirements for requirements in self._requirements.values())
+        return bool(self.supporting(requirement_id))
 
     def unevidence(self, requirement_ids: Iterable[str]) -> None:
         """Reopen requirements whose facts were read off the wrong page, keeping the facts as context.
@@ -417,6 +529,43 @@ class Notes:
         dropped = set(requirement_ids)
         for requirements in self._requirements.values():
             requirements -= dropped
+
+    def discredit(self, requirement_ids: Iterable[str], guessed: Callable[[Evidence], bool]) -> None:
+        """Reopen requirements read off the wrong page, and keep the readings taken there from answering them again.
+
+        Evidence is held only if it was read while on a built address, and only that reading: `guessed` says
+        whether a reading was, and is asked again whenever a hold is checked.
+
+        Reopening alone was not enough: the next read, on the search the run had since rebuilt through the form,
+        concluded the refused value again by drawing on the reopened quotes, and every DONE got the same refusal
+        until the run stopped stuck. Holding more than the guessed readings left requirements open
+        for good: a quote from a page the run reached itself, refused alongside a guessed one, or the same text read
+        again once the run set the search up itself. A conclusion or tally is held through the readings it rests on,
+        never by its own name, so a recount on the right page still counts. Held facts stay as context.
+
+        A hold is not kept per requirement. One quote can answer two, and a claim citing it for the one never
+        refused also stated the refused value from it; nothing tells which part of a quote a claim relied on. So
+        a held reading answers nothing: every requirement resting on it reopens, and one the verifier never doubted
+        is answered again from a fresh reading, off the guess, the way the refused one is.
+        """
+        self._on_guess = guessed
+        # Every refused requirement's support is gathered before any hold is applied: holding one requirement's
+        # readings first refused a conclusion another rested on, its support came back empty, and a guessed quote
+        # only that conclusion drew on was never held.
+        supporting = self.expand_evidence_ids(
+            key for requirement in set(requirement_ids) for key, _ in self.supporting(requirement)
+        )
+        self._discredited.update(
+            key
+            for key in supporting
+            if (fact := self._facts.get(key)) is not None and fact.evidence is not None and guessed(fact.evidence)
+        )
+        # Only what rests on a held quote is reopened: a quote from a page the run reached itself was never doubted,
+        # and reopening it too left the requirement open until a reread happened to cite it again.
+        for key, requirements in self._requirements.items():
+            fact = self._facts.get(key)
+            if self._rests_on_held(key, fact.basis if fact is not None else ()):
+                requirements.clear()
 
     def supersede(self, requirement_id: str, url: str, sha256: str, text: str) -> None:
         """Once a read of `url` evidences a requirement, earlier reads of that address whose quote the page no
@@ -481,8 +630,17 @@ class Notes:
         return tuple(fact.evidence for key, fact in self._facts.items() if fact.evidence is not None and key in sources)
 
     def supporting(self, requirement_id: str) -> tuple[tuple[str, Fact], ...]:
-        """A tally is ranked by code; other facts keep the order they were read in."""
-        supporting = [(key, self._facts[key]) for key, ids in self._requirements.items() if requirement_id in ids]
+        """A tally is ranked by code; other facts keep the order they were read in.
+
+        A refused fact supports nothing even while it still names the requirement: a hold is asked of the lineage
+        each time, so one lifted by a reading off the guess, answered again, comes back once the run reads the
+        guessed page again, and the requirement stood on a quote no claim could cite.
+        """
+        supporting = [
+            (key, self._facts[key])
+            for key, ids in self._requirements.items()
+            if requirement_id in ids and not self.refused(key)
+        ]
         return tuple(sorted(supporting, key=lambda item: -item[1].tally.count if item[1].tally else 0))
 
     def supporting_evidence(self, requirement_id: str) -> tuple[Evidence, ...]:
@@ -650,7 +808,12 @@ class Notes:
             # A JSON state escapes quotes and newlines; its notes budget must count those extra characters.
             return len(json.dumps(text)) - len('""') if json_encoded else len(text)
 
-        visible = {key: fact for key, fact in self._facts.items() if key not in summarized or self._requirements[key]}
+        # A refused fact is never offered to cite, whatever reads these notes: a reader, the composer, a verdict.
+        visible = {
+            key: fact
+            for key, fact in self._facts.items()
+            if (key not in summarized or self._requirements[key]) and not self.refused(key)
+        }
         # Counts are ranked in code; the reader need only select the output the task asked for.
         ranked = sorted(
             visible.items(),
@@ -687,7 +850,7 @@ class Notes:
 
         complete = render(ranked)
         if size(complete) <= max_chars:
-            return RenderedNotes(text=complete, evidence_ids=tuple(self._facts))
+            return RenderedNotes(text=complete, evidence_ids=tuple(key for key in self._facts if not self.refused(key)))
         required = set(self.expand_evidence_ids(key for key, ids in self._requirements.items() if ids))
         ordered = sorted(ranked, key=lambda item: item[0] not in required)
         keys = tuple(key for key, _ in ordered)

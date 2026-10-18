@@ -11,7 +11,7 @@ import base64
 import contextlib
 import json
 import logging
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Self, cast
@@ -24,7 +24,7 @@ from cdp_use.cdp.page.events import (
     ScreencastFrameEvent,
     WindowOpenEvent,
 )
-from cdp_use.cdp.runtime.events import ExecutionContextCreatedEvent
+from cdp_use.cdp.runtime.events import BindingCalledEvent, ExecutionContextCreatedEvent
 from cdp_use.cdp.target.commands import CreateTargetParameters
 from cdp_use.cdp.target.events import (
     AttachedToTargetEvent,
@@ -35,6 +35,7 @@ from cdp_use.cdp.target.events import (
 )
 from cdp_use.cdp.target.types import TargetInfo
 from cdp_use.client import CDPClient
+from pydantic import JsonValue
 from websockets.exceptions import ConnectionClosed, InvalidMessage, InvalidStatus
 
 from fastbrowse.clients.validation import RETRYABLE_STATUS
@@ -123,6 +124,32 @@ _KEEP_PAINTING: dict[str, object] = {
 }
 _TRACK_DOCUMENT_JS = data_file("browser", "snapshot.js").read_text(encoding="utf-8") + "('fingerprint')"
 _REFUSE_COOKIES_JS = data_file("browser", "autoconsent", "autoconsent.standalone.js").read_text(encoding="utf-8")
+INPUT_WORLD = "fastbrowse-input"
+"""The isolated world the input watch runs in: the page's own scripts cannot see a global, a listener or a binding
+there, and a binding or listener in the page's world is a fingerprint any site can read."""
+INPUT_NAVIGATION_BINDING = "__fastbrowseInputNavigation"
+"""The binding the input watch calls, from its isolated world only, when the run's own input moved the page."""
+# Whether the run's own input moved the page. A trusted input event's task, its promise reactions included, and the
+# task after it are the run's: a form's submit() is planned as a task of its own, queued after the first timer. A
+# navigation the Navigation API reports in that window, or one the user agent began for a link or form itself, to
+# another document or on the same one, is reported through the binding, which outlives the document. A page that
+# moves later, on a timer or after a fetch, is not: a script that set its location after a delay was once read as the
+# move of whatever click came before it. DOM events and the navigate event reach an isolated world's listeners too.
+INPUT_HISTORY_JS = (
+    "(() => { if (globalThis.__watching) return; globalThis.__watching = true; let input = 0; "
+    # Code's own events are not trusted, so code opens the window around them, from this world only: a page that
+    # could open it could pass its own move off as the run's. A window left open closes itself.
+    "const later = () => setTimeout(() => setTimeout(() => { input--; }, 0), 0); "
+    "globalThis.__openInput = () => { input++; return setTimeout(() => { input--; }, 2000); }; "
+    "globalThis.__closeInput = timer => { clearTimeout(timer); later(); }; "
+    "for (const type of ['click', 'submit', 'keydown', 'keyup', 'input', 'change', 'pointerup', 'mouseup']) "
+    "addEventListener(type, ev => { if (!ev.isTrusted) return; input++; later(); }, "
+    "{capture: true, passive: true}); "
+    "if (globalThis.navigation) navigation.addEventListener('navigate', ev => { "
+    "if (!(ev.userInitiated || input > 0)) return; "
+    f"const report = globalThis[{INPUT_NAVIGATION_BINDING!r}]; if (typeof report === 'function') report('1'); }}); "
+    "})()"
+)
 """DuckDuckGo's autoconsent (MPL-2.0, unmodified): refuses consent banners on known platforms and hides them
 before they paint, so neither the agent's steps nor a recording are spent on one."""
 
@@ -356,6 +383,9 @@ class BrowserSession:
         self._download_texts_shown = 0
         """How many of them an observation has already shown, so each is shown to the run once."""
         self._dialogs: dict[str, Dialog] = {}
+        self._dialog_urls: dict[str, str] = {}
+        self._input_navigations = 0
+        """The address of the document each pending dialog came from, which `Dialog` does not carry."""
         """Pending JS dialog per tab session id; cleared once handled."""
         self._dialog_opened = asyncio.Event()
         self._background: set[asyncio.Task[None]] = set()
@@ -415,6 +445,25 @@ class BrowserSession:
             return session_id == self.active_session_id
 
         return {fid: sid for fid, sid in self._frame_sessions.items() if belongs(sid)}
+
+    def frame_family(self, frame_id: str) -> set[str]:
+        """`frame_id` and every frame drawn inside it, whose sessions descend from that frame's session."""
+        root = self._frame_sessions.get(frame_id)
+        if root is None:
+            return set()
+
+        def inside(session_id: str) -> bool:
+            seen: set[str] = set()
+            while session_id not in seen:
+                if session_id == root:
+                    return True
+                seen.add(session_id)
+                if session_id not in self._frame_parents:
+                    return False
+                session_id = self._frame_parents[session_id]
+            return False
+
+        return {fid for fid, sid in self.frame_sessions().items() if inside(sid)}
 
     @property
     def artifacts(self) -> tuple[Artifact, ...]:
@@ -479,6 +528,17 @@ class BrowserSession:
         return next(
             (
                 self._dialogs[sid]
+                for sid in (self.active_session_id, *self.frame_sessions().values())
+                if sid in self._dialogs
+            ),
+            None,
+        )
+
+    def pending_dialog_url(self) -> str | None:
+        """The address of the document the pending dialog came from, if one is pending."""
+        return next(
+            (
+                self._dialog_urls.get(sid)
                 for sid in (self.active_session_id, *self.frame_sessions().values())
                 if sid in self._dialogs
             ),
@@ -653,7 +713,51 @@ class BrowserSession:
                 self.client.send.Runtime.evaluate(params={"expression": source}, session_id=session_id)
                 for source in self._new_document_scripts
             ),
+            self._watch_input_now(session_id),
             return_exceptions=True,
+        )
+
+    @contextlib.asynccontextmanager
+    async def input_window(self, session_id: str) -> AsyncGenerator[None]:
+        """Count a move the page makes while code dispatches its own input events as the run's: a select's or a
+        date field's change handler that moved the page is the run's doing, though no event it got was trusted."""
+        context: int | None = None
+        timer: JsonValue = None
+        with contextlib.suppress(Exception):
+            context = await self._input_context(session_id)
+            opened = await self.client.send_raw(
+                "Runtime.evaluate",
+                {"expression": "globalThis.__openInput?.()", "contextId": context, "returnByValue": True},
+                session_id=session_id,
+            )
+            timer = opened.get("result", {}).get("value")
+        try:
+            yield
+        finally:
+            if context is not None:
+                with contextlib.suppress(Exception):
+                    await self.client.send_raw(
+                        "Runtime.evaluate",
+                        {"expression": f"globalThis.__closeInput?.({json.dumps(timer)})", "contextId": context},
+                        session_id=session_id,
+                    )
+
+    async def _input_context(self, session_id: str) -> int:
+        """The input watch's isolated world in the session's main frame; asking by name returns the same world."""
+        tree = await self.client.send_raw("Page.getFrameTree", session_id=session_id)
+        world = await self.client.send_raw(
+            "Page.createIsolatedWorld",
+            {"frameId": tree["frameTree"]["frame"]["id"], "worldName": INPUT_WORLD},
+            session_id=session_id,
+        )
+        return world["executionContextId"]
+
+    async def _watch_input_now(self, session_id: str) -> None:
+        """Start the input watch in a document that was already open, in its own isolated world as on a new one."""
+        await self.client.send_raw(
+            "Runtime.evaluate",
+            {"expression": INPUT_HISTORY_JS, "contextId": await self._input_context(session_id)},
+            session_id=session_id,
         )
 
     async def _open_owned_tab(self, url: str) -> str:
@@ -694,6 +798,16 @@ class BrowserSession:
         await _together(
             *(self.client.send_raw(f"{domain}.enable", session_id=session_id) for domain in _ENABLE_DOMAINS),
             self.client.send_raw(
+                "Runtime.addBinding",
+                {"name": INPUT_NAVIGATION_BINDING, "executionContextName": INPUT_WORLD},
+                session_id=session_id,
+            ),
+            self.client.send_raw(
+                "Page.addScriptToEvaluateOnNewDocument",
+                {"source": INPUT_HISTORY_JS, "worldName": INPUT_WORLD},
+                session_id=session_id,
+            ),
+            self.client.send_raw(
                 "Target.setAutoAttach",
                 {"autoAttach": True, "waitForDebuggerOnStart": scoped, "flatten": True},
                 session_id=session_id,
@@ -730,6 +844,7 @@ class BrowserSession:
         client.register.Target.targetInfoChanged(self._on_target_info_changed)
         client.register.Target.targetDestroyed(self._on_target_destroyed)
         client.register.Page.javascriptDialogOpening(self._on_dialog)
+        client.register.Runtime.bindingCalled(self._on_binding)
         client.register.Page.javascriptDialogClosed(self._on_dialog_closed)
         # A background run casts without a frame handler too, and a frame nobody acks stalls the cast that sent it.
         if self._on_frame is not None or not self._connection.foreground:
@@ -985,6 +1100,7 @@ class BrowserSession:
         self._dialogs[session_id] = Dialog(
             kind=event["type"], message=event["message"], default_prompt=event.get("defaultPrompt")
         )
+        self._dialog_urls[session_id] = event.get("url", "")
         self._dialog_opened.set()
 
     async def handle_dialog(self, accept: bool, prompt_text: str | None = None) -> None:
@@ -997,10 +1113,20 @@ class BrowserSession:
         await self.client.send.Page.handleJavaScriptDialog(params=params, session_id=session_id)  # ty: ignore[invalid-argument-type]
         self._dialogs.pop(session_id, None)
 
+    def _on_binding(self, event: BindingCalledEvent, session_id: str | None) -> None:
+        if event["name"] == INPUT_NAVIGATION_BINDING:
+            self._input_navigations += 1
+
+    @property
+    def input_navigations(self) -> int:
+        """How many navigations to another document the run's own input has begun, on any page, so far."""
+        return self._input_navigations
+
     def _on_dialog_closed(self, event: JavascriptDialogClosedEvent, session_id: str | None) -> None:
         # Navigation can dismiss a dialog without going through handle_dialog.
         if session_id is not None:
             self._dialogs.pop(session_id, None)
+            self._dialog_urls.pop(session_id, None)
 
     # -- Downloads ------------------------------------------------------------------------------------
 
