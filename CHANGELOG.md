@@ -26,6 +26,14 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   A ranking over a count that is not complete still fails, as does a wrong rank. When a run cannot finish, its
   partial answer now lists every counted group before any quote. A correct answer is also no longer refused
   because a check named its source by the page's block id instead of the one handle it is now shown.
+- Answers are checked sooner, with the same checks. The answer's source and assertion audits run side by side,
+  and the claim selection runs beside the call that binds each output to its subject, where each used to wait
+  for the one before; the completion verifier runs beside the draft's audit instead of after it; and the
+  answer checks, which only finishing reads, are written while the run browses rather than before its first
+  read. A run with a dollar or call cap keeps the old order, so every call is still checked against the
+  receipts of the calls it used to follow. A wrong or uncited answer still fails exactly as before. Each model
+  call's start, end and outcome (ok, error or cancelled) is now in the run's trace, so a run's critical path can
+  be rebuilt from its events.
 
 ## [0.5.22] - 2026-10-16
 

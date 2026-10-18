@@ -558,11 +558,14 @@ async def test_abandoned_head_start_keeps_cancelled_normalization_receipt(monkey
         head = HeadStart.begin(client, "Report the price")
         await waiting.wait()
         costs = await head.abandon()
-    assert head.planning.cancelled()
+    # The plan finished and the normalization chained after it was cancelled: both are billed, the plan by its
+    # receipt and the cancelled call as unknown.
+    assert head.checking is not None and head.checking.cancelled()
     assert len(costs) == 2
-    assert costs[0].dollars == 0.01
-    assert costs[1].basis is CostBasis.UNKNOWN
-    assert costs[1].dollars is None
+    planned, cancelled = sorted(costs, key=lambda cost: cost.dollars is None)
+    assert planned.dollars == 0.01
+    assert cancelled.basis is CostBasis.UNKNOWN
+    assert cancelled.dollars is None
 
 
 @pytest.mark.parametrize("cancellations", [1, 2])
