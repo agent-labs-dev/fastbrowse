@@ -28,7 +28,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from fastbrowse.addresses import search_address
 from fastbrowse.browser.cursor import CursorFeedback, Geometry
-from fastbrowse.browser.session import BrowserSession, OriginNotAllowed
+from fastbrowse.browser.session import STATUS_WORLD, BrowserSession, OriginNotAllowed, PageUnresponsive
 from fastbrowse.config import Config
 from fastbrowse.datafiles import data_file
 from fastbrowse.models import TARGETED, Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome, Unavailable
@@ -189,11 +189,11 @@ _COVER_JS = (
     "if (hit && !holds(node, hit)) { let obstruction = null; "
     "for (let n = hit; n && !obstruction; n = up(n)) if (n.matches(OBSTRUCTIONS)) obstruction = n; "
     "if (obstruction && !holds(obstruction, node)) return 'obstruction'; "
-    "for (let n = hit; n && !holds(n, node); n = up(n)) { "
+    "let band = false; for (let n = hit; n && !holds(n, node); n = up(n)) { "
     "if (!['fixed', 'sticky'].includes(view.getComputedStyle(n).position)) continue; "
     "const r = n.getBoundingClientRect(); "
-    "return r.width * r.height < view.innerWidth * view.innerHeight / 2 ? 'band' : 'other'; } "
-    "return 'other'; } "
+    "if (r.width * r.height >= view.innerWidth * view.innerHeight / 2) return 'other'; band = true; } "
+    "return band ? 'band' : 'other'; } "
     "if (doc === document) return 'none'; node = view.frameElement; if (!node) return 'none'; "
     "const frame = node.getBoundingClientRect(); "
     "x = frame.x + (node.clientLeft + x) * frame.width / node.offsetWidth; "
@@ -237,9 +237,9 @@ _DRAG_STEP_SECONDS = 0.01
 # A guard resumed inside an animation callback can miss other callbacks in that same frame. Resolve in the
 # next task so a combined frame wait and hit test sees their DOM changes too.
 _PRESENTED_JS = (
-    "new Promise(done => { const t = setTimeout(done, 100); "
-    "requestAnimationFrame(() => requestAnimationFrame(() => "
-    "setTimeout(() => { clearTimeout(t); done(); }, 0))); })"
+    "new Promise(done => { const r = window.__fastbrowse; const t = r.nativeSetTimeout(done, 100); "
+    "r.nativeRequestAnimationFrame(() => r.nativeRequestAnimationFrame(() => "
+    "r.nativeSetTimeout(() => { r.nativeClearTimeout(t); done(); }, 0))); })"
 )
 """Resolves once the page has drawn a frame, or after 100ms where a hidden page never draws one."""
 
@@ -276,8 +276,8 @@ _HANDED_FOCUS_JS = (
     "if (was.doc.hidden) start(); else requestAnimationFrame(() => setTimeout(start, 0)); }))"
 )
 type _Point = tuple[float, float] | Literal["covered"] | None
-_TARGET_STATE = TypeAdapter(tuple[str, list[object] | None, _Point, bool])
-"""[fingerprint, live guard, hit-test point, popup announced] from the pre-action check."""
+_TARGET_STATE = TypeAdapter(tuple[str, list[object] | None, _Point, bool, bool])
+"""[fingerprint, live guard, hit-test point, popup announced, opens a window] from the pre-action check."""
 _SETTLED = TypeAdapter(tuple[bool, str | None])
 _NODE_ID = TypeAdapter(int | None)
 _LANDED = TypeAdapter(tuple[bool, bool])
@@ -330,6 +330,10 @@ class _SnapshotControl(Frozen):
     download: bool | None = None
 
 
+class _ScriptError(BrowserError):
+    """A script this layer evaluated threw in the page, as one can when the page replaced a global it calls."""
+
+
 class _FrameText(Frozen):
     url: str
     title: str
@@ -376,6 +380,8 @@ class _CaptureSnapshot(_FrameText):
 _SETTLE_SECONDS = 5.0
 _SETTLE_POLL_SECONDS = 0.1
 _SETTLE_QUIET_SECONDS = 0.2
+_SETTLE_FRAME_SECONDS = 0.5
+"""How long a settle waits for the page to draw a frame before it starts polling without one."""
 # A visible loading indicator outranks a quiet DOM, because a spinner settles the fingerprint while the page it
 # is waiting for does not exist yet. Its own budget, inside `_SETTLE_SECONDS`, is what keeps a page that spins
 # forever from paying the whole settle budget on every action: past it, quiet and ready decide alone.
@@ -389,13 +395,26 @@ self-clearing bot check such as PyPI's "Client Challenge" runs its script and th
 and an observation in flight across that swap failed with CDP -32000 and ended the run as an error. This bounds
 only how often one read follows a document that keeps replacing itself, each try waiting for the next one to
 settle; it is not a limit on the agent, whose steps, time and spend are counted elsewhere and untouched here."""
+_FRAME_READ_SECONDS = 5.0
+"""How long one child frame's page script may take before the read goes on without it. A child frame that stops
+answering (an advertisement's renderer stuck in a loop) left every observation waiting out the whole CDP command
+deadline, two minutes, and one login run spent 26 minutes that way while the page it was signing into answered at
+once. A frame past this is reported unread, as a cross-origin frame that cannot be read is."""
+_FRAME_RETRY_SECONDS = 0.5
+"""What a frame that missed `_FRAME_READ_SECONDS` gets on later reads, until it answers again or
+`_FRAME_RECHECK_SECONDS` have passed."""
+_FRAME_RECHECK_SECONDS = 30.0
+"""How long a frame that missed its deadline keeps the short budget. A frame that recovers but still answers slowly,
+as over a distant cloud connection, would otherwise never be read again for the rest of the run."""
 _SCREENSHOT_WAIT_SECONDS = 1.0
 _SCREENSHOT_STALL_SECONDS = 5.0
 """How long a background tab gets to paint a frame once its cast is restarted. Nothing else can make it paint
 without bringing its window forward, so past this the run goes on without the image."""
-# How long a click that opened a tab waits for it to be attached before the run carries on in the opener.
-_POPUP_ADOPT_SECONDS = 2.0
 _OPENS_TABS = frozenset({Operation.CLICK, Operation.ENTER})
+_POINTER_FIRST = frozenset({Operation.CLICK, Operation.FILL, Operation.HOVER})
+"""Operations that move the pointer to the point `act` measured before anything else."""
+_MEASURE_DRAWN_SECONDS = 2.0
+"""Bound on the measuring call that also waits for a drawn frame, out of the page's reach."""
 _NAVIGATE_ATTEMPTS = 4
 """Two tries a second apart were not enough behind a cloud browser's proxy: in three 0.5.8 evals of about 300 runs,
 a first page failed both, once on a certificate error, twice timing out connecting and once never becoming ready,
@@ -515,6 +534,10 @@ class CdpPage(Page):
         that same address: a dialog a page opened as it loaded after a navigation is not the action's, and
         accepting it moved nothing."""
         self._back_to: dict[str, str] = {}
+        self._unanswered: dict[str, float] = {}
+        """Child frame session -> when its last read missed the full deadline."""
+        self._status_worlds: dict[str, str] = {}
+        """Tab session -> the unique id of the isolated world its HTTP status is read in."""
 
     @property
     def artifacts(self) -> tuple[Artifact, ...]:
@@ -705,7 +728,10 @@ class CdpPage(Page):
                     f"return ({expression}); }})()"
                 )
             try:
-                raw = await self._evaluate(session_id, script)
+                if frame_key == _MAIN:
+                    raw = await self._evaluate(session_id, script)
+                else:
+                    raw = await self._frame_evaluate(session_id, script)
             except BrowserError:
                 if frame_key != _MAIN:
                     return None
@@ -745,7 +771,24 @@ class CdpPage(Page):
                 result[key] = frame
         if main := result.get(_MAIN):
             self._session.set_tab_info(target_id, main.raw.url, main.raw.title)
+        live = set(self._session.frame_sessions().values())
+        self._unanswered = {session_id: at for session_id, at in self._unanswered.items() if session_id in live}
         return result
+
+    async def _frame_evaluate(self, session_id: str, script: str) -> JsonValue:
+        """Evaluate in a child frame within its deadline; past it, the frame reads as unreadable (`None`)."""
+        missed = self._unanswered.get(session_id)
+        short = missed is not None and time.monotonic() - missed < _FRAME_RECHECK_SECONDS
+        budget = _FRAME_RETRY_SECONDS if short else _FRAME_READ_SECONDS
+        try:
+            async with asyncio.timeout(budget):
+                raw = await self._evaluate(session_id, script)
+        except TimeoutError:
+            if not short:
+                self._unanswered[session_id] = time.monotonic()
+            return None
+        self._unanswered.pop(session_id, None)
+        return raw
 
     def _inaccessible_frames(self, coverage: dict[str, int]) -> int:
         # Each inaccessible child is counted by its parent. Only a successful capture of that
@@ -862,12 +905,29 @@ class CdpPage(Page):
         # A pending dialog already blocks the renderer's main thread; evaluating now would hang.
         before_fingerprint = ""
         point: _Point = None
-        announced = False
+        announced = opens = False
+        # The pointer must move only once the browser has drawn the layout the point was measured in. Waiting for
+        # that frame inside the measuring call saves the pointer move a round trip of its own.
+        drawn = (
+            action.operation in _POINTER_FIRST and target is not None and target[0] == self._session.active_session_id
+        )
         if self._session.pending_dialog() is None:
-            before_fingerprint, live_guard, point, announced = await self._before_action(
-                target,
-                hit_test=action.operation in TARGETED,
-            )
+            try:
+                # The frame wait runs on the page's own timers, which a page can replace with ones that never
+                # fire; past this bound the point is measured again and the pointer move waits for its own frame.
+                async with asyncio.timeout(_MEASURE_DRAWN_SECONDS if drawn else None):
+                    before_fingerprint, live_guard, point, announced, opens = await self._before_action(
+                        target, hit_test=action.operation in TARGETED, present=drawn
+                    )
+            except TimeoutError as exc:
+                # The renderer may be synchronously blocked. Do not queue a second evaluation behind it.
+                raise PageUnresponsive("page did not draw the measured layout before the deadline") from exc
+            except _ScriptError:
+                # A page can replace those timers with ones that throw while leaving the renderer responsive.
+                drawn = False
+                before_fingerprint, live_guard, point, announced, opens = await self._before_action(
+                    target, hit_test=action.operation in TARGETED
+                )
             if target is not None and live_guard != target[3]:
                 return ActResult(
                     outcome=StepOutcome.STALE, page_changed=False, detail="control changed since observation"
@@ -892,8 +952,9 @@ class CdpPage(Page):
             document = marked[0] if marked is not None and opened_here else None
         else:
             document = await self._input_mark()
+        window_opens = self._session.window_opens
         try:
-            outcome, detail = await self._dispatch(action, target, point)
+            outcome, detail = await self._dispatch(action, target, point, drawn=drawn)
         except BrowserError:
             if not action.form_fill:
                 raise
@@ -913,7 +974,9 @@ class CdpPage(Page):
                 )
             ),
         )
-        if action.operation in _OPENS_TABS and await self._session.follow_popup(popups, _POPUP_ADOPT_SECONDS):
+        if action.operation in _OPENS_TABS and await self._session.follow_popup(
+            popups, expected=opens or self._session.window_opens != window_opens
+        ):
             return ActResult(
                 outcome=StepOutcome.EXECUTED, page_changed=True, detail="opened a new tab, now active", moved=True
             )
@@ -1018,7 +1081,12 @@ class CdpPage(Page):
         return False
 
     async def _dispatch(
-        self, action: Action, target: tuple[str, str, int, list[object] | None] | None, point: _Point
+        self,
+        action: Action,
+        target: tuple[str, str, int, list[object] | None] | None,
+        point: _Point,
+        *,
+        drawn: bool = False,
     ) -> tuple[StepOutcome, str | None]:
         match action.operation:
             case Operation.NAVIGATE:
@@ -1032,13 +1100,18 @@ class CdpPage(Page):
                     return StepOutcome.FAILED, str(error)
                 return StepOutcome.EXECUTED, None
             case Operation.CLICK:
-                return await self._click(target, point)
+                return await self._click(target, point, drawn=drawn)
             case Operation.HOVER:
-                return await self._hover(target, point)
+                return await self._hover(target, point, drawn=drawn)
             case Operation.FILL:
                 filled = await self._until_dialog(
                     self._fill(
-                        target, action.text or "", point, secret=action.secret, secret_origin=action.secret_origin
+                        target,
+                        action.text or "",
+                        point,
+                        secret=action.secret,
+                        secret_origin=action.secret_origin,
+                        drawn=drawn,
                     )
                 )
                 return filled or (StepOutcome.FAILED, "dialog interrupted fill before its value was verified")
@@ -1197,7 +1270,7 @@ class CdpPage(Page):
         return "keyboard"
 
     async def _click(
-        self, target: tuple[str, str, int, list[object] | None] | None, point: _Point
+        self, target: tuple[str, str, int, list[object] | None] | None, point: _Point, *, drawn: bool = False
     ) -> tuple[StepOutcome, str | None]:
         if target is None:
             return StepOutcome.FAILED, "click requires a target"
@@ -1210,7 +1283,7 @@ class CdpPage(Page):
             if route == "keyboard":
                 return await self._press(target)
             point = route
-        return await self._click_point(target, point)
+        return await self._click_point(target, point, drawn=drawn)
 
     async def _press(self, target: tuple[str, str, int, list[object] | None]) -> tuple[StepOutcome, str | None]:
         """Activate a control from the keyboard: focus it and press the key its semantics answer to."""
@@ -1249,7 +1322,7 @@ class CdpPage(Page):
         return (await self._evaluate(session_id, f"({_GUARD_HOLDS_JS})({local_id}, {json.dumps(guard)})")) is True
 
     async def _hover(
-        self, target: tuple[str, str, int, list[object] | None] | None, point: _Point
+        self, target: tuple[str, str, int, list[object] | None] | None, point: _Point, *, drawn: bool = False
     ) -> tuple[StepOutcome, str | None]:
         if target is None:
             return StepOutcome.FAILED, "hover requires a target"
@@ -1258,7 +1331,7 @@ class CdpPage(Page):
         if point == "covered":
             return StepOutcome.COVERED, await self._covered_detail(target)
         # The pointer stays where it lands, so what the hover reveals is still shown when the page is next read.
-        await self._move(target[0], point)
+        await self._move(target[0], point, drawn=drawn)
         return StepOutcome.EXECUTED, None
 
     async def _await_popup(self, session_id: str, local_id: int) -> None:
@@ -1295,6 +1368,7 @@ class CdpPage(Page):
         *,
         secret: bool = False,
         secret_origin: str | None = None,
+        drawn: bool = False,
     ) -> tuple[StepOutcome, str | None]:
         if target is None:
             return StepOutcome.FAILED, "fill requires a target"
@@ -1312,7 +1386,7 @@ class CdpPage(Page):
         if isinstance(route, tuple):
             # Ported from browser-use/jev-ultrafast (MIT), browser.py: fill clicks before typing.
             # Focus alone bypasses pointer handlers that open autocomplete and calendar pickers.
-            outcome, detail = await self._click_point(target, route, prepare_fill=True)
+            outcome, detail = await self._click_point(target, route, prepare_fill=True, drawn=drawn)
             if outcome is not StepOutcome.EXECUTED:
                 return outcome, detail
             handed, native_date, focused = _FILL_TARGET.validate_python(
@@ -1619,15 +1693,16 @@ class CdpPage(Page):
             return StepOutcome.STALE, "upload target disconnected"
         return StepOutcome.EXECUTED, None
 
-    async def _move(self, session_id: str, point: tuple[float, float]) -> None:
+    async def _move(self, session_id: str, point: tuple[float, float], *, drawn: bool = False) -> None:
         """Move the pointer to a point measured in the DOM, once the browser routes input by the same layout.
 
         Chrome sends input to a frame by the last frame the page drew, not by the DOM. A fill that scrolled a
         cross-origin frame into view left the drawn layout a frame behind, so the click meant for the button
         below it went to the old position and the popup it opens never appeared.
         """
-        with suppress(Exception):
-            await asyncio.wait_for(self._evaluate(self._session.active_session_id, _PRESENTED_JS), 0.5)
+        if not drawn:
+            with suppress(Exception):
+                await asyncio.wait_for(self._evaluate(self._session.active_session_id, _PRESENTED_JS), 0.5)
         params: DispatchMouseEventParameters = {"type": "mouseMoved", "x": point[0], "y": point[1]}
         await self._input(self._session.client.send.Input.dispatchMouseEvent(params=params, session_id=session_id))
 
@@ -1637,8 +1712,9 @@ class CdpPage(Page):
         point: tuple[float, float],
         *,
         prepare_fill: bool = False,
+        drawn: bool = False,
     ) -> tuple[StepOutcome, str | None]:
-        outcome, detail, point = await self._stable_point(target, point, prepare_fill=prepare_fill)
+        outcome, detail, point = await self._stable_point(target, point, prepare_fill=prepare_fill, drawn=drawn)
         if outcome is not StepOutcome.EXECUTED:
             return outcome, detail
         x, y = point
@@ -1654,13 +1730,16 @@ class CdpPage(Page):
         *,
         prepare_fill: bool = False,
         scroll: bool = True,
+        drawn: bool = False,
     ) -> tuple[StepOutcome, str | None, tuple[float, float]]:
         # Pointer entry can move, cover or repurpose a widget. Press only after the same guarded target
         # stays under the pointer across rendered frames; a moving target never earns a speculative click.
         session_id = target[0]
         deadline = time.monotonic() + _TARGET_STABILITY_SECONDS
         while True:
-            await self._move(session_id, point)
+            # Only the first point was measured in a call that waited for its frame; a later one may have scrolled.
+            await self._move(session_id, point, drawn=drawn)
+            drawn = False
             check = asyncio.create_task(
                 self._before_action(target, hit_test=True, prepare_fill=prepare_fill, after_move=True, scroll=scroll)
             )
@@ -1669,7 +1748,7 @@ class CdpPage(Page):
                 await asyncio.wait({check, dialog}, return_when=asyncio.FIRST_COMPLETED)
                 if self._session.pending_dialog() is not None:
                     return StepOutcome.FAILED, "pointer movement opened a dialog before press", point
-                _, guard, fresh, _ = check.result()
+                _, guard, fresh, _, _ = check.result()
             finally:
                 check.cancel()
                 dialog.cancel()
@@ -1715,7 +1794,7 @@ class CdpPage(Page):
             return StepOutcome.FAILED, "drag source and drop target are the same control"
         # The drop target is hit-tested exactly as the source is: its point is only computed when the live guard
         # still matches the observed one, so a target that moved or was covered since the observation is stale.
-        _, _, drop_point, _ = await self._before_action(drop, hit_test=True)
+        _, _, drop_point, _, _ = await self._before_action(drop, hit_test=True)
         if drop_point is None or drop_point == "covered":
             return StepOutcome.STALE, "drop target disconnected"
         # Finding the destination can scroll the source away. Scrolling back would invalidate the drop point.
@@ -1723,7 +1802,7 @@ class CdpPage(Page):
         if outcome is not StepOutcome.EXECUTED:
             return outcome, detail
         # Pointer entry on the source can repurpose the destination after its first guard check.
-        _, _, drop_point, _ = await self._before_action(drop, hit_test=True, scroll=False)
+        _, _, drop_point, _, _ = await self._before_action(drop, hit_test=True, scroll=False)
         if drop_point is None or drop_point == "covered":
             return StepOutcome.STALE, "drop target changed before pointer press"
         session_id = target[0]
@@ -1754,7 +1833,7 @@ class CdpPage(Page):
             )
             await asyncio.sleep(_DRAG_STEP_SECONDS)
             if step == 1:
-                _, _, landed, _ = await self._before_action(drop, hit_test=True, scroll=False)
+                _, _, landed, _, _ = await self._before_action(drop, hit_test=True, scroll=False)
                 if not isinstance(landed, tuple):
                     await self._cancel_drag(session_id, (start_x, start_y))
                     return StepOutcome.STALE, "drop target changed during the drag"
@@ -1769,7 +1848,7 @@ class CdpPage(Page):
             for _ in range(2):
                 await self._drag_move(session_id, *at)
                 await asyncio.sleep(_DRAG_STEP_SECONDS)
-            _, _, landed, _ = await self._before_action(drop, hit_test=True, scroll=False)
+            _, _, landed, _, _ = await self._before_action(drop, hit_test=True, scroll=False)
             if not isinstance(landed, tuple):
                 break
             if landed == at:
@@ -1922,19 +2001,28 @@ class CdpPage(Page):
     async def _document_response(self) -> _DocumentResponse:
         # Page scripts can replace timing APIs, so status is read in a world they cannot modify.
         session_id = self._session.active_session_id
-        tree = await self._session.client.send.Page.getFrameTree(session_id=session_id)
-        world = await self._session.client.send.Page.createIsolatedWorld(
-            params={"frameId": tree["frameTree"]["frame"]["id"], "worldName": "fastbrowse-status"},
-            session_id=session_id,
-        )
-        raw = await self._evaluate(
-            session_id,
+        read = (
             "(() => { const navigation = performance.getEntriesByType('navigation')[0]; "
             "return {url: location.href, document_key: String(performance.timeOrigin), "
             "response_status: navigation?.name.split('#')[0] === location.href.split('#')[0] "
-            "? navigation.responseStatus || null : null}; })()",
-            context_id=world["executionContextId"],
+            "? navigation.responseStatus || null : null}; })()"
         )
+        # Making the world took two round trips more than reading it, on every observation, so one is kept until
+        # its document goes. It is kept by the unique id Chrome gives each context, never by its context id: Chrome
+        # reuses context ids across renderer processes, so a kept context id could name another document's world,
+        # even the page's own, while a unique id names this world or nothing.
+        if (kept := self._status_worlds.get(session_id)) is not None:
+            with suppress(BrowserError):
+                return _DocumentResponse.model_validate(await self._evaluate(session_id, read, unique_context_id=kept))
+            del self._status_worlds[session_id]
+        tree = await self._session.client.send.Page.getFrameTree(session_id=session_id)
+        world = await self._session.client.send.Page.createIsolatedWorld(
+            params={"frameId": tree["frameTree"]["frame"]["id"], "worldName": STATUS_WORLD},
+            session_id=session_id,
+        )
+        raw = await self._evaluate(session_id, read, context_id=world["executionContextId"])
+        if (unique := self._session.status_context(session_id, world["executionContextId"])) is not None:
+            self._status_worlds[session_id] = unique
         return _DocumentResponse.model_validate(raw)
 
     async def response_status(self) -> int | None:
@@ -2083,9 +2171,10 @@ class CdpPage(Page):
         prepare_fill: bool = False,
         after_move: bool = False,
         scroll: bool = True,
-    ) -> tuple[str, list[object] | None, _Point, bool]:
+        present: bool = False,
+    ) -> tuple[str, list[object] | None, _Point, bool, bool]:
         if target is None:
-            return await self._fingerprint(), None, None, False
+            return await self._fingerprint(), None, None, False, False
         session_id, _frame, local_id, guard = target
         same_session = session_id == self._session.active_session_id
         # Input routing uses the top frame's drawn layout. An OOPIF cannot wait for that frame in its own
@@ -2093,7 +2182,7 @@ class CdpPage(Page):
         if after_move and not same_session:
             await self._evaluate(self._session.active_session_id, _PRESENTED_JS)
 
-        async def target_state() -> tuple[str, list[object] | None, _Point, bool]:
+        async def target_state() -> tuple[str, list[object] | None, _Point, bool, bool]:
             # Guard validation and hit testing share a renderer task, so no page script can swap the
             # verified control between them. Stale controls must never be scrolled into view.
             result = await self._evaluate(
@@ -2113,11 +2202,23 @@ class CdpPage(Page):
                     if prepare_fill
                     else ""
                 )
+                + (
+                    f"if (Array.isArray(point)) await {_PRESENTED_JS}; "
+                    if present and same_session and not after_move
+                    else ""
+                )
                 + f"const e = r?.nodes.get({local_id}); "
                 "const announced = !!e && e.getAttribute('aria-expanded') !== 'true' && "
                 "(!!e.getAttribute('aria-haspopup') || e.getAttribute('aria-expanded') === 'false' || "
                 "!!e.getAttribute('aria-controls') || !!e.getAttribute('aria-owns')); "
-                "return [fingerprint, guard, point, announced]; })()",
+                # A link, area or submit that names a new browsing context opens a window whatever its handlers do.
+                "const fresh = name => (name ?? '').trim().toLowerCase() === '_blank'; "
+                "const link = e?.closest('a[href],area[href]'); "
+                "const opens = !!e && ((!!link && fresh(link.hasAttribute('target') ? link.getAttribute('target') "
+                ": e.ownerDocument.querySelector('base[target]')?.getAttribute('target'))) || "
+                "(!!e.form && ['submit', 'image'].includes(e.type) && "
+                "fresh(e.getAttribute('formtarget') ?? e.form.getAttribute('target')))); "
+                "return [fingerprint, guard, point, announced, opens]; })()",
             )
             return _TARGET_STATE.validate_python(result)
 
@@ -2126,8 +2227,8 @@ class CdpPage(Page):
         fingerprint_task = asyncio.create_task(self._fingerprint())
         target_task = asyncio.create_task(target_state())
         try:
-            fingerprint, (_, live_guard, point, announced) = await asyncio.gather(fingerprint_task, target_task)
-            return fingerprint, live_guard, point, announced
+            fingerprint, (_, live_guard, point, announced, opens) = await asyncio.gather(fingerprint_task, target_task)
+            return fingerprint, live_guard, point, announced, opens
         finally:
             fingerprint_task.cancel()
             target_task.cancel()
@@ -2192,8 +2293,12 @@ class CdpPage(Page):
             f"Math.max(1, {_SETTLE_QUIET_SECONDS * 1000} - state.quietFor)) "
             f": {_SETTLE_POLL_SECONDS * 1000}); }}; "
             # Wait for one rendered frame first: a menu shown in an animation frame callback mutates only when that
-            # frame runs, and a late frame would otherwise let 200ms of quiet pass before the menu exists.
-            "if (document.hidden) poll(); else requestAnimationFrame(() => setTimeout(poll, 0)); })",
+            # frame runs, and a late frame would otherwise let 200ms of quiet pass before the menu exists. A tab
+            # that is not hidden can still stop drawing (a background tab behind another), and a settle waiting on
+            # its frame alone held each read for the whole command deadline; the timer starts the poll regardless.
+            "let started = false; const start = () => { if (!started) { started = true; poll(); } }; "
+            f"setTimeout(start, {_SETTLE_FRAME_SECONDS * 1000}); "
+            "if (document.hidden) start(); else requestAnimationFrame(() => setTimeout(start, 0)); })",
         )
         return _SETTLED.validate_python(result)
 
@@ -2208,13 +2313,22 @@ class CdpPage(Page):
             f"setTimeout(poll, {_SETTLE_POLL_SECONDS * 1000}); }}; poll(); }})"
         )
 
-    async def _evaluate(self, session_id: str, expression: str, *, context_id: int | None = None) -> JsonValue:
+    async def _evaluate(
+        self,
+        session_id: str,
+        expression: str,
+        *,
+        context_id: int | None = None,
+        unique_context_id: str | None = None,
+    ) -> JsonValue:
         params: EvaluateParameters = {"expression": expression, "returnByValue": True, "awaitPromise": True}
         if context_id is not None:
             params["contextId"] = context_id
+        if unique_context_id is not None:
+            params["uniqueContextId"] = unique_context_id
         out = await self._session.client.send.Runtime.evaluate(params=params, session_id=session_id)
         if "exceptionDetails" in out:
-            raise BrowserError("Runtime.evaluate failed (JavaScriptError)")
+            raise _ScriptError("Runtime.evaluate failed (JavaScriptError)")
         return out["result"].get("value")
 
 

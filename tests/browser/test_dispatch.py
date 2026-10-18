@@ -613,7 +613,9 @@ async def test_an_unstable_target_expires_without_a_press(page: CdpPage, monkeyp
     monkeypatch.setattr(page_module, "_TARGET_STABILITY_SECONDS", 0)
     monkeypatch.setattr(page, "_move", AsyncMock())
     monkeypatch.setattr(page, "_evaluate", AsyncMock())
-    monkeypatch.setattr(page, "_before_action", AsyncMock(return_value=("fingerprint", ["guard"], (20.0, 20.0), False)))
+    monkeypatch.setattr(
+        page, "_before_action", AsyncMock(return_value=("fingerprint", ["guard"], (20.0, 20.0), False, False))
+    )
     pressed = AsyncMock()
     monkeypatch.setattr(page, "_input", pressed)
     outcome, _ = await page._click_point(("session", "main", 1, ["guard"]), (10.0, 10.0))
@@ -694,10 +696,12 @@ async def test_covered_target_reports_visible_overlay_controls(
     if detail_race:
         evaluate = page._evaluate
 
-        async def racing_evaluate(session_id: str, expression: str, *, context_id: int | None = None) -> object:
+        async def racing_evaluate(
+            session_id: str, expression: str, *, context_id: int | None = None, unique_context_id: str | None = None
+        ) -> object:
             if "let cover = hit?.closest" in expression:
                 raise BrowserError("Execution context changed while describing the obstruction")
-            return await evaluate(session_id, expression, context_id=context_id)
+            return await evaluate(session_id, expression, context_id=context_id, unique_context_id=unique_context_id)
 
         monkeypatch.setattr(page, "_evaluate", racing_evaluate)
     before = await page.observe()

@@ -1,6 +1,6 @@
 """Contract for the injected LLM: structured generation for a named purpose."""
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Sequence
 from typing import Literal, Protocol
 
 from pydantic import BaseModel
@@ -51,3 +51,16 @@ class LLMClient(Protocol):
         them before returning so no paid request outlives its cost result.
         """
         ...
+
+
+async def recorded[T: BaseModel](generating: Awaitable[Generation[T]], ledger: Ledger | None) -> Generation[T]:
+    """The generation, its receipt already in `ledger`.
+
+    A successful generation leaves its receipt to the caller. A call run as a task beside another returned into a
+    task that could be cancelled or discarded before its caller recorded it: a verifier that finished while the
+    audit beside it failed was paid for and never billed. Recorded in the task that made it, a finished call is
+    a billed call, whatever happens to its sibling."""
+    generated = await generating
+    if ledger is not None:
+        ledger.record(generated.cost)
+    return generated

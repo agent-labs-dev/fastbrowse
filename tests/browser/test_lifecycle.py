@@ -473,7 +473,7 @@ async def test_a_background_tab_that_paints_nothing_has_no_screenshot(monkeypatc
     assert "Page.captureScreenshot" in transport.finished
 
 
-async def test_initial_navigation_error_returns_error_result(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_connection_lost_while_opening_returns_an_unavailable_result(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = CdpTransport(monkeypatch)
     transport.failures["Page.navigate"] = ConnectionError("secret")
 
@@ -484,7 +484,7 @@ async def test_initial_navigation_error_returns_error_result(monkeypatch: pytest
     monkeypatch.setattr(chrome_adapter, "local_chrome", chrome)
     no_shortcut = ScriptedLLM([{"url": None}, {"url": None}])
     result = await run_task("Read", start="https://example.test", jev=ScriptedJev({}), llm=no_shortcut)
-    assert result.status is Status.ERROR
+    assert result.status is Status.UNAVAILABLE
     assert result.error == "Page.navigate failed (ConnectionError)"
 
 

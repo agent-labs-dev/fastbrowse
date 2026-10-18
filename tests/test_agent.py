@@ -34,6 +34,7 @@ from fastbrowse.agent import (
     _without_missing,
 )
 from fastbrowse.batches import evaluate_batches
+from fastbrowse.browser.session import BrowserUnresponsive, PageUnresponsive
 from fastbrowse.citations import text_fragment
 from fastbrowse.clients.openai_compatible import OpenAICompatibleLLM
 from fastbrowse.clients.typesafe import TypeSafeJevClient
@@ -82,7 +83,7 @@ from fastbrowse.page import (
     Page,
     SiteUnreachable,
 )
-from fastbrowse.planner import OutputTarget, Plan, Requirement, RequirementKind, RunReport
+from fastbrowse.planner import CheckedPlan, OutputTarget, Plan, Requirement, RequirementKind, RunReport
 from fastbrowse.policy import Decision, HistoryEntry, ReadAssessment, build_request, decide
 from fastbrowse.retrieval import TRANSACTION_CONTRADICTED, ComposedAnswer
 from fastbrowse.safety import Redactor, ScopedSecrets
@@ -2793,7 +2794,11 @@ async def test_the_page_a_run_began_on_is_shown_to_the_checks_after_a_shortcut_l
     async def planned(*args: object, **kwargs: object) -> Generation[Plan]:
         return Generation(data=plan, cost=FREE)
 
+    async def checked(*args: object, **kwargs: object) -> CheckedPlan:
+        return CheckedPlan(data=plan, cost=None)
+
     monkeypatch.setattr(agent_module, "make_plan", planned)
+    monkeypatch.setattr(agent_module, "answer_checks", checked)
     on = _at(release)
     page = Mock(spec=Page)
     page.artifacts = ()
@@ -2802,7 +2807,15 @@ async def test_the_page_a_run_began_on_is_shown_to_the_checks_after_a_shortcut_l
     page.response_status = AsyncMock(return_value=200)
     page.observe = AsyncMock(return_value=on)
     page.screenshot = AsyncMock(return_value=b"")
-    llm = ScriptedLLM(
+
+    class Verifying(ScriptedLLM):
+        async def generate(self, purpose, messages, schema, **kwargs):
+            if purpose is LLMPurpose.COMPOSE:
+                # The answer written beside the verifier is still being written when it refuses.
+                await asyncio.Event().wait()
+            return await super().generate(purpose, messages, schema, **kwargs)
+
+    llm = Verifying(
         [{"missing": ["req-1"], "complete": False}, {"diagnosis": "", "next_subgoal": "", "give_up": False}]
     )
     agent = Agent(page, ScriptedJev({}, noul=0.5), llm)
@@ -3647,6 +3660,7 @@ async def test_plan_receipt_is_not_billed_twice_when_recording_exceeds_budget(
 
     async def consume(state: _RunState, output_schema: object, until: object) -> RunResult:
         await state.await_plan()
+        await state.await_checks()
         raise AssertionError("Recording the plan must exceed the budget")
 
     monkeypatch.setattr(agent, "_loop", consume)
@@ -4511,6 +4525,22 @@ async def test_a_page_nobody_read_is_read_before_it_is_scrolled() -> None:
     assert len(llm.calls) == 1
     # Once this document is read, scrolling it is how the rest of a lazily drawn list comes in.
     assert not await agent._read_before_interaction(state, obs, decision)
+
+
+@pytest.mark.parametrize(
+    ("failed", "status"),
+    [(PageUnresponsive, Status.ERROR), (BrowserUnresponsive, Status.UNAVAILABLE)],
+)
+async def test_a_page_that_stops_answering_is_the_runs_failure_and_a_lost_browser_an_outage(
+    failed: type[BrowserError], status: Status
+) -> None:
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    page.navigate = AsyncMock()
+    page.observe = AsyncMock(side_effect=failed("Runtime.evaluate exceeded its command deadline"))
+    llm = ScriptedLLM([{"url": None}, {"url": None}])
+    result = await Agent(page, ScriptedJev({}), llm).run("Sign in", start="https://example.test")
+    assert result.status is status
 
 
 @pytest.mark.parametrize("failed", [NavigationTimeout, SiteUnreachable, BrowserUnavailable])

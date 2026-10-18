@@ -8,14 +8,15 @@ import inspect
 import json
 import os
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from cdp_use.cdp.target.events import TargetCreatedEvent, TargetInfoChangedEvent
 from cdp_use.client import CDPClient
 
 from fastbrowse.adapters.local_chrome import find_chrome, local_chrome
 from fastbrowse.browser.page import CdpPage
-from fastbrowse.browser.session import BrowserSession
+from fastbrowse.browser.session import BrowserSession, PageUnresponsive
 from fastbrowse.clients.environment import load_settings
 from fastbrowse.config import Config, ObservationLimits
 from fastbrowse.effects import effect
@@ -164,6 +165,39 @@ async def test_covered_click_dispatches_nothing(loaded_page: CdpPage, browser_se
     assert clicked is None
 
 
+@pytest.mark.parametrize("shadow", [False, True], ids=["document", "shadow-root"])
+async def test_small_fixed_child_does_not_hide_full_window_cover_from_hit_test(
+    loaded_page: CdpPage, browser_session: BrowserSession, shadow: bool
+) -> None:
+    session_id = browser_session.active_session_id
+    if shadow:
+        html = (
+            "(()=>{document.body.innerHTML = '<button id=target>Covered target</button><x-cover></x-cover>'; "
+            "const host = document.querySelector('x-cover'); "
+            "host.style.cssText = 'display:block;position:fixed;inset:0;z-index:9999;transform:translateZ(0)'; "
+            "const root = host.attachShadow({mode:'open'}); "
+            "root.innerHTML = '<div class=child style=\"position:fixed;background:#000\"></div>'; "
+            "const r = document.getElementById('target').getBoundingClientRect(); "
+            "const child = root.querySelector('.child'); child.style.left = r.left+'px'; "
+            "child.style.top = r.top+'px'; child.style.width = r.width+'px'; "
+            "child.style.height = r.height+'px'; return true})()"
+        )
+    else:
+        html = (
+            "document.body.innerHTML = '<button id=target>Covered target</button>' + "
+            "'<div style=\"position:fixed;inset:0;z-index:9999;transform:translateZ(0)\">' + "
+            "'<div style=\"position:fixed;left:0;top:0;width:128px;height:128px;background:#000\"></div>' + "
+            "'</div>'; true"
+        )
+    await eval_value(browser_session, session_id, html)
+    obs = await loaded_page.observe()
+    target = find(obs, "Covered target")
+    result = await loaded_page.act(Action(operation=Operation.CLICK, target_id=target.id), obs)
+    assert result.outcome == StepOutcome.COVERED
+    clicked = await eval_value(browser_session, session_id, "document.getElementById('target').dataset.clicked || null")
+    assert clicked is None
+
+
 async def test_dom_swap_after_observe_makes_act_stale(loaded_page: CdpPage, browser_session: BrowserSession) -> None:
     obs = await loaded_page.observe()
     target = find(obs, "Swap target")
@@ -253,6 +287,120 @@ async def test_a_click_that_opens_a_tab_continues_there(loaded_page: CdpPage, br
     back = await loaded_page.act(Action(operation=Operation.SWITCH_TAB, tab_id=opener_tab.id), obs2)
     assert back.outcome == StepOutcome.EXECUTED
     assert find(await loaded_page.observe(), "Open popup")
+
+
+async def test_a_new_tab_slow_to_set_up_is_still_followed(
+    loaded_page: CdpPage, browser_session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    obs = await loaded_page.observe()
+    prepare = browser_session._prepare_session
+
+    async def slow(session_id: str) -> None:
+        # A loaded browser took seconds to answer a new tab's setup, past any fixed allowance for it.
+        await asyncio.sleep(2.5)
+        await prepare(session_id)
+
+    monkeypatch.setattr(browser_session, "_prepare_session", slow)
+    result = await loaded_page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Open popup").id), obs)
+    assert result.outcome is StepOutcome.EXECUTED and result.detail == "opened a new tab, now active"
+    assert find(await loaded_page.observe(), "Popup button")
+
+
+def _announce_late(browser_session: BrowserSession, seconds: float) -> None:
+    """Hold back Chrome's announcement of new targets, as a loaded machine did for over two seconds."""
+    loop = asyncio.get_running_loop()
+    created, changed = browser_session._on_target_created, browser_session._on_target_info_changed
+
+    def late_created(event: TargetCreatedEvent, session_id: str | None) -> None:
+        loop.call_later(seconds, created, event, session_id)
+
+    def late_changed(event: TargetInfoChangedEvent, session_id: str | None) -> None:
+        loop.call_later(seconds, changed, event, session_id)
+
+    browser_session.client.register.Target.targetCreated(late_created)
+    browser_session.client.register.Target.targetInfoChanged(late_changed)
+
+
+@pytest.mark.parametrize("opener", ["window.open", "link"])
+async def test_a_new_tab_announced_late_is_still_followed(
+    loaded_page: CdpPage, browser_session: BrowserSession, opener: str
+) -> None:
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.body.insertAdjacentHTML('beforeend', "
+        '\'<a href="/popup.html" target="_blank">New window link</a>\')',
+    )
+    obs = await loaded_page.observe()
+    _announce_late(browser_session, 2.5)
+    if opener == "link":
+        # The link names a new browsing context, which is enough to wait for its tab without Chrome saying so.
+        browser_session.client.register.Page.windowOpen(lambda event, session_id: None)
+    label = "Open popup" if opener == "window.open" else "New window link"
+    result = await loaded_page.act(Action(operation=Operation.CLICK, target_id=find(obs, label).id), obs)
+    assert result.outcome is StepOutcome.EXECUTED and result.detail == "opened a new tab, now active"
+    assert find(await loaded_page.observe(), "Popup button")
+
+
+async def test_a_new_tab_whose_opener_is_reported_late_is_still_followed(
+    loaded_page: CdpPage, browser_session: BrowserSession
+) -> None:
+    obs = await loaded_page.observe()
+    created = browser_session._on_target_created
+
+    def without_opener(event: TargetCreatedEvent, session_id: str | None) -> None:
+        info = {k: v for k, v in event["targetInfo"].items() if k != "openerId"}
+        created(cast("TargetCreatedEvent", {"targetInfo": info}), session_id)
+
+    # Chrome can name the opener only in a later update of the target's info.
+    browser_session.client.register.Target.targetCreated(without_opener)
+    result = await loaded_page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Open popup").id), obs)
+    assert result.outcome is StepOutcome.EXECUTED and result.detail == "opened a new tab, now active"
+
+
+async def test_a_click_that_opens_no_window_does_not_wait_for_one(
+    loaded_page: CdpPage, browser_session: BrowserSession
+) -> None:
+    obs = await loaded_page.observe()
+    _announce_late(browser_session, 2.5)
+    started = asyncio.get_running_loop().time()
+    result = await loaded_page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Shadow button").id), obs)
+    assert result.outcome is StepOutcome.EXECUTED and result.detail is None
+    assert asyncio.get_running_loop().time() - started < 2.0
+
+
+async def test_a_draw_wait_timeout_does_not_queue_a_second_page_evaluation(
+    loaded_page: CdpPage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    obs = await loaded_page.observe()
+    calls = 0
+
+    async def timed_out(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        raise TimeoutError
+
+    monkeypatch.setattr(loaded_page, "_before_action", timed_out)
+    with pytest.raises(PageUnresponsive, match="did not draw"):
+        await loaded_page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Shadow button").id), obs)
+    assert calls == 1
+
+
+async def test_a_tab_opened_from_a_cross_site_frame_is_followed(
+    loaded_page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await wait_until(lambda: bool(browser_session.frame_sessions()))
+    frame_session = next(iter(browser_session.frame_sessions().values()))
+    await eval_value(
+        browser_session,
+        frame_session,
+        f'document.body.insertAdjacentHTML(\'beforeend\', \'<a href="{main_site}/popup.html" target="_blank">'
+        "Frame window link</a>')",
+    )
+    obs = await observe_until(loaded_page, "Frame window link")
+    result = await loaded_page.act(Action(operation=Operation.CLICK, target_id=find(obs, "Frame window link").id), obs)
+    assert result.outcome is StepOutcome.EXECUTED and result.detail == "opened a new tab, now active"
+    assert find(await loaded_page.observe(), "Popup button")
 
 
 async def test_confirm_dialog_handled_via_dialog_operation(
@@ -1019,6 +1167,58 @@ async def test_page_javascript_cannot_forge_the_http_status(
     )
     assert (await page.observe()).response_status == 200
     assert await page.response_status() == 200
+
+
+async def test_http_status_world_is_made_once_per_document(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    send = browser_session.client.send_raw
+
+    async def counted(method: str, params: Any = None, session_id: str | None = None) -> dict[str, Any]:
+        calls.append(method)
+        return await send(method, params, session_id)
+
+    monkeypatch.setattr(browser_session.client, "send_raw", counted)
+    for path, status in (("", 200), ("/http-error/404", 404), ("", 200)):
+        await page.navigate(f"{main_site}{path}")
+        assert (await page.observe()).response_status == status
+        calls.clear()
+        assert (await page.observe()).response_status == status
+        assert "Page.createIsolatedWorld" not in calls and "Page.getFrameTree" not in calls
+
+
+async def test_the_kept_status_world_is_addressed_only_by_its_unique_id(
+    page: CdpPage, browser_session: BrowserSession, main_site: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await page.navigate(main_site)
+    assert (await page.observe()).response_status == 200
+    session_id = browser_session.active_session_id
+    kept = page._status_worlds[session_id]
+    sent: list[dict[str, Any]] = []
+    send = browser_session.client.send_raw
+
+    async def recorded(method: str, params: Any = None, session_id: str | None = None) -> dict[str, Any]:
+        if method == "Runtime.evaluate" and params and ("contextId" in params or "uniqueContextId" in params):
+            sent.append(params)
+        return await send(method, params, session_id)
+
+    monkeypatch.setattr(browser_session.client, "send_raw", recorded)
+    # Chrome reuses context ids across renderer processes, so a kept context id could reach the page's own world,
+    # where this forgery would be read; a unique id reaches the status world or nothing.
+    await eval_value(
+        browser_session,
+        session_id,
+        "Performance.prototype.getEntriesByType = performance.getEntriesByType = "
+        "() => [{name: location.href, responseStatus: 401}]; true",
+    )
+    assert (await page.observe()).response_status == 200
+    assert sent == [{"expression": sent[0]["expression"], "returnByValue": True, "awaitPromise": True,
+                     "uniqueContextId": kept}]  # fmt: skip
+    # A new document's world replaces the kept one, which then names nothing.
+    await page.navigate(f"{main_site}/http-error/404")
+    assert (await page.observe()).response_status == 404
+    assert page._status_worlds[session_id] != kept
 
 
 async def test_required_radios_use_their_form_group_validity(

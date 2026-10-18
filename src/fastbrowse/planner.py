@@ -13,7 +13,7 @@ from typing import NamedTuple, Self
 from pydantic import Field, model_validator
 
 from fastbrowse.llm import Generation, LLMClient, LLMError, Message
-from fastbrowse.models import CostBasis, Frozen, Limits, LLMPurpose, combined_basis
+from fastbrowse.models import CostBasis, CostLine, Frozen, Limits, LLMPurpose, combined_basis
 from fastbrowse.telemetry import Ledger
 
 FIELD_CATEGORIES = (
@@ -252,8 +252,17 @@ def _instructions() -> Message:
 
 
 async def make_plan(
-    llm: LLMClient, task: str, *, start: str | None = None, ledger: Ledger | None = None
+    llm: LLMClient,
+    task: str,
+    *,
+    start: str | None = None,
+    ledger: Ledger | None = None,
+    normalize_checks: bool = True,
 ) -> Generation[Plan]:
+    """The plan, with its answer checks normalized unless `normalize_checks` is off.
+
+    Off, the plan keeps the planner's draft checks, and `answer_checks` normalizes them later: discovery never reads
+    them, so a run can start reading while they are still being written."""
     site = "" if start is None else f"\n\n# Start page\n{start}"
     generated = await llm.generate(
         LLMPurpose.PLAN,
@@ -273,60 +282,18 @@ async def make_plan(
         kind = RequirementKind.INFORMATION if plan.answer_expected else RequirementKind.ACTION
         requirement = Requirement(id="req_1", text=task, kind=kind)
         plan = plan.model_copy(update={"requirements": (requirement,)})
-    information = tuple(r.text for r in plan.requirements if r.kind is RequirementKind.INFORMATION)
-    proposed = tuple(dict.fromkeys(check.strip() for check in plan.answer_checks if check.strip()))
+    if not normalize_checks:
+        return generated.model_copy(update={"data": plan})
     cost = generated.cost
-    if information and plan.page_answer_expected:
-        # Nonempty field labels lost the task's every-item scope; normalize checks without replanning discovery.
+    if _needs_checks(plan):
         billing = ledger or Ledger(Limits())
         billing.record(generated.cost)
-        repaired = await llm.generate(
-            LLMPurpose.PLAN,
-            [
-                Message(
-                    role="system",
-                    content=(
-                        "Normalize the draft checks against the original task's requested answer outputs. "
-                        "Draft checks can omit entities, quantifiers or fields and are not authoritative. "
-                        "Separate each "
-                        "field or component for each named or numbered result. Preserve entity, scope and "
-                        "constraints. For a fixed number of unnamed results, give each numbered result its own "
-                        "field checks. Preserve every, each, all and exact-count requirements. For an unbounded "
-                        "result set, check each requested field across all results. Each check must state its "
-                        "entity and scope explicitly, not just a field label. "
-                        "Exclude the supplied run_reports: code reports those directly from browser state after "
-                        "page-answer verification. Keep requested page facts and action outcomes. "
-                        "Do not add actions, navigation or extra outputs. These checks do not change discovery."
-                        " Supplied action_requirements are checked separately against browser state and executed "
-                        "actions. An actor name or login identity supplied for a prerequisite action is not an "
-                        "identity to quote in the answer or bind to each reported data value. Preserve identities "
-                        "that the user explicitly requests as record subjects or data filters."
-                    ),
-                ),
-                Message(
-                    role="user",
-                    content=json.dumps(
-                        {
-                            "task": task,
-                            "information_requirements": information,
-                            "action_requirements": tuple(
-                                r.text for r in plan.requirements if r.kind is RequirementKind.ACTION
-                            ),
-                            "draft_checks": proposed,
-                            "run_reports": plan.run_reports,
-                        }
-                    ),
-                ),
-            ],
-            _AnswerChecks,
-            max_output_tokens=8000,
-            ledger=billing,
-        )
-        proposed = tuple(dict.fromkeys(check.strip() for check in repaired.data.checks))
-        cost = repaired.cost
+        checked = await answer_checks(llm, task, plan, ledger=billing)
+        assert checked.cost is not None
+        cost = checked.cost
         if ledger is None:
             # Without an external ledger the returned line accounts for both calls, rather than hiding the repair.
-            lines = (generated.cost, repaired.cost)
+            lines = (generated.cost, checked.cost)
             basis = CostBasis.UNKNOWN if any(line.dollars is None for line in lines) else combined_basis(lines)
             cost = cost.model_copy(
                 update={
@@ -337,7 +304,70 @@ async def make_plan(
                     "seconds": None,
                 }
             )
-    checks = proposed if information and plan.page_answer_expected else ()
-    if checks != plan.answer_checks:
-        plan = plan.model_copy(update={"answer_checks": checks})
+        plan = checked.data
+    elif plan.answer_checks:
+        plan = plan.model_copy(update={"answer_checks": ()})
     return generated.model_copy(update={"data": plan, "cost": cost})
+
+
+def _needs_checks(plan: Plan) -> bool:
+    return plan.page_answer_expected and any(r.kind is RequirementKind.INFORMATION for r in plan.requirements)
+
+
+class CheckedPlan(Frozen):
+    data: Plan
+    cost: CostLine | None
+    """The normalizing call's cost, or None when the plan needed no checks and nothing was called."""
+
+
+async def answer_checks(llm: LLMClient, task: str, plan: Plan, *, ledger: Ledger | None = None) -> CheckedPlan:
+    """`plan` with its draft answer checks normalized against the task, or with none when no page answer is due."""
+    if not _needs_checks(plan):
+        return CheckedPlan(data=plan.model_copy(update={"answer_checks": ()}), cost=None)
+    information = tuple(r.text for r in plan.requirements if r.kind is RequirementKind.INFORMATION)
+    proposed = tuple(dict.fromkeys(check.strip() for check in plan.answer_checks if check.strip()))
+    # Nonempty field labels lost the task's every-item scope; normalize checks without replanning discovery.
+    repaired = await llm.generate(
+        LLMPurpose.PLAN,
+        [
+            Message(
+                role="system",
+                content=(
+                    "Normalize the draft checks against the original task's requested answer outputs. "
+                    "Draft checks can omit entities, quantifiers or fields and are not authoritative. "
+                    "Separate each "
+                    "field or component for each named or numbered result. Preserve entity, scope and "
+                    "constraints. For a fixed number of unnamed results, give each numbered result its own "
+                    "field checks. Preserve every, each, all and exact-count requirements. For an unbounded "
+                    "result set, check each requested field across all results. Each check must state its "
+                    "entity and scope explicitly, not just a field label. "
+                    "Exclude the supplied run_reports: code reports those directly from browser state after "
+                    "page-answer verification. Keep requested page facts and action outcomes. "
+                    "Do not add actions, navigation or extra outputs. These checks do not change discovery."
+                    " Supplied action_requirements are checked separately against browser state and executed "
+                    "actions. An actor name or login identity supplied for a prerequisite action is not an "
+                    "identity to quote in the answer or bind to each reported data value. Preserve identities "
+                    "that the user explicitly requests as record subjects or data filters."
+                ),
+            ),
+            Message(
+                role="user",
+                content=json.dumps(
+                    {
+                        "task": task,
+                        "information_requirements": information,
+                        "action_requirements": tuple(
+                            r.text for r in plan.requirements if r.kind is RequirementKind.ACTION
+                        ),
+                        "draft_checks": proposed,
+                        "run_reports": plan.run_reports,
+                    }
+                ),
+            ),
+        ],
+        _AnswerChecks,
+        max_output_tokens=8000,
+        ledger=ledger,
+    )
+    checks = tuple(dict.fromkeys(check.strip() for check in repaired.data.checks))
+    return CheckedPlan(data=plan.model_copy(update={"answer_checks": checks}), cost=repaired.cost)

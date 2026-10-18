@@ -22,6 +22,7 @@ from fastbrowse.clients.validation import (
     with_discarded,
 )
 from fastbrowse.jev import JEV_MODEL, Evaluation, Question
+from fastbrowse.telemetry import call_span
 
 TYPESAFE_URL = "https://api.typesafe.ai"
 OPENROUTER_URL = "https://openrouter.ai/api"
@@ -50,6 +51,13 @@ class TypeSafeJevClient:
         )
 
     async def _ask(
+        self, state: JsonValue, questions: Mapping[str, Question], start_attempt: int, split_batch: bool
+    ) -> Evaluation:
+        # The span covers the parse as well as the request: a 200 whose body is not a valid answer is a failed call.
+        with call_span("jev"):
+            return await self._request(state, questions, start_attempt, split_batch)
+
+    async def _request(
         self, state: JsonValue, questions: Mapping[str, Question], start_attempt: int, split_batch: bool
     ) -> Evaluation:
         started = monotonic()
