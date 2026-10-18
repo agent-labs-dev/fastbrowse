@@ -20,7 +20,10 @@ approved candidate. A group whose catalog differs from the approved one only by 
 `retired` (a site that is gone) is compared on the tasks both ran; the earlier catalog is found in Git history by
 its digest. Any other catalog, task or limit difference is a protocol change, published only as described
 under [Changing the protocol](#changing-the-protocol). Unresolved costs, missing grades, incomplete coverage and
-a failed fixture workflow block publication. These checks detect recorded regressions; they do not prove that
+a failed fixture workflow block publication. The fixture receipt is a successful maintainer dispatch of
+`evals.yml` whose head commit is the measured build. When `main` has moved past that build, push a branch at
+it and dispatch the workflow there; a branch run counts only when its commit is in `main`'s history, so the
+workflow and runner it used are ones `main` held. These checks detect recorded regressions; they do not prove that
 every website or grader is free of bugs. Review unexpected outcomes before approving.
 
 To approve reviewed results, dispatch `publish-evals.yml` on `main` with the SHA256 of the exact candidate

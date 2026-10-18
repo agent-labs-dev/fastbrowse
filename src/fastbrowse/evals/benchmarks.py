@@ -365,6 +365,18 @@ def github_run(run_id: int) -> dict:
     return json.loads(result.stdout)
 
 
+def on_main(sha: str) -> bool:
+    """Whether `sha` is in main's history, so a run at it used a workflow file and runner main once held."""
+    result = subprocess.run(
+        ["gh", "api", f"repos/agent-labs-dev/fastbrowse/compare/{sha}...main", "--jq", ".status"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    return result.stdout.strip() in {"ahead", "identical"}
+
+
 def check_fixture(candidate: Candidate) -> None:
     run = github_run(candidate.fixture.run_id)
     if (
@@ -373,8 +385,11 @@ def check_fixture(candidate: Candidate) -> None:
         or run["status"] != "completed"
         or run["path"] != ".github/workflows/evals.yml"
         or run["repository"]["full_name"] != "agent-labs-dev/fastbrowse"
-        or run["head_branch"] != "main"
         or run["event"] != "workflow_dispatch"
+        # A branch other than main is accepted only at a commit in main's history: the run then used the workflow
+        # file and runner main held, so a maintainer can produce the receipt for a build main has moved past,
+        # but not from a branch whose own commit replaces the workflow or its runner.
+        or (run["head_branch"] != "main" and not on_main(run["head_sha"]))
     ):
         raise ValueError("a successful fixture workflow receipt on the measured build is required")
     from fastbrowse.evals.runner import _tasks
