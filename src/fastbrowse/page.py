@@ -160,6 +160,9 @@ class Observation(Frozen):
     can_go_back: bool = False
     """A same-origin http(s) entry sits immediately before the current one in browser history: BACK would leave
     the task's own site otherwise, as a wizard sharing one URL with no earlier entry but `about:blank` does."""
+    history_entry: str | None = None
+    """The tab's browser history entry this page is: Back, Forward and a reload return to the same one, and a
+    navigation, a new tab or `pushState` makes another. None when the browser would not say."""
 
     @property
     def today(self) -> str:
@@ -285,6 +288,9 @@ class ActResult(Frozen):
     page_changed: bool
     detail: str | None = None
     form_unchanged: bool = False
+    moved: bool = False
+    """The action itself took the page elsewhere: its own input event began a navigation or changed the address,
+    or it opened a tab. A page that moves on its own time, even to a new document just after the action, is not."""
 
 
 class Page(Protocol):

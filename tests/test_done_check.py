@@ -245,6 +245,11 @@ async def test_the_verifier_is_told_where_each_requirement_was_read_and_which_ad
     page = prompt[prompt.index("## Page\n") :]
     assert page.startswith(f"## Page\n{_PAGE.url}\n{_PAGE.viewport_text}")
     assert guessed not in page
+    # google-flights: told only to weigh a built address hardest, the verifier refused a loaded search for how
+    # the run reached it. It judges what the page shows, and an answer keeps the terms its value was quoted under.
+    instructions = " ".join(message.content for message in llm.calls[0][1])
+    assert "judge such a page by what it shows, not by how the run reached it" in instructions
+    assert "states the terms a value was quoted under" in instructions
 
 
 async def test_a_verifier_told_of_no_guessed_address_is_asked_nothing_extra() -> None:
@@ -357,3 +362,123 @@ async def test_completion_sheds_optional_draft_before_required_source_quotes() -
     assert isinstance(jev.state, dict) and "draft" not in jev.state
     assert quote in str(jev.state) and "draft_needs_writing" not in jev.questions
     assert len(json.dumps(jev.state)) + max(len(q.model_dump_json()) for q in jev.questions.values()) <= 48000
+
+
+def test_the_same_text_read_off_the_guess_at_another_fragment_answers_again() -> None:
+    """A search routed by fragment was guessed at /search#old and refused, then rebuilt by the run at /search#new
+    with byte-identical text. A fact's id ignores the fragment while lineage keeps it, so the fresh reading mapped
+    onto the held fact and kept its guessed address, and the requirement stayed open."""
+    old = evidence(sha="same").model_copy(update={"url": "https://example.test/search#old", "quote": "Fare $320"})
+    new = old.model_copy(update={"url": "https://example.test/search#new"})
+    notes = Notes()
+    notes.add(Fact(reader=FactReader.LLM, requirement_id="r1", text="Fare $320", evidence=old))
+    notes.discredit(("r1",), lambda item: item.url.endswith("#old"))
+    assert not notes.evidenced("r1")
+    notes.add(Fact(reader=FactReader.LLM, requirement_id="r1", text="Fare $320", evidence=new))
+    assert notes.evidenced("r1")
+    assert [item.url for item in notes.supporting_evidence("r1")] == ["https://example.test/search#new"]
+
+
+def test_the_claim_check_shows_no_held_quote_as_a_claims_source() -> None:
+    """Jev's claim check was shown a held quote as the cited source while the audit refused it, so the two checks
+    of one claim disagreed about what it rests on."""
+    from fastbrowse.retrieval import Claim, ComposedAnswer, claim_check_questions
+
+    quote = evidence(sha="guess").model_copy(update={"quote": "Fare $320"})
+    notes = Notes()
+    notes.add(Fact(reader=FactReader.LLM, requirement_id="r1", text="Fare $320", evidence=quote))
+    key = fact_id(Fact(reader=FactReader.LLM, text="", evidence=quote))
+    notes.discredit(("r1",), lambda item: item.capture_sha256 == "guess")
+    composed = ComposedAnswer(
+        answer="$320.",
+        linked_answer="$320.",
+        claims=(Claim(text="It costs $320.", evidence_ids=(key,)),),
+        requirements=(Requirement(id="r1", text="Fare", kind=RequirementKind.INFORMATION),),
+    )
+    instructions = claim_check_questions(composed, notes, check_omission=False)["unsupported_0"].instructions
+    assert f"MISSING: {key}" in instructions and "Fare $320" not in instructions
+
+
+def _in_set_order(first_is_quote_requirement: bool) -> tuple[str, str]:
+    """Two requirement ids a set yields in the chosen order in this process, so both orders of a refusal are tried
+    whatever the string hash seed."""
+    for n in range(100):
+        quoted, concluded = f"q{n}", f"c{n}"
+        if (next(iter({quoted, concluded})) == quoted) is first_is_quote_requirement:
+            return quoted, concluded
+    raise AssertionError("no pair in that order")
+
+
+@pytest.mark.parametrize("r1_first", [True, False])
+def test_a_refusal_of_two_requirements_holds_every_guessed_reading_either_way_round(r1_first: bool) -> None:
+    """r1 rests on guessed quote A, r2 on a conclusion over A and guessed quote B, and both were refused at once.
+    Holding r1's readings first refused the conclusion, r2's support then came back empty, and B was never held,
+    so it could answer r2 again."""
+    r1, r2 = _in_set_order(r1_first)
+    a = evidence(sha="guess").model_copy(update={"quote": "Fare $320"})
+    b = evidence(sha="guess").model_copy(update={"quote": "Departs 08:00", "start": 40, "end": 53})
+    notes = Notes()
+    notes.add(Fact(reader=FactReader.LLM, requirement_id=r1, text="Fare $320", evidence=a))
+    quote_a = fact_id(Fact(reader=FactReader.LLM, text="", evidence=a))
+    quote_b = fact_id(Fact(reader=FactReader.LLM, text="", evidence=b))
+    notes.add(Fact(reader=FactReader.LLM, text="Departs 08:00", evidence=b))
+    notes.add(
+        Fact(reader=FactReader.LLM, requirement_id=r2, text="$320 at 08:00", evidence=None, basis=(quote_a, quote_b))
+    )
+    notes.discredit((r1, r2), lambda item: item.capture_sha256 == "guess")
+    assert notes.held(quote_a) and notes.held(quote_b)
+    notes.add(Fact(reader=FactReader.LLM, requirement_id=r2, text="Departs 08:00", evidence=b))
+    assert not notes.evidenced(r2)
+
+
+def test_a_hold_that_comes_back_takes_the_requirement_with_it() -> None:
+    """Lifted by a reading off the guess, a held quote answered its requirement again; once the run read the guessed
+    page again the hold was back, and the requirement still counted as answered by a quote no claim could cite."""
+    quote = evidence(sha="guess").model_copy(update={"quote": "Fare $320"})
+    notes = Notes()
+    notes.add(Fact(reader=FactReader.LLM, requirement_id="r1", text="Fare $320", evidence=quote))
+    on_guess = [True]
+    notes.discredit(("r1",), lambda _: on_guess[0])
+    on_guess[0] = False
+    notes.add(Fact(reader=FactReader.LLM, requirement_id="r1", text="Fare $320", evidence=quote))
+    assert notes.evidenced("r1")
+    on_guess[0] = True
+    assert not notes.evidenced("r1") and not notes.supporting_evidence("r1")
+
+
+def test_a_quote_refused_for_one_requirement_answers_no_claim_until_read_again_off_the_guess() -> None:
+    """One quote answered two requirements, a provider and a price, and was refused for the price as read off a
+    guessed page. A hold kept for the price alone let a claim stating both through, since the provider still
+    stood on the same quote. A held quote answers nothing; the provider is answered again from a fresh reading."""
+    from fastbrowse.retrieval import Claim, ComposedAnswer
+    from fastbrowse.verification import _output_context
+
+    def composed(key: str) -> ComposedAnswer:
+        return ComposedAnswer(
+            answer="Acme Air, $320.",
+            linked_answer="Acme Air, $320.",
+            claims=(Claim(text="Acme Air sells it for $320.", evidence_ids=(key,)),),
+            requirements=tuple(
+                Requirement(id=r, text=f"{r} detail", kind=RequirementKind.INFORMATION) for r in ("r1", "r2")
+            ),
+        )
+
+    quote = evidence(sha="guess").model_copy(update={"quote": "Acme Air $320"})
+    notes = Notes()
+    for requirement in ("r1", "r2"):
+        notes.add(Fact(reader=FactReader.LLM, requirement_id=requirement, text="Acme Air $320", evidence=quote))
+    held = fact_id(Fact(reader=FactReader.LLM, text="", evidence=quote))
+    notes.discredit(("r1",), lambda item: item.capture_sha256 == "guess")
+
+    assert _output_context(composed(held), notes) is None
+    assert not notes.evidenced("r1") and not notes.evidenced("r2")
+    # Read again on the same page while still on the guess, the quote stays held for both.
+    notes.add(Fact(reader=FactReader.LLM, requirement_id="r2", text="Acme Air $320", evidence=quote))
+    assert not notes.evidenced("r2")
+
+    fresh = evidence(sha="fresh").model_copy(update={"quote": "Acme Air"})
+    notes.add(Fact(reader=FactReader.LLM, requirement_id="r2", text="Acme Air", evidence=fresh))
+    reread = fact_id(Fact(reader=FactReader.LLM, text="", evidence=fresh))
+    assert notes.evidenced("r2") and not notes.evidenced("r1")
+    context = _output_context(composed(reread), notes)
+    assert context is not None and context.claims[0].cited_sources[0].quote == "Acme Air"

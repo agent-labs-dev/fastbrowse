@@ -165,6 +165,39 @@ async def test_covered_click_dispatches_nothing(loaded_page: CdpPage, browser_se
     assert clicked is None
 
 
+@pytest.mark.parametrize("shadow", [False, True], ids=["document", "shadow-root"])
+async def test_small_fixed_child_does_not_hide_full_window_cover_from_hit_test(
+    loaded_page: CdpPage, browser_session: BrowserSession, shadow: bool
+) -> None:
+    session_id = browser_session.active_session_id
+    if shadow:
+        html = (
+            "(()=>{document.body.innerHTML = '<button id=target>Covered target</button><x-cover></x-cover>'; "
+            "const host = document.querySelector('x-cover'); "
+            "host.style.cssText = 'display:block;position:fixed;inset:0;z-index:9999;transform:translateZ(0)'; "
+            "const root = host.attachShadow({mode:'open'}); "
+            "root.innerHTML = '<div class=child style=\"position:fixed;background:#000\"></div>'; "
+            "const r = document.getElementById('target').getBoundingClientRect(); "
+            "const child = root.querySelector('.child'); child.style.left = r.left+'px'; "
+            "child.style.top = r.top+'px'; child.style.width = r.width+'px'; "
+            "child.style.height = r.height+'px'; return true})()"
+        )
+    else:
+        html = (
+            "document.body.innerHTML = '<button id=target>Covered target</button>' + "
+            "'<div style=\"position:fixed;inset:0;z-index:9999;transform:translateZ(0)\">' + "
+            "'<div style=\"position:fixed;left:0;top:0;width:128px;height:128px;background:#000\"></div>' + "
+            "'</div>'; true"
+        )
+    await eval_value(browser_session, session_id, html)
+    obs = await loaded_page.observe()
+    target = find(obs, "Covered target")
+    result = await loaded_page.act(Action(operation=Operation.CLICK, target_id=target.id), obs)
+    assert result.outcome == StepOutcome.COVERED
+    clicked = await eval_value(browser_session, session_id, "document.getElementById('target').dataset.clicked || null")
+    assert clicked is None
+
+
 async def test_dom_swap_after_observe_makes_act_stale(loaded_page: CdpPage, browser_session: BrowserSession) -> None:
     obs = await loaded_page.observe()
     target = find(obs, "Swap target")

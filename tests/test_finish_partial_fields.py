@@ -302,6 +302,28 @@ def test_collection_scope_changes_partition_proof():
     assert _partition_proof(plan, Notes((fact, changed)), set()) != proof
 
 
+def test_a_hold_changes_the_partition_proof_though_no_fact_changes():
+    """A hold is asked of the run's lineage each time, so it can come back with every fact unchanged: the run
+    returns to the guessed entry and reads the same page there. A proof over the facts alone kept serving an
+    answer checked while the hold was lifted."""
+    from fastbrowse.agent import _partition_proof
+
+    page = capture((BlockKind.RECORD, "Fare $320"))
+    fact = Fact(text=page.text, evidence=block_evidence(page, "s0"), reader=FactReader.LLM, requirement_id="r")
+    notes = Notes((fact,))
+    on_guess = [True]
+    notes.discredit(("r",), lambda _: on_guess[0])
+    plan = Plan(
+        requirements=(Requirement(id="r", text="Report the fare", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    held = _partition_proof(plan, notes, set())
+    on_guess[0] = False
+    assert _partition_proof(plan, notes, set()) != held
+    on_guess[0] = True
+    assert _partition_proof(plan, notes, set()) == held
+
+
 async def test_grouped_repair_keeps_its_rejection_after_new_source_evidence():
     from fastbrowse.retrieval import AnswerCorrection
     from tests.test_partitioned_finish import finish_agent

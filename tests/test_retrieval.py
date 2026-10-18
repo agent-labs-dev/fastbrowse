@@ -5478,3 +5478,16 @@ async def test_a_repeated_excerpt_under_two_products_stays_ambiguous(parts: tupl
     notes = Notes()
     result = await read(ScriptedLLM([response]), page, "Find Widget B's price", ["price"], notes)
     assert result.rejected_claims == 1 and not notes.evidenced("price")
+
+
+async def test_the_composer_keeps_the_terms_a_value_was_quoted_under() -> None:
+    """google-flights: a reader noted "$617 round trip, returning 18 November" and the answer gave $617 as the
+    price of a flight on the 14th, which the judge failed as a round-trip fare passed off as one-way."""
+    plan = Plan(
+        requirements=(Requirement(id="r1", text="The cheapest nonstop fare", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    llm = ScriptedLLM([{"claims": []}])
+    await compose(llm, "Cheapest nonstop fare on 14 November?", plan, Notes())
+    system = llm.calls[0][1][0].content
+    assert "the terms a value is quoted under, such as what it covers, the dates it applies to" in system
