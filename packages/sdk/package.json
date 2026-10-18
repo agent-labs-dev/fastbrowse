@@ -1,6 +1,6 @@
 {
   "name": "fastbrowse",
-  "version": "0.5.22",
+  "version": "0.5.23",
   "description": "Browser automation with cited answers, structured output and code-controlled credentials and authorization.",
   "license": "MIT",
   "repository": {
