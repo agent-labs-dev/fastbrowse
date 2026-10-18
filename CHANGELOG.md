@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.23] - 2026-10-18
+
 - A page that stops answering no longer stalls a run for minutes at a time. A frame inside the page that stops
   responding, such as a stuck advertisement, is read as unreadable after five seconds instead of holding every
   observation for the two-minute command deadline, and a tab that stops drawing frames no longer makes each wait
@@ -1410,7 +1412,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.22...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.23...HEAD
+[0.5.23]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.23
 [0.5.22]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.22
 [0.5.20]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.20
 [0.5.19]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.19
