@@ -845,3 +845,12 @@ def test_fixture_rows_need_no_browser_record() -> None:
         del source["run"]["browser"]
     report = publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY)
     assert not any(f.check == "browser" for f in report.findings)
+
+
+@pytest.mark.parametrize("arm", ["fastbrowse", "fastbrowse-pool", "jev-ultrafast"])
+def test_a_navigation_row_at_another_viewport_is_refused(arm: str) -> None:
+    """The Ultrafast comparison runs at one viewport, so no arm in it may pass a navigation task at another."""
+    page = _NAVIGATION_PAGE | {"inner_width": 1440}
+    sources = [row(arm=arm, category="navigate", final_page=page, repeat=index) for index in range(3)]
+    report = publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY)
+    assert any(f.check == "protocol" and "viewport" in f.detail for f in report.blocking)

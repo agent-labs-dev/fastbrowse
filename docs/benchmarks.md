@@ -3,13 +3,25 @@
 Measured results for fastbrowse against the agents it competes with. Every figure is traceable to a named
 source; where a comparison has not been run, this file says so rather than estimating. The
 [benchmark page](https://fastbrowse.ai/benchmarks) renders only an approved feed and withholds every
-measurement slot until the maintainer approves one; this file records the measurements behind that feed
-alongside the internal matched-task campaigns and the browser cost basis.
+measurement slot until the maintainer approves one; this file records the measurements behind that feed.
 
 These are recorded benchmark comparisons, not a controlled experiment: the associations below do not
 establish cause.
 
-## Recorded head-to-head: fastbrowse vs hosted Browser Use
+Benchmarking compares exactly three things, and nothing else is a headline:
+
+| | Comparison | Arms | Publication group | Status |
+|:--|:--|:--|:--|:--|
+| C1 | agent against agent | `fastbrowse` against `browser-use`, the hosted Browser Use agent | `internal-hosted` | recorded below |
+| C2 | backend against backend | `fastbrowse-pool`, fastbrowse on its own browser pool, against `fastbrowse` on a Browser Use Cloud browser | `internal-backend` | not yet measured |
+| C3 | fastbrowse and its backend against Browser Use Ultrafast | `fastbrowse-pool` against `jev-ultrafast`, over the 6 tasks both run | `internal-ultrafast` | not yet measured |
+
+The Codex with Cua Driver arm and the upstream suites (BU Bench, Online-Mind2Web) are diagnostics, described in
+[measuring fastbrowse](evals.md); none of them is one of the three comparisons.
+
+## C1: fastbrowse against the hosted Browser Use agent
+
+### Recorded head-to-head
 
 Same 14 answer tasks (lookups, sign-ins, checkout, Google Flights), three passes each, on identical cloud
 browsers under identical limits (30 steps, $0.25 cap, 300s).
@@ -24,7 +36,7 @@ All 28 of Browser Use's failures ran past the $0.25 cap. Source: the recorded he
 `fastbrowse-site` repository (`src/app/page.tsx`). The live benchmark page withholds every measurement slot
 until the maintainer approves a candidate feed, so this file, not that page, carries the recorded figures.
 
-## Internal matched-task campaigns: fastbrowse vs the Browser Use hosted agent
+### Internal matched-task campaigns
 
 Medians and means are over each arm's recorded attempts on the tasks both arms ran, the matched subset named
 in the Matched tasks column (`docs/results/<build>.jsonl`). Cost is metered provider spend; the ratio is
@@ -44,12 +56,14 @@ and its sha256.
 `browser-use` arm ran `claude-opus-4.7`. Task sets and revisions changed between builds, so rows compare
 within a build, not across.
 
-## fastbrowse vs Browser Use Ultrafast (`jev-ultrafast`)
+## C2: fastbrowse's own browser pool against a Browser Use Cloud browser
 
-0.5.14 core suite, six tasks, 60 attempts each: fastbrowse **58 of 60 (96.7%)**, median **8.6s**;
-`jev-ultrafast` **40 of 60 (66.7%)**, median **12.6s**. Source: `docs/results/0.5.14.jsonl`.
+Not yet measured. The `internal-backend` group runs fastbrowse on the 53 fastbrowse tasks twice, once on its own
+hosted browser pool and once on a Browser Use Cloud browser, so the browser backend is the only difference. No
+approved campaign of it exists, so no speed or cost delta between the two backends is claimed here. Running it
+needs `BROWSER_USE_API_KEY` (the cloud arm) and the private Parallax live tasks.
 
-## Browser cost basis
+### Browser cost basis
 
 | | fastbrowse's own fleet | Browser Use Cloud |
 |:--|:--|:--|
@@ -62,20 +76,19 @@ the campaigns above. One billed Browser Use Cloud browser minute ($0.0003 at the
 a fraction of that, so on fastbrowse's own cost scale the browser backend is not the cost driver: model
 routing is. Source: the campaign rows and Browser Use's published cloud pricing, checked 2026-10-18.
 
-## Fixture regression suite
+## C3: fastbrowse on its own browser pool against Browser Use Ultrafast (`jev-ultrafast`)
 
-`uv run python -m fastbrowse.evals.runner --suite local --repeat 1` exercises real local Chrome and grades
-what the fixture server recorded: **6/6 passed** (recorded 2026-10-15). The receipt for the release fixture
-gate - its head sha and workflow run id - is recorded in `docs/results/benchmarks.json`, and the local run is
-listed in `docs/results/evidence.manifest.json`. This is a regression gate, not a claim about performance
-across the web; the mock suite is the larger companion suite.
+Not yet measured. The `internal-ultrafast` group compares the two products whole, each on its own backend:
+fastbrowse on its browser pool against `jev-ultrafast`, on the 6 core tasks both run, three repeats each.
+From publication schema 5 the gate holds every new candidate to that pairing.
+
+The earlier record is not a C3 figure: the 0.5.14 core suite ran fastbrowse on a Browser Use Cloud browser, not on
+its own pool, against `jev-ultrafast` (fastbrowse 58 of 60, median 8.6s; `jev-ultrafast` 40 of 60, median 12.6s;
+source: `docs/results/0.5.14.jsonl`). Figures approved under that pairing keep it, under their own schema.
 
 ## What is not claimed here
 
-- The eval harness does not record which browser backend a row used. A matched campaign of fastbrowse on
-  **our own fleet** against fastbrowse on **Browser Use Cloud browsers** has not been run, so no speed or
-  cost delta between those two browser backends is claimed above. Running it needs `BROWSER_USE_API_KEY`
-  (the cloud arm) and the private Parallax live tasks.
+- No speed, cost or success delta is claimed for C2 or C3 until an approved campaign of each exists.
 - Browser Use Cloud rates are published and may change.
 - fastbrowse's `dollars` are metered provider cost. The hosted product's customer price is separate
   (`fastbrowse-hosted/docs/billing.md`).
