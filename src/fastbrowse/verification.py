@@ -847,6 +847,33 @@ async def _check_answer_outputs(
         for claim in composed.claims
         for key in claim.evidence_ids
     )
+    current_sources = notes.current_evidence()
+
+    def counterevidence(claims: Sequence[_OutputClaim]) -> list[dict[str, object]]:
+        cited = {source.model_dump_json() for claim in claims for source in claim.cited_sources}
+        locations = {(source.url_ref, source.frame_id) for claim in claims for source in claim.cited_sources}
+        refs = {url: alias for alias, url in context.urls.items()}
+        sources = {}
+        # Selecting a field's quote hid conflicting values retained in another claim or uncited note.
+        for evidence in current_sources.values():
+            alias = refs.get(evidence.url)
+            if alias is None or (alias, evidence.frame_id) not in locations:
+                continue
+            page = notes.captured_page(evidence)
+            source = _OutputSource(
+                url_ref=alias,
+                quote=evidence.quote,
+                complete_source=evidence.complete_source,
+                control_context=evidence.control_context,
+                source_id=evidence.source_id,
+                frame_id=evidence.frame_id,
+                page_title=page.title if page and evidence.frame_id is None else None,
+            )
+            serialized = source.model_dump_json()
+            if serialized not in cited:
+                sources[serialized] = source.model_dump(exclude={"page_title"})
+        return list(sources.values())
+
     scores = {}
     if verbatim or quoted:
         questions = {
@@ -857,17 +884,22 @@ async def _check_answer_outputs(
                     "entity separately. Related items, implied values and ambiguous source associations do not "
                     "satisfy it. A derived count or comparison can rest on the cited source records that support its "
                     "calculation; the sources need not state the derived result. Observed page titles can reveal "
-                    "shortened exact strings but cannot replace a missing "
-                    f"citation. Criterion: {criterion}"
+                    "shortened exact strings but cannot replace a missing citation. Other quotes retained from the "
+                    "same pages are in counterevidence: they never support the answer, and when one conflicts with, "
+                    "qualifies or gives another value for a requested output, the answer does not satisfy the "
+                    f"criterion. Criterion: {criterion}"
                 ),
                 true="Yes, every part is answered and directly evidenced.",
                 false="No, a requested output is missing, unsupported, ambiguous or uncertain.",
             )
             for key, criterion in criteria.items()
         }
-        result = await evaluate_batches(
-            jev, context.model_dump(mode="json"), questions, tokens=tokens, ledger=ledger, allow_failed_batches=False
-        )
+        # The LLM audits see every other quote retained from the cited pages, so a vote that settles in their
+        # place must see them too: a conflicting or condition-dependent value otherwise passes unseen.
+        state = context.model_dump(mode="json")
+        if conflicts := counterevidence(context.claims):
+            state["counterevidence"] = conflicts
+        result = await evaluate_batches(jev, state, questions, tokens=tokens, ledger=ledger, allow_failed_batches=False)
         if (
             verbatim
             and result is not None
@@ -1056,32 +1088,6 @@ async def _check_answer_outputs(
     source_fields = {}
     covered: set[int] = set()
     selected_claims: dict[str, tuple[Claim, ...]] = {}
-    current_sources = notes.current_evidence()
-
-    def counterevidence(claims: Sequence[_OutputClaim]) -> list[dict[str, object]]:
-        cited = {source.model_dump_json() for claim in claims for source in claim.cited_sources}
-        locations = {(source.url_ref, source.frame_id) for claim in claims for source in claim.cited_sources}
-        refs = {url: alias for alias, url in context.urls.items()}
-        sources = {}
-        # Selecting a field's quote hid conflicting values retained in another claim or uncited note.
-        for evidence in current_sources.values():
-            alias = refs.get(evidence.url)
-            if alias is None or (alias, evidence.frame_id) not in locations:
-                continue
-            page = notes.captured_page(evidence)
-            source = _OutputSource(
-                url_ref=alias,
-                quote=evidence.quote,
-                complete_source=evidence.complete_source,
-                control_context=evidence.control_context,
-                source_id=evidence.source_id,
-                frame_id=evidence.frame_id,
-                page_title=page.title if page and evidence.frame_id is None else None,
-            )
-            serialized = source.model_dump_json()
-            if serialized not in cited:
-                sources[serialized] = source.model_dump(exclude={"page_title"})
-        return list(sources.values())
 
     for key, criterion in uncertain.items():
         chosen = selected.answers.get(key) if selected is not None else None

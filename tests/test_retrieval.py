@@ -4293,7 +4293,10 @@ async def test_atomic_output_context_keeps_cited_sources_without_uncited_metadat
     llm = ScriptedLLM([{"judgments": {"output_0": "yes"}, "reason": "The price is quoted."}] * 2)
     assert await check_answer_outputs(Jev(), llm, answer, notes, ("Report the price.",))
     assert "Unrelated title" not in json.dumps(shown)
-    assert "9am" not in json.dumps(shown)
+    # An uncited quote from the cited page reaches Jev only as counterevidence, never as the answer's own source.
+    cited_only = [{k: v for k, v in s.items() if k != "counterevidence"} if isinstance(s, dict) else s for s in shown]
+    assert "9am" not in json.dumps(cited_only)
+    assert any("9am" in json.dumps(s.get("counterevidence")) for s in shown if isinstance(s, dict))
     assert "Price £12" in json.dumps(json.loads(llm.calls[1][1][-1].content), ensure_ascii=False)
 
     assert "page_title" not in json.dumps(llm.calls[1][1][-1].content)
