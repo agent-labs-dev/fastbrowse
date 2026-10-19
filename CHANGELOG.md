@@ -17,7 +17,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   compared the agents but not the products; publication schema 5 now pairs `fastbrowse-pool` with
   `jev-ultrafast` there, over the same 6 tasks, and the gate holds every new candidate to that pairing. Figures
   approved under the old pairing still read under their own schema, and repointing a published group is a
-  protocol change the maintainer approves. The README and the benchmark results list the three comparisons, with
+  protocol change the maintainer approves. A `fastbrowse-pool` row on a navigation task is now held to the
+  comparison viewport, as the `fastbrowse` and `jev-ultrafast` rows already were. The README and the benchmark results list the three comparisons, with
   the two never measured under their current pairing marked as not yet measured; the upstream suites and the
   Codex with Cua Driver arm are diagnostics.
 
