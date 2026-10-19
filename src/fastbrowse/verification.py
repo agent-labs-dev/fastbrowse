@@ -557,6 +557,12 @@ def _assessment_schema(key: str) -> type[BaseModel]:
 
 type OutputAuditCache = dict[str, OutputAuditVerdict | _OutputIdentities]
 
+# Jev's agreement that a quoted answer satisfies a criterion, from which the two LLM audits are not sent. The
+# criterion question is strict, so a correct answer rarely scores high: on a real-Jev probe of 21 correct quoted
+# answers (0.22 to 0.71) and 21 wrong ones (a wrong value, another entity, a missing field, an unsupported extra
+# value: 0.04 to 0.13), 0.8 settled none of the correct answers and 0.5 settled 12 with every wrong one still audited.
+_OUTPUT_SETTLED_FROM = 0.5
+
 
 def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | None:
     requirements = {requirement.id: requirement.text for requirement in composed.requirements}
@@ -825,8 +831,24 @@ async def _check_answer_outputs(
             and claim.text == fact.text
             for fact in notes.facts
         )
+    # Jev is the first tier for every answer that only restates quotes: a confident vote spares the two serial LLM
+    # audits, which were a third of a lookup's wall time. The claims check beside this one still has to find each
+    # claim supported by its quote. Counts, totals, comparisons and other calculations are derived across records,
+    # the class of answer the LLM audit exists for, so they always reach it: a claim qualifies only when every fact
+    # it cites is a direct read with no basis, whether or not the reader stored its derivation as a tally. A Jev
+    # choice is the exception that is still a copy: code cut its value from the page, and its basis only lists the
+    # other places the same value appears, as a repeated version string or price does on most lookups.
+    facts = {fact_id(fact): fact for fact in notes.facts}
+    quoted = not isinstance(composed, FieldAnswer) and all(
+        (fact := facts.get(key)) is not None
+        and fact.tally is None
+        and fact.comparison is None
+        and (fact.reader is FactReader.JEV_CHOICE or (fact.evidence is not None and not fact.basis))
+        for claim in composed.claims
+        for key in claim.evidence_ids
+    )
     scores = {}
-    if verbatim:
+    if verbatim or quoted:
         questions = {
             key: NoulQuestion(
                 instructions=(
@@ -846,14 +868,19 @@ async def _check_answer_outputs(
         result = await evaluate_batches(
             jev, context.model_dump(mode="json"), questions, tokens=tokens, ledger=ledger, allow_failed_batches=False
         )
-        if result is not None and any(not isinstance(result.answers.get(key), NoulAnswer) for key in questions):
+        if (
+            verbatim
+            and result is not None
+            and any(not isinstance(result.answers.get(key), NoulAnswer) for key in questions)
+        ):
             return False
-        # An oversized scalar still reaches the source audit when Jev cannot score it.
+        # An unscored criterion, or an oversized answer Jev could not score, still reaches the LLM audit.
         scores = {key: _probability(result.answers, key) if result is not None else 0.0 for key in questions}
         trace("answer_outputs", scores=scores)
-    # Confident votes excused prose's unsupported components; only code-copied scalar claims bypass the source audit.
     uncertain = (
-        criteria if not verbatim else {key: criteria[key] for key, probability in scores.items() if probability < 0.8}
+        {key: criteria[key] for key, probability in scores.items() if probability < _OUTPUT_SETTLED_FROM}
+        if scores
+        else criteria
     )
     if not uncertain:
         return True
