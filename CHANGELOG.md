@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Answers that only restate what the page quoted are now checked by Jev first, and the two LLM audits run only
+  when Jev is unsure. They were the largest single cost in a run: on the local and mock fixture suites, LLM
+  verification fell from 10.5 to 6.0 seconds per run and the median task from 24.0 to 16.9 seconds, with every
+  task still passing. Counts and comparisons, which are worked out across several records, are still audited
+  by the LLM every time, and each claim must still be supported by its own quote.
+
 ## [0.5.23] - 2026-10-18
 
 - A page that stops answering no longer stalls a run for minutes at a time. A frame inside the page that stops

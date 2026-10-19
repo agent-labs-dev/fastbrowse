@@ -825,8 +825,15 @@ async def _check_answer_outputs(
             and claim.text == fact.text
             for fact in notes.facts
         )
+    # Jev is the first tier for every answer that only restates quotes: a confident vote spares the two serial LLM
+    # audits, which were a third of a lookup's wall time. The claims check beside this one still has to find each
+    # claim supported by its quote. Counts and comparisons are derived across records, the class of answer the LLM
+    # audit exists for, so they always reach it.
+    quoted = not isinstance(composed, FieldAnswer) and all(
+        not claim.counted_records and not claim.compared_records for claim in context.claims
+    )
     scores = {}
-    if verbatim:
+    if verbatim or quoted:
         questions = {
             key: NoulQuestion(
                 instructions=(
@@ -846,15 +853,16 @@ async def _check_answer_outputs(
         result = await evaluate_batches(
             jev, context.model_dump(mode="json"), questions, tokens=tokens, ledger=ledger, allow_failed_batches=False
         )
-        if result is not None and any(not isinstance(result.answers.get(key), NoulAnswer) for key in questions):
+        if (
+            verbatim
+            and result is not None
+            and any(not isinstance(result.answers.get(key), NoulAnswer) for key in questions)
+        ):
             return False
-        # An oversized scalar still reaches the source audit when Jev cannot score it.
+        # An unscored criterion, or an oversized answer Jev could not score, still reaches the LLM audit.
         scores = {key: _probability(result.answers, key) if result is not None else 0.0 for key in questions}
         trace("answer_outputs", scores=scores)
-    # Confident votes excused prose's unsupported components; only code-copied scalar claims bypass the source audit.
-    uncertain = (
-        criteria if not verbatim else {key: criteria[key] for key, probability in scores.items() if probability < 0.8}
-    )
+    uncertain = {key: criteria[key] for key, probability in scores.items() if probability < 0.8} if scores else criteria
     if not uncertain:
         return True
     if llm is None:
