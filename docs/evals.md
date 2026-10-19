@@ -4,9 +4,17 @@ We measure fastbrowse with browser fixture tests and benchmark tasks run through
 
 The [benchmark page](https://fastbrowse.ai/benchmarks) describes these measurements:
 
-| Set | Agents | Measurement |
+| Comparison | Arms | Measurement |
 |---|---|---|
-| fastbrowse internal | fastbrowse, Browser Use hosted default, Jev Ultrafast | Source task success on matched tasks |
+| C1, agent against agent (`internal-hosted`) | fastbrowse, Browser Use hosted default | Source task success on matched tasks |
+| C2, backend against backend (`internal-backend`) | fastbrowse on its own browser pool, fastbrowse on a Browser Use Cloud browser | Source task success on matched tasks |
+| C3, against Ultrafast (`internal-ultrafast`) | fastbrowse on its own browser pool, Jev Ultrafast | Source task success on matched tasks |
+
+These three are the only comparisons; [benchmark results](benchmarks.md) records the figures each has. The
+upstream suites below and the Codex with Cua Driver arm are diagnostics, not comparisons:
+
+| Diagnostic | Agents | Measurement |
+|---|---|---|
 | BU Bench | fastbrowse, with Browser Use's published figures as a separate reference | Official weighted rubric score |
 | Online-Mind2Web | fastbrowse, with published figures as a separate reference | Official full-task success |
 
@@ -19,6 +27,12 @@ judge and browser protocol; missing reference configuration is disclosed rather 
 Local and mock suites exercise real browsers, completion rules and authorization gates. They are regression
 checks, not claims about performance across the web. `.github/workflows/evals.yml` runs them on a schedule
 and on demand. A release needs a green fixture run on its exact build.
+
+The recorded run: `uv run python -m fastbrowse.evals.runner --suite local --repeat 1` exercises real local Chrome and grades
+what the fixture server recorded: **6/6 passed** (recorded 2026-10-15). The receipt for the release fixture
+gate - its head sha and workflow run id - is recorded in `docs/results/benchmarks.json`, and the local run is
+listed in `docs/results/evidence.manifest.json`. This is a regression gate, not a claim about performance
+across the web; the mock suite is the larger companion suite.
 
 ```sh
 uv run python -m fastbrowse.evals.runner --help
@@ -44,6 +58,8 @@ pinned by `evidence.manifest.json`. The site validates both files at one commit 
 Read [the eval workflow](agents/evals.md) before changing agent behavior or running paid checks.
 
 ## Codex with Cua Driver
+
+A diagnostic arm, not one of the three comparisons.
 
 The internal comparison catalog includes the opt-in `cua-codex` arm, using Codex CLI 0.160.1
 and Cua Driver 0.34.0. Parallax runs it through browser MCP tools on a private Linux desktop,
