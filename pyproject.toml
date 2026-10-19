@@ -49,7 +49,7 @@ dev = [
     "ruff>=0.14,<1",
     "vale==3.22.0.0",
     "pytest-timeout>=2.3,<3",
-    "ty==0.0.86",          # preview: pinned, and moved with the pre-commit hook
+    "ty==0.0.88",          # preview: pinned, and moved with the pre-commit hook
     "pre-commit>=4.6.2",
     "actionlint-py==1.7.12.25",
 ]
