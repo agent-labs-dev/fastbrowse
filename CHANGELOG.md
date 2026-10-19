@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.24] - 2026-10-19
+
 - Simple lookups are back to answering soon after they find the value. Since 0.5.20 every answer waited for two
   rounds of LLM output audits, which doubled a one-page lookup (a median of 7.6 seconds became 15.3 on the same
   machine). Jev now scores answers that only restate what the page showed, including a value Jev itself chose
@@ -1431,7 +1433,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.23...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.24...HEAD
+[0.5.24]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.24
 [0.5.23]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.23
 [0.5.22]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.22
 [0.5.20]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.20
