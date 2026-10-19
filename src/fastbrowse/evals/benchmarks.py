@@ -162,6 +162,14 @@ class Candidate(PublicModel):
                 raise ValueError("a verified export must name the measured build and campaign")
             if set(self.export.groups) != {group.id for group in self.groups}:
                 raise ValueError("a verified export must cover exactly the published groups")
+            # The receipt stands in for the live run, so it must account for every row about to be published: an
+            # export covering a subset cannot vouch for rows it never measured.
+            published_rows = sum(len(group.rows) for group in self.groups)
+            if self.export.rows != published_rows:
+                raise ValueError(
+                    f"a verified export must account for every published row: the receipt claims "
+                    f"{self.export.rows}, the groups hold {published_rows}"
+                )
         return self
 
 
@@ -638,10 +646,25 @@ def install(candidate_path: Path, approval_path: Path) -> None:
     APPROVAL.write_bytes(approval_bytes)
 
 
-def _next_action(candidate: Candidate) -> str:
-    if candidate.export is not None:
-        return "commit the reviewed candidate and the owner approval, then deploy the site"
-    return "dispatch Evals at the measured build for the fixture receipt, then publish-evals as the owner"
+def _next_action(
+    candidate: Candidate, *, catalog_ok: bool, receipt_ok: bool, regression_ok: bool, has_baseline: bool
+) -> str:
+    """The one action that clears the next blocker, chosen from the checks that just ran.
+
+    A passing candidate is never told to repeat a step it has already cleared, and a failing one is never told to
+    publish: the action follows the first failure in the order the gate applies them.
+    """
+    if not catalog_ok:
+        return "correct the catalog coverage or the group task list, then stage the candidate again"
+    if not receipt_ok:
+        if candidate.export is not None:
+            return "re-verify the export bundle against the published rows and stage the candidate again"
+        return "dispatch Evals at the measured build for the fixture receipt"
+    if not regression_ok:
+        return "re-measure the regressed group, or get the owner's protocol_change approval for the change"
+    if not has_baseline:
+        return "the first publication requires the owner's --bootstrap approval"
+    return "commit the reviewed candidate and the owner approval, then deploy the site"
 
 
 def status(candidate_path: Path, catalog_path: Path, baseline_path: Path) -> str:
@@ -652,7 +675,7 @@ def status(candidate_path: Path, catalog_path: Path, baseline_path: Path) -> str
     of surfacing as a terse failure deep in a workflow log.
     """
     if not candidate_path.exists():
-        return f"no staged candidate at {candidate_path}; stage one before publishing"
+        return f"no candidate at {candidate_path}; stage one before publishing"
     candidate = read(candidate_path)
     lines = [
         f"candidate {candidate.campaign_id} (schema {candidate.schema_version}) on {candidate.agent_sha[:12]}",
@@ -660,13 +683,16 @@ def status(candidate_path: Path, catalog_path: Path, baseline_path: Path) -> str
     ]
     try:
         check_catalog(candidate, catalog_path)
+        catalog_ok = True
         lines.append("PASS catalog: internal groups cover the pinned catalog")
     except ValueError as exc:
+        catalog_ok = False
         lines.append(f"FAIL catalog: {exc}")
+    receipt_ok = True
     if candidate.export is not None:
         lines.append(
-            f"receipt: verified export {candidate.export.bundle_sha256[:12]} "
-            f"({candidate.export.rows} rows, trace {candidate.export.trace_id})"
+            f"PASS export: {candidate.export.bundle_sha256[:12]} accounts for all {candidate.export.rows} "
+            f"published rows (trace {candidate.export.trace_id})"
         )
     else:
         assert candidate.fixture is not None
@@ -674,22 +700,34 @@ def status(candidate_path: Path, catalog_path: Path, baseline_path: Path) -> str
             check_fixture(candidate)
             lines.append(f"PASS fixture: run {candidate.fixture.run_id} is a successful receipt on the measured build")
         except Exception as exc:
+            receipt_ok = False
             lines.append(f"FAIL fixture: {exc}")
-    if baseline_path.exists():
+    regression_ok = True
+    has_baseline = baseline_path.exists()
+    if has_baseline:
         try:
             regressions(candidate, Candidate.model_validate_json(baseline_path.read_bytes()), catalog_path.read_bytes())
             lines.append("PASS regression: no task-version matched decline against the published baseline")
         except ValueError as exc:
+            regression_ok = False
             lines.append(f"FAIL regression: {exc}")
     else:
         lines.append("no published baseline: the first publication needs --bootstrap approval")
-    lines.append("next: " + _next_action(candidate))
+    action = _next_action(
+        candidate,
+        catalog_ok=catalog_ok,
+        receipt_ok=receipt_ok,
+        regression_ok=regression_ok,
+        has_baseline=has_baseline,
+    )
+    lines.append("next: " + action)
     return "\n".join(lines)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--candidate", type=Path, default=Path("docs/results/benchmarks.json"))
+    # Resolved per mode: a bare `--status` inspects the staged candidate, everything else the published figures.
+    parser.add_argument("--candidate", type=Path, help="the figures to read (defaults to the staged or published file)")
     parser.add_argument("--catalog", type=Path, default=Path("src/fastbrowse/evals/benchmark-catalog.json"))
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--verify-fixture", action="store_true")
@@ -701,6 +739,7 @@ def main() -> None:
     parser.add_argument("--protocol-record", type=Path, help="where to write the protocol_change record")
     parser.add_argument("--install", type=Path, metavar="APPROVAL", help="install approved figures and archive")
     args = parser.parse_args()
+    args.candidate = args.candidate or (STAGED if args.status else PUBLISHED)
     if args.status:
         print(status(args.candidate, args.catalog, args.baseline or PUBLISHED))
         return
