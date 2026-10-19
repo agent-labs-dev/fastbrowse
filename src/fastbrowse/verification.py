@@ -827,10 +827,18 @@ async def _check_answer_outputs(
         )
     # Jev is the first tier for every answer that only restates quotes: a confident vote spares the two serial LLM
     # audits, which were a third of a lookup's wall time. The claims check beside this one still has to find each
-    # claim supported by its quote. Counts and comparisons are derived across records, the class of answer the LLM
-    # audit exists for, so they always reach it.
+    # claim supported by its quote. Counts, totals, comparisons and other calculations are derived across records,
+    # the class of answer the LLM audit exists for, so they always reach it: a claim qualifies only when every fact
+    # it cites is a direct read with no basis, whether or not the reader stored its derivation as a tally.
+    facts = {fact_id(fact): fact for fact in notes.facts}
     quoted = not isinstance(composed, FieldAnswer) and all(
-        not claim.counted_records and not claim.compared_records for claim in context.claims
+        (fact := facts.get(key)) is not None
+        and fact.evidence is not None
+        and not fact.basis
+        and fact.tally is None
+        and fact.comparison is None
+        for claim in composed.claims
+        for key in claim.evidence_ids
     )
     scores = {}
     if verbatim or quoted:

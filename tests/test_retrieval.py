@@ -4503,8 +4503,8 @@ async def test_output_checks_can_bind_an_unbounded_field_to_multiple_claims() ->
     assert [claim["cited_sources"][0]["quote"] for claim in claims] == ["Book A", "Book B"]
 
 
-@pytest.mark.parametrize("counted", [False, True])
-async def test_a_confident_jev_vote_skips_the_llm_audit_except_for_counts(counted: bool) -> None:
+@pytest.mark.parametrize("cited", ["quote", "tally", "basis"])
+async def test_a_confident_jev_vote_skips_the_llm_audit_except_for_derived_answers(cited: str) -> None:
     from fastbrowse.verification import check_answer_outputs
 
     page = capture((BlockKind.PARAGRAPH, "Price £12"), (BlockKind.PARAGRAPH, "Price £14"))
@@ -4512,16 +4512,29 @@ async def test_a_confident_jev_vote_skips_the_llm_audit_except_for_counts(counte
         Fact(text=block.source_id, evidence=block_evidence(page, block.source_id), reader=FactReader.LLM)
         for block in page.blocks
     )
-    cited = (
-        fact_id(notes.add_tally(Tally(requirement_id="r", key="Prices", records=tuple(notes.evidence))))
-        if counted
-        else next(iter(notes.evidence))
-    )
-    text = "There are two prices." if counted else "It costs £12."
-    answer = assemble_answer((Claim(text=text, evidence_ids=(cited,)),), notes, ())
+    first, second = notes.facts
+    match cited:
+        case "quote":
+            text, key = "It costs £12.", fact_id(first)
+        case "tally":
+            tally = notes.add_tally(Tally(requirement_id="r", key="Prices", records=tuple(notes.evidence)))
+            text, key = "There are two prices.", fact_id(tally)
+        case "basis":
+            # A total the reader stored as a plain fact still rests on other quotes.
+            total = Fact(
+                text="Together they cost £26.",
+                evidence=None,
+                basis=(fact_id(first), fact_id(second)),
+                reader=FactReader.LLM,
+            )
+            notes.add(total)
+            text, key = total.text, fact_id(total)
+        case _:
+            raise AssertionError(cited)
+    answer = assemble_answer((Claim(text=text, evidence_ids=(key,)),), notes, ())
     jev = _ReadJev({"output_0": NoulAnswer(probability=0.99)})
     # Without an LLM, only an answer that never needed its audit can hold.
-    assert await check_answer_outputs(jev, None, answer, notes, ("Report the price.",)) is (not counted)
+    assert await check_answer_outputs(jev, None, answer, notes, ("Report the price.",)) is (cited == "quote")
 
 
 async def test_source_availability_audit_withholds_reported_values() -> None:
