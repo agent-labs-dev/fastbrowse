@@ -111,12 +111,12 @@ async def test_under_a_cap_each_audit_call_reserves_after_the_receipts_it_used_t
     class OrderedJev(RoutingJev):
         async def evaluate(self, state, questions):
             if any(isinstance(question, ChoiceQuestion) for question in questions.values()):
-                # The identity call's receipt is in the ledger before the selection is sent.
+                # The identity call's receipt is in the ledger, after the Jev tier's, before the selection is sent.
                 order.append(f"selection after {ledger.llm_calls} llm receipt(s): {len(ledger.lines)} line(s)")
             return await super().evaluate(state, questions)
 
     assert not await check_answer_outputs(OrderedJev(), llm, answer, notes, ("Report the price.",), ledger=ledger)
-    assert order == ["selection after 1 llm receipt(s): 1 line(s)"]
+    assert order == ["selection after 1 llm receipt(s): 2 line(s)"]
     # The source refusal decides before the assertion audit is ever sent.
     assert llm.stages == ["source"]
 
@@ -137,6 +137,8 @@ async def test_an_identity_call_that_finished_is_billed_when_the_check_is_cancel
 
     class StalledJev(RoutingJev):
         async def evaluate(self, state, questions):
+            if not any(isinstance(question, ChoiceQuestion) for question in questions.values()):
+                return await super().evaluate(state, questions)
             selecting.set()
             await asyncio.Event().wait()
             raise AssertionError("the selection should have been cancelled")
@@ -149,7 +151,7 @@ async def test_an_identity_call_that_finished_is_billed_when_the_check_is_cancel
     checking.cancel()
     with pytest.raises(asyncio.CancelledError):
         await checking
-    assert [line.dollars for line in ledger.lines] == [0.7]
+    assert [line.dollars for line in ledger.lines if line.component is CostComponent.LLM] == [0.7]
 
 
 async def test_both_audits_progress_together_when_their_fields_exceed_the_cap() -> None:

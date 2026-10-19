@@ -11,6 +11,14 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Simple lookups are back to answering soon after they find the value. Since 0.5.20 every answer waited for two
+  rounds of LLM output audits, which doubled a one-page lookup (a median of 7.6 seconds became 15.3 on the same
+  machine). Jev now scores answers that only restate what the page showed, including a value Jev itself chose
+  where it appears more than once, and settles them when it agrees, which it did for 12 of 21 correct answers
+  in a probe while every wrong answer scored below the bar. Other answers, and every count, total and
+  comparison, still go through the LLM audits. On eight live lookups the median fell from 13.0 to 9.1 seconds
+  with every answer still correct, and every local and mock fixture task still passes.
+
 - Benchmarking compares exactly three things: fastbrowse against the hosted Browser Use agent, fastbrowse on its
   own browser pool against fastbrowse on a Browser Use Cloud browser, and fastbrowse on its own browser pool
   against Browser Use Ultrafast. The last of these ran fastbrowse on a Browser Use Cloud browser before, which
