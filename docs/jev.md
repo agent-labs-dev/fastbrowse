@@ -59,7 +59,8 @@ summarises how concentrated the distribution is; it is not the chosen option's p
 the answer.
 
 Every threshold in `config.py` (`recover_below` 0.55, `done_accept_from` 0.85, `claim_problem_above` 0.70,
-the 0.90 read cut in `retrieval.py`) is **ours**. None is a Typesafe recommendation. Each is set per
+the 0.90 read cut in `retrieval.py`, and the 0.5 `_OUTPUT_SETTLED_FROM` in `verification.py` from which a quoted
+answer skips the LLM output audits) is **ours**. None is a Typesafe recommendation. Each is set per
 question on the evals, and the gates behind them (VERIFY, the claim check, the LLM fallback) mean a
 miscalibrated threshold tends to cost seconds rather than a wrong answer. Not always: a completion
 judged at or above `done_accept_from` skips VERIFY, so a confidently wrong DONE is not caught there.

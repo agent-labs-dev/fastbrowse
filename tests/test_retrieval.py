@@ -4211,9 +4211,10 @@ async def test_a_quoted_count_does_not_repair_another_requirements_missing_recor
         # A confident Jev vote settles a quoted answer; the LLM audits are never sent.
         (0.99, "yes", True, 0),
         (0.99, "no", True, 0),
-        (0.5, "yes", True, 3),
-        (0.5, "no", False, 3),
-        (0.5, None, False, 3),
+        (0.5, "no", True, 0),
+        (0.4, "yes", True, 3),
+        (0.4, "no", False, 3),
+        (0.4, None, False, 3),
         (0.01, "yes", True, 3),
         # An unanswered selection stops after the identity call it ran beside.
         (None, "yes", False, 1),
@@ -4273,7 +4274,7 @@ async def test_atomic_output_context_keeps_cited_sources_without_uncited_metadat
                 answers={
                     key: _choice("claim_0")
                     if isinstance(question, ChoiceQuestion)
-                    else NoulAnswer(probability=0.5 if key.startswith("output_") else 0.99)
+                    else NoulAnswer(probability=0.4 if key.startswith("output_") else 0.99)
                     for key, question in questions.items()
                 },
                 input_tokens=1,
@@ -4362,7 +4363,7 @@ async def test_output_audits_isolate_fields_and_check_extra_answer_claims(separa
                 answers={
                     key: _choice("claim_0")
                     if isinstance(question, ChoiceQuestion)
-                    else NoulAnswer(probability=0.5 if key.startswith("output_") else 0.99)
+                    else NoulAnswer(probability=0.4 if key.startswith("output_") else 0.99)
                     for key, question in questions.items()
                 },
                 cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
@@ -4475,7 +4476,7 @@ async def test_output_checks_can_bind_an_unbounded_field_to_multiple_claims() ->
             return Evaluation(
                 model="test",
                 answers={
-                    key: _choice("all") if isinstance(question, ChoiceQuestion) else NoulAnswer(probability=0.5)
+                    key: _choice("all") if isinstance(question, ChoiceQuestion) else NoulAnswer(probability=0.4)
                     for key, question in questions.items()
                 },
                 input_tokens=1,
@@ -4503,7 +4504,7 @@ async def test_output_checks_can_bind_an_unbounded_field_to_multiple_claims() ->
     assert [claim["cited_sources"][0]["quote"] for claim in claims] == ["Book A", "Book B"]
 
 
-@pytest.mark.parametrize("cited", ["quote", "tally", "basis"])
+@pytest.mark.parametrize("cited", ["quote", "choice", "tally", "basis"])
 async def test_a_confident_jev_vote_skips_the_llm_audit_except_for_derived_answers(cited: str) -> None:
     from fastbrowse.verification import check_answer_outputs
 
@@ -4519,6 +4520,13 @@ async def test_a_confident_jev_vote_skips_the_llm_audit_except_for_derived_answe
         case "tally":
             tally = notes.add_tally(Tally(requirement_id="r", key="Prices", records=tuple(notes.evidence)))
             text, key = "There are two prices.", fact_id(tally)
+        case "choice":
+            # A value Jev chose where it appears twice rests on both copies, yet code still copied it from the page.
+            choice = Fact(
+                text="£12", evidence=None, basis=(fact_id(first), fact_id(second)), reader=FactReader.JEV_CHOICE
+            )
+            notes.add(choice)
+            text, key = "It costs £12.", fact_id(choice)
         case "basis":
             # A total the reader stored as a plain fact still rests on other quotes.
             total = Fact(
@@ -4534,7 +4542,9 @@ async def test_a_confident_jev_vote_skips_the_llm_audit_except_for_derived_answe
     answer = assemble_answer((Claim(text=text, evidence_ids=(key,)),), notes, ())
     jev = _ReadJev({"output_0": NoulAnswer(probability=0.99)})
     # Without an LLM, only an answer that never needed its audit can hold.
-    assert await check_answer_outputs(jev, None, answer, notes, ("Report the price.",)) is (cited == "quote")
+    assert await check_answer_outputs(jev, None, answer, notes, ("Report the price.",)) is (
+        cited in ("quote", "choice")
+    )
 
 
 async def test_source_availability_audit_withholds_reported_values() -> None:
@@ -4553,7 +4563,7 @@ async def test_source_availability_audit_withholds_reported_values() -> None:
                 answers={
                     key: _choice("claim_0")
                     if isinstance(question, ChoiceQuestion)
-                    else NoulAnswer(probability=0.5 if key.startswith("output_") else 0.99)
+                    else NoulAnswer(probability=0.4 if key.startswith("output_") else 0.99)
                     for key, question in questions.items()
                 },
                 input_tokens=1,
@@ -4747,7 +4757,7 @@ async def test_grouped_output_audit_checks_each_claim_against_its_own_citations(
                 answers={
                     key: _choice("all")
                     if isinstance(question, ChoiceQuestion)
-                    else NoulAnswer(probability=0.5 if key.startswith("output_") else 0.99)
+                    else NoulAnswer(probability=0.4 if key.startswith("output_") else 0.99)
                     for key, question in questions.items()
                 },
                 cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
@@ -4828,7 +4838,7 @@ async def test_field_audits_receive_only_the_urls_of_their_selected_citations() 
                 answers={
                     key: _choice("claim_0")
                     if isinstance(question, ChoiceQuestion)
-                    else NoulAnswer(probability=0.5 if key.startswith("output_") else 0.99)
+                    else NoulAnswer(probability=0.4 if key.startswith("output_") else 0.99)
                     for key, question in questions.items()
                 },
                 cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),

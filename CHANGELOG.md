@@ -11,11 +11,24 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- Answers that only restate what the page quoted are now checked by Jev first, and the two LLM audits run only
-  when Jev is unsure. They were the largest single cost in a run: on the local and mock fixture suites, LLM
-  verification fell from 10.5 to 6.0 seconds per run and the median task from 24.0 to 16.9 seconds, with every
-  task still passing. Counts and comparisons, which are worked out across records, are still audited
-  by the LLM every time, and each claim must still be supported by its own quote.
+- Simple lookups are back to answering soon after they find the value. Since 0.5.20 every answer waited for two
+  rounds of LLM output audits, which doubled a one-page lookup (a median of 7.6 seconds became 15.3 on the same
+  machine). Jev now scores answers that only restate what the page showed, including a value Jev itself chose
+  where it appears more than once, and settles them when it agrees, which it did for 12 of 21 correct answers
+  in a probe while every wrong answer scored below the bar. Other answers, and every count, total and
+  comparison, still go through the LLM audits. On eight live lookups the median fell from 13.0 to 9.1 seconds
+  with every answer still correct, and every local and mock fixture task still passes.
+
+- Benchmarking compares exactly three things: fastbrowse against the hosted Browser Use agent, fastbrowse on its
+  own browser pool against fastbrowse on a Browser Use Cloud browser, and fastbrowse on its own browser pool
+  against Browser Use Ultrafast. The last of these ran fastbrowse on a Browser Use Cloud browser before, which
+  compared the agents but not the products; publication schema 5 now pairs `fastbrowse-pool` with
+  `jev-ultrafast` there, over the same 6 tasks, and the gate holds every new candidate to that pairing. Figures
+  approved under the old pairing still read under their own schema, and repointing a published group is a
+  protocol change the maintainer approves. A `fastbrowse-pool` row on a navigation task is now held to the
+  comparison viewport, as the `fastbrowse` and `jev-ultrafast` rows already were. The README and the benchmark results list the three comparisons, with
+  the two never measured under their current pairing marked as not yet measured; the upstream suites and the
+  Codex with Cua Driver arm are diagnostics.
 
 ## [0.5.23] - 2026-10-18
 

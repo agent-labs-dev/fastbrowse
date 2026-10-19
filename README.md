@@ -30,13 +30,20 @@ Recorded on local Chrome: 13 steps, 20.9s and $0.0034 in model calls. Playback i
 
 ### Against Browser Use agents
 
-The [benchmark page](https://fastbrowse.ai/benchmarks) reports task success, speed and cost,
-with methods and run summaries.
+Benchmarking compares exactly three things:
 
-Rows are comparable only at matching task versions. See [eval results and workflow](docs/evals.md).
+| | Comparison | Arms | Recorded |
+|:--|:--|:--|:--|
+| C1 | agent against agent | fastbrowse against the hosted Browser Use agent | 40 of 42 passed against 14 of 42, median 17.0s against 27.5s, $0.011 against $0.400 a task |
+| C2 | backend against backend | fastbrowse on its own browser pool against fastbrowse on a Browser Use Cloud browser | not yet measured |
+| C3 | fastbrowse and its backend against [Browser Use Ultrafast](https://github.com/browser-use/jev-ultrafast) | fastbrowse on its own browser pool against `jev-ultrafast`, 6 tasks | not yet measured |
 
-Recorded results - the published head-to-head, the matched-task campaigns and the browser cost basis - are
-summarised with their limitations in [benchmark results](docs/benchmarks.md).
+C1's figures are the recorded head-to-head on 14 answer tasks, three passes each, on identical cloud browsers
+under identical limits. [Benchmark results](docs/benchmarks.md) gives each comparison's sources, the internal
+matched-task campaigns behind C1, the browser cost basis and the limitations. The
+[benchmark page](https://fastbrowse.ai/benchmarks) renders only figures the maintainer approved. Rows are
+comparable only at matching task versions; the upstream suites and the Codex with Cua Driver arm are diagnostics,
+described in [eval results and workflow](docs/evals.md).
 
 ### Why fastbrowse, against each kind of agent
 
@@ -279,6 +286,7 @@ More in [docs/design.md](docs/design.md).
 | Signing in | yes | password fields excluded | `--secret` or a Bitwarden vault item; models see names only |
 | Irreversible actions | explicit task instructions in our fixture tests | no authorization parameter in Agent | classifier plus a code-enforced authorization gate |
 | Browser | cloud | Chrome through Browser Harness; cloud in these evals | cloud by default, or local Chrome with `--local` |
+| Benchmarked in | C1 | C3 | C1 on a cloud browser; C2 and C3 on its own browser pool |
 
 Browser Use Ultrafast (`jev-ultrafast`) is Browser Use's navigation agent, separate from its hosted
 LLM agent; fastbrowse shares its core techniques. Its column describes

@@ -90,8 +90,18 @@ def candidate() -> dict:
     }
 
 
+def _current(candidate: dict) -> dict:
+    """The fixture as a new measurement makes it: schema 5, the Ultrafast comparison run on fastbrowse's own pool."""
+    out = copy.deepcopy(candidate)
+    out["schema_version"] = 5
+    for row in out["groups"][1]["rows"]:
+        if row["arm"] == "fastbrowse":
+            row["arm"] = "fastbrowse-pool"
+    return out
+
+
 def test_complete_candidate_matches_the_catalog(candidate):
-    check_catalog(Candidate.model_validate(candidate), CATALOG)
+    check_catalog(Candidate.model_validate(_current(candidate)), CATALOG)
 
 
 def test_official_suite_can_publish_without_new_comparator_runs(candidate):
@@ -1039,7 +1049,7 @@ def test_an_export_row_count_matching_the_groups_is_accepted(candidate):
 
 def test_status_names_the_receipt_and_the_single_next_action(candidate, tmp_path):
     path = tmp_path / "benchmark-candidate.json"
-    path.write_text(json.dumps(_export_candidate(candidate)))
+    path.write_text(json.dumps(_export_candidate(_current(candidate))))
     report = benchmarks.status(path, CATALOG, tmp_path / "absent.json")
     assert "PASS export" in report
     assert "no published baseline" in report
@@ -1092,3 +1102,62 @@ def test_bare_status_reads_the_staged_candidate(tmp_path, monkeypatch):
     monkeypatch.setattr("sys.argv", ["benchmarks", "--status"])
     benchmarks.main()
     assert seen == [Path("docs/results/benchmark-candidate.json")]
+
+
+def _ultrafast(candidate: dict, schema: int, arms: tuple[str, ...]) -> dict:
+    group = copy.deepcopy(candidate["groups"][1])
+    template = group["rows"][0]
+    group["rows"] = [
+        {**template, "task": t, "repeat": r, "arm": a} for t in group["task_ids"] for r in range(3) for a in arms
+    ]
+    return {**candidate, "schema_version": schema, "groups": [group]}
+
+
+@pytest.mark.parametrize(
+    ("schema", "arms", "valid"),
+    [
+        # Schema 5 compares the two products each on its own backend: fastbrowse's pool against jev-ultrafast.
+        (5, ("fastbrowse-pool", "jev-ultrafast"), True),
+        (5, ("fastbrowse", "jev-ultrafast"), False),
+        # Figures approved before keep the pairing they were measured under.
+        (4, ("fastbrowse", "jev-ultrafast"), True),
+        (4, ("fastbrowse-pool", "jev-ultrafast"), False),
+        (2, ("fastbrowse", "jev-ultrafast"), True),
+    ],
+)
+def test_the_ultrafast_pairing_follows_the_schema(candidate, schema, arms, valid):
+    data = _ultrafast(candidate, schema, arms)
+    if not valid:
+        with pytest.raises(ValidationError, match="every scheduled slot"):
+            Candidate.model_validate(data)
+        return
+    parsed = Candidate.model_validate(data)
+    assert len(parsed.groups[0].task_ids) == 6
+    if schema < 5:
+        # The old pairing still reads, but a new measurement on the current catalog must use the pool.
+        with pytest.raises(ValueError, match="pair fastbrowse-pool"):
+            check_catalog(parsed, CATALOG)
+    else:
+        check_catalog(parsed, CATALOG)
+
+
+def test_the_pool_arm_is_the_one_guarded_in_the_ultrafast_comparison(candidate):
+    before = Candidate.model_validate(_ultrafast(candidate, 5, ("fastbrowse-pool", "jev-ultrafast")))
+    data = _ultrafast(candidate, 5, ("fastbrowse-pool", "jev-ultrafast"))
+    task = data["groups"][0]["task_ids"][0]
+    for row in data["groups"][0]["rows"]:
+        if row["task"] == task and row["arm"] == "fastbrowse-pool":
+            row["seconds"] = 15.0
+    with pytest.raises(ValueError, match="seconds regression: internal-ultrafast"):
+        regressions(Candidate.model_validate(data), before)
+
+
+def test_repointing_the_ultrafast_comparison_is_a_protocol_change(candidate):
+    from fastbrowse.evals.benchmarks import unapproved_changes
+
+    before = Candidate.model_validate(_ultrafast(candidate, 4, ("fastbrowse", "jev-ultrafast")))
+    after = Candidate.model_validate(_ultrafast(candidate, 5, ("fastbrowse-pool", "jev-ultrafast")))
+    assert unapproved_changes(after, before, CATALOG.read_bytes()) == {"internal-ultrafast"}
+    with pytest.raises(ValueError, match="protocol changed: internal-ultrafast"):
+        regressions(after, before, CATALOG.read_bytes())
+    regressions(after, before, CATALOG.read_bytes(), {"internal-ultrafast"})

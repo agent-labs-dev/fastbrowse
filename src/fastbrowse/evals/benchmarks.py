@@ -9,10 +9,11 @@ import subprocess
 import tempfile
 from collections.abc import Collection
 from pathlib import Path
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, NamedTuple, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from fastbrowse.evals.catalog import CatalogTask, eligible
 from fastbrowse.evals.publication import REGRESSION_FACTOR
 from fastbrowse.models import Status
 
@@ -29,6 +30,7 @@ GroupId = Literal[
     "bu-bench",
     "online-mind2web",
 ]
+Arm = Literal["fastbrowse", "fastbrowse-pool", "browser-use", "jev-ultrafast"]
 RESULTS = Path("docs/results")
 PUBLISHED = RESULTS / "benchmarks.json"
 APPROVAL = RESULTS / "benchmark-approval.json"
@@ -42,7 +44,7 @@ class PublicModel(BaseModel):
 class Row(PublicModel):
     task: Identifier
     repeat: Annotated[int, Field(ge=0)]
-    arm: Literal["fastbrowse", "fastbrowse-pool", "browser-use", "jev-ultrafast"]
+    arm: Arm
     status: Identifier
     completed: bool
     score: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
@@ -60,6 +62,37 @@ class Row(PublicModel):
         return self
 
 
+class Coverage(NamedTuple):
+    counts: frozenset[int]
+    repeats: int
+    metric: Literal["task-success", "weighted-rubric", "full-task-success"]
+    arms: tuple[Arm, ...]
+    """The measured arms, the Fastbrowse arm first: it is the one whose figures the regression check guards."""
+
+
+# Each count the approved protocol has had. Retiring stretch-wizard-correction, whose site left DNS, took one task
+# from the internal catalog; figures approved before then keep their count. A new candidate is held to the exact
+# current catalog by `check_catalog`.
+COVERAGE: dict[GroupId, Coverage] = {
+    "internal-fastbrowse": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse",)),
+    "internal-hosted": Coverage(frozenset({46, 47}), 3, "task-success", ("fastbrowse", "browser-use")),
+    "internal-ultrafast": Coverage(frozenset({6}), 3, "task-success", ("fastbrowse-pool", "jev-ultrafast")),
+    "internal-backend": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse", "fastbrowse-pool")),
+    "bu-bench": Coverage(frozenset({200}), 1, "weighted-rubric", ("fastbrowse",)),
+    "online-mind2web": Coverage(frozenset({300}), 1, "full-task-success", ("fastbrowse",)),
+}
+POOL_ULTRAFAST_SCHEMA = 5
+"""From this schema the Ultrafast comparison is fastbrowse with its own browser pool against `jev-ultrafast`: the
+two whole products, each on its own backend. Before it, fastbrowse ran there on a Browser Use Cloud browser, so
+figures approved under an older schema keep that pairing."""
+
+
+def group_arms(group: GroupId, schema_version: int) -> tuple[Arm, ...]:
+    if group == "internal-ultrafast" and schema_version < POOL_ULTRAFAST_SCHEMA:
+        return ("fastbrowse", "jev-ultrafast")
+    return COVERAGE[group].arms
+
+
 class Group(PublicModel):
     id: GroupId
     agent_sha: Sha | None = None
@@ -73,29 +106,21 @@ class Group(PublicModel):
 
     @model_validator(mode="after")
     def coverage(self) -> Self:
-        # Each count the approved protocol has had. Retiring stretch-wizard-correction, whose site left DNS, took
-        # one task from the internal catalog; figures approved before then keep their count. A new candidate is
-        # held to the exact current catalog by `check_catalog`.
-        spec = {
-            "internal-fastbrowse": ({53, 54}, 3, "task-success", {"fastbrowse"}),
-            "internal-hosted": ({46, 47}, 3, "task-success", {"fastbrowse", "browser-use"}),
-            "internal-ultrafast": ({6}, 3, "task-success", {"fastbrowse", "jev-ultrafast"}),
-            "internal-backend": ({53, 54}, 3, "task-success", {"fastbrowse", "fastbrowse-pool"}),
-            "bu-bench": ({200}, 1, "weighted-rubric", {"fastbrowse"}),
-            "online-mind2web": ({300}, 1, "full-task-success", {"fastbrowse"}),
-        }
-        counts, repeats, metric, arms = spec[self.id]
-        if len(self.task_ids) not in counts or len(set(self.task_ids)) != len(self.task_ids):
+        spec = COVERAGE[self.id]
+        if len(self.task_ids) not in spec.counts or len(set(self.task_ids)) != len(self.task_ids):
             raise ValueError("task coverage differs from the approved full protocol")
-        if self.repeats != repeats or self.metric != metric or not self.limits:
+        if self.repeats != spec.repeats or self.metric != spec.metric or not self.limits:
             raise ValueError("repeats, metric and recorded limits are required")
-        expected = {(task, repeat, arm) for task in self.task_ids for repeat in range(repeats) for arm in arms}
-        actual = [(r.task, r.repeat, r.arm) for r in self.rows]
-        if len(actual) != len(set(actual)) or set(actual) != expected:
-            raise ValueError("every scheduled slot must have exactly one measured row")
         if self.metric != "weighted-rubric" and any(r.score not in {0, 1} for r in self.rows):
             raise ValueError("binary source grades cannot contain partial scores")
         return self
+
+    def check_slots(self, arms: tuple[Arm, ...]) -> None:
+        """The arms depend on the candidate's schema, so the candidate checks each group's slots against them."""
+        expected = {(task, repeat, arm) for task in self.task_ids for repeat in range(self.repeats) for arm in arms}
+        actual = [(r.task, r.repeat, r.arm) for r in self.rows]
+        if len(actual) != len(set(actual)) or set(actual) != expected:
+            raise ValueError("every scheduled slot must have exactly one measured row")
 
 
 class Fixture(PublicModel):
@@ -124,7 +149,7 @@ class ExportReceipt(PublicModel):
 
 
 class Candidate(PublicModel):
-    schema_version: Literal[1, 2, 3, 4]
+    schema_version: Literal[1, 2, 3, 4, 5]
     campaign_id: Identifier
     agent_sha: Sha
     runner_sha: Sha
@@ -147,6 +172,7 @@ class Candidate(PublicModel):
         if self.schema_version < 4 and "internal-backend" in ids:
             raise ValueError("the internal-backend group requires schema 4")
         for group in self.groups:
+            group.check_slots(group_arms(group.id, self.schema_version))
             for field in ("agent_sha", "runner_sha"):
                 measured = getattr(group, field)
                 if (self.schema_version >= 2 or measured is not None) and measured != getattr(self, field):
@@ -221,23 +247,21 @@ def check_catalog(candidate: Candidate, path: Path) -> None:
     if hashlib.sha256(raw).hexdigest() != candidate.catalog_sha256:
         raise ValueError("catalog must match the current pinned task source")
     catalog = json.loads(raw)
-    tasks = [task for suite in catalog["suites"].values() for task in suite]
-    for group, other in (
-        ("internal-hosted", "browser-use"),
-        ("internal-ultrafast", "jev-ultrafast"),
-        ("internal-backend", "fastbrowse-pool"),
-    ):
-        required = {task["id"] for task in tasks if {"fastbrowse", other} <= set(task["arms"])}
-        found = next((g for g in candidate.groups if g.id == group), None)
-        if found is None:
+    tasks = [CatalogTask.model_validate(task) for suite in catalog["suites"].values() for task in suite]
+    for group in candidate.groups:
+        if group.id in {"bu-bench", "online-mind2web"}:
             continue
-        if set(found.task_ids) != required or found.source_sha256 != candidate.catalog_sha256:
-            raise ValueError("internal rows must cover the exact matched catalog")
-    fastbrowse = next((g for g in candidate.groups if g.id == "internal-fastbrowse"), None)
-    if fastbrowse is not None:
-        required = {task["id"] for task in tasks if "fastbrowse" in task["arms"]}
-        if set(fastbrowse.task_ids) != required or fastbrowse.source_sha256 != candidate.catalog_sha256:
-            raise ValueError("internal rows must cover the exact fastbrowse catalog")
+        # Approved figures keep the pairing they were measured under, but a new measurement is held to the current
+        # one: fastbrowse with its own browser pool against jev-ultrafast.
+        if group.id == "internal-ultrafast" and candidate.schema_version < POOL_ULTRAFAST_SCHEMA:
+            raise ValueError(f"new internal-ultrafast rows pair fastbrowse-pool, from schema {POOL_ULTRAFAST_SCHEMA}")
+        # A comparison covers the tasks every one of its arms is eligible for: the pool runs every fastbrowse task,
+        # so the Ultrafast comparison covers the tasks fastbrowse and jev-ultrafast share whichever backend it ran.
+        arms = group_arms(group.id, candidate.schema_version)
+        required = {task.id for task in tasks if all(eligible(arm, task) for arm in arms)}
+        if set(group.task_ids) != required or group.source_sha256 != candidate.catalog_sha256:
+            kind = "fastbrowse" if group.id == "internal-fastbrowse" else "matched"
+            raise ValueError(f"internal rows must cover the exact {kind} catalog")
 
 
 CATALOG_PATH = "src/fastbrowse/evals/benchmark-catalog.json"
@@ -297,12 +321,17 @@ def unapproved_changes(candidate: Candidate, baseline: Candidate, catalog: bytes
     return {
         change.id
         for change in changed_protocols(candidate, baseline)
-        if not _retirement_only(groups[change.id], previous[change.id], catalog)
+        if _arms_changed(groups[change.id], candidate, baseline)
+        or not _retirement_only(groups[change.id], previous[change.id], catalog)
     }
 
 
+def _arms_changed(group: Group, candidate: Candidate, baseline: Candidate) -> bool:
+    return group_arms(group.id, candidate.schema_version) != group_arms(group.id, baseline.schema_version)
+
+
 def changed_protocols(candidate: Candidate, baseline: Candidate) -> list[GroupProtocol]:
-    """The published groups `candidate` measures under a different catalog, task list or limits."""
+    """The published groups `candidate` measures under a different catalog, task list, limits or pairing of arms."""
     previous = {g.id: g for g in baseline.groups}
     return [
         GroupProtocol(
@@ -316,8 +345,11 @@ def changed_protocols(candidate: Candidate, baseline: Candidate) -> list[GroupPr
         )
         for group in candidate.groups
         if (old := previous.get(group.id)) is not None
-        and (group.source_sha256, sorted(group.task_ids), group.limits)
-        != (old.source_sha256, sorted(old.task_ids), old.limits)
+        and (
+            (group.source_sha256, sorted(group.task_ids), group.limits)
+            != (old.source_sha256, sorted(old.task_ids), old.limits)
+            or _arms_changed(group, candidate, baseline)
+        )
     ]
 
 
@@ -370,15 +402,16 @@ def regressions(
         old = previous.get(group.id)
         if old is None or group.id in changed:
             continue
-        if (group.source_sha256, sorted(group.task_ids), group.limits) != (
-            old.source_sha256,
-            sorted(old.task_ids),
-            old.limits,
-        ) and not _retirement_only(group, old, catalog):
+        if _arms_changed(group, candidate, baseline) or (
+            (group.source_sha256, sorted(group.task_ids), group.limits)
+            != (old.source_sha256, sorted(old.task_ids), old.limits)
+            and not _retirement_only(group, old, catalog)
+        ):
             raise ValueError(f"protocol changed: {group.id}; matched baseline measurement is required")
+        arm = group_arms(group.id, candidate.schema_version)[0]
         for task in group.task_ids:
-            now = [r for r in group.rows if r.arm == "fastbrowse" and r.task == task]
-            before = [r for r in old.rows if r.arm == "fastbrowse" and r.task == task]
+            now = [r for r in group.rows if r.arm == arm and r.task == task]
+            before = [r for r in old.rows if r.arm == arm and r.task == task]
             if sum(r.score for r in now) / len(now) < sum(r.score for r in before) / len(before):
                 raise ValueError(f"source-score regression: {group.id}/{task}")
             if sum(r.completed for r in now) < sum(r.completed for r in before):
