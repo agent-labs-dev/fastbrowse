@@ -8,9 +8,21 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from fastbrowse.evals import benchmarks
 from fastbrowse.evals.benchmarks import Candidate, check_catalog, regressions
 
 CATALOG = Path(__file__).parents[1] / "src/fastbrowse/evals/benchmark-catalog.json"
+
+
+run = {
+    "head_sha": "a" * 40,
+    "conclusion": "success",
+    "status": "completed",
+    "path": ".github/workflows/evals.yml",
+    "repository": {"full_name": "agent-labs-dev/fastbrowse"},
+    "head_branch": "main",
+    "event": "workflow_dispatch",
+}
 
 
 @pytest.fixture
@@ -963,3 +975,120 @@ def test_a_reused_campaign_id_with_other_figures_archives_beside_the_first(candi
     misnamed.write_bytes(first)
     with pytest.raises(ValueError, match="not named by the digest"):
         check_diff("base", Path("catalog.json"))
+
+
+def _export_candidate(candidate: dict) -> dict:
+    """The same candidate with a verified-export receipt in place of the live fixture run."""
+    out = copy.deepcopy(candidate)
+    out.pop("fixture")
+    out["export"] = {
+        "bundle_sha256": "c" * 64,
+        "campaign_id": out["campaign_id"],
+        "agent_sha": out["agent_sha"],
+        "groups": [group["id"] for group in out["groups"]],
+        "rows": sum(len(group["rows"]) for group in out["groups"]),
+        "trace_id": "trace-1",
+    }
+    return out
+
+
+def test_a_verified_export_replaces_the_live_fixture_run(candidate):
+    parsed = Candidate.model_validate(_export_candidate(candidate))
+    # There is no live run to fetch: the reviewed candidate carries the export the owner approves.
+    benchmarks.check_fixture(parsed)
+
+
+def test_a_candidate_needs_exactly_one_measurement_receipt(candidate):
+    both = copy.deepcopy(candidate)
+    both["export"] = _export_candidate(candidate)["export"]
+    with pytest.raises(ValidationError):
+        Candidate.model_validate(both)
+    neither = copy.deepcopy(candidate)
+    neither.pop("fixture")
+    with pytest.raises(ValidationError):
+        Candidate.model_validate(neither)
+
+
+def test_a_verified_export_must_name_the_measured_build_campaign_and_groups(candidate):
+    wrong_build = _export_candidate(candidate)
+    wrong_build["export"]["agent_sha"] = "d" * 40
+    with pytest.raises(ValidationError):
+        Candidate.model_validate(wrong_build)
+    wrong_group = _export_candidate(candidate)
+    wrong_group["export"]["groups"] = wrong_group["export"]["groups"][:-1]
+    with pytest.raises(ValidationError):
+        Candidate.model_validate(wrong_group)
+
+
+def test_an_export_must_account_for_every_published_row(candidate):
+    """A receipt that covers only a subset cannot vouch for rows it never measured."""
+    short = _export_candidate(candidate)
+    short["export"]["rows"] = 1
+    with pytest.raises(ValidationError, match="every published row"):
+        Candidate.model_validate(short)
+
+
+def test_an_export_row_count_matching_the_groups_is_accepted(candidate):
+    exact = _export_candidate(candidate)
+    total = sum(len(group["rows"]) for group in exact["groups"])
+    exact["export"]["rows"] = total
+    parsed = Candidate.model_validate(exact)
+    assert parsed.export is not None
+    assert parsed.export.rows == total
+
+
+def test_status_names_the_receipt_and_the_single_next_action(candidate, tmp_path):
+    path = tmp_path / "benchmark-candidate.json"
+    path.write_text(json.dumps(_export_candidate(candidate)))
+    report = benchmarks.status(path, CATALOG, tmp_path / "absent.json")
+    assert "PASS export" in report
+    assert "no published baseline" in report
+    # No baseline, so the first publication needs the owner's bootstrap, not a commit-and-deploy.
+    assert "next: the first publication requires the owner's --bootstrap approval" in report
+
+
+def test_status_does_not_advise_publishing_when_a_check_fails(candidate, tmp_path):
+    """The action follows the first failure: a blocked candidate is never told to commit and deploy."""
+    broken = _export_candidate(candidate)
+    broken["catalog_sha256"] = "0" * 64
+    path = tmp_path / "benchmark-candidate.json"
+    path.write_text(json.dumps(broken))
+    baseline = tmp_path / "benchmarks.json"
+    baseline.write_text(json.dumps(_export_candidate(candidate)))
+    report = benchmarks.status(path, CATALOG, baseline)
+    assert "FAIL catalog" in report
+    assert "commit the reviewed candidate" not in report
+    assert "next: correct the catalog coverage" in report
+
+
+def test_a_passing_candidate_is_told_to_publish_not_to_redispatch(candidate):
+    """A live-fixture candidate whose receipt already passed is ready to publish, not to re-dispatch Evals."""
+    parsed = Candidate.model_validate(candidate)
+    action = benchmarks._next_action(parsed, catalog_ok=True, receipt_ok=True, regression_ok=True, has_baseline=True)
+    assert "dispatch Evals" not in action
+    assert action == "commit the reviewed candidate and the owner approval, then deploy the site"
+
+
+def test_a_failing_receipt_is_told_to_dispatch_evals(candidate):
+    parsed = Candidate.model_validate(candidate)
+    action = benchmarks._next_action(parsed, catalog_ok=True, receipt_ok=False, regression_ok=True, has_baseline=True)
+    assert "dispatch Evals at the measured build" in action
+
+
+def test_a_regression_is_told_to_remeasure_or_approve(candidate):
+    parsed = Candidate.model_validate(candidate)
+    action = benchmarks._next_action(parsed, catalog_ok=True, receipt_ok=True, regression_ok=False, has_baseline=True)
+    assert "protocol_change approval" in action
+    assert "commit the reviewed candidate" not in action
+
+
+def test_bare_status_reads_the_staged_candidate(tmp_path, monkeypatch):
+    """A bare `--status` inspects what is about to be published, not what already is."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "docs/results").mkdir(parents=True)
+    (tmp_path / "docs/results/benchmark-candidate.json").write_text("{}")
+    seen: list[Path] = []
+    monkeypatch.setattr(benchmarks, "status", lambda path, _catalog, _baseline: seen.append(path) or "")
+    monkeypatch.setattr("sys.argv", ["benchmarks", "--status"])
+    benchmarks.main()
+    assert seen == [Path("docs/results/benchmark-candidate.json")]

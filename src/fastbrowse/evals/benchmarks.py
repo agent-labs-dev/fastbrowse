@@ -105,13 +105,32 @@ class Fixture(PublicModel):
     total: Literal[108]
 
 
+class ExportReceipt(PublicModel):
+    """A verified measurement export that stands in for the live fixture run.
+
+    A campaign measured on a build `main` has since moved past, or measured while workflow dispatch was
+    unavailable, cannot mint the live `Evals` receipt the gate otherwise requires. This records the export that
+    was verified instead: the bundle's digest, the campaign and build it covers, its row count and the trace it
+    was read back from. It is a field of the reviewed candidate, so the owner approves it with the figures it
+    carries; the receipt is never inferred from an aggregate or waived in silence.
+    """
+
+    bundle_sha256: Digest
+    campaign_id: Identifier
+    agent_sha: Sha
+    groups: Annotated[list[GroupId], Field(min_length=1)]
+    rows: Annotated[int, Field(gt=0)]
+    trace_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.:-]{1,64}$")]
+
+
 class Candidate(PublicModel):
     schema_version: Literal[1, 2, 3, 4]
     campaign_id: Identifier
     agent_sha: Sha
     runner_sha: Sha
     catalog_sha256: Digest
-    fixture: Fixture
+    fixture: Fixture | None = None
+    export: ExportReceipt | None = None
     langfuse_verified: Literal[True]
     groups: list[Group]
 
@@ -132,8 +151,25 @@ class Candidate(PublicModel):
                 measured = getattr(group, field)
                 if (self.schema_version >= 2 or measured is not None) and measured != getattr(self, field):
                     raise ValueError("each group must identify the measured agent and runner build")
-        if self.agent_sha != self.fixture.head_sha:
+        if (self.fixture is None) == (self.export is None):
+            raise ValueError(
+                "a candidate carries exactly one measurement receipt: a live fixture run or a verified export"
+            )
+        if self.fixture is not None and self.agent_sha != self.fixture.head_sha:
             raise ValueError("fixtures must pass on the measured agent build")
+        if self.export is not None:
+            if self.export.agent_sha != self.agent_sha or self.export.campaign_id != self.campaign_id:
+                raise ValueError("a verified export must name the measured build and campaign")
+            if set(self.export.groups) != {group.id for group in self.groups}:
+                raise ValueError("a verified export must cover exactly the published groups")
+            # The receipt stands in for the live run, so it must account for every row about to be published: an
+            # export covering a subset cannot vouch for rows it never measured.
+            published_rows = sum(len(group.rows) for group in self.groups)
+            if self.export.rows != published_rows:
+                raise ValueError(
+                    f"a verified export must account for every published row: the receipt claims "
+                    f"{self.export.rows}, the groups hold {published_rows}"
+                )
         return self
 
 
@@ -378,6 +414,12 @@ def on_main(sha: str) -> bool:
 
 
 def check_fixture(candidate: Candidate) -> None:
+    if candidate.export is not None:
+        # A verified export stands in for the live fixture run: the campaign was measured on a build `main` has
+        # moved past, or while workflow dispatch was unavailable, so the receipt is the export itself, bound by
+        # digest and carried in the reviewed candidate the owner approves. Nothing is waived in silence.
+        return
+    assert candidate.fixture is not None  # the model requires exactly one receipt
     run = github_run(candidate.fixture.run_id)
     if (
         run["head_sha"] != candidate.agent_sha
@@ -604,12 +646,92 @@ def install(candidate_path: Path, approval_path: Path) -> None:
     APPROVAL.write_bytes(approval_bytes)
 
 
+def _next_action(
+    candidate: Candidate, *, catalog_ok: bool, receipt_ok: bool, regression_ok: bool, has_baseline: bool
+) -> str:
+    """The one action that clears the next blocker, chosen from the checks that just ran.
+
+    A passing candidate is never told to repeat a step it has already cleared, and a failing one is never told to
+    publish: the action follows the first failure in the order the gate applies them.
+    """
+    if not catalog_ok:
+        return "correct the catalog coverage or the group task list, then stage the candidate again"
+    if not receipt_ok:
+        if candidate.export is not None:
+            return "re-verify the export bundle against the published rows and stage the candidate again"
+        return "dispatch Evals at the measured build for the fixture receipt"
+    if not regression_ok:
+        return "re-measure the regressed group, or get the owner's protocol_change approval for the change"
+    if not has_baseline:
+        return "the first publication requires the owner's --bootstrap approval"
+    return "commit the reviewed candidate and the owner approval, then deploy the site"
+
+
+def status(candidate_path: Path, catalog_path: Path, baseline_path: Path) -> str:
+    """What stands between the staged candidate and publication, and the single next action.
+
+    The operator's view of the gate: it runs every check that needs no network, names the receipt the candidate
+    carries, and states the one action that clears the next blocker. A blocked publication then says why, instead
+    of surfacing as a terse failure deep in a workflow log.
+    """
+    if not candidate_path.exists():
+        return f"no candidate at {candidate_path}; stage one before publishing"
+    candidate = read(candidate_path)
+    lines = [
+        f"candidate {candidate.campaign_id} (schema {candidate.schema_version}) on {candidate.agent_sha[:12]}",
+        f"groups: {', '.join(group.id for group in candidate.groups)}",
+    ]
+    try:
+        check_catalog(candidate, catalog_path)
+        catalog_ok = True
+        lines.append("PASS catalog: internal groups cover the pinned catalog")
+    except ValueError as exc:
+        catalog_ok = False
+        lines.append(f"FAIL catalog: {exc}")
+    receipt_ok = True
+    if candidate.export is not None:
+        lines.append(
+            f"PASS export: {candidate.export.bundle_sha256[:12]} accounts for all {candidate.export.rows} "
+            f"published rows (trace {candidate.export.trace_id})"
+        )
+    else:
+        assert candidate.fixture is not None
+        try:
+            check_fixture(candidate)
+            lines.append(f"PASS fixture: run {candidate.fixture.run_id} is a successful receipt on the measured build")
+        except Exception as exc:
+            receipt_ok = False
+            lines.append(f"FAIL fixture: {exc}")
+    regression_ok = True
+    has_baseline = baseline_path.exists()
+    if has_baseline:
+        try:
+            regressions(candidate, Candidate.model_validate_json(baseline_path.read_bytes()), catalog_path.read_bytes())
+            lines.append("PASS regression: no task-version matched decline against the published baseline")
+        except ValueError as exc:
+            regression_ok = False
+            lines.append(f"FAIL regression: {exc}")
+    else:
+        lines.append("no published baseline: the first publication needs --bootstrap approval")
+    action = _next_action(
+        candidate,
+        catalog_ok=catalog_ok,
+        receipt_ok=receipt_ok,
+        regression_ok=regression_ok,
+        has_baseline=has_baseline,
+    )
+    lines.append("next: " + action)
+    return "\n".join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--candidate", type=Path, default=Path("docs/results/benchmarks.json"))
+    # Resolved per mode: a bare `--status` inspects the staged candidate, everything else the published figures.
+    parser.add_argument("--candidate", type=Path, help="the figures to read (defaults to the staged or published file)")
     parser.add_argument("--catalog", type=Path, default=Path("src/fastbrowse/evals/benchmark-catalog.json"))
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--verify-fixture", action="store_true")
+    parser.add_argument("--status", action="store_true", help="print what blocks publication and the next action")
     parser.add_argument("--check-diff")
     parser.add_argument("--bootstrap", action="store_true", help="owner approval for the first publication")
     parser.add_argument("--protocol-change", action="store_true", help="owner approval of a deliberate protocol change")
@@ -617,6 +739,10 @@ def main() -> None:
     parser.add_argument("--protocol-record", type=Path, help="where to write the protocol_change record")
     parser.add_argument("--install", type=Path, metavar="APPROVAL", help="install approved figures and archive")
     args = parser.parse_args()
+    args.candidate = args.candidate or (STAGED if args.status else PUBLISHED)
+    if args.status:
+        print(status(args.candidate, args.catalog, args.baseline or PUBLISHED))
+        return
     if args.install:
         install(args.candidate, args.install)
         print(f"Installed {PUBLISHED} and {APPROVAL}")
