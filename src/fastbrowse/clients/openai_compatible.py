@@ -5,6 +5,7 @@ import base64
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from time import monotonic
+from typing import assert_never
 
 import httpx
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
@@ -132,6 +133,27 @@ def strict_schema(schema: JsonValue) -> JsonValue:
     if isinstance(properties := schema.get("properties"), dict):
         result["required"] = list(properties)
     return result
+
+
+def hedge_seconds(purpose: LLMPurpose) -> float:
+    """When a still-unanswered call of this purpose is raced by a twin: about its p90 on the 0.5.24 campaign.
+
+    One 4s hedge for every purpose left the short structured calls' tail alone: answer audits took 2.2s median but
+    8.6s at p99 (1,781 calls), and one slow audit holds the whole answer. A read is longer by nature (3.0s median,
+    5.2s p90), so `LLM_HEDGE_SECONDS` stays its ceiling and no purpose hedges later than it.
+    """
+    match purpose:
+        case LLMPurpose.SHORTCUT | LLMPurpose.FIELD_TEXT:
+            measured = 1.5
+        case LLMPurpose.PLAN | LLMPurpose.VERIFY | LLMPurpose.COMPOSE:
+            measured = 3.0
+        case LLMPurpose.RECOVER:
+            measured = 3.5
+        case LLMPurpose.READ:
+            measured = LLM_HEDGE_SECONDS
+        case _:
+            assert_never(purpose)
+    return min(measured, LLM_HEDGE_SECONDS)
 
 
 def _grow_cap(body: dict[str, JsonValue], attempt: int, cap: int, purpose: LLMPurpose) -> None:
@@ -265,7 +287,7 @@ class OpenAICompatibleLLM:
         return text.replace(self._api_key, "[api key]") if self._api_key else text
 
     async def _request(
-        self, body: dict[str, JsonValue], ledger: Ledger | None, usage: RequestUsage
+        self, body: dict[str, JsonValue], ledger: Ledger | None, usage: RequestUsage, purpose: LLMPurpose
     ) -> dict[str, JsonValue]:
         started = monotonic()
         try:
@@ -276,7 +298,7 @@ class OpenAICompatibleLLM:
                 self._headers(),
                 call=f"llm {body.get('model')}",
                 attempt_seconds=LLM_ATTEMPT_SECONDS,
-                hedge_seconds=LLM_HEDGE_SECONDS,
+                hedge_seconds=hedge_seconds(purpose),
                 before_retry=None if ledger is None else lambda: ledger.reserve(CostComponent.LLM),
                 usage=usage,
                 settle_on_cancel=True,
@@ -450,7 +472,7 @@ class OpenAICompatibleLLM:
                     ledger.reserve(CostComponent.LLM)
                 usage = RequestUsage()
                 try:
-                    payload = await self._request(body, ledger, usage)
+                    payload = await self._request(body, ledger, usage, purpose)
                 except BaseException:
                     offset = len(costs)
                     costs.extend(_cost({}, purpose) for _ in range(usage.unaccounted_requests))

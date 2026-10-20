@@ -73,6 +73,15 @@ def two_entity_answer():
     return notes, answer
 
 
+def sent_only_speculative_audits(writer) -> bool:
+    """After the identity call, every request was a speculative audit: none carried the rejected identities."""
+    return all(
+        not field.get("requested_entities")
+        for _, messages in writer.calls[1:]
+        for field in json.loads(messages[-1].content)["criteria"].values()
+    )
+
+
 @pytest.mark.parametrize("ref,quote", [("q999", "Adapter Beacon"), ("q1", "Invented Beacon")])
 async def test_identity_must_copy_an_offered_literal_source(ref, quote):
     notes, answer = two_entity_answer()
@@ -81,7 +90,7 @@ async def test_identity_must_copy_an_offered_literal_source(ref, quote):
     assert not await check_answer_outputs(
         RoutingJev(), writer, answer, notes, ("Report Adapter Beacon exact port count.",), corrections=corrections
     )
-    assert len(writer.calls) == 1
+    assert sent_only_speculative_audits(writer)
     assert len(corrections) == 1 and corrections[0].stage == "source"
     assert corrections[0].claims == answer.claims
 
@@ -90,7 +99,8 @@ async def test_source_and_assertion_audits_share_literal_identity_without_report
     notes, answer = two_entity_answer()
     writer = IdentityWriter()
     assert await check_answer_outputs(RoutingJev(), writer, answer, notes, ("Report Adapter Beacon exact port count.",))
-    assert len(writer.calls) == 4
+    # The speculative round, sent without identities, did not stand, so the audits ran again with them.
+    assert len(writer.calls) == 5
 
 
 @pytest.mark.parametrize("scope,expected", [("subjectless", True), ("unresolved", False)])
@@ -169,7 +179,7 @@ async def test_shared_identity_references_fail_closed(scope, refs):
     assert not await check_answer_outputs(
         RoutingJev(), writer, answer, notes, ("Report Adapter Beacon exact port count.",)
     )
-    assert len(writer.calls) == 1
+    assert sent_only_speculative_audits(writer)
 
 
 async def test_duplicate_identity_references_do_not_duplicate_requested_subjects():
@@ -184,7 +194,7 @@ async def test_an_identity_id_naming_two_quotes_fails_closed():
     assert not await check_answer_outputs(
         RoutingJev(), writer, answer, notes, ("Report Adapter Beacon exact port count.",)
     )
-    assert len(writer.calls) == 1
+    assert sent_only_speculative_audits(writer)
 
 
 async def test_identity_request_lets_a_record_be_named_by_its_requested_identifier():

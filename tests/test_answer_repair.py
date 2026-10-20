@@ -261,6 +261,12 @@ async def test_comparison_repair_must_supply_all_operands_in_its_own_citations()
                 "judgments": {"output_0": "no"},
                 "reason": "Highest requires the rival's capacity in this claim's citations.",
             },
+            # The speculative round's refusal is audited again with the checked identities.
+            {"judgments": {"output_0": "yes"}, "reason": "One property supports a preference."},
+            {
+                "judgments": {"output_0": "no"},
+                "reason": "Highest requires the rival's capacity in this claim's citations.",
+            },
             {
                 "claims": [
                     {"text": "Alpha has the highest capacity, 10 compared with Beta's 7.", "evidence_ids": ["e0", "e1"]}
@@ -272,7 +278,7 @@ async def test_comparison_repair_must_supply_all_operands_in_its_own_citations()
     )
     answer, verified = await Agent(Mock(spec=Page), RoutingJev(), llm)._answer(state, None)
     assert verified and set(answer.claims[0].evidence_ids) == set(state.notes.evidence)
-    correction_prompt = llm.calls[4][1][-1].content
+    correction_prompt = llm.calls[6][1][-1].content
     assert "Highest requires the rival" in correction_prompt
     assert "Alpha capacity 10" in correction_prompt and "Beta capacity 7" in correction_prompt
 

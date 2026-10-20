@@ -140,9 +140,10 @@ async def test_five_source_answer_above_notes_budget_keeps_full_quote_checks(fai
                 audit["criteria"][f"output_{index}"] for audit in audits if f"output_{index}" in audit["criteria"]
             ]
             sources = [field for field in fields if "sources" in field]
-            assert len(sources) == 1
+            # A refused speculative round is audited again with identities, from the same quotes.
+            assert len(sources) == (2 if failure in ("source", "assertion") else 1)
             assert sources[0]["sources"][0]["cited_sources"][0]["quote"] == fact.evidence.quote
             if failure != "source":
                 assertions = [field for field in fields if "reported_claims" in field]
-                assert len(assertions) == 1
+                assert len(assertions) == (2 if failure == "assertion" else 1)
                 assert assertions[0]["reported_claims"][0]["cited_sources"][0]["quote"] == fact.evidence.quote
