@@ -11,14 +11,14 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.25] - 2026-10-20
+
 - Answers that need the full LLM audit, such as the cheapest item, a count or a date range, no longer wait for
   two model round trips in a row. The audits start beside the call that names the answer's subjects and stand
   only when those subjects are then found quoted in the cited sources and every audit agrees; anything else is
   audited again exactly as before. Up to eight audits run at once instead of four, and a slow model call is raced
   by a second request sooner. On the tasks fastbrowse shares with the hosted Browser Use agent, in a Browser Use
   Cloud browser, the median run fell from 16.5 to 14.9 seconds and the mean from 21.6 to 18.7.
-
-## [0.5.24] - 2026-10-19
 
 - Simple lookups are back to answering soon after they find the value. Since 0.5.20 every answer waited for two
   rounds of LLM output audits, which doubled a one-page lookup (a median of 7.6 seconds became 15.3 on the same
@@ -1440,8 +1440,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.24...HEAD
-[0.5.24]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.24
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.25...HEAD
+[0.5.25]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.25
 [0.5.23]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.23
 [0.5.22]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.22
 [0.5.20]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.20
