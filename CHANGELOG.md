@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.5.25] - 2026-10-20
+
 - Answers that need the full LLM audit, such as the cheapest item, a count or a date range, no longer wait for
   two model round trips in a row. The audits start beside the call that names the answer's subjects and stand
   only when those subjects are then found quoted in the cited sources and every audit agrees; anything else is
@@ -1440,7 +1442,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.24...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.25...HEAD
+[0.5.25]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.25
 [0.5.24]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.24
 [0.5.23]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.23
 [0.5.22]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.22
