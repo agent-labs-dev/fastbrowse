@@ -1408,10 +1408,17 @@ async def _check_answer_outputs(
             await asyncio.gather(identifying_task, return_exceptions=True)
             return False
         # A repeated audit finds its speculative verdicts in the audit cache too, so it is never billed twice.
+        # A selection that already fails the answer is decided after the identities, as it was when they came
+        # first: what the speculative build recorded is taken back, so one failure is never reported twice.
+        recorded_missing = len(missing_outputs) if missing_outputs is not None else 0
+        recorded_corrections = len(corrections) if corrections is not None else 0
         speculative = build(context, selected, {})
         if isinstance(speculative, bool):
-            await asyncio.gather(identifying_task, return_exceptions=True)
-            return speculative
+            if missing_outputs is not None:
+                missing_outputs[recorded_missing:] = []
+            if corrections is not None:
+                corrections[recorded_corrections:] = []
+            speculative = None
         spec_source_reasons: dict[str, str] = {}
         spec_reasons: dict[str, str] = {}
         auditing = (

@@ -199,3 +199,48 @@ async def test_a_speculative_yes_cannot_pass_an_identity_missing_from_its_source
     assert not await check_answer_outputs(RoutingJev(), llm, answer, notes, ("Report the price.",))
     # Both speculative audits ran and agreed, and the answer still failed on its identity.
     assert sorted(llm.stages) == ["assertion", "source"]
+
+
+async def test_an_answer_failed_by_both_its_selection_and_its_identity_is_reported_once() -> None:
+    """The speculative audit fields are built before the identities return; a selection that already fails the
+    answer is decided after them, so the failure reaches the repair composer once, as it did when they came first."""
+    from fastbrowse.jev import ChoiceAnswer
+
+    notes, answer = _answer()
+
+    class NoClaimJev(RoutingJev):
+        async def evaluate(self, state, questions):
+            result = await super().evaluate(state, questions)
+            none = ChoiceAnswer(choice="none", probabilities={"none": 1}, confidence=1)
+            return result.model_copy(
+                update={
+                    "answers": {
+                        key: none if isinstance(questions[key], ChoiceQuestion) else value
+                        for key, value in result.answers.items()
+                    }
+                }
+            )
+
+    class UnresolvedLLM(AuditLLM):
+        async def generate(self, purpose, messages, schema, **kwargs):
+            if schema.__name__ != "_OutputIdentities":
+                return await super().generate(purpose, messages, schema, **kwargs)
+            payload = scripted_identities(messages)
+            for binding in payload["bindings"].values():
+                binding.update(scope="unresolved", identity_ids=[])
+            cost = CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0.001, purpose=purpose)
+            return Generation(data=schema.model_validate(payload), cost=cost)
+
+    missing: list[str] = []
+    corrections = []
+    assert not await check_answer_outputs(
+        NoClaimJev(),
+        UnresolvedLLM(),
+        answer,
+        notes,
+        ("Report the price.",),
+        missing_outputs=missing,
+        corrections=corrections,
+    )
+    assert missing == ["Report the price."]
+    assert len(corrections) == 1
