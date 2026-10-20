@@ -386,6 +386,7 @@ class _Handler(BaseHTTPRequestHandler):
             "/widgets/shadow": self._shadow_post,
             "/portal": self._portal_post,
             "/board/drop": self._board_drop,
+            "/media/toggle": self._media_toggle,
             "/booking": self._booking_post,
             "/gate": self._gate_post,
             "/message": self._message_post,
