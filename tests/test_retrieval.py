@@ -4213,8 +4213,9 @@ async def test_a_quoted_count_does_not_repair_another_requirements_missing_recor
         (0.99, "no", True, 0),
         (0.5, "no", True, 0),
         (0.4, "yes", True, 3),
-        (0.4, "no", False, 3),
-        (0.4, None, False, 3),
+        # A speculative round that does not pass is audited again with the checked identities.
+        (0.4, "no", False, 5),
+        (0.4, None, False, 5),
         (0.01, "yes", True, 3),
         # An unanswered selection stops after the identity call it ran beside.
         (None, "yes", False, 1),
@@ -4252,7 +4253,7 @@ async def test_atomic_outputs_reach_the_source_audits_when_jev_is_unsure(
     page = capture((BlockKind.PARAGRAPH, "Price £12"))
     notes = Notes((Fact(reader=FactReader.LLM, text="£12", evidence=block_evidence(page, "s0")),))
     answer = assemble_answer((Claim(text="It costs £12.", evidence_ids=tuple(notes.evidence)),), notes, ())
-    llm = ScriptedLLM([{"judgments": {"output_0": judgment or "uncertain"}, "reason": "test"}] * 2)
+    llm = ScriptedLLM([{"judgments": {"output_0": judgment or "uncertain"}, "reason": "test"}] * 4)
     held = await check_answer_outputs(Jev(), llm, answer, notes, ("Report the price.",))
     assert held is expected
     # The source and assertion audits run side by side once a claim is selected, so a rejected source still sent both.
@@ -4413,8 +4414,9 @@ async def test_output_audits_isolate_fields_and_check_extra_answer_claims(separa
     assert not await check_answer_outputs(
         Jev(), llm, answer, notes, checks, ledger=ledger, task="Report the current price of the selected item."
     )
-    assert llm.saw_extra and llm.peak == 4
-    assert sum(line.component is CostComponent.LLM for line in ledger.lines) == 15 + int(separate)
+    assert llm.saw_extra and llm.peak == 8
+    # One identity call, then every audit twice: the speculative round refused, so it ran again with identities.
+    assert sum(line.component is CostComponent.LLM for line in ledger.lines) == 1 + 2 * (14 + int(separate))
 
 
 def test_output_audit_keeps_every_operand_of_a_quoted_comparison() -> None:
@@ -4574,7 +4576,7 @@ async def test_source_availability_audit_withholds_reported_values() -> None:
             )
 
     jev = Jev()
-    llm = ScriptedLLM([{"judgments": {"output_0": "no"}, "reason": "The column identity is absent."}])
+    llm = ScriptedLLM([{"judgments": {"output_0": "no"}, "reason": "The column identity is absent."}] * 4)
     missing: list[str] = []
     assert not await check_answer_outputs(
         jev, llm, answer, notes, ("Report Device Beta's port count.",), missing_outputs=missing
@@ -4585,8 +4587,9 @@ async def test_source_availability_audit_withholds_reported_values() -> None:
     assert "text" not in source
     assert source["cited_sources"][0]["quote"] == "| Ports | 1 | 3 |"
     assert missing == ["Report Device Beta's port count."]
-    # Identities, then the source audit beside the assertion audit, whose verdict a failed source never uses.
-    assert len(llm.calls) == 3
+    # Identities, then the source audit beside the assertion audit, whose verdict a failed source never uses: once
+    # speculatively and once more with the checked identities.
+    assert len(llm.calls) == 5
 
 
 def test_large_headerless_tables_repeat_real_context_without_inventing_headers() -> None:

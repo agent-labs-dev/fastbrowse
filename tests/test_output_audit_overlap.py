@@ -174,9 +174,28 @@ async def test_both_audits_progress_together_when_their_fields_exceed_the_cap() 
     assert await check_answer_outputs(RoutingJev(), LoggingLLM(), answer, notes, checks)
     first_end = log.index(next(entry for entry in log if entry[0] == "end"))
     assert {stage for event, stage in log[:first_end] if event == "start"} == {"source", "assertion"}
-    # The cap of four still holds across both stages.
+    # The cap of eight still holds across both stages.
     in_flight = peak = 0
     for event, _ in log:
         in_flight += 1 if event == "start" else -1
         peak = max(peak, in_flight)
-    assert peak == 4
+    assert peak == 8
+
+
+async def test_a_speculative_yes_cannot_pass_an_identity_missing_from_its_sources() -> None:
+    """The audits are sent before code checks the identity quotes; their yes stands only once the quotes are found."""
+    notes, answer = _answer()
+
+    class UnquotedIdentityLLM(AuditLLM):
+        async def generate(self, purpose, messages, schema, **kwargs):
+            if schema.__name__ != "_OutputIdentities":
+                return await super().generate(purpose, messages, schema, **kwargs)
+            payload = scripted_identities(messages)
+            payload["identities"][0]["quote"] = "Gamma Corporation"
+            cost = CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0.001, purpose=purpose)
+            return Generation(data=schema.model_validate(payload), cost=cost)
+
+    llm = UnquotedIdentityLLM()
+    assert not await check_answer_outputs(RoutingJev(), llm, answer, notes, ("Report the price.",))
+    # Both speculative audits ran and agreed, and the answer still failed on its identity.
+    assert sorted(llm.stages) == ["assertion", "source"]

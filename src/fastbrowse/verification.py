@@ -944,12 +944,14 @@ async def _check_answer_outputs(
             jev, {"answer": composed.answer}, selecting, tokens=tokens, ledger=ledger, allow_failed_batches=False
         )
 
-    selection: Answered | None = None
-    selection_pending = True
     # Under a cap each call must see the receipts of the calls it used to follow; see `Ledger.capped`.
     together = ledger is None or not ledger.capped
-    identities: dict[str, list[dict[str, JsonValue]]] = {}
-    if context.claims:
+
+    async def resolve_identities() -> dict[str, list[dict[str, JsonValue]]] | bool:
+        """Each uncertain criterion's requested subjects as code-checked identifying quotes, or the rejection."""
+        identities: dict[str, list[dict[str, JsonValue]]] = {}
+        if not context.claims:
+            return identities
         offered = {}
         refs = {}
         for claim in context.claims:
@@ -1019,18 +1021,7 @@ async def _check_answer_outputs(
                 ),
                 ledger,
             )
-            if together:
-                # The claim selection reads only the answer, never the identities, so it runs beside the identity
-                # call rather than after it, where it added a Jev round trip to every audited answer. Both settle
-                # before either failure propagates, so neither is billed after the check has returned.
-                generated, chosen = await asyncio.gather(identifying, select(), return_exceptions=True)
-                if isinstance(generated, BaseException):
-                    raise generated
-                if isinstance(chosen, BaseException):
-                    raise chosen
-                selection, selection_pending = chosen, False
-            else:
-                generated = await identifying
+            generated = await identifying
             payload = generated.data.model_dump()
             shared: dict[str, _QuotedIdentity] = {}
             for entry in payload["identities"]:
@@ -1081,63 +1072,77 @@ async def _check_answer_outputs(
                         control_context=source.control_context.model_dump(mode="json"),
                     )
                 identities[key].append(identity)
-    selected = await select() if selection_pending else selection
-    if selected is not None and any(not isinstance(selected.answers.get(key), ChoiceAnswer) for key in selecting):
-        return False
-    fields = {}
-    source_fields = {}
-    covered: set[int] = set()
-    selected_claims: dict[str, tuple[Claim, ...]] = {}
+        return identities
 
-    for key, criterion in uncertain.items():
-        chosen = selected.answers.get(key) if selected is not None else None
-        choice = chosen.choice if isinstance(chosen, ChoiceAnswer) else "all"
-        if isinstance(composed, FieldAnswer):
-            indices = composed.output_claims[criterion]
-            selected_claims[key] = tuple(composed.claims[index] for index in indices)
-            claims = tuple(context.claims[index] for index in indices)
-            covered.update(indices)
-        elif choice == "none":
-            return reject(
-                (criterion,),
-                repair="The answer does not state this requested output. Use retained quotes to answer it.",
-            )
-        elif choice == "all":
-            selected_claims[key] = composed.claims
-            claims = context.claims
-            if len(claims) == 1:
-                covered.add(0)
-        elif choice in choices:
-            index = int(choice.removeprefix("claim_"))
-            claims = (context.claims[index],)
-            selected_claims[key] = (composed.claims[index],)
-            covered.add(index)
-        else:
-            return False
-        fields[key] = {
-            "criterion": criterion,
-            "requested_entities": identities.get(key, []),
-            "reported_claims": [
-                claim.model_dump(exclude={"cited_sources": {"__all__": {"page_title"}}}) for claim in claims
-            ],
-            "counterevidence": counterevidence(claims),
-        }
-        source_fields[key] = {
-            "criterion": criterion,
-            "requested_entities": identities.get(key, []),
-            "sources": [
-                {
-                    "cited_sources": [source.model_dump(exclude={"page_title"}) for source in claim.cited_sources],
-                    "counted_records": [count.model_dump() for count in claim.counted_records],
-                    "compared_records": [comparison.model_dump() for comparison in claim.compared_records],
+    def build(
+        context: _OutputContext, selected: Answered | None, identities: dict[str, list[dict[str, JsonValue]]]
+    ) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]], dict[str, tuple[Claim, ...]]] | bool:
+        """The audit fields for this claim selection and these subject identities, or the rejection."""
+        fields: dict[str, dict[str, object]] = {}
+        source_fields: dict[str, dict[str, object]] = {}
+        covered: set[int] = set()
+        selected_claims: dict[str, tuple[Claim, ...]] = {}
+
+        for key, criterion in uncertain.items():
+            chosen = selected.answers.get(key) if selected is not None else None
+            choice = chosen.choice if isinstance(chosen, ChoiceAnswer) else "all"
+            if isinstance(composed, FieldAnswer):
+                indices = composed.output_claims[criterion]
+                selected_claims[key] = tuple(composed.claims[index] for index in indices)
+                claims = tuple(context.claims[index] for index in indices)
+                covered.update(indices)
+            elif choice == "none":
+                return reject(
+                    (criterion,),
+                    repair="The answer does not state this requested output. Use retained quotes to answer it.",
+                )
+            elif choice == "all":
+                selected_claims[key] = composed.claims
+                claims = context.claims
+                if len(claims) == 1:
+                    covered.add(0)
+            elif choice in choices:
+                index = int(choice.removeprefix("claim_"))
+                claims = (context.claims[index],)
+                selected_claims[key] = (composed.claims[index],)
+                covered.add(index)
+            else:
+                return False
+            fields[key] = {
+                "criterion": criterion,
+                "requested_entities": identities.get(key, []),
+                "reported_claims": [
+                    claim.model_dump(exclude={"cited_sources": {"__all__": {"page_title"}}}) for claim in claims
+                ],
+                "counterevidence": counterevidence(claims),
+            }
+            source_fields[key] = {
+                "criterion": criterion,
+                "requested_entities": identities.get(key, []),
+                "sources": [
+                    {
+                        "cited_sources": [source.model_dump(exclude={"page_title"}) for source in claim.cited_sources],
+                        "counted_records": [count.model_dump() for count in claim.counted_records],
+                        "compared_records": [comparison.model_dump() for comparison in claim.compared_records],
+                    }
+                    for claim in claims
+                ],
+                "counterevidence": fields[key]["counterevidence"],
+            }
+        for index, claim in enumerate(context.claims):
+            if index not in covered:
+                key = f"claim_only_{index}"
+                selected_claims[key] = (composed.claims[index],)
+                fields[key] = {
+                    "criterion": "Every factual assertion is supported by its own cited sources.",
+                    "reported_claims": [claim.model_dump(exclude={"cited_sources": {"__all__": {"page_title"}}})],
+                    "counterevidence": counterevidence((claim,)),
                 }
-                for claim in claims
-            ],
-            "counterevidence": fields[key]["counterevidence"],
-        }
+        return fields, source_fields, selected_claims
 
-    # One cap over both audits, which run side by side: the requests in flight stay at the four one audit sent.
-    semaphore = asyncio.Semaphore(4)
+    # One cap over both audits, which run side by side. Four sent a second wave of audits in 37 of 91 audited runs of
+    # the 0.5.24 campaign (about 2.3s each); eight sends a three-criterion answer's six audits at once.
+    semaphore = asyncio.Semaphore(8)
 
     type _Stage = tuple[list[Message], Mapping[str, object], dict[str, str]]
 
@@ -1373,15 +1378,13 @@ async def _check_answer_outputs(
             ),
         ),
     ]
-    for index, claim in enumerate(context.claims):
-        if index not in covered:
-            key = f"claim_only_{index}"
-            selected_claims[key] = (composed.claims[index],)
-            fields[key] = {
-                "criterion": "Every factual assertion is supported by its own cited sources.",
-                "reported_claims": [claim.model_dump(exclude={"cited_sources": {"__all__": {"page_title"}}})],
-                "counterevidence": counterevidence((claim,)),
-            }
+
+    def settled(verdicts: Sequence[dict[str, str] | BaseException], built: Sequence[Mapping[str, object]]) -> bool:
+        return all(
+            not isinstance(v, BaseException) and all(v.get(k) == "yes" for k in f)
+            for v, f in zip(verdicts, built, strict=True)
+        )
+
     source_reasons: dict[str, str] = {}
     reasons: dict[str, str] = {}
     # Neither audit reads the other's verdict: the source audit withholds the assertions, and the assertion audit
@@ -1390,10 +1393,80 @@ async def _check_answer_outputs(
     # Both settle before either failure propagates, so neither is billed after the check has returned.
     generated: dict[str, str] | BaseException | None = None
     if together:
-        available, generated = await audit(
-            (source_messages, source_fields, source_reasons), (assertion_messages, fields, reasons)
+        # The identity call was a whole model round trip before any audit could start: 2.5s median, and the second
+        # of two serial rounds on 92 of 159 runs of the 0.5.24 campaign. The audits are sent beside it as soon as
+        # Jev's claim selection is back, without the subject quotes. They only stand when the identities then pass
+        # code's quote check and every speculative verdict, in both audits, is yes; anything else is audited again
+        # with the checked identities, exactly as before, so a speculative no never rejects an answer.
+        identifying_task = asyncio.ensure_future(resolve_identities())
+        try:
+            selected = await select()
+        except BaseException:
+            await asyncio.gather(identifying_task, return_exceptions=True)
+            raise
+        if selected is not None and any(not isinstance(selected.answers.get(key), ChoiceAnswer) for key in selecting):
+            await asyncio.gather(identifying_task, return_exceptions=True)
+            return False
+        # A repeated audit finds its speculative verdicts in the audit cache too, so it is never billed twice.
+        speculative = build(context, selected, {})
+        if isinstance(speculative, bool):
+            await asyncio.gather(identifying_task, return_exceptions=True)
+            return speculative
+        spec_source_reasons: dict[str, str] = {}
+        spec_reasons: dict[str, str] = {}
+        auditing = (
+            None
+            if speculative is None
+            else asyncio.ensure_future(
+                audit(
+                    (source_messages, speculative[1], spec_source_reasons),
+                    (assertion_messages, speculative[0], spec_reasons),
+                )
+            )
         )
+
+        async def settle_speculation() -> None:
+            if auditing is not None:
+                await asyncio.gather(auditing, return_exceptions=True)
+
+        try:
+            identities = await identifying_task
+        except BaseException:
+            await settle_speculation()
+            raise
+        if isinstance(identities, bool):
+            await settle_speculation()
+            return identities
+        built = build(context, selected, identities)
+        if isinstance(built, bool):
+            await settle_speculation()
+            return built
+        fields, source_fields, selected_claims = built
+        spec_available, spec_generated = await auditing if auditing is not None else ({}, {})
+        if auditing is not None and (
+            not any(identities.values()) or settled((spec_available, spec_generated), (source_fields, fields))
+        ):
+            # With no subject quotes the speculative fields are the real ones, so their verdicts stand either way.
+            available, generated = spec_available, spec_generated
+            source_reasons, reasons = spec_source_reasons, spec_reasons
+            trace("output_audit", speculative="accepted")
+        else:
+            if auditing is not None:
+                trace("output_audit", speculative="reaudited")
+            available, generated = await audit(
+                (source_messages, source_fields, source_reasons), (assertion_messages, fields, reasons)
+            )
     else:
+        identities = await resolve_identities()
+        if isinstance(identities, bool):
+            return identities
+        selected = await select()
+        if selected is not None and any(not isinstance(selected.answers.get(key), ChoiceAnswer) for key in selecting):
+            return False
+        built = build(context, selected, identities)
+        if isinstance(built, bool):
+            return built
+        fields, source_fields, selected_claims = built
         (available,) = await audit((source_messages, source_fields, source_reasons))
     if isinstance(available, BaseException):
         raise available

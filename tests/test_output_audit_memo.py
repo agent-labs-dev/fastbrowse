@@ -29,7 +29,9 @@ async def test_repair_reuses_source_audit_but_checks_changed_assertion():
         for _, messages in writer.calls
         if "answer" not in json.loads(messages[-1].content)
     ]
-    assert len(sources) == 3
+    # The rejected answer ran both audits speculatively and again with identities; the corrected one reused its
+    # unchanged source audit and sent only the changed assertion.
+    assert len(sources) == 5
 
 
 class AuditWriter(ScriptedLLM):
@@ -70,8 +72,9 @@ async def test_identical_audit_reuses_positive_and_negative_verdicts_without_bil
     assert results[0] == results[1]
     assert results[0][0] is (verdict == "yes")
     # Identities, then the source and assertion audits side by side: a rejected source still bills the assertion
-    # audit it ran beside, once, and the second check bills neither.
-    assert len(writer.calls) == 3
+    # audit it ran beside, a refused speculative round runs them again with identities, and the second check bills
+    # nothing.
+    assert len(writer.calls) == (3 if verdict == "yes" else 5)
     assert ledger.llm_calls == len(writer.calls)
     assert sum(line.component is CostComponent.LLM for line in ledger.lines) == len(writer.calls)
 
@@ -121,7 +124,8 @@ async def test_repeated_rejected_assertion_replays_its_correction_and_reason():
         results.append(corrections)
     assert results[0] == results[1]
     assert results[0][0].reason == "conditions omitted or extra detail unsupported"
-    assert len(writer.calls) == 3
+    # Identities and both audit rounds once; the repeat replays every verdict from the memo.
+    assert len(writer.calls) == 5
 
 
 async def test_claim_audit_propagates_the_same_run_scoped_memo():

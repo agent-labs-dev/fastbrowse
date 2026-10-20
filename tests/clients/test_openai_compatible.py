@@ -862,7 +862,7 @@ async def test_twin_cancelled_after_its_sibling_answered_is_charged_as_that_answ
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: settled)) as http:
         client = OpenAICompatibleLLM("key", http=http, base_url="https://llm.test", models={LLMPurpose.PLAN: "model"})
 
-        async def abandoned(body, ledger, usage):
+        async def abandoned(body, ledger, usage, purpose):
             usage.unaccounted_requests += 2
             usage.cancelled_twins += 1
             usage.discarded_responses.append(settled)
