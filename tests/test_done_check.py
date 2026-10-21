@@ -243,7 +243,9 @@ async def test_the_verifier_is_told_where_each_requirement_was_read_and_which_ad
     assert guessed in prompt
     # Grounding placed after the address left the page text under "## Addresses this run built from the task".
     page = prompt[prompt.index("## Page\n") :]
-    assert page.startswith(f"## Page\n{_PAGE.url}\n{_PAGE.viewport_text}")
+    assert page.startswith(f"## Page\n{_PAGE.url}\n")
+    # Notes and page text follow the address, page text last, so the stable part of the request stays ahead of it.
+    assert page.rstrip().endswith(_PAGE.viewport_text)
     assert guessed not in page
     # google-flights: told only to weigh a built address hardest, the verifier refused a loaded search for how
     # the run reached it. It judges what the page shows, and an answer keeps the terms its value was quoted under.
@@ -482,3 +484,44 @@ def test_a_quote_refused_for_one_requirement_answers_no_claim_until_read_again_o
     assert notes.evidenced("r2") and not notes.evidenced("r1")
     context = _output_context(composed(reread), notes)
     assert context is not None and context.claims[0].cited_sources[0].quote == "Acme Air"
+
+
+def test_a_visual_only_page_sends_the_screenshot() -> None:
+    from fastbrowse.verification import visual_only_state
+
+    plain = _PAGE.model_copy(update={"viewport_text": "A paragraph long enough to judge a form from, with words."})
+    assert not visual_only_state(plain)
+    checked = plain.model_copy(
+        update={
+            "controls": (
+                Control(
+                    id="c",
+                    frame_id=None,
+                    role="checkbox",
+                    label="Nonstop only",
+                    operations=frozenset({Operation.CLICK}),
+                    checked=True,
+                ),
+            )
+        }
+    )
+    assert visual_only_state(checked)
+    sparse = plain.model_copy(update={"viewport_text": "Loading"})
+    assert visual_only_state(sparse)
+
+
+def test_the_verifier_prompt_keeps_the_page_last_and_a_byte_identical_request_is_one_key() -> None:
+    from fastbrowse.verification import verify_cache_key, verify_messages
+
+    notes = Notes()
+    one = verify_messages("Open the page.", _OPEN, _PAGE, (), notes, ())
+    two = verify_messages("Open the page.", _OPEN, _PAGE, (), notes, ())
+    assert verify_cache_key(one) == verify_cache_key(two)
+    assert one[0].role == "system" and "## Verdict" in one[0].content
+    assert one[1].content.index("## Task") < one[1].content.index("## Page")
+    assert one[1].content.rstrip().endswith("encode/httpx")
+    moved = _PAGE.model_copy(update={"viewport_text": "A different page"})
+    assert verify_cache_key(verify_messages("Open the page.", _OPEN, moved, (), notes, ())) != verify_cache_key(one)
+    imaged = verify_messages("Open the page.", _OPEN, _PAGE, (b"png",), notes, ())
+    assert verify_cache_key(imaged) != verify_cache_key(one)
+    assert "screenshot" in imaged[0].content and "screenshot" not in one[0].content

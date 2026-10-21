@@ -163,6 +163,10 @@
     "fingerprint": "1e74914c5a7c3ca4",
     "version": 7
   },
+  "mock-pause-playback": {
+    "version": 1,
+    "fingerprint": "bea21fbf0cb0ee54"
+  },
   "mock-priciest-product": {
     "fingerprint": "3f2a53c296aa01f9",
     "version": 5

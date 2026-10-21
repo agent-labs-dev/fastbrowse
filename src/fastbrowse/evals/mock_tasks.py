@@ -224,6 +224,12 @@ def _read_katherine(result: MockResult, site: Site) -> str | None:
     return _answer_has(result, KATHERINE)
 
 
+def _paused_playback(result: MockResult, site: Site) -> str | None:
+    if not site.media_paused:
+        return "the playback was never paused"
+    return _status(result, Status.COMPLETE)
+
+
 def _iframe_note(result: MockResult, site: Site) -> str | None:
     notes = [fields.get("note") for path, fields in site.posts if path == "/widgets"]
     if "coffee-restock" not in notes:
@@ -461,6 +467,12 @@ TASKS: tuple[MockTask, ...] = (
         "one digit per box. Then tell me your account email.",
         _read_katherine,
         secrets={"password": KATHERINE_PASSWORD},
+    ),
+    MockTask(
+        "mock-pause-playback",
+        "/media",
+        "Pause the playback on this page.",
+        _paused_playback,
     ),
     MockTask(
         "mock-iframe-note",

@@ -120,6 +120,8 @@ class Site:
         self.sign_ins: list[str] = []
         self.failed_sign_ins: list[str] = []
         self.code_attempts: list[str] = []
+        self.media_paused = False
+        """Playback paused by the page's own toggle: a reversible action a run must not stop to confirm."""
         self.carts: dict[str, list[str]] = {}
         self.orders_placed: list[dict[str, str]] = []
         self.password_changes: list[tuple[str, str]] = []
@@ -132,6 +134,10 @@ class Site:
     def record(self, path: str, fields: dict[str, str]) -> None:
         with self._lock:
             self.posts.append((path, fields))
+
+    def set_media_paused(self, paused: bool) -> None:
+        with self._lock:
+            self.media_paused = paused
 
     def record_feed_batch(self, after: int) -> None:
         with self._lock:
@@ -338,6 +344,8 @@ class _Handler(BaseHTTPRequestHandler):
             "/api/products.json": self._products_json,
             "/download/report.csv": self._report,
             "/board": self._board,
+            "/media": self._media,
+            "/media/toggle": self._media_toggle,
             "/upload": self._upload_page,
             "/news": self._news,
             "/news/extra": self._news_extra,
@@ -378,6 +386,7 @@ class _Handler(BaseHTTPRequestHandler):
             "/widgets/shadow": self._shadow_post,
             "/portal": self._portal_post,
             "/board/drop": self._board_drop,
+            "/media/toggle": self._media_toggle,
             "/booking": self._booking_post,
             "/gate": self._gate_post,
             "/message": self._message_post,
@@ -687,6 +696,20 @@ class _Handler(BaseHTTPRequestHandler):
             f"<p>grace@example.com: <strong>{code_for('grace@example.com')}</strong></p>"
             f"<p>katherine@example.com: <strong>{code_for('katherine@example.com')}</strong></p>",
         )
+
+    def _media(self, _: dict[str, str]) -> None:
+        """A playback control only: pausing it is undone by the same control, so it commits nothing."""
+        paused = self.site.media_paused
+        self._html(
+            "Roastery tour",
+            f"<p>The roastery tour is {'paused' if paused else 'playing'}.</p>"
+            "<form action='/media/toggle' method='post'>"
+            f"<button type='submit'>{'Play' if paused else 'Pause'}</button></form>",
+        )
+
+    def _media_toggle(self, _: dict[str, str]) -> None:
+        self.site.set_media_paused(not self.site.media_paused)
+        self._redirect("/media")
 
     def _reports(self, _: dict[str, str]) -> None:
         self._html("Reports", "<p>Download the <a href='/download/report.csv'>orders report</a>.</p>")
