@@ -347,31 +347,8 @@ def _step(entry: HistoryEntry) -> str:
     return f"- {action}{typed} -> {entry.outcome.value}{effect}"
 
 
-_VISUAL_ONLY_INPUTS = frozenset({"file", "color", "range", "date", "time", "month", "week", "datetime-local"})
-
-
-def visual_only_state(observation: Observation) -> bool:
-    """Whether this page's state is carried by pixels, so a verifier needs the screenshot.
-
-    Page text, the controls and the notes cover a form, a listing and a quoted answer. What they do not
-    carry is a checked box, a selected option, a calendar's highlighted day, a canvas or a chart, a file
-    input's chosen file, or a dialog drawn over the page. A page with almost no text is judged the same
-    way: there is nothing in it to read, so the screenshot is the only evidence there is.
-    """
-    if observation.dialog is not None:
-        return True
-    if len(observation.viewport_text.strip()) < 40:
-        return True
-    return any(
-        c.checked is not None
-        or c.selected is not None
-        or (c.input_type or "").lower() in _VISUAL_ONLY_INPUTS
-        or c.role.lower() in {"canvas", "img", "image"}
-        for c in observation.controls
-    )
-
-
-def verify_messages(
+async def llm_verify(
+    llm: LLMClient,
     task: str,
     plan: Plan,
     observation: Observation,
@@ -383,20 +360,13 @@ def verify_messages(
     invented: Sequence[str] = (),
     visited: Sequence[str] = (),
     config: Config = _DEFAULT_CONFIG,
-) -> list[Message]:
-    """The verifier's request, in the order that keeps the stable prefix ahead of the page.
-
-    `doubted` names the requirements the done check doubted, which the verifier must see shown, not assume.
+    ledger: Ledger | None = None,
+) -> Generation[LLMVerdict]:
+    """`doubted` names the requirements the done check doubted, which the verifier must see shown, not assume.
 
     `invented` names addresses this run built from the task rather than reached by clicking, which are the ones
     that can land on a page that looks like the answer without being the search the task asked for. `visited` is
-    every address the run has been on, first the one it began on.
-
-    The task, its requirements and the verdict rules are the same on every finish attempt of a run, so they sit
-    in the system message and at the head of the user message; the page text and notes, which change every time,
-    come last. A provider that caches a request prefix can then reuse it across attempts, which is the ordering
-    Browser Use reports as its own speed win.
-    """
+    every address the run has been on, first the one it began on."""
     # A flights search passed here with Jev doubting its one requirement at 0.14: the rows matched, and nothing
     # asked whether the nonstop filter the task named had ever been applied.
     requirements = "\n".join(
@@ -410,13 +380,8 @@ def verify_messages(
     # search the verifier passed had matching rows and no nonstop filter applied.
     # Only what is set: every empty field on a long form would crowd the request without saying anything.
     stateful = [c for c in observation.controls if c.checked or c.selected or c.value]
-    evidence = (
-        "the screenshot, set controls, page text and notes"
-        if screenshots
-        else "the set controls, page text and notes"
-    )
     instruction = (
-        f"## Verdict\nDecide from {evidence} whether the task is finished. "
+        "\n\n## Verdict\nDecide from the screenshot, set controls, page text and notes whether the task is finished. "
         "Be strict and name every requirement id that is not visibly satisfied. An action requirement (clicking a "
         "link or button, filling a field, submitting a form, navigating) is satisfied when the steps taken show it "
         "executed on the control the task meant and produced the requested outcome. The task may paraphrase "
@@ -439,7 +404,10 @@ def verify_messages(
         "such as what it covers and the dates it applies to."
     )
     messages = [
-        Message(role="system", content=f"# Verifier\n{UNTRUSTED}\n\n{instruction}"),
+        Message(
+            role="system",
+            content=f"# Verifier\n{UNTRUSTED}",
+        ),
         Message(
             role="user",
             content=(
@@ -457,7 +425,7 @@ def verify_messages(
     ]
 
     def room(*parts: str) -> int:
-        prompt = "".join(message.content for message in messages) + "".join(parts)
+        prompt = "".join(message.content for message in messages) + "".join(parts) + instruction
         return config.tokens.remaining_chars(prompt + json.dumps(LLMVerdict.model_json_schema()))
 
     # As in the done check's page state, the notes' requirement evidence is placed first and the page text is cut
@@ -465,53 +433,7 @@ def verify_messages(
     rendered = notes.render(room("\n\n## Notes\n"), preserve_requirements=True)
     text = cut_text(observation.viewport_text, room("\n\n## Notes\n", rendered))
     messages[-1] = messages[-1].model_copy(
-        update={"content": f"{messages[-1].content}\n\n## Notes\n{rendered}\n\n{text}"}
-    )
-    return messages
-
-
-def verify_cache_key(messages: Sequence[Message]) -> str:
-    """A digest of the exact request: the prompt and every image byte, in order.
-
-    Two finish attempts whose rendered request is byte-identical cannot need a second audit, so the
-    verdict paid for by the first is reused (see `Agent._verify_done`).
-    """
-    digest = hashlib.sha256()
-    for message in messages:
-        digest.update(message.role.encode())
-        digest.update(message.content.encode())
-        for image in message.images:
-            digest.update(hashlib.sha256(image).digest())
-    return digest.hexdigest()
-
-
-async def llm_verify(
-    llm: LLMClient,
-    task: str,
-    plan: Plan,
-    observation: Observation,
-    screenshots: tuple[bytes, ...],
-    notes: Notes,
-    history: Sequence[HistoryEntry],
-    *,
-    doubted: Sequence[str] = (),
-    invented: Sequence[str] = (),
-    visited: Sequence[str] = (),
-    config: Config = _DEFAULT_CONFIG,
-    ledger: Ledger | None = None,
-) -> Generation[LLMVerdict]:
-    """The verifier's verdict for one rendered request; see `verify_messages` for the shape of the evidence."""
-    messages = verify_messages(
-        task,
-        plan,
-        observation,
-        screenshots,
-        notes,
-        history,
-        doubted=doubted,
-        invented=invented,
-        visited=visited,
-        config=config,
+        update={"content": f"{messages[-1].content}{text}\n\n## Notes\n{rendered}{instruction}"}
     )
     return await llm.generate(
         LLMPurpose.VERIFY,

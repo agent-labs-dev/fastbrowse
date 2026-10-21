@@ -48,29 +48,6 @@ def may_be_irreversible(operation: Operation, control: Control | None) -> bool:
             return False
 
 
-# A playback control: its action is undone by the reverse action, so it commits nothing. The label must name
-# playback and nothing that turns "pause" into a commitment ("pause my subscription").
-_REVERSIBLE_TOGGLE = re.compile(r"\b(play|pause|resume|unmute|mute|replay)\b", re.IGNORECASE)
-_COMMITTED_NOUN = re.compile(
-    r"\b(subscription|membership|plan|billing|payment|invoice|order|shipment|delivery|account|profile|"
-    r"job|project|campaign|listing|ad|deploy|server|instance|customer|contract|policy)\b",
-    re.IGNORECASE,
-)
-
-
-def reversible_toggle(control: Control) -> bool:
-    """Whether activating this control only flips playback, which the same control flips back.
-
-    Pausing a video, muting audio or resuming playback is reversible by whoever did it, with no effect
-    outside the page, so it is not a commit to confirm. The label alone decides, and only when it also
-    carries no noun that a pause would commit (a subscription, a shipment, an ad campaign).
-    """
-    label = control.label.strip()
-    if not _REVERSIBLE_TOGGLE.search(label) or _COMMITTED_NOUN.search(label):
-        return False
-    return not (control.context and _COMMITTED_NOUN.search(control.context))
-
-
 def irreversible_question(
     task: str, operation: Operation, control: Control, destination: Control | None = None
 ) -> NoulQuestion:

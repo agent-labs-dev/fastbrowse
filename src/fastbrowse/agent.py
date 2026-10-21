@@ -153,7 +153,6 @@ from fastbrowse.safety import (
     may_be_irreversible,
     origin_of,
     resolve_secret,
-    reversible_toggle,
     secret_allowed,
     sets_new_password,
     starts_download,
@@ -170,10 +169,8 @@ from fastbrowse.verification import (
     check_claims,
     check_done,
     extract,
+    llm_verify,
     page_state,
-    verify_cache_key,
-    verify_messages,
-    visual_only_state,
 )
 
 GENERATE = "generate"
@@ -443,10 +440,6 @@ class _RunState:
     missing_answer_outputs: tuple[str, ...] = ()
     answer_corrections: tuple[AnswerCorrection, ...] = ()
     output_audit_cache: OutputAuditCache = field(default_factory=dict)
-    verify_cache: dict[str, Generation[LLMVerdict]] = field(default_factory=dict)
-    challenge_reloads: set[str] = field(default_factory=set)
-    """Bot-check documents this run has already reloaded once, so a challenge that survives is reported."""
-    """Verifier verdicts by the digest of the exact request that produced them, within this run."""
     open_answer_outputs: tuple[str, ...] = ()
     rejected_answer_evidence: frozenset[tuple[str, str | None, str]] | None = None
     answer_check_evidence: str | None = None
@@ -1096,8 +1089,6 @@ class Agent:
                 # A bot check that draws a CAPTCHA has controls, and may still clear itself before it does.
                 if (bot_check or not raw.controls) and await self._outwait(raw):
                     continue
-                if bot_check and not raw.controls and await self._reload_challenge(state, raw):
-                    continue
                 if bot_check:
                     # The address is the raw observation's, and an error is written out of the process, so a
                     # secret typed earlier and echoed in another host is redacted here as in any other report.
@@ -1354,28 +1345,6 @@ class Agent:
         opened = HistoryEntry(operation=None, target=None, outcome=StepOutcome.EXECUTED, page_changed=True, note=note)
         # The facts cite where the page landed, so a redirect's address is the one they can be matched against.
         return [opened], {shortcut, landed}
-
-    async def _reload_challenge(self, state: _RunState, challenge: Observation) -> bool:
-        """Reload a bot check that offers nothing to act on, once per document.
-
-        PyPI's client challenge is a script that replaces itself with the page it cleared; a fresh navigation to
-        the same address is what a person does when the interstitial does not advance, and it clears it. A check
-        that drew controls is not reloaded: it is a CAPTCHA to be answered, or a wall to report. Once per
-        document, so a challenge that survives its reload is reported rather than looped on.
-        """
-        key = f"{challenge.url}|{challenge.document_key}"
-        if key in state.challenge_reloads:
-            return False
-        state.challenge_reloads.add(key)
-        trace("challenge_reload", url=challenge.url)
-        back_to = state.started_url if challenge.url in state.invented else None
-        try:
-            await self._page.navigate(challenge.url, back_to=back_to)
-        except BrowserError:
-            return False
-        if await self._outwait(challenge):
-            return True
-        return (await self._observe()).page_key != challenge.page_key
 
     async def _outwait(self, stuck: Observation) -> bool:
         """Re-observe until the page is no longer `stuck`, returning whether it moved in time."""
@@ -2200,12 +2169,6 @@ class Agent:
         if target is None or not may_be_irreversible(decision.operation, target):
             return
         await self._gate_download(state, observation, decision, target)
-        if decision.operation is Operation.CLICK and reversible_toggle(target):
-            # A media pause, play or mute is undone by the same control and commits nothing off the page, so it
-            # is not a commit to confirm. saucedemo-pause stopped at needs_confirmation three times of three
-            # while pausing a video the task asked it to pause.
-            trace("reversible_toggle", target=_describe(target))
-            return
         label = _describe(target)
         if decision.destination is not None:
             label += f" onto {_describe(decision.destination)}"
@@ -4082,33 +4045,22 @@ class Agent:
 
     async def _verify_done(self, state: _RunState, fresh: Observation, check: DoneCheck) -> Generation[LLMVerdict]:
         """The verifier's verdict, billed as it arrives: run beside the audit, it can finish before a failure there
-        discards it.
-
-        Two things keep this from being paid for twice. The screenshot goes only when the page carries state that
-        the text cannot (see `visual_only_state`), which is most of verified wall time. And a finish attempt whose
-        rendered request is byte-identical to an earlier one in this run reuses the earlier verdict: identical
-        input cannot need a second audit, and a recovery that changed nothing used to buy one.
-        """
-        messages = verify_messages(
+        discards it."""
+        verifying = llm_verify(
+            self._llm,
             state.task,
             state.plan,
             fresh,
-            await self._screenshots() if visual_only_state(fresh) else (),
+            await self._screenshots(),
             state.notes,
             _record(state.history, self._config.observation),
             doubted=check.doubted,
             invented=sorted(state.invented),
             visited=_visited(state.visited, self._config.observation, self._redactor.redact),
             config=self._config,
+            ledger=state.ledger,
         )
-        key = verify_cache_key(messages)
-        if (reused := state.verify_cache.get(key)) is not None:
-            trace("verify_reused", doubted=list(check.doubted))
-            return reused
-        verifying = self._llm.generate(LLMPurpose.VERIFY, messages, LLMVerdict, ledger=state.ledger)
-        judged = await recorded(verifying, state.ledger)
-        state.verify_cache[key] = judged
-        return judged
+        return await recorded(verifying, state.ledger)
 
     async def _answer(self, state: _RunState, prepared: _Prepared) -> tuple[ComposedAnswer, bool]:
         """Return the checked draft, or compose an answer and check its claims."""
