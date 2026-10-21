@@ -95,6 +95,7 @@ VERDICT_TOKENS = 400
 spent 1166 output tokens and 13.7s restating the answer it was judging; the cap bounds that pathology while
 leaving room for every requirement id on a long plan."""
 
+
 class LLMVerdict(Frozen):
     missing: tuple[str, ...] = Field(description="Requirement ids the page or notes do not show as satisfied.")
     ungrounded: tuple[str, ...] = Field(
@@ -416,9 +417,7 @@ def verify_messages(
     # Only what is set: every empty field on a long form would crowd the request without saying anything.
     stateful = [c for c in observation.controls if c.checked or c.selected or c.value]
     evidence = (
-        "the screenshot, set controls, page text and notes"
-        if screenshots
-        else "the set controls, page text and notes"
+        "the screenshot, set controls, page text and notes" if screenshots else "the set controls, page text and notes"
     )
     instruction = (
         f"## Verdict\nDecide from {evidence} whether the task is finished. "
