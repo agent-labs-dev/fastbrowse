@@ -13,7 +13,7 @@ Benchmarking compares exactly three things, and nothing else is a headline:
 | | Comparison | Arms | Publication group | Status |
 |:--|:--|:--|:--|:--|
 | C1 | agent against agent | `fastbrowse` against `browser-use`, the hosted Browser Use agent | `internal-hosted` | recorded below |
-| C2 | backend against backend | `fastbrowse-pool`, fastbrowse on its own browser pool, against `fastbrowse` on a Browser Use Cloud browser | `internal-backend` | not yet measured |
+| C2 | backend against backend | `fastbrowse-pool`, fastbrowse on its own browser pool, against `fastbrowse` on a Browser Use Cloud browser | `internal-backend` | recorded below |
 | C3 | fastbrowse and its backend against Browser Use Ultrafast | `fastbrowse-pool` against `jev-ultrafast`, over the 6 tasks both run | `internal-ultrafast` | not yet measured |
 
 The Codex with Cua Driver arm and the upstream suites (BU Bench, Online-Mind2Web) are diagnostics, described in
@@ -23,18 +23,25 @@ The Codex with Cua Driver arm and the upstream suites (BU Bench, Online-Mind2Web
 
 ### Recorded head-to-head
 
-Same 14 answer tasks (lookups, sign-ins, checkout, Google Flights), three passes each, on identical cloud
-browsers under identical limits (30 steps, $0.25 cap, 300s).
+Both agents attempted every catalog task the hosted agent supports (46), three repeats each, on Browser Use
+cloud browsers under identical limits, with the hosted agent at its defaults. Source: `docs/results/benchmarks.json`,
+campaign `release-0.5.25-48c964d`.
 
 | Metric | fastbrowse | Browser Use (hosted) | Delta |
 |:--|:--|:--|:--|
-| Tasks passed | 40 / 42 (95%) | 14 / 42 (33%) | 2.9x the pass rate |
-| Median execution time | 17.0s | 27.5s | 1.6x faster |
-| Average cost per task | $0.011 | $0.400 | 35x cheaper |
+| Task success | 99.2% (137 of 138 counted) | 97.8% (135 of 138) | 1.4 points higher |
+| Median time per result | 16.3s | 16.1s | 0.2s slower |
+| Median cost per result | $0.0256 | $0.2840 | 11.1x cheaper |
+| Total cost | $7.03 | $45.07 | $38.04 cheaper |
 
-All 28 of Browser Use's failures ran past the $0.25 cap. Source: the recorded head-to-head in the
-`fastbrowse-site` repository (`src/app/page.tsx`). The live benchmark page withholds every measurement slot
-until the maintainer approves a candidate feed, so this file, not that page, carries the recorded figures.
+Task success is the share of scored results the source grader passed. Completion is reported separately:
+fastbrowse completed 135 of 138 results to the hosted agent's 138 of 138.
+
+An earlier record in the `fastbrowse-site` repository (`src/app/page.tsx`) measured 14 answer tasks (lookups,
+sign-ins, checkout, Google Flights) under a 30-step, $0.25 cap, 300s regime: fastbrowse passed 40 of 42 and the
+hosted agent 14 of 42, median 17.0s against 27.5s, $0.011 against $0.400 a task, with all 28 of the hosted agent's
+failures running past the $0.25 cap. That is a different task set under different limits, so it is not the C1
+headline.
 
 ### Internal matched-task campaigns
 
@@ -58,10 +65,21 @@ within a build, not across.
 
 ## C2: fastbrowse's own browser pool against a Browser Use Cloud browser
 
-Not yet measured. The `internal-backend` group runs fastbrowse on the 53 fastbrowse tasks twice, once on its own
-hosted browser pool and once on a Browser Use Cloud browser, so the browser backend is the only difference. No
-approved campaign of it exists, so no speed or cost delta between the two backends is claimed here. Running it
-needs `BROWSER_USE_API_KEY` (the cloud arm) and the private Parallax live tasks.
+### Recorded matched browser comparison
+
+The `internal-backend` group runs fastbrowse on the 53 fastbrowse tasks three repeats each, once on its own
+hosted browser pool and once on a Browser Use Cloud browser, so the browser backend is the only difference.
+Source: `docs/results/benchmarks.json`, campaign `release-0.5.25-48c964d`.
+
+| Metric | fastbrowse, Browser Use Cloud browser | fastbrowse, own pool | Delta |
+|:--|:--|:--|:--|
+| Task success | 98.1% (156 of 159 counted) | 96.2% (153 of 159) | 1.9 points lower on the pool |
+| Median time per result | 15.0s | 15.9s | 0.9s slower on the pool |
+| Median cost per result | $0.0200 | $0.0192 | $0.0008 cheaper on the pool |
+| Total cost | $6.76 | $7.14 | $0.38 more on the pool |
+
+This is a matched comparison of browsers, not of agents: both arms run the same fastbrowse build, tasks and
+repeats. On this backend fastbrowse passes fewer tasks on its own pool than on the Browser Use Cloud browser.
 
 ### Browser cost basis
 
@@ -88,7 +106,7 @@ source: `docs/results/0.5.14.jsonl`). Figures approved under that pairing keep i
 
 ## What is not claimed here
 
-- No speed, cost or success delta is claimed for C2 or C3 until an approved campaign of each exists.
+- No speed, cost or success delta is claimed for C3 until an approved campaign of it exists.
 - Browser Use Cloud rates are published and may change.
 - fastbrowse's `dollars` are metered provider cost. The hosted product's customer price is separate
   (`fastbrowse-hosted/docs/billing.md`).
