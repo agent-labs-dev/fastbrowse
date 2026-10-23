@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Reading a page's controls takes about half as long on a dense page, with the same result: the snapshot reuses
+  each label, text and section title it has already read in that pass instead of reading it again, and stops
+  asking every ancestor of each repeated button whether it holds the others. On the Wikipedia article for the
+  United States, 5,571 controls, the in-page work fell from 477 to 238 ms, and on an Amazon results page from 71
+  to 39 ms.
+
 ## [0.5.25] - 2026-10-20
 
 - Answers that need the full LLM audit, such as the cheapest item, a count or a date range, no longer wait for
