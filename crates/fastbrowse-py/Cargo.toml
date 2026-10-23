@@ -1,0 +1,15 @@
+[package]
+name = "fastbrowse-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "fastbrowse_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+fastbrowse-core = { path = "../fastbrowse-core" }
+# abi3: one wheel per platform serves every CPython from 3.13 on.
+pyo3 = { version = "0.30", features = ["extension-module", "abi3-py313"] }

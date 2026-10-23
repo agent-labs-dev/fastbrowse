@@ -41,6 +41,7 @@ npm run check:sdk
 uv run actionlint
 uv run python .sift/agents.py check
 uv run python .sift/gate.py --base origin/main
+just rust
 ```
 
 The JavaScript checks need Node.js 22 or newer. `npm run check:sdk` lints, type-checks and tests the SDK in

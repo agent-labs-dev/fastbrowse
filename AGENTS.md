@@ -41,6 +41,7 @@ npm run check:sdk                                   # starts `fastbrowse serve` 
 uv run actionlint
 uv run python .sift/agents.py check
 uv run python .sift/gate.py --base origin/main
+just rust                                           # the Rust workspace (docs/adr/0001); needs cargo and just
 ```
 
 `uv run pre-commit install` runs ruff and ty before each commit; the hook versions and the pinned tools move
