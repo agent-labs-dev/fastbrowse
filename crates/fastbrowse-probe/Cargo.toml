@@ -9,6 +9,7 @@ description = "Spike: drive Chrome over raw CDP and take one snapshot.js observa
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 # The provider for wss:// (cloud browsers). tokio-tungstenite leaves the choice to the binary.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "macros"] }
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "macros", "sync", "signal"] }
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }

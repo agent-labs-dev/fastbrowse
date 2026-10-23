@@ -1,32 +1,35 @@
-//! Spike: launch or attach to Chrome, open a tab, navigate, and take one snapshot.js observation over raw CDP.
+//! Spike: launch or attach to Chrome, open (or attach to) a tab, navigate, and observe it as `CdpPage.observe`
+//! does: the main frame and every cross-origin iframe in its own session, merged into one control list.
 //!
-//! Prints the snapshot's controls as JSON on stdout and phase timings on stderr. It answers what binary size and
-//! start-up a Rust core gets on its riskiest dependency; it is not a port of `fastbrowse.browser`.
+//! Prints `{"steps": [observation, ...]}` on stdout and phase timings on stderr.
 //!
-//! Usage: fastbrowse-probe <url> [--cdp-url ws://...] [--chrome <name-or-path>]
+//! Usage: fastbrowse-probe [url] [--cdp-url ws://...] [--attach <url-or-title-part>] [--chrome <name-or-path>]
+//!            [--timeout-ms N] [--click <js>] [--accept-dialog] [--pause-new-targets]
+//!
+//! `--click` evaluates a script after the first observation (a click that may open a dialog) and observes again;
+//! `--accept-dialog` then accepts the pending dialog and observes once more. `--timeout-ms` and Ctrl-C cancel the
+//! run wherever it is; the tab is closed if the probe opened it and left open if it attached.
 //!
 //! `FASTBROWSE_PROBE_T0_NS` (Unix epoch nanoseconds) moves the timing origin to before the process was spawned,
 //! so a harness can time the Rust and Python paths from the same point.
 
-use std::collections::VecDeque;
+mod cdp;
+mod page;
+mod session;
+
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::net::TcpStream;
 use tokio::time::{sleep, timeout};
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
-const SNAPSHOT_JS: &str = include_str!("../../../src/fastbrowse/browser/snapshot.js");
-
-/// page.py's `_CAPTURE_LOADING_SECONDS` and `_SETTLE_POLL_SECONDS`.
-const LOADING_WAIT_MS: u32 = 3000;
-const LOADING_POLL_MS: u32 = 100;
+use crate::cdp::Cdp;
+use crate::page::{evaluate, observe, until_dialog};
+use crate::session::{Options, Session};
 
 type Error = Box<dyn std::error::Error>;
 type Result<T> = std::result::Result<T, Error>;
@@ -43,45 +46,97 @@ impl Clock {
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
-    let clock = Clock(env::var("FASTBROWSE_PROBE_T0_NS").ok().and_then(|v| v.parse().ok()).unwrap_or_else(now_ns));
-    if let Err(err) = run(&clock).await {
-        eprintln!("fastbrowse-probe: {err}");
-        std::process::exit(1);
-    }
+#[derive(Default)]
+struct Args {
+    url: Option<String>,
+    cdp_url: Option<String>,
+    attach: Option<String>,
+    chrome: Option<String>,
+    timeout_ms: Option<u64>,
+    click: Option<String>,
+    accept_dialog: bool,
+    pause_new_targets: bool,
 }
 
-async fn run(clock: &Clock) -> Result<()> {
-    let mut url = None;
-    let mut cdp_url = None;
-    let mut chrome = None;
+fn parse_args() -> Result<Args> {
+    let mut parsed = Args::default();
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
+        let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
         match arg.as_str() {
-            "--cdp-url" => cdp_url = Some(args.next().ok_or("--cdp-url needs a value")?),
-            "--chrome" => chrome = Some(args.next().ok_or("--chrome needs a value")?),
-            _ if url.is_none() => url = Some(arg),
+            "--cdp-url" => parsed.cdp_url = Some(value()?),
+            "--attach" => parsed.attach = Some(value()?),
+            "--chrome" => parsed.chrome = Some(value()?),
+            "--timeout-ms" => parsed.timeout_ms = Some(value()?.parse()?),
+            "--click" => parsed.click = Some(value()?),
+            "--accept-dialog" => parsed.accept_dialog = true,
+            "--pause-new-targets" => parsed.pause_new_targets = true,
+            _ if parsed.url.is_none() && !arg.starts_with("--") => parsed.url = Some(arg),
             _ => return Err(format!("unexpected argument {arg}").into()),
         }
     }
-    let url = url.ok_or("usage: fastbrowse-probe <url> [--cdp-url ws://...] [--chrome <name-or-path>]")?;
+    if parsed.url.is_none() && parsed.attach.is_none() {
+        return Err("usage: fastbrowse-probe [url] [--cdp-url ws://...] [--attach <match>] [--timeout-ms N] ...".into());
+    }
+    Ok(parsed)
+}
 
-    let launched = match cdp_url {
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let clock = Clock(env::var("FASTBROWSE_PROBE_T0_NS").ok().and_then(|v| v.parse().ok()).unwrap_or_else(now_ns));
+    match run(&clock).await {
+        Ok(true) => {}
+        Ok(false) => std::process::exit(130),
+        Err(err) => {
+            eprintln!("fastbrowse-probe: {err}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Ok(false) when the run was cancelled.
+async fn run(clock: &Clock) -> Result<bool> {
+    let args = parse_args()?;
+    let launched = match args.cdp_url {
         Some(_) => None,
-        None => Some(LocalChrome::launch(chrome.as_deref())?),
+        None => Some(LocalChrome::launch(args.chrome.as_deref())?),
     };
     let result = async {
-        let ws = match (&cdp_url, &launched) {
+        let ws = match (&args.cdp_url, &launched) {
             (Some(ws), _) => ws.clone(),
             (None, Some(local)) => local.wait_for_ws().await?,
             (None, None) => unreachable!(),
         };
-        let mut cdp = Cdp::connect(&ws).await?;
+        let cdp = Cdp::connect(&ws).await?;
         clock.mark("connected");
-        let controls = observe(&mut cdp, &url, clock).await?;
-        println!("{}", serde_json::to_string(&controls)?);
-        Ok(())
+        let options = Options { pause_new_targets: args.pause_new_targets };
+        let session = match &args.attach {
+            Some(needle) => Session::attach(&cdp, needle, options).await?,
+            None => Session::open(&cdp, options).await?,
+        };
+        clock.mark("tab");
+        let limit = args.timeout_ms.map_or(Duration::MAX, Duration::from_millis);
+        let mut work = Box::pin(steps(&session, &args, clock));
+        let outcome = tokio::select! {
+            out = &mut work => Ok(out),
+            () = sleep(limit) => Err("timeout"),
+            _ = tokio::signal::ctrl_c() => Err("interrupt"),
+        };
+        if let Err(why) = outcome {
+            let in_flight = cdp.pending();
+            // Dropping the run drops every call it had in flight; their replies are discarded when they come.
+            drop(work);
+            eprintln!("cancelled ({why}) with {in_flight} calls in flight; pending once dropped: {}", cdp.pending());
+        }
+        session.close().await;
+        eprintln!("calls pending after close: {}", cdp.pending());
+        match outcome {
+            Ok(steps) => {
+                println!("{}", serde_json::to_string(&steps?)?);
+                Ok(true)
+            }
+            Err(_) => Ok(false),
+        }
     }
     .await;
     if let Some(local) = launched {
@@ -90,116 +145,40 @@ async fn run(clock: &Clock) -> Result<()> {
     result
 }
 
-async fn observe(cdp: &mut Cdp, url: &str, clock: &Clock) -> Result<Value> {
-    let target = cdp.call("Target.createTarget", json!({"url": "about:blank"}), None).await?;
-    let target_id = target["targetId"].as_str().ok_or("createTarget returned no targetId")?;
-    let attached = cdp.call("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None).await?;
-    let session = attached["sessionId"].as_str().ok_or("attachToTarget returned no sessionId")?.to_owned();
-    let session = Some(session.as_str());
-    cdp.call("Page.enable", json!({}), session).await?;
-    clock.mark("tab");
+async fn steps(session: &Session, args: &Args, clock: &Clock) -> Result<Value> {
+    if let Some(url) = &args.url {
+        navigate(session, url).await?;
+        clock.mark("navigated");
+    }
+    let mut steps = vec![serde_json::to_value(observe(session).await?)?];
+    clock.mark("snapshot");
+    if let Some(script) = &args.click {
+        // A click whose handler opens a dialog holds the evaluate until the dialog is handled.
+        match until_dialog(session, evaluate(session, &session.session_id, script)).await {
+            Some(result) => drop(result?),
+            None => eprintln!("the click opened a dialog"),
+        }
+        steps.push(serde_json::to_value(observe(session).await?)?);
+        if args.accept_dialog {
+            session.handle_dialog(true, None).await?;
+            steps.push(serde_json::to_value(observe(session).await?)?);
+        }
+    }
+    Ok(json!({"steps": steps, "input_navigations": session.input_navigations()}))
+}
 
-    let navigated = cdp.call("Page.navigate", json!({"url": url}), session).await?;
+/// Navigate and wait for the load event, or for a dialog that blocks it.
+async fn navigate(session: &Session, url: &str) -> Result<()> {
+    let sid = Some(session.session_id.as_str());
+    let mut loaded = session.cdp.subscribe("Page.loadEventFired", sid);
+    let navigated = session.cdp.call("Page.navigate", json!({"url": url}), sid).await?;
     if let Some(error) = navigated["errorText"].as_str() {
         return Err(format!("Page.navigate failed ({error})").into());
     }
-    cdp.wait_event("Page.loadEventFired", session, Duration::from_secs(30)).await?;
-    clock.mark("navigated");
-
-    // page.py's `_page_js` with no origin grant, called as `_snapshot_all_frames` calls it on the main frame:
-    // wrapped in `_loaded_script`, which waits up to 3s for a visible loading indicator to go.
-    let page_js = format!("(mode => ({SNAPSHOT_JS})(mode, null))");
-    let loaded = format!(
-        "new Promise(resolve => {{ const sample = {page_js}; \
-         const deadline = performance.now() + {LOADING_WAIT_MS}; \
-         const poll = () => {{ const state = sample('fingerprint'); \
-         if (!state.loading || state.hidden || performance.now() >= deadline) {{ resolve(null); return; }} \
-         setTimeout(poll, {LOADING_POLL_MS}); }}; poll(); }})"
-    );
-    let expression = format!("(async () => {{ await {loaded}; return ({page_js}('snapshot')); }})()");
-    let out = cdp
-        .call(
-            "Runtime.evaluate",
-            json!({"expression": expression, "returnByValue": true, "awaitPromise": true}),
-            session,
-        )
-        .await?;
-    if out.get("exceptionDetails").is_some() {
-        return Err(format!("Runtime.evaluate failed: {}", out["exceptionDetails"]).into());
-    }
-    clock.mark("snapshot");
-    // An attached browser outlives the probe, so the tab it opened is closed, as BrowserSession closes its own.
-    cdp.call("Target.closeTarget", json!({"targetId": target_id}), None).await?;
-    let snapshot = &out["result"]["value"];
-    Ok(json!({
-        "url": snapshot["url"],
-        "title": snapshot["title"],
-        "inaccessible_frames": snapshot["inaccessible_frames"],
-        "controls": snapshot["controls"],
-    }))
-}
-
-/// One browser-level CDP connection. Calls are sequential: events read while waiting for a reply are queued for
-/// `wait_event`. A real port needs a reader task routing replies by id and events by session.
-struct Cdp {
-    ws: WebSocketStream<MaybeTlsStream<TcpStream>>,
-    next_id: u64,
-    events: VecDeque<Value>,
-}
-
-impl Cdp {
-    async fn connect(url: &str) -> Result<Self> {
-        let (ws, _) = connect_async(url).await?;
-        Ok(Self { ws, next_id: 1, events: VecDeque::new() })
-    }
-
-    async fn call(&mut self, method: &str, params: Value, session: Option<&str>) -> Result<Value> {
-        let id = self.next_id;
-        self.next_id += 1;
-        let mut message = json!({"id": id, "method": method, "params": params});
-        if let Some(session) = session {
-            message["sessionId"] = json!(session);
-        }
-        self.ws.send(Message::text(message.to_string())).await?;
-        loop {
-            let mut message = self.read().await?;
-            if message["id"].as_u64() == Some(id) {
-                if let Some(error) = message.get("error") {
-                    return Err(format!("{method} failed: {error}").into());
-                }
-                return Ok(message["result"].take());
-            }
-            if message.get("method").is_some() {
-                self.events.push_back(message);
-            }
-        }
-    }
-
-    async fn wait_event(&mut self, method: &str, session: Option<&str>, limit: Duration) -> Result<Value> {
-        let matches = |m: &Value| m["method"] == method && m["sessionId"].as_str() == session;
-        if let Some(at) = self.events.iter().position(matches) {
-            return Ok(self.events.remove(at).unwrap_or_default());
-        }
-        timeout(limit, async {
-            loop {
-                let message = self.read().await?;
-                if matches(&message) {
-                    return Ok(message);
-                }
-            }
-        })
-        .await
-        .map_err(|_| format!("no {method} within {limit:?}"))?
-    }
-
-    async fn read(&mut self) -> Result<Value> {
-        loop {
-            match self.ws.next().await.ok_or("the browser closed the connection")?? {
-                Message::Text(text) => return Ok(serde_json::from_str(&text)?),
-                Message::Close(_) => return Err("the browser closed the connection".into()),
-                _ => {}
-            }
-        }
+    match timeout(Duration::from_secs(30), until_dialog(session, loaded.recv())).await {
+        Err(_) => Err("no Page.loadEventFired within 30s".into()),
+        Ok(Some(None)) => Err("the browser closed the connection".into()),
+        Ok(_) => Ok(()),
     }
 }
 
