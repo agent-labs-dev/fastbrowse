@@ -94,7 +94,17 @@
     };
     registry.track(document);
   }
-  if (mode === 'fingerprint') {
+  const clock = () => ({
+    ready: document.readyState === 'interactive' || document.readyState === 'complete',
+    quietFor: performance.now() - registry.lastMutation,
+    hidden: document.hidden,
+  });
+  // The settle loop reads the clock alone until the page has gone quiet: the walk below reads every element and
+  // all the page's text, which on a large page costs more than the poll interval leaves room for.
+  if (mode === 'quiet') return clock();
+  // `loading` walks for indicators, and to watch new shadow roots and frames, but hashes nothing.
+  if (mode === 'fingerprint' || mode === 'loading') {
+    const hashing = mode === 'fingerprint';
     let hash = 2166136261;
     let loading = false;
     const hashText = text => {
@@ -103,8 +113,7 @@
     const include = root => {
       registry.track(root);
       loading ||= [...root.querySelectorAll(LOADING)].some(showing);
-      const text = root.body?.innerText ?? root.textContent ?? '';
-      hashText(text);
+      if (hashing) hashText(root.body?.innerText ?? root.textContent ?? '');
       // innerText omits shadow trees and child documents even when their content is visible.
       for (const e of root.querySelectorAll('*')) {
         // A filter can change only its checkmark, so text alone reported "Nonstop only" as a no-op.
@@ -112,6 +121,7 @@
         // Only rendered controls: a hidden carousel's aria-selected dots churn on their own and would read as
         // progress.
         if (
+          hashing &&
           ('checked' in e || 'selected' in e || e.hasAttribute('aria-checked') || e.hasAttribute('aria-selected')) &&
           e.checkVisibility({ checkOpacity: !nativeChoice(e), checkVisibilityCSS: true }) &&
           (!nativeChoice(e) || shownThrough(e))
@@ -138,10 +148,8 @@
     };
     include(document);
     return {
-      fingerprint: location.href + '|' + document.title + '|' + (hash >>> 0) + '|' + scrollY,
-      ready: document.readyState === 'interactive' || document.readyState === 'complete',
-      quietFor: performance.now() - registry.lastMutation,
-      hidden: document.hidden,
+      ...clock(),
+      fingerprint: hashing ? location.href + '|' + document.title + '|' + (hash >>> 0) + '|' + scrollY : null,
       loading,
     };
   }

@@ -2292,9 +2292,13 @@ class CdpPage(Page):
             f"new Promise(resolve => {{ const sample = {self._page_js}; "
             f"const deadline = performance.now() + {timeout_seconds * 1000}; "
             f"const spinning = performance.now() + {_SETTLE_LOADING_SECONDS * 1000}; "
+            f"const quietOf = state => state.ready && state.quietFor >= {_SETTLE_QUIET_SECONDS * 1000}; "
             "const poll = () => { "
-            "const state = sample('fingerprint'); "
-            f"const quiet = state.ready && state.quietFor >= {_SETTLE_QUIET_SECONDS * 1000}; "
+            # The fingerprint walks the whole document, so it is taken only once the clock says quiet, or as the
+            # wait ends. Taking it tracks any shadow root or frame added since, which restarts the quiet clock.
+            "let state = sample('quiet'); "
+            "if (quietOf(state) || state.hidden || performance.now() >= deadline) state = sample('fingerprint'); "
+            "const quiet = quietOf(state); "
             "const stable = quiet && (!state.loading || performance.now() >= spinning); "
             "if (stable || state.hidden || performance.now() >= deadline) { "
             "resolve([stable, state.ready ? state.fingerprint : null]); return; } "
@@ -2319,7 +2323,7 @@ class CdpPage(Page):
         return (
             f"new Promise(resolve => {{ const sample = {self._page_js}; "
             f"const deadline = performance.now() + {timeout_seconds * 1000}; "
-            "const poll = () => { const state = sample('fingerprint'); "
+            "const poll = () => { const state = sample('loading'); "
             "if (!state.loading || state.hidden || performance.now() >= deadline) { resolve(null); return; } "
             f"setTimeout(poll, {_SETTLE_POLL_SECONDS * 1000}); }}; poll(); }})"
         )
