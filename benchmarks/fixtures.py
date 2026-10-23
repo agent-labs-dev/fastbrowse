@@ -22,7 +22,7 @@ GOLDEN = Path(__file__).parent / "golden"
 
 # Page name to (golden n, benchmark n).
 PAGES = {
-    "links": (40, 3000),
+    "links": (40, 600),
     "cards": (8, 300),
     "calendar": (2, 24),
     "forms": (4, 80),
