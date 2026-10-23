@@ -11,6 +11,26 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A run that stops before its completion check confirms the finish returns an answer rather than the notes it
+  collected. One composer call over the evidence the run already read writes that answer, with its citations
+  intact and marked `Answer (unverified)`. A table lookup used to arrive as its rows in page order with no
+  sentence naming the country, though the row was read: the evidence was there and nothing had been asked to
+  answer from it. The call is spent only on a run that is already stopping, and the previous list of quotes is
+  returned if the composer fails, is over budget, or the notes are too large, so a stop never trades evidence
+  for an error.
+
+- A browsing requirement no longer holds an evidenced answer open. "Navigate through every page of the site" is
+  how a run reaches the information, not something the caller receives, so once every information requirement is
+  evidenced an unconfirmed visit is reported as unconfirmed instead of blocking the answer. A count read off a
+  site's own exhaustive tag listing had looped on that step until its recoveries ran out. Anything that changes
+  state on the site, such as submitting a form, signing in or placing an order, still blocks, a run holding an
+  unevidenced information requirement is still refused, and a plan that asks for no answer at all is unaffected.
+  On the five complex tasks this was measured on, the baseline answered 7 of 10 runs correctly and completed 6;
+  with the completion gate on, 5 of 5 were answered correctly and 5 of 5 completed.
+
+- Either behaviour can be turned off for a measurement with `FASTBROWSE_FIX_COMMIT=0` and
+  `FASTBROWSE_FIX_GATE=0`.
+
 ## [0.5.25] - 2026-10-20
 
 - Answers that need the full LLM audit, such as the cheapest item, a count or a date range, no longer wait for

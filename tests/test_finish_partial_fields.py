@@ -55,7 +55,7 @@ async def test_failed_sibling_retains_only_fully_verified_field(empty):
     judge = SiblingJudge([])
     agent = Agent(Mock(spec=Page, artifacts=()), RoutingJev(), judge)
     assert await agent._holds(state, answer) is None
-    partial = agent._partial_result(state.notes, state, state.ledger, Status.UNVERIFIED, "Missing links")
+    partial = await agent._partial_result(state.notes, state, state.ledger, Status.UNVERIFIED, "Missing links")
     assert partial.answer is not None
     assert partial.answer.startswith("Partial answer.")
     assert "Fixed in the next release." in partial.answer
