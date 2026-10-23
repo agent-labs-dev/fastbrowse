@@ -19,3 +19,7 @@ recordings/
 # Local audit output and JavaScript development tools.
 .sift/runs/
 node_modules/
+
+# Cargo output and the locally built Node addon.
+/target/
+crates/fastbrowse-node/*.node

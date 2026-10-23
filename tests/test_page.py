@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -6,6 +7,9 @@ from fastbrowse.browser.page import _capped, _same_http_origin
 from fastbrowse.models import BrowserConnection, Operation
 from fastbrowse.origins import OriginGrant, parse_origin, parse_origins
 from fastbrowse.page import Control, cut_text, pager_link, pages_forward
+
+# The Rust core parses URLs as WHATWG does, so it resolves these to the origin Chrome would load.
+RUST_CORE = os.environ.get("FASTBROWSE_RUST_CORE") == "1"
 
 
 def link(label: str, *, next_page: bool | None = None, i: int = 0) -> Control:
@@ -170,11 +174,11 @@ def test_a_grant_needs_an_origin_and_a_connection_validates_it() -> None:
         ("https://a.example.evil.example/", False),
         ("https://evil.example/https://a.example/", False),
         ("https://a.example@evil.example/", False),
-        ("https://a.example\\@evil.example/", False),
+        ("https://a.example\\@evil.example/", RUST_CORE),
         ("https://a.example.:443/", False),
         ("https://a.example\t@evil.example/", False),
-        ("https://a.exam%70le/", False),
-        ("https:a.example/", False),
+        ("https://a.exam%70le/", RUST_CORE),
+        ("https:a.example/", RUST_CORE),
         ("about:blank#x", False),
         ("data:text/html,hi", False),
         ("blob:https://a.example/id", False),
