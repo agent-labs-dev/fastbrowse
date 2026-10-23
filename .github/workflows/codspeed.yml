@@ -16,6 +16,8 @@ jobs:
   snapshot:
     # Bare metal: the timings are wall time in a browser process, which a shared VM's neighbours would move.
     runs-on: codspeed-macro
+    # A self-hosted runner open to public repositories runs whatever a pull request brings, so a fork's never starts.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     permissions: {contents: read, id-token: write}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
