@@ -14,7 +14,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from benchmarks.fixtures import GOLDEN, PAGES, fingerprint, golden_view, open_page, serve, snapshot
+from benchmarks.fixtures import GOLDEN, PAGES, fingerprint, golden_view, guards, open_page, serve, snapshot
 from fastbrowse.browser.page import CdpPage
 
 
@@ -27,7 +27,9 @@ def origin() -> Iterator[str]:
 @pytest.mark.parametrize("name", list(PAGES))
 async def test_snapshot_matches_golden(page: CdpPage, origin: str, name: str) -> None:
     await open_page(page, origin, name, PAGES[name][0])
-    view = golden_view(await snapshot(page), await fingerprint(page), origin)
+    result = await snapshot(page)
+    raw = await guards(page, [c["id"] for c in result["controls"]])
+    view = golden_view(result, raw, await fingerprint(page), origin)
     path = GOLDEN / f"{name}.json"
     if os.environ.get("FASTBROWSE_UPDATE_GOLDEN") == "1":
         path.write_text(json.dumps(view, indent=1, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")

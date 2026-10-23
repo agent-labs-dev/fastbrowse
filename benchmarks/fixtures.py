@@ -62,6 +62,14 @@ async def snapshot(page: CdpPage) -> Any:
     return await page._evaluate(page._session.active_session_id, page._page_js + "('snapshot')")
 
 
+async def guards(page: CdpPage, ids: list[int]) -> Any:
+    """The guards themselves, which the snapshot sends to Python only as digests."""
+    return await page._evaluate(
+        page._session.active_session_id,
+        f"(r => Object.fromEntries({json.dumps(ids)}.map(id => [id, r.guard(r.nodes.get(id))])))(window.__fastbrowse)",
+    )
+
+
 async def fingerprint(page: CdpPage) -> Any:
     return await page._evaluate(page._session.active_session_id, page._fingerprint_js)
 
@@ -77,13 +85,13 @@ def normalize(value: Any, origin: str) -> Any:
     return value
 
 
-def golden_view(result: dict[str, Any], fingerprint: str, origin: str) -> dict[str, Any]:
-    """The snapshot as the golden file records it: the document's time origin is a clock reading, and
-    `page_key` is decoded so a change shows as a diff of its parts."""
+def golden_view(result: dict[str, Any], guards: dict[str, Any], fingerprint: str, origin: str) -> dict[str, Any]:
+    """The snapshot as the golden file records it. The document's time origin is a clock reading, and the digests
+    hash the fixture server's port, so the guards are recorded whole in their place."""
     view = dict(result)
-    del view["document_key"]
-    view["page_key"] = json.loads(view["page_key"])
+    for digest in ("document_key", "page_key", "retarget_keys"):
+        del view[digest]
     # A guard holds its document's `performance.timeOrigin` at index 15.
-    view["guards"] = {k: g if g is None else [*g[:15], None, *g[16:]] for k, g in view["guards"].items()}
+    view["guards"] = {k: g if g is None else [*g[:15], None, *g[16:]] for k, g in guards.items()}
     view["fingerprint"] = fingerprint
     return normalize(view, origin)
