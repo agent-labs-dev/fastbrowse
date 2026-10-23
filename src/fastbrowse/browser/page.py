@@ -594,14 +594,18 @@ class CdpPage(Page):
         snapshot = asyncio.create_task(self._snapshot_all_frames())
         response = asyncio.create_task(self._document_response())
         try:
-            (can_go_back, history_entry, entry_url), (frames, inaccessible), document = await asyncio.gather(
-                history, snapshot, response
-            )
+            # A timer can open a dialog while the snapshot waits on a loading indicator, and the dialog blocks that
+            # evaluate until the 120s command deadline.
+            read = await self._until_dialog(asyncio.gather(history, snapshot, response))
         finally:
             history.cancel()
             snapshot.cancel()
             response.cancel()
             await asyncio.gather(history, snapshot, response, return_exceptions=True)
+        if read is None:
+            dialog = self._session.pending_dialog()
+            return self._dialog_observation(dialog) if dialog is not None else await self._observe_once(attempt)
+        (can_go_back, history_entry, entry_url), (frames, inaccessible), document = read
         main = frames.get(_MAIN)
         # History and the snapshot are read at once, so a pushState between them paired the new page with the old
         # entry, whose lineage the new page then overwrote. Both are read again until they name one address; a
@@ -1147,9 +1151,9 @@ class CdpPage(Page):
             case _:
                 assert_never(action.operation)
 
-    async def _until_dialog[T](self, work: Coroutine[None, None, T]) -> T | None:
+    async def _until_dialog[T](self, work: Awaitable[T]) -> T | None:
         # Input and focus handlers can open a dialog before CDP answers, blocking every following renderer check.
-        task = asyncio.create_task(work)
+        task = asyncio.ensure_future(work)
         dialog = asyncio.create_task(self._session.wait_for_dialog())
         try:
             await asyncio.wait({task, dialog}, return_when=asyncio.FIRST_COMPLETED)

@@ -22,6 +22,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   United States, 5,571 controls, the in-page work fell from 477 to 238 ms, and on an Amazon results page from 71
   to 39 ms.
 
+- A JavaScript dialog that opens while a page is being read no longer stalls the run for two minutes. A page
+  showing a loading indicator is read once the indicator clears, and an alert a timer opened during that wait
+  blocked the read until the browser command deadline. The read now stops when the dialog opens and reports the
+  dialog, as it already did for a dialog open before the read began.
+
 ## [0.5.25] - 2026-10-20
 
 - Answers that need the full LLM audit, such as the cheapest item, a count or a date range, no longer wait for
