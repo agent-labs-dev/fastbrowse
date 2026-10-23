@@ -32,6 +32,12 @@ jobs:
           - {target: win32-x64, runner: windows-2022}
     env:
       TARGET: ${{ matrix.target }}
+      # `uv sync` takes the image's own Python when the image already has the version asked for, and the freeze
+      # then reads every file of that installation: on 2026-10-23 a source read inside it failed with `[Errno 5]`
+      # during Analysis and took darwin-x64 down, on a runner that then hung 45 minutes after the job. A managed
+      # one is the interpreter uv downloaded, the same on every image, so the build reads only what this
+      # workflow installed.
+      UV_PYTHON_PREFERENCE: only-managed
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
