@@ -7,6 +7,7 @@ from fastbrowse.safety import (
     ScopedSecrets,
     may_be_irreversible,
     origin_of,
+    reversible_toggle,
     secret_allowed,
     starts_download,
 )
@@ -203,3 +204,21 @@ def test_starts_download_reads_the_page_evidence(href: str | None, download: boo
         id="a", frame_id=None, role="link", label="Get it", href=href, download=download, operations=frozenset()
     )
     assert starts_download(control) is expected
+
+
+@pytest.mark.parametrize("target", [control("Pause"), control("Play"), control("Resume"), control("Mute")])
+def test_playback_controls_are_reversible(target: Control) -> None:
+    assert reversible_toggle(target)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        control("Pause my subscription"),
+        control("Pause billing"),
+        control("Play the demo with your order"),
+        control("Delete account"),
+    ],
+)
+def test_a_pause_that_commits_something_is_not_reversible(target: Control) -> None:
+    assert not reversible_toggle(target)
