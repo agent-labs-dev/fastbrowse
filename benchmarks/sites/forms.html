@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Forms</title><link rel="stylesheet" href="base.css">
+<style>
+form, .group { display: inline-block; width: 400px; height: 220px; overflow: hidden; vertical-align: top; }
+label, legend, h2 { display: block; height: 20px; overflow: hidden; white-space: nowrap; }
+input, select, button { display: block; width: 200px; height: 20px; }
+input[type="checkbox"], input[type="radio"] { display: inline-block; width: 16px; height: 16px; }
+</style>
+</head>
+<body>
+<!-- Forms that submit, block on required fields and hold date pickers, and a script-built group of fields
+     with no form element at all. Size it with ?n=. -->
+<main id="main"></main>
+<script>
+const n = Number(new URLSearchParams(location.search).get('n') || 4);
+const parts = [];
+for (let i = 0; i < n; i++) {
+  parts.push(`<form action="/submit/${i}" method="post">
+    <h2>Booking ${i}</h2>
+    <label for="name-${i}">Name</label><input id="name-${i}" name="name" autocomplete="name" required>
+    <label>Email <input type="email" name="email" value="guest${i}@example.com"></label>
+    <label for="when-${i}">Start Date</label><input id="when-${i}" type="date" name="when">
+    <select name="room" aria-label="Room"><option>Single</option><option>Double</option><option disabled>Suite</option></select>
+    <input type="checkbox" id="news-${i}" name="news"><label for="news-${i}">Newsletter</label>
+    <input type="password" name="secret" aria-label="Password" value="hunter${i}">
+    <button type="submit">Book</button>
+  </form>`);
+  parts.push(`<div class="group">
+    <h2>Filter ${i}</h2>
+    <input aria-label="Minimum price" type="number"><input aria-label="Maximum price" type="number">
+    <div role="button" tabindex="0">Apply</div>
+  </div>`);
+}
+document.getElementById('main').innerHTML = parts.join('');
+</script>
+</body>
+</html>

@@ -71,6 +71,7 @@ gitleaks detect --source . --no-banner --redact
 - MCP registers its browse tool and uses its schema/docstrings as model-visible descriptions.
 - `src/fastbrowse/browser/page.py` loads snapshot and capture JavaScript by file path; both are wheel assets.
 - CDP event registrations, context-manager methods, pytest fixtures and test discovery call symbols indirectly.
+  `benchmarks/` is collected only by `codspeed.yml`, outside `testpaths`.
 - Evals and audit modules have `python -m` entry points; scripts are also called from CI and the justfile.
 - Approved benchmark rows, sanitized evidence projections, README and changelog content are consumed by
   fastbrowse.ai outside this repository.
@@ -91,8 +92,9 @@ See [the evaluation workflow](../../../docs/agents/evals.md) for paid-run prereq
 | packages/sdk/test/ | test |
 | packages/sdk/src/protocol.ts | generated |
 | scripts/ | script |
-| tests/ Python | test |
-| tests/browser/sites/, evals/fixtures/, audit/fixtures/ | fixture |
+| tests/ Python, benchmarks/ Python | test |
+| tests/browser/sites/, benchmarks/sites/, evals/fixtures/, audit/fixtures/ | fixture |
+| benchmarks/golden/ | generated |
 | docs/results/, src/fastbrowse/evals/versions.json, packaging/aur/.SRCINFO | generated |
 | src/fastbrowse/browser/autoconsent/, .sift/gate.py, .sift/agents.py | vendor |
 | .github/, packaging/, tool manifests and lockfiles | config |

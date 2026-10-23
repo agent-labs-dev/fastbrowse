@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Cards</title><link rel="stylesheet" href="base.css">
+<style>
+.card { display: inline-block; width: 300px; height: 120px; overflow: hidden; vertical-align: top; }
+.card h3, .card .price, .card .caption, .card h4 { display: block; height: 20px; overflow: hidden; white-space: nowrap; }
+.card button, .card a { display: inline-block; width: 90px; height: 20px; overflow: hidden; white-space: nowrap; }
+.card .caption { display: none; }
+.card:hover .caption { display: block; }
+</style>
+</head>
+<body>
+<!-- A shop's results: twin "Add to cart" buttons, an unnamed icon button per card, and a caption only the
+     pointer reveals. Size it with ?n=. -->
+<svg width="0" height="0" style="position: absolute"><symbol id="trash-2"><path d="M0 0h1v1H0z"/></symbol></svg>
+<main id="main"></main>
+<script>
+const n = Number(new URLSearchParams(location.search).get('n') || 8);
+const parts = [];
+for (let i = 0; i < n; i++) {
+  // The second half of the results sits below the viewport.
+  if (i === Math.floor(n / 2)) parts.push('<div style="height: 900px"></div>');
+  parts.push(`<div class="card">
+    <h3>Product ${i}</h3>
+    <span class="price">$${(i * 7) % 90}.99</span>
+    <span class="caption">Ships in ${i % 5} days</span>
+    <button>Add to cart</button>
+    <button><svg class="lucide-trash-2" width="12" height="12"><use href="#trash-2"/></svg></button>
+    <a href="/product/${i}">Details</a>
+    <h4>Options</h4>
+  </div>`);
+}
+document.getElementById('main').innerHTML = parts.join('');
+</script>
+</body>
+</html>
