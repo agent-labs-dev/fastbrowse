@@ -28,7 +28,13 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from fastbrowse.addresses import search_address
 from fastbrowse.browser.cursor import CursorFeedback, Geometry
-from fastbrowse.browser.session import STATUS_WORLD, BrowserSession, OriginNotAllowed, PageUnresponsive
+from fastbrowse.browser.session import (
+    SNAPSHOT_UNINSTALLED,
+    STATUS_WORLD,
+    BrowserSession,
+    OriginNotAllowed,
+    PageUnresponsive,
+)
 from fastbrowse.config import Config
 from fastbrowse.datafiles import data_file
 from fastbrowse.models import TARGETED, Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome, Unavailable
@@ -52,7 +58,6 @@ from fastbrowse.page import (
     pager_link,
 )
 
-_PAGE_JS = data_file("browser", "snapshot.js").read_text(encoding="utf-8")
 _CAPTURE_JS = data_file("browser", "capture.js").read_text(encoding="utf-8")
 _SELECT_TEXT_JS = (
     "if (typeof e.select === 'function') e.select(); else { const range = e.ownerDocument.createRange(); "
@@ -524,7 +529,7 @@ class CdpPage(Page):
         self._cursor = cursor
         self._cursor_pid: int | None = None
         origins = "null" if session.grant is None else json.dumps(sorted(session.grant.origins))
-        self._page_js = f"(mode => ({_PAGE_JS})(mode, {origins}))"
+        self._page_js = session.snapshot.function
         self._capture_js = f"({_CAPTURE_JS})({origins})"
         self._fingerprint_js = self._page_js + "('fingerprint').fingerprint"
         self._session = session
@@ -2333,6 +2338,12 @@ class CdpPage(Page):
         if unique_context_id is not None:
             params["uniqueContextId"] = unique_context_id
         out = await self._session.client.send.Runtime.evaluate(params=params, session_id=session_id)
+        if "exceptionDetails" in out and SNAPSHOT_UNINSTALLED in json.dumps(out["exceptionDetails"]):
+            # A document older than the session never ran the script that installs snapshot.js. The call threw
+            # as it looked the function up, before doing anything, so it is made again once installed.
+            install: EvaluateParameters = {**params, "expression": f"void {self._session.snapshot.install}"}
+            await self._session.client.send.Runtime.evaluate(params=install, session_id=session_id)
+            out = await self._session.client.send.Runtime.evaluate(params=params, session_id=session_id)
         if "exceptionDetails" in out:
             raise _ScriptError("Runtime.evaluate failed (JavaScriptError)")
         return out["result"].get("value")
