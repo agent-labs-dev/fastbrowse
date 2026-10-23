@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Calendar</title><link rel="stylesheet" href="base.css">
+<style>
+.month { display: inline-block; width: 300px; height: 200px; overflow: hidden; vertical-align: top; }
+.month .title { display: block; height: 20px; }
+.month a { display: inline-block; width: 60px; height: 20px; }
+table { border-collapse: collapse; table-layout: fixed; width: 280px; }
+th, td { width: 40px; height: 20px; overflow: hidden; }
+td button { width: 40px; height: 20px; }
+</style>
+</head>
+<body>
+<!-- Date pickers: twin Prev and Next anchors with no destination, and day buttons whose weekday only the
+     table's column header names. Size it with ?n=. -->
+<main id="main"></main>
+<script>
+const n = Number(new URLSearchParams(location.search).get('n') || 2);
+const days = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+const parts = [];
+for (let m = 0; m < n; m++) {
+  const rows = [];
+  for (let w = 0; w < 6; w++) {
+    const cells = [];
+    for (let d = 0; d < 7; d++) {
+      const day = w * 7 + d - (m % 7) + 1;
+      cells.push(day >= 1 && day <= 30 ? `<td><button>${day}</button></td>` : '<td></td>');
+    }
+    rows.push(`<tr>${cells.join('')}</tr>`);
+  }
+  parts.push(`<div class="month">
+    <span class="title">Month ${m + 1} 2026</span>
+    <a data-handler="prev" data-event="click">Prev</a><a data-handler="next" data-event="click">Next</a>
+    <table><thead><tr>${days.map(d => `<th scope="col" abbr="${d}day">${d}</th>`).join('')}</tr></thead>
+    <tbody>${rows.join('')}</tbody></table>
+  </div>`);
+}
+document.getElementById('main').innerHTML = parts.join('');
+</script>
+</body>
+</html>

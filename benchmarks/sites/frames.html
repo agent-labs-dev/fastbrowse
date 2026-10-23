@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Frames</title><link rel="stylesheet" href="base.css">
+<style>
+.widget { display: inline-block; width: 300px; height: 40px; vertical-align: top; }
+iframe { display: block; width: 1200px; height: 200px; border: 0; }
+</style>
+</head>
+<body>
+<!-- Controls the snapshot reaches only by walking into open shadow roots and a same-origin frame.
+     Size it with ?n=; the frame takes the same size. -->
+<main id="main"></main>
+<script>
+const n = Number(new URLSearchParams(location.search).get('n') || 6);
+const main = document.getElementById('main');
+for (let i = 0; i < n; i++) {
+  const host = document.createElement('div');
+  host.className = 'widget';
+  const root = host.attachShadow({ mode: 'open' });
+  root.innerHTML = `<link rel="stylesheet" href="base.css"><span class="cell">Widget ${i}</span>
+    <button class="cell">Open</button><input class="cell" aria-label="Quantity ${i}" type="number">`;
+  main.append(host);
+}
+const frame = document.createElement('iframe');
+frame.src = `frame-inner.html?n=${n}`;
+frame.title = 'Inner list';
+main.append(frame);
+</script>
+</body>
+</html>

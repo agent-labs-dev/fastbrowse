@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Inner list</title><link rel="stylesheet" href="base.css"></head>
+<body>
+<main id="main"></main>
+<script>
+const n = Number(new URLSearchParams(location.search).get('n') || 6);
+document.getElementById('main').innerHTML = Array.from(
+  { length: n },
+  (_, i) => `<a class="cell" href="/inner/${i}">Inner ${i}</a><button class="cell">Remove</button>`,
+).join('');
+</script>
+</body>
+</html>

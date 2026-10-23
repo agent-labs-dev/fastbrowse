@@ -56,6 +56,8 @@ dev = [
 # What builds the native executable (`packaging/fastbrowse.spec`). A group of its own, so that the build
 # environment holds the package, this, and neither the development tools nor an extra.
 freeze = ["pyinstaller==6.22.3"]
+# snapshot.js benchmarks (`benchmarks/`), which CodSpeed runs when the script changes.
+bench = ["pytest-codspeed>=5,<6"]
 
 [tool.ruff]
 line-length = 120
@@ -77,7 +79,7 @@ timeout = 120
 [tool.ty.src]
 # The package and its tests, which is the scope the checker has always had. `scripts/` runs jev-ultrafast in its own environment
 # and imports modules that are not installed here, which is the point of it.
-include = ["src", "tests"]
+include = ["src", "tests", "benchmarks"]
 
 [tool.ty.environment]
 python-version = "3.13"

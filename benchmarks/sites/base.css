@@ -1,0 +1,26 @@
+/* Every box has a size the stylesheet sets, so layout does not follow the platform's fonts: the golden
+   snapshots compare offscreen flags and distances, which a wrapped line would move. */
+html {
+  scrollbar-width: none;
+}
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font: 12px/16px monospace;
+}
+.cell {
+  display: inline-block;
+  width: 200px;
+  height: 20px;
+  overflow: hidden;
+  white-space: nowrap;
+  vertical-align: top;
+}
+.row {
+  display: block;
+  width: 1200px;
+  height: 20px;
+  overflow: hidden;
+  white-space: nowrap;
+}
