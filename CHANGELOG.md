@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Every read of the page no longer sends the 48 KB page script to the browser and compiles it again. Each
+  document compiles it once, so a step's observation and the checks around each action skip about 3 ms per call
+  locally, and a remote browser no longer receives the script on every one of them.
+
 - Each observation sends far less from the browser to fastbrowse. The per-control freshness guards and the page
   key now leave the page as short digests, where a guard used to carry up to 6,000 characters of the text around
   its control. A Wikipedia article's observation fell from 7.1 MB to 2.4 MB and its round trip from 508 to 291 ms;
