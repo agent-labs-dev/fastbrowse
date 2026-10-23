@@ -127,7 +127,7 @@ _SCROLL_EVENT_SECONDS = 3.0
 # nothing is acted on.
 _UNCOVER_JS = (
     "(async (id, guard) => { const r = window.__fastbrowse, e = r?.nodes.get(id); "
-    "if (!e?.isConnected || JSON.stringify(r.guard(e)) !== JSON.stringify(guard)) return null; "
+    "if (!e?.isConnected || r.guardKey(e) !== guard) return null; "
     "const docs = [], scrollers = [], roots = []; "
     # The scrolling element reports the window's scroll, whose events and scrollend go to the document instead.
     "for (let n = e; n; ) { if (n !== n.ownerDocument.scrollingElement) scrollers.push(n); "
@@ -203,7 +203,7 @@ _COVER_JS = (
 # The pointer path rechecks a control's guard before every press (`_stable_point`); the keyboard path asks this.
 _GUARD_HOLDS_JS = (
     "((id, guard) => { const r = window.__fastbrowse, e = r?.nodes.get(id); "
-    "return !!e?.isConnected && !!r.guard && JSON.stringify(r.guard(e)) === JSON.stringify(guard); })"
+    "return !!e?.isConnected && !!r.guardKey && r.guardKey(e) === guard; })"
 )
 
 # Keys go to the focused control whatever is drawn over it, so a control a band still covers is pressed from the
@@ -276,7 +276,7 @@ _HANDED_FOCUS_JS = (
     "if (was.doc.hidden) start(); else requestAnimationFrame(() => setTimeout(start, 0)); }))"
 )
 type _Point = tuple[float, float] | Literal["covered"] | None
-_TARGET_STATE = TypeAdapter(tuple[str, list[object] | None, _Point, bool, bool])
+_TARGET_STATE = TypeAdapter(tuple[str, str | None, _Point, bool, bool])
 """[fingerprint, live guard, hit-test point, popup announced, opens a window] from the pre-action check."""
 _SETTLED = TypeAdapter(tuple[bool, str | None])
 _NODE_ID = TypeAdapter(int | None)
@@ -353,8 +353,10 @@ class _Snapshot(_FrameText):
     document_key: str
     controls: tuple[_SnapshotControl, ...]
     page_key: str
-    guards: dict[str, list[object] | None]
-    """Freshness guard per control, keyed by the control's local id as a string (a JSON object key)."""
+    guards: dict[str, str | None]
+    """Digest of each control's freshness guard, keyed by its local id as a string (a JSON object key)."""
+    retarget_keys: dict[str, str | None]
+    """Digest of the guard without the node ids at its ends, which a redraw changes."""
 
 
 class _SnapshotBlock(Frozen):
@@ -477,11 +479,11 @@ class _ObservedState:
     def __init__(
         self,
         page_key: str,
-        controls: dict[str, tuple[str, str, int, list[object] | None]],
+        controls: dict[str, tuple[str, str, int, str | None]],
         labels: dict[str, list[str]] | None = None,
     ) -> None:
         self.page_key = page_key
-        # control_id -> (session_id, frame_key, local_node_id, guard snapshot)
+        # control_id -> (session_id, frame_key, local_node_id, guard digest)
         self.controls = controls
         # frame_key -> the labels of the controls observed in that frame, for naming what a covering frame offers
         self.labels = labels or {}
@@ -613,13 +615,13 @@ class CdpPage(Page):
                 return await self._observe_once(attempt + 1)
             history_entry = None
         controls: list[Control] = []
-        control_state: dict[str, tuple[str, str, int, list[object] | None]] = {}
+        control_state: dict[str, tuple[str, str, int, str | None]] = {}
         for frame_key, frame in frames.items():
             for c in frame.raw.controls:
                 control_id = f"{frame_key}:{c.id}"
                 fid = f"{frame_key}/{c.frame_path}" if c.frame_path else frame.frame_id
                 guard = frame.raw.guards.get(str(c.id))
-                controls.append(_control_from_raw(control_id, fid, c, guard))
+                controls.append(_control_from_raw(control_id, fid, c, frame.raw.retarget_keys.get(str(c.id))))
                 control_state[control_id] = (frame.session_id, frame_key, c.id, guard)
 
         limits = self._config.observation
@@ -1069,7 +1071,7 @@ class CdpPage(Page):
         except ValidationError:
             return None
 
-    async def _form_unchanged(self, target: tuple[str, str, int, list[object] | None], text: str) -> bool:
+    async def _form_unchanged(self, target: tuple[str, str, int, str | None], text: str) -> bool:
         if self._session.pending_dialog() is not None or target[0] != self._session.active_session_id:
             return False
         # Other frame sessions can change independently of this renderer's guard.
@@ -1087,7 +1089,7 @@ class CdpPage(Page):
     async def _dispatch(
         self,
         action: Action,
-        target: tuple[str, str, int, list[object] | None] | None,
+        target: tuple[str, str, int, str | None] | None,
         point: _Point,
         *,
         drawn: bool = False,
@@ -1163,7 +1165,7 @@ class CdpPage(Page):
             dialog.cancel()
             await asyncio.gather(task, dialog, return_exceptions=True)
 
-    async def _covered_detail(self, target: tuple[str, str, int, list[object] | None]) -> str:
+    async def _covered_detail(self, target: tuple[str, str, int, str | None]) -> str:
         session_id, _frame, local_id, _guard = target
         # A cart or menu can cover a still-indexed button. Name the drawn obstruction so recovery can dismiss it.
         detail = None
@@ -1232,7 +1234,7 @@ class CdpPage(Page):
             return []
         return [label for key in self._session.frame_family(frame_id) for label in self._last.labels.get(key, [])]
 
-    async def _route_around(self, target: tuple[str, str, int, list[object] | None], *, scroll: bool = True) -> _Route:
+    async def _route_around(self, target: tuple[str, str, int, str | None], *, scroll: bool = True) -> _Route:
         """Where a covered control can still be acted on without touching what covers it.
 
         Only a band fixed to the window is routed around: it is first scrolled clear of, and a control it still
@@ -1274,7 +1276,7 @@ class CdpPage(Page):
         return "keyboard"
 
     async def _click(
-        self, target: tuple[str, str, int, list[object] | None] | None, point: _Point, *, drawn: bool = False
+        self, target: tuple[str, str, int, str | None] | None, point: _Point, *, drawn: bool = False
     ) -> tuple[StepOutcome, str | None]:
         if target is None:
             return StepOutcome.FAILED, "click requires a target"
@@ -1289,7 +1291,7 @@ class CdpPage(Page):
             point = route
         return await self._click_point(target, point, drawn=drawn)
 
-    async def _press(self, target: tuple[str, str, int, list[object] | None]) -> tuple[StepOutcome, str | None]:
+    async def _press(self, target: tuple[str, str, int, str | None]) -> tuple[StepOutcome, str | None]:
         """Activate a control from the keyboard: focus it and press the key its semantics answer to."""
         session_id, _frame, local_id, _guard = target
         key = _ACTIVATION_KEY.validate_python(await self._evaluate(session_id, f"({_ACTIVATION_KEY_JS})({local_id})"))
@@ -1301,7 +1303,7 @@ class CdpPage(Page):
         return StepOutcome.EXECUTED, "Pressed from the keyboard: a band fixed to the window covers it."
 
     async def _keys_reach(
-        self, target: tuple[str, str, int, list[object] | None], *, guarded: bool, local_id: int | None = None
+        self, target: tuple[str, str, int, str | None], *, guarded: bool, local_id: int | None = None
     ) -> _Refusal | None:
         """Why a key or text, sent now, would not go to the control as it was authorized, or None if it would.
 
@@ -1321,12 +1323,12 @@ class CdpPage(Page):
             return _Refusal(StepOutcome.COVERED, await self._covered_detail((session_id, frame, node, guard)))
         return None
 
-    async def _guard_holds(self, target: tuple[str, str, int, list[object] | None]) -> bool:
+    async def _guard_holds(self, target: tuple[str, str, int, str | None]) -> bool:
         session_id, _frame, local_id, guard = target
         return (await self._evaluate(session_id, f"({_GUARD_HOLDS_JS})({local_id}, {json.dumps(guard)})")) is True
 
     async def _hover(
-        self, target: tuple[str, str, int, list[object] | None] | None, point: _Point, *, drawn: bool = False
+        self, target: tuple[str, str, int, str | None] | None, point: _Point, *, drawn: bool = False
     ) -> tuple[StepOutcome, str | None]:
         if target is None:
             return StepOutcome.FAILED, "hover requires a target"
@@ -1366,7 +1368,7 @@ class CdpPage(Page):
 
     async def _fill(
         self,
-        target: tuple[str, str, int, list[object] | None] | None,
+        target: tuple[str, str, int, str | None] | None,
         text: str,
         point: _Point,
         *,
@@ -1555,7 +1557,7 @@ class CdpPage(Page):
             )
 
     async def _select(
-        self, target: tuple[str, str, int, list[object] | None] | None, option: str, point: _Point
+        self, target: tuple[str, str, int, str | None] | None, option: str, point: _Point
     ) -> tuple[StepOutcome, str | None]:
         if target is None:
             return StepOutcome.FAILED, "select requires a target"
@@ -1588,7 +1590,7 @@ class CdpPage(Page):
         return StepOutcome.EXECUTED, None
 
     async def _key(
-        self, target: tuple[str, str, int, list[object] | None] | None, key: str, point: _Point
+        self, target: tuple[str, str, int, str | None] | None, key: str, point: _Point
     ) -> tuple[StepOutcome, str | None]:
         session_id = target[0] if target is not None else self._session.active_session_id
         if target is not None:
@@ -1658,7 +1660,7 @@ class CdpPage(Page):
         return StepOutcome.EXECUTED, None
 
     async def _upload(
-        self, target: tuple[str, str, int, list[object] | None] | None, files: tuple[Attachment, ...], point: _Point
+        self, target: tuple[str, str, int, str | None] | None, files: tuple[Attachment, ...], point: _Point
     ) -> tuple[StepOutcome, str | None]:
         if target is None:
             return StepOutcome.FAILED, "upload requires a target"
@@ -1712,7 +1714,7 @@ class CdpPage(Page):
 
     async def _click_point(
         self,
-        target: tuple[str, str, int, list[object] | None],
+        target: tuple[str, str, int, str | None],
         point: tuple[float, float],
         *,
         prepare_fill: bool = False,
@@ -1729,7 +1731,7 @@ class CdpPage(Page):
 
     async def _stable_point(
         self,
-        target: tuple[str, str, int, list[object] | None],
+        target: tuple[str, str, int, str | None],
         point: tuple[float, float],
         *,
         prepare_fill: bool = False,
@@ -1769,7 +1771,7 @@ class CdpPage(Page):
 
     async def _drag(
         self,
-        target: tuple[str, str, int, list[object] | None] | None,
+        target: tuple[str, str, int, str | None] | None,
         point: _Point,
         destination_id: str | None,
     ) -> tuple[StepOutcome, str | None]:
@@ -1924,7 +1926,7 @@ class CdpPage(Page):
         # A changed or vanished control, or a new document, is a redraw.
         check = (
             "(ids => { const r = window.__fastbrowse; if (!r?.observed) return true; "
-            "return ids.some(id => r.observed.has(id) && JSON.stringify(r.guard(r.nodes.get(id))) !== "
+            "return ids.some(id => r.observed.has(id) && r.guardKey(r.nodes.get(id)) !== "
             f"r.observed.get(id)); }})({json.dumps(ids)})"
         )
         deadline = time.monotonic() + timeout_seconds
@@ -2169,14 +2171,14 @@ class CdpPage(Page):
 
     async def _before_action(
         self,
-        target: tuple[str, str, int, list[object] | None] | None,
+        target: tuple[str, str, int, str | None] | None,
         *,
         hit_test: bool,
         prepare_fill: bool = False,
         after_move: bool = False,
         scroll: bool = True,
         present: bool = False,
-    ) -> tuple[str, list[object] | None, _Point, bool, bool]:
+    ) -> tuple[str, str | None, _Point, bool, bool]:
         if target is None:
             return await self._fingerprint(), None, None, False, False
         session_id, _frame, local_id, guard = target
@@ -2186,7 +2188,7 @@ class CdpPage(Page):
         if after_move and not same_session:
             await self._evaluate(self._session.active_session_id, _PRESENTED_JS)
 
-        async def target_state() -> tuple[str, list[object] | None, _Point, bool, bool]:
+        async def target_state() -> tuple[str, str | None, _Point, bool, bool]:
             # Guard validation and hit testing share a renderer task, so no page script can swap the
             # verified control between them. Stale controls must never be scrolled into view.
             result = await self._evaluate(
@@ -2195,9 +2197,9 @@ class CdpPage(Page):
                 + (f"await {_PRESENTED_JS}; " if after_move and same_session else "")
                 + "const r = window.__fastbrowse; "
                 f"const fingerprint = {self._fingerprint_js if same_session and not after_move else "''"}; "
-                f"const guard = r?.guard ? r.guard(r.nodes.get({local_id})) : null; "
-                f"const point = {json.dumps(hit_test)} && JSON.stringify(guard) === "
-                f"JSON.stringify({json.dumps(guard)}) ? ({_HIT_TEST_JS})({local_id}, {json.dumps(scroll)}) : null; "
+                f"const guard = r?.guardKey ? r.guardKey(r.nodes.get({local_id})) : null; "
+                f"const point = {json.dumps(hit_test)} && guard === {json.dumps(guard)} "
+                f"? ({_HIT_TEST_JS})({local_id}, {json.dumps(scroll)}) : null; "
                 + (
                     f"if (Array.isArray(point)) {{ const e = r.nodes.get({local_id}); "
                     "const rect = e.getBoundingClientRect(); "
@@ -2336,17 +2338,13 @@ class CdpPage(Page):
         return out["result"].get("value")
 
 
-def _control_from_raw(
-    control_id: str, frame_id: str | None, c: _SnapshotControl, guard: list[object] | None
-) -> Control:
+def _control_from_raw(control_id: str, frame_id: str | None, c: _SnapshotControl, retarget_key: str | None) -> Control:
     return Control(
         id=control_id,
         frame_id=frame_id,
         frame_origin=c.frame_origin,
         form_id=c.form_id,
-        # A redraw changes the node ids at either end of the guard. Everything between them, including
-        # the receiving document's timeOrigin and form semantics, must survive before an action can follow it.
-        retarget_key=hashlib.sha256(json.dumps(guard[1:-1]).encode()).hexdigest() if guard else None,
+        retarget_key=retarget_key,
         role=c.role,
         label=c.label,
         context=c.context,

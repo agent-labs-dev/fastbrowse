@@ -309,7 +309,7 @@ async def test_cancelled_browser_check_drains_renderer_and_dialog_waits(
         page = CdpPage(session, Config())
         monkeypatch.setattr(page, "_move", AsyncMock())
         task = asyncio.create_task(
-            page._click_point(("session", "main", 1, []), (10, 10)) if press else page._changed_since("before")
+            page._click_point(("session", "main", 1, ""), (10, 10)) if press else page._changed_since("before")
         )
         try:
             await asyncio.wait_for(started.wait(), timeout=2)

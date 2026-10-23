@@ -153,6 +153,25 @@
     return id;
   };
   for (const [id, e] of registry.nodes) if (!e.isConnected) registry.nodes.delete(id);
+  // The DOM cannot change while this script runs, so a label, a text or a section title read once is reused for
+  // the rest of it. `registry.guard` reads them again in a later script, against a page that may have changed
+  // since, so the reuse ends as soon as this one does, whether it returns or throws.
+  const caches = [];
+  registry.nativeQueueMicrotask ||= window.queueMicrotask.bind(window);
+  registry.nativeQueueMicrotask(() => {
+    for (const cache of caches) cache.clear();
+    caches.length = 0;
+  });
+  const memo = read => {
+    const cache = new Map();
+    caches.push(cache);
+    return e => {
+      if (!caches.includes(cache)) return read(e);
+      if (!cache.has(e)) cache.set(e, read(e));
+      return cache.get(e);
+    };
+  };
+  const innerTextOf = memo(e => e.innerText);
 
   const safe = e => e.type !== 'hidden';
   // Password and agent-typed secret values never leave the page: only their length is observed.
@@ -230,21 +249,21 @@
       .filter(Boolean)
       .join(' ');
   };
-  const labelOf = (e, seen = new Set()) => {
+  const labelFrom = (e, seen) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
     const root = typeof e.getRootNode === 'function' ? e.getRootNode() : document;
     const byId = id => (root.getElementById ? root.getElementById(id) : document.getElementById(id));
     const referenced = (e.getAttribute('aria-labelledby') || '')
       .split(/\s+/)
-      .map(id => labelOf(byId(id), seen))
+      .map(id => labelFrom(byId(id), seen))
       .filter(Boolean)
       .join(' ');
     return (
       referenced ||
       e.getAttribute('aria-label') ||
       [...(e.labels || [])]
-        .map(l => labelOf(l, seen))
+        .map(l => labelFrom(l, seen))
         .filter(Boolean)
         .join(' ') ||
       (['button', 'submit', 'reset'].includes(e.type) ? e.value : '') ||
@@ -256,7 +275,7 @@
               n.nodeType === 3
                 ? n.textContent
                 : n.nodeType === 1 && !CODE.has(n.tagName) && n.getAttribute('aria-hidden') !== 'true'
-                  ? labelOf(n, seen)
+                  ? labelFrom(n, seen)
                   : '',
             )
             .join(' ')
@@ -266,6 +285,8 @@
       ''
     );
   };
+
+  const labelOf = memo(e => labelFrom(e, new Set()));
 
   const ARIA_ROLES = [
     'button',
@@ -318,7 +339,7 @@
     return null;
   };
 
-  const submitSemantics = e => {
+  const submitSemantics = memo(e => {
     const form = e.form;
     const explicit = ['BUTTON', 'INPUT'].includes(e.tagName) && ['submit', 'image'].includes(e.type);
     const implicit = [
@@ -346,9 +367,9 @@
       label: submit ? labelOf(submit) : labelOf(form),
       method: submit?.getAttribute('formmethod') || form.method,
       action: submit?.getAttribute('formaction') || form.action,
-      text: excerpt(form.innerText, FORM_TEXT_CHARS),
+      text: excerpt(innerTextOf(form), FORM_TEXT_CHARS),
     });
-  };
+  });
 
   const framePath = doc => {
     if (doc === document) return null;
@@ -379,6 +400,21 @@
     }
   }
 
+  // Guards and the page key go to Python as digests: each comparison is equality, and the full guards cost more to
+  // send than the snapshot takes to compute. Not cryptographic, and it needs not be: a page that wants a guard to
+  // hold can simply leave its DOM alone.
+  const digest = text => {
+    let h1 = 0xdeadbeef,
+      h2 = 0x41c6ce57;
+    for (let i = 0; i < text.length; i++) {
+      const c = text.charCodeAt(i);
+      h1 = Math.imul(h1 ^ c, 2654435761);
+      h2 = Math.imul(h2 ^ c, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
+  };
   registry.guard = e => {
     if (!e?.isConnected || !visible(e)) return null;
     const source = sourceOf(e);
@@ -400,7 +436,7 @@
       e.getAttribute('aria-checked'),
       e.getAttribute('aria-selected'),
       e.getAttribute('href'),
-      scope?.innerText?.slice(0, GUARD_TEXT_CHARS) || '',
+      (scope && innerTextOf(scope))?.slice(0, GUARD_TEXT_CHARS) || '',
       e.ownerDocument.location.origin,
       e.ownerDocument.defaultView.performance.timeOrigin,
       submitSemantics(e),
@@ -408,6 +444,10 @@
       source.getAttribute('autocomplete'),
       identity(source),
     ];
+  };
+  registry.guardKey = e => {
+    const guard = registry.guard(e);
+    return guard && digest(JSON.stringify(guard));
   };
 
   const controls = [];
@@ -444,7 +484,8 @@
     if (rname === 'gridcell' && e.querySelector('button,[role="button"]')) continue;
     // A button-styled link offers the same label twice, but its inner button owns every useful click point.
     if (rname === 'link') {
-      const nested = e.querySelectorAll(SELECTOR);
+      // Most links hold no button, and querying every link for every control was the walk's slowest step.
+      const nested = e.querySelector('button') ? e.querySelectorAll(SELECTOR) : [];
       const button = nested.length === 1 ? nested[0] : null;
       if (button?.tagName === 'BUTTON' && visible(button) && !button.matches(':disabled') &&
           !button.closest('[aria-disabled="true"],[inert]') && labelOf(button) === labelOf(e)) continue;
@@ -531,11 +572,11 @@
   // A label tied to no control titles what follows it, as a heading would: a blog post's "Date Picker 3" is one,
   // and the post's first heading ("Data Entry Form") named that picker's Submit when only headings counted.
   // A hidden title names nothing on screen: innerText still returns a `hidden` label's text.
-  const titles = scope =>
+  const titles = memo(scope =>
     [...scope.querySelectorAll(`${HEADINGS},label`)].filter(
       e =>
         (e.localName !== 'label' || !e.control) && e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
-    );
+    ));
   // A table's header cell names its own row, and a caption its own table, never what sits outside them: a jQuery UI
   // datepicker's Next button was named "Su", its weekday header, and every month's Next read the same.
   const reaches = (title, element) =>
@@ -546,7 +587,7 @@
     let first = '',
       before = '';
     for (const title of titles(scope)) {
-      const text = firstLine(title.innerText);
+      const text = firstLine(innerTextOf(title));
       if (!text || text === label || title.contains(element) || !reaches(title, element)) continue;
       first ||= text;
       if (title.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) before = text;
@@ -563,18 +604,18 @@
     // A line that is itself a repeated control's label ("Prev") reads the same in every repeat, so it names none:
     // past it, a datepicker's first line is the month it shows. The label is cut out as whole words, since a day
     // labelled "2" cut out of "October 2026" left "October 0 6".
-    const lines = (scope.innerText || '')
+    const lines = (innerTextOf(scope) || '')
       .split('\n')
       .map(line => line.replace(/\s+/g, ' ').trim())
       .filter(line => line && !repeated.has(line));
     return firstLine(lines.map(line => (label ? ` ${line} `.split(` ${label} `).join(' ') : line)).join('\n'));
   };
-  const contextOf = (element, twins, label, nearest = true) => {
+  const contextOf = (element, holding, label, nearest = true) => {
     // The widest twin-free ancestor is the card, row or section the twins repeat over. A narrower one names
     // the button's own wrapper, which on a shop is its price rather than the product it belongs to.
     let scope = null;
     for (let e = element.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
-      if (twins.some(twin => twin !== element && e.contains(twin))) break;
+      if (holding.get(e) > 1) break;
       scope = e;
       // A lone open reply has no form twin nearby; crossing its record picks a different commenter's name.
       if (e.matches('article,li,[role="listitem"]') ||
@@ -709,12 +750,18 @@
   for (const group of byLabel.values()) {
     if (group.length < 2) continue;
     const twins = group.map(c => registry.nodes.get(c.id));
-    const nearest = group.map(c => contextOf(registry.nodes.get(c.id), twins, c.label));
+    // How many twins each ancestor holds. One that holds two is past the card, and counting once beats asking
+    // every ancestor of every twin whether it contains each of the others.
+    const holding = new Map();
+    for (const twin of twins) {
+      for (let e = twin.parentElement; e; e = e.parentElement) holding.set(e, (holding.get(e) || 0) + 1);
+    }
+    const nearest = group.map(c => contextOf(registry.nodes.get(c.id), holding, c.label));
     group.forEach((c, i) => {
       // Cards that each end in an "Options" heading share their nearest title, which would name every twin
       // alike; a twin whose nearest title another twin shares is named by its card's first title instead.
       const shared = nearest.indexOf(nearest[i]) !== nearest.lastIndexOf(nearest[i]);
-      const context = shared ? contextOf(registry.nodes.get(c.id), twins, c.label, false) : nearest[i];
+      const context = shared ? contextOf(registry.nodes.get(c.id), holding, c.label, false) : nearest[i];
       if (context) c.context = context;
     });
     // Options that are direct children of one list share every ancestor, and their aria-label hides the text
@@ -770,7 +817,7 @@
       const aria = (e.getAttribute('aria-label') || '').trim();
       const outside = [...e.children]
         .filter(child => child !== path)
-        .map(child => firstLine(child.innerText))
+        .map(child => firstLine(innerTextOf(child)))
         .find(line => line && line !== label && !repeated.has(line));
       return excerpt((aria !== label && aria) || outside || first, CONTROL_CONTEXT_CHARS);
     }
@@ -883,6 +930,8 @@
   // Text in a same-process child document is on screen as much as the parent's: a frameset page has no text of
   // its own at all. Each child is read in its own coordinates, shifted by where its frame sits.
   const words = [];
+  // Text nodes share their parents, and a parent's visibility is asked once; geometry, the cheaper test, goes first.
+  const shown = memo(visible);
   const readText = (doc, dx, dy) => {
     if (!doc.body) return;
     const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
@@ -891,7 +940,7 @@
     while ((node = walker.nextNode())) {
       const value = node.textContent.trim(),
         parent = node.parentElement;
-      if (!value || !parent || parent.closest('script,style,noscript,template') || !visible(parent)) continue;
+      if (!value || !parent) continue;
       range.selectNodeContents(node);
       const r = range.getBoundingClientRect();
       const top = r.top + dy,
@@ -902,7 +951,9 @@
         top + r.height > 0 &&
         top < innerHeight &&
         left + r.width > 0 &&
-        left < innerWidth
+        left < innerWidth &&
+        !parent.closest('script,style,noscript,template') &&
+        shown(parent)
       ) {
         words.push(value);
       }
@@ -922,8 +973,15 @@
   readText(document, 0, 0);
   const viewport_text = words.join('\n');
 
-  const guards = {};
-  for (const c of controls) guards[c.id] = registry.guard(registry.nodes.get(c.id));
+  const guards = {},
+    retarget_keys = {};
+  for (const c of controls) {
+    const guard = registry.guard(registry.nodes.get(c.id));
+    guards[c.id] = guard && digest(JSON.stringify(guard));
+    // A redraw changes the node ids at either end of the guard. Everything between them, including the receiving
+    // document's timeOrigin and form semantics, must survive before an action can follow it.
+    retarget_keys[c.id] = guard && digest(JSON.stringify(guard.slice(1, -1)));
+  }
   // A dependent field can appear without changing page text. Compare all controls,
   // excusing only the value and required marker of the field just filled.
   const formState = controls.map(({ distance, offscreen, ...c }) => {
@@ -945,13 +1003,13 @@
   }
   registry.formObserved = { page: formPage, controls: formState };
   // Kept so a later check can ask whether any of these controls changed without sending the guards back.
-  registry.observed = new Map(controls.map(c => [c.id, JSON.stringify(guards[c.id])]));
+  registry.observed = new Map(controls.map(c => [c.id, guards[c.id]]));
   const field_state = [...document.querySelectorAll('input,textarea,select')]
     .filter(safe)
     .map(e => [identity(e), reveal(e), e.checked, e.selectedIndex, e.disabled, e.readOnly]);
   // Compare meaning and identity for the page_key fingerprint; geometry is re-resolved just before input.
   const semantics = controls.map(({ distance, ...c }) => c);
-  const page_key = JSON.stringify([
+  const page_key = digest(JSON.stringify([
     location.href,
     scrollX,
     scrollY,
@@ -961,7 +1019,7 @@
     viewport_text,
     semantics,
     field_state,
-  ]);
+  ]));
 
   return {
     url: location.href,
@@ -971,6 +1029,7 @@
     controls: semantics,
     page_key,
     guards,
+    retarget_keys,
     inaccessible_frames: inaccessible,
   };
 })

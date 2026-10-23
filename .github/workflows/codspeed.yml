@@ -1,0 +1,46 @@
+name: CodSpeed
+# snapshot.js is the only code these benchmarks time, so nothing else pays for a macro runner. The runs on main
+# are the baseline each pull request is compared with.
+on:
+  pull_request:
+    paths: &measured
+      - src/fastbrowse/browser/snapshot.js
+      - benchmarks/**
+      - .github/workflows/codspeed.yml
+  push:
+    branches: [main]
+    paths: *measured
+  workflow_dispatch:
+permissions: {}
+jobs:
+  snapshot:
+    # Bare metal: the timings are wall time in a browser process, which a shared VM's neighbours would move.
+    runs-on: codspeed-macro
+    # Keeps an approved fork pull request off the paid runner. It is no security boundary: a fork's pull request
+    # runs its own copy of this file, so the fork approval policy is what keeps a stranger's code off the runner.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions: {contents: read, id-token: write}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with: {python-version: "3.13"}
+      - run: uv sync --locked --group bench
+      # The runner image's Node is 18, and Playwright needs 20 or newer.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: {node-version: "22", package-manager-cache: false}
+      # Macro runners are arm64 Linux, which Chrome has no build for; Playwright publishes a Chromium for it.
+      - name: Install Chromium
+        run: |
+          npx --yes playwright@1.63.0 install --with-deps chromium
+          chrome="$(find "$HOME/.cache/ms-playwright" -type f -name chrome -path '*chromium-*' | head -n 1)"
+          test -x "$chrome"
+          echo "FASTBROWSE_CHROME=$chrome" >> "$GITHUB_ENV"
+          # Ubuntu 24.04's AppArmor refuses Chromium the user namespace its sandbox starts in.
+          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - uses: CodSpeedHQ/action@78102a468f96d8e0ccb92d0ec49425753fc42062 # v5.6.0
+        with:
+          mode: walltime
+          run: uv run --no-sync pytest benchmarks --codspeed -q

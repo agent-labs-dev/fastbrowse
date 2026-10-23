@@ -11,6 +11,17 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Each observation sends far less from the browser to fastbrowse. The per-control freshness guards and the page
+  key now leave the page as short digests, where a guard used to carry up to 6,000 characters of the text around
+  its control. A Wikipedia article's observation fell from 7.1 MB to 2.4 MB and its round trip from 508 to 291 ms;
+  over a remote browser, such as Browser Use Cloud, the saving is larger.
+
+- Reading a page's controls takes about half as long on a dense page, with the same result: the snapshot reuses
+  each label, text and section title it has already read in that pass instead of reading it again, and stops
+  asking every ancestor of each repeated button whether it holds the others. On the Wikipedia article for the
+  United States, 5,571 controls, the in-page work fell from 477 to 238 ms, and on an Amazon results page from 71
+  to 39 ms.
+
 - A JavaScript dialog that opens while a page is being read no longer stalls the run for two minutes. A page
   showing a loading indicator is read once the indicator clears, and an alert a timer opened during that wait
   blocked the read until the browser command deadline. The read now stops when the dialog opens and reports the

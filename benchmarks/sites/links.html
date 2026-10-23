@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Links</title><link rel="stylesheet" href="base.css"></head>
+<body>
+<!-- An article of links, as on a long reference page. One in twenty is a button-styled link, and the
+     last is the list's next page. Size it with ?n=. -->
+<main id="main"></main>
+<script>
+const n = Number(new URLSearchParams(location.search).get('n') || 40);
+const parts = [];
+for (let i = 0; i < n; i++) {
+  if (i % 6 === 0) parts.push(`<p class="row">Section ${i / 6} of the article, between its links</p>`);
+  const label = `Topic ${i % 50}`;
+  // Past the viewport, so the list's tail is reported offscreen with a distance.
+  if (i === n - 1) parts.push(`<div class="row" style="height: 900px"></div><a class="cell" href="/page/2" rel="next">Next</a>`);
+  else if (i % 20 === 19) parts.push(`<a class="cell" href="/topic/${i}"><button>${label}</button></a>`);
+  else parts.push(`<a class="cell" href="/topic/${i}" title="About ${label}">${label}</a>`);
+}
+document.getElementById('main').innerHTML = parts.join('');
+</script>
+</body>
+</html>
