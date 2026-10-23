@@ -400,6 +400,21 @@
     }
   }
 
+  // Guards and the page key go to Python as digests: each comparison is equality, and the full guards cost more to
+  // send than the snapshot takes to compute. Not cryptographic, and it needs not be: a page that wants a guard to
+  // hold can simply leave its DOM alone.
+  const digest = text => {
+    let h1 = 0xdeadbeef,
+      h2 = 0x41c6ce57;
+    for (let i = 0; i < text.length; i++) {
+      const c = text.charCodeAt(i);
+      h1 = Math.imul(h1 ^ c, 2654435761);
+      h2 = Math.imul(h2 ^ c, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
+  };
   registry.guard = e => {
     if (!e?.isConnected || !visible(e)) return null;
     const source = sourceOf(e);
@@ -429,6 +444,10 @@
       source.getAttribute('autocomplete'),
       identity(source),
     ];
+  };
+  registry.guardKey = e => {
+    const guard = registry.guard(e);
+    return guard && digest(JSON.stringify(guard));
   };
 
   const controls = [];
@@ -954,8 +973,15 @@
   readText(document, 0, 0);
   const viewport_text = words.join('\n');
 
-  const guards = {};
-  for (const c of controls) guards[c.id] = registry.guard(registry.nodes.get(c.id));
+  const guards = {},
+    retarget_keys = {};
+  for (const c of controls) {
+    const guard = registry.guard(registry.nodes.get(c.id));
+    guards[c.id] = guard && digest(JSON.stringify(guard));
+    // A redraw changes the node ids at either end of the guard. Everything between them, including the receiving
+    // document's timeOrigin and form semantics, must survive before an action can follow it.
+    retarget_keys[c.id] = guard && digest(JSON.stringify(guard.slice(1, -1)));
+  }
   // A dependent field can appear without changing page text. Compare all controls,
   // excusing only the value and required marker of the field just filled.
   const formState = controls.map(({ distance, offscreen, ...c }) => {
@@ -977,13 +1003,13 @@
   }
   registry.formObserved = { page: formPage, controls: formState };
   // Kept so a later check can ask whether any of these controls changed without sending the guards back.
-  registry.observed = new Map(controls.map(c => [c.id, JSON.stringify(guards[c.id])]));
+  registry.observed = new Map(controls.map(c => [c.id, guards[c.id]]));
   const field_state = [...document.querySelectorAll('input,textarea,select')]
     .filter(safe)
     .map(e => [identity(e), reveal(e), e.checked, e.selectedIndex, e.disabled, e.readOnly]);
   // Compare meaning and identity for the page_key fingerprint; geometry is re-resolved just before input.
   const semantics = controls.map(({ distance, ...c }) => c);
-  const page_key = JSON.stringify([
+  const page_key = digest(JSON.stringify([
     location.href,
     scrollX,
     scrollY,
@@ -993,7 +1019,7 @@
     viewport_text,
     semantics,
     field_state,
-  ]);
+  ]));
 
   return {
     url: location.href,
@@ -1003,6 +1029,7 @@
     controls: semantics,
     page_key,
     guards,
+    retarget_keys,
     inaccessible_frames: inaccessible,
   };
 })

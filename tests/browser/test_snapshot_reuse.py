@@ -31,6 +31,6 @@ async def test_a_guard_after_the_snapshot_reads_the_changed_page(page: CdpPage, 
     changed = await page._evaluate(
         page._session.active_session_id,
         f"(() => {{ const r = window.__fastbrowse; const e = r.nodes.get({target['id']}); {edit}; "
-        f"return JSON.stringify(r.guard(e)) !== r.observed.get({target['id']}); }})()",
+        f"return r.guardKey(e) !== r.observed.get({target['id']}); }})()",
     )
     assert changed, json.dumps(target)
