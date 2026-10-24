@@ -1,0 +1,35 @@
+[package]
+name = "fastbrowse-browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The browser layer: Chrome over raw CDP, sessions, observation, capture and actions (src/fastbrowse/browser)."
+
+[features]
+default = ["cloud"]
+# Browser Use Cloud: an HTTPS client on the TLS stack the websocket already links, so it adds no crates.
+cloud = []
+# The Cua Driver cursor overlay (Linux X11). A child process over stdio, no extra crates.
+cursor = []
+# Recording the active tab to MP4 through ffmpeg. A child process, no extra crates.
+recording = []
+
+[dependencies]
+# Hashes, HMAC and the TLS provider, already linked by rustls.
+ring = "0.17"
+# Base64 and base32, already linked by tungstenite.
+data-encoding = "2.11"
+fastbrowse-core = { path = "../fastbrowse-core" }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+httparse = "1.10"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "macros", "sync", "process", "io-util", "fs"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+webpki-roots = "1"
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros"] }

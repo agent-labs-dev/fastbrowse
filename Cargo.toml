@@ -1,6 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["crates/fastbrowse-core", "crates/fastbrowse-clients", "crates/fastbrowse-py", "crates/fastbrowse-node", "crates/fastbrowse-probe"]
+members = [
+    "crates/fastbrowse-core",
+    "crates/fastbrowse-clients",
+    "crates/fastbrowse-browser",
+    "crates/fastbrowse-py",
+    "crates/fastbrowse-node",
+    "crates/fastbrowse-probe",
+]
 
 [workspace.package]
 version = "0.7.0"
