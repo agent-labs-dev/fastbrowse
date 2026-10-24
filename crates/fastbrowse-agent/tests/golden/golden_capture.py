@@ -270,6 +270,8 @@ class _Case:
         self.calls: list[dict[str, Any]] = []
         self.ledgers = ledgers
         self.skip: str | None = None
+        self.fake_raised: set[str] = set()
+        """What an LLM fake raised that is not an LLM failure, such as IndexError once its script ran out."""
 
     def counts(self) -> list[tuple[int, int, int]]:
         return [(len(ledger.lines), ledger.jev_calls, ledger.llm_calls) for ledger in self.ledgers]
@@ -370,6 +372,8 @@ class _Proxy:
             raise
         except BaseException as error:
             entry["response"] = {"error": type(error).__name__, "message": str(error)}
+            if isinstance(error, Exception):
+                case.fake_raised.add(error_kind(error))
             raise
         finally:
             if (effect := case.effect(before)) is not None:
@@ -452,6 +456,10 @@ class _Recording:
             "trace": [_safe(event) for event in events],
         }
         skip = self.skip or self.case.skip
+        if skip is None and outcome.get("error") in self.case.fake_raised:
+            # A call that ends on the fake's own exception cannot end that way in Rust, whose LLM client can only fail
+            # with an LLM error.
+            skip = f"the LLM fake raised {outcome['error']}, which no LLM client raises"
         if skip is not None:
             record["skip"] = skip
         if self.unsupported:

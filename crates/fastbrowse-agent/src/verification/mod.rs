@@ -195,6 +195,83 @@ pub struct DoneOptions<'a> {
     pub trace: Trace,
 }
 
+/// How a requirement that only moves through pages is worded (`_TRAVERSAL`), each a whole-word match ignoring case.
+const TRAVERSAL: &[&str] = &[
+    "navigate",
+    "browse",
+    "go through",
+    "going through",
+    "go to each",
+    "visit",
+    "scroll",
+    "page through",
+    "paging through",
+    "read through",
+    "look through",
+    "open each",
+    "move through",
+    "click through",
+    "walk through",
+    "search through",
+    "explore",
+];
+
+/// The verbs that make a requirement something the caller receives instead (`_COMMITTING`): a submission, an account,
+/// a purchase. Python's optional words are spelled out.
+const COMMITTING: &[&str] = &[
+    "submit",
+    "send",
+    "sign in",
+    "sign up",
+    "log in",
+    "log out",
+    "login",
+    "logout",
+    "register",
+    "add to cart",
+    "add to basket",
+    "add to bag",
+    "add to the cart",
+    "add to the basket",
+    "add to the bag",
+    "place order",
+    "place the order",
+    "place an order",
+    "place your order",
+    "buy",
+    "purchase",
+    "pay",
+    "check out",
+    "checkout",
+    "book",
+    "reserve",
+    "delete",
+    "remove",
+    "upload",
+    "download",
+    "fill",
+    "type",
+    "enter",
+    "apply",
+    "save",
+    "create",
+    "post",
+    "publish",
+    "confirm",
+    "accept",
+    "subscribe",
+];
+
+/// Whether a requirement only directs the browsing, rather than naming something the caller receives.
+///
+/// A traversal requirement is instrumental: its point is the information it reaches, so once that information is
+/// evidenced and verified, an unconfirmed visit does not leave the task unanswered. Anything that changes state on
+/// the site keeps blocking, because a run that never submitted the form or placed the order has not done what the
+/// caller asked for however good its evidence is.
+pub fn traversal_only(text: &str) -> bool {
+    text::find_word(text, TRAVERSAL).is_some() && text::find_word(text, COMMITTING).is_none()
+}
+
 fn probability(answers: &IndexMap<String, Answer>, key: &str) -> f64 {
     match answers.get(key) {
         Some(Answer::Noul(answer)) => answer.probability,
@@ -232,7 +309,25 @@ pub async fn check_done(
         .collect();
     let mut unmet: Vec<String> = unevidenced.iter().map(|id| id.to_string()).collect();
     unmet.sort();
-    for requirement in &plan.requirements {
+    // A requirement that only directs the browsing -- go through every page, browse the category, visit each listing
+    // -- is how the run reaches the information, not something the caller receives. Once every information
+    // requirement is evidenced, holding the run open for one of these buys nothing: a count read off the site's own
+    // exhaustive tag listing still looped on "navigate through every page" until its recoveries ran out. The answer
+    // stands; the browsing step is reported as unconfirmed rather than blocking an evidenced answer. The exemption
+    // stands in for an answer that is already proved. A plan that asks for no answer, or one with no information
+    // requirement to prove, has no answer for a visit to stand in for, so its navigation is the task.
+    let standing_answer =
+        plan.page_answer_expected() && plan.requirements.iter().any(|r| r.kind == RequirementKind::Information);
+    let instrumental: HashSet<&str> = if standing_answer && unevidenced.is_empty() {
+        plan.requirements
+            .iter()
+            .filter(|r| r.kind == RequirementKind::Action && traversal_only(&r.text))
+            .map(|r| r.id.as_str())
+            .collect()
+    } else {
+        HashSet::new()
+    };
+    for requirement in plan.requirements.iter().filter(|r| !instrumental.contains(r.id.as_str())) {
         match requirement.kind {
             RequirementKind::Action => {
                 questions.insert(
@@ -305,7 +400,7 @@ pub async fn check_done(
     };
     let evaluation = jev.evaluate(&state, &questions).await?;
     let answers = &evaluation.answers;
-    for requirement in &plan.requirements {
+    for requirement in plan.requirements.iter().filter(|r| !instrumental.contains(r.id.as_str())) {
         if probability(answers, &format!("unmet_{}", requirement.id)) > thresholds.claim_problem_above {
             unmet.push(requirement.id.clone());
         }
@@ -318,8 +413,9 @@ pub async fn check_done(
         .requirements
         .iter()
         .filter(|r| {
-            !matches!(answers.get(&format!("unmet_{}", r.id)),
-                Some(Answer::Noul(doubt)) if doubt.probability < thresholds.requirement_confirmed_below)
+            !instrumental.contains(r.id.as_str())
+                && !matches!(answers.get(&format!("unmet_{}", r.id)),
+                    Some(Answer::Noul(doubt)) if doubt.probability < thresholds.requirement_confirmed_below)
         })
         .map(|r| r.id.clone())
         .collect();
@@ -2284,5 +2380,101 @@ mod tests {
         let identities = fastbrowse_core::schema::json_schema(&identity_schema(["criterion_17", "other"]));
         assert_eq!(identities["$defs"]["_RequiredBindings"]["required"], json!(["criterion_17", "other"]));
         assert_eq!(identities["required"], json!(["identities", "bindings"]));
+    }
+
+    // -- tests/test_accuracy_fixes.py: a browsing step cannot outvote an evidenced answer ------------------------
+
+    #[test]
+    fn only_browsing_steps_are_instrumental() {
+        // A browsing step is how the run reaches the information. Anything that changes state on the site is what
+        // the caller asked for, so it keeps blocking however good the evidence is.
+        for (text, traversal) in [
+            ("Navigate through every page of the site.", true),
+            ("Browse the Sequential Art category, including all of its pages.", true),
+            ("Scroll through the listing until every result has been shown.", true),
+            ("Sign in with username standard_user and password secret_sauce.", false),
+            ("Add both products to the cart and place the order.", false),
+            ("Submit the contact form with the prepared message.", false),
+            ("Go through every page and submit the last page's form.", false),
+            ("Report the country with the 12th-highest GDP.", false),
+        ] {
+            assert_eq!(traversal_only(text), traversal, "{text}");
+        }
+    }
+
+    /// `_Jev` in tests/test_done_check.py: answers each question it is asked from a table of probabilities.
+    struct TableJev(Vec<(&'static str, f64)>);
+
+    impl JevClient for TableJev {
+        fn evaluate<'a>(
+            &'a self,
+            _: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> fastbrowse_core::BoxFuture<
+            'a,
+            std::result::Result<fastbrowse_core::jev::Evaluation, fastbrowse_core::jev::JevError>,
+        > {
+            let answers: Map<String, Value> = self
+                .0
+                .iter()
+                .filter(|(key, _)| questions.contains_key(*key))
+                .map(|(key, p)| (key.to_string(), json!({"type": "noul", "probability": p})))
+                .collect();
+            let evaluation = json!({"model": "test", "answers": answers, "input_tokens": 1,
+                "cost": {"component": "jev", "basis": "estimated", "dollars": 0.0}});
+            Box::pin(async move { Ok(serde_json::from_value(evaluation).expect("evaluation")) })
+        }
+    }
+
+    fn count_plan() -> Plan {
+        serde_json::from_value(json!({
+            "requirements": [
+                {"id": "r1", "text": "Navigate through every page of the site.", "kind": "action"},
+                {"id": "r2", "text": "Count the quotes tagged love.", "kind": "information"},
+            ],
+            "answer_expected": true,
+        }))
+        .expect("plan")
+    }
+
+    fn counted_notes() -> Notes {
+        let total = "14 quotes are tagged love";
+        let evidence: Evidence = serde_json::from_value(json!({
+            "source_id": "s0", "url": "https://example.test", "frame_id": null,
+            "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": "love", "start": 0, "end": total.len(),
+            "quote": total,
+        }))
+        .expect("evidence");
+        Notes::new([crate::memory::Fact::read(Some("r2"), total, evidence, FactReader::Llm)])
+    }
+
+    fn page() -> Observation {
+        serde_json::from_value(json!({
+            "url": "https://example.test/encode/httpx", "title": "encode/httpx", "page_key": "k",
+            "captured_at": "2026-01-01T00:00:00Z", "controls": [], "omitted_controls": 0,
+            "viewport_text": "encode/httpx", "tabs": [],
+        }))
+        .expect("observation")
+    }
+
+    fn done(answers: Vec<(&'static str, f64)>, notes: &Notes) -> DoneCheck {
+        let jev = TableJev(answers);
+        let options = DoneOptions::default();
+        block_on(check_done(&jev, "Count them.", &count_plan(), &page(), notes, &Thresholds::default(), None, &options))
+            .expect("check")
+    }
+
+    #[test]
+    fn an_unconfirmed_browsing_step_does_not_hold_an_evidenced_answer() {
+        // Every information requirement is evidenced; only the visit is unconfirmed, and the page is doubted as a
+        // whole. The tag count was read off the site's own exhaustive listing.
+        let check = done(vec![("complete", 0.63), ("unmet_r1", 0.9), ("unmet_r2", 0.1)], &counted_notes());
+        assert_eq!(check.verdict, DoneVerdict::Accept);
+    }
+
+    #[test]
+    fn an_unevidenced_answer_still_keeps_the_run_working() {
+        // The traversal exemption is for a run that has read what it was asked for, never for one that has not.
+        assert_eq!(done(vec![("complete", 0.9)], &Notes::default()).verdict, DoneVerdict::Reject);
     }
 }
