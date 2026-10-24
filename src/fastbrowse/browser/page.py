@@ -361,6 +361,8 @@ class _Snapshot(_FrameText):
     """snapshot.js output for one frame."""
 
     viewport_text: str
+    visual_content: int = 0
+    """Visible images, canvases, drawings and videos: page state the text and the controls do not carry."""
     document_key: str
     controls: tuple[_SnapshotControl, ...]
     page_key: str
@@ -716,6 +718,7 @@ class CdpPage(Page):
             controls=tuple(kept),
             omitted_controls=omitted,
             viewport_text=viewport_text,
+            visual_content=any(frame.raw.visual_content for frame in frames.values()),
             tabs=self._session.tabs(),
             dialog=self._session.pending_dialog(),
             inaccessible_frames=inaccessible,

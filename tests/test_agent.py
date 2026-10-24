@@ -3539,6 +3539,41 @@ async def test_a_decision_dropped_for_a_redraw_still_asks_the_bot_check_again() 
     assert all("bot_check" in asked for asked in jev.requests)
 
 
+async def test_a_challenge_is_reloaded_once_per_address_not_once_per_document() -> None:
+    """A reload mints a new document key, so a guard keyed on the document reloads a surviving challenge forever."""
+    page = Mock(spec=Page)
+    page.navigate = AsyncMock()
+    page.artifacts = ()
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    agent._outwait = AsyncMock(return_value=True)
+    state = await run_state()
+    challenge = _at("https://pypi.test/simple/")
+
+    assert await agent._reload_challenge(state, challenge) is True
+    # The reload's own navigation mints a new document for the same address; the guard must still refuse it,
+    # or a persistent control-less interstitial is reloaded on every iteration instead of reported as blocked.
+    reloaded = challenge.model_copy(update={"document_key": "2", "page_key": "k2"})
+    assert await agent._reload_challenge(state, reloaded) is False
+    assert page.navigate.await_count == 1
+
+
+async def test_the_production_verifier_caps_the_verdict_at_verdict_tokens() -> None:
+    """VERDICT_TOKENS is passed by llm_verify alone; the run's own verifier must cap its request too."""
+    from fastbrowse.verification import VERDICT_TOKENS
+
+    page = Mock(spec=Page)
+    page.artifacts = ()
+    llm = ScriptedLLM([{"missing": [], "ungrounded": [], "complete": True}])
+    agent = Agent(page, ScriptedJev({}), llm)
+    agent._screenshots = AsyncMock(return_value=())
+    state = await run_state()
+    check = DoneCheck(verdict=DoneVerdict.VERIFY, complete=0.5, unmet=(), doubted=(), answer=None, cost=FREE)
+
+    await agent._verify_done(state, _at("https://example.test/"), check)
+
+    assert llm.output_caps == [VERDICT_TOKENS]
+
+
 @pytest.mark.parametrize(
     ("proposed", "opened"),
     [
