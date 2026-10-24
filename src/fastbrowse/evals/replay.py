@@ -130,28 +130,32 @@ def canonical_value(value: Any) -> Any:
 
 TARGET_ID = re.compile(r"\b[0-9A-F]{32}\b")
 """A Chrome target id. Each browser makes up its own, and the agent offers tabs to Jev by id, so the ids are
-numbered by first appearance in the key and swapped back into the response (`translate_targets`)."""
+numbered by first appearance in the body as the agent wrote it, before members are sorted (sorting first would
+number them by the random ids themselves), and swapped back into the response (`translate_targets`)."""
 
 
-def _sorted_json(body: bytes | str | Any) -> str:
-    if isinstance(body, bytes | str):
-        try:
-            body = json.loads(body)
-        except ValueError:
-            return canonical_text(body.decode("utf-8", "replace") if isinstance(body, bytes) else body)
-    return json.dumps(canonical_value(body), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+def _as_written(body: bytes | str | Any) -> str:
+    if isinstance(body, bytes):
+        return body.decode("utf-8", "replace")
+    return body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
 
 
 def target_ids(body: bytes | str | Any) -> list[str]:
-    """The Chrome target ids a request names, in the order the canonical form first names them."""
-    return list(dict.fromkeys(TARGET_ID.findall(_sorted_json(body))))
+    """The Chrome target ids a request names, in the order it first names them."""
+    return list(dict.fromkeys(TARGET_ID.findall(_as_written(body))))
 
 
 def canonical_json(body: bytes | str | Any) -> str:
     """The body as one canonical JSON string. A body that is not JSON is canonicalized as text."""
-    text = _sorted_json(body)
-    numbers = {target: f"<target {n}>" for n, target in enumerate(dict.fromkeys(TARGET_ID.findall(text)), 1)}
-    return TARGET_ID.sub(lambda match: numbers[match.group()], text) if numbers else text
+    text = _as_written(body)
+    numbers = {target: f"<target {n}>" for n, target in enumerate(target_ids(text), 1)}
+    if numbers:
+        text = TARGET_ID.sub(lambda match: numbers[match.group()], text)
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return canonical_text(text)
+    return json.dumps(canonical_value(parsed), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def translate_targets(response: str, recorded: Any, requested: Any) -> str:
@@ -184,7 +188,11 @@ def describe_request(path: str, body: Any) -> tuple[str, str | None]:
 
 
 def _pretty(body: Any) -> list[str]:
-    return json.dumps(canonical_value(body), sort_keys=True, indent=1, ensure_ascii=False).splitlines()
+    keyed = canonical_json(body)
+    try:
+        return json.dumps(json.loads(keyed), sort_keys=True, indent=1, ensure_ascii=False).splitlines()
+    except ValueError:
+        return keyed.splitlines()
 
 
 def miss_diff(body: Any, nearest: Any | None, *, limit: int = MAX_DIFF_LINES) -> str:
@@ -283,7 +291,7 @@ class Cassette:
         path.parent.mkdir(parents=True, exist_ok=True)
         head = {"cassette": CASSETTE_VERSION, "task": self.task, **self.meta}
         lines = [json.dumps(head, sort_keys=True)]
-        lines.extend(json.dumps(exchange.to_json(), sort_keys=True, ensure_ascii=False) for exchange in self.exchanges)
+        lines.extend(json.dumps(exchange.to_json(), ensure_ascii=False) for exchange in self.exchanges)
         # mtime 0 and no file name, so recording the same exchanges twice writes the same bytes.
         with (
             path.open("wb") as raw,

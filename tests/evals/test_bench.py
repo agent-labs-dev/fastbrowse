@@ -241,13 +241,17 @@ def test_compare_reports_only_differing_tasks() -> None:
 
 def test_chrome_target_ids_are_numbered_and_swapped_back() -> None:
     old_a, old_b = "B263C989BBEF4C3B6D03DD4B207B8F8C", "F0F04130F2C835E1D1DF50DFAFA6EF7C"
-    new_a, new_b = "039D86F8FCB3567C10AD293C34379CFE", "57B1BE83D83269F43C3E0D03C5D0FB26"
+    new_a, new_b = "57B1BE83D83269F43C3E0D03C5D0FB26", "039D86F8FCB3567C10AD293C34379CFE"
 
     def state(a: str, b: str) -> dict[str, list[dict[str, str]]]:
         return {"tabs": [{"id": a, "title": "News"}, {"id": b, "opener_id": a, "title": "Story"}]}
 
     assert request_key(JEV, state(old_a, old_b)) == request_key(JEV, state(new_a, new_b))
     assert request_key(JEV, state(old_a, old_b)) != request_key(JEV, {"tabs": state(old_a, old_b)["tabs"][::-1]})
+    # Keyed by id, a sorted map would put the tabs in the order of their random ids.
+    criteria = {"criteria": {old_a: "News", old_b: "Story"}}
+    flipped = {"criteria": {new_a: "News", new_b: "Story"}}  # new_a sorts after new_b, old_a before old_b
+    assert request_key(JEV, criteria) == request_key(JEV, flipped)
     cassette = Cassette(task="t")
     cassette.exchanges.append(_exchange(JEV, state(old_a, old_b), json.dumps({"choice": old_b})))
     with Proxy(cassette) as base:
