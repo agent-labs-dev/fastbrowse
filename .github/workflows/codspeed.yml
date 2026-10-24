@@ -1,10 +1,12 @@
 name: CodSpeed
-# snapshot.js is the only code these benchmarks time, so nothing else pays for a macro runner. The runs on main
-# are the baseline each pull request is compared with.
+# The benchmarks time snapshot.js and the observe around it, which page.py and session.py drive, so nothing else
+# pays for a macro runner. The runs on main are the baseline each pull request is compared with.
 on:
   pull_request:
     paths: &measured
       - src/fastbrowse/browser/snapshot.js
+      - src/fastbrowse/browser/page.py
+      - src/fastbrowse/browser/session.py
       - benchmarks/**
       - .github/workflows/codspeed.yml
   push:

@@ -1,5 +1,5 @@
-"""snapshot.js on dense pages, timed as `observe` pays for it: one CDP evaluate, from sending the script
-to holding its result in Python.
+"""snapshot.js on dense pages: one CDP evaluate, from sending the call to holding its result in Python, and the
+whole `observe` a step makes around it.
 
     uv run --group bench pytest benchmarks --codspeed
 """
@@ -26,3 +26,11 @@ def test_snapshot(benchmark, loop: asyncio.AbstractEventLoop, page: CdpPage, ori
 def test_fingerprint(benchmark, loop: asyncio.AbstractEventLoop, page: CdpPage, origin: str, name: str) -> None:
     loop.run_until_complete(open_page(page, origin, name, PAGES[name][1]))
     assert benchmark(lambda: loop.run_until_complete(fingerprint(page)))
+
+
+# What a step pays to read the page: the loading wait, the history entry, every frame's snapshot and Python's
+# validation of it, with no settle before it.
+@pytest.mark.parametrize("name", list(PAGES))
+def test_observe(benchmark, loop: asyncio.AbstractEventLoop, page: CdpPage, origin: str, name: str) -> None:
+    loop.run_until_complete(open_page(page, origin, name, PAGES[name][1]))
+    assert benchmark(lambda: loop.run_until_complete(page.observe())).controls
