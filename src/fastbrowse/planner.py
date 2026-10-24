@@ -13,7 +13,7 @@ from typing import NamedTuple, Self
 from pydantic import Field, model_validator
 
 from fastbrowse.llm import Generation, LLMClient, LLMError, Message
-from fastbrowse.models import CostBasis, CostLine, Frozen, Limits, LLMPurpose, combined_basis
+from fastbrowse.models import Frozen, LLMPurpose
 from fastbrowse.telemetry import Ledger
 
 FIELD_CATEGORIES = (
@@ -57,8 +57,13 @@ class Plan(Frozen):
         default=(),
         max_length=128,
         description="Completion-only checks for requested answer outputs, separate from browsing requirements. "
-        "Split requested fields and components into individual checks for each named or numbered result. "
-        "Retain the entity, scope and constraints. For an unbounded set, check each field across all results. "
+        "Write them in full here: nothing normalizes a terse draft afterwards. "
+        "Split requested fields and components into individual checks for each named or numbered result, and "
+        "give each numbered result its own field checks for a fixed number of unnamed results. "
+        "Retain the entity, scope and constraints, and preserve every, each, all and exact-count requirements. "
+        "For an unbounded set, check each field across all results. "
+        "Each check must state its entity and scope explicitly, not just a field label. "
+        "Exclude this run's own reports (run_reports), which code fills from browser state. "
         "Do not add outputs, actions or intermediate navigation that the user did not request.",
     )
     inspect_access: bool = Field(
@@ -79,16 +84,6 @@ class Plan(Frozen):
     def validate_ids(self) -> Self:
         if len({requirement.id for requirement in self.requirements}) != len(self.requirements):
             raise ValueError("requirement ids must be unique")
-        return self
-
-
-class _AnswerChecks(Frozen):
-    checks: tuple[str, ...] = Field(min_length=1, max_length=128)
-
-    @model_validator(mode="after")
-    def not_blank(self) -> Self:
-        if any(not check.strip() for check in self.checks):
-            raise ValueError("answer checks must name requested outputs")
         return self
 
 
@@ -240,8 +235,16 @@ def _instructions() -> Message:
             "requested record identities or answer fields. Retain named entities and identity filters when "
             "the user asks for information about those entities.\n\n"
             "For an expected page answer, also fill answer_checks with individually checkable requested output "
-            "values. Separate components of a requested breakdown. These checks validate the final answer, "
-            "not the discovery plan: do not turn them into extra browsing requirements.\n\n"
+            "values, and fill them completely in this one call: nothing normalizes a terse draft afterwards, so "
+            "an entity or field the draft omits is an output the answer is never checked against. Separate "
+            "components of a requested breakdown. Separate each field or component for each named or numbered "
+            "result, and give each numbered result its own field checks for a fixed number of unnamed results. "
+            "Preserve the entity, scope and constraints in every check, and preserve every, each, all and "
+            "exact-count requirements; for an unbounded result set, check each requested field across all "
+            "results. Each check must state its entity and scope explicitly, not just a field label. Exclude this "
+            "run's own reports (run_reports): code fills those from browser state after page-answer verification. "
+            "These checks validate the final answer, not the discovery plan: do not turn them into extra "
+            "browsing requirements.\n\n"
             "Set count_records for a requested total number of matching entities, including items nested in "
             "groups. Preserve the requested entity and filters: group headings are not the entities they "
             "contain. Do not turn a record count into a prose estimate. Set inspect_access only for an explicit "
@@ -257,12 +260,12 @@ async def make_plan(
     *,
     start: str | None = None,
     ledger: Ledger | None = None,
-    normalize_checks: bool = True,
 ) -> Generation[Plan]:
-    """The plan, with its answer checks normalized unless `normalize_checks` is off.
+    """The plan, with the answer checks written by the same call that decomposes the task.
 
-    Off, the plan keeps the planner's draft checks, and `answer_checks` normalizes them later: discovery never reads
-    them, so a run can start reading while they are still being written."""
+    One call writes the plan and its checks. The checks are what the final answer is judged against, so the request
+    that states the requirements must state them in full: a second call that normalized a terse draft traded that
+    guarantee for a call saved, and a draft is not a plan's checks until it names every entity and scope."""
     site = "" if start is None else f"\n\n# Start page\n{start}"
     generated = await llm.generate(
         LLMPurpose.PLAN,
@@ -282,92 +285,23 @@ async def make_plan(
         kind = RequirementKind.INFORMATION if plan.answer_expected else RequirementKind.ACTION
         requirement = Requirement(id="req_1", text=task, kind=kind)
         plan = plan.model_copy(update={"requirements": (requirement,)})
-    if not normalize_checks:
-        return generated.model_copy(update={"data": plan})
-    cost = generated.cost
-    if _needs_checks(plan):
-        billing = ledger or Ledger(Limits())
-        billing.record(generated.cost)
-        checked = await answer_checks(llm, task, plan, ledger=billing)
-        assert checked.cost is not None
-        cost = checked.cost
-        if ledger is None:
-            # Without an external ledger the returned line accounts for both calls, rather than hiding the repair.
-            lines = (generated.cost, checked.cost)
-            basis = CostBasis.UNKNOWN if any(line.dollars is None for line in lines) else combined_basis(lines)
-            cost = cost.model_copy(
-                update={
-                    "basis": basis,
-                    "dollars": None if basis is CostBasis.UNKNOWN else sum(line.dollars or 0 for line in lines),
-                    "input_tokens": sum(line.input_tokens for line in lines),
-                    "output_tokens": sum(line.output_tokens for line in lines),
-                    "seconds": None,
-                }
-            )
-        plan = checked.data
-    elif plan.answer_checks:
-        plan = plan.model_copy(update={"answer_checks": ()})
-    return generated.model_copy(update={"data": plan, "cost": cost})
+    plan = plan.model_copy(update={"answer_checks": settled_checks(plan)})
+    return generated.model_copy(update={"data": plan})
 
 
 def _needs_checks(plan: Plan) -> bool:
     return plan.page_answer_expected and any(r.kind is RequirementKind.INFORMATION for r in plan.requirements)
 
 
-class CheckedPlan(Frozen):
-    data: Plan
-    cost: CostLine | None
-    """The normalizing call's cost, or None when the plan needed no checks and nothing was called."""
+def settled_checks(plan: Plan) -> tuple[str, ...]:
+    """The checks the final answer is judged against, taken from the plan's own answer checks.
 
-
-async def answer_checks(llm: LLMClient, task: str, plan: Plan, *, ledger: Ledger | None = None) -> CheckedPlan:
-    """`plan` with its draft answer checks normalized against the task, or with none when no page answer is due."""
+    Trimmed and deduplicated, and empty when no page answer is due. A planner that wrote none for a page-answer
+    task falls back to one check per information requirement: the requirement's own text names its entity and
+    scope, so it is checkable even though it is coarser than a split one."""
     if not _needs_checks(plan):
-        return CheckedPlan(data=plan.model_copy(update={"answer_checks": ()}), cost=None)
-    information = tuple(r.text for r in plan.requirements if r.kind is RequirementKind.INFORMATION)
-    proposed = tuple(dict.fromkeys(check.strip() for check in plan.answer_checks if check.strip()))
-    # Nonempty field labels lost the task's every-item scope; normalize checks without replanning discovery.
-    repaired = await llm.generate(
-        LLMPurpose.PLAN,
-        [
-            Message(
-                role="system",
-                content=(
-                    "Normalize the draft checks against the original task's requested answer outputs. "
-                    "Draft checks can omit entities, quantifiers or fields and are not authoritative. "
-                    "Separate each "
-                    "field or component for each named or numbered result. Preserve entity, scope and "
-                    "constraints. For a fixed number of unnamed results, give each numbered result its own "
-                    "field checks. Preserve every, each, all and exact-count requirements. For an unbounded "
-                    "result set, check each requested field across all results. Each check must state its "
-                    "entity and scope explicitly, not just a field label. "
-                    "Exclude the supplied run_reports: code reports those directly from browser state after "
-                    "page-answer verification. Keep requested page facts and action outcomes. "
-                    "Do not add actions, navigation or extra outputs. These checks do not change discovery."
-                    " Supplied action_requirements are checked separately against browser state and executed "
-                    "actions. An actor name or login identity supplied for a prerequisite action is not an "
-                    "identity to quote in the answer or bind to each reported data value. Preserve identities "
-                    "that the user explicitly requests as record subjects or data filters."
-                ),
-            ),
-            Message(
-                role="user",
-                content=json.dumps(
-                    {
-                        "task": task,
-                        "information_requirements": information,
-                        "action_requirements": tuple(
-                            r.text for r in plan.requirements if r.kind is RequirementKind.ACTION
-                        ),
-                        "draft_checks": proposed,
-                        "run_reports": plan.run_reports,
-                    }
-                ),
-            ),
-        ],
-        _AnswerChecks,
-        max_output_tokens=8000,
-        ledger=ledger,
-    )
-    checks = tuple(dict.fromkeys(check.strip() for check in repaired.data.checks))
-    return CheckedPlan(data=plan.model_copy(update={"answer_checks": checks}), cost=repaired.cost)
+        return ()
+    checks = tuple(dict.fromkeys(check.strip() for check in plan.answer_checks if check.strip()))
+    if checks:
+        return checks
+    return tuple(r.text for r in plan.requirements if r.kind is RequirementKind.INFORMATION)

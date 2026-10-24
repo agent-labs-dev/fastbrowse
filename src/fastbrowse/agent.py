@@ -47,7 +47,7 @@ from fastbrowse.batches import evaluate_batches
 from fastbrowse.citations import ANSWER_LINK, text_fragment
 from fastbrowse.clients.validation import jev_spend
 from fastbrowse.comparison import NumericComparison, complete_comparison
-from fastbrowse.config import Config, ObservationLimits, flag
+from fastbrowse.config import Config, ObservationLimits
 from fastbrowse.effects import (
     SETTING_ROLES,
     ControlKey,
@@ -107,13 +107,11 @@ from fastbrowse.page import (
     pager_link,
 )
 from fastbrowse.planner import (
-    CheckedPlan,
     OutputTarget,
     Plan,
     Requirement,
     RequirementKind,
     RunReport,
-    answer_checks,
     make_plan,
     partition_plan,
 )
@@ -421,9 +419,6 @@ class _RunState:
     authorization: Authorization
     ledger: Ledger
     planning: asyncio.Task[Generation[Plan]]
-    checking: asyncio.Task[CheckedPlan] | None = None
-    """Normalizes the plan's answer checks while the run browses; None when `planning` already did."""
-    checks_ready: bool = False
     plan_billed: bool = False
     """The plan's receipt reached the ledger as the plan arrived, so taking the plan must not record it again."""
     notes: Notes = field(default_factory=Notes)
@@ -612,22 +607,15 @@ class _RunState:
         return self.ready_plan
 
     async def await_plan(self) -> Plan:
-        plan = await self._take_plan()
-        if self.ledger.capped and self.checking is not None and not self.checks_ready:
-            # Under a cap the checks are taken with the plan, as before they were deferred: browsing calls sent beside
-            # the normalization would reserve without its receipt (see `Ledger.capped`).
-            return await self.await_checks()
-        return plan
+        return await self._take_plan()
 
     async def _take_plan(self) -> Plan:
         if self.ready_plan is None:
             # Shielded: a caller cancelled mid-wait (a fill a redraw abandoned) must not cancel the one plan every
             # later step needs. Teardown still cancels the task itself.
             planned = await asyncio.shield(self.planning)
-            # Draft checks have not been normalized yet, and nothing before finishing may use them.
-            self.ready_plan = (
-                planned.data if self.checking is None else planned.data.model_copy(update={"answer_checks": ()})
-            )
+            # The plan arrives with its answer checks written by the same call, so taking it takes them too.
+            self.ready_plan = planned.data
             if self.plan_billed:
                 # Billed on arrival; a receipt that broke a limit still stops the run here.
                 self.ledger.check()
@@ -643,16 +631,11 @@ class _RunState:
         return self.ready_plan
 
     async def await_checks(self) -> Plan:
-        """The plan with its normalized answer checks, which only finishing and answering read."""
-        plan = await self._take_plan()
-        if self.checking is not None and not self.checks_ready:
-            checked = await asyncio.shield(self.checking)
-            # Marked taken before recording, which can raise over budget: teardown bills an untaken receipt again.
-            self.checks_ready = True
-            self.ready_plan = plan = plan.model_copy(update={"answer_checks": checked.data.answer_checks})
-            if checked.cost is not None:
-                self.ledger.record(checked.cost)
-        return plan
+        """The plan with its answer checks, which only finishing and answering read.
+
+        The plan call writes the checks, so this returns the same plan `await_plan` does; it stays a seam so the
+        finishing code that reads checks keeps one place to wait."""
+        return await self._take_plan()
 
 
 @dataclass
@@ -670,7 +653,6 @@ class HeadStart:
     start: str | None
     planning: asyncio.Task[Generation[Plan]]
     proposing: asyncio.Task[Shortcut] | None
-    checking: asyncio.Task[CheckedPlan] | None = None
     plan_billed: bool = False
 
     @classmethod
@@ -680,23 +662,24 @@ class HeadStart:
         # of browser startup would end the run over time the limit does not count.
         ledger.started = math.inf
         # The plan is needed to read, to judge DONE and to answer, and the start page, the first fills and clicks
-        # all come before those, so it is written from the task while they run.
-        # The answer checks are normalized in a second call, which only finishing reads: chained after the plan
-        # rather than inside it, the first read no longer waits on a call that does not change discovery.
-        planning = asyncio.create_task(make_plan(llm, task, start=start, ledger=ledger, normalize_checks=False))
-        # The normalization reserves against the ledger as soon as the plan arrives. Recorded only when the run took
-        # the plan, the plan's receipt was missing from that reservation, and a dollar cap the plan alone had spent
-        # let a second paid request through. The receipt is billed once, by whichever comes first: the plan's own
-        # completion, or the normalization about to reserve.
+        # all come before those, so it is written from the task while they run. Its answer checks are written by
+        # the same call, so a run can browse as soon as the plan arrives.
+        planning = asyncio.create_task(make_plan(llm, task, start=start, ledger=ledger))
+        # The plan's receipt is put in the ledger once, by whichever comes first: the plan's own completion, or the
+        # run taking the plan over and recording it. Recorded only when the run took it, a cap the plan alone had
+        # spent used to let a later paid request through.
         bill = _PlanBill(ledger)
         planning.add_done_callback(bill)
-        checking = asyncio.create_task(_normalize_checks(llm, task, planning, ledger, bill))
-        proposing = None if start is None else asyncio.create_task(_propose(llm, task, start, ledger))
-        return cls(ledger, task, start, planning, proposing, checking, plan_billed=True)
+        proposing = (
+            asyncio.create_task(_propose(llm, task, start, ledger))
+            if start is not None and _shortcut_worth_proposing(start)
+            else None
+        )
+        return cls(ledger, task, start, planning, proposing, plan_billed=True)
 
     @property
     def tasks(self) -> tuple[asyncio.Task[Any], ...]:
-        return tuple(task for task in (self.planning, self.checking, self.proposing) if task is not None)
+        return tuple(task for task in (self.planning, self.proposing) if task is not None)
 
     async def discard(self) -> None:
         """Cancel what is still being written, so nothing bills a run that has already ended."""
@@ -711,21 +694,7 @@ class HeadStart:
         await self.discard()
         if not self.plan_billed and not self.planning.cancelled() and self.planning.exception() is None:
             self.ledger.lines.append(self.planning.result().cost)
-        self.bill_checks()
         return tuple(self.ledger.lines)
-
-    def bill_checks(self, state: "_RunState | None" = None) -> None:
-        """A finished normalization the run never awaited still bills, as a finished plan does."""
-        checking = self.checking
-        if checking is None or (state is not None and state.checks_ready):
-            return
-        if (
-            checking.done()
-            and not checking.cancelled()
-            and checking.exception() is None
-            and (cost := checking.result().cost) is not None
-        ):
-            self.ledger.lines.append(cost)
 
 
 @dataclass(slots=True)
@@ -739,16 +708,6 @@ class _PlanBill:
         if not self.billed and planning.done() and not planning.cancelled() and planning.exception() is None:
             self.billed = True
             self.ledger.lines.append(planning.result().cost)
-
-
-async def _normalize_checks(
-    llm: LLMClient, task: str, planning: asyncio.Task[Generation[Plan]], ledger: Ledger, bill: _PlanBill
-) -> CheckedPlan:
-    # Shielded so that this task's cancellation leaves the plan to its own owner.
-    planned = await asyncio.shield(planning)
-    # A plan finished before this task first ran wakes it ahead of the plan's own completion callback.
-    bill(planning)
-    return await answer_checks(llm, task, planned.data, ledger=ledger)
 
 
 class Agent:
@@ -812,7 +771,7 @@ class Agent:
                     # from a page it opened itself wants. `choose_start` is the other case: a caller with a goal
                     # and no page at all, who wants the first address worked out from the task.
                     opening = start if start is not None or not choose_start else await self._first_page(task, ledger)
-                    if opening is not None and head.proposing is None:
+                    if opening is not None and head.proposing is None and _shortcut_worth_proposing(opening):
                         # A chosen first address arrives after startup; its shortcut still needs owned, bounded waiting.
                         head.proposing = asyncio.create_task(_propose(self._llm, task, opening, ledger))
                     proposing = head.proposing
@@ -831,7 +790,6 @@ class Agent:
                         authorization or Authorization(),
                         ledger,
                         head.planning,
-                        head.checking,
                         plan_billed=head.plan_billed,
                     )
                     state.started_url = opening
@@ -927,7 +885,6 @@ class Agent:
                 ):
                     # First observation can fail before the completed plan is consumed, but its receipt still bills.
                     ledger.lines.append(head.planning.result().cost)
-                head.bill_checks(state)
         # Startup calls can settle during teardown, after the loop has made its last budget check.
         try:
             ledger.check_spend()
@@ -1320,11 +1277,14 @@ class Agent:
         `proposing` is the proposal a head start already asked for, and a run without one asks now.
         """
         try:
-            if proposing is None:
-                proposal = await _propose(self._llm, task, start, ledger)
-            else:
+            if proposing is not None:
                 # Cancelling a dispatched shortcut loses its bill and stops capped runs; the head start owns cleanup.
                 proposal = await asyncio.wait_for(asyncio.shield(proposing), _SHORTCUT_WAIT_SECONDS)
+            elif _shortcut_worth_proposing(start):
+                proposal = await _propose(self._llm, task, start, ledger)
+            else:
+                # The caller named the page; going elsewhere on its origin is not the run's to propose.
+                proposal = None
         except (TimeoutError, LLMError):
             proposal = None
         shortcut = None if proposal is None else accept(proposal.url, start)
@@ -4653,7 +4613,7 @@ class Agent:
         if not notes.facts:
             return self._result(state, ledger, status, error=error, budget=budget)
         partial: ComposedAnswer | None = None
-        if flag("FASTBROWSE_FIX_COMMIT") and state is not None and status in {Status.STUCK, Status.UNVERIFIED}:
+        if state is not None and status in {Status.STUCK, Status.UNVERIFIED}:
             partial = await self._commit(state)
         if partial is None:
             partial = partial_answer(notes, self._config.observation.working_notes_chars)
@@ -5490,6 +5450,17 @@ def _follow_recovery(
     if target is None:
         return None
     return decision.model_copy(update={"operation": operation, "target": target, "directed": True})
+
+
+def _shortcut_worth_proposing(start: str) -> bool:
+    """Whether to ask for a direct address from `start`.
+
+    The shortcut synthesizes a deeper page on the start site from the task's own words, worth asking for at a site's
+    entry point, where the task names the page but not its address. When the caller already handed the run a page
+    inside the site - a path, not just the origin - the run is at a destination the caller chose, and a proposal to
+    go elsewhere on that origin second-guesses it.
+    """
+    return urlsplit(start).path in ("", "/")
 
 
 async def _propose(llm: LLMClient, task: str, start: str, ledger: Ledger) -> Shortcut:

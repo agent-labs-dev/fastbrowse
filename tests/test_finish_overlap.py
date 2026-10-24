@@ -74,51 +74,34 @@ async def test_the_verifier_runs_beside_the_ready_drafts_output_audit() -> None:
     assert purposes.count("LLMVerdict") == 1
 
 
-async def test_reading_does_not_wait_for_the_answer_checks() -> None:
-    """The checks only finishing reads are normalized after the plan, while the run browses."""
-    release = asyncio.Event()
+async def test_the_plan_arrives_with_its_answer_checks() -> None:
+    """One plan call writes the checks, so taking the plan takes them and nothing is normalized afterwards."""
     plan = Plan(
         requirements=(Requirement(id="r1", text="Find the price", kind=RequirementKind.INFORMATION),),
         answer_expected=True,
-        answer_checks=("price",),
+        answer_checks=("Report the price of the item.",),
     )
-
-    class LLM(ScriptedLLM):
-        async def generate(self, purpose, messages, schema, **kwargs):
-            if purpose is LLMPurpose.PLAN and schema.__name__ == "_AnswerChecks":
-                await release.wait()
-                self.responses.append({"checks": ["Report the price of the item."]})
-            else:
-                self.responses.append(plan.model_dump(mode="json"))
-            return await super().generate(purpose, messages, schema, **kwargs)
-
-    head = HeadStart.begin(LLM([]), "Find the price")
+    head = HeadStart.begin(ScriptedLLM([plan.model_dump(mode="json")]), "Find the price")
     state = await run_state()
-    state.ledger, state.planning, state.checking, state.ready_plan = head.ledger, head.planning, head.checking, None
+    state.ledger, state.planning, state.ready_plan = head.ledger, head.planning, None
     state.plan_billed = head.plan_billed
     async with asyncio.timeout(_TOGETHER_SECONDS):
-        browsing = await state.await_plan()
-    # Draft checks are never offered before they are normalized.
-    assert browsing.requirements == plan.requirements and browsing.answer_checks == ()
-    release.set()
-    async with asyncio.timeout(_TOGETHER_SECONDS):
-        finishing = await state.await_checks()
-    assert finishing.answer_checks == ("Report the price of the item.",)
-    assert state.ledger.llm_calls == 2
-    assert sum(line.purpose is LLMPurpose.PLAN for line in state.ledger.lines) == 2
+        taken = await state.await_plan()
+    assert taken.requirements == plan.requirements and taken.answer_checks == plan.answer_checks
+    assert state.ledger.llm_calls == 1
+    assert sum(line.purpose is LLMPurpose.PLAN for line in state.ledger.lines) == 1
 
 
-async def test_a_plan_that_spent_the_dollar_cap_sends_no_normalization(monkeypatch) -> None:
-    """The plan's receipt must be in the ledger before the normalization reserves: a cap the plan alone spent
-    used to let the second paid request through, since the run recorded the plan only when it took it."""
+async def test_a_plan_that_spent_the_dollar_cap_stops_before_browsing(monkeypatch) -> None:
+    """The plan's receipt must be in the ledger before any browsing call reserves: a cap the plan alone spent
+    used to let a later paid request through, since the run recorded the plan only when it took it."""
     llm = ScriptedLLM(
         [
             {
                 "requirements": [{"id": "r1", "text": "Find the price", "kind": "information"}],
                 "answer_expected": True,
                 "answer_checks": ["price"],
-            },
-            {"checks": ["Report the price of the item."]},
+            }
         ]
     )
     # Each scripted call costs $0.001, so the plan alone is over this cap.
@@ -173,20 +156,20 @@ async def test_under_a_cap_the_verifier_waits_for_the_audit_receipts() -> None:
 
 
 async def test_under_a_cap_the_plan_is_taken_with_its_checks() -> None:
-    """Browsing calls sent beside the normalization would reserve without its receipt, so a capped run waits."""
+    """A capped run takes the plan with its checks, so the plan's receipt is recorded before browsing reserves."""
     plan = Plan(
         requirements=(Requirement(id="r1", text="Find the price", kind=RequirementKind.INFORMATION),),
         answer_expected=True,
-        answer_checks=("price",),
+        answer_checks=("Report the price of the item.",),
     )
-    llm = ScriptedLLM([plan.model_dump(mode="json"), {"checks": ["Report the price of the item."]}])
+    llm = ScriptedLLM([plan.model_dump(mode="json")])
     head = HeadStart.begin(llm, "Find the price", limits=Limits(max_dollars=1.0))
     state = await run_state()
-    state.ledger, state.planning, state.checking, state.ready_plan = head.ledger, head.planning, head.checking, None
+    state.ledger, state.planning, state.ready_plan = head.ledger, head.planning, None
     state.plan_billed = head.plan_billed
     taken = await state.await_plan()
     assert taken.answer_checks == ("Report the price of the item.",)
-    assert state.checks_ready and len(state.ledger.lines) == 2
+    assert len(state.ledger.lines) == 1
 
 
 async def test_a_verifier_that_finished_is_billed_when_the_audit_beside_it_fails() -> None:

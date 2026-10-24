@@ -131,6 +131,23 @@ These are the things a change must not quietly break.
 - **An action that changed nothing is not progress.** An idle action from the same state goes to recovery
   before a retry; rewriting a field's current value cannot count as progress even if the page changes.
 
+## Prompts and models
+
+A prompt is code, and a model's output is untrusted until code accepts it.
+
+- **One call does one job.** A request that states a task states everything the next step needs from it. The
+  plan call writes its own answer checks instead of leaving a terse draft for a second call to repair. Split a
+  job across calls only when the two cannot be asked in the same breath, and give each half its own contract.
+- **Code decides, the model proposes.** A check, a count, a citation or a stop decision is settled by code
+  against the schema, the quotes or the page state. Trust a model's output only where code can prove it
+  complete; where it cannot, repair it deterministically or ask again. A partial result is reported as
+  partial.
+- **Every call leaves a receipt.** The ledger records each call's purpose, tokens and dollars, and a budget
+  is checked before the call that would break it. A change to the calls a run makes is measured by calls per
+  purpose, not wall clock.
+- **A prompt change is a behaviour change.** It is iterated against the eval suites like any other agent
+  change, and a unit test pins any instruction the behaviour depends on.
+
 ## Style
 
 Ruff, 120 columns, Python 3.13 floor (CI runs 3.13 and 3.14 - do not reach for syntax the floor lacks, such

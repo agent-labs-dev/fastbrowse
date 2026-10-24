@@ -1,23 +1,10 @@
 """Tunable policy. Defaults are starting points to be recalibrated from recorded decision packets."""
 
-import os
 from collections.abc import Sequence
 
 from pydantic import Field
 
 from fastbrowse.models import Frozen, TripwireMode
-
-
-def flag(name: str, *, default: bool = True) -> bool:
-    """A settled policy that a process can still turn off, so a measurement can compare one build against another.
-
-    Read at the point of use rather than captured at import: an eval arm or a test sets it per run, and a value
-    read once would hold the first run's setting for every later run in the same process.
-    """
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 class Thresholds(Frozen):

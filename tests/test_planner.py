@@ -24,10 +24,11 @@ def example_plan() -> Plan:
 
 
 class PlannerLLM:
-    def __init__(self, plan: Plan | None = None, repaired_checks: tuple[str, ...] = ("Find the price",)) -> None:
+    """The one plan call, replying with the plan it was given."""
+
+    def __init__(self, plan: Plan | None = None) -> None:
         self.calls: list[tuple[LLMPurpose, tuple[Message, ...]]] = []
         self.plan = plan if plan is not None else example_plan()
-        self.repaired_checks = repaired_checks
         self.cost = CostLine(
             component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0.01, purpose=LLMPurpose.PLAN
         )
@@ -45,12 +46,7 @@ class PlannerLLM:
         if ledger is not None:
             ledger.reserve(CostComponent.LLM)
         self.calls.append((purpose, tuple(messages)))
-        data = (
-            schema.model_validate_json(self.plan.model_dump_json())
-            if schema is Plan
-            else schema.model_validate({"checks": self.repaired_checks})
-        )
-        return Generation(data=data, cost=self.cost)
+        return Generation(data=schema.model_validate_json(self.plan.model_dump_json()), cost=self.cost)
 
 
 async def test_planning_reads_only_the_task_and_start_address_and_preserves_cost() -> None:
@@ -59,7 +55,8 @@ async def test_planning_reads_only_the_task_and_start_address_and_preserves_cost
     purpose, messages = llm.calls[0]
     prompt = "\n".join(message.content for message in messages)
     assert purpose is LLMPurpose.PLAN
-    assert result.data == example_plan() and result.cost.dollars == 0.02
+    assert result.data == example_plan() and result.cost.dollars == 0.01
+    assert len(llm.calls) == 1
     assert "# Task\nFind the price" in prompt and "# Start page\nhttps://shop.test/" in prompt
     assert "individually checkable" in prompt
 
@@ -89,13 +86,16 @@ async def test_an_empty_plan_retains_the_requested_outcome(answer_expected: bool
     requirement = result.data.requirements[0]
     assert requirement.text == task
     assert requirement.kind is (RequirementKind.INFORMATION if answer_expected else RequirementKind.ACTION)
-    assert result.cost.dollars == (0.02 if answer_expected else 0.01)
+    # One plan call is one receipt; a synthesized information requirement still gets its own check.
+    assert result.data.answer_checks == ((task,) if answer_expected else ())
+    assert result.cost.dollars == 0.01
 
 
 @pytest.mark.parametrize("checks", [(), (" ",)])
-async def test_omitted_answer_checks_are_decomposed_without_replanning_discovery(
+async def test_omitted_answer_checks_fall_back_to_the_information_requirements(
     checks: tuple[str, ...],
 ) -> None:
+    """A planner that writes no checks still gets one per information requirement, whose text names its scope."""
     plan = Plan(
         requirements=(
             Requirement(id="r", text="Report admission price and opening hours.", kind=RequirementKind.INFORMATION),
@@ -103,13 +103,12 @@ async def test_omitted_answer_checks_are_decomposed_without_replanning_discovery
         answer_expected=True,
         answer_checks=checks,
     )
-    checks = ("Report admission price.", "Report opening hours.")
-    llm = PlannerLLM(plan, repaired_checks=checks)
+    llm = PlannerLLM(plan)
     result = await make_plan(llm, plan.requirements[0].text)
-    assert result.data.answer_checks == checks
+    assert result.data.answer_checks == ("Report admission price and opening hours.",)
     assert result.data.requirements == plan.requirements
-    assert len(llm.calls) == 2
-    assert result.cost.dollars == 0.02
+    assert len(llm.calls) == 1
+    assert result.cost.dollars == 0.01
 
 
 async def test_action_only_plans_do_not_acquire_answer_checks() -> None:
@@ -118,63 +117,67 @@ async def test_action_only_plans_do_not_acquire_answer_checks() -> None:
         answer_expected=True,
         answer_checks=("Report the museum's opening hours.",),
     )
-    result = await make_plan(PlannerLLM(plan), plan.requirements[0].text)
+    llm = PlannerLLM(plan)
+    result = await make_plan(llm, plan.requirements[0].text)
     assert result.data.answer_checks == ()
+    assert len(llm.calls) == 1
 
 
-async def test_output_check_repair_keeps_both_receipts_and_respects_call_limits() -> None:
+async def test_one_plan_is_one_call_against_the_call_limit() -> None:
+    """The plan is a single call: a limit of one admits it, and a ledger already at its cap refuses it."""
     plan = Plan(requirements=example_plan().requirements, answer_expected=True)
-    llm = PlannerLLM(plan, repaired_checks=("Find the price",))
-    ledger = Ledger(Limits(max_llm_calls=2))
+    llm = PlannerLLM(plan)
+    ledger = Ledger(Limits(max_llm_calls=1))
     result = await make_plan(llm, "Find the price", ledger=ledger)
     ledger.record(result.cost)
-    assert ledger.llm_calls == 2 and ledger.lines == [llm.cost, llm.cost]
-    capped = Ledger(Limits(max_llm_calls=1))
+    assert ledger.llm_calls == 1 and ledger.lines == [llm.cost]
+    spent = Ledger(Limits(max_llm_calls=1))
+    spent.reserve(CostComponent.LLM)
     with pytest.raises(BudgetExceeded):
-        await make_plan(llm, "Find the price", ledger=capped)
-    assert capped.llm_calls == 1 and capped.lines == [llm.cost]
+        await make_plan(llm, "Find the price", ledger=spent)
+    assert spent.llm_calls == 1 and spent.lines == []
 
 
-async def test_unpriced_plan_repair_retains_unknown_aggregate_dollars() -> None:
+async def test_an_unpriced_plan_keeps_unknown_dollars() -> None:
     llm = PlannerLLM(Plan(requirements=example_plan().requirements, answer_expected=True))
     llm.cost = llm.cost.model_copy(update={"basis": CostBasis.UNKNOWN, "dollars": None})
     result = await make_plan(llm, "Find the price")
     assert result.cost.basis is CostBasis.UNKNOWN and result.cost.dollars is None
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 1
 
 
-async def test_nonempty_output_checks_retain_every_requested_entity() -> None:
+async def test_the_plan_call_is_asked_for_entity_scoped_checks() -> None:
+    """Each check names its entity and scope, and the plan call is the only one, so nothing rewrites a terse draft."""
     task = "Compare Adapter Atlas and Adapter Beacon. Report the exact port count of each adapter."
-    draft = Plan(
+    scoped = ("Report Adapter Atlas exact port count.", "Report Adapter Beacon exact port count.")
+    plan = Plan(
         requirements=(Requirement(id="r", text=task, kind=RequirementKind.INFORMATION),),
         answer_expected=True,
-        answer_checks=("exact port count",),
+        answer_checks=scoped,
     )
-    scoped = ("Report Adapter Atlas exact port count.", "Report Adapter Beacon exact port count.")
-    llm = PlannerLLM(draft, repaired_checks=scoped)
+    llm = PlannerLLM(plan)
     result = await make_plan(llm, task)
+    prompt = "\n".join(message.content for message in llm.calls[0][1])
+    assert "Each check must state its entity and scope explicitly, not just a field label" in prompt
     assert result.data.answer_checks == scoped
-    assert result.data.requirements == draft.requirements
-    assert len(llm.calls) == 2
-    assert result.cost.dollars == 0.02
+    assert result.data.requirements == plan.requirements
+    assert len(llm.calls) == 1
+    assert result.cost.dollars == 0.01
 
 
 async def test_mixed_page_answer_excludes_code_reported_outputs() -> None:
-    import json
-
     from fastbrowse.planner import RunReport
 
     plan = example_plan().model_copy(update={"run_reports": (RunReport.FINAL_URL,)})
     llm = PlannerLLM(plan)
     result = await make_plan(llm, "Report the price and final URL.")
-    prompt = llm.calls[1][1]
-    assert json.loads(prompt[-1].content)["run_reports"] == ["final_url"]
-    assert "Exclude the supplied run_reports" in prompt[0].content
+    prompt = llm.calls[0][1]
+    assert "Exclude this run's own reports (run_reports)" in prompt[0].content
     assert result.data.answer_checks == ("Find the price",)
     assert result.data.run_reports == (RunReport.FINAL_URL,)
 
 
-async def test_code_report_only_plan_needs_no_output_normalization() -> None:
+async def test_code_report_only_plan_needs_no_answer_checks() -> None:
     from fastbrowse.planner import RunReport
 
     plan = Plan(requirements=(), answer_expected=True, run_reports=(RunReport.FINAL_URL,))

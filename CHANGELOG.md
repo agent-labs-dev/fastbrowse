@@ -11,6 +11,16 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-24
+
+- The plan is one call. The planner is asked for a plan's answer checks in the same request that decomposes the task, so the second PLAN call that normalized a terse draft is gone: the checks the final answer is judged against are written in full by the call that states the requirements, rather than repaired afterwards by a call that only saw the draft. A planner that wrote none for a page-answer task still gets one check per information requirement, whose text names its entity and scope.
+
+- The direct-address shortcut is asked for only at a site's entry point, not when the caller has already handed the run a page inside the site: a proposal to go elsewhere on that origin second-guesses a destination the caller chose.
+
+- The `FASTBROWSE_FIX_COMMIT` and `FASTBROWSE_FIX_GATE` measurement switches from 0.6.0 are gone, along with the `flag` helper behind them; both defaulted on, so behaviour is unchanged and the accuracy fixes now stand on their own.
+
+- The browser-use adapter moves to browser-use-sdk 3.12.1.
+
 ## [0.6.0] - 2026-10-24
 
 - A slow model call is no longer raced by a duplicate request. The per-purpose hedge fired before the gateway's
@@ -1506,7 +1516,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.6.0...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.0
 [0.6.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.6.0
 [0.5.25]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.25
 [0.5.23]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.23
