@@ -30,10 +30,10 @@ want to browse. Keep its `references` directory beside `SKILL.md`. Personal inst
 
 ## Configure and use
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) for the CLI path. Set `OPENROUTER_API_KEY`
-in the calling process environment or a local `.env`, outside the conversation. Local Chrome is the skill
-default and needs only the model key. Add `BROWSER_USE_API_KEY` for cloud browsing. An existing DevTools
-connection reuses your Chrome; `--local` without a connection starts a separate browser.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) for the CLI path. Set `OPENROUTER_API_KEY`,
+or `AI_GATEWAY_API_KEY`, in the calling process environment or a local `.env`, outside the conversation. Local
+Chrome is the skill default and needs only the model key. Add `BROWSER_USE_API_KEY` for cloud browsing. An
+existing DevTools connection reuses your Chrome; `--local` without a connection starts a separate browser.
 The [CLI guide](../README.md#try-it) covers browser profiles, secrets, and budgets.
 For MCP, use the [server setup](../README.md#use-it-from-an-mcp-client) instead; credentials belong to the server's environment.
 

@@ -2,8 +2,9 @@
 
 Full browser campaigns run through Parallax. Its exporter validates clean builds, scheduled slots, source
 identity, physical ledgers and private Langfuse read-back before producing `docs/results/benchmark-candidate.json`.
-The file contains sanitized per-run grades, completion, time and cost. Official rubric scores retain
-their source meaning. Internal hosted and Ultrafast comparisons use separate matched task groups.
+The file contains sanitized per-run grades, completion, time, cost, LLM and Jev call counts and model
+throughput. Official rubric scores retain their source meaning. Internal hosted and Ultrafast comparisons use
+separate matched task groups.
 
 Schema 1 requires all four original groups. Schema 2 accepts nonempty subsets of those four groups.
 Schema 3 also supports `internal-fastbrowse`: every supported internal task in the current catalog (53 since
@@ -13,22 +14,30 @@ fastbrowse suites do not require new comparator runs. Previously published compa
 as references with their task and build differences stated. Every group inside one candidate still comes
 from the same measured agent and runner build. Adding a suite must retain the published groups and their
 regression checks; results from different builds cannot be combined under one build receipt.
-Schemas 2 and 3 record each group's agent and runner commits and require them to match the candidate's build.
+Schema 4 adds `internal-backend`: fastbrowse on a Browser Use Cloud browser against fastbrowse on its own
+browser pool. From schema 5, `internal-ultrafast` pairs fastbrowse on its own pool with `jev-ultrafast`; figures
+approved under an older schema keep fastbrowse on a Browser Use Cloud browser there.
+Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build.
 
-CI validates the candidate's exact coverage and compares matched scores, time and cost with the previous
-approved candidate. A group whose catalog differs from the approved one only by tasks listed under the catalog's
-`retired` (a site that is gone) is compared on the tasks both ran; the earlier catalog is found in Git history by
-its digest. Any other catalog, task or limit difference is a protocol change, published only as described
+CI validates the candidate's exact coverage and compares matched scores, completion, LLM and Jev calls, model
+throughput and cost with the previous approved candidate; wall time is recorded but not compared. A group whose
+catalog differs from the approved one only by tasks listed under the catalog's `retired` (a site that is gone)
+is compared on the tasks both ran; the earlier catalog is found in Git history by its digest. Any other catalog,
+task or limit difference is a protocol change, published only as described
 under [Changing the protocol](#changing-the-protocol). Unresolved costs, missing grades, incomplete coverage and
 a failed fixture workflow block publication. The fixture receipt is a successful maintainer dispatch of
 `evals.yml` whose head commit is the measured build. When `main` has moved past that build, push a branch at
 it and dispatch the workflow there; a branch run counts only when its commit is in `main`'s history, so the
-workflow and runner it used are ones `main` held. These checks detect recorded regressions; they do not prove that
+workflow and runner it used are ones `main` held. A candidate can carry a verified export receipt in its `export`
+field in place of the fixture receipt, never both. The export receipt names the measured build and campaign, the
+bundle's digest and the trace it was read back from, covers exactly the published groups and counts every
+published row. `uv run python -m fastbrowse.evals.benchmarks --status` prints what blocks the staged candidate
+and the next action. These checks detect recorded regressions; they do not prove that
 every website or grader is free of bugs. Review unexpected outcomes before approving.
 
 To approve reviewed results, dispatch `publish-evals.yml` on `main` with the SHA256 of the exact candidate
 bytes. For the first publication, also approve establishing the initial baseline. Only the maintainer can issue
-this approval. The workflow revalidates coverage and the fixture receipt and returns a `benchmark-approval`
+this approval. The workflow revalidates coverage and the measurement receipt and returns a `benchmark-approval`
 artifact. Download `benchmark-approval.json` and install it with
 
 ```sh

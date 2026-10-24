@@ -38,14 +38,16 @@ approved baselines and source identity receipts, not logs, recordings, decrypted
 
 Parallax exports the internal catalog into fastbrowse and checks it byte-for-byte. The fastbrowse publication
 gate requires the matching catalog digest, clean committed runner and agent builds, current task versions,
-complete task coverage, three measured repeats and every physical run in the ledger. Matched task success,
-time and cost regressions block publication. No result is published until complete runs are reviewed and
+complete task coverage, three measured repeats and every physical run in the ledger. Regressions in matched
+task success, completion, LLM and Jev calls, model throughput or cost block publication; wall time is recorded
+but moves with cloud load, so it never blocks. No result is published until complete runs are reviewed and
 the maintainer explicitly approves it.
 
 The fixture workflow must be green on the release build. A changed comparison must also be rerun on that
 build. CI validates changed result rows and their ledgers against base-branch baselines. The release guard
 refuses a missing fixture receipt or executable changes after a comparison measurement.
 
-Public projections contain ids, source hashes, grades, completion, build identity, time and cost only. Answers,
-page content, credentials, local paths and private trace links never enter a public dataset or page. Langfuse
-upload is not publication approval. Read-back checks must verify an upload before marking tracking complete.
+Public projections contain ids, source hashes, grades, completion, build identity, time, cost, call counts and
+model throughput only. Answers, page content, credentials, local paths and private trace links never enter a
+public dataset or page. Langfuse upload is not publication approval. Read-back checks must verify an upload
+before marking tracking complete.
