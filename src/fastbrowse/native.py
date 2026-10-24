@@ -8,6 +8,7 @@ Python as before.
 
 import asyncio
 import base64
+import importlib
 import json
 import uuid
 from collections.abc import Awaitable, Callable
@@ -112,7 +113,8 @@ async def run(
     secrets: SecretResolver | None,
 ) -> RunResult:
     """Run `run_params` on the Rust core and return its result as Python's `run_task` returns one."""
-    import fastbrowse_native  # ty: ignore[unresolved-import]
+    # Built from crates/fastbrowse-py and installed apart from this package, so the checker has no types for it.
+    fastbrowse_native: Any = importlib.import_module("fastbrowse_native")
 
     raised = _Raised()
 

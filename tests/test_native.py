@@ -6,6 +6,7 @@ The conversion is checked here without the module. The runs need `fastbrowse_nat
 
 import asyncio
 import base64
+import importlib
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ from fastbrowse.models import Attachment, BrowserEvent, LocalChrome, SecretRef, 
 from fastbrowse.safety import ScopedSecrets
 
 try:
-    import fastbrowse_native  # ty: ignore[unresolved-import]
+    fastbrowse_native = importlib.import_module("fastbrowse_native")
 
     NATIVE = hasattr(fastbrowse_native, "run_task")
 except ImportError:

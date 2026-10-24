@@ -5,6 +5,7 @@ table, one that signs in with a secret, one that uploads an attachment. `python 
 --agent in-process` runs all of them, once per core.
 """
 
+import importlib
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,7 @@ from fastbrowse.evals.replay import Cassette, Latency, Proxy
 from fastbrowse.models import LocalChrome
 
 try:
-    import fastbrowse_native  # ty: ignore[unresolved-import]
+    fastbrowse_native = importlib.import_module("fastbrowse_native")
 
     NATIVE = hasattr(fastbrowse_native, "run_task")
 except ImportError:

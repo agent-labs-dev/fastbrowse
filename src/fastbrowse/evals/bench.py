@@ -2,7 +2,7 @@
 
     uv run python -m fastbrowse.evals.bench record  [--only TASK ...] [--budget 5]
     uv run python -m fastbrowse.evals.bench fill    [--only TASK ...] [--latency zero|recorded] [--passes 6]
-    uv run python -m fastbrowse.evals.bench replay  [--latency zero|recorded] [--agent "CMD" | --agent in-process] [--out FILE]
+    uv run python -m fastbrowse.evals.bench replay  [--latency zero|recorded] [--agent "CMD"|in-process] [--out FILE]
     uv run python -m fastbrowse.evals.bench compare A.json B.json
     uv run python -m fastbrowse.evals.bench report  RUN.json ... [--markdown FILE] [--json FILE]
 
