@@ -7,6 +7,7 @@
 mod macros;
 
 pub mod batches;
+pub mod comparison;
 pub mod error;
 pub mod memory;
 pub mod planner;

@@ -17,6 +17,7 @@ The files are written with `ensure_ascii`, so they stay plain ASCII whatever the
 """
 
 import asyncio
+import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -26,6 +27,7 @@ from typing import Any
 from pydantic import BaseModel, JsonValue
 
 from fastbrowse.batches import evaluate_batches
+from fastbrowse.comparison import NumericComparison, QuotedField, complete_comparison
 from fastbrowse.config import TokenBudget
 from fastbrowse.jev import (
     Answer,
@@ -40,7 +42,28 @@ from fastbrowse.jev import (
     Question,
 )
 from fastbrowse.llm import Generation, LLMError, Message
-from fastbrowse.models import CostBasis, CostComponent, CostLine, Limits, LLMPurpose
+from fastbrowse.memory import (
+    CollectionFact,
+    Comparison,
+    Fact,
+    Notes,
+    NotesTooLarge,
+    Tally,
+    evidence_id,
+    fact_id,
+    shows,
+)
+from fastbrowse.models import (
+    CostBasis,
+    CostComponent,
+    CostLine,
+    Evidence,
+    FactReader,
+    Limits,
+    LLMPurpose,
+    SourceControl,
+)
+from fastbrowse.page import Block, BlockKind, Capture
 from fastbrowse.planner import Plan, Requirement, RequirementKind, RunReport, answer_checks, make_plan, partition_plan
 from fastbrowse.telemetry import BudgetExceeded, Ledger
 
@@ -273,7 +296,7 @@ def batches() -> list[dict[str, Any]]:
 
     many = {f"q{i}": NoulQuestion(instructions="x" * 300 + f" {i}") for i in range(40)}
     cent = CostLine(component=CostComponent.JEV, basis=CostBasis.ESTIMATED, dollars=0.01, input_tokens=12)
-    state = {"rules": "Is it relevant? é東京", "page": {"url": "https://example.test/", "n": 1.5e-7}}
+    state = {"rules": "Is it relevant? \u00e9\u6771\u4eac", "page": {"url": "https://example.test/", "n": 1.5e-7}}
     case("many questions split small", state, many, TokenBudget(batch_tokens=1000), nouls(0.25, cent))
     case(
         "billed against a ledger",
@@ -302,7 +325,7 @@ def batches() -> list[dict[str, Any]]:
     case(
         "one question per batch",
         {},
-        {"a": NoulQuestion(instructions="first"), "b": NoulQuestion(instructions="second  ")},
+        {"a": NoulQuestion(instructions="first"), "b": NoulQuestion(instructions="second \u2028")},
         tiny,
         nouls(0.5),
     )
@@ -381,7 +404,7 @@ def planner() -> list[dict[str, Any]]:
     make("plan and repair its checks", "Find the price", plan_reply(example), start="https://shop.test/")
     make(
         "a task in other scripts",
-        "Trouve le prix à Tokyo 東京 \U0001f600 \"quoted\"\nline two",
+        'Trouve le prix \u00e0 Tokyo \u6771\u4eac \U0001f600 "quoted"\nline two',
         plan_reply(example),
     )
     for expected in (False, True):
@@ -392,9 +415,7 @@ def planner() -> list[dict[str, Any]]:
         )
     for checks in ([], [" "]):
         plan = {
-            "requirements": [
-                {"id": "r", "text": "Report admission price and opening hours.", "kind": "information"}
-            ],
+            "requirements": [{"id": "r", "text": "Report admission price and opening hours.", "kind": "information"}],
             "answer_expected": True,
             "answer_checks": checks,
         }
@@ -435,9 +456,7 @@ def planner() -> list[dict[str, Any]]:
         normalize_checks=False,
     )
 
-    def partition(
-        name: str, task: str, plan: Plan, groups: JsonValue, *, independent_fields: bool = True
-    ) -> None:
+    def partition(name: str, task: str, plan: Plan, groups: JsonValue, *, independent_fields: bool = True) -> None:
         calls: list[dict[str, Any]] = []
         book = Ledger(Limits())
         llm = RecordingLLM(calls, lambda purpose, messages, schema: {"groups": groups}, llm_cost())
@@ -489,19 +508,21 @@ def planner() -> list[dict[str, Any]]:
     ]
     partition("partition by subject", task, plan, groups)
     partition("partition without categories", task, plan, groups, independent_fields=False)
-    partition("an unknown requirement", task, plan, [{**groups[0], "subjects": [{"name": "X", "requirement_ids": ["x"]}]}])
+    partition(
+        "an unknown requirement", task, plan, [{**groups[0], "subjects": [{"name": "X", "requirement_ids": ["x"]}]}]
+    )
     partition("a check left uncovered", task, plan, groups[:1])
     partition("an empty field", task, plan, [{**groups[0], "fields": [" "]}])
     partition("nothing to decompose", task, plan.model_copy(update={"answer_checks": ()}), groups)
 
     calls: list[dict[str, Any]] = []
     llm = RecordingLLM(calls, lambda purpose, messages, schema: {"checks": ["a", " b ", "a"]}, llm_cost())
-    checked = asyncio.run(answer_checks(llm, "é task", plan))
+    checked = asyncio.run(answer_checks(llm, "\u00e9 task", plan))
     cases.append(
         {
             "name": "answer checks for a mixed plan",
             "function": "answer_checks",
-            "task": "é task",
+            "task": "\u00e9 task",
             "plan": plan.model_dump(mode="json"),
             "calls": calls,
             "outcome": {
@@ -514,6 +535,738 @@ def planner() -> list[dict[str, Any]]:
     return cases
 
 
+# --- memory and comparison ----------------------------------------------------------------------------------------
+
+
+class RecordedNotes:
+    """`Notes`, with every call and what it returned written down for Rust to make and compare."""
+
+    def __init__(self, facts: Sequence[Fact] = ()) -> None:
+        self.ops: list[dict[str, Any]] = [{"op": "new", "facts": [dump_fact(f) for f in facts]}]
+        self.notes = Notes(facts)
+
+    def _call(self, op: str, call: Callable[[], Any], encode: Callable[[Any], Any], **arguments: Any) -> Any:
+        try:
+            value = call()
+        except (NotesTooLarge, ValueError, KeyError) as error:
+            self.ops.append({"op": op, **arguments, "result": {"error": type(error).__name__}})
+            return None
+        self.ops.append({"op": op, **arguments, "result": encode(value)})
+        return value
+
+    def add(self, fact: Fact) -> bool:
+        return self._call("add", lambda: self.notes.add(fact), lambda added: added, fact=dump_fact(fact))
+
+    def add_tally(self, tally: Tally) -> Fact:
+        return self._call(
+            "add_tally",
+            lambda: self.notes.add_tally(tally),
+            lambda fact: {"id": fact_id(fact), "fact": dump_fact(fact)},
+            tally=tally.model_dump(mode="json"),
+        )
+
+    def complete_tallies(self, requirement_id: str) -> None:
+        self._call(
+            "complete_tallies", lambda: self.notes.complete_tallies(requirement_id), none, requirement_id=requirement_id
+        )
+
+    def add_continuation(self, requirement_id: str, record_id: str) -> None:
+        self._call(
+            "add_continuation",
+            lambda: self.notes.add_continuation(requirement_id, record_id),
+            none,
+            requirement_id=requirement_id,
+            record_id=record_id,
+        )
+
+    def add_collection_page(self, requirement_id: str, url: str, sha: str) -> None:
+        self._call(
+            "add_collection_page",
+            lambda: self.notes.add_collection_page(requirement_id, url, sha),
+            none,
+            requirement_id=requirement_id,
+            url=url,
+            capture_sha256=sha,
+        )
+
+    def supersede(self, requirement_id: str, url: str, sha: str, text: str) -> None:
+        self._call(
+            "supersede",
+            lambda: self.notes.supersede(requirement_id, url, sha, text),
+            none,
+            requirement_id=requirement_id,
+            url=url,
+            sha256=sha,
+            text=text,
+        )
+
+    def unevidence(self, requirement_ids: Sequence[str]) -> None:
+        self._call(
+            "unevidence", lambda: self.notes.unevidence(requirement_ids), none, requirement_ids=list(requirement_ids)
+        )
+
+    def discredit(self, requirement_ids: Sequence[str], *, urls: Sequence[str] = (), shas: Sequence[str] = ()) -> None:
+        def guessed(evidence: Evidence) -> bool:
+            return evidence.url in urls or evidence.capture_sha256 in shas
+
+        self._call(
+            "discredit",
+            lambda: self.notes.discredit(requirement_ids, guessed),
+            none,
+            requirement_ids=list(requirement_ids),
+            urls=list(urls),
+            shas=list(shas),
+        )
+
+    def retain_for(self, requirement_ids: Sequence[str], fact_ids: Sequence[str]) -> bool:
+        return self._call(
+            "retain_for",
+            lambda: self.notes.retain_for(requirement_ids, fact_ids),
+            lambda added: added,
+            requirement_ids=list(requirement_ids),
+            fact_ids=list(fact_ids),
+        )
+
+    def remember_capture(self, capture: Capture) -> None:
+        self._call(
+            "remember_capture",
+            lambda: self.notes.remember_capture(capture),
+            none,
+            capture=capture.model_dump(mode="json"),
+        )
+
+    def complete_comparison(self, requirement_id: str, comparison: NumericComparison) -> bool:
+        return self._call(
+            "complete_comparison",
+            lambda: complete_comparison(self.notes, requirement_id, comparison),
+            lambda done: done,
+            requirement_id=requirement_id,
+            comparison=comparison.model_dump(mode="json"),
+        )
+
+    def render_with_ids(self, max_chars: int, **options: Any) -> None:
+        self._call(
+            "render_with_ids",
+            lambda: self.notes.render_with_ids(max_chars, **options),
+            lambda rendered: {"text": rendered.text, "evidence_ids": list(rendered.evidence_ids)},
+            max_chars=max_chars,
+            options=options,
+        )
+
+    def render_for_navigation(self, max_chars: int, *, quotes: bool = False) -> None:
+        self._call(
+            "render_for_navigation",
+            lambda: self.notes.render_for_navigation(max_chars, quotes=quotes),
+            lambda text: text,
+            max_chars=max_chars,
+            quotes=quotes,
+        )
+
+    def current_evidence(self, capture: Capture | None) -> None:
+        self._call(
+            "current_evidence",
+            lambda: self.notes.current_evidence(capture),
+            lambda found: list(found),
+            capture=None if capture is None else capture.model_dump(mode="json"),
+        )
+
+    def usable_citations(self, keys: Sequence[str]) -> None:
+        self._call(
+            "usable_citations", lambda: self.notes.usable_citations(keys), lambda found: list(found), keys=list(keys)
+        )
+
+    def captured_page(self, evidence: Evidence) -> None:
+        self._call(
+            "captured_page",
+            lambda: self.notes.captured_page(evidence),
+            lambda page: None if page is None else page.model_dump(mode="json"),
+            evidence=evidence.model_dump(mode="json"),
+        )
+
+    def for_requirements(self, requirement_ids: Sequence[str], evidence_ids: Sequence[str] = ()) -> None:
+        self._call(
+            "for_requirements",
+            lambda: self.notes.for_requirements(requirement_ids, evidence_ids=evidence_ids),
+            lambda scoped: snapshot(scoped, requirement_ids),
+            requirement_ids=list(requirement_ids),
+            evidence_ids=list(evidence_ids),
+        )
+
+    def snapshot(self, requirement_ids: Sequence[str]) -> None:
+        self.ops.append(
+            {
+                "op": "snapshot",
+                "requirement_ids": list(requirement_ids),
+                "result": snapshot(self.notes, requirement_ids),
+            }
+        )
+
+
+def none(_: Any) -> None:
+    return None
+
+
+def dump_fact(fact: Fact) -> JsonValue:
+    return fact.model_dump(mode="json")
+
+
+def snapshot(notes: Notes, requirement_ids: Sequence[str]) -> JsonValue:
+    keys = [fact_id(fact) for fact in notes.facts]
+    return {
+        "facts": [[fact_id(fact), dump_fact(fact)] for fact in notes.facts],
+        "per_fact": {
+            key: {
+                "current": notes.current(key),
+                "derived": notes.derived(key),
+                "refused": notes.refused(key),
+                "held": notes.held(key),
+                "requirements": list(notes.fact_requirements(key)),
+            }
+            for key in keys
+        },
+        "requirements": {
+            rid: {
+                "supporting": [key for key, _ in notes.supporting(rid)],
+                "evidenced": notes.evidenced(rid),
+                "read_for": [evidence_id(e) for e in notes.read_for(rid)],
+                "supporting_evidence": [evidence_id(e) for e in notes.supporting_evidence(rid)],
+                "collection_pages": [read.model_dump(mode="json") for read in notes.collection_pages(rid)],
+                "comparison_records": list(notes.comparison_records(rid)),
+                "has_untallied_records": notes.has_untallied_records(rid),
+            }
+            for rid in requirement_ids
+        },
+        "evidence": list(notes.evidence),
+        "usable": list(notes.usable_evidence()),
+        "current": list(notes.current_evidence()),
+        "refused_ids": list(notes.refused_ids()),
+        "comparison_records": list(notes.comparison_records()),
+        "tallies": [tally.model_dump(mode="json") for tally in notes.tallies],
+        "standings": [
+            None if (standing := notes.standing(tally)) is None else standing.model_dump(mode="json")
+            for tally in notes.tallies
+        ],
+        "expanded": list(notes.expand_evidence_ids(reversed(keys))),
+        "rendered": notes.render_with_ids(10**6, preserve_collections=True).text,
+        "navigation": notes.render_for_navigation(10**6, quotes=True),
+    }
+
+
+def span(
+    *,
+    sha: str = "capture",
+    start: int = 0,
+    end: int = 4,
+    quote: str = "fact",
+    url: str = "https://example.test",
+    **values: Any,
+) -> Evidence:
+    return Evidence(
+        source_id="s1",
+        url=url,
+        frame_id=None,
+        captured_at=datetime(2026, 1, 1, tzinfo=UTC),
+        capture_sha256=sha,
+        start=start,
+        end=end,
+        quote=quote,
+        **values,
+    )
+
+
+def quoted_fact(
+    quote: str,
+    sha: str,
+    url: str = "https://example.test",
+    requirement_id: str | None = "r1",
+    basis: tuple[str, ...] = (),
+) -> Fact:
+    return Fact(
+        requirement_id=requirement_id,
+        text=quote,
+        evidence=span(sha=sha, quote=quote, url=url, end=len(quote)),
+        reader=FactReader.LLM,
+        basis=basis,
+    )
+
+
+def page_capture(*parts: str, url: str = "https://example.test", title: str = "Example") -> Capture:
+    text = "\n\n".join(parts)
+    blocks, start = [], 0
+    for i, part in enumerate(parts):
+        blocks.append(
+            Block(source_id=f"s{i}", kind=BlockKind.PARAGRAPH, frame_id=None, start=start, end=start + len(part))
+        )
+        start += len(part) + 2
+    return Capture(
+        url=url,
+        title=title,
+        captured_at=datetime(2026, 1, 1, tzinfo=UTC),
+        sha256=hashlib.sha256(text.encode()).hexdigest(),
+        text=text,
+        blocks=tuple(blocks),
+    )
+
+
+def memory() -> list[dict[str, Any]]:
+    cases: list[dict[str, Any]] = []
+
+    def case(name: str, notes: RecordedNotes) -> None:
+        cases.append({"name": name, "ops": notes.ops})
+
+    # A new read of an address retires quotes it no longer shows: gone, still shown, at another address.
+    for shown, url in (
+        ("SelectedDate: 28/11/2026", "https://example.test"),
+        ("SelectedDate: 28/11/2026 was SelectedDate: 31/10/2026", "https://example.test"),
+        ("SelectedDate: 28/11/2026", "https://example.test/2#frag"),
+    ):
+        notes = RecordedNotes(
+            [quoted_fact("SelectedDate: 31/10/2026", "before"), quoted_fact("SelectedDate: 28/11/2026", "after", url)]
+        )
+        notes.supersede("r1", url, "after", shown)
+        notes.snapshot(["r1"])
+        case(f"supersede {shown} at {url}", notes)
+
+    notes = RecordedNotes([quoted_fact("Priya Sharma", "before"), quoted_fact("Priya Sharman", "after")])
+    notes.supersede("r1", "https://example.test", "after", "Name: Priya Sharman")
+    notes.snapshot(["r1"])
+    case("a quote inside a longer word", notes)
+
+    old = quoted_fact("Subtotal: GBP 34.50", "before", requirement_id=None)
+    fresh = quoted_fact("Subtotal: GBP 43.25", "after")
+    notes = RecordedNotes([old, fresh])
+    notes.supersede("r1", "https://example.test", "after", fresh.text)
+    notes.snapshot(["r1"])
+    notes.add(old)
+    notes.snapshot(["r1"])
+    case("vanished context quotes retire", notes)
+
+    first = quoted_fact("Order A: 12", "before", requirement_id=None)
+    last = quoted_fact("Order B: 7", "after", requirement_id=None)
+    notes = RecordedNotes([first, last])
+    notes.add_tally(Tally(requirement_id="r1", key="Orders", records=(fact_id(first), fact_id(last))))
+    notes.complete_tallies("r1")
+    notes.add_continuation("r2", fact_id(first))
+    notes.supersede("r1", "https://example.test", "after", last.text)
+    notes.snapshot(["r1", "r2"])
+    case("tallied and compared rows survive a redraw", notes)
+
+    for source_url in ("https://example.test", "https://child.test"):
+        context = quoted_fact("Availability: 20", "before", source_url, requirement_id=None)
+        repeated = quoted_fact("20", "before", source_url, requirement_id=None)
+        answer = Fact(
+            requirement_id="r1",
+            text="20",
+            evidence=None,
+            reader=FactReader.JEV_CHOICE,
+            basis=(fact_id(context), fact_id(repeated)),
+        )
+        current = quoted_fact("Availability: 22", "after", source_url)
+        notes = RecordedNotes([context, repeated, answer, current])
+        notes.snapshot(["r1"])
+        notes.supersede("r1", "https://example.test", "after", "20\nAvailability: 22")
+        notes.snapshot(["r1"])
+        case(f"repeated choice sources from {source_url}", notes)
+
+    notes = RecordedNotes()
+    notes.add(Fact(reader=FactReader.LLM, requirement_id="r1", text="First fact", evidence=span()))
+    notes.add(Fact(reader=FactReader.LLM, requirement_id="r2", text="Same span, another requirement", evidence=span()))
+    notes.add(Fact(reader=FactReader.LLM, requirement_id="r2", text="First fact", evidence=span()))
+    notes.add(Fact(reader=FactReader.LLM, text="Another capture \u00e9\u6771", evidence=span(sha="different")))
+    notes.add(Fact(reader=FactReader.LLM, text="Another span", evidence=span(start=10, end=14)))
+    notes.snapshot(["r1", "r2", "r3"])
+    for budget in (1000, 400, 200, 20, 1, 0):
+        notes.render_with_ids(budget)
+        notes.render_with_ids(budget, preserve_requirements=True)
+        notes.render_for_navigation(budget)
+        notes.render_for_navigation(budget, quotes=True)
+    notes.render_for_navigation(-1)
+    case("deduplicated spans and budgets", notes)
+
+    context = Fact(reader=FactReader.LLM, text="Context", evidence=span(sha="context"))
+    early = Fact(reader=FactReader.LLM, requirement_id="r1", text="First answer", evidence=span(sha="early"))
+    late = Fact(reader=FactReader.LLM, text="Checkout total", evidence=span(sha="late"))
+    notes = RecordedNotes([context, early, late])
+    notes.add(late.model_copy(update={"requirement_id": "r2"}))
+    for budget in range(150, 400, 25):
+        notes.render_with_ids(budget, preserve_requirements=True)
+        notes.render_with_ids(budget, preserve_requirements=True, json_encoded=True)
+    case("requirement evidence first", notes)
+
+    records = [Fact(reader=FactReader.LLM, text=name, evidence=span(sha=name)) for name in ("A", "B", "C")]
+    notes = RecordedNotes(records)
+    a, b, c = (fact_id(f) for f in records)
+    notes.add(records[0].model_copy(update={"requirement_id": "r", "text": "A wins", "basis": (b,)}))
+    notes.add(records[0].model_copy(update={"basis": (c, b, a)}))
+    notes.snapshot(["r"])
+    case("a reused span keeps the answer", notes)
+
+    record = Fact(reader=FactReader.LLM, text="Compared record", evidence=span(sha="record"))
+    subtotal = Fact(reader=FactReader.LLM, text="Subtotal", evidence=span(sha="subtotal"), basis=(fact_id(record),))
+    total = Fact(
+        reader=FactReader.LLM,
+        requirement_id="r",
+        text="Total",
+        evidence=span(sha="total"),
+        basis=(fact_id(subtotal),),
+    )
+    unrelated = Fact(reader=FactReader.LLM, text='Unrelated "quoted"\n' * 30, evidence=span(sha="context"))
+    notes = RecordedNotes([unrelated, total, record, subtotal])
+    for budget in range(300, 1400, 100):
+        for json_encoded in (False, True):
+            notes.render_with_ids(budget, preserve_requirements=True, json_encoded=json_encoded)
+            notes.render_with_ids(budget, json_encoded=json_encoded)
+    case("a budget keeps the transitive basis", notes)
+
+    notes = RecordedNotes()
+    for page in range(4):
+        for number in range(5):
+            quote = f"Record {page * 5 + number} by Ada: " + "A long quotation. " * 10
+            item = span(
+                sha=f"page-{page}",
+                start=number * 1000,
+                end=number * 1000 + len(quote),
+                quote=quote,
+                url=f"https://example.test/page/{page}",
+            )
+            fact = Fact(text=quote, evidence=item, reader=FactReader.LLM)
+            notes.add(fact)
+            notes.add_tally(Tally(requirement_id="r", key="Ada" if number % 2 else "Grace", records=(fact_id(fact),)))
+    notes.snapshot(["r"])
+    notes.complete_tallies("r")
+    notes.snapshot(["r"])
+    for budget in (5000, 3000, 1500, 800):
+        notes.render_with_ids(budget, preserve_requirements=True)
+        notes.render_with_ids(budget)
+    case("tallies render compactly", notes)
+
+    notes = RecordedNotes()
+    for sha, starts in (("first", (0, 30)), ("reread", (10, 40)), ("overlap", (20,)), ("first", (0, 30))):
+        ids = []
+        for start in starts:
+            quote = "Ada: approved" if sha == "first" else "Ada:  approved"
+            fact = Fact(
+                text=quote,
+                evidence=span(sha=sha, start=start, end=start + len(quote), quote=quote),
+                reader=FactReader.LLM,
+            )
+            notes.add(fact)
+            ids.append(fact_id(fact))
+        notes.add_tally(Tally(requirement_id="r", key="Ada", records=tuple(ids)))
+    notes.snapshot(["r"])
+    case("identical rows and recaptures", notes)
+
+    for second in (
+        "https://example.test/rows?page=2",
+        "HTTP://example.test/rows?page=1",
+        "https://example.test/rows?page=1#row",
+        "https://example.test/rows?page=1?",
+        "https://example.test/rows?",
+        "//example.test/rows",
+        "mailto:ada@example.test",
+        "  https://example.test/ro\tws",
+        "relative/path#x",
+    ):
+        notes = RecordedNotes()
+        quote = "Ada | Widget | $10"
+        for index, url in enumerate(("https://example.test/rows?page=1", second, second)):
+            fact = Fact(
+                text=quote,
+                evidence=span(sha=f"capture-{index}", end=len(quote), url=url, quote=quote),
+                reader=FactReader.LLM,
+            )
+            notes.add(fact)
+            notes.add_tally(Tally(requirement_id="r", key="Ada", records=(fact_id(fact),)))
+        notes.complete_tallies("r")
+        notes.snapshot(["r"])
+        case(f"row identity at {second}", notes)
+
+    record = Fact(text="Ada", evidence=span(sha="ada"), reader=FactReader.LLM)
+    context = Fact(text="All authors", evidence=span(sha="context"), reader=FactReader.LLM)
+    notes = RecordedNotes([record, context])
+    tally = notes.add_tally(Tally(requirement_id="r1", key="Ada", records=(fact_id(record),)))
+    notes.add_tally(Tally(requirement_id="r1", key="Unknown", records=("missing",)))
+    notes.complete_tallies("r1")
+    notes.add(
+        Fact(
+            text="Ada leads",
+            evidence=None,
+            basis=(fact_id(record), fact_id(context)),
+            requirement_id="r2",
+            reader=FactReader.LLM,
+        )
+    )
+    notes.render_with_ids(1000, preserve_requirements=True)
+    notes.render_with_ids(1000, labels={fact_id(context): "n2", fact_id(tally): "n1"}, source_only=True)
+    notes.snapshot(["r1", "r2"])
+    case("tally aliases", notes)
+
+    address = "https://shop.test/product?tracking=" + "x" * 300
+    facts = [
+        Fact(text=text, evidence=span(url=address, start=nth, end=nth + 1), reader=FactReader.LLM)
+        for nth, text in enumerate(("Title: Charger A", "Price: GBP20", "Power: 65W", "Ports: two USB-C"))
+    ]
+    notes = RecordedNotes(facts)
+    for budget in (700, 400, 200):
+        notes.render_for_navigation(budget)
+        notes.render_with_ids(budget * 3, json_encoded=True)
+    case("a long shared source url", notes)
+
+    quote = "catalogue " * 80
+    basis = Fact(text=quote, evidence=span(quote=quote, end=len(quote)), reader=FactReader.LLM)
+    progress = Fact(
+        text="The first charger has been checked.", evidence=None, basis=(fact_id(basis),), reader=FactReader.LLM
+    )
+    for order in ((progress, basis), (basis, progress)):
+        notes = RecordedNotes(order)
+        notes.render_for_navigation(500)
+        notes.render_for_navigation(900, quotes=True)
+        case(f"navigation keeps progress {len(cases)}", notes)
+
+    notes = RecordedNotes()
+    for position in ("1 of 2", "2 of 2"):
+        control = SourceControl(role="figure", label="Avatar \u00e9", context=position)
+        notes.add(Fact(text="fact", reader=FactReader.LLM, evidence=span(control_context=control)))
+    notes.render_with_ids(2000)
+    case("equal quotes on different controls", notes)
+
+    first_url = "https://first.test/?ref=" + 'quote"\\' * 30
+    second_url = "https://second.test/?ref=" + "context" * 30
+    first = quoted_fact("First price: 10", "first", first_url)
+    second = quoted_fact("First availability: yes", "second", first_url)
+    other = quoted_fact("Other price: 20", "other", second_url)
+    last = quoted_fact("Other availability: no", "last", second_url)
+    derived = Fact(
+        requirement_id="comparison",
+        text="The first price is lower",
+        evidence=None,
+        basis=(fact_id(first), fact_id(other)),
+        reader=FactReader.LLM,
+    )
+    notes = RecordedNotes([first, second, derived, other, last])
+    notes.render_with_ids(10000, preserve_requirements=True, json_encoded=True)
+    notes.render_with_ids(10000)
+    notes.for_requirements(["comparison"])
+    case("shared url groups", notes)
+
+    review = quoted_fact("3. Review\n\nName: Ada Lovelace", "review", "https://qa.test/#lab", None)
+    heading = quoted_fact("Automation Practice Lab", "submitted", "https://qa.test/#lab", None)
+    message = quoted_fact(
+        "Wizard submitted successfully!",
+        "submitted",
+        "https://qa.test/#lab",
+        "msg",
+        (fact_id(review), fact_id(heading)),
+    )
+    notes = RecordedNotes([review, heading, message])
+    notes.supersede(
+        "msg", "https://qa.test/#lab", "submitted", "Automation Practice Lab\n\nWizard submitted successfully!"
+    )
+    notes.snapshot(["msg"])
+    case("a fresh quote on a vanished step", notes)
+
+    guessed, right = "https://example.test/search?q=guess", "https://example.test/search?tfs=set"
+    old_rows = [quoted_fact(f"Order {n}", f"guess-{n}", guessed, None) for n in "AB"]
+    notes = RecordedNotes(old_rows)
+    notes.add_tally(Tally(requirement_id="r1", key="Orders", records=tuple(fact_id(f) for f in old_rows)))
+    notes.complete_tallies("r1")
+    notes.discredit(["r1"], urls=[guessed])
+    notes.complete_tallies("r1")
+    notes.snapshot(["r1"])
+    notes.add_tally(Tally(requirement_id="r1", key="Orders", records=(fact_id(old_rows[0]),)))
+    notes.complete_tallies("r1")
+    fresh_rows = [quoted_fact(f"Order {n}", f"right-{n}", right, None) for n in "CDE"]
+    for fact in fresh_rows:
+        notes.add(fact)
+    notes.add_tally(Tally(requirement_id="r1", key="Orders", records=tuple(fact_id(f) for f in fresh_rows)))
+    notes.complete_tallies("r1")
+    notes.add_collection_page("r1", guessed, "guess-A")
+    notes.add_collection_page("r1", right, "right-C")
+    notes.snapshot(["r1"])
+    case("a refused count and a recount", notes)
+
+    on_guess, on_right = quoted_fact("Fare $320", "guess", guessed), quoted_fact("Fare $305", "right", right)
+    notes = RecordedNotes([on_guess, on_right])
+    notes.discredit(["r1"], urls=[guessed])
+    notes.add(on_guess)
+    notes.add(on_right)
+    notes.add(Fact(requirement_id="r1", text="$305", evidence=None, basis=(fact_id(on_right),), reader=FactReader.LLM))
+    notes.add(Fact(requirement_id="r1", text="$320", evidence=None, basis=(fact_id(on_guess),), reader=FactReader.LLM))
+    assert on_guess.evidence is not None
+    moved = on_guess.evidence.model_copy(update={"url": guessed + "#x"})
+    notes.add(on_guess.model_copy(update={"evidence": moved}))
+    notes.snapshot(["r1"])
+    notes.usable_citations([fact_id(on_guess), fact_id(on_right), fact_id(on_right), "missing"])
+    notes.render_with_ids(10**6)
+    case("a refusal holds only guessed quotes", notes)
+
+    ranking = NumericComparison(
+        order="lowest", limit=1, label=QuotedField(prefix="", suffix=": "), value=QuotedField(prefix=": ", suffix="")
+    )
+    for build in ("quote", "conclusion", "tally", "comparison", "recount"):
+        for which in ("guessed", "own"):
+            held = quoted_fact("BA: $320", "guess", guessed)
+            own = quoted_fact("VS: $305", "own", right, None)
+            notes = RecordedNotes([held, own])
+            notes.discredit(["r1"], shas=["guess"])
+            target = held if which == "guessed" else own
+            key = fact_id(target)
+            match build:
+                case "quote":
+                    notes.add(target.model_copy(update={"requirement_id": "r1"}))
+                case "conclusion":
+                    notes.add(
+                        Fact(requirement_id="r1", text="Cheapest", evidence=None, basis=(key,), reader=FactReader.LLM)
+                    )
+                case "tally":
+                    notes.add_tally(Tally(requirement_id="r1", key="Fares", records=(key,)))
+                    notes.complete_tallies("r1")
+                case "comparison":
+                    notes.add_continuation("r1", key)
+                    notes.complete_comparison("r1", ranking)
+                case _:
+                    notes.add_tally(Tally(requirement_id="r1", key="Fares", records=(key,)))
+                    assert target.evidence is not None
+                    reread = target.evidence.model_copy(update={"capture_sha256": "recount"})
+                    again = target.model_copy(update={"requirement_id": None, "evidence": reread})
+                    notes.add(again)
+                    notes.add_tally(Tally(requirement_id="r1", key="Fares", records=(fact_id(again),)))
+                    notes.complete_tallies("r1")
+            notes.snapshot(["r1"])
+            case(f"held readings build nothing: {build} on {which}", notes)
+
+    rows = [quoted_fact(f"Fare {n}: {price}", "own", right, None) for n, price in (("A", 305), ("B", 340))]
+    notes = RecordedNotes([*rows, quoted_fact("Fare $320", "guess", guessed)])
+    for row in rows:
+        notes.add_continuation("cheapest", fact_id(row))
+    notes.complete_comparison("cheapest", ranking)
+    notes.discredit(["r1"], urls=[guessed])
+    notes.snapshot(["r1", "cheapest"])
+    notes.for_requirements(["cheapest"], [fact_id(rows[0])])
+    case("refusing one requirement leaves another's ranking", notes)
+
+    shared_rows = [quoted_fact(f"Order {n}", "shared", guessed, None) for n in "AB"]
+    notes = RecordedNotes([*shared_rows, quoted_fact("Fare $320", "shared", guessed)])
+    notes.add_tally(Tally(requirement_id="orders", key="Orders", records=tuple(fact_id(f) for f in shared_rows)))
+    notes.add_collection_page("orders", guessed, "shared")
+    notes.add_collection_page("orders", guessed, "shared")
+    notes.discredit(["r1"], urls=[guessed])
+    notes.snapshot(["r1", "orders"])
+    case("a list read stays read", notes)
+
+    first_page = page_capture("Price: 12", url="https://example.test")
+    later = datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC)
+    second_page = first_page.model_copy(update={"title": "Beacon", "captured_at": later})
+    read = span(sha=first_page.sha256, quote="Price: 12", end=9)
+    notes = RecordedNotes([Fact(text="Price: 12", evidence=read, reader=FactReader.JEV_CHOICE)])
+    notes.remember_capture(first_page)
+    notes.remember_capture(first_page.model_copy(update={"title": "Renamed"}))
+    notes.remember_capture(second_page)
+    notes.captured_page(read)
+    notes.captured_page(read.model_copy(update={"captured_at": later}))
+    notes.current_evidence(page_capture("Price: 13", url="https://example.test#top"))
+    notes.current_evidence(page_capture("Price: 12 today", url="https://example.test"))
+    notes.current_evidence(page_capture("Price: 13", url="https://other.test"))
+    case("captured pages", notes)
+
+    # Groups that rank: a lone group, ties, and a long neighbour's label.
+    notes = RecordedNotes()
+    counts = {"Ada": 3, "Grace": 3, "Linus " + "x" * 200: 1, "Barbara": 2, "Edsger": 1, "Alan": 4, "Ken": 1}
+    serial = 0
+    for key, count in counts.items():
+        ids = []
+        for _ in range(count):
+            fact = quoted_fact(f"Row {serial}", f"sha-{serial}", requirement_id=None)
+            serial += 1
+            notes.add(fact)
+            ids.append(fact_id(fact))
+        notes.add_tally(Tally(requirement_id="r", key=key, records=tuple(ids)))
+    notes.complete_tallies("r")
+    lone = quoted_fact("Lone", "lone", requirement_id=None)
+    notes.add(lone)
+    notes.add_tally(Tally(requirement_id="other", key="Only", records=(fact_id(lone),)))
+    notes.snapshot(["r", "other"])
+    notes.retain_for(["r", "x"], [fact_id(lone), "missing"])
+    notes.retain_for(["r"], [fact_id(lone)])
+    notes.unevidence(["r"])
+    notes.snapshot(["r"])
+    notes.for_requirements(["other"])
+    case("standings", notes)
+
+    # Rankings over a list, and a collection's coverage fact beside them.
+    items = [
+        quoted_fact(f"Item {n}: {p}", "list", "https://shop.test/list", None)
+        for n, p in (("A", "$5"), ("B", "$3.50"), ("C", "$3.5"), ("D", "$10"), ("E", "$\u0661\u0662"))
+    ]
+    for limit, order in ((1, "lowest"), (2, "lowest"), (2, "highest"), (6, "lowest"), (1, "highest")):
+        notes = RecordedNotes(items)
+        for item in items:
+            notes.add_continuation("cheap", fact_id(item))
+        comparison = NumericComparison(
+            order=order,
+            limit=limit,
+            label=QuotedField(prefix="", suffix=": "),
+            value=QuotedField(prefix=": ", suffix=""),
+        )
+        notes.complete_comparison("cheap", comparison)
+        coverage = CollectionFact(
+            requirement_id=None,
+            text="Every item read",
+            evidence=None,
+            basis=tuple(fact_id(r) for r in items),
+            reader=FactReader.LLM,
+            scope="All items",
+            comparison=Comparison(requirement_id="cheap", records=(fact_id(items[0]),), complete=True),
+        )
+        notes.add(coverage)
+        notes.snapshot(["cheap"])
+        notes.render_with_ids(10**6, preserve_collections=True, source_only=True)
+        case(f"comparison {order} {limit}", notes)
+    return cases
+
+
+def quoted_fields() -> list[dict[str, Any]]:
+    cases = []
+    for prefix, suffix, quote in (
+        ("", ": ", "Fare A: $305"),
+        (": ", "", "Fare A: $305"),
+        (": ", "", "A: 1: 2"),
+        ("(", ")", "x (a) (b)"),
+        ("(", ")", "x (a)"),
+        ("", "", "  whole  "),
+        ("a", "a", "aaa"),
+        ("<", ">", "<line\nbreak>"),
+        ("<", ">", "< >"),
+        ("\u00e9", "\u6771", "x\u00e9 v \u6771y"),
+        ("[", "]", "no delimiters"),
+        ("", "|", "left | right"),
+    ):
+        value = QuotedField(prefix=prefix, suffix=suffix).extract(quote)
+        cases.append({"prefix": prefix, "suffix": suffix, "quote": quote, "value": value})
+    return cases
+
+
+def shows_cases() -> list[dict[str, Any]]:
+    cases = []
+    for text, quote in (
+        ("Name: Priya Sharman", "Priya Sharma"),
+        ("Name: Priya Sharma.", "Priya Sharma"),
+        ("x", ""),
+        ("", ""),
+        ("ab", "b"),
+        ("a b", "b"),
+        ("\u00e9b", "b"),
+        ("_b", "b"),
+        ("b_", "b"),
+        ("$5", "$5"),
+        ("a$5", "$5"),
+        ("b b", "b b"),
+        ("bb b", "b"),
+    ):
+        cases.append({"text": text, "quote": quote, "shows": shows(text, quote)})
+    return cases
+
+
 def write(name: str, value: Any) -> None:
     (HERE / name).write_text(json.dumps(sort_operations(value), indent=1) + "\n", encoding="ascii")
 
@@ -521,3 +1274,4 @@ def write(name: str, value: Any) -> None:
 if __name__ == "__main__":
     write("batches.json", batches())
     write("planner.json", planner())
+    write("memory.json", {"cases": memory(), "quoted_fields": quoted_fields(), "shows": shows_cases()})

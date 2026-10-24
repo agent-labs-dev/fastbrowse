@@ -21,10 +21,14 @@ use indexmap::IndexMap;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-pub fn cases(name: &str) -> Vec<Value> {
+pub fn golden(name: &str) -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden").join(name);
     let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    match serde_json::from_str(&text).expect("golden JSON") {
+    serde_json::from_str(&text).expect("golden JSON")
+}
+
+pub fn cases(name: &str) -> Vec<Value> {
+    match golden(name) {
         Value::Array(cases) => cases,
         other => panic!("expected a list of cases, got {other}"),
     }
