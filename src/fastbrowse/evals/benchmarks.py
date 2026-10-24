@@ -51,6 +51,9 @@ class Row(PublicModel):
     seconds: Amount
     dollars: Amount
     physical_runs: Annotated[int, Field(gt=0)]
+    llm_calls: Annotated[int, Field(ge=0)] = 0
+    jev_calls: Annotated[int, Field(ge=0)] = 0
+    tokens_per_second: Amount = 0.0
 
     @model_validator(mode="after")
     def completion(self) -> Self:
@@ -416,11 +419,17 @@ def regressions(
                 raise ValueError(f"source-score regression: {group.id}/{task}")
             if sum(r.completed for r in now) < sum(r.completed for r in before):
                 raise ValueError(f"completion regression: {group.id}/{task}")
-            for field, floor in (("seconds", 1.0), ("dollars", 0.001)):
+            # Wall time moves with cloud load, so it is not compared; the calls a run made and its model
+            # throughput are properties of the build. `dollars` is kept: it is a charge, not a duration.
+            for field, floor in (("llm_calls", 1.0), ("jev_calls", 1.0), ("dollars", 0.001)):
                 a = statistics.median(getattr(r, field) for r in now)
                 b = statistics.median(getattr(r, field) for r in before)
                 if a > b * REGRESSION_FACTOR and a - b > floor:
                     raise ValueError(f"{field} regression: {group.id}/{task}")
+            now_tps = statistics.median(r.tokens_per_second for r in now)
+            before_tps = statistics.median(r.tokens_per_second for r in before)
+            if before_tps > 0 and now_tps < before_tps / REGRESSION_FACTOR and before_tps - now_tps > 1.0:
+                raise ValueError(f"tokens_per_second regression: {group.id}/{task}")
 
 
 def github_run(run_id: int) -> dict:

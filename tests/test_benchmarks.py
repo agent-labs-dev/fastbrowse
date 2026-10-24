@@ -270,7 +270,7 @@ def test_same_count_with_an_unmatched_catalog_task_is_refused(candidate):
         check_catalog(Candidate.model_validate(candidate), CATALOG)
 
 
-@pytest.mark.parametrize(("field", "value"), [("score", 0.0), ("seconds", 15.0), ("dollars", 0.02)])
+@pytest.mark.parametrize(("field", "value"), [("score", 0.0), ("llm_calls", 40), ("dollars", 0.02)])
 def test_matched_regressions_block_publication(candidate, field, value):
     before = Candidate.model_validate(copy.deepcopy(candidate))
     task = candidate["groups"][0]["task_ids"][0]
@@ -1147,8 +1147,8 @@ def test_the_pool_arm_is_the_one_guarded_in_the_ultrafast_comparison(candidate):
     task = data["groups"][0]["task_ids"][0]
     for row in data["groups"][0]["rows"]:
         if row["task"] == task and row["arm"] == "fastbrowse-pool":
-            row["seconds"] = 15.0
-    with pytest.raises(ValueError, match="seconds regression: internal-ultrafast"):
+            row["llm_calls"] = 40
+    with pytest.raises(ValueError, match="llm_calls regression: internal-ultrafast"):
         regressions(Candidate.model_validate(data), before)
 
 

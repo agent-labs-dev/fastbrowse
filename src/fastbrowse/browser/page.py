@@ -561,6 +561,14 @@ class CdpPage(Page):
     def withhold_frames(self, withheld: bool) -> None:
         self._session.frames_withheld = withheld
 
+    def lifecycle_mark(self) -> int:
+        """The page's current lifecycle generation, to pass to `wait_for_lifecycle`."""
+        return self._session.lifecycle_mark()
+
+    async def wait_for_lifecycle(self, mark: int, seconds: float) -> bool:
+        """Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`."""
+        return await self._session.wait_for_lifecycle(mark, seconds)
+
     # -- observe / capture -------------------------------------------------------------------------
 
     async def observe(self) -> Observation:
@@ -595,7 +603,7 @@ class CdpPage(Page):
             await self._until_dialog(settle())
         except ContextLost:
             # The new document can be replaced in turn while this waits; the next read is what counts.
-            await asyncio.sleep(_SETTLE_POLL_SECONDS)
+            await self.wait_for_lifecycle(self.lifecycle_mark(), _SETTLE_POLL_SECONDS)
 
     async def _observe_once(self, attempt: int = 0) -> Observation:
         await self._session.assert_clear()
@@ -1979,18 +1987,27 @@ class CdpPage(Page):
             "return ids.some(id => r.observed.has(id) && r.guardKey(r.nodes.get(id)) !== "
             f"r.observed.get(id)); }})({json.dumps(ids)})"
         )
-        deadline = time.monotonic() + timeout_seconds
-        while time.monotonic() < deadline:
-            try:
-                changed = await self._evaluate(session_id, check)
-            except BrowserError:
-                # A navigation destroys the context mid-check; `act` refuses the old controls on its own.
-                return False
-            if changed:
-                with suppress(BrowserError):
-                    await self._settled_fingerprint(_SETTLE_SECONDS)
-                return True
-            await asyncio.sleep(_SETTLE_POLL_SECONDS)
+        # One renderer call waits for the guard to change, as `_settled_fingerprint` waits for quiet: a Python
+        # poll paid a cloud round trip per interval and could let the wait outlast the change it was watching for.
+        watch = (
+            "new Promise(resolve => { const changed = () => "
+            + check
+            + f"; const deadline = performance.now() + {timeout_seconds * 1000}; "
+            "const poll = () => { "
+            "let moved = false; try { moved = changed(); } catch { resolve(true); return; } "
+            "if (moved) { resolve(true); return; } "
+            "if (performance.now() >= deadline) { resolve(false); return; } "
+            f"setTimeout(poll, {_SETTLE_POLL_SECONDS * 1000}); }}; poll(); }})"
+        )
+        try:
+            changed = await self._evaluate(session_id, watch)
+        except BrowserError:
+            # A navigation destroys the context mid-check; `act` refuses the old controls on its own.
+            return False
+        if changed:
+            with suppress(BrowserError):
+                await self._settled_fingerprint(_SETTLE_SECONDS)
+            return True
         return False
 
     async def screenshot(self) -> bytes:
@@ -2303,7 +2320,9 @@ class CdpPage(Page):
             # Fills already check retention after insertion. Other inputs start the top renderer's quiet clock;
             # events in a separate frame cannot reach it, so those still need the delay.
             if not input_settling:
-                await asyncio.sleep(_SETTLE_QUIET_SECONDS)
+                # Let the renderer's own quiet clock start. The page's lifecycle events say when the document is
+                # still moving, so this waits on the page rather than a flat interval that expires regardless.
+                await self.wait_for_lifecycle(self.lifecycle_mark(), _SETTLE_QUIET_SECONDS)
             while (remaining := deadline - time.monotonic()) > 0:
                 if self._session.pending_dialog() is not None:
                     return True
@@ -2323,7 +2342,7 @@ class CdpPage(Page):
                 finally:
                     settled.cancel()
                     await asyncio.gather(settled, return_exceptions=True)
-                await asyncio.sleep(_SETTLE_POLL_SECONDS)
+                await self.wait_for_lifecycle(self.lifecycle_mark(), max(0.0, deadline - time.monotonic()))
             return True
         finally:
             dialog.cancel()

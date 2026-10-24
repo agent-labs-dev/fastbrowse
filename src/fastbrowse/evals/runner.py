@@ -39,7 +39,15 @@ from fastbrowse.evals.mock_tasks import MockTask
 from fastbrowse.evals.status import normalize
 from fastbrowse.evals.tasks import TASKS, LocalTask
 from fastbrowse.evals.versions import load_lock, provenance, suite_version, task_version
-from fastbrowse.models import Attachment, BrowserConnection, CostBreakdown, Frozen, Limits, RunResult
+from fastbrowse.models import (
+    Attachment,
+    BrowserConnection,
+    CostBreakdown,
+    CostComponent,
+    Frozen,
+    Limits,
+    RunResult,
+)
 from fastbrowse.safety import ScopedSecrets, origin_of
 from fastbrowse.telemetry import traced, transient_seconds
 
@@ -129,6 +137,26 @@ def fixture_config() -> Config:
     return Config(refuse_cookie_banners=False)
 
 
+def _efficiency(cost: CostBreakdown) -> dict[str, object]:
+    """The stable efficiency measures a row is compared on: tokens, calls and model throughput.
+
+    Wall time and cloud load move together, so they cannot compare two builds; the tokens a run sent and the calls
+    it made are properties of the build. Tokens a second is model throughput over the LLM calls' own seconds, not
+    the run's wall clock, so a slow page or a browser stall never enters it.
+    """
+    llm = [line for line in cost.lines if line.component is CostComponent.LLM]
+    tokens_in = sum(line.input_tokens for line in llm)
+    tokens_out = sum(line.output_tokens for line in llm)
+    call_seconds = sum(line.seconds or 0.0 for line in llm)
+    return {
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "llm_calls": len(llm),
+        "jev_calls": sum(1 for line in cost.lines if line.component is CostComponent.JEV),
+        "tokens_per_second": round((tokens_in + tokens_out) / call_seconds, 1) if call_seconds > 0 else None,
+    }
+
+
 def _row(
     result: RunResult, *, task_id: str, failure: str | None, seconds: float, lost: float, limit: int | None
 ) -> dict[str, object]:
@@ -153,7 +181,7 @@ def _row(
         "data": result.data,
         "error": result.error,
         "trace": [f"{s.operation.value} {s.target or ''} -> {s.outcome.value}" for s in result.steps],
-    }
+    } | _efficiency(result.cost)
 
 
 async def _drive(
