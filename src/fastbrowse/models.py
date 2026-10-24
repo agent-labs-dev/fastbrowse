@@ -351,7 +351,7 @@ class Limits(Frozen):
     """Steps that reached the page. A click whose element was redrawn before it landed dispatched nothing and is
     not counted; the stall budget ends a page that keeps redrawing."""
     max_jev_calls: int | None = Field(default=None, gt=0)
-    """Logical Jev evaluations. A hedged or retried request adds cost but not a call."""
+    """Logical Jev evaluations. A retried request adds cost but not a call."""
     max_llm_calls: int | None = Field(default=None, gt=0)
     max_dollars: float | None = Field(default=None, gt=0)
     """Bounds Jev and LLM spend as it happens. A cloud browser bills when it stops, after the run, so its

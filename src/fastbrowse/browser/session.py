@@ -22,6 +22,7 @@ from cdp_use.cdp.fetch.types import RequestPattern
 from cdp_use.cdp.page.events import (
     JavascriptDialogClosedEvent,
     JavascriptDialogOpeningEvent,
+    LifecycleEventEvent,
     ScreencastFrameEvent,
     WindowOpenEvent,
 )
@@ -412,6 +413,10 @@ class BrowserSession:
         """The address of the document each pending dialog came from, which `Dialog` does not carry."""
         """Pending JS dialog per tab session id; cleared once handled."""
         self._dialog_opened = asyncio.Event()
+        self._lifecycle_generation = 0
+        """Bumped on every `Page.lifecycleEvent`: the page's own signal that it is still loading or has settled."""
+        self._lifecycle_waiters: set[asyncio.Future[None]] = set()
+        """Resolved when the next lifecycle event arrives, so a settle waits on the page, not a fixed interval."""
         self._background: set[asyncio.Task[None]] = set()
         self._closing = False
 
@@ -870,6 +875,7 @@ class BrowserSession:
         client.register.Page.javascriptDialogOpening(self._on_dialog)
         client.register.Runtime.bindingCalled(self._on_binding)
         client.register.Page.javascriptDialogClosed(self._on_dialog_closed)
+        client.register.Page.lifecycleEvent(self._on_lifecycle)
         # A background run casts without a frame handler too, and a frame nobody acks stalls the cast that sent it.
         if self._on_frame is not None or not self._connection.foreground:
             client.register.Page.screencastFrame(self._on_screencast_frame)
@@ -1136,6 +1142,43 @@ class BrowserSession:
             params["promptText"] = prompt_text
         await self.client.send.Page.handleJavaScriptDialog(params=params, session_id=session_id)  # ty: ignore[invalid-argument-type]
         self._dialogs.pop(session_id, None)
+
+    def _on_lifecycle(self, event: LifecycleEventEvent, session_id: str | None) -> None:
+        """A frame reported a lifecycle transition (init, DOMContentLoaded, load, networkIdle...).
+
+        Chrome reports these as a document loads, so a settle can wait on the page's own signal instead of a fixed
+        interval. The generation is global: a wake for another tab only makes a waiter re-check the page, which is
+        what it would do anyway.
+        """
+        self._lifecycle_generation += 1
+        waiters, self._lifecycle_waiters = self._lifecycle_waiters, set()
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.set_result(None)
+
+    def lifecycle_mark(self) -> int:
+        """The current lifecycle generation: pass one back to `wait_for_lifecycle` to wait for the next event."""
+        return self._lifecycle_generation
+
+    async def wait_for_lifecycle(self, mark: int, seconds: float) -> bool:
+        """Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`.
+
+        A timeout is not a failure: the caller re-reads the page and decides. This replaces the fixed-interval poll
+        a settle used to run, so the wait costs nothing while the page reports nothing new.
+        """
+        if self._lifecycle_generation != mark:
+            return True
+        if seconds <= 0:
+            return False
+        waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._lifecycle_waiters.add(waiter)
+        try:
+            await asyncio.wait_for(waiter, seconds)
+            return True
+        except TimeoutError:
+            return False
+        finally:
+            self._lifecycle_waiters.discard(waiter)
 
     def _on_binding(self, event: BindingCalledEvent, session_id: str | None) -> None:
         if event["name"] == INPUT_NAVIGATION_BINDING:
