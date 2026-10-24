@@ -1,0 +1,243 @@
+{
+  "pages": [
+    {"name": "index-read", "path": "/index.html", "steps": [{"op": "observe"}, {"op": "capture"}]},
+    {
+      "name": "index-login",
+      "path": "/index.html",
+      "steps": [
+        {"op": "observe"},
+        {"op": "fill", "label": "Username", "text": "ada"},
+        {"op": "observe"},
+        {"op": "fill", "label": "Password", "text": "hunter2"},
+        {"op": "observe"},
+        {"op": "click", "label": "Sign in"},
+        {"op": "observe"},
+        {"op": "capture"}
+      ]
+    },
+    {
+      "name": "index-frame",
+      "path": "/index.html",
+      "steps": [
+        {"op": "observe"},
+        {"op": "fill", "label": "Frame field", "text": "hello"},
+        {"op": "observe"},
+        {"op": "click", "label": "Frame button"},
+        {"op": "observe"},
+        {"op": "capture"}
+      ]
+    },
+    {
+      "name": "index-modal",
+      "path": "/index.html",
+      "steps": [
+        {"op": "observe"},
+        {"op": "click", "label": "Open modal"},
+        {"op": "observe"},
+        {"op": "click", "label": "Covered target"},
+        {"op": "observe"}
+      ]
+    },
+    {
+      "name": "index-widgets",
+      "path": "/index.html",
+      "steps": [
+        {"op": "observe"},
+        {"op": "click", "label": "Search or jump to"},
+        {"op": "observe"},
+        {"op": "click", "label": "Trigger swap"},
+        {"op": "observe"},
+        {"op": "click", "label": "Swap target"},
+        {"op": "observe"},
+        {"op": "click", "label": "Shadow button"},
+        {"op": "observe"},
+        {"op": "fill", "label": "Hydrating field", "text": "hydrated"},
+        {"op": "observe"},
+        {"op": "fill", "label": "Rejecting field", "text": "rejected"},
+        {"op": "observe"},
+        {"op": "click", "label": "Add to cart", "label_nth": 1},
+        {"op": "observe"}
+      ]
+    },
+    {
+      "name": "index-dialog",
+      "path": "/index.html",
+      "steps": [
+        {"op": "observe"},
+        {"op": "click", "label": "Confirm"},
+        {"op": "observe"},
+        {"op": "dialog", "accept": true},
+        {"op": "observe"},
+        {"op": "capture"}
+      ]
+    },
+    {
+      "name": "index-popup",
+      "path": "/index.html",
+      "steps": [
+        {"op": "observe"},
+        {"op": "click", "label": "Open popup"},
+        {"op": "observe"},
+        {"op": "switch_tab", "tab": 0},
+        {"op": "observe"}
+      ]
+    },
+    {
+      "name": "index-download",
+      "path": "/index.html",
+      "steps": [{"op": "observe"}, {"op": "click", "label": "Download attachment"}, {"op": "observe"}]
+    },
+    {
+      "name": "index-escape-back",
+      "path": "/index.html",
+      "steps": [
+        {"op": "observe"},
+        {"op": "escape"},
+        {"op": "observe"},
+        {"op": "navigate", "path": "/signin.html"},
+        {"op": "observe"},
+        {"op": "back"},
+        {"op": "observe"}
+      ]
+    },
+    {
+      "name": "dispatch",
+      "path": "/dispatch.html",
+      "steps": [{"op": "observe"}, {"op": "click", "label": "One way"}, {"op": "observe"}, {"op": "capture"}]
+    },
+    {
+      "name": "animated",
+      "path": "/animated.html",
+      "steps": [{"op": "observe"}, {"op": "click", "label": "Trip type"}, {"op": "observe"}]
+    },
+    {
+      "name": "menu",
+      "path": "/menu.html",
+      "steps": [{"op": "observe"}, {"op": "click", "label": "Round trip"}, {"op": "observe"}, {"op": "capture"}]
+    },
+    {
+      "name": "hovers",
+      "path": "/hovers.html",
+      "steps": [
+        {"op": "observe"},
+        {"op": "hover", "label": "User Avatar"},
+        {"op": "observe"},
+        {"op": "hover", "label": "Products"},
+        {"op": "observe"},
+        {"op": "capture"}
+      ]
+    },
+    {
+      "name": "overlay",
+      "path": "/overlay.html",
+      "steps": [{"op": "observe"}, {"op": "fill", "label": "Where from?", "text": "Lon"}, {"op": "observe"}]
+    },
+    {
+      "name": "popup",
+      "path": "/popup.html",
+      "steps": [{"op": "observe"}, {"op": "click", "label": "Popup button"}, {"op": "observe"}]
+    },
+    {
+      "name": "release",
+      "path": "/release.html",
+      "steps": [
+        {"op": "observe"},
+        {"op": "click", "label": "Export changelog"},
+        {"op": "observe"},
+        {"op": "capture"},
+        {"op": "click", "label": "Download 2.1.0"},
+        {"op": "observe"}
+      ]
+    },
+    {
+      "name": "safety",
+      "path": "/safety.html",
+      "steps": [
+        {"op": "observe"},
+        {"op": "fill", "label": "Account name", "text": "renamed"},
+        {"op": "observe"},
+        {"op": "select", "label": "Destination", "text": "Second"},
+        {"op": "observe"},
+        {"op": "select", "label": "Destination", "text": "Third"},
+        {"op": "observe"},
+        {"op": "fill", "label": "Other field", "text": "echoed"},
+        {"op": "observe"},
+        {"op": "click", "label": "Echo prompt"},
+        {"op": "observe"},
+        {"op": "dialog", "accept": true, "text": "answer"},
+        {"op": "observe"},
+        {"op": "fill", "label": "Inner field", "text": "inside"},
+        {"op": "observe"},
+        {"op": "capture"}
+      ]
+    },
+    {
+      "name": "signin",
+      "path": "/signin.html",
+      "steps": [
+        {"op": "observe"},
+        {"op": "fill", "label": "Username", "text": "grace"},
+        {"op": "observe"},
+        {"op": "fill", "label": "Password", "text": "s3cret"},
+        {"op": "observe"},
+        {"op": "enter", "label": "Password"},
+        {"op": "observe"}
+      ]
+    },
+    {
+      "name": "todos",
+      "path": "/todos.html",
+      "steps": [
+        {"op": "observe"},
+        {"op": "click", "label": "Toggle Todo", "label_nth": 1},
+        {"op": "observe"},
+        {"op": "capture"}
+      ]
+    },
+    {
+      "name": "token",
+      "path": "/token.html",
+      "steps": [
+        {"op": "observe"},
+        {"op": "fill", "label": "Token", "text": "abc123"},
+        {"op": "observe"},
+        {"op": "click", "label": "Save"},
+        {"op": "observe"}
+      ]
+    },
+    {
+      "name": "long-list",
+      "path": "/long-list.html",
+      "steps": [
+        {"op": "observe"},
+        {"op": "scroll"},
+        {"op": "observe"},
+        {"op": "scroll"},
+        {"op": "observe"},
+        {"op": "scroll_up"},
+        {"op": "observe"},
+        {"op": "capture"},
+        {"op": "click", "label": "Book 3"},
+        {"op": "observe"},
+        {"op": "back"},
+        {"op": "observe"}
+      ]
+    },
+    {"name": "gallery", "path": "/gallery.html", "steps": [{"op": "observe"}, {"op": "capture"}]},
+    {"name": "challenge", "path": "/challenge.html", "steps": [{"op": "observe"}, {"op": "capture"}]},
+    {"name": "comments-empty", "path": "/comments-empty.html", "steps": [{"op": "observe"}, {"op": "capture"}]},
+    {"name": "loading", "path": "/loading.html", "steps": [{"op": "observe"}, {"op": "capture"}]},
+    {"name": "offscreen-loading", "path": "/offscreen-loading.html", "steps": [{"op": "observe"}, {"op": "capture"}]},
+    {"name": "icons", "path": "/icons.html", "steps": [{"op": "observe"}, {"op": "capture"}]},
+    {"name": "frames", "path": "/frames.html", "steps": [{"op": "observe"}, {"op": "capture"}]},
+    {"name": "inner", "path": "/inner.html", "steps": [{"op": "observe"}, {"op": "capture"}]},
+    {"name": "pypi-challenge", "path": "/pypi-challenge.html", "steps": [{"op": "observe"}, {"op": "capture"}]},
+    {
+      "name": "drag",
+      "path": "/todos.html",
+      "steps": [{"op": "observe"}, {"op": "drag", "label": "Toggle Todo", "to": "Toggle Todo", "to_nth": 2}, {"op": "observe"}]
+    },
+    {"name": "http-error", "path": "/http-error/503", "steps": [{"op": "observe"}, {"op": "capture"}]},
+    {"name": "report-csv", "path": "/index.html", "steps": [{"op": "goto", "path": "/report.csv?short"}, {"op": "observe"}, {"op": "capture"}]}
+  ]
+}

@@ -1,6 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["crates/fastbrowse-core", "crates/fastbrowse-clients", "crates/fastbrowse-py", "crates/fastbrowse-node"]
+members = [
+    "crates/fastbrowse-core",
+    "crates/fastbrowse-clients",
+    "crates/fastbrowse-browser",
+    "crates/fastbrowse-py",
+    "crates/fastbrowse-node",
+    "crates/fastbrowse-probe",
+]
 
 [workspace.package]
 version = "0.7.0"
@@ -13,3 +20,13 @@ lto = true
 codegen-units = 1
 # Stripping at link time left a dylib whose LINKEDIT string pool dyld refused on macOS 27.
 strip = "none"
+
+# The size-tuned profile: `cargo build --profile release-small`. Plain `--release` keeps the workspace defaults
+# so the two can be compared.
+[profile.release-small]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
