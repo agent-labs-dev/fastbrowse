@@ -67,7 +67,7 @@ class FailoverJevClient:
 
             cost = result.cost
             if error.unaccounted_requests:
-                # Only unanswered requests may be billed. Estimate their inputs without multiplying backup hedges.
+                # Only unanswered requests may be billed. Estimate their inputs from the answered request.
                 discarded = estimated_cost(result.input_tokens * error.unaccounted_requests)
                 cost = merged_cost([cost, discarded]).model_copy(update={"seconds": cost.seconds})
             return Evaluation(
