@@ -11,5 +11,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 fastbrowse-core = { path = "../fastbrowse-core" }
+# `run_task` with the rules `serve` applies to a run's params, without the stand-in runs the binary's tests use.
+fastbrowse-cli = { path = "../fastbrowse-cli", default-features = false }
 # abi3: one wheel per platform serves every CPython from 3.13 on.
 pyo3 = { version = "0.30", features = ["extension-module", "abi3-py313"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }

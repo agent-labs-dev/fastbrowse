@@ -229,8 +229,11 @@ dependencies = [
 name = "fastbrowse-py"
 version = "0.7.0"
 dependencies = [
+ "fastbrowse-cli",
  "fastbrowse-core",
  "pyo3",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
