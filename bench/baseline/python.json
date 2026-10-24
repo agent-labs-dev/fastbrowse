@@ -1,0 +1,868 @@
+{
+ "agent": "/Users/jnsdls/fastbrowse/.claude/worktrees/agent-a33931a0015dcb7fa/.venv/bin/fastbrowse serve --stdio",
+ "groups": {
+  "replay, latency zero": {
+   "aggregate": {
+    "tasks": 36,
+    "wall_s_median": 1.8797,
+    "wall_s_total": 104.0677,
+    "wall_s_max": 14.7616,
+    "cpu_s_median": 0.49929999999999997,
+    "cpu_s_total": 18.3979,
+    "cpu_s_max": 0.7883,
+    "startup_s_median": 0.2596,
+    "startup_s_total": 9.3668,
+    "startup_s_max": 0.3356,
+    "rss_bytes_median": 79011840.0,
+    "rss_bytes_total": null,
+    "rss_bytes_max": 80183296,
+    "passed": 106,
+    "runs": 108
+   },
+   "stability": {
+    "runs": 3,
+    "pairs": [
+     {
+      "against": 1,
+      "differing_tasks": []
+     },
+     {
+      "against": 2,
+      "differing_tasks": [
+       "mock-support-portal"
+      ]
+     }
+    ],
+    "misses": 2,
+    "identical": false
+   },
+   "tasks": {
+    "search-price": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 2.6476,
+     "cpu_s": 0.3924,
+     "startup_s": 0.2208,
+     "rss_bytes": 78495744,
+     "steps": 5,
+     "misses": 0
+    },
+    "contact-form": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 2.4801,
+     "cpu_s": 0.4399,
+     "startup_s": 0.2323,
+     "rss_bytes": 78430208,
+     "steps": 6,
+     "misses": 0
+    },
+    "contact-needs-confirmation": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 2.1043,
+     "cpu_s": 0.4323,
+     "startup_s": 0.2383,
+     "rss_bytes": 78462976,
+     "steps": 5,
+     "misses": 0
+    },
+    "table-extract": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 0.666,
+     "cpu_s": 0.3641,
+     "startup_s": 0.2294,
+     "rss_bytes": 78118912,
+     "steps": 1,
+     "misses": 0
+    },
+    "login-wall": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 0.6708,
+     "cpu_s": 0.3388,
+     "startup_s": 0.2201,
+     "rss_bytes": 77922304,
+     "steps": 0,
+     "misses": 0
+    },
+    "confirm-dialog": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 1.0018,
+     "cpu_s": 0.3797,
+     "startup_s": 0.2359,
+     "rss_bytes": 78102528,
+     "steps": 4,
+     "misses": 0
+    },
+    "mock-cold-sign-in": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 14.7616,
+     "cpu_s": 0.6084,
+     "startup_s": 0.2278,
+     "rss_bytes": 79626240,
+     "steps": 5,
+     "misses": 0
+    },
+    "mock-supplied-sign-in-route": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 2.2327,
+     "cpu_s": 0.5041,
+     "startup_s": 0.3356,
+     "rss_bytes": 79167488,
+     "steps": 5,
+     "misses": 0
+    },
+    "mock-sign-in": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 2.1206,
+     "cpu_s": 0.4468,
+     "startup_s": 0.2261,
+     "rss_bytes": 79282176,
+     "steps": 5,
+     "misses": 0
+    },
+    "mock-sign-in-two-step": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 5.0429,
+     "cpu_s": 0.6725,
+     "startup_s": 0.2222,
+     "rss_bytes": 80150528,
+     "steps": 17,
+     "misses": 0
+    },
+    "mock-sign-in-code-given": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 2.8403,
+     "cpu_s": 0.4945,
+     "startup_s": 0.2216,
+     "rss_bytes": 79429632,
+     "steps": 7,
+     "misses": 0
+    },
+    "mock-sign-out": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 2.1138,
+     "cpu_s": 0.441,
+     "startup_s": 0.2184,
+     "rss_bytes": 78659584,
+     "steps": 5,
+     "misses": 0
+    },
+    "mock-basket": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 3.5657,
+     "cpu_s": 0.5305,
+     "startup_s": 0.2165,
+     "rss_bytes": 79577088,
+     "steps": 11,
+     "misses": 0
+    },
+    "mock-order-validation": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 4.9874,
+     "cpu_s": 0.6154,
+     "startup_s": 0.2114,
+     "rss_bytes": 79855616,
+     "steps": 19,
+     "misses": 0
+    },
+    "mock-order-pause": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 3.749,
+     "cpu_s": 0.5111,
+     "startup_s": 0.2161,
+     "rss_bytes": 79233024,
+     "steps": 10,
+     "misses": 0
+    },
+    "mock-password-change": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 3.2057,
+     "cpu_s": 0.474,
+     "startup_s": 0.2273,
+     "rss_bytes": 78643200,
+     "steps": 9,
+     "misses": 0
+    },
+    "mock-password-pause": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 2.9419,
+     "cpu_s": 0.4661,
+     "startup_s": 0.2225,
+     "rss_bytes": 78675968,
+     "steps": 8,
+     "misses": 0
+    },
+    "mock-cheapest-product": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 1.2957,
+     "cpu_s": 0.4456,
+     "startup_s": 0.2214,
+     "rss_bytes": 79544320,
+     "steps": 5,
+     "misses": 0
+    },
+    "mock-priciest-product": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 1.5051,
+     "cpu_s": 0.4705,
+     "startup_s": 0.2463,
+     "rss_bytes": 79970304,
+     "steps": 8,
+     "misses": 0
+    },
+    "mock-stock-count": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 0.777,
+     "cpu_s": 0.4295,
+     "startup_s": 0.2729,
+     "rss_bytes": 78675968,
+     "steps": 1,
+     "misses": 0
+    },
+    "mock-sign-in-per-digit": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 6.8068,
+     "cpu_s": 0.7883,
+     "startup_s": 0.2788,
+     "rss_bytes": 80183296,
+     "steps": 22,
+     "misses": 0
+    },
+    "mock-iframe-note": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 1.5468,
+     "cpu_s": 0.4619,
+     "startup_s": 0.2753,
+     "rss_bytes": 78266368,
+     "steps": 2,
+     "misses": 0
+    },
+    "mock-shadow-dom": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 1.504,
+     "cpu_s": 0.4707,
+     "startup_s": 0.3012,
+     "rss_bytes": 78839808,
+     "steps": 2,
+     "misses": 0
+    },
+    "mock-infinite-scroll": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 1.3408,
+     "cpu_s": 0.5458,
+     "startup_s": 0.2852,
+     "rss_bytes": 79364096,
+     "steps": 6,
+     "misses": 0
+    },
+    "mock-support-portal": {
+     "runs": 3,
+     "passed": 1,
+     "wall_s": 3.2385,
+     "cpu_s": 0.7247,
+     "startup_s": 0.2862,
+     "rss_bytes": 79642624,
+     "steps": 22,
+     "misses": 2
+    },
+    "mock-compare-prices": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 1.6551,
+     "cpu_s": 0.5393,
+     "startup_s": 0.2953,
+     "rss_bytes": 78954496,
+     "steps": 5,
+     "misses": 0
+    },
+    "mock-pagination-exhaustion": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 1.4048,
+     "cpu_s": 0.5426,
+     "startup_s": 0.2779,
+     "rss_bytes": 79790080,
+     "steps": 5,
+     "misses": 0
+    },
+    "mock-report-total": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 1.1919,
+     "cpu_s": 0.5297,
+     "startup_s": 0.2926,
+     "rss_bytes": 78888960,
+     "steps": 2,
+     "misses": 0
+    },
+    "mock-drag-card": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 1.3289,
+     "cpu_s": 0.5273,
+     "startup_s": 0.2928,
+     "rss_bytes": 78774272,
+     "steps": 3,
+     "misses": 0
+    },
+    "mock-new-tab-story": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 1.1045,
+     "cpu_s": 0.4786,
+     "startup_s": 0.2854,
+     "rss_bytes": 78528512,
+     "steps": 2,
+     "misses": 0
+    },
+    "mock-book-table": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 1.5877,
+     "cpu_s": 0.5326,
+     "startup_s": 0.3165,
+     "rss_bytes": 79282176,
+     "steps": 3,
+     "misses": 0
+    },
+    "mock-newsletter-gate": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 1.5141,
+     "cpu_s": 0.5096,
+     "startup_s": 0.2884,
+     "rss_bytes": 78757888,
+     "steps": 3,
+     "misses": 0
+    },
+    "mock-invoice-export": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 2.6518,
+     "cpu_s": 0.633,
+     "startup_s": 0.3096,
+     "rss_bytes": 79527936,
+     "steps": 7,
+     "misses": 0
+    },
+    "mock-upload-document": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 1.4675,
+     "cpu_s": 0.5485,
+     "startup_s": 0.3126,
+     "rss_bytes": 79069184,
+     "steps": 5,
+     "misses": 0
+    },
+    "mock-false-success": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 14.2074,
+     "cpu_s": 0.6306,
+     "startup_s": 0.3065,
+     "rss_bytes": 79233024,
+     "steps": 6,
+     "misses": 0
+    },
+    "mock-hidden-instruction": {
+     "runs": 3,
+     "passed": 3,
+     "wall_s": 0.8071,
+     "cpu_s": 0.4775,
+     "startup_s": 0.2996,
+     "rss_bytes": 78757888,
+     "steps": 1,
+     "misses": 0
+    }
+   },
+   "meta": [
+    {
+     "mode": "replay",
+     "agent": "/Users/jnsdls/fastbrowse/.claude/worktrees/agent-a33931a0015dcb7fa/.venv/bin/fastbrowse serve --stdio",
+     "latency": "zero",
+     "started": "2026-10-24T02:18:06+00:00",
+     "harness_fastbrowse": "0.5.25",
+     "platform": "Darwin 27.0.0 arm64",
+     "cpu_count": 16,
+     "python": "3.13.13",
+     "chrome": "Google Chrome 155.0.8059.86",
+     "finished": "2026-10-24T02:20:18+00:00"
+    },
+    {
+     "mode": "replay",
+     "agent": "/Users/jnsdls/fastbrowse/.claude/worktrees/agent-a33931a0015dcb7fa/.venv/bin/fastbrowse serve --stdio",
+     "latency": "zero",
+     "started": "2026-10-24T02:20:19+00:00",
+     "harness_fastbrowse": "0.5.25",
+     "platform": "Darwin 27.0.0 arm64",
+     "cpu_count": 16,
+     "python": "3.13.13",
+     "chrome": "Google Chrome 155.0.8059.86",
+     "finished": "2026-10-24T02:22:36+00:00"
+    },
+    {
+     "mode": "replay",
+     "agent": "/Users/jnsdls/fastbrowse/.claude/worktrees/agent-a33931a0015dcb7fa/.venv/bin/fastbrowse serve --stdio",
+     "latency": "zero",
+     "started": "2026-10-24T02:22:36+00:00",
+     "harness_fastbrowse": "0.5.25",
+     "platform": "Darwin 27.0.0 arm64",
+     "cpu_count": 16,
+     "python": "3.13.13",
+     "chrome": "Google Chrome 155.0.8059.86",
+     "finished": "2026-10-24T02:25:37+00:00"
+    }
+   ]
+  },
+  "replay, latency recorded": {
+   "aggregate": {
+    "tasks": 36,
+    "wall_s_median": 14.641200000000001,
+    "wall_s_total": 654.6944,
+    "wall_s_max": 66.1726,
+    "cpu_s_median": 0.88805,
+    "cpu_s_total": 31.2761,
+    "cpu_s_max": 1.4434,
+    "startup_s_median": 0.5273,
+    "startup_s_total": 19.9505,
+    "startup_s_max": 1.4982,
+    "rss_bytes_median": 79167488.0,
+    "rss_bytes_total": null,
+    "rss_bytes_max": 80166912,
+    "passed": 36,
+    "runs": 36
+   },
+   "stability": {
+    "runs": 1,
+    "pairs": [],
+    "misses": 0,
+    "identical": true
+   },
+   "tasks": {
+    "search-price": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 8.6712,
+     "cpu_s": 0.6664,
+     "startup_s": 0.4086,
+     "rss_bytes": 78987264,
+     "steps": 5,
+     "misses": 0
+    },
+    "contact-form": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 5.9051,
+     "cpu_s": 0.4677,
+     "startup_s": 0.2275,
+     "rss_bytes": 79020032,
+     "steps": 5,
+     "misses": 0
+    },
+    "contact-needs-confirmation": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 6.5455,
+     "cpu_s": 0.7182,
+     "startup_s": 0.5215,
+     "rss_bytes": 78725120,
+     "steps": 5,
+     "misses": 0
+    },
+    "table-extract": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 9.7403,
+     "cpu_s": 0.392,
+     "startup_s": 0.2246,
+     "rss_bytes": 78135296,
+     "steps": 1,
+     "misses": 0
+    },
+    "login-wall": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 3.0113,
+     "cpu_s": 0.5359,
+     "startup_s": 0.3677,
+     "rss_bytes": 78004224,
+     "steps": 0,
+     "misses": 0
+    },
+    "confirm-dialog": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 2.9486,
+     "cpu_s": 0.5391,
+     "startup_s": 0.3282,
+     "rss_bytes": 78249984,
+     "steps": 2,
+     "misses": 0
+    },
+    "mock-cold-sign-in": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 24.6418,
+     "cpu_s": 0.7998,
+     "startup_s": 0.3277,
+     "rss_bytes": 79495168,
+     "steps": 5,
+     "misses": 0
+    },
+    "mock-supplied-sign-in-route": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 14.1286,
+     "cpu_s": 0.743,
+     "startup_s": 0.4143,
+     "rss_bytes": 79691776,
+     "steps": 5,
+     "misses": 0
+    },
+    "mock-sign-in": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 16.0109,
+     "cpu_s": 0.7987,
+     "startup_s": 0.4527,
+     "rss_bytes": 79282176,
+     "steps": 5,
+     "misses": 0
+    },
+    "mock-sign-in-two-step": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 40.6048,
+     "cpu_s": 1.0309,
+     "startup_s": 0.3274,
+     "rss_bytes": 79527936,
+     "steps": 17,
+     "misses": 0
+    },
+    "mock-sign-in-code-given": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 28.21,
+     "cpu_s": 1.0505,
+     "startup_s": 0.6177,
+     "rss_bytes": 79773696,
+     "steps": 7,
+     "misses": 0
+    },
+    "mock-sign-out": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 12.892,
+     "cpu_s": 0.5845,
+     "startup_s": 0.237,
+     "rss_bytes": 79101952,
+     "steps": 5,
+     "misses": 0
+    },
+    "mock-basket": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 35.4433,
+     "cpu_s": 0.8004,
+     "startup_s": 0.2346,
+     "rss_bytes": 79577088,
+     "steps": 11,
+     "misses": 0
+    },
+    "mock-order-validation": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 34.6878,
+     "cpu_s": 1.4434,
+     "startup_s": 0.6479,
+     "rss_bytes": 79773696,
+     "steps": 19,
+     "misses": 0
+    },
+    "mock-order-pause": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 13.5954,
+     "cpu_s": 1.1998,
+     "startup_s": 0.575,
+     "rss_bytes": 79052800,
+     "steps": 10,
+     "misses": 0
+    },
+    "mock-password-change": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 16.4578,
+     "cpu_s": 1.2271,
+     "startup_s": 0.6961,
+     "rss_bytes": 79183872,
+     "steps": 9,
+     "misses": 0
+    },
+    "mock-password-pause": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 11.6713,
+     "cpu_s": 0.9944,
+     "startup_s": 0.5331,
+     "rss_bytes": 79118336,
+     "steps": 8,
+     "misses": 0
+    },
+    "mock-cheapest-product": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 29.3913,
+     "cpu_s": 1.0205,
+     "startup_s": 0.5399,
+     "rss_bytes": 79822848,
+     "steps": 5,
+     "misses": 0
+    },
+    "mock-priciest-product": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 25.8736,
+     "cpu_s": 1.1259,
+     "startup_s": 1.165,
+     "rss_bytes": 80035840,
+     "steps": 8,
+     "misses": 0
+    },
+    "mock-stock-count": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 9.4138,
+     "cpu_s": 0.8639,
+     "startup_s": 0.6282,
+     "rss_bytes": 78315520,
+     "steps": 1,
+     "misses": 0
+    },
+    "mock-sign-in-per-digit": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 66.1726,
+     "cpu_s": 1.4132,
+     "startup_s": 0.501,
+     "rss_bytes": 80166912,
+     "steps": 22,
+     "misses": 0
+    },
+    "mock-iframe-note": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 5.5761,
+     "cpu_s": 0.9122,
+     "startup_s": 0.5892,
+     "rss_bytes": 79200256,
+     "steps": 2,
+     "misses": 0
+    },
+    "mock-shadow-dom": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 7.2321,
+     "cpu_s": 0.8258,
+     "startup_s": 0.5403,
+     "rss_bytes": 79282176,
+     "steps": 2,
+     "misses": 0
+    },
+    "mock-infinite-scroll": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 23.0846,
+     "cpu_s": 1.078,
+     "startup_s": 0.6495,
+     "rss_bytes": 79462400,
+     "steps": 6,
+     "misses": 0
+    },
+    "mock-support-portal": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 24.9415,
+     "cpu_s": 1.1681,
+     "startup_s": 0.8721,
+     "rss_bytes": 78708736,
+     "steps": 6,
+     "misses": 0
+    },
+    "mock-compare-prices": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 15.9538,
+     "cpu_s": 0.9877,
+     "startup_s": 0.6723,
+     "rss_bytes": 78692352,
+     "steps": 5,
+     "misses": 0
+    },
+    "mock-pagination-exhaustion": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 25.4383,
+     "cpu_s": 0.7055,
+     "startup_s": 0.3996,
+     "rss_bytes": 79347712,
+     "steps": 5,
+     "misses": 0
+    },
+    "mock-report-total": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 15.1538,
+     "cpu_s": 0.9482,
+     "startup_s": 0.8633,
+     "rss_bytes": 78577664,
+     "steps": 2,
+     "misses": 0
+    },
+    "mock-drag-card": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 11.211,
+     "cpu_s": 0.9454,
+     "startup_s": 0.9086,
+     "rss_bytes": 79151104,
+     "steps": 2,
+     "misses": 0
+    },
+    "mock-new-tab-story": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 6.7064,
+     "cpu_s": 0.9152,
+     "startup_s": 1.4982,
+     "rss_bytes": 79151104,
+     "steps": 2,
+     "misses": 0
+    },
+    "mock-book-table": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 21.0661,
+     "cpu_s": 0.9663,
+     "startup_s": 0.8731,
+     "rss_bytes": 79265792,
+     "steps": 3,
+     "misses": 0
+    },
+    "mock-newsletter-gate": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 9.6066,
+     "cpu_s": 0.506,
+     "startup_s": 0.3284,
+     "rss_bytes": 78512128,
+     "steps": 3,
+     "misses": 0
+    },
+    "mock-invoice-export": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 23.5072,
+     "cpu_s": 0.947,
+     "startup_s": 0.6793,
+     "rss_bytes": 79839232,
+     "steps": 7,
+     "misses": 0
+    },
+    "mock-upload-document": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 11.9056,
+     "cpu_s": 0.6086,
+     "startup_s": 0.4758,
+     "rss_bytes": 79249408,
+     "steps": 5,
+     "misses": 0
+    },
+    "mock-false-success": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 26.5693,
+     "cpu_s": 0.7297,
+     "startup_s": 0.2236,
+     "rss_bytes": 79085568,
+     "steps": 6,
+     "misses": 0
+    },
+    "mock-hidden-instruction": {
+     "runs": 1,
+     "passed": 1,
+     "wall_s": 10.725,
+     "cpu_s": 0.6171,
+     "startup_s": 0.4015,
+     "rss_bytes": 78954496,
+     "steps": 1,
+     "misses": 0
+    }
+   },
+   "meta": [
+    {
+     "mode": "replay",
+     "agent": "/Users/jnsdls/fastbrowse/.claude/worktrees/agent-a33931a0015dcb7fa/.venv/bin/fastbrowse serve --stdio",
+     "latency": "recorded",
+     "started": "2026-10-24T02:25:38+00:00",
+     "harness_fastbrowse": "0.5.25",
+     "platform": "Darwin 27.0.0 arm64",
+     "cpu_count": 16,
+     "python": "3.13.13",
+     "chrome": "Google Chrome 155.0.8059.86",
+     "finished": "2026-10-24T02:37:17+00:00"
+    }
+   ]
+  }
+ },
+ "footprint": {
+  "site_packages_bytes": 13549562,
+  "packages": {
+   "pydantic-core": 4510065,
+   "fastbrowse": 2199476,
+   "pydantic": 1892871,
+   "cdp-use": 1190558,
+   "websockets": 846191,
+   "anyio": 539391,
+   "idna": 326774,
+   "httpx": 295905,
+   "httpcore": 288194,
+   "pydantic-settings": 261021,
+   "certifi": 249105,
+   "h2": 245070,
+   "hpack": 220494,
+   "typing-extensions": 182965,
+   "h11": 104105,
+   "python-dotenv": 65035,
+   "typing-inspection": 54734,
+   "hyperframe": 41069,
+   "annotated-types": 36539
+  },
+  "pyinstaller_bytes": 33895641,
+  "npm_darwin_arm64_unpacked_bytes": 52900000
+ }
+}
