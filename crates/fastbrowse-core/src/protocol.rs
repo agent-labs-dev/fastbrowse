@@ -1,0 +1,411 @@
+//! Port of `src/fastbrowse/protocol.py`: the messages `fastbrowse serve` exchanges with its client, and the version
+//! of that exchange.
+//!
+//! JSON-RPC 2.0, one message per line, each written as `model_dump_json()` writes it.
+
+use std::path::PathBuf;
+
+use indexmap::IndexMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
+
+use crate::models::{Authorization, Event, Image, Limits, LocalChrome, SecretRef};
+use crate::py::{base64, lax};
+
+/// Changes only when the wire format does, so it is not the package version: a release that leaves the messages alone
+/// leaves this alone, and an SDK can tell a binary it cannot talk to from one that is merely newer.
+pub const PROTOCOL_VERSION: i64 = 1;
+
+/// `StrictInt | StrictStr`. Strict, because JSON-RPC echoes the id back and a `true` read as 1 would answer a request
+/// nobody sent.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RequestId {
+    Int(i64),
+    Str(String),
+}
+
+impl Serialize for RequestId {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            RequestId::Int(id) => serializer.serialize_i64(*id),
+            RequestId::Str(id) => serializer.serialize_str(id),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RequestId {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        match Value::deserialize(d)? {
+            Value::String(id) => Ok(RequestId::Str(id)),
+            value => lax::strict_int_of(&value).map(RequestId::Int).map_err(serde::de::Error::custom),
+        }
+    }
+}
+
+str_enum! {
+    /// What a client can ask of the server.
+    pub enum Method {
+        Initialize = "initialize",
+        Run = "run",
+        RunCancel = "run/cancel",
+        Shutdown = "shutdown",
+    }
+}
+
+str_enum! {
+    /// What the server sends without being asked.
+    pub enum ServerMethod {
+        RunEvent = "run/event",
+        RunFrame = "run/frame",
+        RunUntil = "run/until",
+        SecretsResolve = "secrets/resolve",
+    }
+}
+
+/// Every code an error reply can carry: the JSON-RPC standard ones, then this protocol's own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ErrorCode {
+    ParseError,
+    InvalidRequest,
+    MethodNotFound,
+    InvalidParams,
+    InternalError,
+    // JSON-RPC reserves -32000 to -32099 for the server's own errors.
+    Busy,
+    Cancelled,
+    Configuration,
+    UnsupportedSchema,
+}
+
+impl ErrorCode {
+    pub const ALL: [ErrorCode; 9] = [
+        ErrorCode::ParseError,
+        ErrorCode::InvalidRequest,
+        ErrorCode::MethodNotFound,
+        ErrorCode::InvalidParams,
+        ErrorCode::InternalError,
+        ErrorCode::Busy,
+        ErrorCode::Cancelled,
+        ErrorCode::Configuration,
+        ErrorCode::UnsupportedSchema,
+    ];
+
+    pub fn code(self) -> i64 {
+        match self {
+            ErrorCode::ParseError => -32700,
+            ErrorCode::InvalidRequest => -32600,
+            ErrorCode::MethodNotFound => -32601,
+            ErrorCode::InvalidParams => -32602,
+            ErrorCode::InternalError => -32603,
+            ErrorCode::Busy => -32001,
+            ErrorCode::Cancelled => -32002,
+            ErrorCode::Configuration => -32003,
+            ErrorCode::UnsupportedSchema => -32004,
+        }
+    }
+
+    pub fn from_code(code: i64) -> Option<ErrorCode> {
+        ErrorCode::ALL.into_iter().find(|c| c.code() == code)
+    }
+}
+
+impl Serialize for ErrorCode {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_i64(self.code())
+    }
+}
+
+impl<'de> Deserialize<'de> for ErrorCode {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let code = lax::int(d)?;
+        ErrorCode::from_code(code).ok_or_else(|| serde::de::Error::custom(format!("{code} is not a known error code")))
+    }
+}
+
+literal_tag!(JsonRpc = "2.0");
+
+/// `dict[str, Any] | list[Any] | None`. JSON-RPC also allows params by position. No method here takes them, and
+/// accepting the shape lets the refusal be "invalid params" for that method instead of "invalid request".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Params {
+    Named(serde_json::Map<String, Value>),
+    Positional(Vec<Value>),
+}
+
+/// A call in either direction. One without an id is a notification and gets no reply. Unknown members are ignored.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Request {
+    #[serde(default)]
+    pub jsonrpc: JsonRpc,
+    #[serde(default)]
+    pub id: Option<RequestId>,
+    pub method: String,
+    #[serde(default)]
+    pub params: Option<Params>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Response {
+    #[serde(default)]
+    pub jsonrpc: JsonRpc,
+    pub id: RequestId,
+    /// `Any`, required. A missing member is refused like any other missing field.
+    pub result: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Error {
+    pub code: ErrorCode,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ErrorResponse {
+    #[serde(default)]
+    pub jsonrpc: JsonRpc,
+    /// Null when the request could not be read far enough to learn its id.
+    #[serde(deserialize_with = "lax::nullable")]
+    pub id: Option<RequestId>,
+    pub error: Error,
+}
+
+/// The params of `initialize` and `shutdown`: none, and an unknown one refused.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NoParams {}
+
+/// The client's side of the handshake.
+///
+/// Unknown fields are allowed here and nowhere else: a client on a later protocol may send some, and it has to get
+/// the server's version back to report the mismatch, which a refusal of its params would hide.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InitializeParams {
+    #[serde(deserialize_with = "lax::strict_int")]
+    pub protocol_version: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InitializeResult {
+    #[serde(deserialize_with = "lax::int")]
+    pub protocol_version: i64,
+    pub fastbrowse_version: String,
+}
+
+/// Bytes that travel as base64: read with `b64decode`'s leniency, written in the standard alphabet.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Base64Bytes(pub Vec<u8>);
+
+impl Serialize for Base64Bytes {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&base64::encode(&self.0))
+    }
+}
+
+impl<'de> Deserialize<'de> for Base64Bytes {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(d)?;
+        base64::decode(&text)
+            .map(Base64Bytes)
+            .map_err(|error| serde::de::Error::custom(format!("Base64 decoding error: '{error}'")))
+    }
+}
+
+/// An `Attachment` as it travels: JSON has no bytes, so the content is base64.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunAttachment {
+    pub name: String,
+    pub mime_type: String,
+    pub content: Base64Bytes,
+}
+
+fn run_id<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let id = String::deserialize(d)?;
+    if id.is_empty() {
+        return Err(serde::de::Error::custom("String should have at least 1 character"));
+    }
+    Ok(id)
+}
+
+fn viewport<'de, D: Deserializer<'de>>(d: D) -> Result<Option<(i64, i64)>, D::Error> {
+    match Option::<Vec<Value>>::deserialize(d)? {
+        None => Ok(None),
+        Some(items) if items.len() == 2 => {
+            let width = lax::int_of(&items[0]).map_err(serde::de::Error::custom)?;
+            let height = lax::int_of(&items[1]).map_err(serde::de::Error::custom)?;
+            Ok(Some((width, height)))
+        }
+        Some(_) => Err(serde::de::Error::custom("Tuple should have 2 items")),
+    }
+}
+
+/// One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.
+///
+/// The reply is the `RunResult`. No API key is among the fields: model and browser keys come from the environment
+/// the server inherited.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunParams {
+    /// Chosen by the client, and carried by every message the server sends about this run.
+    #[serde(deserialize_with = "run_id")]
+    pub run_id: String,
+    pub task: String,
+    #[serde(default)]
+    pub start: Option<String>,
+    #[serde(default)]
+    pub inputs: Option<IndexMap<String, String>>,
+    #[serde(default)]
+    pub attachments: Vec<RunAttachment>,
+    #[serde(default)]
+    pub limits: Option<Limits>,
+    #[serde(default)]
+    pub authorization: Option<Authorization>,
+    /// The shape of `RunResult.data`, as JSON Schema draft 2020-12 with an object at its root.
+    #[serde(default)]
+    pub output_schema: Option<serde_json::Map<String, Value>>,
+    /// The secrets the client holds, by name and origin. A value is asked for with `secrets/resolve`.
+    #[serde(default)]
+    pub secrets: Vec<SecretRef>,
+    /// Send the active tab as `run/frame` notifications while the run goes on. Off, the page is never filmed.
+    #[serde(default, deserialize_with = "lax::boolean")]
+    pub frames: bool,
+    /// Whether the client holds a check of its own. The check stays there: the server asks it with `run/until`.
+    #[serde(default, deserialize_with = "lax::boolean")]
+    pub until: bool,
+    #[serde(default)]
+    pub downloads: Option<PathBuf>,
+    #[serde(default)]
+    pub record: Option<PathBuf>,
+    /// Draw the agent's cursor over a visible local or attached Chrome with the Cua Driver.
+    #[serde(default, deserialize_with = "lax::boolean")]
+    pub cursor: bool,
+    /// Local Chrome instead of a Browser Use Cloud browser.
+    #[serde(default, deserialize_with = "lax::boolean")]
+    pub local: bool,
+    /// Which local Chrome, and how. A headed window or a kept profile implies `local`.
+    #[serde(default)]
+    pub chrome: Option<LocalChrome>,
+    #[serde(default)]
+    pub cloud_profile: Option<String>,
+    #[serde(default)]
+    pub cdp_url: Option<String>,
+    #[serde(default, deserialize_with = "lax::opt_int")]
+    pub cdp_port: Option<i64>,
+    #[serde(default, deserialize_with = "lax::boolean")]
+    pub attach: bool,
+    #[serde(default)]
+    pub target_match: Option<String>,
+    /// Bring the run's tab and its browser window to the front, to watch it.
+    #[serde(default, deserialize_with = "lax::boolean")]
+    pub foreground: bool,
+    #[serde(default)]
+    pub proxy_country: Option<String>,
+    #[serde(default, deserialize_with = "viewport")]
+    pub viewport: Option<(i64, i64)>,
+    #[serde(default, deserialize_with = "lax::boolean")]
+    pub cloud_allow_resizing: bool,
+}
+
+/// Which run to stop. One that is not active, because it finished or never was, is left as it is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunCancelParams {
+    pub run_id: String,
+}
+
+/// The params of `run/event`: one thing a run did, written before that run's reply.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunEvent {
+    pub run_id: String,
+    pub event: Event,
+}
+
+/// The params of `run/frame`: the active tab as it looked a moment ago. Sent only to a run that set `frames`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunFrame {
+    pub run_id: String,
+    /// One JPEG.
+    pub frame: Image,
+}
+
+/// A message from the server that takes no reply. It has no `id` member at all, which is what marks it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Notification {
+    #[serde(default)]
+    pub jsonrpc: JsonRpc,
+    pub method: ServerMethod,
+    pub params: Value,
+}
+
+/// A call from the server that the client answers, with a `Response` or an `ErrorResponse` carrying its id.
+///
+/// The ids are the server's own and count up from one. A reply is told from a request by having no `method`, so a
+/// client's ids may be the same numbers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerRequest {
+    #[serde(default)]
+    pub jsonrpc: JsonRpc,
+    #[serde(deserialize_with = "lax::int")]
+    pub id: i64,
+    pub method: ServerMethod,
+    pub params: Value,
+}
+
+/// The params of `secrets/resolve`: one value the run is about to type. The reply is the value, or null.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SecretsResolveParams {
+    pub run_id: String,
+    pub name: String,
+    /// Where it will be typed. The server has already checked it against the origins the ref declared.
+    pub origin: String,
+}
+
+/// The params of `run/until`: the address a run ended on. The reply is a boolean, and false keeps the run from
+/// `complete`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunUntilParams {
+    pub run_id: String,
+    pub url: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::py::dump::Dump;
+    use serde_json::json;
+
+    #[test]
+    fn a_request_id_is_an_int_or_a_string_and_nothing_else() {
+        assert!(serde_json::from_value::<Request>(json!({"id": true, "method": "x"})).is_err());
+        assert!(serde_json::from_value::<Request>(json!({"id": 1.0, "method": "x"})).is_err());
+        let request: Request = serde_json::from_value(json!({"id": "a", "method": "x", "params": [1]})).unwrap();
+        assert_eq!(request.dump_json(), r#"{"jsonrpc":"2.0","id":"a","method":"x","params":[1]}"#);
+        let notification: Request = serde_json::from_value(json!({"method": "x", "extra": 1})).unwrap();
+        assert_eq!(notification.dump_json(), r#"{"jsonrpc":"2.0","id":null,"method":"x","params":null}"#);
+    }
+
+    #[test]
+    fn an_error_reply_writes_its_code_as_a_number() {
+        let reply = ErrorResponse {
+            jsonrpc: JsonRpc,
+            id: None,
+            error: Error { code: ErrorCode::ParseError, message: "bad".into() },
+        };
+        assert_eq!(reply.dump_json(), r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"bad"}}"#);
+    }
+
+    #[test]
+    fn run_params_refuse_what_they_do_not_name() {
+        assert!(serde_json::from_value::<RunParams>(json!({"run_id": "r", "task": "t", "tsak": 1})).is_err());
+        assert!(serde_json::from_value::<RunParams>(json!({"run_id": "", "task": "t"})).is_err());
+        let params: RunParams =
+            serde_json::from_value(json!({"run_id": "r", "task": "t", "attachments": [{"name": "a", "mime_type": "text/plain", "content": "aGVs bG8="}], "viewport": [1280, "720"]}))
+                .unwrap();
+        assert_eq!(params.attachments[0].content.0, b"hello");
+        assert_eq!(params.viewport, Some((1280, 720)));
+        let refused =
+            serde_json::from_value::<RunAttachment>(json!({"name": "a", "mime_type": "m", "content": "aGVsbG8"}));
+        assert!(refused.unwrap_err().to_string().contains("Base64 decoding error: 'Incorrect padding'"));
+    }
+}
