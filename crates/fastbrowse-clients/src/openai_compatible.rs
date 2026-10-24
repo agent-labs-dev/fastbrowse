@@ -16,8 +16,8 @@ use tokio::time::Instant;
 
 use crate::http::{Http, Response};
 use crate::validation::{
-    Attempts, LLM_ATTEMPT_SECONDS, LLM_HEDGE_SECONDS, RetryStop, Usage, body_excerpt, describe, dollars, errors_json,
-    json_invalid, json_object, object_value, post_with_retry, retryable, token_count, with_discarded,
+    Attempts, LLM_ATTEMPT_SECONDS, RetryStop, Usage, body_excerpt, describe, dollars, errors_json, json_invalid,
+    json_object, object_value, post_with_retry, retryable, token_count, with_discarded,
 };
 
 /// How much larger the output cap is on the one retry after a response ran into it.
@@ -100,21 +100,6 @@ fn short_of_cap(payload: &Map<String, Value>, cap: i64) -> Option<i64> {
     let usage = object_value(Some(payload.get("usage").unwrap_or(&empty))).ok()?;
     let written = token_count(usage.get("completion_tokens")).ok()?;
     (0 < written && written < cap).then_some(written)
-}
-
-/// When a still-unanswered call of this purpose is raced by a twin: about its p90 on the 0.5.24 campaign.
-///
-/// One 4s race for every purpose left the short structured calls' tail alone: answer audits took 2.2s median but 8.6s
-/// at p99 (1,781 calls), and one slow audit holds the whole answer. A read is longer by nature (3.0s median, 5.2s
-/// p90), so `LLM_HEDGE_SECONDS` stays its ceiling and no purpose races later than it.
-pub fn hedge_seconds(purpose: LLMPurpose) -> f64 {
-    let measured = match purpose {
-        LLMPurpose::Shortcut | LLMPurpose::FieldText => 1.5,
-        LLMPurpose::Plan | LLMPurpose::Verify | LLMPurpose::Compose => 3.0,
-        LLMPurpose::Recover => 3.5,
-        LLMPurpose::Read => LLM_HEDGE_SECONDS,
-    };
-    f64::min(measured, LLM_HEDGE_SECONDS)
 }
 
 /// Make room for a response that ran into the output cap, or report it as truncated when it did so again.
@@ -401,14 +386,12 @@ impl OpenAICompatibleLLM {
         body: &Value,
         ledger: Option<&Ledger>,
         usage: &Usage,
-        purpose: LLMPurpose,
     ) -> Result<Map<String, Value>, LLMError> {
         let started = Instant::now();
         let reserve = ledger.map(|ledger| move || ledger.reserve(CostComponent::Llm, 0.0, 1));
         let attempts = Attempts {
             call: format!("llm {}", body["model"].as_str().unwrap_or_default()),
             attempt_seconds: LLM_ATTEMPT_SECONDS,
-            hedge_seconds: hedge_seconds(purpose),
             before_retry: reserve.as_ref().map(|reserve| reserve as _),
             start_attempt: 0,
             split_batch: false,
@@ -594,21 +577,20 @@ impl OpenAICompatibleLLM {
             let usage = Usage::default();
             billing.in_flight = Some(usage.clone());
             let sent = Value::Object(body.clone());
-            let payload = match self.request(&sent, ledger, &usage, purpose).await {
+            let payload = match self.request(&sent, ledger, &usage).await {
                 Ok(payload) => payload,
                 Err(error) => {
                     let offset = billing.charge_unanswered(&usage);
-                    let twins = usage.lock().cancelled_twins;
-                    self.settle_unanswered(billing, offset, twins, body).await;
+                    self.settle_unanswered(billing, offset, body).await;
                     return Err(error);
                 }
             };
             billing.in_flight = None;
             let usage = usage.snapshot();
             // Recorded before the envelope is read: a generation we cannot parse was still billed, and dropping it
-            // would let an unaccounted request pass a dollar cap. A race's discarded twin carried the same prompt, so
-            // it is charged as the answer was; charging it as unknown instead made every run with one slow call stop
-            // at its dollar cap.
+            // would let an unaccounted request pass a dollar cap. A request sent but never delivered carried the same
+            // prompt, so it is charged as the answer was; charging it as unknown instead made every run with one slow
+            // call stop at its dollar cap.
             billing.costs.push(with_discarded(cost(&payload, purpose), &usage));
             let settled = with_discarded(self.settled_cost(&payload, purpose, body).await, &usage);
             *billing.costs.last_mut().expect("pushed above") = settled;
@@ -676,17 +658,8 @@ impl OpenAICompatibleLLM {
     }
 
     /// Price the requests of an attempt that returned nothing usable.
-    async fn settle_unanswered(&self, billing: &mut Billing<'_>, start: usize, twins: i64, body: &Map<String, Value>) {
-        // A race twin dropped once its sibling answered carried the same prompt, so it is charged as that answer was,
-        // as an estimate. Other requests without a response are bounded.
-        let known = billing.costs[start..].iter().find(|line| line.dollars.is_some()).cloned();
-        if let Some(known) = known {
-            let unknown: Vec<usize> =
-                (start..billing.costs.len()).filter(|i| billing.costs[*i].dollars.is_none()).collect();
-            for index in unknown.into_iter().take(twins.max(0) as usize) {
-                billing.costs[index] = CostLine { basis: CostBasis::Estimated, ..known.clone() };
-            }
-        }
+    async fn settle_unanswered(&self, billing: &mut Billing<'_>, start: usize, body: &Map<String, Value>) {
+        // A request without a response is bounded.
         for index in start..billing.costs.len() {
             if billing.costs[index].dollars.is_none() {
                 let line = billing.costs[index].clone();

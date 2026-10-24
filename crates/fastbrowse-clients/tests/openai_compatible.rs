@@ -1,7 +1,7 @@
 //! tests/clients/test_openai_compatible.py and test_attempt_deadline.py.
 //!
-//! Python shortens its retry, race and deadline constants by monkeypatching them; here they stay Python's and the
-//! clock is paused, so a full retry ladder or a race delay passes at once. Python cancels a task and lets an abandoned
+//! Python shortens its retry and deadline constants by monkeypatching them; here they stay Python's and the clock is
+//! paused, so a full retry ladder passes at once. Python cancels a task and lets an abandoned
 //! request run to its deadline so its receipt can be read; here the future is dropped, and a request in flight is
 //! charged as unknown at once. The tests that depend on that wait say how the Rust behaviour differs.
 
@@ -208,37 +208,6 @@ async fn test_a_retry_reserves_its_own_call_and_keeps_an_unreadable_attempts_cos
 }
 
 #[tokio::test(start_paused = true)]
-async fn test_a_hedge_loser_is_charged_as_the_winner() {
-    let script = Script::new([
-        Step::Stall,
-        completion(json!(r#"{"count":1}"#), json!({"cost": 0.01, "prompt_tokens": 20, "completion_tokens": 5})),
-    ]);
-    let ledger = Ledger::new(Limits { max_llm_calls: Some(2), max_dollars: Some(1.0), ..Limits::default() });
-    let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
-    let result = generate(&llm, LLMPurpose::Read, &[], 2000, Some(&ledger)).await.unwrap();
-    ledger.record([result.cost.clone()]).unwrap();
-    assert_eq!(script.requests().len(), 2);
-    assert_eq!(ledger.state().llm_calls, 2);
-    assert_eq!(result.data["count"], 1);
-    assert_eq!(result.cost.basis, CostBasis::Estimated);
-    assert!(approx(result.cost.dollars.unwrap(), 0.02));
-    assert!(!ledger.breakdown().has_unknown());
-    ledger.check(0.0).unwrap();
-}
-
-#[tokio::test(start_paused = true)]
-async fn test_a_hedge_loser_is_recorded_even_when_the_winner_fails() {
-    let script = Script::new([Step::Stall, text(401, "")]);
-    let ledger = Ledger::new(Limits::default());
-    let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
-    let error = generate(&llm, LLMPurpose::Read, &[], 2000, Some(&ledger)).await.unwrap_err();
-    assert!(error.to_string().contains("401"));
-    assert_eq!(script.requests().len(), 2);
-    assert_eq!(ledger.state().lines.len(), 1);
-    assert!(ledger.breakdown().has_unknown());
-}
-
-#[tokio::test(start_paused = true)]
 async fn test_an_error_status_retry_does_not_add_llm_cost() {
     let script = Script::new([text(503, ""), completion(json!(r#"{"count":1}"#), json!({"cost": 0.01}))]);
     let ledger = Ledger::new(Limits { max_llm_calls: Some(2), ..Limits::default() });
@@ -401,20 +370,6 @@ async fn test_abandoned_generation_is_charged_for_its_request_in_flight() {
         assert_eq!((lines[0].basis, lines[0].dollars), (CostBasis::Unknown, None));
         assert!(ledger.check(0.0).is_err());
     }
-}
-
-#[tokio::test(start_paused = true)]
-async fn test_abandoned_hedged_generation_retains_both_attempts() {
-    // Python lets both racing requests finish and keeps what each reported; dropped, both are charged as unknown.
-    let script = Script::new([Step::Stall, Step::Cancel]);
-    let ledger = capped(Some(0.25));
-    let llm = client(script.http(), "https://llm.test", LLMPurpose::Plan, "planner");
-    assert!(cancelled(generate(&llm, LLMPurpose::Plan, &[], 2000, Some(&ledger)), &script.cancel).await);
-    assert_eq!(script.requests().len(), 2);
-    assert_eq!(ledger.state().llm_calls, 2);
-    assert_eq!(ledger.state().lines.len(), 2);
-    assert!(ledger.breakdown().has_unknown());
-    assert!(ledger.check(0.0).unwrap_err().to_string().contains("reported no cost"));
 }
 
 fn without_cost(id: &str) -> Value {

@@ -11,8 +11,9 @@ one or more calls and records:
 - the ledger's lines and call counts, and the lines a `jev_spend` scope collected;
 - the trace records that say how a call went: spans, retries with their waits, failovers, cancelled request costs.
 
-Retry backoff is recorded rather than slept: `asyncio.sleep` is replaced, as `tests/clients/conftest.py` does. Races
-run on the real clock, so the cases with a stalled request take about the race delay each. Wall times are left out
+Retry backoff is recorded rather than slept: `asyncio.sleep` is replaced, as `tests/clients/conftest.py` does. Attempt
+deadlines run on the real clock, so a case with a stalled request waits out one (15s for Jev, 30s for the LLM). Wall
+times are left out
 (`seconds` is null, and "in 1.5s" in a message reads "in <t>s"): Python's clock and a paused tokio clock disagree.
 """
 
@@ -615,7 +616,7 @@ def cases() -> list[dict[str, Any]]:
         limits={"max_dollars": 28.0},
     )
     case(
-        "llm race won by the second request",
+        "llm stalled request retried after its attempt deadline",
         OPENROUTER_LLM,
         [generate("field_text")],
         [{"stall": True}, completion('{"count":1}', cost=0.01)],
@@ -796,7 +797,7 @@ def cases() -> list[dict[str, Any]]:
         [FAIL_503, FAIL_503, jev_answer(noul("a", gateway=True), gateway=True)] + [FAIL_503] * 4,
     )
     case(
-        "jev race won by the second request",
+        "jev stalled request retried after its attempt deadline",
         DIRECT,
         [evaluate({"q": q_noul()})],
         [{"stall": True}, jev_answer(noul("q"), cost=0.002)],

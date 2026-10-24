@@ -1,5 +1,5 @@
-//! Port of `clients/validation.py`: shared wire encoding and strict validation for both Jev transports, and the retry,
-//! race and accounting every model request goes through.
+//! Port of `clients/validation.py`: shared wire encoding and strict validation for both Jev transports, and the retry
+//! and accounting every model request goes through.
 //!
 //! Python cancels a call by raising `CancelledError` into it and lets each frame settle its receipts on the way out.
 //! Here a call is cancelled by dropping its future, so what Python does in an `except CancelledError` is done by a
@@ -222,12 +222,6 @@ pub const JEV_ATTEMPT_SECONDS: f64 = 15.0;
 pub const JEV_SLOW_SECONDS: f64 = 2.0;
 /// Leaves room for long reads and verification while bounding upstream stalls; flash-lite plans take about 0.8s.
 pub const LLM_ATTEMPT_SECONDS: f64 = 30.0;
-/// Over twice the slowest of 25 measured gateway calls (0.28s median, 0.62s worst); a live run once spent 34s of one
-/// task in Jev, and a second request sent here wins those for a fraction of a cent.
-pub const JEV_HEDGE_SECONDS: f64 = 1.5;
-/// About twice a typical read or verify (2 to 2.7s). Live runs saw single PLAN and READ calls take 7 to 9s while the
-/// rest took 2s; hedging here duplicates only that tail, and these calls cost a fraction of a cent.
-pub const LLM_HEDGE_SECONDS: f64 = 4.0;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RequestUsage {
@@ -237,8 +231,6 @@ pub struct RequestUsage {
     pub unaccounted_requests: i64,
     /// Why each request that came back unusable failed, in order: its status and reason, or its transport error.
     pub failures: Vec<String>,
-    /// Unaccounted race requests dropped because their sibling had already answered.
-    pub cancelled_twins: i64,
 }
 
 impl RequestUsage {
@@ -248,7 +240,7 @@ impl RequestUsage {
     }
 }
 
-/// A call's usage, shared with the requests it races so a dropped request can still be counted.
+/// A call's usage, shared with the request in flight so a dropped request can still be counted.
 #[derive(Debug, Clone, Default)]
 pub struct Usage(Arc<Mutex<RequestUsage>>);
 
@@ -264,7 +256,7 @@ impl Usage {
 }
 
 pub fn attempts(requests: i64, seconds: f64) -> String {
-    // Every request sent, races included: counting only this request's failures, a batch that split into singles
+    // Every request sent: counting only this request's failures, a batch that split into singles
     // reported "1 failed requests" for a call that had sent five.
     format!("{requests} request{} in {seconds:.1}s", if requests == 1 { "" } else { "s" })
 }
@@ -273,7 +265,7 @@ pub fn exhausted(requests: i64, seconds: f64, last: &str) -> String {
     format!("Jev request failed after {}; last: {last}", attempts(requests, seconds))
 }
 
-/// A call's cost including requests raced and discarded: each carried the same input, so each is charged as the one
+/// A call's cost including requests sent but not delivered: each carried the same input, so each is charged as the one
 /// that answered, as an estimate. A bound holds for any request with that input, so it stays a bound.
 pub fn with_discarded(cost: CostLine, usage: &RequestUsage) -> CostLine {
     if usage.unaccounted_requests == 0 {
@@ -303,11 +295,10 @@ pub(crate) enum RetryStop {
 
 pub(crate) type BeforeRetry<'a> = Option<&'a (dyn Fn() -> Result<(), BudgetExceeded> + Sync)>;
 
-/// How a request is repeated and raced.
+/// How a request is repeated.
 pub(crate) struct Attempts<'a> {
     pub call: String,
     pub attempt_seconds: f64,
-    pub hedge_seconds: f64,
     pub before_retry: BeforeRetry<'a>,
     pub start_attempt: usize,
     pub split_batch: bool,
@@ -315,10 +306,10 @@ pub(crate) struct Attempts<'a> {
 
 /// Retry an overloaded or dropped request, which produced nothing and is always safe to repeat.
 ///
-/// Each attempt is raced: a request still unanswered after `hedge_seconds` is joined by an identical one, because a
-/// provider's slowest calls are stalls, not work, and a fresh request tends to land on a healthy replica.
-/// `before_retry` runs ahead of every repeat and every race request, so a budget counts each request actually sent.
-/// `usage` counts discarded or timed-out requests that may still have been billed.
+/// Each attempt sends one request and waits for it: a provider's slowest calls are stalls, and the attempt deadline
+/// bounds them, so the time they cost is excluded from evals rather than hidden by racing a duplicate that doubles the
+/// bill. `before_retry` runs ahead of every repeat, so a budget counts each request actually sent. `usage` counts
+/// timed-out or dropped requests that may still have been billed.
 /// Returns `None` when the transport never completed, leaving each client to name its own failure. Every retry is
 /// logged as a warning naming `call`, the failure and the wait, and each failure is kept on `usage`.
 pub(crate) async fn post_with_retry(
@@ -342,8 +333,7 @@ pub(crate) async fn post_with_retry(
             before_retry().map_err(RetryStop::Budget)?;
         }
         let attempted = monotonic();
-        let allow_hedge = request_limit.is_none_or(|limit| usage.lock().requests + 1 < limit);
-        response = hedged(http, url, body, headers, attempts, usage, allow_hedge).await?;
+        response = send(http, url, body, headers, attempts.attempt_seconds, usage).await.map_err(RetryStop::Fatal)?;
         if let Some(answered) = &response
             && !retryable(answered)
         {
@@ -360,7 +350,7 @@ pub(crate) async fn post_with_retry(
             break;
         }
         if attempts.split_batch && consecutive_5xx >= 2 && delay.is_some() {
-            // Batch races consume requests too, so a split inherits only the requests still available.
+            // Each attempt consumes a request, so a split inherits only the requests still available.
             let next_attempt = start_attempt + requests as usize;
             if next_attempt > retries {
                 break;
@@ -415,61 +405,6 @@ fn backoff(response: Option<&Response>, delay: f64) -> f64 {
         };
     }
     delay
-}
-
-/// The first usable response from one request, raced by a second if the first outlasts `hedge_seconds`.
-async fn hedged(
-    http: &Http,
-    url: &str,
-    body: &Value,
-    headers: &[(String, String)],
-    attempts: &Attempts<'_>,
-    usage: &Usage,
-    allow_hedge: bool,
-) -> Result<Option<Response>, RetryStop> {
-    let seconds = attempts.attempt_seconds;
-    let mut first = std::pin::pin!(send(http, url, body, headers, seconds, usage));
-    let early = tokio::select! {
-        biased;
-        sent = &mut first => Some(sent),
-        _ = tokio::time::sleep(Duration::from_secs_f64(attempts.hedge_seconds)) => None,
-    };
-    if let Some(sent) = early {
-        return sent.map_err(RetryStop::Fatal);
-    }
-    if !allow_hedge {
-        return first.await.map_err(RetryStop::Fatal);
-    }
-    if let Some(before_retry) = attempts.before_retry {
-        // Refused, the first request is dropped and counted as unaccounted by its own guard.
-        before_retry().map_err(RetryStop::Budget)?;
-    }
-    let mut second = std::pin::pin!(send(http, url, body, headers, seconds, usage));
-    let (mut first_done, mut second_done) = (false, false);
-    let mut unanswered = 0;
-    let mut last;
-    loop {
-        let sent = tokio::select! {
-            sent = &mut first, if !first_done => { first_done = true; sent }
-            sent = &mut second, if !second_done => { second_done = true; sent }
-        };
-        match sent.map_err(RetryStop::Fatal)? {
-            Some(response) if !retryable(&response) => {
-                // The sibling still in flight is dropped on return; a sibling that came back with nothing is charged
-                // too. Either carried the same prompt as the answer.
-                let pending = i64::from(!(first_done && second_done));
-                usage.lock().cancelled_twins += unanswered + pending;
-                return Ok(Some(response));
-            }
-            response => {
-                unanswered += i64::from(response.is_none());
-                last = response;
-            }
-        }
-        if first_done && second_done {
-            return Ok(last);
-        }
-    }
 }
 
 /// Counts a dispatched request that never finished, so a dropped one is charged rather than free.
@@ -605,7 +540,6 @@ pub(crate) async fn post(
     let attempts = Attempts {
         call: "jev".into(),
         attempt_seconds: JEV_ATTEMPT_SECONDS,
-        hedge_seconds: JEV_HEDGE_SECONDS,
         before_retry: Some(&check),
         start_attempt,
         split_batch,
@@ -1009,7 +943,7 @@ pub(crate) async fn asking_split(questions: IndexMap<String, Question>, ask: &As
                 .await
                 .map_err(AskError::into_jev)?;
             record_jev_spend([result.cost.clone()]);
-            // A race request consumes a retry too; later questions retain only their first attempt for free.
+            // Each request consumes a retry too; later questions retain only their first attempt for free.
             start_attempt =
                 RETRY_DELAYS_SECONDS.len().min((start_attempt + result.requests as usize).saturating_sub(1));
             answered.push(result);
@@ -1041,7 +975,7 @@ pub(crate) async fn asking_split(questions: IndexMap<String, Question>, ask: &As
     let mut cost = merged_cost(&costs);
     let input_tokens: i64 = answered.iter().map(|result| result.input_tokens).sum();
     if usage.unaccounted_requests > 0 {
-        // The failed batch carried all questions; estimate its unanswered races from the answered singles.
+        // The failed batch carried all questions; estimate its unanswered requests from the answered singles.
         let discarded = estimated_cost(input_tokens * usage.unaccounted_requests, 0);
         cost = merged_cost(&[cost, discarded]);
     }

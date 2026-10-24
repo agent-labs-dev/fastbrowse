@@ -104,7 +104,7 @@ impl FailoverJevClient {
         };
         let mut cost = result.cost.clone();
         if error.unaccounted_requests > 0 {
-            // Only unanswered requests may be billed. Estimate their inputs without multiplying backup races.
+            // Only unanswered requests may be billed. Estimate their inputs from the answered request.
             let discarded = estimated_cost(result.input_tokens * error.unaccounted_requests, 0);
             cost = fastbrowse_core::models::CostLine { seconds: cost.seconds, ..merged_cost(&[cost, discarded]) };
         }

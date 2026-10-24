@@ -516,8 +516,6 @@ fn noul_answers(keys: &[String], gateway_route: bool) -> Value {
     json!({"answers": answers, "usage": {if gateway_route { "inputTokens" } else { "input_tokens" }: 100}})
 }
 
-/// Python also runs this with a 1ms race delay, holding each single's first request until its twin wins; Rust cannot
-/// lower the delay or see the client's race decision from the transport, so only the unraced variant is ported.
 #[tokio::test(start_paused = true)]
 async fn test_failed_batch_splits_with_only_remaining_attempts() {
     for gateway_route in [false, true] {
@@ -748,32 +746,13 @@ impl Drop for SetOnDrop {
 }
 
 #[tokio::test(start_paused = true)]
-async fn test_split_singletons_share_the_remaining_request_budget_with_hedges() {
-    // On paused time the real race delay passes at once: each single's first request waits for its twin, then both
-    // come back 503, so every race spends two of the requests the split inherited.
+async fn test_split_singletons_share_the_remaining_request_budget() {
     for gateway_route in [false, true] {
         let seen: Arc<Mutex<HashMap<Vec<String>, usize>>> = Arc::default();
-        let paired = Arc::new(Notify::new());
-        let (counts, pair) = (seen.clone(), paired.clone());
+        let counts = seen.clone();
         let http = answering(move |request| {
-            let keys = keys(request);
-            let count = {
-                let mut counts = counts.lock().unwrap();
-                let count = counts.entry(keys.clone()).or_default();
-                *count += 1;
-                *count
-            };
-            let pair = pair.clone();
-            Box::pin(async move {
-                if keys.len() == 1 {
-                    if count % 2 == 0 {
-                        pair.notify_waiters();
-                    } else {
-                        pair.notified().await;
-                    }
-                }
-                Ok(Response::new(503, ""))
-            })
+            *counts.lock().unwrap().entry(keys(request)).or_default() += 1;
+            Box::pin(async move { Ok(Response::new(503, "")) })
         });
         let client: Box<dyn JevClient> = if gateway_route { Box::new(gateway(http)) } else { Box::new(direct(http)) };
         let error =

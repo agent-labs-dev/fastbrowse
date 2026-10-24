@@ -3521,7 +3521,7 @@
   ]
  },
  {
-  "name": "llm race won by the second request",
+  "name": "llm stalled request retried after its attempt deadline",
   "client": {
    "kind": "llm",
    "models": {
@@ -3619,12 +3619,21 @@
   ],
   "trace": [
    {
+    "event": "request_retry",
+    "call": "llm model-field_text",
+    "attempt": 1,
+    "reason": "no response within 30s (TimeoutError)",
+    "wait": 0.5
+   },
+   {
     "event": "call",
     "call": "llm:field_text",
     "outcome": "ok"
    }
   ],
-  "sleeps": []
+  "sleeps": [
+   0.5
+  ]
  },
  {
   "name": "llm cancelled mid request",
@@ -6339,7 +6348,7 @@
   ]
  },
  {
-  "name": "jev race won by the second request",
+  "name": "jev stalled request retried after its attempt deadline",
   "client": {
    "kind": "typesafe",
    "base_url": "https://api.typesafe.ai",
@@ -6427,12 +6436,21 @@
   ],
   "trace": [
    {
+    "event": "request_retry",
+    "call": "jev",
+    "attempt": 1,
+    "reason": "no response within 15s (TimeoutError)",
+    "wait": 0.5
+   },
+   {
     "event": "call",
     "call": "jev",
     "outcome": "ok"
    }
   ],
-  "sleeps": []
+  "sleeps": [
+   0.5
+  ]
  },
  {
   "name": "jev cancelled mid request",

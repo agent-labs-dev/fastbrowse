@@ -1,18 +1,16 @@
-//! tests/clients/test_validation.py: retries, races and the accounting of what they cost, seen through the Jev clients
+//! tests/clients/test_validation.py: retries and the accounting of what they cost, seen through the Jev clients
 //! since the request loop itself is crate-private.
 
 mod common;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use common::{Script, answering, reply, text};
 use fastbrowse_clients::http::{Http, Request, Response, TransportError};
 use fastbrowse_clients::typesafe::TypeSafeJevClient;
-use fastbrowse_clients::validation::{
-    JEV_HEDGE_SECONDS, Lines, Paid, RETRY_DELAYS_SECONDS, RequestUsage, jev_spend, with_discarded,
-};
+use fastbrowse_clients::validation::{Lines, Paid, RETRY_DELAYS_SECONDS, RequestUsage, jev_spend, with_discarded};
 use fastbrowse_clients::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 use fastbrowse_core::jev::{JEV_DOLLARS_PER_INPUT_TOKEN, JevClient, JevError, NoulQuestion, Question};
 use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, MaybeUnavailable};
@@ -21,7 +19,6 @@ use fastbrowse_core::telemetry::Trace;
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 use tokio::sync::Notify;
-use tokio::time::Instant;
 
 fn noul(instructions: &str) -> Question {
     NoulQuestion::new(instructions, None, None).into()
@@ -48,57 +45,12 @@ fn direct(http: Http) -> TypeSafeJevClient {
     TypeSafeJevClient::direct("key", http)
 }
 
-/// Sets its flag when dropped, which is how a test sees a request cancelled.
-struct SetOnDrop(Arc<AtomicBool>);
-
-impl Drop for SetOnDrop {
-    fn drop(&mut self) {
-        self.0.store(true, Ordering::SeqCst);
-    }
-}
-
 fn events(trace: &Trace, kind: &str) -> Vec<Value> {
     trace.events().into_iter().filter(|event| event["event"] == kind).collect()
 }
 
 #[tokio::test(start_paused = true)]
-async fn test_a_stalled_request_is_raced_and_the_loser_cancelled() {
-    for winner in [1, 2] {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let hedged = Arc::new(Notify::new());
-        let (count, flag, race) = (calls.clone(), cancelled.clone(), hedged.clone());
-        let http = answering(move |_| {
-            let number = count.fetch_add(1, Ordering::SeqCst) + 1;
-            let (flag, race) = (flag.clone(), race.clone());
-            Box::pin(async move {
-                if number == 2 {
-                    race.notify_waiters();
-                }
-                if number != winner {
-                    let _cancelled = SetOnDrop(flag);
-                    std::future::pending::<()>().await;
-                }
-                if number == 1 {
-                    race.notified().await;
-                }
-                Ok(answered())
-            })
-        });
-        let started = Instant::now();
-        let result = direct(http).evaluate(&json!("page"), &one()).await.unwrap();
-        // Answered once the race delay passed, not after the stalled request's attempt deadline.
-        assert!(started.elapsed().as_secs_f64() < JEV_HEDGE_SECONDS + 0.5);
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
-        assert!(cancelled.load(Ordering::SeqCst));
-        // The loser carried the same input, so it is charged as an estimate beside the winner.
-        assert_eq!(result.requests, 2);
-        assert_eq!((result.cost.basis, result.cost.input_tokens), (CostBasis::Estimated, 200));
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn test_a_fast_request_is_not_hedged() {
+async fn test_a_single_request_is_sent_per_attempt() {
     let script = Script::new([common::Step::Reply(answered())]);
     let result = direct(script.http()).evaluate(&json!("page"), &one()).await.unwrap();
     assert_eq!(script.requests().len(), 1);
@@ -107,34 +59,19 @@ async fn test_a_fast_request_is_not_hedged() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn test_batch_hedges_consume_the_split_retry_budget() {
-    // Python lowers the race delay to 1ms; on paused time the real one passes at once to the same effect.
+async fn test_a_batch_splits_into_singles_and_shares_the_retry_budget() {
     for gateway_route in [false, true] {
         for earlier_failures in [0, 2, 4] {
             let sent: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
-            let paired = Arc::new(Notify::new());
-            let (log, twin) = (sent.clone(), paired.clone());
+            let log = sent.clone();
             let http = answering(move |request| {
-                let keys = keys(request);
                 let number = {
                     let mut log = log.lock().unwrap();
-                    log.push(keys.clone());
+                    log.push(keys(request));
                     log.len()
                 };
-                let twin = twin.clone();
-                Box::pin(async move {
-                    if number <= earlier_failures {
-                        return Ok(Response::new(429, ""));
-                    }
-                    if keys.len() > 1 {
-                        if number == earlier_failures + 2 {
-                            twin.notify_waiters();
-                        } else {
-                            twin.notified().await;
-                        }
-                    }
-                    Ok(Response::new(503, ""))
-                })
+                let status = if number <= earlier_failures { 429 } else { 503 };
+                Box::pin(async move { Ok(Response::new(status, "")) })
             });
             let client: Box<dyn JevClient> = if gateway_route {
                 Box::new(VercelGatewayJevClient::new("key", http, GATEWAY_URL))
@@ -217,28 +154,6 @@ async fn test_a_brief_outage_is_outlasted() {
     }
 }
 
-#[tokio::test(start_paused = true)]
-async fn test_a_completed_hedge_loser_still_counts() {
-    let calls = Arc::new(AtomicUsize::new(0));
-    let hedged = Arc::new(Notify::new());
-    let (count, race) = (calls.clone(), hedged.clone());
-    let http = answering(move |_| {
-        let number = count.fetch_add(1, Ordering::SeqCst) + 1;
-        let race = race.clone();
-        Box::pin(async move {
-            if number == 2 {
-                race.notify_waiters();
-            } else {
-                race.notified().await;
-            }
-            Ok(answered())
-        })
-    });
-    let result = direct(http).evaluate(&json!("page"), &one()).await.unwrap();
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
-    assert_eq!((result.cost.basis, result.cost.input_tokens), (CostBasis::Estimated, 200));
-}
-
 #[test]
 fn test_a_discarded_jev_request_is_charged_as_an_estimate() {
     let cost = CostLine { input_tokens: 900, ..CostLine::new(CostComponent::Jev, CostBasis::Metered, Some(0.002)) };
@@ -291,8 +206,7 @@ async fn test_time_lost_to_a_503_is_traced_for_evals_to_leave_out() {
 #[tokio::test(start_paused = true)]
 async fn test_a_slow_jev_call_is_traced_for_evals_to_rerun() {
     // Jev answers in about half a second at any page size; a call past the limit is its outage, not the agent. Python
-    // fixes the clock; here the provider takes 0.6s, then 2.5s, on paused time. The 2.5s call is raced at 1.5s and
-    // its twin answers later, so the first still answers at 2.5s.
+    // fixes the clock; here the provider takes 0.6s, then 2.5s, on paused time.
     let trace = Trace::collecting();
     let calls = Arc::new(AtomicUsize::new(0));
     let count = calls.clone();
@@ -329,39 +243,33 @@ async fn test_nested_gateway_reason_redacts_before_truncating() {
 
 #[tokio::test(start_paused = true)]
 async fn test_cancelled_dispatched_request_retains_estimated_input_cost() {
-    for physical_requests in [1, 2] {
-        let sent = Arc::new(Notify::new());
-        let calls = Arc::new(AtomicUsize::new(0));
-        let bodies: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
-        let (signal, count, kept) = (sent.clone(), calls.clone(), bodies.clone());
-        let http = answering(move |request| {
-            kept.lock().unwrap().push(request.body.clone());
-            let number = count.fetch_add(1, Ordering::SeqCst) + 1;
-            let signal = signal.clone();
-            Box::pin(async move {
-                if number == physical_requests {
-                    signal.notify_one();
-                }
-                std::future::pending().await
-            })
-        });
-        let paid = Paid::default();
-        let client = direct(http);
-        let page = json!("page");
-        let questions = one();
-        tokio::select! {
-            _ = jev_spend(Lines::Paid(paid.clone()), None, client.evaluate(&page, &questions)) => panic!("cancelled"),
-            _ = sent.notified() => {}
-        }
-        let costs = paid.lines();
-        assert_eq!(costs.len(), physical_requests);
-        // Priced as Python prices it: `json.dumps(body)` characters over three per token.
-        let body: Value = serde_json::from_slice(&bodies.lock().unwrap()[0]).unwrap();
-        let tokens = (dumps(&body).len() as f64 / 3.0).ceil() as i64;
-        assert_eq!((costs[0].component, costs[0].basis), (CostComponent::Jev, CostBasis::Estimated));
-        assert_eq!(costs[0].input_tokens, tokens);
-        assert_eq!(costs[0].dollars, Some(tokens as f64 * JEV_DOLLARS_PER_INPUT_TOKEN));
+    let sent = Arc::new(Notify::new());
+    let bodies: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+    let (signal, kept) = (sent.clone(), bodies.clone());
+    let http = answering(move |request| {
+        kept.lock().unwrap().push(request.body.clone());
+        let signal = signal.clone();
+        Box::pin(async move {
+            signal.notify_one();
+            std::future::pending().await
+        })
+    });
+    let paid = Paid::default();
+    let client = direct(http);
+    let page = json!("page");
+    let questions = one();
+    tokio::select! {
+        _ = jev_spend(Lines::Paid(paid.clone()), None, client.evaluate(&page, &questions)) => panic!("cancelled"),
+        _ = sent.notified() => {}
     }
+    let costs = paid.lines();
+    assert_eq!(costs.len(), 1);
+    // Priced as Python prices it: `json.dumps(body)` characters over three per token.
+    let body: Value = serde_json::from_slice(&bodies.lock().unwrap()[0]).unwrap();
+    let tokens = (dumps(&body).len() as f64 / 3.0).ceil() as i64;
+    assert_eq!((costs[0].component, costs[0].basis), (CostComponent::Jev, CostBasis::Estimated));
+    assert_eq!(costs[0].input_tokens, tokens);
+    assert_eq!(costs[0].dollars, Some(tokens as f64 * JEV_DOLLARS_PER_INPUT_TOKEN));
 }
 
 #[tokio::test(start_paused = true)]

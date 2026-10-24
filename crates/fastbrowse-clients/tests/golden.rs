@@ -2,7 +2,7 @@
 //!
 //! Each case's scripted responses are handed back in order; every request must match Python's byte for byte (and so its
 //! canonical form, which a replay is keyed on), and every result, ledger line, collected spend and trace record must
-//! equal Python's. Time is paused, so a race delay or a retry wait passes at once.
+//! equal Python's. Time is paused, so an attempt deadline or a retry wait passes at once.
 
 mod common;
 
