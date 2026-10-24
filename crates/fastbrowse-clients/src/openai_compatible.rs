@@ -610,9 +610,10 @@ impl OpenAICompatibleLLM {
                 }
             };
             let (detail, ends_mid_json) = match serde_json::from_str::<Value>(&content) {
-                Err(error) => {
-                    (errors_json(vec![json_invalid(&error)]), error.classify() == serde_json::error::Category::Eof)
-                }
+                Err(error) => (
+                    errors_json(vec![json_invalid(&content, &error)]),
+                    error.classify() == serde_json::error::Category::Eof,
+                ),
                 Ok(_) => match schema.validate_json(&content) {
                     Ok(data) => {
                         let cost = CostLine {

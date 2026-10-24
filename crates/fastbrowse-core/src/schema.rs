@@ -131,14 +131,20 @@ pub struct Field {
     /// The default as JSON; `None` for a required field.
     pub default: Option<Value>,
     pub description: Option<String>,
+    /// `default_factory`: not required, and pydantic writes no default for it.
+    pub factory: bool,
 }
 
 impl Field {
     pub fn required(name: &str, ty: Ty) -> Field {
-        Field { name: name.into(), alias: None, ty, default: None, description: None }
+        Field { name: name.into(), alias: None, ty, default: None, description: None, factory: false }
     }
     pub fn default(name: &str, ty: Ty, default: impl Into<Value>) -> Field {
-        Field { name: name.into(), alias: None, ty, default: Some(default.into()), description: None }
+        Field { name: name.into(), alias: None, ty, default: Some(default.into()), description: None, factory: false }
+    }
+    /// A field with a `default_factory`, which the schema leaves out of `required` and writes no default for.
+    pub fn factory(name: &str, ty: Ty) -> Field {
+        Field { factory: true, ..Field::required(name, ty) }
     }
     pub fn doc(mut self, description: &str) -> Field {
         self.description = Some(description.into());
@@ -148,7 +154,7 @@ impl Field {
         self.alias.as_deref().unwrap_or(&self.name)
     }
     pub fn is_required(&self) -> bool {
-        self.default.is_none()
+        self.default.is_none() && !self.factory
     }
 }
 
@@ -375,7 +381,8 @@ impl Generator {
                 Some(default) => {
                     schema.insert("default".into(), default.clone());
                 }
-                None => required.push(Value::from(field.key())),
+                None if !field.factory => required.push(Value::from(field.key())),
+                None => {}
             }
             properties.insert(field.key().to_string(), Value::Object(schema));
         }

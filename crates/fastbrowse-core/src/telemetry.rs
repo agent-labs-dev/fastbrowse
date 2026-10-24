@@ -64,13 +64,24 @@ pub struct LedgerState {
 #[derive(Debug)]
 pub struct Ledger {
     pub limits: Limits,
-    pub started: Instant,
+    /// When the run's clock started; None while it has not, so no call can run over a time limit before the run
+    /// takes the ledger over (Python's `started = math.inf`).
+    started: Mutex<Option<Instant>>,
     state: Mutex<LedgerState>,
 }
 
 impl Ledger {
     pub fn new(limits: Limits) -> Ledger {
-        Ledger { limits, started: Instant::now(), state: Mutex::new(LedgerState::default()) }
+        Ledger { limits, started: Mutex::new(Some(Instant::now())), state: Mutex::new(LedgerState::default()) }
+    }
+
+    pub fn started(&self) -> Option<Instant> {
+        *self.started.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Start the clock at `at`, or stop it with None.
+    pub fn set_started(&self, at: Option<Instant>) {
+        *self.started.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = at;
     }
 
     /// The counters, for a caller that counts a step or reads a total.
@@ -135,7 +146,7 @@ impl Ledger {
     fn check_state(&self, state: &LedgerState, extra_dollars: f64) -> Result<(), BudgetExceeded> {
         let limits = &self.limits;
         if let Some(max) = limits.max_seconds
-            && self.started.elapsed().as_secs_f64() > max
+            && self.started().is_some_and(|started| started.elapsed().as_secs_f64() > max)
         {
             return Err(BudgetExceeded::new(
                 format!("time limit {}s reached", float_str(max)),

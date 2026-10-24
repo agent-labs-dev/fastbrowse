@@ -126,11 +126,14 @@ dependencies = [
 name = "fastbrowse-agent"
 version = "0.7.0"
 dependencies = [
+ "fastbrowse-clients",
  "fastbrowse-core",
  "indexmap",
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -207,6 +210,19 @@ version = "0.7.0"
 dependencies = [
  "fastbrowse-core",
  "pyo3",
+]
+
+[[package]]
+name = "fastbrowse-run"
+version = "0.7.0"
+dependencies = [
+ "fastbrowse-agent",
+ "fastbrowse-browser",
+ "fastbrowse-clients",
+ "fastbrowse-core",
+ "indexmap",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

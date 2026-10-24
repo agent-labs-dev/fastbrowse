@@ -1,0 +1,144 @@
+//! tests/test_run.py: run_task decisions that need no real browser.
+
+use std::sync::Arc;
+
+use fastbrowse_clients::environment::Settings;
+use fastbrowse_clients::http::{Http, Request, Response, TransportError};
+use fastbrowse_core::BoxFuture;
+use fastbrowse_core::jev::{Evaluation, JevClient, JevError, Question};
+use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
+use fastbrowse_core::models::{LLMPurpose, Status};
+use fastbrowse_core::telemetry::Ledger;
+use fastbrowse_run::{RunError, RunTask, run_task};
+use indexmap::IndexMap;
+use serde_json::Value;
+use tokio::io::AsyncReadExt;
+use tokio::net::TcpListener;
+
+/// Clients no test here gets far enough to need.
+struct Silent;
+
+impl JevClient for Silent {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a Value,
+        _: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, JevError>> {
+        Box::pin(async { Err(JevError::Failed("not scripted".into())) })
+    }
+}
+
+impl LLMClient for Silent {
+    fn generate_value<'a>(
+        &'a self,
+        _: LLMPurpose,
+        _: &'a [Message],
+        _: &'a dyn ResponseSchema,
+        _: i64,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
+        Box::pin(async { Err(LLMError::Failed("not scripted".into())) })
+    }
+}
+
+fn task(change: impl FnOnce(&mut RunTask)) -> RunTask {
+    let mut options = RunTask {
+        jev: Some(Arc::new(Silent)),
+        llm: Some(Arc::new(Silent)),
+        settings: Some(Settings::from_sources::<&str, &str>(&[], None).unwrap()),
+        ..RunTask::default()
+    };
+    change(&mut options);
+    options
+}
+
+fn answering(status: u16) -> Http {
+    Http::new(Arc::new(move |_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+        Box::pin(async move { Ok(Response::new(status, Vec::new())) })
+    }))
+}
+
+#[tokio::test]
+async fn test_a_devtools_port_without_its_discovery_route_names_the_websocket_to_pass() {
+    let options = task(|o| {
+        o.cdp_port = Some(9222);
+        o.http = Some(answering(404));
+    });
+    let result = run_task("read the page", options).await.unwrap();
+    assert_eq!(result.status, Status::Error);
+    let error = result.error.unwrap();
+    assert!(error.contains("answered 404") && error.contains("DevToolsActivePort"), "{error}");
+    assert!(error.contains("ws://127.0.0.1:<port><path>"), "{error}");
+}
+
+#[tokio::test]
+async fn test_a_devtools_port_refusing_discovery_names_the_status_without_the_chrome_inspect_advice() {
+    for status in [401, 403, 500] {
+        let options = task(|o| {
+            o.cdp_port = Some(9222);
+            o.http = Some(answering(status));
+        });
+        let result = run_task("read the page", options).await.unwrap();
+        assert_eq!(result.status, Status::Error);
+        let error = result.error.unwrap();
+        assert!(error.contains(&format!("answered {status}")), "{error}");
+        assert!(!error.contains("chrome://inspect") && !error.contains("DevToolsActivePort"), "{error}");
+    }
+}
+
+#[tokio::test]
+async fn test_a_browser_connection_that_closes_is_an_outage() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut buffer = [0u8; 1024];
+            let _ = socket.read(&mut buffer).await;
+        }
+    });
+    let options = task(|o| {
+        o.cdp_url = Some(format!("ws://127.0.0.1:{port}/devtools/browser/x"));
+        o.attach = true;
+    });
+    let result = run_task("read the page", options).await.unwrap();
+    assert_eq!(result.status, Status::Unavailable, "{:?}", result.error);
+    assert!(result.error.is_some());
+}
+
+#[tokio::test]
+async fn browser_choices_that_contradict_each_other_are_errors_before_any_browser_starts() {
+    let cases: Vec<(RunTask, &str)> = vec![
+        (task(|o| o.cloud_extensions = vec!["x".into()]), "cloud_extensions"),
+        (
+            task(|o| {
+                o.cdp_url = Some("ws://localhost:1/x".into());
+                o.cdp_port = Some(1);
+            }),
+            "pass one",
+        ),
+        (task(|o| o.attach = true), "attach and target_match require cdp_url or cdp_port"),
+        (
+            task(|o| {
+                o.cdp_url = Some("ws://localhost:1/x".into());
+                o.browser_api_key = Some("key".into());
+            }),
+            "a cloud key would start a second one",
+        ),
+        (task(|o| o.cloud_profile = Some("p".into())), "needs a cloud browser"),
+    ];
+    for (options, expected) in cases {
+        let result = run_task("read the page", options).await.unwrap();
+        assert_eq!(result.status, Status::Error);
+        assert!(result.error.as_deref().is_some_and(|e| e.contains(expected)), "{:?}", result.error);
+    }
+}
+
+#[tokio::test]
+async fn a_recording_cannot_be_combined_with_allowed_origins() {
+    let options = task(|o| {
+        o.allowed_origins = Some(vec!["https://example.test".into()]);
+        o.record = Some("r.mp4".into());
+    });
+    let refused = run_task("read the page", options).await.unwrap_err();
+    assert!(matches!(refused, RunError::Invalid(message) if message.contains("allowed_origins")));
+}

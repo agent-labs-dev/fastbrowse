@@ -1,0 +1,19 @@
+[package]
+name = "fastbrowse-run"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Port of src/fastbrowse/run.py: one task end to end, from the browser and the model clients to the result."
+
+[dependencies]
+fastbrowse-agent = { path = "../fastbrowse-agent" }
+fastbrowse-browser = { path = "../fastbrowse-browser" }
+fastbrowse-clients = { path = "../fastbrowse-clients" }
+fastbrowse-core = { path = "../fastbrowse-core" }
+indexmap = "2"
+serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1", features = ["rt", "time", "macros", "sync", "fs"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "time", "macros", "sync", "net", "io-util"] }
