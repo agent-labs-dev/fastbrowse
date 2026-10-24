@@ -28,7 +28,7 @@ from pydantic import BaseModel, JsonValue
 
 from fastbrowse.batches import evaluate_batches
 from fastbrowse.comparison import NumericComparison, QuotedField, complete_comparison
-from fastbrowse.config import TokenBudget
+from fastbrowse.config import Config, ObservationLimits, TokenBudget
 from fastbrowse.jev import (
     Answer,
     ChoiceAnswer,
@@ -61,11 +61,22 @@ from fastbrowse.models import (
     FactReader,
     Limits,
     LLMPurpose,
+    Operation,
     SourceControl,
+    StepOutcome,
 )
-from fastbrowse.page import Block, BlockKind, Capture
+from fastbrowse.page import Block, BlockKind, Capture, Control, Dialog, Observation, Tab
 from fastbrowse.planner import Plan, Requirement, RequirementKind, RunReport, answer_checks, make_plan, partition_plan
-from fastbrowse.telemetry import BudgetExceeded, Ledger
+from fastbrowse.policy import (
+    HistoryEntry,
+    ReadAssessment,
+    RelevanceCache,
+    StepContext,
+    build_request,
+    decide,
+    fits,
+)
+from fastbrowse.telemetry import BudgetExceeded, Ledger, traced
 
 HERE = Path(__file__).parent
 NOW = datetime(2026, 9, 26, 20, 0, tzinfo=UTC)
@@ -1267,6 +1278,607 @@ def shows_cases() -> list[dict[str, Any]]:
     return cases
 
 
+# --- policy -------------------------------------------------------------------------------------------------------
+
+
+def button(i: int, *, offscreen: bool = False, **values: Any) -> Control:
+    fields: dict[str, Any] = {
+        "id": f"b{i}",
+        "frame_id": None,
+        "role": "button",
+        "label": f"Button {i}",
+        "operations": frozenset({Operation.CLICK}),
+        "offscreen": offscreen,
+    }
+    fields.update(values)
+    return Control(**fields)
+
+
+def observation(controls: Sequence[Control] = (), **values: Any) -> Observation:
+    fields: dict[str, Any] = {
+        "url": "https://example.test/",
+        "title": "t",
+        "page_key": "k",
+        "captured_at": NOW,
+        "controls": tuple(controls),
+        "omitted_controls": 0,
+        "viewport_text": "",
+        "tabs": (),
+    }
+    fields.update(values)
+    return Observation(**fields)
+
+
+def step_context(**changes: Any) -> StepContext:
+    base: dict[str, Any] = {
+        "task": "press button 3",
+        "subgoal": None,
+        "requirements": (),
+        "notes": "",
+        "history": (),
+        "check_login": False,
+        "check_bot": False,
+        "has_attachments": False,
+        "secrets": (),
+    }
+    base.update(changes)
+    return StepContext(**base)
+
+
+def rejecting_offscreen(respond: Responder) -> Responder:
+    def wrapped(state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        if "offscreen" in str(state):
+            raise JevInputTooLarge("max_tokens_exceeded")
+        return respond(state, questions)
+
+    return wrapped
+
+
+def relevance(pick: Mapping[str, str], relevant: set[str], *, fail: bool = False) -> Responder:
+    """tests/test_policy.py's RelevanceJev: a high score for an element naming one of `relevant`."""
+    choose = scripted(pick)
+
+    def respond(state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        if "operation" in questions:
+            return choose(state, questions)
+        if fail:
+            raise JevInputTooLarge("max_tokens_exceeded")
+        return evaluation(
+            {
+                key: NoulAnswer(probability=0.9 if any(f'"{label}"' in str(q) for label in relevant) else 0.1)
+                for key, q in questions.items()
+            }
+        )
+
+    return respond
+
+
+def shedding(pick: Mapping[str, str], answers_up_to: int) -> Responder:
+    """Answers 503 until its retries run out for any request offering more than `answers_up_to` elements."""
+    choose = scripted(pick)
+
+    def respond(state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        assert isinstance(state, dict) and isinstance(state["elements"], list)
+        if len(state["elements"]) > answers_up_to:
+            raise JevRetriesExhausted("HTTP 503", seconds=1.0, unaccounted_requests=0, requests=6)
+        return choose(state, questions)
+
+    return respond
+
+
+def answering(answers: Mapping[str, Answer]) -> Responder:
+    return lambda state, questions: evaluation({key: answers[key] for key in questions if key in answers})
+
+
+def choice_answer(choice: str, confidence: float = 0.9) -> ChoiceAnswer:
+    return ChoiceAnswer(choice=choice, probabilities={choice: 1.0}, confidence=confidence)
+
+
+def policy() -> list[dict[str, Any]]:
+    cases: list[dict[str, Any]] = []
+
+    def case(
+        name: str,
+        respond: Responder,
+        steps: Sequence[tuple[Observation, StepContext, Config]],
+        *,
+        ledger: Limits | None = None,
+        cache: bool = False,
+    ) -> None:
+        calls: list[dict[str, Any]] = []
+        jev = RecordingJev(calls, respond)
+        book = Ledger(ledger) if ledger is not None else None
+        relevance_cache = RelevanceCache() if cache else None
+        outcomes = []
+        for page, context, config in steps:
+            with traced() as events:
+                result, error = run(decide(jev, page, context, config, ledger=book, relevance_cache=relevance_cache))
+            outcomes.append({"result": error or {"decision": result.model_dump(mode="json")}, "trace": list(events)})
+        cases.append(
+            {
+                "name": name,
+                "ledger": None if ledger is None else ledger.model_dump(mode="json"),
+                "cache": cache,
+                "steps": [
+                    {
+                        "observation": page.model_dump(mode="json"),
+                        "context": context.model_dump(mode="json"),
+                        "config": config.model_dump(mode="json"),
+                    }
+                    for page, context, config in steps
+                ],
+                "calls": calls,
+                "outcome": outcomes,
+                "ledger_after": ledger_state(book),
+            }
+        )
+
+    def one(name: str, respond: Responder, page: Observation, context: StepContext, config: Config, **kw: Any) -> None:
+        case(name, respond, [(page, context, config)], **kw)
+
+    history = (HistoryEntry(operation=Operation.SCROLL, target=None, outcome=StepOutcome.EXECUTED, page_changed=True),)
+    buttons = tuple(button(i) for i in range(5))
+    one(
+        "picks the target",
+        scripted({"operation": "click", "click_target": "b3"}),
+        observation(buttons),
+        step_context(history=history),
+        Config(),
+    )
+    one(
+        "scroll back up",
+        scripted({"operation": "scroll_up"}),
+        observation(),
+        step_context(task="Show the article headline", subgoal="Scroll up from the footer to the headline"),
+        Config(),
+    )
+    for assessment in ReadAssessment:
+        one(
+            f"read assessment {assessment.value}",
+            scripted({"operation": "click", "click_target": "b0", "read_assessment": assessment.value}),
+            observation((button(0),)),
+            step_context(unread_requirements=("Report why login failed",)),
+            Config(),
+        )
+    one(
+        "nothing left to read",
+        scripted({"operation": "click", "click_target": "b0"}),
+        observation((button(0),)),
+        step_context(unread_requirements=()),
+        Config(),
+    )
+    groups = Config(observation=ObservationLimits(max_choice_options=10, group_size=4))
+    one(
+        "group then element",
+        scripted({"operation": "click", "click_group": "2", "click_target": "b9"}),
+        observation(tuple(button(i) for i in range(12))),
+        step_context(),
+        groups,
+    )
+    one(
+        "a group chosen from the end",
+        scripted({"operation": "click", "click_group": "-1", "click_target": "b11"}),
+        observation(tuple(button(i) for i in range(12))),
+        step_context(),
+        groups,
+    )
+    pair = (button(0), button(1, offscreen=True))
+    one(
+        "oversized drops offscreen",
+        rejecting_offscreen(scripted({"operation": "click"})),
+        observation(pair),
+        step_context(),
+        Config(),
+    )
+    one(
+        "too large with no controls",
+        scripted({}),
+        observation(pair),
+        step_context(),
+        Config(tokens=TokenBudget(state_plus_largest_question=1, state_plus_all_questions=1)),
+    )
+    shed = Config(tokens=TokenBudget(batch_tokens=200))
+    onscreen = tuple(button(i) for i in range(10))
+    one(
+        "shed to onscreen",
+        shedding({"operation": "click", "click_target": "b3"}, 10),
+        observation((*onscreen, *(button(i, offscreen=True) for i in range(10, 40)))),
+        step_context(),
+        shed,
+    )
+    one("shed by halves", shedding({"operation": "click"}, 5), observation(onscreen), step_context(), shed)
+    one(
+        "a small shed request is an outage",
+        shedding({"operation": "click"}, 0),
+        observation(pair),
+        step_context(),
+        Config(),
+    )
+    dense = Config(
+        tokens=TokenBudget(state_plus_largest_question=2_000, state_plus_all_questions=2_000),
+        observation=ObservationLimits(max_offered_controls=20),
+    )
+    one(
+        "a dense page offers what fits",
+        relevance({"operation": "scroll"}, set(), fail=True),
+        observation((*(button(i) for i in range(39)), button(39, checked=True))),
+        step_context(),
+        dense,
+    )
+    title = "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, " * 2
+    links = tuple(
+        Control(
+            id=f"l{i}",
+            frame_id=None,
+            role="link",
+            label=f"{title}listing {i}",
+            operations=frozenset({Operation.CLICK}),
+            href=f"/Zebra-Ballpoint-Retractable-Reliable-Multipack/dp/B0CT3JS5{i:02d}/ref=sr_1_{i}?dib={'x' * 420}",
+        )
+        for i in range(112)
+    )
+    one(
+        "long titles compact",
+        scripted({"operation": "click", "click_target": "l7"}),
+        observation(links),
+        step_context(),
+        Config(),
+    )
+    for retry in (False, True):
+        one(
+            f"every request needs budget, retry {retry}",
+            rejecting_offscreen(scripted({"operation": "click", "click_group": "0"}))
+            if retry
+            else scripted({"operation": "click", "click_group": "0"}),
+            observation(tuple(button(i, offscreen=retry and i == 0) for i in range(12))),
+            step_context(),
+            groups,
+            ledger=Limits(max_jev_calls=1),
+        )
+    twins = tuple(
+        button(i).model_copy(update={"label": "Add to cart", "context": name})
+        for i, name in enumerate(("Sauce Labs Backpack", "Sauce Labs Bike Light"))
+    )
+    one(
+        "twins carry their context",
+        scripted({"operation": "click", "click_target": "b1"}),
+        observation(twins),
+        step_context(subgoal="Add the Bike Light"),
+        Config(),
+        ledger=Limits(max_dollars=1.0),
+    )
+    click_history = (
+        HistoryEntry(
+            operation=Operation.CLICK,
+            target="b0",
+            outcome=StepOutcome.EXECUTED,
+            page_changed=True,
+            text="secret:x",
+            effect="nothing visible changed",
+            read_progress=True,
+            setting=True,
+        ),
+    )
+    for back in (False, True):
+        one(
+            f"back offered {back}",
+            scripted({"operation": "click", "click_target": "b0"}),
+            observation((button(0),), can_go_back=back),
+            step_context(history=click_history),
+            Config(),
+        )
+    for login, bot in ((True, True), (False, False), (False, True)):
+        one(
+            f"walls login {login} bot {bot}",
+            scripted({}, noul=0.9, nouls={"bot_check": 0.2}),
+            observation((button(1),)),
+            step_context(check_login=login, check_bot=bot),
+            Config(),
+        )
+    ten = Config(observation=ObservationLimits(max_offered_controls=10))
+    one(
+        "relevance finds a late control",
+        relevance({"operation": "click", "click_target": "b30"}, {"Button 30"}),
+        observation(tuple(button(i) for i in range(40))),
+        step_context(),
+        ten,
+    )
+    five = Config(observation=ObservationLimits(max_offered_controls=5))
+    one(
+        "protected controls skip the filter",
+        relevance({"operation": "click"}, set()),
+        observation(
+            (
+                *(button(i) for i in range(35)),
+                button(35, label="Destination", value="Paris"),
+                button(36, blocking=True),
+                Control(
+                    id="next",
+                    frame_id=None,
+                    role="link",
+                    label="Next \u203a",
+                    operations=frozenset({Operation.CLICK}),
+                    href="/page/2",
+                ),
+                button(37, label="Show 20 more"),
+                button(38, expanded=True),
+            )
+        ),
+        step_context(),
+        five,
+    )
+    one(
+        "unset options do not crowd out apply",
+        relevance({"operation": "click", "click_target": "b40"}, {"Apply filters"}),
+        observation(
+            (*(button(i, role="checkbox", checked=False) for i in range(40)), button(40, label="Apply filters"))
+        ),
+        step_context(),
+        ten,
+    )
+    one(
+        "a failed relevance pass keeps document order",
+        relevance({"operation": "click"}, {"Button 30"}, fail=True),
+        observation(tuple(button(i) for i in range(40))),
+        step_context(),
+        ten,
+    )
+    one(
+        "a relevance pass over the call limit",
+        relevance({"operation": "click"}, set()),
+        observation(tuple(button(i) for i in range(40))),
+        step_context(),
+        Config(
+            observation=ObservationLimits(max_offered_controls=10), tokens=TokenBudget(state_plus_all_questions=600)
+        ),
+        ledger=Limits(max_jev_calls=2),
+    )
+    one(
+        "a relevance pass over the spend limit",
+        relevance({"operation": "click"}, set()),
+        observation(tuple(button(i) for i in range(40))),
+        step_context(),
+        ten,
+        ledger=Limits(max_dollars=1e-9),
+    )
+    one(
+        "under the limit no relevance pass",
+        relevance({"operation": "click"}, set()),
+        observation(tuple(button(i) for i in range(20))),
+        step_context(),
+        Config(),
+    )
+    drag = Control(
+        id="drag1",
+        frame_id=None,
+        role="generic",
+        label="Card A",
+        operations=frozenset({Operation.CLICK, Operation.DRAG}),
+    )
+    one(
+        "a drag and where it lands",
+        scripted({"operation": "drag", "drag_target": "drag1", "drag_destination": "b1"}),
+        observation((drag, button(1), button(2, label=""))),
+        step_context(task="Move Card A onto Done"),
+        Config(),
+    )
+    limit = 10
+    one(
+        "drag destinations in groups",
+        scripted(
+            {
+                "operation": "drag",
+                "drag_target": "drag1",
+                "drag_destination_group": str(limit // 10),
+                "drag_destination": f"b{limit - 1}",
+            }
+        ),
+        observation((drag.model_copy(update={"selected": True}), *(button(i, selected=True) for i in range(limit)))),
+        step_context(task="Move Card A onto Done"),
+        Config(observation=ObservationLimits(max_choice_options=limit)),
+    )
+    one(
+        "identical relevance questions",
+        relevance({"operation": "click", "click_target": "b3"}, {"Button 0"}),
+        observation(tuple(button(0).model_copy(update={"id": f"b{i}"}) for i in range(10))),
+        step_context(),
+        five,
+    )
+    page = observation(tuple(button(i) for i in range(10)))
+    case(
+        "a redraw reuses relevance",
+        relevance({"operation": "click", "click_target": "b9"}, {"Button 9"}),
+        [(page, step_context(), five), (page.model_copy(update={"page_key": "redrawn"}), step_context(), five)],
+        cache=True,
+    )
+    two = Config(observation=ObservationLimits(max_offered_controls=2))
+    base = observation(tuple(button(i) for i in range(5)))
+    for change in ("document", "url", "task", "requirements", "unread", "subgoal", "control"):
+        changed_page, changed_step = base, step_context()
+        match change:
+            case "document":
+                changed_page = base.model_copy(update={"document_key": "new-document"})
+            case "url":
+                changed_page = base.model_copy(update={"url": "https://example.test/other"})
+            case "task":
+                changed_step = step_context(task="another task")
+            case "requirements":
+                changed_step = step_context(requirements=("another requirement",))
+            case "unread":
+                changed_step = step_context(unread_requirements=())
+            case "subgoal":
+                changed_step = step_context(subgoal="different obstacle")
+            case _:
+                changed_page = base.model_copy(
+                    update={"controls": (*base.controls[:-1], button(4).model_copy(update={"label": "changed"}))}
+                )
+        case(
+            f"the relevance cache asks again after a {change} change",
+            relevance({"operation": "click"}, {"Button 4"}),
+            [(base, step_context(), two), (changed_page, changed_step, two)],
+            cache=True,
+        )
+    field = button(1).model_copy(update={"role": "textbox", "operations": frozenset({Operation.FILL}), "value": "kept"})
+    one(
+        "a redirected start is not a destination",
+        scripted({"operation": "fill"}),
+        observation((field,), url="https://example.com/form/"),
+        step_context(task="Fill the form", start_url="https://example.com/"),
+        Config(),
+    )
+    one(
+        "a bare page offers the start",
+        scripted({"operation": "navigate", "navigate_target": "0"}),
+        observation(url="chrome-error://chromewebdata/"),
+        step_context(task="Sign in", start_url="https://example.com/login"),
+        Config(),
+    )
+    for omitted in (0, 3):
+        one(
+            f"controls hold back the start {omitted}",
+            scripted({"operation": "click"}),
+            observation(() if omitted else (button(1),), url="https://example.com/code", omitted_controls=omitted),
+            step_context(task="Sign in", start_url="https://example.com/login"),
+            Config(),
+        )
+    one(
+        "already at the start landing",
+        scripted({"operation": "scroll"}),
+        observation(url="https://example.com/form/"),
+        step_context(task="Sign in", start_url="https://example.com/", start_landing_url="https://example.com/form/"),
+        Config(),
+    )
+    one(
+        "an explicit start redirect",
+        scripted({"operation": "click"}),
+        observation((button(1),), url="https://example.com/form/"),
+        step_context(
+            task="Inspect https://example.com/",
+            start_url="https://example.com/",
+            start_landing_url="https://example.com/form/",
+        ),
+        Config(),
+    )
+    urls = " ".join(f"https://site{i}.test/page" for i in range(12))
+    one(
+        "addresses in groups",
+        scripted({"operation": "navigate", "navigate_group": "1", "navigate_target": "1"}, confidence=0.8),
+        observation(),
+        step_context(task=f"Compare these: {urls}"),
+        Config(observation=ObservationLimits(max_choice_options=10, group_size=4)),
+    )
+    tabs = (
+        Tab(id="t1", url="https://example.test/", title="Home \u00e9", active=True, opener_id=None),
+        Tab(id="t2", url="https://example.test/popup", title="Popup", active=False, opener_id="t1"),
+    )
+    upload = Control(
+        id="f1",
+        frame_id="frame-1",
+        role="textbox",
+        label='Resume \u6771\u4eac "cv"',
+        operations=frozenset({Operation.UPLOAD, Operation.CLICK, Operation.FILL, Operation.ENTER}),
+        context="Apply form " + "c" * 120,
+        href="https://example.test/" + "h" * 200,
+        options=("a", "b"),
+        input_type="file",
+        input_name="resume",
+        autocomplete="off",
+        checked=False,
+        offscreen=True,
+        blocking=True,
+    )
+    rich = observation(
+        (upload, button(2, selected=True), button(3, expanded=False)),
+        tabs=tabs,
+        viewport_text="Viewport \u00e9 text\nline \U0001f600",
+        response_status=404,
+        omitted_controls=7,
+        history_entry="h1",
+        document_key="doc",
+    )
+    one(
+        "every state field",
+        scripted({"operation": "switch_tab", "switch_tab_target": "t2"}),
+        rich,
+        step_context(
+            task="Upload my resume \u00e9",
+            subgoal="Open the popup",
+            requirements=("Upload the resume",),
+            unread_requirements=("Find the status",),
+            notes="[n1] note",
+            history=click_history,
+            has_attachments=True,
+            secrets=("password",),
+            recovery_memory="Tried the button twice.",
+            check_login=True,
+        ),
+        Config(),
+    )
+    for operation in ("click", "enter", "fill", "upload"):
+        one(
+            f"every state field compacted, {operation}",
+            rejecting_offscreen(scripted({"operation": operation, f"{operation}_target": "f1"})),
+            rich,
+            step_context(task="Upload", has_attachments=True),
+            Config(),
+        )
+    one(
+        "an open dialog",
+        scripted({"operation": "dialog"}),
+        observation((button(1),), dialog=Dialog(kind="confirm", message="Leave?", default_prompt=None)),
+        step_context(),
+        Config(),
+    )
+    one(
+        "a target that was not offered",
+        scripted({"operation": "click", "click_target": "nope"}),
+        observation((button(1),)),
+        step_context(),
+        Config(),
+    )
+    one(
+        "no operation answered",
+        answering({}),
+        observation((button(1),)),
+        step_context(),
+        Config(),
+    )
+    one(
+        "an operation that does not exist",
+        answering({"operation": choice_answer("fly")}),
+        observation((button(1),)),
+        step_context(),
+        Config(),
+    )
+    return cases
+
+
+def build_requests() -> list[dict[str, Any]]:
+    cases = []
+    dated = observation().model_copy(update={"captured_at": datetime(2026, 9, 26, 20, tzinfo=UTC)})
+    for page, context, config, compact in (
+        (dated, step_context(task="Select next month's first Friday"), Config(), False),
+        (observation((button(1),)), step_context(), Config(), True),
+    ):
+        request = build_request(page, page.controls, context, config, compact=compact)
+        cases.append(
+            {
+                "observation": page.model_dump(mode="json"),
+                "context": context.model_dump(mode="json"),
+                "config": config.model_dump(mode="json"),
+                "compact": compact,
+                "state": compact_json(request.state),
+                "questions": compact_json({k: q.model_dump(mode="json") for k, q in request.questions.items()}),
+                "fits": fits(request, config),
+            }
+        )
+    return cases
+
+
+def compact_json(value: Any) -> str:
+    return compact(value)
+
+
 def write(name: str, value: Any) -> None:
     (HERE / name).write_text(json.dumps(sort_operations(value), indent=1) + "\n", encoding="ascii")
 
@@ -1274,4 +1886,5 @@ def write(name: str, value: Any) -> None:
 if __name__ == "__main__":
     write("batches.json", batches())
     write("planner.json", planner())
+    write("policy.json", {"cases": policy(), "build_request": build_requests()})
     write("memory.json", {"cases": memory(), "quoted_fields": quoted_fields(), "shows": shows_cases()})
