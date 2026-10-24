@@ -515,6 +515,9 @@ async def run_suite(args: argparse.Namespace) -> int:
         if forward is not None:
             extra += f", {entry['forwarded']} forwarded, ${cost:.4f} (total ${spent:.4f})"
         _print_row(entry, extra=extra)
+    # The file is rewritten after every task, so a reader can tell a finished run from one still going.
+    run["meta"]["finished"] = datetime.now(UTC).isoformat(timespec="seconds")
+    _write(args.out, run)
     print(f"{mode}: {len(run['tasks'])} tasks, ${spent:.4f} spent; run written to {args.out}")
     return 0
 
@@ -536,7 +539,10 @@ def _print_row(entry: dict[str, Any], extra: str = "") -> None:
 
 
 def load_run(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    run = json.loads(path.read_text(encoding="utf-8"))
+    if "finished" not in run["meta"]:
+        raise SystemExit(f"{path} is a run still going or one that stopped, with {len(run['tasks'])} tasks")
+    return run
 
 
 def compare_runs(a: dict[str, Any], b: dict[str, Any]) -> dict[str, list[str]]:

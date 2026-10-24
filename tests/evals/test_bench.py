@@ -4,7 +4,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from fastbrowse.evals.bench import agent_environment, compare_runs, corpus, run_params
+from fastbrowse.evals.bench import agent_environment, compare_runs, corpus, load_run, run_params
 from fastbrowse.evals.replay import (
     EMBEDDED_JSON,
     MISS_STATUS,
@@ -265,3 +265,12 @@ def test_chrome_target_ids_are_numbered_and_swapped_back() -> None:
     cassette.exchanges.append(_exchange(JEV, state(old_a, old_b), json.dumps({"choice": old_b})))
     with Proxy(cassette) as base:
         assert _post(base, JEV, state(new_a, new_b)).json() == {"choice": new_b}
+
+
+def test_a_run_still_going_is_not_compared(tmp_path: Path) -> None:
+    path = tmp_path / "run.json"
+    path.write_text(json.dumps({"meta": {}, "tasks": [{"task": "a"}]}))
+    with pytest.raises(SystemExit, match="still going"):
+        load_run(path)
+    path.write_text(json.dumps({"meta": {"finished": "2026-10-23T00:00:00+00:00"}, "tasks": []}))
+    assert load_run(path)["tasks"] == []
