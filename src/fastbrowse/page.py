@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
 
-from pydantic import Field
+from pydantic import Field, field_serializer
 
 from fastbrowse.models import Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome, Unavailable
 
@@ -81,6 +81,12 @@ class Control(Frozen):
     """A link the page marks `rel="next"`: the next page of the list it belongs to."""
     download: bool | None = None
     """A link the page marks with a `download` attribute: activating it saves a file instead of opening a page."""
+
+    @field_serializer("operations", when_used="json")
+    def _sorted_operations(self, operations: frozenset[Operation]) -> list[Operation]:
+        # A frozenset of strings iterates in hash order, which changes with each process's hash seed, so the
+        # same control reached the field writer's prompt as ["click", "fill"] in one run and reversed in the next.
+        return sorted(operations)
 
 
 _ARROWS = "›»→>"  # noqa: RUF001 - the chevrons pagers draw, not a typo for ">"
