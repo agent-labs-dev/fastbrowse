@@ -470,17 +470,163 @@ def commands(run: str, rust: Path) -> tuple[list[str], list[str]]:
     return python, [str(rust), "serve", "--stdio", "--run-task", f"scripted_run:{run}"]
 
 
+# MCP over stdio, the server started with tests/test_mcp_server.py's `Recorder` standing where `run_task` does.
+MCP_INIT = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}},
+}
+MCP_START = "https://shop.example.com/cart"
+
+
+def tool(request_id: int, arguments: Any, token: Any = None, name: str = "browse") -> dict[str, Any]:
+    params: dict[str, Any] = {"name": name, "arguments": arguments}
+    if token is not None:
+        params["_meta"] = {"progressToken": token}
+    return call(request_id, "tools/call", params)
+
+
+MCP_CASES: list[tuple[str, list[str], list[dict[str, Any]]]] = [
+    (
+        "handshake and listings",
+        [],
+        [
+            send(call(0, "tools/list")),
+            send(MCP_INIT | {"params": MCP_INIT["params"] | {"protocolVersion": "1999-01-01"}}),
+            send({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+            send(call(2, "tools/list")),
+            send(call(3, "ping")),
+            send(call(4, "resources/list")),
+            send(call(5, "resources/templates/list")),
+            send(call(6, "prompts/list")),
+            send(call(7, "nope")),
+            send(call(8, "logging/setLevel", {"level": "info"})),
+            send(call(9, "resources/read", {"uri": "file:///x"})),
+            send(call(10, "prompts/get", {"name": "x"})),
+            send(call("s", "tools/list", {"cursor": "abc"})),
+            CLOSE,
+        ],
+    ),
+    (
+        "a call that runs",
+        ["--downloads", "{scratch}/dl"],
+        [
+            send(MCP_INIT),
+            send(tool(2, {"task": "What does the backpack cost?", "start": MCP_START}, token="p1")),
+            send(tool(3, {"task": "t", "start": MCP_START, "max_steps": 500, "max_dollars": 9.0, "max_seconds": 10})),
+            send(tool(4, {"task": "t", "max_steps": 3}, token=7)),
+            CLOSE,
+        ],
+    ),
+    (
+        "calls refused",
+        [],
+        [
+            send(MCP_INIT),
+            send(tool(2, {"task": "Buy it", "start": MCP_START, "authorize": True})),
+            send(tool(3, {"task": ""})),
+            send(tool(4, {})),
+            send(call(5, "tools/call", {"name": "browse"})),
+            send(tool(6, {"task": "t", "max_steps": 0, "fields": {"a b": {"type": "string"}}})),
+            send(tool(7, {"task": "t", "fields": {"a b": {"type": "string"}, "json": {"type": "date"}}})),
+            send(tool(8, {"task": "t", "fields": {f"f{i}": {"type": "string"} for i in range(21)}})),
+            send(tool(9, {"task": "t", "start": "file:///etc/passwd"})),
+            send(tool(10, {"task": "t", "start": "shop.example.com"})),
+            send(tool(11, {"task": "x" * 5000})),
+            send(
+                tool(
+                    12,
+                    {
+                        "task": "x" * 75,
+                        "max_steps": "abc",
+                        "max_dollars": -1,
+                        "authorize": "maybe",
+                        "fields": {"a": {"type": "uuid"}, "b": 5},
+                        "start": 5,
+                    },
+                )
+            ),
+            send(tool(13, {"task": "t", "max_steps": 1.5, "bitwarden": ["x"]})),
+            send(tool(14, {"task": "t", "start": "null", "bitwarden": "[1]", "max_steps": "2"})),
+            send(tool(15, {"task": "t", "bitwarden": "Bank"})),
+            send(tool(16, {"task": "t", "bitwarden": "Bank", "start": MCP_START})),
+            send(tool(17, {}, name="other")),
+            CLOSE,
+        ],
+    ),
+    (
+        "secrets and an operator who allows authorize",
+        [
+            "--secret",
+            "password=SHOP_PW@https://Shop.example.com",
+            "--bitwarden",
+            "Shop",
+            "--allow-authorize",
+            "--max-steps",
+            "20",
+        ],
+        [
+            send(MCP_INIT),
+            send(call(2, "tools/list")),
+            send(tool(3, {"task": "Buy it", "start": MCP_START, "authorize": True, "max_steps": 50}, token="z")),
+            send(tool(4, {"task": "t", "bitwarden": "Bank", "start": MCP_START})),
+            CLOSE,
+        ],
+    ),
+]
+
+MCP_PYTHON = """
+from fastbrowse import mcp_server
+from tests.test_mcp_server import Recorder
+
+build = mcp_server.build_server
+mcp_server.build_server = lambda config, **options: build(config, runner=Recorder(), **options)
+mcp_server.main()
+"""
+
+
+def compare(
+    cases: list[tuple[str, tuple[list[str], list[str]], list[dict[str, Any]]]],
+    env: dict[str, str],
+    scratch: str,
+    show: bool,
+) -> tuple[int, int]:
+    """Run each transcript on both sides; the count of transcripts that differ, and of lines compared."""
+    failed = lines = 0
+    for name, (python_command, rust_command), steps in cases:
+        # Run from a directory with no `.env`, so neither side reads a checkout's settings.
+        started = time.perf_counter()
+        expected = transcript(python_command, env, scratch, steps)
+        actual = transcript(rust_command, env, scratch, steps)
+        same = expected == actual
+        lines += sum(len(group) for group in expected)
+        failed += not same
+        print(f"{'ok  ' if same else 'DIFF'} {name} ({time.perf_counter() - started:.1f}s)")
+        if not same or show:
+            for index, (want, got) in enumerate(zip(expected, actual, strict=True)):
+                if want != got or show:
+                    print(f"  step {index}:")
+                    for line in want:
+                        print(f"    python {line}")
+                    for line in got:
+                        print(f"    rust   {line}")
+    return failed, lines
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--rust", type=Path, default=REPO / "target" / "debug" / "fastbrowse")
     parser.add_argument("--only", help="run the cases whose name contains this")
     parser.add_argument("--show", action="store_true", help="print every transcript, not only differences")
-    parser.add_argument("--cli", action="store_true", help="compare only the CLI's command lines")
+    parser.add_argument("--part", choices=("serve", "cli", "mcp"), help="compare only this entry point")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory() as scratch:
         # `--record` is refused without an ffmpeg, and this machine may have none.
         (Path(scratch) / "ffmpeg").write_text("#!/bin/sh\n")
         (Path(scratch) / "ffmpeg").chmod(0o755)
+        # The MCP server is the same binary under another name.
+        (Path(scratch) / "fastbrowse-mcp").symlink_to(args.rust.resolve())
         env = {
             "PATH": f"{scratch}{os.pathsep}{os.environ['PATH']}",
             "HOME": os.environ.get("HOME", scratch),
@@ -488,36 +634,30 @@ def main() -> int:
             "OPENROUTER_API_KEY": "unused",
             "AI_GATEWAY_API_KEY": "unused",
             "BROWSER_USE_API_KEY": "unused",
+            "SHOP_PW": "hunter2",
         }
+
+        def wanted(part: str, name: str) -> bool:
+            return args.part in (None, part) and (not args.only or args.only in name)
+
         failed = 0
-        lines = 0
-        for name, run, steps in CASES:
-            if (args.only and args.only not in name) or args.cli:
-                continue
-            python_command, rust_command = commands(run, args.rust)
-            # Run from a directory with no `.env`, so neither side reads a checkout's settings.
-            started = time.perf_counter()
-            expected = transcript(python_command, env, scratch, steps)
-            actual = transcript(rust_command, env, scratch, steps)
-            same = expected == actual
-            lines += sum(len(group) for group in expected)
-            failed += not same
-            print(f"{'ok  ' if same else 'DIFF'} {name} ({time.perf_counter() - started:.1f}s)")
-            if not same or args.show:
-                for index, (want, got) in enumerate(zip(expected, actual, strict=True)):
-                    if want != got or args.show:
-                        print(f"  step {index}:")
-                        for line in want:
-                            print(f"    python {line}")
-                        for line in got:
-                            print(f"    rust   {line}")
-        print(
-            f"{failed} of {len(CASES) if not args.only else 'the selected'} transcripts differ; {lines} lines compared"
-        )
-        if args.only:
-            return 1 if failed else 0
+        serve_cases = [(name, commands(run, args.rust), steps) for name, run, steps in CASES if wanted("serve", name)]
+        serve_failed, lines = compare(serve_cases, env, scratch, args.show)
+        print(f"serve: {serve_failed} of {len(serve_cases)} transcripts differ; {lines} lines compared")
+        failed += serve_failed
+        mcp_cases = []
+        for name, flags, steps in MCP_CASES:
+            if wanted("mcp", name):
+                flags = [flag.format(scratch=scratch) for flag in flags]
+                python = [str(PYTHON), "-c", MCP_PYTHON, *flags]
+                rust = [str(Path(scratch) / "fastbrowse-mcp"), "--run-task", "tests.test_mcp_server:Recorder", *flags]
+                mcp_cases.append((f"mcp: {name}", (python, rust), steps))
+        mcp_failed, lines = compare(mcp_cases, env, scratch, args.show)
+        print(f"mcp: {mcp_failed} of {len(mcp_cases)} transcripts differ; {lines} lines compared")
+        failed += mcp_failed
+        cli_cases = [argv for argv in CLI_CASES if wanted("cli", " ".join(argv))]
         cli_failed = 0
-        for argv in CLI_CASES:
+        for argv in cli_cases:
             python = cli_outcome([str(PYTHON), "-c", "from fastbrowse.cli import main; main()", *argv], env, scratch)
             rust = cli_outcome([str(args.rust), *argv], env, scratch)
             same = python == rust
@@ -527,8 +667,9 @@ def main() -> int:
                 for label, want, got in zip(("stdout", "stderr", "exit"), python, rust, strict=True):
                     if want != got or args.show:
                         print(f"  {label}:\n    python {want!r}\n    rust   {got!r}")
-        print(f"{cli_failed} of {len(CLI_CASES)} command lines differ")
-    return 1 if failed or cli_failed else 0
+        print(f"cli: {cli_failed} of {len(cli_cases)} command lines differ")
+        failed += cli_failed
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

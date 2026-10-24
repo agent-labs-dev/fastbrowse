@@ -373,10 +373,12 @@ pub struct McpArgs {
     pub max_concurrent: i64,
     pub downloads: Option<PathBuf>,
     pub cursor: bool,
+    /// A stand-in run by name, as `serve --run-task` takes one, for tests that start this command.
+    pub run_task: Option<String>,
 }
 
 pub fn parser() -> Parser {
-    Parser {
+    let mut parser = Parser {
         prog: "fastbrowse-mcp",
         help: include_str!("../../generated/mcp.txt"),
         version: None,
@@ -401,7 +403,11 @@ pub fn parser() -> Parser {
         ],
         positional: None,
         exclusive: Vec::new(),
+    };
+    if cfg!(feature = "scripted") {
+        parser.options.push(Opt::value("--run-task"));
     }
+    parser
 }
 
 pub fn parse(argv: &[String]) -> Result<McpArgs, Exit> {
@@ -433,6 +439,7 @@ pub fn parse(argv: &[String]) -> Result<McpArgs, Exit> {
         max_concurrent: parsed.value("--max-concurrent").and_then(py_int).unwrap_or(1),
         downloads: parsed.value("--downloads").map(PathBuf::from),
         cursor: parsed.flag("--cursor"),
+        run_task: parsed.value("--run-task").map(str::to_string),
     })
 }
 

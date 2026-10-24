@@ -38,6 +38,18 @@ impl Body for Payload {
             Payload::Events(events) => events.poll_recv(context).map(|event| event.map(|bytes| Ok(Frame::data(bytes)))),
         }
     }
+
+    // A known length is written as `content-length`, as uvicorn writes it; an event stream is chunked.
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        match self {
+            Payload::Full(bytes) => hyper::body::SizeHint::with_exact(bytes.as_ref().map_or(0, |b| b.len() as u64)),
+            Payload::Events(_) => hyper::body::SizeHint::default(),
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        matches!(self, Payload::Full(None))
+    }
 }
 
 type Reply = Response<Payload>;
@@ -348,6 +360,11 @@ pub async fn serve(server: Arc<McpServer>, host: &str, port: i64) -> std::io::Re
     };
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     eprintln!("fastbrowse-mcp: serving on http://{host}:{port}/mcp");
+    serve_on(listener, server, host).await
+}
+
+/// Serve on a socket already bound, as `host` names the address it was bound to.
+pub async fn serve_on(listener: tokio::net::TcpListener, server: Arc<McpServer>, host: &str) -> std::io::Result<()> {
     let http = Http::new(server, host);
     loop {
         let (stream, _) = listener.accept().await?;

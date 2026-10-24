@@ -86,7 +86,15 @@ fn mcp_command(argv: &[String]) -> i32 {
             return 1;
         }
     };
-    let server = mcp::McpServer::new(config, default_runner());
+    #[cfg(feature = "scripted")]
+    let runner = args
+        .run_task
+        .as_deref()
+        .and_then(|name| fastbrowse_cli::scripted::named(name, Arc::default()))
+        .unwrap_or_else(default_runner);
+    #[cfg(not(feature = "scripted"))]
+    let runner = default_runner();
+    let server = mcp::McpServer::new(config, runner);
     runtime().block_on(async move {
         if args.transport == "stdio" {
             mcp::serve_stdio(server).await;

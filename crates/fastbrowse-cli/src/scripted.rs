@@ -184,11 +184,61 @@ async fn run(name: &str, args: RunArgs, requests: Requests) -> Outcome {
             emit(&args, step(0)).await;
             Ok(RunResult { data: json!(2), ..result(Status::Complete) })
         }
+        // tests/test_mcp_server.py's `Recorder`: the events a run sends, then a cited answer with a download.
+        "tests.test_mcp_server:Recorder" => {
+            emit(&args, browser(Some("https://live.example.com/session"), None)).await;
+            let answered = mcp_result();
+            for index in 0..answered.steps.len() {
+                emit(&args, mcp_step(index as i64)).await;
+            }
+            Ok(answered)
+        }
         _ => Err(RunError::Failed(format!("NameError: {name}"))),
     }
 }
 
-const NAMES: [&str; 15] = [
+const START: &str = "https://shop.example.com/cart";
+
+fn mcp_step(index: i64) -> Event {
+    let Event::Step(mut event) = step(index) else { unreachable!("step() makes a step event") };
+    event.step.url = START.into();
+    event.step.target = Some("Add to cart".into());
+    event.step.duration_ms = 5;
+    Event::Step(event)
+}
+
+fn parsed<T: serde::de::DeserializeOwned>(value: Value) -> T {
+    serde_json::from_value(value).expect("a model the tests write")
+}
+
+fn mcp_result() -> RunResult {
+    let steps = (0..2).map(|index| match mcp_step(index) {
+        Event::Step(event) => event.step,
+        Event::Browser(_) => unreachable!("mcp_step() makes a step event"),
+    });
+    RunResult {
+        answer: Some("The backpack costs $29.99.".into()),
+        data: json!({"price": 29.99}),
+        evidence: vec![parsed(json!({
+            "source_id": "s1", "url": START, "frame_id": null, "captured_at": "2026-09-19T00:00:00Z",
+            "capture_sha256": "0".repeat(64), "start": 0, "end": 6, "quote": "$29.99",
+        }))],
+        steps: steps.collect(),
+        cost: parsed(json!({"lines": [
+            {"component": "jev", "basis": "metered", "dollars": 0.004},
+            {"component": "browser", "basis": "unknown"},
+        ]})),
+        artifacts: vec![parsed(json!({
+            "kind": "download", "name": "receipt.pdf", "mime_type": "application/pdf", "size_bytes": 10,
+            "sha256": "1".repeat(64), "uri": "file:///downloads/receipt.pdf",
+        }))],
+        final_url: Some(START.into()),
+        ..result(Status::Complete)
+    }
+}
+
+const NAMES: [&str; 16] = [
+    "tests.test_mcp_server:Recorder",
     "tests.serve_scripts:echo",
     "tests.serve_scripts:browse_until_cancelled",
     "tests.serve_scripts:type_secret",

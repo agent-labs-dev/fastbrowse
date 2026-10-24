@@ -33,4 +33,4 @@ sha1 = { version = "0.10", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "time", "macros", "sync", "net", "test-util"] }
+tokio = { version = "1", features = ["rt", "time", "macros", "sync", "net", "io-util", "test-util"] }
