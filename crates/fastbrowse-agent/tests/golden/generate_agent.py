@@ -817,6 +817,28 @@ def scenarios() -> list[dict[str, Any]]:
         limits={"max_steps": 3},
     )
 
+    sign_in = screen(
+        "https://shop.test/login",
+        "Sign in",
+        "Sign in\n\nThe code is on the Phone page.",
+        [control("phone", "link", "Phone", "click", href="https://phone.test/")],
+    )
+    phone = screen("https://phone.test/", "Phone", "Phone\n\nCode: 123456.", [])
+    scenario(
+        "NAVIGATE may return to the caller's start page, which the task does not spell out",
+        "Sign in to the shop. The Phone page shows the code.",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "login": sign_in, "phone": phone},
+            "urls": {"https://shop.test/login": "login"},
+            "actions": [{"screen": "login", "operation": "click", "target": "phone", "next": "phone"}],
+        },
+        {"Plan": [plan(("a1", "Sign in", "action"), answer=False)]},
+        start="https://shop.test/login",
+        jev={"pick": {"operation": ["click", "navigate", "done"]}, "noul": 0.95, "nouls": {"irreversible": 0.0}},
+        limits={"max_steps": 3},
+    )
+
     redirect = screen("https://elsewhere.test/", "Elsewhere", "Elsewhere\n\nNot the site.", [])
     scenario(
         "a shortcut that lands on another site returns to the start page",

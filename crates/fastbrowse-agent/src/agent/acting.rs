@@ -131,7 +131,7 @@ impl Agent {
                 let observed = decision.directed
                     && decision.url.as_ref().is_some_and(|url| state.observed_links.contains_key(url));
                 let Some(url) = decision.url.clone().filter(|url| {
-                    task_urls(&state.task, state.caller_start.as_deref(), false).contains(url) || observed
+                    task_urls(&state.task, state.caller_start.as_deref(), true).contains(url) || observed
                 }) else {
                     return Err(Stop::new(Status::Stuck, "navigation address was not supplied by the caller").into());
                 };
