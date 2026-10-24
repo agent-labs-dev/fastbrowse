@@ -595,7 +595,7 @@ async fn handshake(driver: &Driver, session: &str) -> Result<(), Failure> {
     Ok(())
 }
 
-async fn open(binary: &Path) -> Option<CursorFeedback> {
+pub(crate) async fn open(binary: &Path) -> Option<CursorFeedback> {
     let driver = match Driver::spawn(binary) {
         Ok(driver) => driver,
         Err(error) => {

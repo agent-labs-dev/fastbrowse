@@ -1,1 +1,77 @@
 //! Test seams added for the safety, speed and serve suites; see the module docs of `testing`.
+
+use std::sync::{Arc, Mutex};
+
+use fastbrowse_core::origins::OriginGrant;
+use tokio::sync::watch;
+use tokio::time::Instant;
+
+use crate::cdp::secs;
+use crate::page::act::Point;
+use crate::page::{CdpPage, FRAME_READ_SECONDS, FRAME_RECHECK_SECONDS, SETTLE_QUIET_SECONDS, SETTLE_SECONDS};
+use crate::session::{BrowserSession, Shared, State};
+use crate::shared::{Attachment, BrowserError, Config, StepOutcome};
+
+/// `page_module._SETTLE_SECONDS`: the longest an action waits for the page to settle.
+pub fn settle_seconds() -> f64 {
+    SETTLE_SECONDS
+}
+
+/// `page_module._SETTLE_QUIET_SECONDS`: how long the DOM must be still to count as settled.
+pub fn settle_quiet_seconds() -> f64 {
+    SETTLE_QUIET_SECONDS
+}
+
+/// `page_module._FRAME_READ_SECONDS`: a child frame's full read budget.
+pub fn frame_read_seconds() -> f64 {
+    FRAME_READ_SECONDS
+}
+
+/// As if `page_module._FRAME_RECHECK_SECONDS` had passed since each frame missed its deadline, so the next read
+/// gives every such frame its full budget again.
+pub fn expire_frame_rechecks(page: &CdpPage) {
+    let past = Instant::now().checked_sub(secs(FRAME_RECHECK_SECONDS)).expect("monotonic clock far enough along");
+    for missed in page.state.lock().unwrap().unanswered.values_mut() {
+        *missed = past;
+    }
+}
+
+/// `await page._upload(page._last.controls[control_id], files, (1.0, 1.0))`.
+///
+/// With `grant`, the upload runs as if `session._grant = OriginGrant(grant)` had been set first: through a page on
+/// a session that shares this one's socket, tabs and active tab, and differs only in its grant.
+pub async fn upload(
+    page: &CdpPage,
+    control_id: &str,
+    files: &[Attachment],
+    grant: Option<Vec<String>>,
+) -> Result<(StepOutcome, Option<String>), BrowserError> {
+    let target = page.state.lock().unwrap().last.as_ref().and_then(|l| l.controls.get(control_id).cloned());
+    let target = target.expect("the control was observed");
+    let Some(grant) = grant else { return page.upload(Some(&target), files, Point::At(1.0, 1.0)).await };
+    let shared = &page.session().0;
+    let mut origins = grant.clone();
+    origins.sort();
+    let state = {
+        let state = shared.state.lock().unwrap();
+        State { tabs: state.tabs.clone(), active_target_id: state.active_target_id.clone(), ..State::default() }
+    };
+    let mut connection = shared.connection.clone();
+    connection.allowed_origins = Some(grant.clone());
+    let sibling = BrowserSession(Arc::new(Shared {
+        connection,
+        check_access: None,
+        grant: Some(OriginGrant::new(grant)),
+        origins,
+        artifact_sink: shared.artifact_sink.clone(),
+        max_download_bytes: shared.max_download_bytes,
+        new_document_scripts: vec![],
+        on_frame: None,
+        client: Mutex::new(shared.client.lock().unwrap().clone()),
+        state: Mutex::new(state),
+        dialog_opened: watch::channel(0).0,
+        popup_signal: watch::channel(0).0,
+        screencast_lock: tokio::sync::Mutex::new(()),
+    }));
+    CdpPage::new(sibling, Config::default()).upload(Some(&target), files, Point::At(1.0, 1.0)).await
+}

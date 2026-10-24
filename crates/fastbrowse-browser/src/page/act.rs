@@ -309,7 +309,11 @@ impl CdpPage {
 
     /// Where the active page's viewport sits in its window, as the page itself reports it.
     #[cfg(feature = "cursor")]
-    fn cursor_geometry(&self, expected_session: String, expected_document: String) -> crate::cursor::GeometryFn {
+    pub(crate) fn cursor_geometry(
+        &self,
+        expected_session: String,
+        expected_document: String,
+    ) -> crate::cursor::GeometryFn {
         use crate::cursor::Geometry;
         let session = self.session.clone();
         let pid = self.cursor_pid.clone();
@@ -373,7 +377,7 @@ impl CdpPage {
         })
     }
 
-    async fn form_unchanged(&self, target: &Target, text: &str) -> bool {
+    pub(crate) async fn form_unchanged(&self, target: &Target, text: &str) -> bool {
         if self.session.pending_dialog().is_some() || Some(&target.0) != self.session.active_session_id().ok().as_ref()
         {
             return false;
@@ -985,7 +989,7 @@ impl CdpPage {
         self.session.send("Input.dispatchMouseEvent", params, Some(&session_id)).await.map(drop)
     }
 
-    async fn back(&self) -> Result<Outcome, BrowserError> {
+    pub(crate) async fn back(&self) -> Result<Outcome, BrowserError> {
         // History can change between the observation that offered BACK and this dispatch, so the predicate that gated
         // it is checked again against the live history rather than trusted from the stale observation.
         let session_id = self.session.active_session_id()?;
@@ -1005,7 +1009,7 @@ impl CdpPage {
         }
     }
 
-    async fn upload(
+    pub(crate) async fn upload(
         &self,
         target: Option<&Target>,
         files: &[Attachment],
@@ -1246,7 +1250,10 @@ impl CdpPage {
     /// CDP answers an input event only after the page's handlers return, and `confirm()` inside a handler does not
     /// return until the dialog is handled; the event has been delivered either way. Dropping the wait for the answer
     /// does not undo an event already delivered to a dialog handler.
-    async fn input(&self, send: impl Future<Output = Result<Value, BrowserError>>) -> Result<(), BrowserError> {
+    pub(crate) async fn input(
+        &self,
+        send: impl Future<Output = Result<Value, BrowserError>>,
+    ) -> Result<(), BrowserError> {
         tokio::select! {
             sent = send => sent.map(drop),
             () = self.session.wait_for_dialog() => Ok(()),

@@ -4,7 +4,7 @@
 //! offscreen targets, password masking and the offscreen-nearest cap are ported from jev-ultrafast (MIT):
 //! jev_ultrafast/browser.py and jev_ultrafast/snapshot.js. `act` dispatches at most once per call.
 
-mod act;
+pub(crate) mod act;
 pub mod scripts;
 
 use std::collections::{HashMap, HashSet};
@@ -248,9 +248,9 @@ pub(crate) struct PageState {
 pub struct CdpPage {
     session: BrowserSession,
     config: Config,
-    page_js: String,
+    pub(crate) page_js: String,
     capture_js: String,
-    fingerprint_js: String,
+    pub(crate) fingerprint_js: String,
     pub(crate) state: Mutex<PageState>,
     #[cfg(feature = "cursor")]
     cursor: Option<Arc<crate::cursor::CursorFeedback>>,

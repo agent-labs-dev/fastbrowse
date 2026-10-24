@@ -227,6 +227,33 @@ pub struct Harness {
     pub session: BrowserSession,
     pub page: CdpPage,
     pub sink: Arc<RecordingArtifactSink>,
+    _turn: Turn,
+}
+
+/// One browser test at a time per binary, as pytest runs them: a tab behind another is throttled, so parallel tests
+/// measured settles and scroll waits that no run sees, and Chrome refuses a burst of DevTools handshakes. A test that
+/// opens a second session already holds the turn, so the turn is counted per test thread rather than taken twice.
+pub struct Turn(Option<tokio::sync::OwnedSemaphorePermit>);
+
+thread_local! {
+    static HELD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Wait for this test's turn on the shared Chrome; held until the returned value drops.
+pub async fn turn() -> Turn {
+    static TURNS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+    let held = HELD.with(|held| held.replace(held.get() + 1));
+    if held > 0 {
+        return Turn(None);
+    }
+    let turns = TURNS.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1))).clone();
+    Turn(Some(turns.acquire_owned().await.expect("turns are never closed")))
+}
+
+impl Drop for Turn {
+    fn drop(&mut self) {
+        HELD.with(|held| held.set(held.get().saturating_sub(1)));
+    }
 }
 
 impl Harness {
@@ -249,11 +276,12 @@ pub async fn harness_with(config: Config, options: SessionOptions) -> Option<Har
 }
 
 pub async fn harness_on(connection: BrowserConnection, config: Config, options: SessionOptions) -> Option<Harness> {
+    let turn = turn().await;
     let sink = Arc::new(RecordingArtifactSink::default());
     let session = BrowserSession::new(connection, sink.clone(), options);
     session.open().await.expect("session opens");
     let page = CdpPage::new(session.clone(), config);
-    Some(Harness { session, page, sink })
+    Some(Harness { session, page, sink, _turn: turn })
 }
 
 /// conftest's `page` fixture: a fresh session with the default config.
