@@ -420,7 +420,12 @@ impl Agent {
         if check.verdict == DoneVerdict::Verify {
             // Write the answer while the verifier is still deciding. Both read the same finished notes, and every
             // accepted run wants an answer, so the whole cost of guessing wrong is one discarded call.
-            let drafting = plan.page_answer_expected() && check.answer.is_none() && state.verified_answer.is_none();
+            // A verdict already in hand, from the verifier sent beside the audit, needs no answer drafted against it:
+            // Python cancels that draft before it starts when its verifier has already answered.
+            let drafting = plan.page_answer_expected()
+                && check.answer.is_none()
+                && state.verified_answer.is_none()
+                && verifying.is_none();
             let request = match verifying.take() {
                 Some(judged) => Err(judged),
                 None => Ok(self.verify_request(state, &fresh, &check).await?),

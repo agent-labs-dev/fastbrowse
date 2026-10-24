@@ -35,7 +35,6 @@ from fastbrowse.models import (
     Limits,
     LLMPurpose,
     Operation,
-    SecretRef,
     StepEvent,
     StepOutcome,
 )
@@ -110,6 +109,9 @@ class FakeSite:
         return Capture.model_validate(self._screen()["capture"])
 
     async def act(self, action: Action, observation: Observation) -> ActResult:
+        if action.operation is Operation.NAVIGATE and action.url is not None:
+            await self.navigate(action.url)
+            return ActResult(outcome=StepOutcome.EXECUTED, page_changed=True)
         if action.operation is Operation.BACK and self.back:
             self.screen = self.back.pop()
             return ActResult(outcome=StepOutcome.EXECUTED, page_changed=True)
@@ -194,6 +196,7 @@ class RecordingJev:
 
 DEFAULT_REPLIES: dict[str, list[JsonValue]] = {
     "Shortcut": [{"url": None}],
+    "_AnswerDraft": [{"claims": []}],
     "LLMVerdict": [{"missing": [], "complete": False}],
     "_ReadResponse": [{"claims": [], "answered": False}],
     "_Recovery": [{"diagnosis": "No way forward", "next_subgoal": "Stop", "give_up": True}],
@@ -330,6 +333,7 @@ def scenarios() -> list[dict[str, Any]]:
         {
             "Plan": [plan(("r1", "Find the last order total", "information"))],
             "Shortcut": [{"url": None}],
+            "_AnswerDraft": [{"claims": []}],
             "_AnswerChecks": [{"checks": ["the order total"]}],
         },
         start=home,
@@ -348,6 +352,7 @@ def scenarios() -> list[dict[str, Any]]:
         {
             "Plan": [plan(("r1", "Find the blue mug's price", "information"))],
             "Shortcut": [{"url": None}],
+            "_AnswerDraft": [{"claims": []}],
             "_AnswerChecks": [{"checks": ["the price"]}],
         },
         start=home,
@@ -389,6 +394,7 @@ def scenarios() -> list[dict[str, Any]]:
         {
             "Plan": [plan(("a1", "Place the order", "action"), answer=False)],
             "Shortcut": [{"url": None}],
+            "_AnswerDraft": [{"claims": []}],
             "_Recovery": [{"diagnosis": "Nothing left", "next_subgoal": "Stop", "give_up": True}],
         },
         start="https://shop.test/cart",
@@ -430,6 +436,7 @@ def scenarios() -> list[dict[str, Any]]:
         {
             "Plan": [plan(("r1", "Find who wrote Dune", "information"))],
             "Shortcut": [{"url": None}],
+            "_AnswerDraft": [{"claims": []}],
             "_AnswerChecks": [{"checks": ["the author of Dune"]}],
             "_FieldText": [{"missing": False, "text": "dune"}],
             "_ReadResponse": [{"claims": [], "answered": False}],
@@ -450,6 +457,7 @@ def scenarios() -> list[dict[str, Any]]:
         {
             "Plan": [plan(("r1", "Find who wrote Dune", "information"))],
             "Shortcut": [{"url": None}],
+            "_AnswerDraft": [{"claims": []}],
             "_AnswerChecks": [{"checks": ["the author of Dune"]}],
             "_FieldText": [{"missing": False, "text": "dune"}],
         },
@@ -482,6 +490,7 @@ def scenarios() -> list[dict[str, Any]]:
         {
             "Plan": [plan(("r1", "Find the returns policy", "information"))],
             "Shortcut": [{"url": None}],
+            "_AnswerDraft": [{"claims": []}],
             "_AnswerChecks": [{"checks": ["the returns policy"]}],
             "_Recovery": [{"diagnosis": "The page is gone", "next_subgoal": "Stop", "give_up": True}],
         },
@@ -506,6 +515,7 @@ def scenarios() -> list[dict[str, Any]]:
         {
             "Plan": [plan(("r1", "Find the latest version", "information"))],
             "Shortcut": [{"url": None}],
+            "_AnswerDraft": [{"claims": []}],
             "_AnswerChecks": [{"checks": ["the latest version"]}],
             "_ReadResponse": [{"claims": [], "answered": False}],
             "_Recovery": [{"diagnosis": "Stuck", "next_subgoal": "Stop", "give_up": True}],
@@ -563,6 +573,7 @@ def scenarios() -> list[dict[str, Any]]:
         {
             "Plan": [plan(("a1", "Fill the contact form as Ada Lovelace", "action"), answer=False)],
             "Shortcut": [{"url": None}],
+            "_AnswerDraft": [{"claims": []}],
             "_FormText": [
                 {
                     "fields": [
@@ -639,11 +650,213 @@ def scenarios() -> list[dict[str, Any]]:
         {
             "Plan": [plan(("a1", "Choose business class", "action"), answer=False)],
             "Shortcut": [{"url": None}],
+            "_AnswerDraft": [{"claims": []}],
             "_Recovery": [recovery("Unsure which control", "Select business class", control=0, operation="select")],
         },
         start="https://travel.test/",
         jev={"pick": {"operation": "select", "pick": "1"}, "noul": 0.1, "confidence": 0.3},
         limits={"max_steps": 1},
+    )
+    article = screen(
+        "https://wiki.test/Dune",
+        "Dune",
+        "Dune (novel)\n\nDune is a 1965 novel by Frank Herbert.",
+        [control("talk", "link", "Talk", "click", href="/Talk:Dune")],
+    )
+    lookup_site = {
+        "start": "blank",
+        "screens": {"blank": screen("about:blank", "", ""), "article": article},
+        "urls": {"https://wiki.test/Dune": "article"},
+    }
+    lookup_llm = {
+        "Plan": [plan(("r1", "Find who wrote Dune", "information"), checks=["the author of Dune"])],
+        "_AnswerChecks": [{"checks": ["the author of Dune"]}],
+        "LLMVerdict": [{"missing": [], "complete": True}],
+    }
+    scenario(
+        "a read by Jev's choice, a done check the verifier settles, and a cited answer complete with frames",
+        "Who wrote Dune? Use https://wiki.test/Dune",
+        lookup_site,
+        lookup_llm,
+        start="https://wiki.test/Dune",
+        step_frames=True,
+        jev={"pick": {"operation": "read", "r1": "c1"}, "noul": 0.5, "nouls": {"draft_needs_writing": 0.0}},
+    )
+    scenario(
+        "an until check that refuses the final address sends the run back to recovery",
+        "Who wrote Dune? Use https://wiki.test/Dune",
+        lookup_site,
+        lookup_llm,
+        start="https://wiki.test/Dune",
+        until=["https://wiki.test/elsewhere"],
+        jev={"pick": {"operation": "read", "r1": "c1"}, "noul": 0.95, "nouls": {"draft_needs_writing": 0.0}},
+    )
+    scenario(
+        "the LLM reader cites a block and Jev's done check accepts",
+        "Who wrote Dune? Use https://wiki.test/Dune",
+        lookup_site,
+        {
+            **lookup_llm,
+            "_ReadResponse": [
+                {
+                    "claims": [
+                        {
+                            "requirement_id": "r1",
+                            "text": "Frank Herbert wrote Dune",
+                            "cite": {"first": "s1", "last": "s1"},
+                        }
+                    ],
+                    "answered": True,
+                }
+            ],
+        },
+        start="https://wiki.test/Dune",
+        jev={
+            "pick": {"operation": "read", "r1": "synthesis"},
+            "noul": 0.95,
+            "nouls": {"draft_needs_writing": 0.0, "unmet_r1": 0.0},
+        },
+    )
+
+    first = screen(
+        "https://shop.test/list?page=1",
+        "Mugs",
+        "Mugs, page 1\n\nRed mug $5\n\nBlue mug $7",
+        [control("next", "link", "Next", "click", href="/list?page=2", next_page=True)],
+    )
+    second = screen("https://shop.test/list?page=2", "Mugs", "Mugs, page 2\n\nGreen mug $3", [])
+    scenario(
+        "a list that goes on is paged by code, read to its end and left unverified by its audit",
+        "Find the cheapest mug across every page of https://shop.test/list?page=1",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "p1": first, "p2": second},
+            "urls": {"https://shop.test/list?page=1": "p1", "https://shop.test/list?page=2": "p2"},
+            "actions": [{"screen": "p1", "operation": "click", "target": "next", "next": "p2"}],
+        },
+        {
+            "Plan": [plan(("r1", "Find the cheapest mug across every page", "information"))],
+            "_AnswerChecks": [{"checks": ["the cheapest mug"]}],
+            "_ReadResponse": [
+                {
+                    "claims": [],
+                    "answered": False,
+                    "continues": [
+                        {
+                            "requirement_id": "r1",
+                            "records": [{"first": "s1", "last": "s1"}, {"first": "s2", "last": "s2"}],
+                        }
+                    ],
+                },
+                {
+                    "claims": [
+                        {
+                            "requirement_id": "r1",
+                            "text": "The green mug at $3 is cheapest",
+                            "cite": {"first": "s1", "last": "s1"},
+                        }
+                    ],
+                    "answered": True,
+                },
+            ],
+        },
+        start="https://shop.test/list?page=1",
+        jev={"pick": {"operation": "read", "r1": "synthesis"}, "noul": 0.95, "nouls": {"draft_needs_writing": 0.0}},
+        limits={"max_steps": 8},
+    )
+
+    dialog = screen(
+        "https://mail.test/draft",
+        "Draft",
+        "Draft\n\nDiscard this draft?",
+        [],
+        dialog={"kind": "confirm", "message": "Discard this draft?"},
+    )
+    scenario(
+        "accepting a confirm dialog is gated, and an unauthorized commit stops needs_confirmation",
+        "Discard my draft on https://mail.test/draft",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "draft": dialog},
+            "urls": {"https://mail.test/draft": "draft"},
+        },
+        {"Plan": [plan(("a1", "Discard the draft", "action"), answer=False)]},
+        start="https://mail.test/draft",
+        jev={"pick": {"operation": "dialog", "pick": "accept"}, "noul": 0.9},
+    )
+
+    scenario(
+        "a caller-supplied address is checked as a destination and opened by NAVIGATE",
+        "Compare https://wiki.test/Dune with https://books.test/",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "article": article, "home": search},
+            "urls": {"https://wiki.test/Dune": "article", "https://books.test/": "home"},
+        },
+        {"Plan": [plan(("a1", "Open both pages", "action"), answer=False)]},
+        start="https://wiki.test/Dune",
+        jev={"pick": {"operation": ["navigate", "done"]}, "noul": 0.95, "nouls": {"irreversible": 0.0}},
+        limits={"max_steps": 3},
+    )
+
+    redirect = screen("https://elsewhere.test/", "Elsewhere", "Elsewhere\n\nNot the site.", [])
+    scenario(
+        "a shortcut that lands on another site returns to the start page",
+        "Find the latest httpx version on pypi.test",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "front": front, "away": redirect},
+            "urls": {"https://pypi.test/": "front", "https://pypi.test/project/httpx/": "away"},
+        },
+        {
+            "Plan": [plan(("r1", "Find the latest httpx version", "information"))],
+            "Shortcut": [{"url": "https://pypi.test/project/httpx/"}],
+            "_AnswerChecks": [{"checks": ["the latest httpx version"]}],
+        },
+        start="https://pypi.test/",
+        jev={"pick": {"operation": "escalate"}, "noul": 0.1},
+    )
+
+    gated = screen(
+        "https://forum.test/thread",
+        "Thread",
+        "Thread\n\nNo replies yet.\n\nLog in to reply.",
+        [control("login", "link", "Log in", "click", href="/login")],
+    )
+    scenario(
+        "a sign-in prompt beside readable content is read before it is called a wall",
+        "How many replies does https://forum.test/thread have?",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "thread": gated},
+            "urls": {"https://forum.test/thread": "thread"},
+        },
+        {
+            "Plan": [plan(("r1", "Find how many replies the thread has", "information"))],
+            "_AnswerChecks": [{"checks": ["the reply count"]}],
+        },
+        start="https://forum.test/thread",
+        jev={"pick": {"operation": "read", "r1": "absent"}, "noul": 0.1, "nouls": {"login_required": 0.95}},
+    )
+
+    blank_deep = screen("https://site.test/deep/path", "", "", [])
+    site_front = screen(
+        "https://site.test", "Site", "Site\n\nWelcome.", [control("a", "link", "About", "click", href="/about")]
+    )
+    scenario(
+        "a start page worked out from the task that opens nothing falls back to the front page",
+        "Find the about page of site.test",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "deep": blank_deep, "front": site_front},
+            "urls": {"https://site.test/deep/path": "deep", "https://site.test": "front"},
+        },
+        {
+            "Plan": [plan(("a1", "Open the about page", "action"), answer=False)],
+            "StartPage": [{"url": "https://site.test/deep/path"}],
+        },
+        choose_start=True,
+        jev={"pick": {"operation": "escalate"}, "noul": 0.1},
     )
     return found
 
@@ -681,13 +894,20 @@ def run_scenario(spec: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(event, StepEvent):
             step = event.step.model_dump(mode="json")
             step["duration_ms"] = 0
-            events.append(step)
+            events.append({"step": step, "frame": event.frame is not None})
 
     async def go() -> Any:
         page = FakeSite(spec["site"])
-        agent = Agent(page, jev, llm, config=Config(stall=StallRules()), secrets=secrets, on_event=on_event)
+        config = Config(stall=StallRules(), step_frames=spec.get("step_frames", False))
+        agent = Agent(page, jev, llm, config=config, secrets=secrets, on_event=on_event)
+        accepted = spec.get("until")
+
+        async def until(url: str) -> bool:
+            return url in (accepted or ())
+
         return await agent.run(
             spec["task"],
+            until=until if accepted is not None else None,
             start=spec.get("start"),
             choose_start=spec.get("choose_start", False),
             limits=Limits.model_validate(spec["limits"]) if spec.get("limits") else None,
@@ -716,5 +936,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-_ = SecretRef

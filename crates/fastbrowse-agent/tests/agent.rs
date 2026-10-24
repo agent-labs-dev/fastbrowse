@@ -8,11 +8,12 @@ use std::sync::{Arc, Mutex};
 
 use fastbrowse_agent::agent::{Agent, RunOptions};
 use fastbrowse_core::BoxFuture;
+use fastbrowse_core::config::Config;
 use fastbrowse_core::jev::{Evaluation, JevClient, JevError, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{
     Artifact, Authorization, CostComponent, CostLine, Event, EventHandler, LLMPurpose, Limits, Operation, SecretValue,
-    StepOutcome,
+    StepOutcome, UntilCheck,
 };
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Observation, Page, PageResult};
 use fastbrowse_core::py::dump::Dump;
@@ -84,6 +85,13 @@ impl Page for FakeSite {
             form_unchanged: false,
             moved: false,
         };
+        if action.operation == Operation::Navigate
+            && let Some(screen) = action.url.as_deref().and_then(|url| self.site["urls"][url].as_str())
+        {
+            let left = std::mem::replace(&mut at.0, screen.to_string());
+            at.1.push(left);
+            return ready(Ok(result(StepOutcome::Executed, true)));
+        }
         if action.operation == Operation::Back
             && let Some(back) = at.1.pop()
         {
@@ -151,9 +159,21 @@ impl Replies {
 
     fn take(&self, key: &str) -> Value {
         let mut answers = self.answers.lock().unwrap();
-        let Some(queue) = answers.get_mut(key).filter(|queue| !queue.is_empty()) else {
-            panic!("{}: a request Python never made:\n{key}", self.name);
-        };
+        if !answers.get(key).is_some_and(|queue| !queue.is_empty()) {
+            // Show where the nearest request Python made parts from this one.
+            let shared = |other: &str| key.bytes().zip(other.bytes()).take_while(|(a, b)| a == b).count();
+            let nearest = answers.keys().max_by_key(|other| shared(other)).cloned().unwrap_or_default();
+            let at = shared(&nearest);
+            let around =
+                |text: &str| text.get(at.saturating_sub(200)..(at + 300).min(text.len())).unwrap_or("").to_string();
+            panic!(
+                "{}: a request Python never made, parting at byte {at}:\nRust:   {}\nPython: {}",
+                self.name,
+                around(key),
+                around(&nearest)
+            );
+        }
+        let queue = answers.get_mut(key).unwrap();
         queue.pop_front().unwrap()
     }
 
@@ -252,7 +272,7 @@ async fn replay(case: Value) {
         if let Event::Step(step) = event {
             let mut dumped = step.step.dump();
             dumped["duration_ms"] = 0.into();
-            sink.lock().unwrap().push(dumped);
+            sink.lock().unwrap().push(serde_json::json!({"step": dumped, "frame": step.frame.is_some()}));
         }
         Box::pin(async {})
     });
@@ -264,13 +284,26 @@ async fn replay(case: Value) {
         Arc::new(ScopedSecrets::per_secret(held)) as Arc<dyn fastbrowse_core::models::SecretResolver>
     });
     let page = Arc::new(FakeSite::new(&case["site"]));
-    let agent = Agent::new(page, jev.clone(), llm.clone()).with_secrets(secrets).with_events(Some(on_event));
+    let config = Config { step_frames: case["step_frames"].as_bool().unwrap_or(false), ..Config::default() };
+    let agent = Agent::new(page, jev.clone(), llm.clone())
+        .with_config(config)
+        .with_secrets(secrets)
+        .with_events(Some(on_event));
+    let until = case["until"].as_array().map(|accepted| {
+        let accepted: Vec<String> = accepted.iter().map(|url| url.as_str().unwrap().to_string()).collect();
+        let check: UntilCheck = Arc::new(move |url: String| {
+            let held = accepted.contains(&url);
+            Box::pin(async move { held })
+        });
+        check
+    });
     let options = RunOptions {
         start: case["start"].as_str().map(String::from),
         choose_start: case["choose_start"].as_bool().unwrap_or(false),
         limits: (!case["limits"].is_null()).then(|| serde_json::from_value::<Limits>(case["limits"].clone()).unwrap()),
         authorization: (!case["authorization"].is_null())
             .then(|| serde_json::from_value::<Authorization>(case["authorization"].clone()).unwrap()),
+        until,
         ..RunOptions::default()
     };
     let result = agent.run(case["task"].as_str().unwrap(), options).await.expect("run");
