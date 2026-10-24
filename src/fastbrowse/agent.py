@@ -5317,25 +5317,53 @@ def _unread_transaction(state: _RunState) -> bool:
     )
 
 
-# A page's own statement that it wants a sign-in: a control offering one, whatever language its label is in.
-_SIGN_IN_AFFORDANCE = re.compile(
-    r"\b(sign[\s-]?in|sign[\s-]?on|log[\s-]?in|log[\s-]?on|login|logon|authenticate|authentication|"
-    r"verify|verification|two[\s-]?factor|one[\s-]?time)\b",
+# The words a page puts on a control that offers a sign-in, in the languages sites are commonly written in. A
+# wall whose only affordance is localized is still the page's own statement that it wants a sign-in.
+_SIGN_IN_LABEL = re.compile(
+    r"\b(?:sign[\s-]?in|sign[\s-]?on|log[\s-]?in|log[\s-]?on|login|logon|authenticate|authentication|"
+    r"verify|verification|two[\s-]?factor|one[\s-]?time|sso|saml|oauth|openid|"
+    r"se\s+connecter|connexion|s'?identifier|s'?authentifier|"
+    r"anmelden|anmeldung|einloggen|"
+    r"iniciar\s+sesi[oó]n|acceder|conectarse|"
+    r"iniciar\s+sess[aã]o|acessar|"
+    r"accedi|accedere|connettersi|inloggen|aanmelden|"
+    r"logga\s+in|logg\s+inn|log\s+ind|zaloguj(?:\s+si[eę])?|giri[sş]\s+yap|войти|вход)\b"
+    r"|ログイン|サインイン|登录|登入|로그인|تسجيل\s+الدخول|साइन\s+इन",
+    re.IGNORECASE,
+)
+
+# A federated sign-in names its provider after a continuation word, and neither half says "sign in" alone.
+_SIGN_IN_PROVIDER = re.compile(
+    r"\b(?:continue|proceed|sign|log|mit|avec|con|inloggen|accedi|entrar|entra)\b.{0,24}\b(?:google|github|gitlab|"
+    r"apple|microsoft|azure|okta|onelogin|saml|sso|oauth|openid|facebook|linkedin|twitter|slack|passkey|e-?mail)\b",
+    re.IGNORECASE,
+)
+
+# A link to an authentication endpoint, which says the page wants a sign-in whatever its text is in.
+_SIGN_IN_HREF = re.compile(
+    r"(?:/sso(?:[/?#]|$)|/saml|/oauth|/openid|/authorize|/auth(?:[/?#]|$)|/log-?in(?:[/?#]|$)|/sign-?in(?:[/?#]|$)|"
+    r"/session/new|/users/sign_in|/adfs|/keycloak|/cognito|accounts\.google\.com|login\.microsoftonline\.com|"
+    r"appleid\.apple\.com|github\.com/login|facebook\.com/dialog/oauth)",
     re.IGNORECASE,
 )
 
 
 def _shows_sign_in(observation: Observation) -> bool:
-    """Whether the page itself offers a sign-in to act on: a credential field, or a control naming one.
+    """Whether the page itself offers a sign-in to act on: a credential field, or a control naming or linking one.
 
     Absent controls are not evidence of missing authentication. A run that stopped on a page with neither a
-    credential field nor a sign-in affordance has not been shown a wall, so it is not reported as signed out."""
-    if any(asks_for_credentials(control) for control in observation.controls):
-        return True
-    return any(
-        _SIGN_IN_AFFORDANCE.search(f"{control.label or ''} {control.href or ''}") is not None
-        for control in observation.controls
-    )
+    credential field nor a sign-in affordance has not been shown a wall, so it is not reported as signed out.
+    The affordance is read from the label in the common languages of the web and from the link a control points
+    at, because a wall often offers only `Se connecter`, `Anmelden` or `Continue with Google` at `/sso`."""
+    for control in observation.controls:
+        if asks_for_credentials(control):
+            return True
+        label = control.label or ""
+        if _SIGN_IN_LABEL.search(label) or _SIGN_IN_PROVIDER.search(label):
+            return True
+        if control.href and _SIGN_IN_HREF.search(control.href):
+            return True
+    return False
 
 
 def _code_decision(operation: Operation, target: Control | None) -> Decision:

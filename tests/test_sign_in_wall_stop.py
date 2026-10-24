@@ -9,10 +9,10 @@ from fastbrowse import agent as agent_module
 from fastbrowse.agent import Agent, _code_decision, _Stop
 from fastbrowse.config import Config, StallRules
 from fastbrowse.models import Operation, Status
-from fastbrowse.page import Page
+from fastbrowse.page import Control, Page
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 from fastbrowse.safety import ScopedSecrets
-from tests.test_agent import _at, _button, run_state
+from tests.test_agent import _at, _button, _link, run_state
 from tests.test_policy import ScriptedJev
 from tests.test_retrieval import ScriptedLLM
 
@@ -74,6 +74,36 @@ async def test_recovery_giving_up_at_a_sign_in_ends_the_run_needing_login(stored
     with pytest.raises(_Stop) as stopped:
         await agent._recover(state, obs, "uncertain next step (0.81)")
     assert stopped.value.status is (Status.STUCK if stored else Status.NEEDS_LOGIN)
+
+
+@pytest.mark.parametrize(
+    "control",
+    [
+        # A wall whose only affordance is localized still says it wants a sign-in.
+        _button("Se connecter"),
+        _button("Anmelden"),
+        _button("Iniciar sesión"),
+        _button("Accedi"),
+        _button("ログイン"),
+        # A federated sign-in names its provider, and neither half says "sign in" alone.
+        _link("sso", "Continue with SSO", "/sso"),
+        _link("google", "Continue with Google", "https://accounts.google.com/o/oauth2/v2/auth"),
+        # The label can be plain and only the link says what the control does.
+        _link("sso", "Continue", "/sso/start"),
+    ],
+)
+async def test_a_localized_or_federated_sign_in_still_ends_the_run_needing_login(control: Control) -> None:
+    """A real wall often offers only `Se connecter`, `Anmelden` or `Continue with Google`, so an English-only
+    label check would report such a page as stuck and tell the caller to narrow the task instead of signing in."""
+    obs = _at("https://shop.test/projects/deep", control)
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"")
+    recovery: JsonValue = {**_GIVE_UP, "needs_login": True}
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([recovery]))
+    state = await run_state()
+    with pytest.raises(_Stop) as stopped:
+        await agent._recover(state, obs, "uncertain next step (0.81)")
+    assert stopped.value.status is Status.NEEDS_LOGIN
 
 
 async def test_a_recovery_claim_of_a_sign_in_without_a_wall_stays_stuck() -> None:
