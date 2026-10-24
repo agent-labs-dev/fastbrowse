@@ -278,6 +278,9 @@ async def run_task(
     `on_frame` receives JPEG bytes from the active tab. Frames are acknowledged after delivery, with no fixed
     frame rate; only the latest pending frame is kept. Handler failures are logged without interrupting the run.
     A handler still running when the run ends is cancelled, and the run waits at most two seconds for it to stop.
+    A handler must honour cancellation: it runs on the caller's event loop, so one that catches `CancelledError`
+    without re-raising keeps that loop alive, and `asyncio.run` then waits for it at shutdown. Do not block the
+    loop either, since delivery and the run share it.
     Live frames and recordings are held back while a resolved secret shows on the page, as PNG step frames are.
     No handler means no live capture.
 

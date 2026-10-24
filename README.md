@@ -394,7 +394,9 @@ it can be `None` for an ordinary successful action.
 
 For continuous live images, pass an async `on_frame` handler accepting JPEG bytes. Frames follow the active
 tab and are acknowledged after delivery, with no fixed frame rate. Only the latest pending frame is kept.
-Handler failures are logged without stopping the run. Live frames and recordings are held back while a
+Handler failures are logged without stopping the run. A handler must honour cancellation: it runs on the
+caller's event loop, so one that catches `CancelledError` without re-raising keeps that loop alive, and
+`asyncio.run` then waits for it at shutdown. Live frames and recordings are held back while a
 resolved secret may show on the page, as PNG step frames are. No handler means no live capture.
 
 Jev uses direct TypeSafe when keyed, otherwise OpenRouter, with Vercel AI Gateway also supported.

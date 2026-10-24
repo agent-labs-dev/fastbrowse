@@ -416,5 +416,7 @@ class BrowserEvent(Frozen):
 
 type EventHandler = Callable[[StepEvent | BrowserEvent], Awaitable[None]]
 type FrameHandler = Callable[[bytes], Awaitable[None]]
+"""Receives the active tab's JPEG bytes on the caller's event loop. A handler must honour cancellation: one that
+swallows `CancelledError` keeps that loop alive, so `asyncio.run` waits for it at shutdown."""
 type UntilCheck = Callable[[str], Awaitable[bool]]
 """Caller assertion over the final page URL; COMPLETE requires it to return True when supplied."""
