@@ -7,18 +7,18 @@ use common::*;
 use fastbrowse_agent::planner::Plan;
 use fastbrowse_agent::retrieval;
 use fastbrowse_agent::shortcut::{Shortcut, StartPage};
+use fastbrowse_agent::verification;
 use fastbrowse_core::llm::{ResponseSchema, Typed};
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::schema::Schema;
+use fastbrowse_core::validation::ModelSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 /// Golden cases whose Rust model is not ported yet, or is private to its module. Wire each once its type lands:
 /// - `_AnswerChecks`, `_FinishOutputs`: private to `planner.rs`.
-/// - TODO(verification): `LLMVerdict`, `_OutputIdentities` (`_identity_schema(["output_0"])`), `_OutputAssessment`
-///   (`_assessment_schema("output_0")`).
-const PENDING: &[&str] = &["_AnswerChecks", "_FinishOutputs", "LLMVerdict", "_OutputIdentities", "_OutputAssessment"];
+const PENDING: &[&str] = &["_AnswerChecks", "_FinishOutputs"];
 
 fn check<T: Schema + DeserializeOwned + Serialize>(case: &Value) {
     check_schema(&Typed::<T>::default(), case);
@@ -42,6 +42,13 @@ fn responses_validate_as_pydantic_validates_them() {
             "Plan" => check::<Plan>(&case),
             "Shortcut" => check::<Shortcut>(&case),
             "StartPage" => check::<StartPage>(&case),
+            "LLMVerdict" => check::<verification::LLMVerdict>(&case),
+            "_OutputIdentities" => {
+                check_schema(&ModelSchema { ty: verification::identity_schema(["output_0"]) }, &case)
+            }
+            "_OutputAssessment" => {
+                check_schema(&ModelSchema { ty: verification::assessment_schema("output_0") }, &case)
+            }
             name if retrieval::response_schema(name).is_some() => {
                 check_schema(&retrieval::response_schema(name).unwrap(), &case)
             }
