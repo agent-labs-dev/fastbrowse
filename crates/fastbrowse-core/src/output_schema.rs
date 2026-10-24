@@ -656,6 +656,7 @@ impl ObjectType {
                 ty: field.ty.ty(),
                 default: (!field.required).then_some(Value::Null),
                 description: field.description.clone(),
+                factory: false,
             })
             .collect();
         ModelTy {
