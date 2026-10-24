@@ -11,6 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A page with more controls than an observation keeps sends only the kept ones in full. Every control is still
+  read, named and counted, and one past the caps arrives with only what tells whether it is a pager, which
+  fastbrowse asks for in full when it keeps one. The Wikipedia article for the United States, 5,571 controls
+  of which 212 are kept, now sends 959 KB per observation instead of 2.4 MB.
+
 - Waiting for a page to settle after an action no longer reads all of its text every 100 ms. The wait watches
   for changes alone until the page goes quiet and reads the page once then, and the check for a loading spinner
   before each observation no longer reads the page's text at all.
