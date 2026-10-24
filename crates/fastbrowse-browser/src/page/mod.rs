@@ -1492,6 +1492,14 @@ impl Page for CdpPage {
     fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
         Box::pin(async move { seam(CdpPage::response_status(self).await) })
     }
+
+    fn lifecycle_mark(&self) -> u64 {
+        CdpPage::lifecycle_mark(self)
+    }
+
+    fn wait_for_lifecycle(&self, mark: u64, seconds: f64) -> BoxFuture<'_, bool> {
+        Box::pin(CdpPage::wait_for_lifecycle(self, mark, seconds))
+    }
 }
 
 /// `str(raw) if raw is not None else ""`, for the strings the page reports.
