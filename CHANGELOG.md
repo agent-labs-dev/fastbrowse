@@ -1498,7 +1498,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.5.25...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.6.0
 [0.5.25]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.25
 [0.5.23]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.23
 [0.5.22]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.22
