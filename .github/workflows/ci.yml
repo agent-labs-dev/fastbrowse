@@ -134,9 +134,13 @@ jobs:
         run: >-
           uv run --no-sync pytest -q tests/test_citations.py tests/test_page.py tests/test_safety.py
           tests/test_retrieval.py tests/test_agent.py tests/browser/test_safety.py
+          tests/test_native.py tests/browser/test_native_parity.py
       - run: cargo build -p fastbrowse-node --release --locked
       - run: cp target/release/libfastbrowse_node.so crates/fastbrowse-node/fastbrowse.node
       - run: node --test crates/fastbrowse-node/test/core.test.ts
+      # The SDK suite again, its runs on the addon in this process instead of a fastbrowse process.
+      - run: npm ci --ignore-scripts
+      - run: FASTBROWSE_TEST_ADDON="$PWD/crates/fastbrowse-node/fastbrowse.node" npm run check:sdk
 
   # Five builds on five runners cost more than the rest of CI together, so a pull request pays for them only
   # when it touches what is frozen, what freezes it, what packs it for npm, or the SDK that the install smoke
@@ -160,7 +164,8 @@ jobs:
             packaging ':!packaging/aur' \
             scripts/smoke_binary.py .github/workflows/binaries.yml .github/workflows/ci.yml \
             scripts/npm_platform_package.py scripts/smoke_npm_install.py scripts/macos_signatures.py \
-            packages/sdk/package.json packages/sdk/tsconfig.json packages/sdk/tsconfig.build.json packages/sdk/src
+            packages/sdk/package.json packages/sdk/tsconfig.json packages/sdk/tsconfig.build.json packages/sdk/src \
+            crates Cargo.toml Cargo.lock rust-toolchain.toml
           then echo "binaries=true" >> "$GITHUB_OUTPUT"
           else echo "binaries=false" >> "$GITHUB_OUTPUT"
           fi
