@@ -159,7 +159,7 @@ impl Replies {
 
     fn take(&self, key: &str) -> Value {
         let mut answers = self.answers.lock().unwrap();
-        if !answers.get(key).is_some_and(|queue| !queue.is_empty()) {
+        if answers.get(key).is_none_or(|queue| queue.is_empty()) {
             // Show where the nearest request Python made parts from this one.
             let shared = |other: &str| key.bytes().zip(other.bytes()).take_while(|(a, b)| a == b).count();
             let nearest = answers.keys().max_by_key(|other| shared(other)).cloned().unwrap_or_default();
