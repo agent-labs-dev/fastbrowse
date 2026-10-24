@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+pub mod capture;
+
 use std::fs;
 use std::future::Future;
 use std::path::Path;
