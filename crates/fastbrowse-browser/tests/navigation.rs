@@ -6,11 +6,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::{Harness, chrome, harness, harness_on, harness_with, sites};
+use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::session::SessionOptions;
-use fastbrowse_browser::shared::{
-    Action, BrowserConnection, BrowserError, Config, ObservationLimits, Operation, StepOutcome,
-};
 use fastbrowse_browser::testing::misc::rereads;
+use fastbrowse_core::config::{Config, ObservationLimits};
+use fastbrowse_core::models::{BrowserConnection, Operation, StepOutcome};
+use fastbrowse_core::page::Action;
 use misc_support::{eval_value, find, js, observe_until, try_eval, wait_until};
 use relay::{Relay, Verdict};
 use serde_json::{Value, json};
@@ -24,7 +25,7 @@ mod relay {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use fastbrowse_browser::shared::BoxFuture;
+    use fastbrowse_core::BoxFuture;
     use futures_util::{SinkExt, StreamExt};
     use serde_json::Value;
     use tokio::net::{TcpListener, TcpStream};
@@ -477,7 +478,7 @@ async fn test_an_action_reports_only_the_moves_it_made_itself() {
     }
 }
 
-async fn accept_dialog(h: &Harness) -> fastbrowse_browser::shared::ActResult {
+async fn accept_dialog(h: &Harness) -> fastbrowse_core::page::ActResult {
     let session = &h.session;
     wait_until(|| async move { session.pending_dialog().is_some() }, 5.0).await;
     let dialog = h.observe().await;
@@ -695,6 +696,9 @@ async fn test_the_pager_and_load_more_at_the_foot_of_a_long_listing_are_still_of
     assert!(observation.omitted_controls > 0, "the page must be long enough to hit the cap");
     assert!(labels.contains(&"next"));
     assert!(labels.contains(&"Show more books"));
-    assert!(labels.len() <= max_offscreen_controls + observation.controls.iter().filter(|c| !c.offscreen).count());
+    assert!(
+        labels.len() as i64
+            <= max_offscreen_controls + observation.controls.iter().filter(|c| !c.offscreen).count() as i64
+    );
     h.close().await;
 }

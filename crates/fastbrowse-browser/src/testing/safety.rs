@@ -2,16 +2,18 @@
 
 use std::sync::{Arc, Mutex};
 
+use fastbrowse_core::config::Config;
+use fastbrowse_core::models::{Attachment, StepOutcome};
 use fastbrowse_core::origins::OriginGrant;
 use serde_json::json;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::cdp::secs;
+use crate::error::BrowserError;
 use crate::page::act::Point;
 use crate::page::{CdpPage, FRAME_READ_SECONDS, FRAME_RECHECK_SECONDS, SETTLE_QUIET_SECONDS, SETTLE_SECONDS};
 use crate::session::{BrowserSession, Shared, SnapshotScript, State, py_json};
-use crate::shared::{Attachment, BrowserError, Config, StepOutcome};
 
 /// `page_module._SETTLE_SECONDS`: the longest an action waits for the page to settle.
 pub fn settle_seconds() -> f64 {

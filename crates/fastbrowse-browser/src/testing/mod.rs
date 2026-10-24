@@ -7,9 +7,9 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::cdp::Event;
+use crate::error::BrowserError;
 use crate::page::CdpPage;
 use crate::session::{BrowserSession, Frame, Shared, adopt_popup, deliver_frames};
-use crate::shared::BrowserError;
 
 pub mod browser;
 pub mod dispatch;

@@ -18,8 +18,10 @@ use data_encoding::HEXLOWER;
 use fastbrowse_browser::adapters::local_chrome::LocalChromeProcess;
 use fastbrowse_browser::page::scripts::PRESENTED_JS;
 use fastbrowse_browser::session::SessionOptions;
-use fastbrowse_browser::shared::{Action, BrowserConnection, Config, LocalChrome, Operation, StepOutcome};
 use fastbrowse_browser::testing::safety as seams;
+use fastbrowse_core::config::Config;
+use fastbrowse_core::models::{BrowserConnection, LocalChrome, Operation, StepOutcome};
+use fastbrowse_core::page::Action;
 use safety_support::{
     CdpProxy, Reply, cdp_proxy, eval_active, find, has, observe_until, one_at_a_time, serve_on, wait_until,
 };

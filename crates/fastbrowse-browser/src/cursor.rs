@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard};
 use std::time::{Duration, Instant};
 
+use fastbrowse_core::BoxFuture;
 use futures_util::future::{FutureExt, Shared};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -29,8 +30,6 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{Mutex, MutexGuard};
 use tokio::task::{AbortHandle, JoinHandle};
 use tokio::time::{sleep, timeout};
-
-use crate::shared::BoxFuture;
 
 const TOOLS: [&str; 5] = ["start_session", "end_session", "list_windows", "move_cursor", "set_agent_cursor_enabled"];
 const CALL_SECONDS: Duration = Duration::from_secs(2);

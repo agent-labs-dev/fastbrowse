@@ -6,9 +6,10 @@
 use std::future::Future;
 use std::time::{Duration, Instant};
 
+use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::page::CdpPage;
 use fastbrowse_browser::session::BrowserSession;
-use fastbrowse_browser::shared::{Block, BlockKind, BrowserError, Capture, Control, Observation};
+use fastbrowse_core::page::{Block, BlockKind, Capture, Control, Observation};
 use serde_json::{Value, json};
 
 /// `eval_value`, keeping the failure: a read that straddles a navigation can fail.
@@ -90,7 +91,7 @@ pub async fn observe_until(page: &CdpPage, label: &str, timeout_seconds: f64) ->
 
 /// `capture.text[block.start : block.end]`: the offsets count code points, as Python indexes a `str`.
 pub fn text_of(capture: &Capture, block: &Block) -> String {
-    capture.text.chars().skip(block.start).take(block.end - block.start).collect()
+    capture.block_text(block).to_owned()
 }
 
 /// Every block's text, in order.

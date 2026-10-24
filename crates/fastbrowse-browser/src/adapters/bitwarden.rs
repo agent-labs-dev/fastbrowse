@@ -10,11 +10,12 @@ use std::fmt;
 use std::process::Stdio;
 use std::time::Duration;
 
+use fastbrowse_core::models::SecretValue;
 use serde::Deserialize;
 use serde::de::{Deserializer, Error as _};
 
 use crate::adapters::totp::one_time_code;
-use crate::shared::{SecretValue, urlsplit};
+use crate::urlsplit::urlsplit;
 
 /// The vault is locked, the item is missing, or it does not belong to the start origin.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,7 +159,7 @@ pub fn login_values(item_json: &str, origin: &str) -> Result<Vec<(String, Secret
     }
     let mut values: Vec<(String, SecretValue)> = [("username", login.username), ("password", login.password)]
         .into_iter()
-        .filter_map(|(key, value)| value.filter(|v| !v.is_empty()).map(|v| (key.to_owned(), SecretValue::Value(v))))
+        .filter_map(|(key, value)| value.filter(|v| !v.is_empty()).map(|v| (key.to_owned(), SecretValue::Plain(v))))
         .collect();
     if let Some(totp) = login.totp.filter(|totp| !totp.is_empty()) {
         // Amazon's two-step sign-in stopped a run at "Enter OTP" with the key in the vault. The code is made when
@@ -239,8 +240,8 @@ mod tests {
         values
             .iter()
             .map(|(name, value)| match value {
-                SecretValue::Value(v) => (name.clone(), v.clone()),
-                SecretValue::Provider(_) => (name.clone(), "<provider>".into()),
+                SecretValue::Plain(v) => (name.clone(), v.clone()),
+                SecretValue::Computed(_) => (name.clone(), "<provider>".into()),
             })
             .collect()
     }
@@ -297,7 +298,7 @@ mod tests {
                 .unwrap();
         let names: Vec<&str> = values.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(names, ["username", "password", "one_time_code"]);
-        let SecretValue::Provider(provider) = &values[2].1 else { panic!("the code is made when it is typed") };
+        let SecretValue::Computed(provider) = &values[2].1 else { panic!("the code is made when it is typed") };
         let code = provider().await;
         assert!(code.len() == 6 && code.bytes().all(|b| b.is_ascii_digit()));
     }

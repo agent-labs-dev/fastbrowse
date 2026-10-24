@@ -14,12 +14,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use fastbrowse_browser::adapters::local_chrome::LocalChromeProcess;
+use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::page::CdpPage;
 use fastbrowse_browser::session::{BrowserSession, SessionOptions};
-use fastbrowse_browser::shared::{
-    Action, Artifact, ArtifactKind, ArtifactSink, BoxError, BoxFuture, BrowserConnection, BrowserError, Config,
-    LocalChrome, Observation, Operation,
-};
+use fastbrowse_core::BoxFuture;
+use fastbrowse_core::config::Config;
+use fastbrowse_core::models::{Artifact, ArtifactKind, ArtifactSink, BrowserConnection, LocalChrome, Operation};
+use fastbrowse_core::page::{Action, Observation};
 use serde_json::{Value, json};
 
 /// Downloads are dropped: the check compares what the page reports, and a capture of a download's text.
@@ -31,14 +32,14 @@ impl ArtifactSink for NullSink {
         kind: ArtifactKind,
         name: &'a str,
         mime_type: &'a str,
-        content: Vec<u8>,
-    ) -> BoxFuture<'a, Result<Artifact, BoxError>> {
+        content: &'a [u8],
+    ) -> BoxFuture<'a, std::io::Result<Artifact>> {
         Box::pin(async move {
             Ok(Artifact {
                 kind,
                 name: name.to_owned(),
                 mime_type: mime_type.to_owned(),
-                size_bytes: content.len() as u64,
+                size_bytes: content.len() as i64,
                 sha256: String::new(),
                 uri: format!("memory://{name}"),
             })

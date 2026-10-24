@@ -23,7 +23,7 @@ use tokio_tungstenite::tungstenite::error::ProtocolError;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
-use crate::shared::BrowserError;
+use crate::error::BrowserError;
 
 /// How long a CDP command waits before the browser is asked whether it is still there. A cloud browser's proxy can
 /// keep the socket open, answering pings, after losing the browser behind it, and a run with no wall-clock limit
@@ -190,7 +190,7 @@ impl Cdp {
                 )));
             }
             Ok(Err(error)) => {
-                return Err(BrowserError::Browser(format!("CDP.start failed ({})", handshake_detail(&error))));
+                return Err(BrowserError::Failed(format!("CDP.start failed ({})", handshake_detail(&error))));
             }
             Err(_) => {
                 return Err(BrowserError::BrowserUnresponsive(format!(
@@ -417,11 +417,11 @@ pub fn browser_error(method: &str, error: &CdpError, lost_is_outage: bool) -> Br
         CdpError::Closed(why) if lost_is_outage => {
             BrowserError::BrowserUnresponsive(format!("{method} failed ({why})"))
         }
-        CdpError::Closed(why) => BrowserError::Browser(format!("{method} failed ({why})")),
+        CdpError::Closed(why) => BrowserError::Failed(format!("{method} failed ({why})")),
         CdpError::Protocol { code: SERVER_ERROR } => {
             BrowserError::ContextLost(format!("{method} failed (CDP {SERVER_ERROR})"))
         }
-        CdpError::Protocol { code } => BrowserError::Browser(format!("{method} failed (CDP {code})")),
+        CdpError::Protocol { code } => BrowserError::Failed(format!("{method} failed (CDP {code})")),
     }
 }
 

@@ -9,13 +9,14 @@ pub mod adapters;
 pub mod cdp;
 #[cfg(feature = "cursor")]
 pub mod cursor;
+pub mod error;
 pub mod page;
 #[cfg(feature = "recording")]
 pub mod recording;
 pub mod session;
-pub mod shared;
 #[doc(hidden)]
 pub mod testing;
+pub mod urlsplit;
 
 /// A warning Python logs through `logging`: written to stderr when `FASTBROWSE_LOG` is set, else dropped. Never
 /// pass an error's message here, only its kind: transport errors can carry credentials or page text.

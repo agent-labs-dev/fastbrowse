@@ -1,10 +1,11 @@
 //! Test seams added for the lifecycle suites; see the module docs of `testing`.
 
+use fastbrowse_core::models::StepOutcome;
 use serde_json::json;
 
+use crate::error::BrowserError;
 use crate::page::CdpPage;
 use crate::session::BrowserSession;
-use crate::shared::{BrowserError, StepOutcome};
 
 /// `session._closing`.
 pub fn closing(session: &BrowserSession) -> bool {

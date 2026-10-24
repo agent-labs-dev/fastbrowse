@@ -48,10 +48,12 @@ mod lifecycle_support;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::page::CdpPage;
 use fastbrowse_browser::session::{BrowserSession, SessionOptions};
-use fastbrowse_browser::shared::{BrowserConnection, BrowserError, Config, StepOutcome};
 use fastbrowse_browser::testing;
+use fastbrowse_core::config::Config;
+use fastbrowse_core::models::{BrowserConnection, StepOutcome};
 use lifecycle_support::{FakeChrome, Reply, SECRET};
 use serde_json::{Value, json};
 
@@ -241,7 +243,7 @@ async fn handshake_server(reply: &'static [u8]) -> String {
 }
 
 async fn assert_outage(name: &str, url: String, outage: bool) {
-    let connection = BrowserConnection { cdp_url: url, foreground: true, ..Default::default() };
+    let connection = BrowserConnection { foreground: true, ..BrowserConnection::new(url, false) };
     let session =
         BrowserSession::new(connection, Arc::new(common::RecordingArtifactSink::default()), Default::default());
     let error = session.open().await.unwrap_err();
@@ -570,7 +572,7 @@ async fn test_attach_existing_tab_and_non_destructive_teardown() {
             {"targetId": "target_tab_1", "type": "page", "url": "http://example.com/app", "title": "My App"},
         ]})],
     );
-    let connection = BrowserConnection { cdp_url: fake.url.clone(), attach: true, ..Default::default() };
+    let connection = BrowserConnection { attach: true, ..BrowserConnection::new(fake.url.clone(), false) };
     let session = fake.session(connection).await;
     assert_eq!(session.active_target_id(), "target_tab_1");
     assert_eq!(session.tabs().into_iter().map(|t| t.id).collect::<Vec<_>>(), ["target_tab_1"]);
@@ -608,10 +610,9 @@ async fn test_attach_adopts_its_popups_and_windows_without_opener_only_when_matc
             ],
         );
         let connection = BrowserConnection {
-            cdp_url: fake.url.clone(),
             attach: true,
             target_match: target_match.map(str::to_owned),
-            ..Default::default()
+            ..BrowserConnection::new(fake.url.clone(), false)
         };
         let session = fake.session(connection).await;
         // Discovery replays "other", which was open before the session and has no opener either.
@@ -648,10 +649,9 @@ async fn test_attach_target_matching_by_title_or_url() {
     ]});
     fake.queue("Target.getTargets", [pages.clone(), pages]);
     let connection = BrowserConnection {
-        cdp_url: fake.url.clone(),
         attach: true,
         target_match: Some("Editor".into()),
-        ..Default::default()
+        ..BrowserConnection::new(fake.url.clone(), false)
     };
     let session = fake.session(connection.clone()).await;
     assert_eq!(session.active_target_id(), "tab_2");

@@ -16,11 +16,12 @@ use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use fastbrowse_core::BoxFuture;
+use fastbrowse_core::models::{BrowserConnection, CostBasis, CostComponent, CostLine};
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
 use crate::adapters::http::{self, Response};
-use crate::shared::{BoxFuture, BrowserConnection, CostBasis, CostComponent, CostLine};
 
 pub const API_V3: &str = "https://api.browser-use.com/api/v3";
 pub const API_V4: &str = "https://api.browser-use.com/api/v4";
@@ -273,12 +274,10 @@ impl BrowserUseCloudBrowser {
             })?
         };
         Ok(BrowserConnection {
-            cdp_url: ws_url,
             live_url: browser.live_url,
             browser_id: Some(browser.id),
-            remote: true,
             foreground: true,
-            ..BrowserConnection::default()
+            ..BrowserConnection::new(ws_url, true)
         })
     }
 
@@ -399,8 +398,8 @@ fn lock(state: &Shared) -> std::sync::MutexGuard<'_, State> {
 
 fn record_cost(state: &Shared, browser: &View) {
     lock(state).cost = vec![
-        CostLine { component: CostComponent::Browser, basis: CostBasis::Metered, dollars: Some(browser.browser_cost) },
-        CostLine { component: CostComponent::Proxy, basis: CostBasis::Metered, dollars: Some(browser.proxy_cost) },
+        CostLine::new(CostComponent::Browser, CostBasis::Metered, Some(browser.browser_cost)),
+        CostLine::new(CostComponent::Proxy, CostBasis::Metered, Some(browser.proxy_cost)),
     ];
 }
 

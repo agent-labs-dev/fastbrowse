@@ -12,8 +12,10 @@ use common::{harness, harness_with, sites};
 use dispatch_support::{PROXY_ERROR, action, eval_active, eval_value, failing_proxy, fill, find, observe_until};
 use fastbrowse_browser::page::scripts::UNCOVER_JS;
 use fastbrowse_browser::session::SessionOptions;
-use fastbrowse_browser::shared::{Action, Config, Operation, StepOutcome};
 use fastbrowse_browser::testing;
+use fastbrowse_core::config::Config;
+use fastbrowse_core::models::{Operation, StepOutcome};
+use fastbrowse_core::page::Action;
 use serde_json::{Value, json};
 
 /// A string as a JS literal, where Python's tests interpolate `repr()` or `json.dumps()`.
@@ -414,7 +416,7 @@ async fn test_uncertain_press_is_never_replayed() {
         doomed
     })
     .await;
-    let connection = fastbrowse_browser::shared::BrowserConnection { cdp_url: proxy, ..chrome.clone() };
+    let connection = fastbrowse_core::models::BrowserConnection { cdp_url: proxy, ..chrome.clone() };
     let h = common::harness_on(connection, Config::default(), SessionOptions::default()).await.expect("harness");
     h.goto("/dispatch.html").await;
     let obs = h.observe().await;
@@ -454,7 +456,7 @@ async fn test_pointer_entry_dialog_does_not_block_a_fresh_hit_test() {
     }
 }
 
-fn drag(source: &fastbrowse_browser::shared::Control, destination: &fastbrowse_browser::shared::Control) -> Action {
+fn drag(source: &fastbrowse_core::page::Control, destination: &fastbrowse_core::page::Control) -> Action {
     Action { destination_id: Some(destination.id.clone()), ..action(Operation::Drag, source) }
 }
 
@@ -717,7 +719,7 @@ async fn test_covered_target_reports_visible_overlay_controls() {
                             .is_some_and(|e| e.contains("let cover = hit?.closest"))
                 })
                 .await;
-                let connection = fastbrowse_browser::shared::BrowserConnection { cdp_url: proxy, ..chrome.clone() };
+                let connection = fastbrowse_core::models::BrowserConnection { cdp_url: proxy, ..chrome.clone() };
                 common::harness_on(connection, Config::default(), SessionOptions::default()).await.expect("harness")
             } else {
                 let Some(h) = harness_with(Config::default(), SessionOptions::default()).await else { return };

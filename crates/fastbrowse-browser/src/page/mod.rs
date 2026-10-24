@@ -14,6 +14,15 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use data_encoding::{BASE64, HEXLOWER};
+use fastbrowse_core::BoxFuture;
+use fastbrowse_core::addresses::search_address;
+use fastbrowse_core::config::Config;
+use fastbrowse_core::models::{Artifact, Operation, SourceControl};
+use fastbrowse_core::page::{
+    Block, BlockKind, Capture, Control, Dialog, Observation, cut_marker, loads_more, pager_link,
+};
+use fastbrowse_core::py::datetime::DateTime;
+use fastbrowse_core::py::text;
 use ring::digest::{SHA256, digest};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -21,11 +30,9 @@ use serde_json::{Value, json};
 use tokio::time::{Instant, sleep, timeout};
 
 use crate::cdp::secs;
+use crate::error::BrowserError;
 use crate::session::{BrowserSession, CAPTURE_JS, SNAPSHOT_UNINSTALLED, STATUS_WORLD, py_json};
-use crate::shared::{
-    Artifact, Block, BlockKind, BrowserError, Capture, Config, Control, Dialog, Observation, Operation, SourceControl,
-    Timestamp, cut_marker, loads_more, pager_link, search_address, urlsplit,
-};
+use crate::urlsplit::urlsplit;
 use scripts::py_float;
 
 pub(crate) const SETTLE_SECONDS: f64 = 5.0;
@@ -195,7 +202,7 @@ struct SnapshotBlock {
     source_path: String,
     href: Option<String>,
     list_id: Option<String>,
-    list_count: Option<u64>,
+    list_count: Option<i64>,
     #[serde(default)]
     list_frameless: bool,
 }
@@ -357,13 +364,6 @@ fn control_from_raw(
     c: &SnapshotControl,
     retarget: Option<String>,
 ) -> Control {
-    // A frozenset in Python: a repeated operation counts once.
-    let mut operations: Vec<Operation> = vec![];
-    for op in &c.operations {
-        if !operations.contains(op) {
-            operations.push(*op);
-        }
-    }
     Control {
         id: control_id,
         frame_id,
@@ -373,7 +373,7 @@ fn control_from_raw(
         role: c.role.clone(),
         label: c.label.clone(),
         context: c.context.clone(),
-        operations,
+        operations: c.operations.iter().copied().collect(),
         value: c.value.clone(),
         href: c.href.clone(),
         options: c.options.clone(),
@@ -404,18 +404,18 @@ pub(crate) fn sha256_hex(text: &str) -> String {
 fn parse<T: DeserializeOwned>(raw: Value, shape: &str) -> Result<T, BrowserError> {
     // Our own page script produced this, so a mismatch is a bug in one side of the contract.
     serde_json::from_value(raw)
-        .map_err(|e| BrowserError::Browser(format!("page script returned an unexpected {shape}: {e}")))
+        .map_err(|e| BrowserError::Failed(format!("page script returned an unexpected {shape}: {e}")))
 }
 
-fn char_len(text: &str) -> usize {
-    text.chars().count()
+/// A configured count as a length. Core's `Config` refuses a negative one when it is read; one built in code is
+/// taken as zero.
+fn limit(count: i64) -> usize {
+    usize::try_from(count).unwrap_or(0)
 }
 
-fn char_prefix(text: &str, chars: usize) -> &str {
-    match text.char_indices().nth(chars) {
-        Some((at, _)) => &text[..at],
-        None => text,
-    }
+/// A length or offset as core's models hold it, the `int` Python writes.
+fn int(count: usize) -> i64 {
+    i64::try_from(count).unwrap_or(i64::MAX)
 }
 
 impl CdpPage {
@@ -520,7 +520,7 @@ impl CdpPage {
         }
     }
 
-    fn observe_once(&self, attempt: u32) -> crate::shared::BoxFuture<'_, Result<Observation, BrowserError>> {
+    fn observe_once(&self, attempt: u32) -> BoxFuture<'_, Result<Observation, BrowserError>> {
         Box::pin(async move {
             self.session.assert_clear().await?;
             if let Some(dialog) = self.session.pending_dialog() {
@@ -571,10 +571,10 @@ impl CdpPage {
             let limits = &self.config.observation;
             let total = controls.len();
             let (onscreen, offscreen): (Vec<Control>, Vec<Control>) = controls.into_iter().partition(|c| !c.offscreen);
-            let offscreen = capped(offscreen, limits.max_offscreen_controls);
+            let offscreen = capped(offscreen, limit(limits.max_offscreen_controls));
             let mut omitted = total - onscreen.len() - offscreen.len();
             let both = onscreen.len() + offscreen.len();
-            let kept = capped(onscreen.into_iter().chain(offscreen).collect(), limits.max_controls);
+            let kept = capped(onscreen.into_iter().chain(offscreen).collect(), limit(limits.max_controls));
             omitted += both - kept.len();
             let kept = self.whole_rows(&frames, kept, &partial, &mut control_state).await?;
             let control_state: HashMap<String, Target> =
@@ -599,15 +599,15 @@ impl CdpPage {
                     download.name, download.url, download.text
                 ));
             }
-            let length = char_len(&viewport_text);
-            if length > limits.viewport_text_chars {
-                let omitted_chars = length - limits.viewport_text_chars;
-                viewport_text =
-                    char_prefix(&viewport_text, limits.viewport_text_chars).to_owned() + &cut_marker(omitted_chars);
+            let length = text::len(&viewport_text);
+            let budget = limit(limits.viewport_text_chars);
+            if length > budget {
+                viewport_text = text::prefix(&viewport_text, budget).to_owned() + &cut_marker(length - budget);
             }
             let response_status = match main {
                 Some(main) if main.raw.url == document.url && main.raw.document_key == document.document_key => {
-                    document.response_status.and_then(|s| u16::try_from(s).ok())
+                    // pydantic's bound on the field: a status outside it would make an observation core cannot read.
+                    document.response_status.filter(|s| (100..=999).contains(s))
                 }
                 _ => None,
             };
@@ -615,15 +615,15 @@ impl CdpPage {
                 url,
                 title,
                 page_key,
-                captured_at: Timestamp::now(),
+                captured_at: DateTime::now_utc(),
                 response_status,
                 document_key: main.map(|m| m.raw.document_key.clone()).unwrap_or_default(),
                 controls: kept,
-                omitted_controls: omitted,
+                omitted_controls: int(omitted),
                 viewport_text,
                 tabs: self.session.tabs(),
                 dialog: self.session.pending_dialog(),
-                inaccessible_frames: inaccessible,
+                inaccessible_frames: int(inaccessible),
                 can_go_back,
                 history_entry,
             })
@@ -675,7 +675,7 @@ impl CdpPage {
             url: active.map(|t| t.url.clone()).unwrap_or_default(),
             title: active.map(|t| t.title.clone()).unwrap_or_default(),
             page_key,
-            captured_at: Timestamp::now(),
+            captured_at: DateTime::now_utc(),
             response_status: None,
             document_key: String::new(),
             controls: vec![],
@@ -906,7 +906,7 @@ impl CdpPage {
                 }
                 let start = offset;
                 text.push_str(&block.text);
-                offset += char_len(&block.text);
+                offset += text::len(&block.text);
                 let end = offset;
                 text.push_str("\n\n");
                 offset += 2;
@@ -919,8 +919,8 @@ impl CdpPage {
                         Some(path) => Some(format!("{frame_key}/{path}")),
                         None => frame.frame_id.clone(),
                     },
-                    start,
-                    end,
+                    start: int(start),
+                    end: int(end),
                     heading_path: block.heading_path.clone(),
                     control_context: block.control_context.clone(),
                     href: block.href.clone(),
@@ -933,7 +933,7 @@ impl CdpPage {
         for (index, download) in self.session.download_texts().into_iter().enumerate() {
             let start = offset;
             text.push_str(&download.text);
-            offset += char_len(&download.text);
+            offset += text::len(&download.text);
             // CSV rows lose their column meanings when treated as unrelated prose excerpts.
             let table = download.mime == "text/csv"
                 || download.mime == "application/csv"
@@ -944,8 +944,8 @@ impl CdpPage {
                 complete_source: download.complete,
                 kind: if table { BlockKind::Table } else { BlockKind::Paragraph },
                 frame_id: None,
-                start,
-                end: offset,
+                start: int(start),
+                end: int(offset),
                 heading_path: vec![format!("Downloaded file: {}", download.name)],
                 control_context: None,
                 href: None,
@@ -959,11 +959,11 @@ impl CdpPage {
         Ok(Capture {
             url,
             title,
-            captured_at: Timestamp::now(),
+            captured_at: DateTime::now_utc(),
             sha256: sha256_hex(&text),
             text,
             blocks,
-            inaccessible_frames: self.inaccessible_frames(&coverage)?,
+            inaccessible_frames: int(self.inaccessible_frames(&coverage)?),
         })
     }
 
@@ -1063,7 +1063,7 @@ impl CdpPage {
         };
         BASE64
             .decode(shot["data"].as_str().unwrap_or_default().as_bytes())
-            .map_err(|_| BrowserError::Browser("Page.captureScreenshot failed (Error)".into()))
+            .map_err(|_| BrowserError::Failed("Page.captureScreenshot failed (Error)".into()))
     }
 
     pub async fn origin(&self) -> Result<String, BrowserError> {
@@ -1237,7 +1237,7 @@ impl CdpPage {
         if failure.strip_prefix("net::ERR_").is_some_and(|name| UNREACHABLE.contains(&name)) {
             return Err(BrowserError::SiteUnreachable(message));
         }
-        Err(BrowserError::Browser(message))
+        Err(BrowserError::Failed(message))
     }
 
     #[doc(hidden)]
@@ -1364,7 +1364,7 @@ impl CdpPage {
             Some([Value::Bool(stable), fingerprint]) if fingerprint.is_string() || fingerprint.is_null() => {
                 Ok((*stable, fingerprint.as_str().map(str::to_owned)))
             }
-            _ => Err(BrowserError::Browser("page script returned an unexpected tuple[bool, str | None]".into())),
+            _ => Err(BrowserError::Failed("page script returned an unexpected tuple[bool, str | None]".into())),
         }
     }
 
@@ -1473,11 +1473,5 @@ mod tests {
         assert!(net_error("net::ERR_EMPTY_RESPONSE"));
         assert!(!net_error("net::ERR_"));
         assert!(!net_error("Cannot navigate to invalid URL"));
-    }
-
-    #[test]
-    fn prefixes_count_code_points() {
-        assert_eq!(char_prefix("h\u{e9}llo", 2), "h\u{e9}");
-        assert_eq!(char_len("h\u{e9}llo"), 5);
     }
 }

@@ -4,9 +4,11 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use fastbrowse_core::BoxFuture;
+use fastbrowse_core::models::SecretValue;
 use ring::hmac;
 
-use crate::shared::{BoxFuture, SecretValue, urlsplit};
+use crate::urlsplit::urlsplit;
 
 /// The stored authenticator key cannot produce a code. The message never contains the key.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,7 +241,7 @@ pub fn one_time_code_with(key: &str, clock: Clock, sleep: Sleep) -> Result<Secre
     let authenticator = Arc::new(parse_key(key)?);
     let period = f64::from(authenticator.period);
     let guard = 5.0_f64.min(period / 2.0);
-    Ok(SecretValue::Provider(Arc::new(move || {
+    Ok(SecretValue::Computed(Arc::new(move || {
         let (authenticator, clock, sleep) = (authenticator.clone(), clock.clone(), sleep.clone());
         Box::pin(async move {
             let mut now = clock();
@@ -275,8 +277,8 @@ mod tests {
 
     async fn provide(value: &SecretValue) -> String {
         match value {
-            SecretValue::Provider(provider) => provider().await,
-            SecretValue::Value(_) => panic!("a one-time code is computed when it is typed"),
+            SecretValue::Computed(provider) => provider().await,
+            SecretValue::Plain(_) => panic!("a one-time code is computed when it is typed"),
         }
     }
 

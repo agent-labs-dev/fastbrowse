@@ -8,9 +8,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::session::{BrowserSession, SessionOptions};
-use fastbrowse_browser::shared::{BoxError, BrowserError, FrameHandler};
 use fastbrowse_browser::testing;
+use fastbrowse_core::models::FrameHandler;
 use lifecycle_support::{FakeChrome, Reply};
 use serde_json::json;
 use tokio::sync::watch;
@@ -61,7 +62,6 @@ impl Receiver {
                 receiver.frames.lock().unwrap().push(frame);
                 receiver.delivering.send_replace(true);
                 let _ = receiver.release.subscribe().wait_for(|released| *released).await;
-                Ok(())
             })
         })
     }
@@ -221,27 +221,21 @@ async fn test_live_frames_follow_tabs_ack_after_delivery_and_keep_only_the_lates
 }
 
 /// Python also checks every failure is logged as a warning that quotes nothing private; the Rust warnings go to
-/// stderr only when `FASTBROWSE_LOG` is set, and a test cannot read its own stderr.
+/// stderr only when `FASTBROWSE_LOG` is set, and a test cannot read its own stderr. Python's handler that raises has
+/// no case here: core's `FrameHandler` returns nothing, so it cannot fail.
 #[tokio::test]
 async fn test_live_view_failures_are_warnings_and_leave_the_session_usable() {
-    for failure in ["Page.startScreencast", "Page.stopScreencast", "Page.screencastFrameAck", "handler"] {
+    for failure in ["Page.startScreencast", "Page.stopScreencast", "Page.screencastFrameAck"] {
         let fake = FakeChrome::start().await;
         let calls = Arc::new(AtomicUsize::new(0));
         let on_frame: FrameHandler = Arc::new({
             let calls = calls.clone();
             move |_frame| {
                 calls.fetch_add(1, Ordering::SeqCst);
-                Box::pin(async move {
-                    if failure == "handler" {
-                        return Err::<(), BoxError>("private page text".into());
-                    }
-                    Ok(())
-                })
+                Box::pin(async {})
             }
         });
-        if failure != "handler" {
-            fake.fail(failure, Reply::Error(-32603));
-        }
+        fake.fail(failure, Reply::Error(-32603));
         let options = SessionOptions { on_frame: Some(on_frame), ..Default::default() };
         let session = fake.session_with(fake.connection(), options).await;
         settle(&session).await;
@@ -262,7 +256,7 @@ async fn test_live_view_failures_are_warnings_and_leave_the_session_usable() {
 async fn test_a_stalled_screencast_does_not_delay_switching_tabs() {
     let fake = FakeChrome::start().await;
     fake.block("Page.startScreencast");
-    let on_frame: FrameHandler = Arc::new(|_frame| Box::pin(async { Ok(()) }));
+    let on_frame: FrameHandler = Arc::new(|_frame| Box::pin(async {}));
     let options = SessionOptions { on_frame: Some(on_frame), ..Default::default() };
     let session = fake.session_with(fake.connection(), options).await;
     fake.sent("Page.startScreencast").await;
@@ -280,7 +274,7 @@ async fn test_a_stalled_screencast_does_not_delay_switching_tabs() {
 async fn test_a_recording_whose_cast_sent_no_frame_ends_on_a_screenshot_unless_frames_are_withheld() {
     // Chrome can acknowledge `Page.startScreencast` and then send nothing, and a short run ends before the restart.
     use fastbrowse_browser::recording::Recording;
-    use fastbrowse_browser::session::CheckAccess;
+    use fastbrowse_browser::session::{BoxError, CheckAccess};
 
     if fastbrowse_browser::adapters::local_chrome::which("ffmpeg").is_none() {
         eprintln!("recording needs ffmpeg; skipping");
@@ -390,7 +384,6 @@ async fn test_close_does_not_wait_on_a_frame_callback_that_ignores_cancellation(
                 while !released.load(Ordering::SeqCst) {
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                Ok(())
             })
         }
     });
@@ -544,8 +537,10 @@ mod cursor {
     use super::*;
     use crate::common::{control, harness};
     use fastbrowse_browser::page::CdpPage;
-    use fastbrowse_browser::shared::{Action, Config, Operation, StepOutcome};
     use fastbrowse_browser::testing::lifecycle::{cursor_geometry, open_cursor};
+    use fastbrowse_core::config::Config;
+    use fastbrowse_core::models::{Operation, StepOutcome};
+    use fastbrowse_core::page::Action;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_geometry_rejects_a_point_from_another_tab() {

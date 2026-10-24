@@ -10,11 +10,13 @@ use std::time::Duration;
 use common::{Harness, harness, harness_on, sites};
 use dispatch_support::{action, eval_active, eval_value, fill, find, observe_until};
 use fastbrowse_browser::session::SessionOptions;
-use fastbrowse_browser::shared::{Action, Attachment, BrowserConnection, Config, Operation, StepOutcome};
 use fastbrowse_browser::testing;
+use fastbrowse_core::config::Config;
+use fastbrowse_core::models::{Attachment, BrowserConnection, Bytes, Operation, StepOutcome};
+use fastbrowse_core::page::Action;
 use serde_json::json;
 
-fn form_fill(target: &fastbrowse_browser::shared::Control, text: &str) -> Action {
+fn form_fill(target: &fastbrowse_core::page::Control, text: &str) -> Action {
     Action { form_fill: true, ..fill(target, text) }
 }
 
@@ -278,13 +280,11 @@ async fn test_control_observations_are_bounded() {
     )
     .await;
     let capture = h.page.capture().await.expect("capture");
-    // Block offsets count code points, as Python indexes a str.
-    let chars: Vec<char> = capture.text.chars().collect();
     let observations = capture
         .blocks
         .iter()
         .filter(|b| {
-            let text: String = chars[b.start..b.end].iter().collect();
+            let text = capture.block_text(b);
             text.contains("[empty]") || text.contains(": disabled")
         })
         .count();
@@ -314,7 +314,7 @@ async fn test_visible_label_uploads_to_hidden_file_input() {
         let observation = h.observe().await;
         let control =
             observation.controls.iter().find(|c| c.label == "Upload or Drag Image").expect("the upload label");
-        assert_eq!(control.operations, vec![Operation::Upload], "{mutation:?}");
+        assert_eq!(control.operations, [Operation::Upload].into(), "{mutation:?}");
         if let Some(mutation) = mutation {
             let expression = if mutation == "disabled" {
                 "document.getElementById('file').disabled = true"
@@ -328,7 +328,7 @@ async fn test_visible_label_uploads_to_hidden_file_input() {
             files: vec![Attachment {
                 name: "image.png".into(),
                 mime_type: "image/png".into(),
-                content: b"provided bytes".to_vec(),
+                content: Bytes(b"provided bytes".to_vec()),
             }],
             ..action(Operation::Upload, control)
         };

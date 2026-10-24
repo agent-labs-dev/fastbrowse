@@ -18,9 +18,10 @@ use data_encoding::HEXLOWER;
 use fastbrowse_browser::adapters::local_chrome::{LocalChromeProcess, find_chrome};
 use fastbrowse_browser::page::CdpPage;
 use fastbrowse_browser::session::{BrowserSession, SessionOptions};
-use fastbrowse_browser::shared::{
-    Artifact, ArtifactKind, ArtifactSink, BoxError, BoxFuture, BrowserConnection, Config, LocalChrome, Observation,
-};
+use fastbrowse_core::BoxFuture;
+use fastbrowse_core::config::Config;
+use fastbrowse_core::models::{Artifact, ArtifactKind, ArtifactSink, BrowserConnection, LocalChrome};
+use fastbrowse_core::page::Observation;
 
 pub fn sites_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/browser/sites")
@@ -39,20 +40,20 @@ impl ArtifactSink for RecordingArtifactSink {
         kind: ArtifactKind,
         name: &'a str,
         mime_type: &'a str,
-        content: Vec<u8>,
-    ) -> BoxFuture<'a, Result<Artifact, BoxError>> {
+        content: &'a [u8],
+    ) -> BoxFuture<'a, std::io::Result<Artifact>> {
         Box::pin(async move {
-            let digest = ring::digest::digest(&ring::digest::SHA256, &content);
+            let digest = ring::digest::digest(&ring::digest::SHA256, content);
             let artifact = Artifact {
                 kind,
                 name: name.to_owned(),
                 mime_type: mime_type.to_owned(),
-                size_bytes: content.len() as u64,
+                size_bytes: content.len() as i64,
                 sha256: HEXLOWER.encode(digest.as_ref()),
                 uri: format!("memory://{name}"),
             };
             self.artifacts.lock().unwrap().push(artifact.clone());
-            self.contents.lock().unwrap().push(content);
+            self.contents.lock().unwrap().push(content.to_vec());
             Ok(artifact)
         })
     }
@@ -290,7 +291,7 @@ pub async fn harness() -> Option<Harness> {
 }
 
 /// The control whose label is `label`, as tests look one up.
-pub fn control<'a>(observation: &'a Observation, label: &str) -> &'a fastbrowse_browser::shared::Control {
+pub fn control<'a>(observation: &'a Observation, label: &str) -> &'a fastbrowse_core::page::Control {
     observation.controls.iter().find(|c| c.label == label).unwrap_or_else(|| {
         panic!(
             "no control labelled {label:?} in {:?}",
