@@ -279,7 +279,7 @@ pub async fn connect_cdp(options: ConnectCdp) -> Result<Connected, BrowserError>
 enum Owned {
     /// One the caller handed over: nothing to start and nothing to stop.
     Handed,
-    Local(LocalChromeProcess),
+    Local(Box<LocalChromeProcess>),
     Cloud(Box<BrowserUseCloudBrowser>),
 }
 
@@ -343,7 +343,7 @@ async fn browser(task: &RunTask, chrome: &LocalChrome, http: &Http) -> Result<(B
         let (process, connection) =
             LocalChromeProcess::launch(chrome).await.map_err(|error| refused(&error.to_string()))?;
         let connection = BrowserConnection { foreground: connection.foreground || foreground, ..connection };
-        return Ok((connection, Owned::Local(process)));
+        return Ok((connection, Owned::Local(Box::new(process))));
     };
     let options = BrowserUseCloudOptions {
         proxy_country: task.proxy_country.clone(),

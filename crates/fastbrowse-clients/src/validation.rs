@@ -17,12 +17,12 @@ use fastbrowse_core::jev::{
     ScoreAnswer,
 };
 use fastbrowse_core::models::{CostBasis, CostComponent, CostLine};
-use fastbrowse_core::py::json::{Style, dumps, float_str, write};
+use fastbrowse_core::py::json::{dumps, float_str};
 use fastbrowse_core::py::lax::float_of;
 use fastbrowse_core::py::{self, text};
 use fastbrowse_core::telemetry::{BudgetExceeded, Ledger, LedgerState, Trace, monotonic};
 use indexmap::IndexMap;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 use tokio::time::Instant;
 
 use crate::http::{Http, Response, TransportError};
@@ -101,36 +101,15 @@ pub fn dollars(value: Option<&Value>) -> Result<f64, String> {
     Ok(result)
 }
 
-/// pydantic's `ValidationError.json(include_input=False, include_url=False)` for one error, which is how Python quotes
-/// a body it could not read.
-pub fn line_error(kind: &str, loc: Vec<Value>, msg: &str, ctx: Option<Value>) -> Value {
-    let mut error = Map::new();
-    error.insert("type".into(), kind.into());
-    error.insert("loc".into(), Value::Array(loc));
-    error.insert("msg".into(), msg.into());
-    if let Some(ctx) = ctx {
-        error.insert("ctx".into(), ctx);
-    }
-    Value::Object(error)
-}
-
-/// The errors as `ValidationError.json()` writes them: compact, UTF-8, through pydantic-core's own writer.
-pub fn errors_json(errors: Vec<Value>) -> String {
-    write(&Value::Array(errors), Style::PYDANTIC)
-}
-
-/// A body jiter could not parse, as pydantic reports it. jiter's messages are serde_json's, word for word.
-pub fn json_invalid(error: &serde_json::Error) -> Value {
-    let reason = error.to_string();
-    line_error("json_invalid", vec![], &format!("Invalid JSON: {reason}"), Some(json!({"error": reason})))
-}
+// pydantic's error text has one home, fastbrowse-core's validation, so a re-ask quotes it word for word.
+pub use fastbrowse_core::validation::{errors_json, json_invalid, line_error};
 
 /// `TypeAdapter(dict[str, JsonValue]).validate_json(response.content)`, failing with pydantic's error text.
 pub fn json_object(response: &Response) -> Result<Map<String, Value>, String> {
     match serde_json::from_slice::<Value>(&response.body) {
         Ok(Value::Object(map)) => Ok(map),
         Ok(_) => Err(errors_json(vec![line_error("dict_type", vec![], "Input should be an object", None)])),
-        Err(error) => Err(errors_json(vec![json_invalid(&error)])),
+        Err(error) => Err(errors_json(vec![json_invalid(&String::from_utf8_lossy(&response.body), &error)])),
     }
 }
 

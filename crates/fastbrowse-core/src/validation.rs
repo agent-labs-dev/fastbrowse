@@ -40,10 +40,13 @@ pub fn errors_json(errors: Vec<Value>) -> String {
 /// A body jiter could not parse, as pydantic reports it.
 ///
 /// jiter words most failures as serde_json does, position included. Where they part, it is jiter's wording that a
-/// recorded re-ask holds: a literal cut short (`tru`, `nul`) is to jiter the end of the input, not a bad identifier.
-pub fn json_invalid(error: &serde_json::Error) -> Value {
+/// recorded re-ask holds: a literal cut short at the end of `text` (`tru`, `nul`) is to jiter the end of the input,
+/// while a bad word inside it (`not json`) is a bad identifier to both.
+pub fn json_invalid(text: &str, error: &serde_json::Error) -> Value {
     let mut reason = error.to_string();
-    if let Some(position) = reason.strip_prefix("expected ident") {
+    let last = text.rsplit('\n').next().unwrap_or_default().chars().count();
+    let at_end = error.line() >= text.split('\n').count() && error.column() >= last;
+    if let Some(position) = reason.strip_prefix("expected ident").filter(|_| at_end) {
         reason = format!("EOF while parsing a value{position}");
     }
     line_error("json_invalid", vec![], &format!("Invalid JSON: {reason}"), Some(json!({"error": reason})))
@@ -62,7 +65,7 @@ pub fn validate_json(ty: &Ty, text: &str) -> Result<Value, String> {
 }
 
 fn parse(text: &str) -> Result<Value, String> {
-    serde_json::from_str::<Value>(text).map_err(|error| errors_json(vec![json_invalid(&error)]))
+    serde_json::from_str::<Value>(text).map_err(|error| errors_json(vec![json_invalid(text, &error)]))
 }
 
 /// `T.model_validate_json(text)` for a Rust type: the type's own tree decides what pydantic would refuse, and serde
@@ -720,6 +723,7 @@ mod tests {
     fn a_cut_literal_is_the_end_of_the_input() {
         for (text, reason) in [
             ("nul", "EOF while parsing a value at line 1 column 3"),
+            ("not json", "expected ident at line 1 column 2"),
             ("", "EOF while parsing a value at line 1 column 0"),
             (r#"{"x": 1} trailing"#, "trailing characters at line 1 column 10"),
             (r#"{"a":1,}"#, "trailing comma at line 1 column 8"),
@@ -728,7 +732,7 @@ mod tests {
             (r#"{"a": "b\q"}"#, "invalid escape at line 1 column 10"),
         ] {
             let error = serde_json::from_str::<Value>(text).unwrap_err();
-            assert_eq!(json_invalid(&error)["ctx"]["error"], reason, "{text}");
+            assert_eq!(json_invalid(text, &error)["ctx"]["error"], reason, "{text}");
         }
     }
 }

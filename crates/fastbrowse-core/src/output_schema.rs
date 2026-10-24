@@ -727,7 +727,7 @@ impl ResponseSchema for OutputModel {
     fn validate_json(&self, text: &str) -> Result<Value, String> {
         // Unparseable JSON is reported as pydantic reports it; a caller's own schema checks keep their own wording.
         let data: Value = serde_json::from_str(text)
-            .map_err(|e| crate::validation::errors_json(vec![crate::validation::json_invalid(&e)]))?;
+            .map_err(|e| crate::validation::errors_json(vec![crate::validation::json_invalid(text, &e)]))?;
         self.validate(&data).map_err(|e| e.to_string())
     }
 }
