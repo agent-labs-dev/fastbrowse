@@ -1,0 +1,10 @@
+//! The decision logic of `src/fastbrowse`, ported module by module above fastbrowse-core: one module per Python file.
+//!
+//! Every prompt, Jev request and structured-output schema built here is byte for byte the one Python builds for the
+//! same inputs, since a run is proven by replaying recorded model traffic keyed on a hash of the request body.
+
+pub mod batches;
+pub mod error;
+mod support;
+
+pub use error::AgentError;

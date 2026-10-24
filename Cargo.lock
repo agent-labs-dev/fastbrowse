@@ -123,6 +123,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastbrowse-agent"
+version = "0.7.0"
+dependencies = [
+ "fastbrowse-core",
+ "indexmap",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "fastbrowse-browser"
 version = "0.7.0"
 dependencies = [
