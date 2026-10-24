@@ -113,9 +113,7 @@ async def test_a_brief_outage_is_outlasted(monkeypatch: pytest.MonkeyPatch, stat
     monkeypatch.setattr("fastbrowse.clients.validation.asyncio.sleep", record)
     responses = iter([*(httpx.Response(status) for _ in range(4)), httpx.Response(200)])
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: next(responses))) as http:
-        response = await post_with_retry(
-            http, "https://jev.test/v1", {}, {}, call="jev", attempt_seconds=30.0
-        )
+        response = await post_with_retry(http, "https://jev.test/v1", {}, {}, call="jev", attempt_seconds=30.0)
     assert response is not None and response.status_code == 200
     assert sum(waits) > 10
 
@@ -174,9 +172,7 @@ async def test_time_lost_to_a_503_is_traced_for_evals_to_leave_out(monkeypatch: 
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: next(responses))) as http:
         with traced() as events:
             for _ in range(2):
-                await post_with_retry(
-                    http, "https://jev.test/v1", {}, {}, call="jev", attempt_seconds=30.0
-                )
+                await post_with_retry(http, "https://jev.test/v1", {}, {}, call="jev", attempt_seconds=30.0)
     lost = [e for e in events if isinstance(e, dict) and e["event"] == "request_transient"]
     assert len(lost) == 1 and lost[0]["call"] == "jev" and lost[0]["ended"] >= lost[0]["began"]
 

@@ -466,9 +466,7 @@ def test_material_call_and_cost_increases_block() -> None:
 
 
 @pytest.mark.parametrize(("base_calls", "candidate_calls"), [(10, 10), (10, 11)])
-def test_a_call_rise_under_the_relative_bound_or_floor_does_not_block(
-    base_calls: int, candidate_calls: int
-) -> None:
+def test_a_call_rise_under_the_relative_bound_or_floor_does_not_block(base_calls: int, candidate_calls: int) -> None:
     baseline = [baseline_row(passed=True) | {"llm_calls": base_calls} for _ in range(3)]
     candidate = [r | {"llm_calls": candidate_calls} for r in attempts(3)]
     report = publication.gate(candidate, release=RELEASE, ledger=evidence(candidate), baselines_=baseline)
