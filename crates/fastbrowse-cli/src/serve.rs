@@ -13,7 +13,9 @@ use std::sync::{Arc, Mutex};
 
 use fastbrowse_clients::environment::{ConfigurationError, Settings};
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::models::{Attachment, Bytes, Event, Image, SecretRef, SecretResolver};
+use fastbrowse_core::models::{
+    Attachment, Bytes, Event, EventHandler, FrameHandler, Image, RunResult, SecretRef, SecretResolver, UntilCheck,
+};
 use fastbrowse_core::output_schema::output_model;
 use fastbrowse_core::protocol::{
     Error, ErrorCode, ErrorResponse, InitializeResult, JsonRpc, Method, Notification, PROTOCOL_VERSION, RequestId,
@@ -266,10 +268,7 @@ impl Server {
             }
             Method::Run => match serde_json::from_value::<RunParams>(params) {
                 Ok(params) => self.start_run(id, params).await,
-                Err(error) => {
-                    let refusal = refused(ErrorCode::InvalidParams, format!("{method}: params: {error}"));
-                    self.refuse(id.as_ref(), refusal).await;
-                }
+                Err(error) => self.refuse(id.as_ref(), params_refused(&error)).await,
             },
         }
     }
@@ -327,22 +326,7 @@ impl Server {
             let outcome = server.0.runner.run(arguments).await;
             server.finish_run();
             let failure = context.failure.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
-            let reply = match outcome {
-                Ok(result) => Ok(result),
-                Err(RunError::Configuration(message)) => Err(refused(ErrorCode::Configuration, message)),
-                // A callback's failure stopped the run, and the reply says what the client failed, as Python's
-                // `run_task` lets the callback's exception through. What the run did before then is in the events.
-                Err(RunError::Cancelled) => match failure {
-                    Some(failure) => Ok(options::error_result(failure.to_string())),
-                    None => Err(refused(ErrorCode::Cancelled, format!("run {} was cancelled", repr(&context.run_id)))),
-                },
-                Err(RunError::Failed(message)) => {
-                    // The reply has room for what went wrong and none for where, so the detail goes to the log.
-                    log::error(&format!("serve: run {} failed\n{message}", repr(&context.run_id)));
-                    Ok(options::error_result(message))
-                }
-            };
-            match reply {
+            match reply(outcome, failure, &context.run_id) {
                 Ok(result) => server.respond(id.as_ref(), result.dump()).await,
                 Err(refusal) => server.refuse(id.as_ref(), refusal).await,
             }
@@ -368,107 +352,28 @@ impl Server {
         }
     }
 
-    /// A `run` request as `run_task`'s arguments, or the reason it cannot become a run.
-    ///
-    /// What the environment can get wrong is found here, before a browser opens: `run_task` reads its model keys only
-    /// when it builds the clients, and a missing Chrome would surface as a failed run. The key checks hold for a
-    /// stand-in runner too, so the server refuses the same requests whatever runs them.
+    /// The callbacks a run of this server reaches its client through, and the run's arguments with them.
     fn arguments(&self, params: &RunParams, context: &RunContext) -> Result<RunArgs, Refused> {
-        let proxy_country = match &params.proxy_country {
-            None => None,
-            Some(asked) => Some(
-                options::country_code(asked)
-                    .map_err(|error| refused(ErrorCode::InvalidParams, format!("run: proxy_country: {error}")))?,
-            ),
-        };
-        let output_schema = match &params.output_schema {
-            None => None,
-            Some(schema) => Some(
-                output_model(&Value::Object(schema.clone()))
-                    .map_err(|error| refused(ErrorCode::UnsupportedSchema, format!("run: output_schema: {error}")))?,
-            ),
-        };
-        options::recording(params.record.as_deref())?;
-        let settings = (self.0.settings)()?;
-        let local = params.chrome.clone().unwrap_or_default();
-        let chrome = options::chrome(&settings, local.headed, local.profile.as_deref(), local.binary.as_deref());
-        let handed_over = options::handed_over(&HandOver {
-            cdp_url: params.cdp_url.as_deref(),
-            cdp_port: params.cdp_port,
-            attach: params.attach,
-            target_match: params.target_match.as_deref(),
-            local: params.local,
-            cloud_asked: false,
-            chrome: &chrome,
-            cloud_profile: params.cloud_profile.as_deref(),
-            proxy_country: proxy_country.as_deref(),
-        })?;
-        let on_cloud = !handed_over
-            && options::cloud(params.local, &chrome, params.cloud_profile.as_deref(), proxy_country.as_deref())?;
-        if !handed_over && !on_cloud && options::find_chrome(chrome.binary.as_deref()).is_none() {
-            return Err(ConfigurationError(
-                "Chrome was not found: install it, or name it in FASTBROWSE_CHROME or in `chrome.binary`".into(),
-            )
-            .into());
-        }
-        let browser_api_key = options::browser_key(&settings, on_cloud)?;
-        options::check_model_keys(&settings)?;
-        let mut args = RunArgs::new(params.task.clone());
-        args.start = params.start.clone();
-        args.browser_api_key = browser_api_key;
-        args.chrome = Some(chrome);
-        args.cloud_profile = params.cloud_profile.clone();
-        args.cdp_url = params.cdp_url.clone();
-        args.cdp_port = params.cdp_port;
-        args.attach = params.attach;
-        args.target_match = params.target_match.clone();
-        args.foreground = params.foreground;
-        args.proxy_country = Some(options::proxy_country(proxy_country.as_deref()));
-        args.viewport = params.viewport;
-        args.cloud_allow_resizing = params.cloud_allow_resizing;
-        args.inputs = params.inputs.clone();
-        args.attachments = params
-            .attachments
-            .iter()
-            .map(|attachment| Attachment {
-                name: attachment.name.clone(),
-                mime_type: attachment.mime_type.clone(),
-                content: Bytes(attachment.content.0.clone()),
-            })
-            .collect();
-        args.limits = params.limits.clone();
-        args.authorization = params.authorization.clone();
-        args.output_schema = output_schema;
-        args.secrets = (!params.secrets.is_empty())
-            .then(|| Arc::new(ClientSecrets { refs: params.secrets.clone(), context: context.clone() }) as _);
-        args.downloads = params.downloads.clone();
-        args.record = params.record.clone();
-        args.cursor = params.cursor;
-        args.cancel = context.cancel.clone();
-        let events = context.clone();
-        args.on_event = Some(Arc::new(move |event: Event| {
-            let context = events.clone();
-            Box::pin(async move {
-                // The run waits for this before it goes on, which puts the events on the wire in order and ahead of
-                // the reply.
-                let params = RunEvent { run_id: context.run_id.clone(), event };
-                context.server.notify(ServerMethod::RunEvent, params.dump()).await;
-            })
-        }));
-        // A run with no frame handler starts no screencast, so a client that reads no frames pays for none.
-        if params.frames {
-            let frames = context.clone();
-            args.on_frame = Some(Arc::new(move |frame: Vec<u8>| {
+        let (events, frames, checks, secrets) = (context.clone(), context.clone(), context.clone(), context.clone());
+        let callbacks = Callbacks {
+            cancel: context.cancel.clone(),
+            on_event: Arc::new(move |event: Event| {
+                let context = events.clone();
+                Box::pin(async move {
+                    // The run waits for this before it goes on, which puts the events on the wire in order and ahead
+                    // of the reply.
+                    let params = RunEvent { run_id: context.run_id.clone(), event };
+                    context.server.notify(ServerMethod::RunEvent, params.dump()).await;
+                })
+            }),
+            on_frame: Some(Arc::new(move |frame: Vec<u8>| {
                 let context = frames.clone();
                 Box::pin(async move {
                     let params = RunFrame { run_id: context.run_id.clone(), frame: Image(frame) };
                     context.server.notify(ServerMethod::RunFrame, params.dump()).await;
                 })
-            }));
-        }
-        if params.until {
-            let checks = context.clone();
-            args.until = Some(Arc::new(move |url: String| {
+            })),
+            until: Some(Arc::new(move |url: String| {
                 let context = checks.clone();
                 Box::pin(async move {
                     let question = RunUntilParams { run_id: context.run_id.clone(), url };
@@ -479,9 +384,20 @@ impl Server {
                         None => false,
                     }
                 })
-            }));
-        }
-        Ok(args)
+            })),
+            resolve: Some(Arc::new(move |name: String, origin: String| {
+                let context = secrets.clone();
+                Box::pin(async move {
+                    let failure = secret_failure(&name);
+                    let question = SecretsResolveParams { run_id: context.run_id.clone(), name, origin };
+                    match context.ask(ServerMethod::SecretsResolve, question.dump(), Some(failure)).await? {
+                        Ok(answer) => secret_value(answer).unwrap_or_else(|failure| context.fail(failure)),
+                        Err(failure) => context.fail(failure),
+                    }
+                })
+            })),
+        };
+        arguments(params, &self.0.settings, callbacks)
     }
 
     async fn notify(&self, method: ServerMethod, params: Value) {
@@ -529,6 +445,144 @@ impl Server {
     }
 }
 
+/// A `run` request as `run_task`'s arguments, or the reason it cannot become a run.
+///
+/// What the environment can get wrong is found here, before a browser opens: `run_task` reads its model keys only
+/// when it builds the clients, and a missing Chrome would surface as a failed run. The key checks hold for a
+/// stand-in runner too, so the server refuses the same requests whatever runs them.
+pub fn arguments(params: &RunParams, settings: &SettingsSource, callbacks: Callbacks) -> Result<RunArgs, Refused> {
+    let proxy_country = match &params.proxy_country {
+        None => None,
+        Some(asked) => Some(
+            options::country_code(asked)
+                .map_err(|error| refused(ErrorCode::InvalidParams, format!("run: proxy_country: {error}")))?,
+        ),
+    };
+    let output_schema = match &params.output_schema {
+        None => None,
+        Some(schema) => Some(
+            output_model(&Value::Object(schema.clone()))
+                .map_err(|error| refused(ErrorCode::UnsupportedSchema, format!("run: output_schema: {error}")))?,
+        ),
+    };
+    options::recording(params.record.as_deref())?;
+    let settings = settings()?;
+    let local = params.chrome.clone().unwrap_or_default();
+    let chrome = options::chrome(&settings, local.headed, local.profile.as_deref(), local.binary.as_deref());
+    let handed_over = options::handed_over(&HandOver {
+        cdp_url: params.cdp_url.as_deref(),
+        cdp_port: params.cdp_port,
+        attach: params.attach,
+        target_match: params.target_match.as_deref(),
+        local: params.local,
+        cloud_asked: false,
+        chrome: &chrome,
+        cloud_profile: params.cloud_profile.as_deref(),
+        proxy_country: proxy_country.as_deref(),
+    })?;
+    let on_cloud = !handed_over
+        && options::cloud(params.local, &chrome, params.cloud_profile.as_deref(), proxy_country.as_deref())?;
+    if !handed_over && !on_cloud && options::find_chrome(chrome.binary.as_deref()).is_none() {
+        return Err(ConfigurationError(
+            "Chrome was not found: install it, or name it in FASTBROWSE_CHROME or in `chrome.binary`".into(),
+        )
+        .into());
+    }
+    let browser_api_key = options::browser_key(&settings, on_cloud)?;
+    options::check_model_keys(&settings)?;
+    let mut args = RunArgs::new(params.task.clone());
+    args.start = params.start.clone();
+    args.browser_api_key = browser_api_key;
+    args.chrome = Some(chrome);
+    args.cloud_profile = params.cloud_profile.clone();
+    args.cdp_url = params.cdp_url.clone();
+    args.cdp_port = params.cdp_port;
+    args.attach = params.attach;
+    args.target_match = params.target_match.clone();
+    args.foreground = params.foreground;
+    args.proxy_country = Some(options::proxy_country(proxy_country.as_deref()));
+    args.viewport = params.viewport;
+    args.cloud_allow_resizing = params.cloud_allow_resizing;
+    args.inputs = params.inputs.clone();
+    args.attachments = params
+        .attachments
+        .iter()
+        .map(|attachment| Attachment {
+            name: attachment.name.clone(),
+            mime_type: attachment.mime_type.clone(),
+            content: Bytes(attachment.content.0.clone()),
+        })
+        .collect();
+    args.limits = params.limits.clone();
+    args.authorization = params.authorization.clone();
+    args.output_schema = output_schema;
+    args.secrets = match callbacks.resolve {
+        Some(resolve) if !params.secrets.is_empty() => {
+            Some(Arc::new(OriginChecked { refs: params.secrets.clone(), resolve }) as _)
+        }
+        _ => None,
+    };
+    args.downloads = params.downloads.clone();
+    args.record = params.record.clone();
+    args.cursor = params.cursor;
+    args.cancel = callbacks.cancel;
+    args.on_event = Some(callbacks.on_event);
+    // A run with no frame handler starts no screencast, so a client that reads no frames pays for none.
+    args.on_frame = callbacks.on_frame.filter(|_| params.frames);
+    args.until = callbacks.until.filter(|_| params.until);
+    Ok(args)
+}
+
+/// What a run's callbacks reach, wherever the client is: over the wire for `serve`, in this process for the bindings.
+pub struct Callbacks {
+    pub cancel: Cancel,
+    pub on_event: EventHandler,
+    /// Used only by a run whose params set `frames`.
+    pub on_frame: Option<FrameHandler>,
+    /// Used only by a run whose params set `until`.
+    pub until: Option<UntilCheck>,
+    /// Asked for a secret's value once the origin rule has let the question through.
+    pub resolve: Option<Resolve>,
+}
+
+/// `(name, origin)` to the value the client holds, or None.
+pub type Resolve = Arc<dyn Fn(String, String) -> BoxFuture<'static, Option<String>> + Send + Sync>;
+
+/// The refusal of `run` params that passed the shape check and still could not be read.
+fn params_refused(error: &serde_json::Error) -> Refused {
+    refused(ErrorCode::InvalidParams, format!("{}: params: {error}", Method::Run.as_str()))
+}
+
+/// `run` params as the model, or the refusal `serve` answers them with.
+pub fn run_params(params: &Value) -> Result<RunParams, Refused> {
+    validate::check(&validate::run_params(), params)
+        .map_err(|problems| refused(ErrorCode::InvalidParams, format!("{}: {problems}", Method::Run.as_str())))?;
+    serde_json::from_value(params.clone()).map_err(|error| params_refused(&error))
+}
+
+/// How a run's outcome is answered. `failure` is the first callback the client failed, which stopped the run.
+pub fn reply(
+    outcome: Result<RunResult, RunError>,
+    failure: Option<ClientError>,
+    run_id: &str,
+) -> Result<RunResult, Refused> {
+    match outcome {
+        Ok(result) => Ok(result),
+        Err(RunError::Configuration(message)) => Err(refused(ErrorCode::Configuration, message)),
+        // A callback's failure stopped the run, and the reply says what the client failed, as Python's `run_task`
+        // lets the callback's exception through. What the run did before then is in the events.
+        Err(RunError::Cancelled) => match failure {
+            Some(failure) => Ok(options::error_result(failure.to_string())),
+            None => Err(refused(ErrorCode::Cancelled, format!("run {} was cancelled", repr(run_id)))),
+        },
+        Err(RunError::Failed(message)) => {
+            // The reply has room for what went wrong and none for where, so the detail goes to the log.
+            log::error(&format!("serve: run {} failed\n{message}", repr(run_id)));
+            Ok(options::error_result(message))
+        }
+    }
+}
+
 impl RunContext {
     /// Ask the client, and wait for its answer as long as it takes, or until the run is stopped (None).
     ///
@@ -573,16 +627,35 @@ fn strict_bool(value: Value) -> Result<bool, ClientError> {
     })
 }
 
+/// What a failed `secrets/resolve` says in place of the client's message. A client's own account of why it has no
+/// value may quote the value, and the run's result is read by people and models the value is kept from.
+pub fn secret_failure(name: &str) -> String {
+    format!("the client could not resolve the secret {}", repr(name))
+}
+
+/// The client's answer to `secrets/resolve`: a string, or null for none.
+pub fn secret_value(answer: Value) -> Result<Option<String>, ClientError> {
+    match answer {
+        Value::Null => Ok(None),
+        Value::String(value) => Ok(Some(value)),
+        _ => Err(ClientError {
+            method: ServerMethod::SecretsResolve,
+            message: "the result cannot be used: Input should be a valid string".into(),
+            code: None,
+        }),
+    }
+}
+
 /// A run's `SecretResolver` for values the client holds. Each one is asked for as it is typed, and none is kept.
 ///
 /// The origin rule is applied here, ahead of the question: a client asked about an origin its ref does not cover
 /// would have to apply the rule a second time to refuse, and the two could disagree.
-struct ClientSecrets {
+struct OriginChecked {
     refs: Vec<SecretRef>,
-    context: RunContext,
+    resolve: Resolve,
 }
 
-impl SecretResolver for ClientSecrets {
+impl SecretResolver for OriginChecked {
     fn available(&self) -> Vec<SecretRef> {
         self.refs.clone()
     }
@@ -593,24 +666,7 @@ impl SecretResolver for ClientSecrets {
             if !secret_allowed(secret, origin) {
                 return None;
             }
-            let question = SecretsResolveParams {
-                run_id: self.context.run_id.clone(),
-                name: name.to_string(),
-                origin: origin.to_string(),
-            };
-            // A client's own account of why it has no value may quote the value, and the run's result is read by
-            // people and models the value is kept from.
-            let failure = format!("the client could not resolve the secret {}", repr(name));
-            match self.context.ask(ServerMethod::SecretsResolve, question.dump(), Some(failure)).await? {
-                Ok(Value::Null) => None,
-                Ok(Value::String(value)) => Some(value),
-                Ok(_) => self.context.fail(ClientError {
-                    method: ServerMethod::SecretsResolve,
-                    message: "the result cannot be used: Input should be a valid string".into(),
-                    code: None,
-                }),
-                Err(failure) => self.context.fail(failure),
-            }
+            (self.resolve)(name.to_string(), origin.to_string()).await
         })
     }
 }

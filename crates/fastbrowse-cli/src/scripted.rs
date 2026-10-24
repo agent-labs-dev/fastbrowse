@@ -184,6 +184,14 @@ async fn run(name: &str, args: RunArgs, requests: Requests) -> Outcome {
             emit(&args, step(0)).await;
             Ok(RunResult { data: json!(2), ..result(Status::Complete) })
         }
+        // src/fastbrowse/scripted.py: `run_task` on a real browser, the script in the task standing where the models
+        // do. The binary's smoke run, which has no model keys, is this.
+        "fastbrowse.scripted:run_task" => {
+            let script = fastbrowse_agent::scripted::steps(&args.task)
+                .map_err(|error| RunError::Failed(format!("ValueError: {error}")))?;
+            let jev = Arc::new(fastbrowse_agent::scripted::ScriptedJev::new(script));
+            crate::runner::run_task_with(args, Some(jev), Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM))).await
+        }
         // tests/test_mcp_server.py's `Recorder`: the events a run sends, then a cited answer with a download.
         "tests.test_mcp_server:Recorder" => {
             emit(&args, browser(Some("https://live.example.com/session"), None)).await;
@@ -237,8 +245,9 @@ fn mcp_result() -> RunResult {
     }
 }
 
-const NAMES: [&str; 16] = [
+const NAMES: [&str; 17] = [
     "tests.test_mcp_server:Recorder",
+    "fastbrowse.scripted:run_task",
     "tests.serve_scripts:echo",
     "tests.serve_scripts:browse_until_cancelled",
     "tests.serve_scripts:type_secret",
