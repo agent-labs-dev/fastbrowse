@@ -47,7 +47,7 @@ The fixture workflow must be green on the release build. A changed comparison mu
 build. CI validates changed result rows and their ledgers against base-branch baselines. The release guard
 refuses a missing fixture receipt or executable changes after a comparison measurement.
 
-Public projections contain ids, source hashes, grades, completion, build identity, time, cost, call counts and
-model throughput only. Answers, page content, credentials, local paths and private trace links never enter a
-public dataset or page. Langfuse upload is not publication approval. Read-back checks must verify an upload
-before marking tracking complete.
+Public projections contain ids, source hashes, grades, completion, build identity, time, cost, call counts,
+model throughput and the input and output token counts behind that throughput only. Answers, page content,
+credentials, local paths and private trace links never enter a public dataset or page. Langfuse upload is
+not publication approval. Read-back checks must verify an upload before marking tracking complete.
