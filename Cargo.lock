@@ -213,6 +213,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastbrowse-run"
+version = "0.7.0"
+dependencies = [
+ "fastbrowse-agent",
+ "fastbrowse-browser",
+ "fastbrowse-clients",
+ "fastbrowse-core",
+ "indexmap",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
