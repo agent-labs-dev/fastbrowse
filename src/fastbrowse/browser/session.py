@@ -475,11 +475,14 @@ class BrowserSession:
 
         return {fid: sid for fid, sid in self._frame_sessions.items() if belongs(sid)}
 
-    def frame_family(self, frame_id: str) -> set[str]:
-        """`frame_id` and every frame drawn inside it, whose sessions descend from that frame's session."""
+    def frame_family(self, frame_id: str) -> tuple[str, ...]:
+        """`frame_id` and every frame drawn inside it, whose sessions descend from that frame's session.
+
+        In the order the frames were attached: a set iterated in hash order, which changes with each process's
+        hash seed, and the labels read from these frames reach a prompt in this order."""
         root = self._frame_sessions.get(frame_id)
         if root is None:
-            return set()
+            return ()
 
         def inside(session_id: str) -> bool:
             seen: set[str] = set()
@@ -492,7 +495,7 @@ class BrowserSession:
                 session_id = self._frame_parents[session_id]
             return False
 
-        return {fid for fid, sid in self.frame_sessions().items() if inside(sid)}
+        return tuple(fid for fid, sid in self.frame_sessions().items() if inside(sid))
 
     @property
     def artifacts(self) -> tuple[Artifact, ...]:
