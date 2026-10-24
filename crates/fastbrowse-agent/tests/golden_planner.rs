@@ -3,8 +3,8 @@
 mod common;
 
 use common::*;
-use fastbrowse_agent::planner::{Plan, answer_checks, make_plan, partition_plan};
-use fastbrowse_core::models::Limits;
+use fastbrowse_agent::planner::{Plan, make_plan, partition_plan};
+use fastbrowse_core::models::{CostComponent, Limits};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::Ledger;
 use serde_json::{Value, json};
@@ -22,8 +22,10 @@ fn plans_ask_what_python_asks() {
             "make_plan" => {
                 let ledger = ledger(&case["ledger"]);
                 let start = case["start"].as_str();
-                let normalize = case["normalize_checks"].as_bool().unwrap();
-                let result = block_on(make_plan(&llm, task, start, ledger.as_ref(), normalize));
+                if case["spent"].as_bool().unwrap() {
+                    ledger.as_ref().unwrap().reserve(CostComponent::Llm, 0.0, 1).unwrap();
+                }
+                let result = block_on(make_plan(&llm, task, start, ledger.as_ref()));
                 let outcome = match result {
                     Ok(generated) => plan_outcome(&generated.data, generated.cost.dump()),
                     Err(error) => error_outcome(&error),
@@ -42,11 +44,6 @@ fn plans_ask_what_python_asks() {
                     Err(error) => error_outcome(&error),
                 };
                 (outcome, Some(ledger))
-            }
-            "answer_checks" => {
-                let plan: Plan = parse(&case["plan"]);
-                let checked = block_on(answer_checks(&llm, task, &plan, None)).unwrap();
-                (plan_outcome(&checked.data, checked.cost.map_or(Value::Null, |cost| cost.dump())), None)
             }
             other => panic!("no Rust function for {other}"),
         };

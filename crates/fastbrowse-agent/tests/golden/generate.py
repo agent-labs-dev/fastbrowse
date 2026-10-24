@@ -66,7 +66,7 @@ from fastbrowse.models import (
     StepOutcome,
 )
 from fastbrowse.page import Block, BlockKind, Capture, Control, Dialog, Observation, Tab
-from fastbrowse.planner import Plan, Requirement, RequirementKind, RunReport, answer_checks, make_plan, partition_plan
+from fastbrowse.planner import Plan, Requirement, RequirementKind, RunReport, make_plan, partition_plan
 from fastbrowse.policy import (
     HistoryEntry,
     ReadAssessment,
@@ -378,9 +378,10 @@ def example_plan() -> Plan:
 def planner() -> list[dict[str, Any]]:
     cases: list[dict[str, Any]] = []
 
-    def plan_reply(plan: JsonValue, checks: Sequence[str] = ("Find the price",)) -> Reply:
+    def plan_reply(plan: JsonValue) -> Reply:
         def reply(purpose: LLMPurpose, messages: Sequence[Message], schema: type[BaseModel]) -> JsonValue:
-            return plan if schema is Plan else {"checks": list(checks)}
+            assert schema is Plan
+            return plan
 
         return reply
 
@@ -391,13 +392,15 @@ def planner() -> list[dict[str, Any]]:
         *,
         start: str | None = None,
         ledger: Limits | None = None,
-        normalize_checks: bool = True,
+        spent: bool = False,
         cost: CostLine | None = None,
     ) -> None:
         calls: list[dict[str, Any]] = []
         book = Ledger(ledger) if ledger is not None else None
+        if book is not None and spent:
+            book.reserve(CostComponent.LLM)
         llm = RecordingLLM(calls, reply, cost or llm_cost())
-        result, error = run(make_plan(llm, task, start=start, ledger=book, normalize_checks=normalize_checks))
+        result, error = run(make_plan(llm, task, start=start, ledger=book))
         cases.append(
             {
                 "name": name,
@@ -405,7 +408,7 @@ def planner() -> list[dict[str, Any]]:
                 "task": task,
                 "start": start,
                 "ledger": None if ledger is None else ledger.model_dump(mode="json"),
-                "normalize_checks": normalize_checks,
+                "spent": spent,
                 "calls": calls,
                 "outcome": error
                 or {"plan": result.data.model_dump(mode="json"), "cost": result.cost.model_dump(mode="json")},
@@ -414,7 +417,7 @@ def planner() -> list[dict[str, Any]]:
         )
 
     example = example_plan().model_dump(mode="json")
-    make("plan and repair its checks", "Find the price", plan_reply(example), start="https://shop.test/")
+    make("a plan with its checks", "Find the price", plan_reply(example), start="https://shop.test/")
     make(
         "a task in other scripts",
         'Trouve le prix \u00e0 Tokyo \u6771\u4eac \U0001f600 "quoted"\nline two',
@@ -426,16 +429,16 @@ def planner() -> list[dict[str, Any]]:
             "Check whether the document can be opened without signing in.",
             plan_reply({"requirements": [], "answer_expected": expected}),
         )
-    for checks in ([], [" "]):
+    for checks in ([], [" "], [" Report admission price. ", "Report opening hours.", "Report admission price."]):
         plan = {
             "requirements": [{"id": "r", "text": "Report admission price and opening hours.", "kind": "information"}],
             "answer_expected": True,
             "answer_checks": checks,
         }
         make(
-            f"omitted checks {len(checks)}",
+            f"checks as written, {len(checks)}",
             "Report admission price and opening hours.",
-            plan_reply(plan, (" Report admission price. ", "Report opening hours.", "Report admission price.")),
+            plan_reply(plan),
         )
     make(
         "an action plan keeps no checks",
@@ -449,9 +452,15 @@ def planner() -> list[dict[str, Any]]:
         ),
     )
     unchecked = {"requirements": example["requirements"], "answer_expected": True}
-    make("both receipts in the ledger", "Find the price", plan_reply(unchecked), ledger=limits(max_llm_calls=2))
-    make("the repair over the call limit", "Find the price", plan_reply(unchecked), ledger=limits(max_llm_calls=1))
-    make("an unpriced repair", "Find the price", plan_reply(unchecked), cost=llm_cost(None))
+    make("one receipt in the ledger", "Find the price", plan_reply(unchecked), ledger=limits(max_llm_calls=1))
+    make(
+        "a plan over the call limit",
+        "Find the price",
+        plan_reply(unchecked),
+        ledger=limits(max_llm_calls=1),
+        spent=True,
+    )
+    make("an unpriced plan", "Find the price", plan_reply(unchecked), cost=llm_cost(None))
     make(
         "run reports beside a page answer",
         "Report the price and final URL.",
@@ -461,12 +470,6 @@ def planner() -> list[dict[str, Any]]:
         "run reports alone",
         "Report the final URL.",
         plan_reply({"requirements": [], "answer_expected": True, "run_reports": ["final_url", "screenshot"]}),
-    )
-    make(
-        "checks left for later",
-        "Find the price",
-        plan_reply(example),
-        normalize_checks=False,
     )
 
     def partition(name: str, task: str, plan: Plan, groups: JsonValue, *, independent_fields: bool = True) -> None:
@@ -528,23 +531,6 @@ def planner() -> list[dict[str, Any]]:
     partition("an empty field", task, plan, [{**groups[0], "fields": [" "]}])
     partition("nothing to decompose", task, plan.model_copy(update={"answer_checks": ()}), groups)
 
-    calls: list[dict[str, Any]] = []
-    llm = RecordingLLM(calls, lambda purpose, messages, schema: {"checks": ["a", " b ", "a"]}, llm_cost())
-    checked = asyncio.run(answer_checks(llm, "\u00e9 task", plan))
-    cases.append(
-        {
-            "name": "answer checks for a mixed plan",
-            "function": "answer_checks",
-            "task": "\u00e9 task",
-            "plan": plan.model_dump(mode="json"),
-            "calls": calls,
-            "outcome": {
-                "plan": checked.data.model_dump(mode="json"),
-                "cost": None if checked.cost is None else checked.cost.model_dump(mode="json"),
-            },
-            "ledger_after": None,
-        }
-    )
     return cases
 
 

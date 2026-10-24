@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message};
-use fastbrowse_core::models::{CostBasis, CostLine, LLMPurpose, Limits, combined_basis};
+use fastbrowse_core::models::LLMPurpose;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::{lax, text};
@@ -74,10 +74,6 @@ fn items<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
 
 fn at_most_128<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
     items(d, 0, Some(128))
-}
-
-fn one_to_128<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
-    items(d, 1, Some(128))
 }
 
 fn at_least_one<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Vec<T>, D::Error> {
@@ -164,7 +160,7 @@ impl TryFrom<PlanFields> for Plan {
     }
 }
 
-const ANSWER_CHECKS: &str = "Completion-only checks for requested answer outputs, separate from browsing requirements. Split requested fields and components into individual checks for each named or numbered result. Retain the entity, scope and constraints. For an unbounded set, check each field across all results. Do not add outputs, actions or intermediate navigation that the user did not request.";
+const ANSWER_CHECKS: &str = "Completion-only checks for requested answer outputs, separate from browsing requirements. Write them in full here: nothing normalizes a terse draft afterwards. Split requested fields and components into individual checks for each named or numbered result, and give each numbered result its own field checks for a fixed number of unnamed results. Retain the entity, scope and constraints, and preserve every, each, all and exact-count requirements. For an unbounded set, check each field across all results. Each check must state its entity and scope explicitly, not just a field label. Exclude this run's own reports (run_reports), which code fills from browser state. Do not add outputs, actions or intermediate navigation that the user did not request.";
 const INSPECT_ACCESS: &str = "True only when the user asks to inspect whether access is restricted, rather than to access protected content. A sign-in wall is evidence for that question, not permission to sign in.";
 
 impl Plan {
@@ -208,40 +204,6 @@ impl Schema for Plan {
                     "Requested reports about this run, copied from browser state rather than read from page text.",
                 ),
             ],
-        )
-        .ty()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "AnswerChecksFields")]
-struct AnswerChecks {
-    checks: Vec<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AnswerChecksFields {
-    #[serde(deserialize_with = "one_to_128")]
-    checks: Vec<String>,
-}
-
-impl TryFrom<AnswerChecksFields> for AnswerChecks {
-    type Error = String;
-
-    fn try_from(fields: AnswerChecksFields) -> Result<Self, String> {
-        if fields.checks.iter().any(|check| text::strip(check).is_empty()) {
-            return Err("Value error, answer checks must name requested outputs".into());
-        }
-        Ok(AnswerChecks { checks: fields.checks })
-    }
-}
-
-impl Schema for AnswerChecks {
-    fn ty() -> Ty {
-        model(
-            "_AnswerChecks",
-            vec![Field::required("checks", Ty::list(Ty::Str).constrained("maxItems", 128).constrained("minItems", 1))],
         )
         .ty()
     }
@@ -407,20 +369,20 @@ pub async fn partition_plan(
 
 fn instructions() -> Message {
     Message::system(
-        "# Planner\nList the outcomes the user asked for as individually checkable requirements, each one short sentence. Split compound requests into separate requirements. An information requirement is a fact to find; an action requirement is a change the user asked for (log in, add to cart, submit). Navigating, searching or opening a page is how the work gets done, not a requirement, even when the task names the search to run or the page to open before what it asks: 'search for X, open its page and tell me Y' has one requirement, to find Y. That is only searching and opening pages: a click, entry or submission the task names is still an action requirement. When the user explicitly asks to expand, load or exhaust content until a stopping condition before reporting, reaching that page state is a separate action requirement. A displayed total does not evidence that the requested expansion was performed. Do not absorb that stopping condition into an information requirement. But when reaching a page is all the user asked for, reaching it is the one action requirement. An address the task says to start at or go to before asking for something else is where the work begins, and the browser may already be there: it is not a requirement of its own. A search the user asked only to run is such a page: it is one action requirement, to leave the search showing with the filters the user named applied, and not a fact to find. Except for a task asking only for a run report, every task has at least one requirement. Answering is not a requirement either: say whether the user expects an answer. Requests to report this run's final URL, navigation steps or final page title, or to capture a screenshot of the page, belong in run_reports, not requirements: code reports the observed address, title and recorded actions and captures the final page itself, so a screenshot is never a requirement to confirm. Keep the requested navigation itself as an action requirement when there is no page fact to find. A request only for the current URL, title or a screenshot needs no page requirement. Never classify page facts, image contents, transaction outcomes or a site's navigation instructions as run reports.\n\nEach information requirement must retain the relevant constraints from the task, including dates, filters and comparison criteria, and adds none the task did not state: a total the user wants reported is the order's total, not the total once the order is finished. Keep related output fields together when they identify one result. When the task asks for information independently about several named targets, create one information requirement per target, retaining its name and requested fields. Do not combine those targets into one requirement. Keep a comparison or aggregate across targets together when it can only be answered from the whole set. Do not create a separate requirement to find that same result again.\n\nKeep a prerequisite action's actor identity and supplied inputs with that action. They are not requested record identities or answer fields. Retain named entities and identity filters when the user asks for information about those entities.\n\nFor an expected page answer, also fill answer_checks with individually checkable requested output values. Separate components of a requested breakdown. These checks validate the final answer, not the discovery plan: do not turn them into extra browsing requirements.\n\nSet count_records for a requested total number of matching entities, including items nested in groups. Preserve the requested entity and filters: group headings are not the entities they contain. Do not turn a record count into a prose estimate. Set inspect_access only for an explicit request to inspect access restrictions; never for a request to retrieve protected content.\n\n# Secrets\nNever write a password, token or other secret value into a requirement.",
+        "# Planner\nList the outcomes the user asked for as individually checkable requirements, each one short sentence. Split compound requests into separate requirements. An information requirement is a fact to find; an action requirement is a change the user asked for (log in, add to cart, submit). Navigating, searching or opening a page is how the work gets done, not a requirement, even when the task names the search to run or the page to open before what it asks: 'search for X, open its page and tell me Y' has one requirement, to find Y. That is only searching and opening pages: a click, entry or submission the task names is still an action requirement. When the user explicitly asks to expand, load or exhaust content until a stopping condition before reporting, reaching that page state is a separate action requirement. A displayed total does not evidence that the requested expansion was performed. Do not absorb that stopping condition into an information requirement. But when reaching a page is all the user asked for, reaching it is the one action requirement. An address the task says to start at or go to before asking for something else is where the work begins, and the browser may already be there: it is not a requirement of its own. A search the user asked only to run is such a page: it is one action requirement, to leave the search showing with the filters the user named applied, and not a fact to find. Except for a task asking only for a run report, every task has at least one requirement. Answering is not a requirement either: say whether the user expects an answer. Requests to report this run's final URL, navigation steps or final page title, or to capture a screenshot of the page, belong in run_reports, not requirements: code reports the observed address, title and recorded actions and captures the final page itself, so a screenshot is never a requirement to confirm. Keep the requested navigation itself as an action requirement when there is no page fact to find. A request only for the current URL, title or a screenshot needs no page requirement. Never classify page facts, image contents, transaction outcomes or a site's navigation instructions as run reports.\n\nEach information requirement must retain the relevant constraints from the task, including dates, filters and comparison criteria, and adds none the task did not state: a total the user wants reported is the order's total, not the total once the order is finished. Keep related output fields together when they identify one result. When the task asks for information independently about several named targets, create one information requirement per target, retaining its name and requested fields. Do not combine those targets into one requirement. Keep a comparison or aggregate across targets together when it can only be answered from the whole set. Do not create a separate requirement to find that same result again.\n\nKeep a prerequisite action's actor identity and supplied inputs with that action. They are not requested record identities or answer fields. Retain named entities and identity filters when the user asks for information about those entities.\n\nFor an expected page answer, also fill answer_checks with individually checkable requested output values, and fill them completely in this one call: nothing normalizes a terse draft afterwards, so an entity or field the draft omits is an output the answer is never checked against. Separate components of a requested breakdown. Separate each field or component for each named or numbered result, and give each numbered result its own field checks for a fixed number of unnamed results. Preserve the entity, scope and constraints in every check, and preserve every, each, all and exact-count requirements; for an unbounded result set, check each requested field across all results. Each check must state its entity and scope explicitly, not just a field label. Exclude this run's own reports (run_reports): code fills those from browser state after page-answer verification. These checks validate the final answer, not the discovery plan: do not turn them into extra browsing requirements.\n\nSet count_records for a requested total number of matching entities, including items nested in groups. Preserve the requested entity and filters: group headings are not the entities they contain. Do not turn a record count into a prose estimate. Set inspect_access only for an explicit request to inspect access restrictions; never for a request to retrieve protected content.\n\n# Secrets\nNever write a password, token or other secret value into a requirement.",
     )
 }
 
-/// The plan, with its answer checks normalized unless `normalize_checks` is off.
+/// The plan, with the answer checks written by the same call that decomposes the task.
 ///
-/// Off, the plan keeps the planner's draft checks, and [`answer_checks`] normalizes them later: discovery never reads
-/// them, so a run can start reading while they are still being written.
+/// One call writes the plan and its checks. The checks are what the final answer is judged against, so the request
+/// that states the requirements must state them in full: a second call that normalized a terse draft traded that
+/// guarantee for a call saved, and a draft is not a plan's checks until it names every entity and scope.
 pub async fn make_plan(
     llm: &dyn LLMClient,
     task: &str,
     start: Option<&str>,
     ledger: Option<&Ledger>,
-    normalize_checks: bool,
 ) -> Result<Generation<Plan>> {
     let site = start.map_or(String::new(), |start| format!("\n\n# Start page\n{start}"));
     let messages = [instructions(), Message::user(format!("# Task\n{task}{site}"))];
@@ -432,57 +394,12 @@ pub async fn make_plan(
         let kind = if plan.answer_expected { RequirementKind::Information } else { RequirementKind::Action };
         plan.requirements = vec![Requirement::new("req_1", task, kind)];
     }
-    if !normalize_checks {
-        return Ok(Generation { data: plan, cost: generated.cost });
-    }
-    let mut cost = generated.cost.clone();
-    if needs_checks(&plan) {
-        let own;
-        let billing = match ledger {
-            Some(ledger) => ledger,
-            None => {
-                own = Ledger::new(Limits::default());
-                &own
-            }
-        };
-        billing.record([generated.cost.clone()])?;
-        let checked = answer_checks(llm, task, &plan, Some(billing)).await?;
-        let checked_cost = checked.cost.expect("a plan that needs checks is normalized by a call");
-        cost = checked_cost.clone();
-        if ledger.is_none() {
-            // Without an external ledger the returned line accounts for both calls, rather than hiding the repair.
-            let lines = [&generated.cost, &checked_cost];
-            let basis = if lines.iter().any(|line| line.dollars.is_none()) {
-                CostBasis::Unknown
-            } else {
-                combined_basis(lines)
-            };
-            cost = CostLine {
-                basis,
-                dollars: (basis != CostBasis::Unknown)
-                    .then(|| fastbrowse_core::py::sum(lines.iter().map(|line| line.dollars.unwrap_or(0.0)))),
-                input_tokens: lines.iter().map(|line| line.input_tokens).sum(),
-                output_tokens: lines.iter().map(|line| line.output_tokens).sum(),
-                seconds: None,
-                ..checked_cost
-            };
-        }
-        plan = checked.data;
-    } else if !plan.answer_checks.is_empty() {
-        plan.answer_checks = Vec::new();
-    }
-    Ok(Generation { data: plan, cost })
+    plan.answer_checks = settled_checks(&plan);
+    Ok(Generation { data: plan, cost: generated.cost })
 }
 
 fn needs_checks(plan: &Plan) -> bool {
     plan.page_answer_expected() && plan.requirements.iter().any(|r| r.kind == RequirementKind::Information)
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CheckedPlan {
-    pub data: Plan,
-    /// The normalizing call's cost, or None when the plan needed no checks and nothing was called.
-    pub cost: Option<CostLine>,
 }
 
 /// Each string once, in first-seen order: `tuple(dict.fromkeys(...))`.
@@ -491,37 +408,20 @@ fn unique<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     values.into_iter().filter(|value| seen.insert(*value)).map(str::to_string).collect()
 }
 
-/// `plan` with its draft answer checks normalized against the task, or with none when no page answer is due.
-pub async fn answer_checks(
-    llm: &dyn LLMClient,
-    task: &str,
-    plan: &Plan,
-    ledger: Option<&Ledger>,
-) -> Result<CheckedPlan> {
+/// The checks the final answer is judged against, taken from the plan's own answer checks.
+///
+/// Trimmed and deduplicated, and empty when no page answer is due. A planner that wrote none for a page-answer task
+/// falls back to one check per information requirement: the requirement's own text names its entity and scope, so it
+/// is checkable even though it is coarser than a split one.
+pub fn settled_checks(plan: &Plan) -> Vec<String> {
     if !needs_checks(plan) {
-        return Ok(CheckedPlan { data: Plan { answer_checks: Vec::new(), ..plan.clone() }, cost: None });
+        return Vec::new();
     }
-    let texts = |kind: RequirementKind| -> Vec<&str> {
-        plan.requirements.iter().filter(|r| r.kind == kind).map(|r| r.text.as_str()).collect()
-    };
-    let proposed = unique(plan.answer_checks.iter().map(|check| text::strip(check)).filter(|check| !check.is_empty()));
-    let request = json!({
-        "task": task,
-        "information_requirements": texts(RequirementKind::Information),
-        "action_requirements": texts(RequirementKind::Action),
-        "draft_checks": proposed,
-        "run_reports": plan.run_reports,
-    });
-    // Nonempty field labels lost the task's every-item scope; normalize checks without replanning discovery.
-    let messages = [
-        Message::system(
-            "Normalize the draft checks against the original task's requested answer outputs. Draft checks can omit entities, quantifiers or fields and are not authoritative. Separate each field or component for each named or numbered result. Preserve entity, scope and constraints. For a fixed number of unnamed results, give each numbered result its own field checks. Preserve every, each, all and exact-count requirements. For an unbounded result set, check each requested field across all results. Each check must state its entity and scope explicitly, not just a field label. Exclude the supplied run_reports: code reports those directly from browser state after page-answer verification. Keep requested page facts and action outcomes. Do not add actions, navigation or extra outputs. These checks do not change discovery. Supplied action_requirements are checked separately against browser state and executed actions. An actor name or login identity supplied for a prerequisite action is not an identity to quote in the answer or bind to each reported data value. Preserve identities that the user explicitly requests as record subjects or data filters.",
-        ),
-        Message::user(dumps(&request)),
-    ];
-    let repaired = generate::<AnswerChecks>(llm, LLMPurpose::Plan, &messages, 8000, ledger).await?;
-    let checks = unique(repaired.data.checks.iter().map(|check| text::strip(check)));
-    Ok(CheckedPlan { data: Plan { answer_checks: checks, ..plan.clone() }, cost: Some(repaired.cost) })
+    let checks = unique(plan.answer_checks.iter().map(|check| text::strip(check)).filter(|check| !check.is_empty()));
+    if !checks.is_empty() {
+        return checks;
+    }
+    plan.requirements.iter().filter(|r| r.kind == RequirementKind::Information).map(|r| r.text.clone()).collect()
 }
 
 #[cfg(test)]
@@ -531,8 +431,7 @@ mod tests {
 
     use fastbrowse_core::BoxFuture;
     use fastbrowse_core::llm::ResponseSchema;
-    use fastbrowse_core::models::CostComponent;
-    use fastbrowse_core::schema::json_schema;
+    use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, Limits};
     use fastbrowse_core::telemetry::BudgetExceeded;
 
     use super::*;
@@ -546,18 +445,17 @@ mod tests {
         }
     }
 
+    /// The one plan call, replying with the plan it was given.
     struct PlannerLLM {
         calls: Mutex<Vec<(LLMPurpose, Vec<Message>)>>,
         plan: Plan,
-        repaired_checks: Vec<String>,
         cost: CostLine,
     }
 
-    fn planner(plan: Plan, repaired: &[&str]) -> PlannerLLM {
+    fn planner(plan: Plan) -> PlannerLLM {
         PlannerLLM {
             calls: Mutex::new(Vec::new()),
             plan,
-            repaired_checks: repaired.iter().map(|s| s.to_string()).collect(),
             cost: CostLine {
                 purpose: Some(LLMPurpose::Plan),
                 ..CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.01))
@@ -580,13 +478,8 @@ mod tests {
                     ledger.reserve(CostComponent::Llm, 0.0, 1)?;
                 }
                 self.calls.lock().unwrap().push((purpose, messages.to_vec()));
-                let reply = if schema.name() == "Plan" {
-                    self.plan.dump_json()
-                } else {
-                    dumps(&json!({"checks": self.repaired_checks}))
-                };
                 Ok(Generation {
-                    data: schema.validate_json(&reply).map_err(LLMError::Failed)?,
+                    data: schema.validate_json(&self.plan.dump_json()).map_err(LLMError::Failed)?,
                     cost: self.cost.clone(),
                 })
             })
@@ -597,13 +490,18 @@ mod tests {
         llm.calls.lock().unwrap()[call].1.iter().map(|m| m.content.clone()).collect::<Vec<_>>().join("\n")
     }
 
+    fn calls(llm: &PlannerLLM) -> usize {
+        llm.calls.lock().unwrap().len()
+    }
+
     #[test]
     fn test_planning_reads_only_the_task_and_start_address_and_preserves_cost() {
-        let llm = planner(example_plan(), &["Find the price"]);
-        let result = block_on(make_plan(&llm, "Find the price", Some("https://shop.test/"), None, true)).unwrap();
+        let llm = planner(example_plan());
+        let result = block_on(make_plan(&llm, "Find the price", Some("https://shop.test/"), None)).unwrap();
         assert_eq!(llm.calls.lock().unwrap()[0].0, LLMPurpose::Plan);
         assert_eq!(result.data, example_plan());
-        assert_eq!(result.cost.dollars, Some(0.02));
+        assert_eq!(result.cost.dollars, Some(0.01));
+        assert_eq!(calls(&llm), 1);
         let prompt = prompt(&llm, 0);
         assert!(prompt.contains("# Task\nFind the price") && prompt.contains("# Start page\nhttps://shop.test/"));
         assert!(prompt.contains("individually checkable"));
@@ -619,8 +517,8 @@ mod tests {
 
     #[test]
     fn test_planning_keeps_a_spelled_out_search_out_of_the_requirements() {
-        let llm = planner(example_plan(), &["Find the price"]);
-        block_on(make_plan(&llm, "Search for X, open that article, and tell me the year.", None, None, true)).unwrap();
+        let llm = planner(example_plan());
+        block_on(make_plan(&llm, "Search for X, open that article, and tell me the year.", None, None)).unwrap();
         let prompt = prompt(&llm, 0);
         assert!(prompt.contains("'search for X, open its page and tell me Y' has one requirement, to find Y"));
         assert!(prompt.contains("a click, entry or submission the task names is still an action requirement"));
@@ -630,38 +528,34 @@ mod tests {
     fn test_an_empty_plan_retains_the_requested_outcome() {
         let task = "Check whether the document can be opened without signing in.";
         for answer_expected in [false, true] {
-            let llm = planner(Plan::new(vec![], answer_expected), &["Find the price"]);
-            let result = block_on(make_plan(&llm, task, None, None, true)).unwrap();
+            let llm = planner(Plan::new(vec![], answer_expected));
+            let result = block_on(make_plan(&llm, task, None, None)).unwrap();
             assert_eq!(result.data.requirements.len(), 1);
             let requirement = &result.data.requirements[0];
             assert_eq!(requirement.text, task);
             let kind = if answer_expected { RequirementKind::Information } else { RequirementKind::Action };
             assert_eq!(requirement.kind, kind);
-            assert_eq!(result.cost.dollars, Some(if answer_expected { 0.02 } else { 0.01 }));
+            // One plan call is one receipt; a synthesized information requirement still gets its own check.
+            let checks: Vec<String> = if answer_expected { vec![task.into()] } else { vec![] };
+            assert_eq!(result.data.answer_checks, checks);
+            assert_eq!(result.cost.dollars, Some(0.01));
         }
     }
 
     #[test]
-    fn test_omitted_answer_checks_are_decomposed_without_replanning_discovery() {
+    fn test_omitted_answer_checks_fall_back_to_the_information_requirements() {
         for draft in [vec![], vec![" ".to_string()]] {
+            let text = "Report admission price and opening hours.";
             let plan = Plan {
                 answer_checks: draft,
-                ..Plan::new(
-                    vec![Requirement::new(
-                        "r",
-                        "Report admission price and opening hours.",
-                        RequirementKind::Information,
-                    )],
-                    true,
-                )
+                ..Plan::new(vec![Requirement::new("r", text, RequirementKind::Information)], true)
             };
-            let checks = ["Report admission price.", "Report opening hours."];
-            let llm = planner(plan.clone(), &checks);
-            let result = block_on(make_plan(&llm, &plan.requirements[0].text, None, None, true)).unwrap();
-            assert_eq!(result.data.answer_checks, checks);
+            let llm = planner(plan.clone());
+            let result = block_on(make_plan(&llm, text, None, None)).unwrap();
+            assert_eq!(result.data.answer_checks, [text]);
             assert_eq!(result.data.requirements, plan.requirements);
-            assert_eq!(llm.calls.lock().unwrap().len(), 2);
-            assert_eq!(result.cost.dollars, Some(0.02));
+            assert_eq!(calls(&llm), 1);
+            assert_eq!(result.cost.dollars, Some(0.01));
         }
     }
 
@@ -671,81 +565,88 @@ mod tests {
             answer_checks: vec!["Report the museum's opening hours.".into()],
             ..Plan::new(vec![Requirement::new("r", "Open the museum page.", RequirementKind::Action)], true)
         };
-        let result = block_on(make_plan(&planner(plan.clone(), &[]), "Open the museum page.", None, None, true));
-        assert!(result.unwrap().data.answer_checks.is_empty());
+        let llm = planner(plan);
+        let result = block_on(make_plan(&llm, "Open the museum page.", None, None)).unwrap();
+        assert!(result.data.answer_checks.is_empty());
+        assert_eq!(calls(&llm), 1);
     }
 
     #[test]
-    fn test_output_check_repair_keeps_both_receipts_and_respects_call_limits() {
-        let plan = Plan::new(example_plan().requirements, true);
-        let llm = planner(plan, &["Find the price"]);
-        let ledger = Ledger::new(Limits { max_llm_calls: Some(2), ..Limits::default() });
-        let result = block_on(make_plan(&llm, "Find the price", None, Some(&ledger), true)).unwrap();
+    fn test_one_plan_is_one_call_against_the_call_limit() {
+        let llm = planner(Plan::new(example_plan().requirements, true));
+        let ledger = Ledger::new(Limits { max_llm_calls: Some(1), ..Limits::default() });
+        let result = block_on(make_plan(&llm, "Find the price", None, Some(&ledger))).unwrap();
         ledger.record([result.cost]).unwrap();
-        assert_eq!(ledger.state().llm_calls, 2);
-        assert_eq!(ledger.state().lines, vec![llm.cost.clone(), llm.cost.clone()]);
-        let capped = Ledger::new(Limits { max_llm_calls: Some(1), ..Limits::default() });
-        let error = block_on(make_plan(&llm, "Find the price", None, Some(&capped), true)).unwrap_err();
+        assert_eq!(ledger.state().llm_calls, 1);
+        assert_eq!(ledger.state().lines, vec![llm.cost.clone()]);
+        let spent = Ledger::new(Limits { max_llm_calls: Some(1), ..Limits::default() });
+        spent.reserve(CostComponent::Llm, 0.0, 1).unwrap();
+        let error = block_on(make_plan(&llm, "Find the price", None, Some(&spent))).unwrap_err();
         assert!(matches!(error, AgentError::Budget(BudgetExceeded { .. })));
-        assert_eq!(capped.state().llm_calls, 1);
-        assert_eq!(capped.state().lines, vec![llm.cost.clone()]);
+        assert_eq!(spent.state().llm_calls, 1);
+        assert!(spent.state().lines.is_empty());
     }
 
     #[test]
-    fn test_unpriced_plan_repair_retains_unknown_aggregate_dollars() {
-        let mut llm = planner(Plan::new(example_plan().requirements, true), &["Find the price"]);
+    fn test_an_unpriced_plan_keeps_unknown_dollars() {
+        let mut llm = planner(Plan::new(example_plan().requirements, true));
         llm.cost.basis = CostBasis::Unknown;
         llm.cost.dollars = None;
-        let result = block_on(make_plan(&llm, "Find the price", None, None, true)).unwrap();
+        let result = block_on(make_plan(&llm, "Find the price", None, None)).unwrap();
         assert_eq!((result.cost.basis, result.cost.dollars), (CostBasis::Unknown, None));
-        assert_eq!(llm.calls.lock().unwrap().len(), 2);
+        assert_eq!(calls(&llm), 1);
     }
 
     #[test]
-    fn test_nonempty_output_checks_retain_every_requested_entity() {
+    fn test_the_plan_call_is_asked_for_entity_scoped_checks() {
         let task = "Compare Adapter Atlas and Adapter Beacon. Report the exact port count of each adapter.";
-        let draft = Plan {
-            answer_checks: vec!["exact port count".into()],
+        let scoped = ["Report Adapter Atlas exact port count.", "Report Adapter Beacon exact port count."];
+        let plan = Plan {
+            answer_checks: scoped.iter().map(|s| s.to_string()).collect(),
             ..Plan::new(vec![Requirement::new("r", task, RequirementKind::Information)], true)
         };
-        let scoped = ["Report Adapter Atlas exact port count.", "Report Adapter Beacon exact port count."];
-        let llm = planner(draft.clone(), &scoped);
-        let result = block_on(make_plan(&llm, task, None, None, true)).unwrap();
+        let llm = planner(plan.clone());
+        let result = block_on(make_plan(&llm, task, None, None)).unwrap();
+        assert!(
+            prompt(&llm, 0).contains("Each check must state its entity and scope explicitly, not just a field label")
+        );
         assert_eq!(result.data.answer_checks, scoped);
-        assert_eq!(result.data.requirements, draft.requirements);
-        assert_eq!(llm.calls.lock().unwrap().len(), 2);
-        assert_eq!(result.cost.dollars, Some(0.02));
+        assert_eq!(result.data.requirements, plan.requirements);
+        assert_eq!(calls(&llm), 1);
+        assert_eq!(result.cost.dollars, Some(0.01));
     }
 
     #[test]
     fn test_mixed_page_answer_excludes_code_reported_outputs() {
         let plan = Plan { run_reports: vec![RunReport::FinalUrl], ..example_plan() };
-        let llm = planner(plan, &["Find the price"]);
-        let result = block_on(make_plan(&llm, "Report the price and final URL.", None, None, true)).unwrap();
-        let calls = llm.calls.lock().unwrap();
-        let request: Value = serde_json::from_str(&calls[1].1[1].content).unwrap();
-        assert_eq!(request["run_reports"], json!(["final_url"]));
-        assert!(calls[1].1[0].content.contains("Exclude the supplied run_reports"));
+        let llm = planner(plan);
+        let result = block_on(make_plan(&llm, "Report the price and final URL.", None, None)).unwrap();
+        assert!(llm.calls.lock().unwrap()[0].1[0].content.contains("Exclude this run's own reports (run_reports)"));
         assert_eq!(result.data.answer_checks, ["Find the price"]);
         assert_eq!(result.data.run_reports, [RunReport::FinalUrl]);
     }
 
     #[test]
-    fn test_code_report_only_plan_needs_no_output_normalization() {
+    fn test_code_report_only_plan_needs_no_answer_checks() {
         let plan = Plan { run_reports: vec![RunReport::FinalUrl], ..Plan::new(vec![], true) };
-        let llm = planner(plan.clone(), &[]);
-        let result = block_on(make_plan(&llm, "Report the final URL.", None, None, true)).unwrap();
+        let llm = planner(plan.clone());
+        let result = block_on(make_plan(&llm, "Report the final URL.", None, None)).unwrap();
         assert!(result.data.answer_checks.is_empty());
         assert_eq!(result.data.run_reports, plan.run_reports);
-        assert_eq!(llm.calls.lock().unwrap().len(), 1);
+        assert_eq!(calls(&llm), 1);
     }
 
     #[test]
-    fn blank_answer_checks_are_refused_as_pydantic_refuses_them() {
-        assert!(serde_json::from_str::<AnswerChecks>(r#"{"checks": [" "]}"#).is_err());
-        assert!(serde_json::from_str::<AnswerChecks>(r#"{"checks": []}"#).is_err());
-        assert!(serde_json::from_str::<AnswerChecks>(r#"{"checks": ["a"], "x": 1}"#).is_err());
+    fn settled_checks_are_trimmed_and_deduplicated_in_order() {
+        let plan = Plan {
+            answer_checks: vec![" b ".into(), "a".into(), "b".into(), "".into()],
+            ..Plan::new(vec![Requirement::new("r", "Find a and b", RequirementKind::Information)], true)
+        };
+        assert_eq!(settled_checks(&plan), ["b", "a"]);
+    }
+
+    #[test]
+    fn a_blank_requirement_id_is_refused_as_pydantic_refuses_it() {
         assert!(serde_json::from_str::<Requirement>(r#"{"id": "", "text": "t", "kind": "action"}"#).is_err());
-        assert_eq!(json_schema(&AnswerChecks::ty())["title"], "_AnswerChecks");
     }
 }
