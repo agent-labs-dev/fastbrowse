@@ -13,5 +13,6 @@ pub mod memory;
 pub mod planner;
 pub mod policy;
 mod support;
+pub mod tripwires;
 
 pub use error::AgentError;
