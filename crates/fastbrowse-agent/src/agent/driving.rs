@@ -81,7 +81,7 @@ impl Agent {
                     state.next_page = false;
                     state.await_plan().await?;
                     let reason = HttpFailure { url: observation.url.clone(), status }.message();
-                    self.recover(state, &observation, &reason, Status::Stuck).await?;
+                    Box::pin(self.recover(state, &observation, &reason, Status::Stuck)).await?;
                     continue;
                 }
             }
@@ -89,10 +89,12 @@ impl Agent {
                 let directed = state.directed.take();
                 if let Some((Operation::Navigate, url)) = directed {
                     let decision = Decision { url, directed: true, ..code_decision(Operation::Navigate, None) };
-                    match self.step(state, &observation, &decision, Decider::Llm, StepOptions::default()).await {
+                    match Box::pin(self.step(state, &observation, &decision, Decider::Llm, StepOptions::default()))
+                        .await
+                    {
                         Err(Flow::Unsure(unsure)) => {
                             state.section_read = false;
-                            self.recover(state, &observation, &unsure.reason, unsure.gives_up_as).await?;
+                            Box::pin(self.recover(state, &observation, &unsure.reason, unsure.gives_up_as)).await?;
                         }
                         other => {
                             other?;
@@ -101,7 +103,7 @@ impl Agent {
                 } else {
                     state.section_read = false;
                     let read = code_decision(Operation::Read, None);
-                    self.step(state, &observation, &read, Decider::Llm, StepOptions::default()).await?;
+                    Box::pin(self.step(state, &observation, &read, Decider::Llm, StepOptions::default())).await?;
                     if !state.section_read && state.directed.is_none() && state.oversized_answer {
                         state.directed = Some((Operation::Done, None));
                     }
@@ -114,7 +116,7 @@ impl Agent {
                 && lookup(state.plan())
             {
                 state.directed = None;
-                if let Some(result) = self.finish(state, output_schema, until).await? {
+                if let Some(result) = Box::pin(self.finish(state, output_schema, until)).await? {
                     return Ok(result);
                 }
                 continue;
@@ -122,27 +124,27 @@ impl Agent {
             let (undone, renews, put_back) = self.reversal(state);
             let stalled = self.settle(state, &observation, renews, put_back);
             if let Some(stalled) = undone.or(stalled) {
-                self.recover(state, &observation, &stalled, Status::Stuck).await?;
+                Box::pin(self.recover(state, &observation, &stalled, Status::Stuck)).await?;
                 continue;
             }
             // Walking a list is dispatched before Jev is asked, because not asking is the point: the reader asked for
             // the rest of the list and the link is already found, so a decision would buy nothing. It therefore passes
             // none of the gates below, which is safe only because of what it can be: a pager link to another address.
             if state.next_page && state.through_end && !state.paging_failed {
-                self.pipeline_pages(state, &observation).await?;
+                Box::pin(self.pipeline_pages(state, &observation)).await?;
                 if !state.paging_failed
                     && !state.owes_read
                     && lookup(state.plan())
                     && state.open_answer_outputs.is_empty()
                     && answered(state.plan(), &state.notes)
                     && self.observed().is_some()
-                    && let Some(result) = self.finish(state, output_schema, until).await?
+                    && let Some(result) = Box::pin(self.finish(state, output_schema, until)).await?
                 {
                     return Ok(result);
                 }
                 continue;
             }
-            if self.reread_if_changed(state, &observation).await? {
+            if Box::pin(self.reread_if_changed(state, &observation)).await? {
                 continue;
             }
             if !state.open_answer_outputs.is_empty()
@@ -153,7 +155,7 @@ impl Agent {
             {
                 // Recovery's missing-output list describes the rejected draft. New quoted support needs another
                 // finish check before that stale list sends the browser back to content it has already read.
-                if let Some(result) = self.finish(state, output_schema, until).await? {
+                if let Some(result) = Box::pin(self.finish(state, output_schema, until)).await? {
                     return Ok(result);
                 }
                 continue;
@@ -161,9 +163,9 @@ impl Agent {
             let usable = without_failed_links(state, &observation);
             if let Some(decision) = paging(state, &usable) {
                 let options = StepOptions { gate: false, ..StepOptions::default() };
-                if self.step(state, &observation, &decision, Decider::Llm, options).await? {
+                if Box::pin(self.step(state, &observation, &decision, Decider::Llm, options)).await? {
                     let reason = read_exhausted(state);
-                    self.recover(state, &observation, &reason, Status::Stuck).await?;
+                    Box::pin(self.recover(state, &observation, &reason, Status::Stuck)).await?;
                 }
                 continue;
             }
@@ -230,7 +232,7 @@ impl Agent {
                 }
                 let plan = state.await_plan().await?;
                 if !access_inspection(&plan) {
-                    self.meet_wall(state, &observation, &raw, &plan).await?;
+                    Box::pin(self.meet_wall(state, &observation, &raw, &plan)).await?;
                     continue;
                 }
                 state.passed_wall = Some(raw.url.clone());
@@ -245,7 +247,7 @@ impl Agent {
                     (decision, uncertain, decided_by) = (directed, false, Decider::Llm);
                 }
             }
-            if self.read_before_interaction(state, &observation, &decision, decided_by).await? {
+            if Box::pin(self.read_before_interaction(state, &observation, &decision, decided_by)).await? {
                 let done = state.ready_plan.as_ref().is_some_and(|plan| {
                     lookup(plan) && state.open_answer_outputs.is_empty() && answered(plan, &state.notes)
                 });
@@ -296,7 +298,7 @@ impl Agent {
                     // read spends nothing.
                     let held = state.directed.take();
                     let recoveries = state.recoveries;
-                    if !self.step(state, &observation, &reading, decided_by, StepOptions::default()).await? {
+                    if !Box::pin(self.step(state, &observation, &reading, decided_by, StepOptions::default())).await? {
                         if !(lookup(&plan)
                             && state.open_answer_outputs.is_empty()
                             && answered(&plan, &state.notes)
@@ -321,7 +323,7 @@ impl Agent {
                         };
                         let Some(directed) = directed else {
                             let reason = read_exhausted(state);
-                            self.recover(state, &observation, &reason, Status::Stuck).await?;
+                            Box::pin(self.recover(state, &observation, &reason, Status::Stuck)).await?;
                             continue;
                         };
                         (decision, uncertain, decided_by) = (directed, false, Decider::Llm);
@@ -337,11 +339,11 @@ impl Agent {
                 || (uncertain && !not_acting(decision.operation) && !try_unsure(state, &observation, &decision))
             {
                 let reason = format!("uncertain next step ({:.2})", decision.confidence());
-                self.recover(state, &observation, &reason, Status::Stuck).await?;
+                Box::pin(self.recover(state, &observation, &reason, Status::Stuck)).await?;
                 continue;
             }
             if decision.operation == Operation::Done {
-                if let Some(result) = self.finish(state, output_schema, until).await? {
+                if let Some(result) = Box::pin(self.finish(state, output_schema, until)).await? {
                     return Ok(result);
                 }
                 continue;
@@ -356,22 +358,22 @@ impl Agent {
                 let reason = format!("{} {} already did nothing here", decision.operation, named.unwrap_or_default())
                     .trim()
                     .to_string();
-                self.recover(state, &observation, &reason, Status::Stuck).await?;
+                Box::pin(self.recover(state, &observation, &reason, Status::Stuck)).await?;
                 continue;
             }
             let acted = async {
-                if !uncertain && !decision.directed && self.fill_form(state, &observation, &decision).await? {
+                if !uncertain && !decision.directed && Box::pin(self.fill_form(state, &observation, &decision)).await? {
                     return Ok(());
                 }
-                if self.step(state, &observation, &decision, decided_by, StepOptions::default()).await? {
+                if Box::pin(self.step(state, &observation, &decision, decided_by, StepOptions::default())).await? {
                     let reason = read_exhausted(state);
-                    self.recover(state, &observation, &reason, Status::Stuck).await?;
+                    Box::pin(self.recover(state, &observation, &reason, Status::Stuck)).await?;
                 }
                 Ok(())
             };
             match acted.await {
                 Err(Flow::Unsure(unsure)) => {
-                    self.recover(state, &observation, &unsure.reason, unsure.gives_up_as).await?;
+                    Box::pin(self.recover(state, &observation, &unsure.reason, unsure.gives_up_as)).await?;
                 }
                 other => other?,
             }
@@ -544,8 +546,8 @@ impl Agent {
 
     /// Re-observe until the page is no longer `stuck`, returning whether it moved in time.
     pub(super) async fn outwait(&self, stuck: &Observation) -> Step<bool> {
-        let deadline = Instant::now() + Duration::from_secs_f64(INTERSTITIAL_SECONDS);
-        while tokio::time::Instant::now().into_std() < deadline {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs_f64(INTERSTITIAL_SECONDS);
+        while tokio::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_secs_f64(INTERSTITIAL_POLL_SECONDS)).await;
             if self.observe().await?.page_key != stuck.page_key {
                 return Ok(true);
@@ -625,7 +627,7 @@ impl Agent {
                 None => self.capture().await?,
             };
             let (read_progress, skipped) =
-                self.read(state, Some(capture), Some(observation), options.require_all_evidence).await?;
+                Box::pin(self.read(state, Some(capture), Some(observation), options.require_all_evidence)).await?;
             progressed = read_progress;
             state.read_here = true;
             state.typed_on_passed = false;
@@ -886,7 +888,7 @@ impl Agent {
         }
         for tripped in self.tripwires(state) {
             if self.armed(&tripped) {
-                self.recover(state, observation, &tripped.to_string(), Status::Stuck).await?;
+                Box::pin(self.recover(state, observation, &tripped.to_string(), Status::Stuck)).await?;
                 state.form_continues = false;
                 return Ok(false);
             }

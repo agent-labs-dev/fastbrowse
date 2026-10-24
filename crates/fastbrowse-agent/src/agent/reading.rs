@@ -189,7 +189,7 @@ impl Agent {
             {
                 let drawn = self.capture().await?;
                 if !text::strip(&drawn.text).is_empty() {
-                    return Box::pin(self.read(state, Some(drawn), Some(observation), false)).await;
+                    return Box::pin(Box::pin(self.read(state, Some(drawn), Some(observation), false))).await;
                 }
             }
             // Nothing on the page can evidence anything, so the reader is not asked. A blank outcome was inspected too:
@@ -672,7 +672,14 @@ impl Agent {
                 let read_key = capture.read_key();
                 let options =
                     StepOptions { capture: Some(capture), require_all_evidence: true, ..StepOptions::default() };
-                match self.step(state, &observation, &code_decision(Operation::Read, None), Decider::Llm, options).await
+                match Box::pin(self.step(
+                    state,
+                    &observation,
+                    &code_decision(Operation::Read, None),
+                    Decider::Llm,
+                    options,
+                ))
+                .await
                 {
                     Err(flow) if flow.is_llm() => {
                         let Flow::Agent(error) = &flow else { unreachable!("an LLM error is an agent error") };

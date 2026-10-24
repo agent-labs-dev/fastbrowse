@@ -224,6 +224,14 @@ impl Validator {
                     Some(default) => {
                         output.insert(name.to_string(), default.clone());
                     }
+                    // A default factory builds an empty container; the schema writes no default for it.
+                    None if field.factory => {
+                        let empty = match &field.ty {
+                            Ty::Map(_) => Value::Object(Map::new()),
+                            _ => Value::Array(Vec::new()),
+                        };
+                        output.insert(name.to_string(), empty);
+                    }
                     None => issues.push(Issue::new("missing", "Field required").at(key.into())),
                 },
             }

@@ -1,7 +1,7 @@
-# gitleaks' own rules, and one allowance. The core goldens record what Python's helpers return, and some of that is a
-# sha256 digest under a name ending in `_key`, which the generic-api-key rule reads as a credential. Only those names,
-# holding only lowercase hex, in only the golden files, are let through. A golden is regenerated whenever Python
-# changes, so a fingerprint in .gitleaksignore, which names a line, would stop matching.
+# gitleaks' own rules, and one allowance. The core and agent goldens record what Python's helpers return, and some of
+# that is a sha256 digest under a name ending in `_key`, which the generic-api-key rule reads as a credential. Only
+# those names, holding only lowercase hex, in only the golden files, are let through. A golden is regenerated whenever
+# Python changes, so a fingerprint in .gitleaksignore, which names a line, would stop matching.
 
 [extend]
 useDefault = true
@@ -9,6 +9,6 @@ useDefault = true
 [[allowlists]]
 description = "digests Python computed, recorded in the Rust goldens"
 condition = "AND"
-paths = ['''^crates/fastbrowse-core/tests/golden/[a-z_]+\.json$''']
+paths = ['''^crates/fastbrowse-(core|agent)/tests/golden/[a-z_]+\.json$''']
 regexTarget = "match"
-regexes = ['''(state|step|read)_key": "[0-9a-f]{16,64}"''']
+regexes = ['''(state|step|read|page|document)_key": "[0-9a-f]{16,64}"''']

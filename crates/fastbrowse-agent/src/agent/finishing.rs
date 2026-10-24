@@ -66,7 +66,7 @@ impl Agent {
         state.await_checks().await?;
         if state.finish_partitions.is_empty() {
             if !state.oversized_answer {
-                match self.finish_whole(state, output_schema, until, false).await {
+                match Box::pin(self.finish_whole(state, output_schema, until, false)).await {
                     Err(Flow::Agent(AgentError::NotesTooLarge(_))) => state.oversized_answer = true,
                     other => return other,
                 }
@@ -113,7 +113,7 @@ impl Agent {
                 }
             }
         }
-        self.finish_partitioned(state, output_schema, until).await
+        Box::pin(self.finish_partitioned(state, output_schema, until)).await
     }
 
     async fn finish_partitioned(
@@ -127,7 +127,7 @@ impl Agent {
         {
             let fresh = self.observe().await?;
             let reason = format!("DONE rejected, no new output evidence: {}", state.open_answer_outputs.join("; "));
-            self.recover(state, &fresh, &reason, Status::Unverified).await?;
+            Box::pin(self.recover(state, &fresh, &reason, Status::Unverified)).await?;
             return Ok(None);
         }
         let mut missing: Vec<String> = Vec::new();
@@ -199,7 +199,7 @@ impl Agent {
                 if state.oversized_answer && lookup(&plan) && unread(&plan, &state.notes) {
                     // Separate source reads can leave a bundled requirement unbound. Only a fully audited field answer
                     // can bind their combined quotes before the normal completion check.
-                    let (answer, held) = self.answer(state, None).await?;
+                    let (answer, held) = Box::pin(self.answer(state, None)).await?;
                     supported = held;
                     if supported {
                         let mut basis: Vec<String> = Vec::new();
@@ -216,7 +216,7 @@ impl Agent {
                         state.verified_answer = Some(answer);
                     }
                 }
-                if supported { self.finish_whole(state, None, None, true).await } else { Ok(None) }
+                if supported { Box::pin(self.finish_whole(state, None, None, true)).await } else { Ok(None) }
             }
             .await;
             let child = Child::swap(state, saved);
@@ -275,7 +275,7 @@ impl Agent {
             state.rejected_answer_evidence = Some(answer_evidence(&state.notes, true));
             let fresh = self.observe().await?;
             self.record_failure(state, &fresh, Operation::Done, &reason, None, None, None, Decider::Llm).await?;
-            self.recover(state, &fresh, &reason, Status::Unverified).await?;
+            Box::pin(self.recover(state, &fresh, &reason, Status::Unverified)).await?;
             return Ok(None);
         }
         let mut claims: Vec<Claim> = Vec::new();
@@ -285,7 +285,7 @@ impl Agent {
             }
         }
         let answer = assemble_answer(&claims, &state.notes, &state.plan().requirements, 0);
-        let result = match self.conclude(state, output_schema, Some(Prepared::Held(answer)), true).await {
+        let result = match Box::pin(self.conclude(state, output_schema, Some(Prepared::Held(answer)), true)).await {
             Err(Flow::Agent(AgentError::NotesTooLarge(message))) => {
                 let notes = state.notes.clone();
                 return Ok(Some(self.partial_result(
@@ -306,7 +306,7 @@ impl Agent {
             };
             if !until(url).await {
                 let fresh = self.observe().await?;
-                self.recover(state, &fresh, "Completion condition not satisfied", Status::Stuck).await?;
+                Box::pin(self.recover(state, &fresh, "Completion condition not satisfied", Status::Stuck)).await?;
                 return Ok(None);
             }
         }
@@ -348,7 +348,7 @@ impl Agent {
                 state.rejected_answer_evidence = Some(answer_evidence(&state.notes, true));
             }
             let reason = format!("DONE rejected, no new output evidence: {}", state.open_answer_outputs.join("; "));
-            self.recover(state, &fresh, &reason, Status::Unverified).await?;
+            Box::pin(self.recover(state, &fresh, &reason, Status::Unverified)).await?;
             return Ok(None);
         }
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
@@ -396,7 +396,7 @@ impl Agent {
                     }));
                     held
                 } else {
-                    self.holds(state, answer).await?
+                    Box::pin(self.holds(state, answer)).await?
                 }
             }
             None => None,
@@ -471,7 +471,7 @@ impl Agent {
                 Some(answer) => Some(Prepared::Held(answer)),
                 None => handed.take(),
             };
-            let result = self.conclude(state, output_schema, prepared, !partition).await?;
+            let result = Box::pin(self.conclude(state, output_schema, prepared, !partition)).await?;
             fresh = self.observed().unwrap_or(fresh);
             let mut result = Some(result);
             if result.as_ref().is_some_and(|r| r.status == Status::Unverified)
@@ -542,7 +542,7 @@ impl Agent {
         let judge = if check.verdict == DoneVerdict::Verify { Decider::Llm } else { Decider::Jev };
         self.record_failure(state, &fresh, Operation::Done, &reason, None, None, None, judge).await?;
         let gives_up_as = if state.missing_answer_outputs.is_empty() { Status::Stuck } else { Status::Unverified };
-        self.recover(state, &fresh, &reason, gives_up_as).await?;
+        Box::pin(self.recover(state, &fresh, &reason, gives_up_as)).await?;
         Ok(None)
     }
 
@@ -650,7 +650,7 @@ impl Agent {
         if let Some(verified_answer) = state.verified_answer.clone() {
             // New context can invalidate a cache entry without changing a previously supported answer.
             prepared = None;
-            if let Some(held) = self.holds(state, verified_answer).await? {
+            if let Some(held) = Box::pin(self.holds(state, verified_answer)).await? {
                 return Ok((held, true));
             }
         }
@@ -680,7 +680,7 @@ impl Agent {
             }
             Err(flow) => return Err(flow),
         };
-        let mut held = self.holds(state, composed.clone()).await?;
+        let mut held = Box::pin(self.holds(state, composed.clone())).await?;
         while held.is_none() && !state.answer_corrections.is_empty() {
             let failures = failed_checks(&state.answer_corrections);
             // Fixing cited sources can expose assertion failures; after that, only fewer assertions buy a repair.
@@ -694,7 +694,7 @@ impl Agent {
                 Err(flow) => return Err(flow),
             };
             composed = retain_fields(corrected.data, &composed, &state.notes);
-            held = self.holds(state, composed.clone()).await?;
+            held = Box::pin(self.holds(state, composed.clone())).await?;
         }
         if held.is_none()
             && let Some(facts) = facts
@@ -708,7 +708,7 @@ impl Agent {
                 state.answer_corrections.clone(),
             );
             let fallback = retain_fields(facts, &composed, &state.notes);
-            held = self.holds(state, fallback).await?;
+            held = Box::pin(self.holds(state, fallback)).await?;
             if held.is_none() {
                 // Recovery follows the returned answer's failure, not a sparser fallback's missing fields.
                 (state.missing_answer_outputs, state.open_answer_outputs, state.answer_corrections) = failure;

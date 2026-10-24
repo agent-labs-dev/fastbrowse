@@ -305,7 +305,7 @@ impl Agent {
         let deadline = ledger.limits.max_seconds.map(|seconds| began + Duration::from_secs_f64(seconds));
         let mut slot: Option<RunState> = None;
         let scoped = jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()), async {
-            let body = self.body(task, &options, &mut head, &mut slot);
+            let body = Box::pin(self.body(task, &options, &mut head, &mut slot));
             let outcome = match deadline {
                 Some(deadline) => tokio::time::timeout_at(deadline.into(), body).await.ok(),
                 None => Some(body.await),
@@ -433,7 +433,7 @@ impl Agent {
             state.visited.insert(opening.clone(), ());
         }
         let state = slot.insert(state);
-        self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref()).await
+        Box::pin(self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref())).await
     }
 
     /// The result of a run a step stopped: the error the loop raised, as the status it means.

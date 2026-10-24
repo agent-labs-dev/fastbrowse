@@ -703,7 +703,7 @@ impl Agent {
                 (code_decision(Operation::Fill, Some(control.clone())), Decider::Llm)
             };
             let options = StepOptions { prepared_action: Some(action), ..StepOptions::default() };
-            self.step(state, &observation, &step_decision, decided_by, options).await?;
+            Box::pin(self.step(state, &observation, &step_decision, decided_by, options)).await?;
             if !state.form_continues {
                 completed = false;
                 break;
@@ -727,7 +727,7 @@ impl Agent {
             let stalled = self.settle(state, &observation, renews, put_back);
             if let Some(reason) = undone.or(stalled) {
                 let reason = if reason.is_empty() { "form changed".to_string() } else { reason };
-                self.recover(state, &observation, &reason, Status::Stuck).await?;
+                Box::pin(self.recover(state, &observation, &reason, Status::Stuck)).await?;
                 completed = false;
                 break;
             }
@@ -915,7 +915,7 @@ impl Agent {
         // before any credential is: what the page shows decides whether the wall stands between them.
         let facts = state.notes.facts().len();
         let read = code_decision(Operation::Read, None);
-        self.step(state, observation, &read, Decider::Jev, StepOptions::default()).await?;
+        Box::pin(self.step(state, observation, &read, Decider::Jev, StepOptions::default())).await?;
         if state.notes.facts().len() == facts {
             return Err(wall(format!("reading {page} found none of the requested information")));
         }
@@ -942,7 +942,7 @@ impl Agent {
             // Recovery selected this source to repair missing fields. Uncertainty about the next click cannot spend
             // another recovery before its evidence is read.
             let read = code_decision(Operation::Read, None);
-            return Ok(!self.step(state, observation, &read, Decider::Llm, StepOptions::default()).await?);
+            return Ok(!Box::pin(self.step(state, observation, &read, Decider::Llm, StepOptions::default())).await?);
         }
         if decision.operation == Operation::Back
             && !state.record_read_documents.contains(&observation.document_key)
@@ -953,7 +953,9 @@ impl Agent {
                 // Backing out of an unread document can lose a value needed by a pending action, even after every
                 // information requirement is answered.
                 let reading = Decision { operation: Operation::Read, target: None, ..decision.clone() };
-                return Ok(!self.step(state, observation, &reading, decided_by, StepOptions::default()).await?);
+                return Ok(
+                    !Box::pin(self.step(state, observation, &reading, decided_by, StepOptions::default())).await?
+                );
             }
         }
         if state.ready_plan.is_none() && state.transaction_candidates.iter().any(|c| !c.outcome_read) {
@@ -988,7 +990,7 @@ impl Agent {
         }
         // An interaction can remove evidence, so read first and reconsider before authorizing the next action.
         let reading = Decision { operation: Operation::Read, target: None, ..decision.clone() };
-        let skipped = self.step(state, observation, &reading, decided_by, StepOptions::default()).await?;
+        let skipped = Box::pin(self.step(state, observation, &reading, decided_by, StepOptions::default())).await?;
         Ok(transaction_pending || !skipped)
     }
 
@@ -1037,9 +1039,9 @@ impl Agent {
         state.barren.retain(|k, _| !(k.0 == observation.document_key && k.1 == key));
         let reading = code_decision(Operation::Read, None);
         let options = StepOptions { capture: Some(capture), ..StepOptions::default() };
-        if self.step(state, observation, &reading, Decider::Llm, options).await? {
+        if Box::pin(self.step(state, observation, &reading, Decider::Llm, options)).await? {
             let reason = read_exhausted(state);
-            self.recover(state, observation, &reason, Status::Stuck).await?;
+            Box::pin(self.recover(state, observation, &reason, Status::Stuck)).await?;
         }
         Ok(true)
     }
