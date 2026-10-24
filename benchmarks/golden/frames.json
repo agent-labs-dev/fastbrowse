@@ -997,5 +997,6 @@
  "inaccessible_frames": 0,
  "title": "Frames",
  "url": "http://fixture/frames.html?n=6",
- "viewport_text": "Inner 0\nRemove\nInner 1\nRemove\nInner 2\nRemove\nInner 3\nRemove\nInner 4\nRemove\nInner 5\nRemove"
+ "viewport_text": "Inner 0\nRemove\nInner 1\nRemove\nInner 2\nRemove\nInner 3\nRemove\nInner 4\nRemove\nInner 5\nRemove",
+ "visual_content": 0
 }

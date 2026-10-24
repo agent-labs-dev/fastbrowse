@@ -983,6 +983,24 @@
   readText(document, 0, 0);
   const viewport_text = words.join('\n');
 
+  // Page state carried by pixels: a chart, a picture, a drawing or a video is evidence the page text and the
+  // control list cannot hold, and the verifier needs the screenshot for it. Counted rather than flagged so the
+  // Python side decides, and bounded to elements large enough to be content rather than an icon or a rule.
+  const VISUAL = 'img,canvas,video,svg,picture,figure,[role="img"]';
+  const VISUAL_MIN_PX = 48;
+  const VISUAL_MAX = 8;
+  let visual_content = 0;
+  for (const doc of docs) {
+    for (const e of doc.querySelectorAll(VISUAL)) {
+      if (e.closest('[aria-hidden="true"],[inert]') || !visible(e)) continue;
+      const r = e.getBoundingClientRect();
+      if (r.width < VISUAL_MIN_PX || r.height < VISUAL_MIN_PX) continue;
+      visual_content++;
+      if (visual_content >= VISUAL_MAX) break;
+    }
+    if (visual_content >= VISUAL_MAX) break;
+  }
+
   const guards = {},
     retarget_keys = {};
   for (const c of controls) {
@@ -1035,6 +1053,7 @@
     url: location.href,
     title: document.title,
     viewport_text,
+    visual_content,
     document_key: String(performance.timeOrigin),
     controls: semantics,
     page_key,
