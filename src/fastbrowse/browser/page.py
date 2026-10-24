@@ -333,6 +333,12 @@ class _SnapshotControl(Frozen):
     blocking: bool | None = None
     next_page: bool | None = None
     download: bool | None = None
+    partial: bool = False
+    """Past the observation caps: sent with only the fields that decide whether it is a pager."""
+
+
+_SENT_ROWS = TypeAdapter(list[tuple[_SnapshotControl, str | None, str | None]] | None)
+"""The whole rows a snapshot kept in the page for its partial controls: (control, guard, retarget key)."""
 
 
 class _ScriptError(BrowserError):
@@ -362,6 +368,8 @@ class _Snapshot(_FrameText):
     """Digest of each control's freshness guard, keyed by its local id as a string (a JSON object key)."""
     retarget_keys: dict[str, str | None]
     """Digest of the guard without the node ids at its ends, which a redraw changes."""
+    token: int | None = None
+    """Names this snapshot to the page, which keeps the whole rows of its partial controls under it."""
 
 
 class _SnapshotBlock(Frozen):
@@ -621,13 +629,26 @@ class CdpPage(Page):
             history_entry = None
         controls: list[Control] = []
         control_state: dict[str, tuple[str, str, int, str | None]] = {}
+        partial: set[str] = set()
+
+        def add(
+            frame_key: str,
+            frame: _FrameObservation[_Snapshot],
+            c: _SnapshotControl,
+            guard: str | None,
+            retarget_key: str | None,
+        ) -> Control:
+            control_id = f"{frame_key}:{c.id}"
+            fid = f"{frame_key}/{c.frame_path}" if c.frame_path else frame.frame_id
+            control_state[control_id] = (frame.session_id, frame_key, c.id, guard)
+            return _control_from_raw(control_id, fid, c, retarget_key)
+
         for frame_key, frame in frames.items():
             for c in frame.raw.controls:
-                control_id = f"{frame_key}:{c.id}"
-                fid = f"{frame_key}/{c.frame_path}" if c.frame_path else frame.frame_id
-                guard = frame.raw.guards.get(str(c.id))
-                controls.append(_control_from_raw(control_id, fid, c, frame.raw.retarget_keys.get(str(c.id))))
-                control_state[control_id] = (frame.session_id, frame_key, c.id, guard)
+                key = str(c.id)
+                controls.append(add(frame_key, frame, c, frame.raw.guards.get(key), frame.raw.retarget_keys.get(key)))
+                if c.partial:
+                    partial.add(controls[-1].id)
 
         limits = self._config.observation
         onscreen = [c for c in controls if not c.offscreen]
@@ -635,6 +656,28 @@ class CdpPage(Page):
         omitted = len(controls) - len(onscreen) - len(offscreen)
         kept = _capped(onscreen + offscreen, limits.max_controls)
         omitted += len(onscreen) + len(offscreen) - len(kept)
+        # A pager past the caps was sent with only what made it one; the page kept the rest of its row.
+        wanted: dict[str, list[int]] = {}
+        for c in kept:
+            if c.id in partial:
+                wanted.setdefault(control_state[c.id][1], []).append(control_state[c.id][2])
+        whole: dict[str, Control] = {}
+        for frame_key, ids in wanted.items():
+            frame = frames[frame_key]
+            rows = await self._evaluate(
+                frame.session_id,
+                "((r, token, ids) => r?.sent?.token === token && ids.every(id => r.sent.rows.has(id)) "
+                "? ids.map(id => r.sent.rows.get(id)) : null)"
+                f"(window.__fastbrowse, {json.dumps(frame.raw.token)}, {json.dumps(ids)})",
+            )
+            sent = _SENT_ROWS.validate_python(rows)
+            if sent is None:
+                # Another snapshot or a new document replaced the rows this one kept.
+                raise ContextLost("the page changed before its pagers were read")
+            for c, guard, retarget_key in sent:
+                control = add(frame_key, frame, c, guard, retarget_key)
+                whole[control.id] = control
+        kept = [whole.get(c.id, c) for c in kept]
         control_state = {c.id: control_state[c.id] for c in kept}
         labels: dict[str, list[str]] = {}
         for c in kept:
@@ -719,7 +762,9 @@ class CdpPage(Page):
 
     async def _snapshot_all_frames(self) -> tuple[dict[str, _FrameObservation[_Snapshot]], int]:
         # A results page that hides its controls behind a loading indicator reads as empty until it clears.
-        result = await self._read_frames(self._page_js + "('snapshot')", _Snapshot, wait_loaded=True)
+        limits = self._config.observation
+        caps = json.dumps({"onscreen": limits.max_controls, "offscreen": limits.max_offscreen_controls})
+        result = await self._read_frames(f"{self._page_js}('snapshot', {caps})", _Snapshot, wait_loaded=True)
         coverage = {frame.session_id: frame.raw.inaccessible_frames for frame in result.values()}
         return result, self._inaccessible_frames(coverage)
 

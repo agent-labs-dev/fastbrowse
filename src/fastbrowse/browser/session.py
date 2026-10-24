@@ -333,7 +333,7 @@ class SnapshotScript:
         key = json.dumps(hashlib.sha256(f"{origins}\n{_SNAPSHOT_JS}".encode()).hexdigest()[:16])
         self.install = (
             f"((globalThis.__fastbrowseScripts ||= {{}})[{key}] ||= "
-            f"(snapshot => mode => snapshot(mode, {origins}))({_SNAPSHOT_JS}))"
+            f"(snapshot => (mode, limits) => snapshot(mode, {origins}, limits))({_SNAPSHOT_JS}))"
         )
         """An expression that installs the function, if this document has none, and evaluates to it."""
         self.function = (
