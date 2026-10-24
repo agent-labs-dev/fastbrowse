@@ -379,3 +379,13 @@ def test_a_path_in_the_task_keeps_its_query_and_fragment() -> None:
         "http://shop.example/login?next=/settings#top",
         "http://shop.example/entry",
     )
+
+
+def test_a_link_tells_jev_where_it_goes() -> None:
+    from fastbrowse.safety import irreversible_question
+
+    link = button(0).model_copy(
+        update={"role": "link", "label": "Change your password", "href": "http://shop.test/settings/password"}
+    )
+    question = irreversible_question("Change the password", Operation.CLICK, link).instructions
+    assert "It is a link to http://shop.test/settings/password" in question
