@@ -1147,7 +1147,8 @@ async def read(
     unconfirmed_orders: set[str] = set()
     stated_counts: set[tuple[str, str]] = set()
     expands: str | None = None
-    tally_complete: set[str] = set()
+    # Insertion-ordered: a set of strings iterates in hash order, which changes with each process's hash seed.
+    tally_complete: dict[str, None] = {}
     through_end: tuple[str, ...] = ()
     continuation_records: dict[str, list[str]] = {}
     context_records: dict[str, tuple[str, ...]] = {}
@@ -1411,7 +1412,8 @@ async def read(
                 else:
                     context.append(_ReadClaim(cite=cite, text=evidence.quote))
             # An omitted requirement could have lost a whole page. An explicit empty record set means none matched.
-            lost.update(dict.fromkeys(set(requirement_ids) - {c.requirement_id for c in collected.data.continues}))
+            continued = {c.requirement_id for c in collected.data.continues}
+            lost.update(dict.fromkeys(r for r in requirement_ids if r not in continued))
             result = Generation(
                 data=_ReadResponse(
                     claims=tuple(context),
@@ -1528,7 +1530,7 @@ async def read(
             notes.unevidence((tally_read.requirement_id,))
             so_far.unevidence((tally_read.requirement_id,))
             if tally_read.complete and result.data.answered and part.index == part.total - 1:
-                tally_complete.add(tally_read.requirement_id)
+                tally_complete[tally_read.requirement_id] = None
             groups: list[_TallyGroup] = []
             for group in tally_read.groups:
                 if group.field is None:
@@ -1633,9 +1635,9 @@ async def read(
             if preserve_collections:
                 # A partial collection claim can supply a later conclusion without closing the requirement itself.
                 cited = (references[ref] for ref in claim.draws_on if ref in references)
-                inherited = {
+                inherited = dict.fromkeys(
                     record for key in so_far.expand_evidence_ids(cited) for record in context_records.get(key, ())
-                }
+                )
                 held = {fact_id(fact): fact for fact in so_far.facts}
                 records.update((key, held[key]) for key in inherited)
             for key, record in records.items():
@@ -1818,7 +1820,7 @@ async def read(
         # Its quote was verified against this capture when the chunk was read.
         notes.add(fact)
         facts[(fact_id(fact), fact.requirement_id)] = fact
-    for requirement_id in tally_complete - continues.keys() - blocked:
+    for requirement_id in (r for r in tally_complete if r not in continues and r not in blocked):
         notes.complete_tallies(requirement_id)
     for collection in collections:
         if (
