@@ -12,6 +12,7 @@ so each step's lines are compared as a group, in order.
 """
 
 import argparse
+import contextlib
 import json
 import os
 import queue
@@ -238,7 +239,11 @@ CASES: list[tuple[str, str, list[dict[str, Any]]]] = [
             CLOSE,
         ],
     ),
-    ("cancel sent straight after the run", "never_ends", [send(run(1), call(2, "run/cancel", {"run_id": "run-1"})), CLOSE]),
+    (
+        "cancel sent straight after the run",
+        "never_ends",
+        [send(run(1), call(2, "run/cancel", {"run_id": "run-1"})), CLOSE],
+    ),
     ("shutdown sent straight after the run", "never_ends", [send(run(1), call(2, "shutdown")), CLOSE]),
     ("end of input during a run", "never_ends", [send(run(1)), CLOSE]),
     ("a refused run then another", "never_ends", [send(run(1, local=True, cloud_profile="p"), run(2, "run-2")), CLOSE]),
@@ -266,7 +271,9 @@ CASES: list[tuple[str, str, list[dict[str, Any]]]] = [
         "secrets on an origin the ref does not cover",
         "types_secrets",
         [
-            send(run(1, secrets=[{"name": "P", "origins": [SHOP]}], inputs={"name": "P", "origin": "https://evil.test"})),
+            send(
+                run(1, secrets=[{"name": "P", "origins": [SHOP]}], inputs={"name": "P", "origin": "https://evil.test"})
+            ),
             send(run(2, "run-2", secrets=[{"name": "P", "origins": [SHOP]}], inputs={"name": "Q", "origin": SHOP})),
             CLOSE,
         ],
@@ -274,7 +281,11 @@ CASES: list[tuple[str, str, list[dict[str, Any]]]] = [
     (
         "a secret reply of the wrong shape",
         "types_secrets",
-        [send(run(1, secrets=[{"name": "P", "origins": [SHOP]}], inputs={"name": "P", "origin": SHOP})), answer({"v": 1}), CLOSE],
+        [
+            send(run(1, secrets=[{"name": "P", "origins": [SHOP]}], inputs={"name": "P", "origin": SHOP})),
+            answer({"v": 1}),
+            CLOSE,
+        ],
     ),
     (
         "an error reply to a secret",
@@ -322,9 +333,58 @@ CASES: list[tuple[str, str, list[dict[str, Any]]]] = [
     (
         "serve_scripts type_secret",
         "tests.serve_scripts:type_secret",
-        [send(run(1, **LOCAL, start=f"{SHOP}/login", secrets=[{"name": "P", "origins": [SHOP]}])), answer("hunter2"), CLOSE],
+        [
+            send(run(1, **LOCAL, start=f"{SHOP}/login", secrets=[{"name": "P", "origins": [SHOP]}])),
+            answer("hunter2"),
+            CLOSE,
+        ],
     ),
 ]
+
+
+# Command lines that end before a run starts, so neither side needs an agent: the CLI's usage and preflight errors,
+# compared on stdout, stderr and the exit code. `--json` puts a result on stdout even then.
+CLI_CASES: list[list[str]] = [
+    [],
+    ["--help"],
+    ["--version"],
+    ["t", "--cloud", "--local"],
+    ["t", "--cdp-port", "x"],
+    ["t", "--max-dollars", "x"],
+    ["t", "--proxy-country", "gb"],
+    ["t", "--proxy-country", "usa"],
+    ["t", "--secret", "abc"],
+    ["t", "--secret", "p=V@https://a.example/login"],
+    ["t", "--secret", "p=V@ftp://a"],
+    ["t", "--bogus", "extra"],
+    ["t", "--max"],
+    ["t", "--start"],
+    ["t", "--json="],
+    ["t", "--start", "https://example.com", "--json", "--secret", "p=NOT_SET"],
+    ["t", "--start", "https://example.com", "--secret", "p=NOT_SET"],
+    ["t", "--json", "--secret", "p=NOT_SET", "--bitwarden", "item"],
+    ["t", "--json", "--max-steps", "0", "--max-dollars", "-1"],
+    ["t", "--json", "--max-dollars", "-1"],
+    ["t", "--json", "--cloud", "--headed"],
+    ["t", "--json", "--cdp-url", "ws://b.test/x", "--local", "--headed", "--proxy-country", "uk"],
+    ["t", "--json", "--cdp-url", "http://b.test/x"],
+    ["t", "--json", "--cdp-url", "ws://b.test/x", "--cdp-port", "9222"],
+    ["t", "--json", "--cdp-port", "65536"],
+    ["t", "--json", "--attach"],
+    ["t", "--json", "--local", "--proxy-country", "uk"],
+    ["t", "--json", "--local", "--cloud-profile", "p"],
+    ["--cdp-port", "-5", "t", "--json"],
+    ["serve"],
+    ["serve", "--help"],
+    ["serve", "--stdio", "--bogus"],
+]
+
+
+def cli_outcome(command: list[str], env: dict[str, str], cwd: str) -> tuple[str, str, int]:
+    done = subprocess.run(
+        command, capture_output=True, env=env, cwd=cwd, timeout=60, check=False, stdin=subprocess.DEVNULL
+    )
+    return done.stdout.decode(), done.stderr.decode(), done.returncode
 
 
 class Server:
@@ -346,11 +406,9 @@ class Server:
 
     def write(self, data: bytes) -> None:
         assert self.process.stdin is not None
-        try:
+        with contextlib.suppress(BrokenPipeError):
             self.process.stdin.write(data)
             self.process.stdin.flush()
-        except BrokenPipeError:
-            pass
 
     def read(self, first: float) -> list[str]:
         """Lines until the server has been quiet for QUIET seconds, waiting up to `first` for the first one."""
@@ -391,10 +449,8 @@ def transcript(command: list[str], env: dict[str, str], cwd: str, steps: list[di
             server.write(json.dumps(reply).encode() + b"\n")
         elif step.get("close"):
             assert server.process.stdin is not None
-            try:
+            with contextlib.suppress(BrokenPipeError):
                 server.process.stdin.close()
-            except BrokenPipeError:
-                pass
         record.append(server.read(first))
         first = QUIET * 4
     try:
@@ -402,7 +458,7 @@ def transcript(command: list[str], env: dict[str, str], cwd: str, steps: list[di
     except subprocess.TimeoutExpired:
         server.process.kill()
         code = "timeout"
-    record.append(server.read(QUIET) + [f"exit {code}"])
+    record.append([*server.read(QUIET), f"exit {code}"])
     return record
 
 
@@ -419,6 +475,7 @@ def main() -> int:
     parser.add_argument("--rust", type=Path, default=REPO / "target" / "debug" / "fastbrowse")
     parser.add_argument("--only", help="run the cases whose name contains this")
     parser.add_argument("--show", action="store_true", help="print every transcript, not only differences")
+    parser.add_argument("--cli", action="store_true", help="compare only the CLI's command lines")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory() as scratch:
         # `--record` is refused without an ffmpeg, and this machine may have none.
@@ -435,7 +492,7 @@ def main() -> int:
         failed = 0
         lines = 0
         for name, run, steps in CASES:
-            if args.only and args.only not in name:
+            if (args.only and args.only not in name) or args.cli:
                 continue
             python_command, rust_command = commands(run, args.rust)
             # Run from a directory with no `.env`, so neither side reads a checkout's settings.
@@ -454,8 +511,24 @@ def main() -> int:
                             print(f"    python {line}")
                         for line in got:
                             print(f"    rust   {line}")
-        print(f"{failed} of {len(CASES) if not args.only else 'the selected'} transcripts differ; {lines} Python lines compared")
-    return 1 if failed else 0
+        print(
+            f"{failed} of {len(CASES) if not args.only else 'the selected'} transcripts differ; {lines} lines compared"
+        )
+        if args.only:
+            return 1 if failed else 0
+        cli_failed = 0
+        for argv in CLI_CASES:
+            python = cli_outcome([str(PYTHON), "-c", "from fastbrowse.cli import main; main()", *argv], env, scratch)
+            rust = cli_outcome([str(args.rust), *argv], env, scratch)
+            same = python == rust
+            cli_failed += not same
+            print(f"{'ok  ' if same else 'DIFF'} fastbrowse {' '.join(argv)}")
+            if not same or args.show:
+                for label, want, got in zip(("stdout", "stderr", "exit"), python, rust, strict=True):
+                    if want != got or args.show:
+                        print(f"  {label}:\n    python {want!r}\n    rust   {got!r}")
+        print(f"{cli_failed} of {len(CLI_CASES)} command lines differ")
+    return 1 if failed or cli_failed else 0
 
 
 if __name__ == "__main__":
