@@ -6,6 +6,8 @@
 #[macro_use]
 mod macros;
 
+pub mod agent;
+
 pub mod batches;
 pub mod comparison;
 mod difflib;

@@ -12,3 +12,11 @@ serde = { version = "1", features = ["derive"] }
 # Insertion order: a prompt or a Jev state must list its keys in the order Python wrote them.
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
+# `jev_spend`: the scope a run's Jev calls bill their receipts into, which lives with the clients.
+fastbrowse-clients = { path = "../fastbrowse-clients" }
+# Owned startup calls run beside browser startup, page reads beside paging, and a time limit bounds the run.
+tokio = { version = "1", features = ["rt", "time", "macros", "sync"] }
+url = "2.5"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "time", "macros", "sync", "test-util"] }
