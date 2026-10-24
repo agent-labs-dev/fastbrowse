@@ -148,7 +148,7 @@ async def test_unsupported_output_keeps_current_sources_and_verified_partial() -
     assert await agent._finish(state, None, None) is None
     assert all(state.notes.current(fact_id(fact)) for fact in state.notes.facts)
     assert state.missing_answer_outputs == (state.plan.requirements[3].text,)
-    partial = agent._partial_result(state.notes, state, state.ledger, Status.UNVERIFIED, "Missing reply")
+    partial = await agent._partial_result(state.notes, state, state.ledger, Status.UNVERIFIED, "Missing reply")
     assert partial.status is Status.UNVERIFIED and partial.answer.startswith("Partial answer.")
     assert {citation.url for citation in partial.citations} == {f"https://projects.test/{i}" for i in (0, 1, 2, 4)}
     assert "Project 3: Author says" not in partial.answer
@@ -343,7 +343,7 @@ async def test_unknown_charge_after_one_verified_group_keeps_a_truthful_partial(
     agent._llm = UnpricedSecondAnswer()
     with pytest.raises(BudgetExceeded):
         await agent._finish(state, None, None)
-    result = agent._partial_result(state.notes, state, state.ledger, Status.BUDGET_EXCEEDED, "Unknown charge")
+    result = await agent._partial_result(state.notes, state, state.ledger, Status.BUDGET_EXCEEDED, "Unknown charge")
     assert result.status is Status.BUDGET_EXCEEDED and result.cost.has_unknown
     assert {citation.url for citation in result.citations} == {"https://projects.test/0"}
     assert result.answer.startswith("Partial answer. Unverified outputs:")
@@ -388,7 +388,7 @@ async def test_new_counterevidence_invalidates_only_its_verified_group() -> None
     assert fact.evidence is not None
     assert any(fact.evidence.quote in json.dumps(audit) for audit in audits)
     assert state.open_answer_outputs == (state.plan.requirements[2].text,)
-    partial = agent._partial_result(state.notes, state, state.ledger, Status.UNVERIFIED, "Reply withdrawn")
+    partial = await agent._partial_result(state.notes, state, state.ledger, Status.UNVERIFIED, "Reply withdrawn")
     assert partial.status is Status.UNVERIFIED and "Project 2: Author says" not in partial.answer
 
 

@@ -1267,7 +1267,7 @@ async def test_recovery_cannot_direct_a_finish_while_information_is_unread() -> 
     assert stopped.value.error == "The page has no heading"
     assert state.directed is None
     # What the run did read is what a stuck result hands back.
-    partial = agent._partial_result(state.notes, state, state.ledger, Status.STUCK, stopped.value.error)
+    partial = await agent._partial_result(state.notes, state, state.ledger, Status.STUCK, stopped.value.error)
     assert partial.answer is not None and "This domain is for use in examples." in partial.answer
 
 
@@ -2809,14 +2809,22 @@ async def test_the_page_a_run_began_on_is_shown_to_the_checks_after_a_shortcut_l
     page.screenshot = AsyncMock(return_value=b"")
 
     class Verifying(ScriptedLLM):
+        unanswered = True
+
         async def generate(self, purpose, messages, schema, **kwargs):
-            if purpose is LLMPurpose.COMPOSE:
+            if purpose is LLMPurpose.COMPOSE and self.unanswered:
                 # The answer written beside the verifier is still being written when it refuses.
+                self.unanswered = False
                 await asyncio.Event().wait()
             return await super().generate(purpose, messages, schema, **kwargs)
 
     llm = Verifying(
-        [{"missing": ["req-1"], "complete": False}, {"diagnosis": "", "next_subgoal": "", "give_up": False}]
+        [
+            {"missing": ["req-1"], "complete": False},
+            {"diagnosis": "", "next_subgoal": "", "give_up": False},
+            # The stop's own composer call returns nothing, so the run hands back what it read.
+            {"claims": []},
+        ]
     )
     agent = Agent(page, ScriptedJev({}, noul=0.5), llm)
     monkeypatch.setattr(agent_module, "_propose", AsyncMock(return_value=Shortcut(url=release)))
