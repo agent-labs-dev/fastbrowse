@@ -24,10 +24,11 @@ from pydantic import BaseModel, JsonValue
 
 from fastbrowse import agent as agent_module
 from fastbrowse.agent import Agent
-from fastbrowse.config import Config, StallRules
+from fastbrowse.config import Config
 from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, Evaluation, NoulAnswer, NoulQuestion, Question
-from fastbrowse.llm import Generation, Message
+from fastbrowse.llm import Generation, LLMError, Message
 from fastbrowse.models import (
+    Attachment,
     Authorization,
     CostBasis,
     CostComponent,
@@ -84,6 +85,7 @@ class FakeSite:
         self.site = site
         self.screen: str = site["start"]
         self.back: list[str] = []
+        self.seen: dict[str, int] = {}
 
     def _screen(self) -> Mapping[str, Any]:
         return self.site["screens"][self.screen]
@@ -93,6 +95,13 @@ class FakeSite:
         return ()
 
     async def observe(self) -> Observation:
+        # A screen that `settles` turns into another once it has been observed `after` times, as a 429 page does
+        # when the site lets the client back in.
+        settles = self._screen().get("settles")
+        if settles is not None:
+            self.seen[self.screen] = self.seen.get(self.screen, 0) + 1
+            if self.seen[self.screen] > settles["after"]:
+                self.screen = settles["to"]
         return Observation.model_validate(self._screen()["observation"])
 
     async def document_changed(self, observation: Observation) -> bool:
@@ -232,20 +241,30 @@ class RecordingLLM:
         if not queue:
             raise AssertionError(f"no scripted {schema.__name__} for {purpose.value}")
         data = queue.pop(0) if len(queue) > 1 else queue[0]
+        if isinstance(data, dict) and "raise" in data:
+            # A scripted provider failure: the request is recorded, and no receipt comes back.
+            self.calls.append({"llm": self._request(purpose, messages, schema, max_output_tokens), "response": data})
+            raise LLMError(str(data["raise"]))
         cost = CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0.001, purpose=purpose)
         self.calls.append(
             {
-                "llm": {
-                    "purpose": purpose.value,
-                    "messages": compact([message.model_dump(mode="json") for message in messages]),
-                    "schema_name": schema.__name__,
-                    "schema": json.dumps(schema.model_json_schema()),
-                    "max_output_tokens": max_output_tokens,
-                },
+                "llm": self._request(purpose, messages, schema, max_output_tokens),
                 "response": {"data": data, "cost": cost.model_dump(mode="json")},
             }
         )
         return Generation(data=schema.model_validate(data), cost=cost)
+
+    @staticmethod
+    def _request(
+        purpose: LLMPurpose, messages: Sequence[Message], schema: type[BaseModel], max_output_tokens: int
+    ) -> dict[str, Any]:
+        return {
+            "purpose": purpose.value,
+            "messages": compact([message.model_dump(mode="json") for message in messages]),
+            "schema_name": schema.__name__,
+            "schema": json.dumps(schema.model_json_schema()),
+            "max_output_tokens": max_output_tokens,
+        }
 
 
 # --- page builders ------------------------------------------------------------------------------------------------
@@ -858,6 +877,606 @@ def scenarios() -> list[dict[str, Any]]:
         choose_start=True,
         jev={"pick": {"operation": "escalate"}, "noul": 0.1},
     )
+
+    # --- loops drawn from the unit tests of single behaviours ----------------------------------------------------
+
+    index = screen(
+        "https://wiki.test/",
+        "Wiki",
+        "Wiki\n\nArticles on novels.",
+        [control("dune", "link", "Dune", "click", href="/Dune")],
+    )
+    leaving = screen(
+        "https://wiki.test/Dune",
+        "Dune",
+        "Dune (novel)\n\nDune is a 1965 novel by Frank Herbert.",
+        [control("home", "link", "Home", "click", href="/")],
+        can_go_back=True,
+    )
+    scenario(
+        "a back off a page not yet read reads it first, and that read completes the run",
+        "Who wrote Dune? Start at https://wiki.test/",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "index": index, "article": leaving},
+            "urls": {"https://wiki.test/": "index"},
+            "actions": [{"screen": "index", "operation": "click", "target": "dune", "next": "article"}],
+        },
+        {
+            "Plan": [plan(("r1", "Find who wrote Dune", "information"))],
+            "_AnswerChecks": [{"checks": ["the author of Dune"]}],
+        },
+        start="https://wiki.test/",
+        jev={"pick": {"operation": ["click", "back", "back"]}, "noul": 0.1},
+        limits={"max_steps": 4},
+    )
+
+    toggle = screen(
+        "https://app.test/",
+        "App",
+        "App\n\nOpen the settings panel.",
+        [control("open", "button", "Settings", "click")],
+    )
+    toggle_site = {
+        "start": "blank",
+        "screens": {"blank": screen("about:blank", "", ""), "app": toggle},
+        "urls": {"https://app.test/": "app"},
+    }
+    toggle_llm = {"Plan": [plan(("a1", "Open the settings panel", "action"), answer=False)]}
+    scenario(
+        "a click that keeps coming back stale goes to recovery, which gives up",
+        "Open the settings panel on https://app.test/",
+        {
+            **toggle_site,
+            "actions": [{"screen": "app", "operation": "click", "result": {"outcome": "stale", "page_changed": False}}],
+        },
+        toggle_llm,
+        start="https://app.test/",
+        jev={"pick": {"operation": "click"}, "noul": 0.1},
+        limits={"max_steps": 3},
+    )
+    scenario(
+        "a covered click counts as idle, so picking it again goes to recovery, which gives up",
+        "Open the settings panel on https://app.test/",
+        {
+            **toggle_site,
+            "actions": [
+                {"screen": "app", "operation": "click", "result": {"outcome": "covered", "page_changed": False}}
+            ],
+        },
+        toggle_llm,
+        start="https://app.test/",
+        jev={"pick": {"operation": "click"}, "noul": 0.1},
+        limits={"max_steps": 6},
+    )
+    scenario(
+        "a click that changed nothing is not taken again: the repeat goes to recovery, which gives up",
+        "Open the settings panel on https://app.test/",
+        toggle_site,
+        toggle_llm,
+        start="https://app.test/",
+        jev={"pick": {"operation": "click"}, "noul": 0.1},
+        limits={"max_steps": 8},
+    )
+    scenario(
+        "an armed repetition tripwire recovers, and repeating after it ends the run stuck",
+        "Open the settings panel on https://app.test/",
+        {
+            **toggle_site,
+            "actions": [
+                {"screen": "app", "operation": "click", "result": {"outcome": "executed", "page_changed": True}}
+            ],
+        },
+        toggle_llm,
+        start="https://app.test/",
+        config={"stall": {"tripwires": "armed", "repeated_actions": 2, "unchanged_actions": 5}},
+        jev={"pick": {"operation": "click"}, "noul": 0.1},
+        limits={"max_steps": 8},
+    )
+
+    menu = screen(
+        "https://shop.test/menu",
+        "Shop",
+        "Shop\n\nHover the menu to see departments.",
+        [control("dept", "button", "Departments", "hover", "click")],
+    )
+    scenario(
+        "a hover is taken and then the step limit ends the run",
+        "Open the departments menu on https://shop.test/menu",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "menu": menu},
+            "urls": {"https://shop.test/menu": "menu"},
+        },
+        {"Plan": [plan(("a1", "Open the departments menu", "action"), answer=False)]},
+        start="https://shop.test/menu",
+        jev={"pick": {"operation": "hover"}, "noul": 0.1},
+        limits={"max_steps": 2},
+    )
+
+    long_page = screen(
+        "https://news.test/story",
+        "Story",
+        "Story\n\nThe council met on Monday.\n\nIt voted to close the bridge.",
+        [control("more", "link", "More", "click", href="/more")],
+    )
+    scenario(
+        "a scroll over a page not yet read reads it first, and that read completes the run",
+        "What did the council vote on? See https://news.test/story",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "story": long_page},
+            "urls": {"https://news.test/story": "story"},
+        },
+        {
+            "Plan": [plan(("r1", "Find what the council voted on", "information"))],
+            "_AnswerChecks": [{"checks": ["the vote"]}],
+        },
+        start="https://news.test/story",
+        jev={"pick": {"operation": "scroll"}, "noul": 0.1},
+        limits={"max_steps": 3},
+    )
+
+    apply = screen(
+        "https://jobs.test/apply",
+        "Apply",
+        "Apply\n\nAttach your CV.",
+        [control("cv", "textbox", "CV", "upload", input_type="file")],
+    )
+    scenario(
+        "an upload asks which attachment, sends it, and the step limit ends the run",
+        "Attach my CV on https://jobs.test/apply",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "apply": apply},
+            "urls": {"https://jobs.test/apply": "apply"},
+            "actions": [
+                {"screen": "apply", "operation": "upload", "result": {"outcome": "executed", "page_changed": False}}
+            ],
+        },
+        {"Plan": [plan(("a1", "Attach the CV", "action"), answer=False)]},
+        start="https://jobs.test/apply",
+        attachments=[
+            {"name": "cover.txt", "mime_type": "text/plain", "content": "Dear team"},
+            {"name": "cv.pdf", "mime_type": "application/pdf", "content": "%PDF-1.4"},
+        ],
+        jev={"pick": {"operation": "upload", "pick": "cv.pdf"}, "noul": 0.1},
+        limits={"max_steps": 1},
+    )
+
+    signup = screen(
+        "https://news.test/signup",
+        "Newsletter",
+        "Newsletter\n\nSign up for updates.",
+        [control("email", "textbox", "Email", "fill", input_type="email")],
+    )
+    scenario(
+        "a caller input chosen for a field is typed as given, and the step limit ends the run",
+        "Sign up for the newsletter on https://news.test/signup",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "signup": signup},
+            "urls": {"https://news.test/signup": "signup"},
+            "actions": [
+                {"screen": "signup", "operation": "fill", "result": {"outcome": "executed", "page_changed": False}}
+            ],
+        },
+        {"Plan": [plan(("a1", "Sign up for the newsletter", "action"), answer=False)]},
+        start="https://news.test/signup",
+        inputs={"email": "ada@example.test", "name": "Ada"},
+        jev={"pick": {"operation": "fill", "pick": "input:email"}, "noul": 0.1},
+        limits={"max_steps": 1},
+    )
+
+    pin = screen(
+        "https://bank.test/login",
+        "Bank",
+        "Bank\n\nEnter your PIN.",
+        [
+            control(
+                "pin", "textbox", "PIN", "fill", input_type="password", sensitive=True, frame_origin="https://bank.test"
+            )
+        ],
+    )
+    scenario(
+        "a sensitive field with several stored secrets asks which, types it, and the step limit ends the run",
+        "Log in to https://bank.test/login",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "login": pin},
+            "urls": {"https://bank.test/login": "login"},
+        },
+        {"Plan": [plan(("a1", "Log in", "action"), answer=False)]},
+        start="https://bank.test/login",
+        secrets={"password": ["hunter2", ["https://bank.test"]], "pin": ["4321", ["https://bank.test"]]},
+        jev={"pick": {"operation": "fill", "pick": "pin"}, "noul": 0.1},
+        limits={"max_steps": 1},
+    )
+
+    busy = screen("https://wiki.test/Dune", "Too many requests", "Too many requests\n\nSlow down.", response_status=429)
+    busy["settles"] = {"after": 1, "to": "article"}
+    scenario(
+        "an HTTP 429 that clears while waited on is read once it does",
+        "Who wrote Dune? Use https://wiki.test/Dune",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "busy": busy, "article": article},
+            "urls": {"https://wiki.test/Dune": "busy"},
+        },
+        lookup_llm,
+        start="https://wiki.test/Dune",
+        interstitial=True,
+        jev={"pick": {"operation": "read", "r1": "c1"}, "noul": 0.5, "nouls": {"draft_needs_writing": 0.0}},
+    )
+
+    unauthorized = screen(
+        "https://admin.test/settings",
+        "Sign in",
+        "Sign in\n\nThis page needs an account.",
+        [control("sso", "button", "Sign in with SSO", "click")],
+        response_status=401,
+    )
+    scenario(
+        "a 401 on a task that inspects access is read, and recovery giving up there ends needs_login",
+        "Check whether https://admin.test/settings is restricted to signed-in users",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "wall": unauthorized},
+            "urls": {"https://admin.test/settings": "wall"},
+        },
+        {
+            "Plan": [
+                {**plan(("r1", "Find whether the settings page needs sign-in", "information")), "inspect_access": True}
+            ],
+            "_AnswerChecks": [{"checks": ["whether sign-in is required"]}],
+        },
+        start="https://admin.test/settings",
+        jev={"pick": {"operation": "read", "r1": "absent"}, "noul": 0.1, "nouls": {"login_required": 0.95}},
+    )
+
+    scenario(
+        "an LLM that fails during recovery ends the run with an error",
+        "Read the returns policy at https://shop.test/missing",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "missing": missing},
+            "urls": {"https://shop.test/missing": "missing"},
+        },
+        {
+            "Plan": [plan(("r1", "Find the returns policy", "information"))],
+            "_AnswerChecks": [{"checks": ["the returns policy"]}],
+            "_Recovery": [{"raise": "provider returned 500"}],
+        },
+        start="https://shop.test/missing",
+        jev={"pick": {}, "noul": 0.1},
+    )
+
+    scenario(
+        "an LLM call budget ends the run budget_exceeded",
+        "Search books.test for dune and tell me who wrote it",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "home": search},
+            "urls": {"https://books.test/": "home"},
+            "actions": [
+                {"screen": "home", "operation": "fill", "result": {"outcome": "executed", "page_changed": False}}
+            ],
+        },
+        {
+            "Plan": [plan(("r1", "Find who wrote Dune", "information"))],
+            "_AnswerChecks": [{"checks": ["the author of Dune"]}],
+            "_FieldText": [{"missing": False, "text": "dune"}],
+        },
+        start="https://books.test/",
+        jev={"pick": {"operation": "fill"}, "noul": 0.1},
+        limits={"max_llm_calls": 3},
+    )
+    scenario(
+        "a Jev call budget ends the run budget_exceeded",
+        "Open the settings panel on https://app.test/",
+        toggle_site,
+        toggle_llm,
+        start="https://app.test/",
+        jev={"pick": {"operation": "click"}, "noul": 0.1},
+        limits={"max_jev_calls": 2},
+    )
+
+    contact = screen(
+        "https://shop.test/contact",
+        "Contact",
+        "Contact\n\nSend us your message.",
+        [control("send", "button", "Send message", "click", submit_semantics="submit")],
+    )
+    sent = screen(
+        "https://shop.test/contact/sent",
+        "Sent",
+        "Sent\n\nYour message has been sent.",
+        response_status=503,
+    )
+    scenario(
+        "an authorized send that lands on a 503 goes to recovery, and giving up there ends unavailable",
+        "Send the message on https://shop.test/contact",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "contact": contact, "sent": sent},
+            "urls": {"https://shop.test/contact": "contact"},
+            "actions": [{"screen": "contact", "operation": "click", "target": "send", "next": "sent"}],
+        },
+        {"Plan": [plan(("a1", "Send the message", "action"), answer=False)]},
+        start="https://shop.test/contact",
+        authorization={"irreversible_actions": True},
+        jev={"pick": {"operation": ["click", "done"]}, "noul": 0.95, "nouls": {"irreversible": 0.95}},
+        limits={"max_steps": 4},
+    )
+    panel = screen(
+        "https://app.test/panel",
+        "Panel",
+        "Panel\n\nThree switches.",
+        [
+            control("a", "button", "Alpha", "click"),
+            control("b", "button", "Beta", "click"),
+            control("c", "button", "Gamma", "click"),
+            control("d", "button", "Delta", "click"),
+        ],
+    )
+    scenario(
+        "clicks on different buttons that change nothing trip the stall rule and recovery gives up",
+        "Turn on the panel at https://app.test/panel",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "panel": panel},
+            "urls": {"https://app.test/panel": "panel"},
+        },
+        {"Plan": [plan(("a1", "Turn on the panel", "action"), answer=False)]},
+        start="https://app.test/panel",
+        jev={"pick": {"operation": "click", "click_target": ["a", "b", "c", "d"]}, "noul": 0.1},
+        limits={"max_steps": 8},
+    )
+
+    thanks = screen("https://shop.test/thanks", "Thanks", "Thanks\n\nOrder 42 placed.")
+    scenario(
+        "an authorized order whose receipt is read has its click classified at the finish",
+        "Place the order in my cart on shop.test and tell me its number",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "cart": cart, "done": thanks},
+            "urls": {"https://shop.test/cart": "cart"},
+            "actions": [{"screen": "cart", "operation": "click", "target": "buy", "next": "done"}],
+        },
+        {
+            "Plan": [plan(("a1", "Place the order", "action"), ("r1", "Find the order number", "information"))],
+            "_AnswerChecks": [{"checks": ["the order number"]}],
+            "_ReadResponse": [
+                {
+                    "claims": [
+                        {"requirement_id": "r1", "text": "Order 42 placed", "cite": {"first": "s1", "last": "s1"}}
+                    ],
+                    "answered": False,
+                }
+            ],
+            "LLMVerdict": [{"missing": [], "complete": True}],
+        },
+        start="https://shop.test/cart",
+        authorization={"irreversible_actions": True},
+        jev={
+            "pick": {"operation": ["click", "read", "done"]},
+            "noul": 0.95,
+            "nouls": {"unmet_a1": 0.0, "unmet_r1": 0.0, "draft_needs_writing": 0.0},
+        },
+        limits={"max_steps": 6},
+    )
+
+    down = screen("https://wiki.test/Dune", "Unavailable", "Service unavailable\n\nTry later.", response_status=503)
+    mirror = screen(
+        "https://mirror.test/Dune",
+        "Dune",
+        "Dune (novel)\n\nDune is a 1965 novel by Frank Herbert.",
+    )
+    scenario(
+        "an HTTP 503 that does not clear goes to recovery, which opens the other address the task gave and completes",
+        "Who wrote Dune? Use https://wiki.test/Dune or https://mirror.test/Dune",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "down": down, "mirror": mirror},
+            "urls": {"https://wiki.test/Dune": "down", "https://mirror.test/Dune": "mirror"},
+        },
+        {
+            **lookup_llm,
+            "_Recovery": [
+                recovery("The page is down", "Open the mirror", operation="navigate", url="https://mirror.test/Dune")
+            ],
+        },
+        start="https://wiki.test/Dune",
+        jev={
+            "pick": {"operation": ["escalate", "read"], "r1": "c1"},
+            "noul": 0.5,
+            "nouls": {"draft_needs_writing": 0.0, "destination": 0.95},
+        },
+    )
+
+    portal = screen(
+        "https://portal.test/",
+        "Portal",
+        "Portal\n\nMembers area.",
+        [control("enter", "button", "Continue", "click")],
+    )
+    scenario(
+        "recovery that gives up at a sign-in prompt ends the run needing login",
+        "Download my invoice from https://portal.test/",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "portal": portal},
+            "urls": {"https://portal.test/": "portal"},
+        },
+        {
+            "Plan": [plan(("a1", "Download the invoice", "action"), answer=False)],
+            "_Recovery": [
+                {"diagnosis": "A sign-in blocks it", "next_subgoal": "Sign in", "give_up": True, "needs_login": True}
+            ],
+        },
+        start="https://portal.test/",
+        jev={"pick": {"operation": "click"}, "noul": 0.1, "confidence": 0.3},
+    )
+
+    scenario(
+        "a password field with no stored secret stops needs_login",
+        "Log in to acme.test",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "login": signin},
+            "urls": {"https://acme.test/login": "login"},
+        },
+        {"Plan": [plan(("a1", "Log in", "action"), answer=False)]},
+        start="https://acme.test/login",
+        jev={"pick": {"operation": "fill"}, "noul": 0.1},
+    )
+
+    scenario(
+        "a download the task asks for is dispatched after one question, and the step limit ends the run",
+        "Download version 2.0 from files.test",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "home": downloads},
+            "urls": {"https://files.test/": "home"},
+            "actions": [
+                {"screen": "home", "operation": "click", "result": {"outcome": "executed", "page_changed": False}}
+            ],
+        },
+        {"Plan": [plan(("a1", "Download version 2.0", "action"), answer=False)]},
+        start="https://files.test/",
+        jev={"pick": {"operation": "click"}, "noul": 0.95, "nouls": {"downloads": 0.05, "irreversible": 0.0}},
+        limits={"max_steps": 1},
+    )
+
+    scenario(
+        "a dollar budget ends the run budget_exceeded",
+        "Search books.test for dune and tell me who wrote it",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "home": search},
+            "urls": {"https://books.test/": "home"},
+        },
+        {
+            "Plan": [plan(("r1", "Find who wrote Dune", "information"))],
+            "_AnswerChecks": [{"checks": ["the author of Dune"]}],
+            "_FieldText": [{"missing": False, "text": "dune"}],
+        },
+        start="https://books.test/",
+        jev={"pick": {"operation": "fill"}, "noul": 0.1},
+        limits={"max_dollars": 0.0025},
+    )
+
+    alert = screen(
+        "https://mail.test/inbox",
+        "Inbox",
+        "Inbox\n\nYou have new mail.",
+        [control("open", "link", "Open", "click", href="/m/1")],
+        dialog={"kind": "alert", "message": "Session will expire soon"},
+    )
+    scenario(
+        "dismissing an alert is not gated, and the step limit ends the run",
+        "Open my newest mail on https://mail.test/inbox",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "inbox": alert},
+            "urls": {"https://mail.test/inbox": "inbox"},
+        },
+        {"Plan": [plan(("a1", "Open the newest mail", "action"), answer=False)]},
+        start="https://mail.test/inbox",
+        jev={"pick": {"operation": "dialog", "pick": "dismiss"}, "noul": 0.1},
+        limits={"max_steps": 1},
+    )
+    filler = " Quoted context." * 450
+    replies_text = (
+        f"Replies\n\nProject 0: Author says the fix is available.{filler}\n\n"
+        f"Project 1: Author says the fix is planned.{filler}"
+    )
+    scenario(
+        "a page whose text alone overflows Jev's input stops observation_limit",
+        "Report the reply for Project 0 from https://projects.test/replies",
+        {
+            "start": "blank",
+            "screens": {
+                "blank": screen("about:blank", "", ""),
+                "replies": screen("https://projects.test/replies", "Replies", replies_text),
+            },
+            "urls": {"https://projects.test/replies": "replies"},
+        },
+        {
+            "Plan": [plan(("r0", "Report the reply for Project 0", "information"))],
+            "_AnswerChecks": [{"checks": ["the reply for Project 0"]}],
+        },
+        start="https://projects.test/replies",
+        config={"tokens": {"state_plus_largest_question": 2500, "state_plus_all_questions": 5000}},
+        jev={"pick": {"operation": "read"}, "noul": 0.1},
+    )
+
+    projects = ("available", "planned", "released")
+
+    def project(number: int) -> dict[str, Any]:
+        url = f"https://projects.test/project-{number}"
+        lead = f"Project {number}: Author says the fix is {projects[number]}."
+        return screen(url, f"Project {number}", f"Project {number}\n\n{lead}{filler}", viewport_text=lead)
+
+    def reply(number: int) -> dict[str, Any]:
+        text = f"Project {number}: Author says the fix is {projects[number]}."
+        claim = {"requirement_id": f"r{number}", "text": text, "cite": {"first": "s1", "last": "s1"}}
+        return {"claims": [claim], "answered": number == len(projects) - 1}
+
+    numbers = range(len(projects))
+    scenario(
+        "notes too large for one finish prompt are partitioned per project and each part completes",
+        "Report the reply for each project: "
+        + ", ".join(f"Project {n} at https://projects.test/project-{n}" for n in numbers),
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), **{f"p{n}": project(n) for n in numbers}},
+            "urls": {f"https://projects.test/project-{n}": f"p{n}" for n in numbers},
+        },
+        {
+            "Plan": [
+                plan(
+                    *((f"r{n}", f"Report the reply for Project {n}", "information") for n in numbers),
+                    checks=[f"the reply for Project {n}" for n in numbers],
+                )
+            ],
+            "_AnswerChecks": [{"checks": [f"the reply for Project {n}" for n in numbers]}],
+            "_FinishOutputs": [
+                {
+                    "groups": [
+                        {
+                            "subjects": [{"name": f"Project {n}", "requirement_ids": [f"r{n}"]} for n in numbers],
+                            "fields": ["the reply"],
+                            "check_indices": list(numbers),
+                        }
+                    ]
+                }
+            ],
+            "_ReadResponse": [reply(n) for n in numbers],
+            "_FieldAnswerDraft": [
+                {"output_0": [{"text": f"Project {n}: Author says the fix is {projects[n]}.", "evidence_ids": ["e0"]}]}
+                for n in numbers
+            ],
+            "LLMVerdict": [{"missing": [], "complete": True}],
+        },
+        start="https://projects.test/project-0",
+        config={"tokens": {"state_plus_largest_question": 8800, "state_plus_all_questions": 17600}},
+        jev={
+            "pick": {
+                "operation": ["read", "navigate", "read", "navigate", "read", "done"],
+                "navigate_target": ["0", "0", "1", "1"],
+            },
+            "noul": 0.95,
+            "nouls": {
+                "draft_needs_writing": 0.0,
+                "destination": 0.95,
+                "irreversible": 0.0,
+                "unsupported_0": 0.0,
+                "contradicted_0": 0.0,
+            },
+        },
+        limits={"max_steps": 10},
+    )
     return found
 
 
@@ -898,7 +1517,7 @@ def run_scenario(spec: Mapping[str, Any]) -> dict[str, Any]:
 
     async def go() -> Any:
         page = FakeSite(spec["site"])
-        config = Config(stall=StallRules(), step_frames=spec.get("step_frames", False))
+        config = Config.model_validate({**spec.get("config", {}), "step_frames": spec.get("step_frames", False)})
         agent = Agent(page, jev, llm, config=config, secrets=secrets, on_event=on_event)
         accepted = spec.get("until")
 
@@ -910,11 +1529,21 @@ def run_scenario(spec: Mapping[str, Any]) -> dict[str, Any]:
             until=until if accepted is not None else None,
             start=spec.get("start"),
             choose_start=spec.get("choose_start", False),
+            inputs=spec.get("inputs"),
+            attachments=[Attachment(**{**a, "content": a["content"].encode()}) for a in spec.get("attachments", ())],
             limits=Limits.model_validate(spec["limits"]) if spec.get("limits") else None,
             authorization=Authorization.model_validate(spec["authorization"]) if spec.get("authorization") else None,
         )
 
-    result = asyncio.run(go())
+    if spec.get("interstitial"):
+        # Wait for a page to move on, as the scenario's settling screen does; Rust waits on a paused clock.
+        agent_module._INTERSTITIAL_SECONDS = 1.0
+        agent_module._INTERSTITIAL_POLL_SECONDS = 0.0
+    try:
+        result = asyncio.run(go())
+    finally:
+        agent_module._INTERSTITIAL_SECONDS = 0.0
+        agent_module._INTERSTITIAL_POLL_SECONDS = 0.5
     outcome = result.model_dump(mode="json")
     for step in outcome["steps"]:
         step["duration_ms"] = 0

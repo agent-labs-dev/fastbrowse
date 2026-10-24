@@ -32,11 +32,17 @@ fn cases() -> Vec<Value> {
 struct FakeSite {
     site: Value,
     at: Mutex<(String, Vec<String>)>,
+    /// Times each settling screen has been observed.
+    seen: Mutex<HashMap<String, u64>>,
 }
 
 impl FakeSite {
     fn new(site: &Value) -> FakeSite {
-        FakeSite { site: site.clone(), at: Mutex::new((site["start"].as_str().unwrap().to_string(), Vec::new())) }
+        FakeSite {
+            site: site.clone(),
+            at: Mutex::new((site["start"].as_str().unwrap().to_string(), Vec::new())),
+            seen: Mutex::default(),
+        }
     }
 
     fn screen(&self) -> Value {
@@ -55,6 +61,17 @@ impl Page for FakeSite {
     }
 
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        // A screen that `settles` turns into another once it has been observed `after` times.
+        let settles = self.screen()["settles"].clone();
+        if !settles.is_null() {
+            let mut at = self.at.lock().unwrap();
+            let mut seen = self.seen.lock().unwrap();
+            let count = seen.entry(at.0.clone()).or_default();
+            *count += 1;
+            if *count > settles["after"].as_u64().unwrap() {
+                at.0 = settles["to"].as_str().unwrap().to_string();
+            }
+        }
         ready(Ok(serde_json::from_value(self.screen()["observation"].clone()).expect("observation")))
     }
 
@@ -232,6 +249,9 @@ impl LLMClient for ReplayLLM {
                 max_output_tokens,
             );
             let response = self.0.take(&key);
+            if let Some(failure) = response["raise"].as_str() {
+                return Err(LLMError::Failed(failure.to_string()));
+            }
             let data = schema.validate_json(&dumps(&response["data"])).map_err(LLMError::Failed)?;
             let cost: CostLine = serde_json::from_value(response["cost"].clone()).expect("cost");
             Ok(Generation { data, cost })
@@ -284,7 +304,12 @@ async fn replay(case: Value) {
         Arc::new(ScopedSecrets::per_secret(held)) as Arc<dyn fastbrowse_core::models::SecretResolver>
     });
     let page = Arc::new(FakeSite::new(&case["site"]));
-    let config = Config { step_frames: case["step_frames"].as_bool().unwrap_or(false), ..Config::default() };
+    let mut config = case["config"].clone();
+    if config.is_null() {
+        config = serde_json::json!({});
+    }
+    config["step_frames"] = case["step_frames"].as_bool().unwrap_or(false).into();
+    let config: Config = serde_json::from_value(config).expect("config");
     let agent = Agent::new(page, jev.clone(), llm.clone())
         .with_config(config)
         .with_secrets(secrets)
@@ -300,6 +325,8 @@ async fn replay(case: Value) {
     let options = RunOptions {
         start: case["start"].as_str().map(String::from),
         choose_start: case["choose_start"].as_bool().unwrap_or(false),
+        inputs: serde_json::from_value(case["inputs"].clone()).unwrap_or_default(),
+        attachments: serde_json::from_value(case["attachments"].clone()).unwrap_or_default(),
         limits: (!case["limits"].is_null()).then(|| serde_json::from_value::<Limits>(case["limits"].clone()).unwrap()),
         authorization: (!case["authorization"].is_null())
             .then(|| serde_json::from_value::<Authorization>(case["authorization"].clone()).unwrap()),
@@ -307,9 +334,10 @@ async fn replay(case: Value) {
         ..RunOptions::default()
     };
     let result = agent.run(case["task"].as_str().unwrap(), options).await.expect("run");
-    assert_eq!(normalized(result.dump()), normalized(case["outcome"].clone()), "{name}: result");
+    // A request left unmade explains a differing result better than the result does.
     jev.0.finish();
     llm.0.finish();
+    assert_eq!(normalized(result.dump()), normalized(case["outcome"].clone()), "{name}: result");
     assert_eq!(Value::Array(events.lock().unwrap().clone()), case["events"], "{name}: step events");
 }
 

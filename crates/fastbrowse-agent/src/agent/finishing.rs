@@ -386,9 +386,17 @@ impl Agent {
                     // The verifier judges completion from the page and the notes, and the audit judges the draft's
                     // claims against their quotes; neither reads the other's verdict, so they are asked side by side.
                     // Under a cap it still waits, so it reserves against the audit's receipts.
-                    let request = self.verify_request(state, &fresh, &check).await?;
-                    let (judged, held) =
-                        tokio::join!(self.verify_done(state.ledger.clone(), request), self.holds(state, answer));
+                    // Python builds the request inside the verifier's task, so notes too large for it fail only when
+                    // the verdict is awaited, after the audit has run.
+                    let request = self.verify_request(state, &fresh, &check).await;
+                    let ledger = state.ledger.clone();
+                    let judging = async {
+                        match request {
+                            Ok(request) => self.verify_done(ledger, request).await,
+                            Err(error) => Err(error),
+                        }
+                    };
+                    let (judged, held) = tokio::join!(judging, self.holds(state, answer));
                     let held = held?;
                     verifying = Some(judged.map(|(key, judged)| {
                         state.verify_cache.insert(key, judged.clone());
@@ -428,14 +436,16 @@ impl Agent {
                 && verifying.is_none();
             let request = match verifying.take() {
                 Some(judged) => Err(judged),
-                None => Ok(self.verify_request(state, &fresh, &check).await?),
+                // A request that cannot be built fails when its verdict is awaited, after the draft was sent, as in Python.
+                None => Ok(self.verify_request(state, &fresh, &check).await),
             };
             let options = if drafting { Some(self.compose_options(state).await?) } else { None };
             let ledger = state.ledger.clone();
             let judging = async {
                 match request {
                     Err(judged) => judged.map(|judged| (None, judged)),
-                    Ok(request) => {
+                    Ok(Err(error)) => Err(error),
+                    Ok(Ok(request)) => {
                         self.verify_done(ledger.clone(), request).await.map(|(key, judged)| (Some(key), judged))
                     }
                 }
