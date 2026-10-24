@@ -9,3 +9,9 @@ publish.workspace = true
 # WHATWG URL parsing, with UTS #46 host processing through its `idna` dependency: the parser Chrome uses.
 url = "2.5"
 percent-encoding = "2.3"
+indexmap = { version = "2", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+# Insertion order: pydantic writes fields in declaration order, and a request body must match Python's byte for byte.
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = { version = "0.10", default-features = false }
+thiserror = "2"
