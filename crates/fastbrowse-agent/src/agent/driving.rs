@@ -404,6 +404,10 @@ impl Agent {
         if redecided {
             return work.await.map(Watched::Done);
         }
+        // Python runs the work and the watch as tasks and waits on both, so whatever was already ready, such as a head
+        // start's plan, runs first. Without a shortcut to wait for, this is a run's first wait, and a plan left
+        // unpolled here went unasked and unbilled when the first action stopped the run.
+        tokio::task::yield_now().await;
         let raw = self.raw().unwrap_or_else(|| observation.clone());
         let watching = self.page.redrawn(&raw, REDRAW_WATCH_SECONDS, target);
         tokio::pin!(work);

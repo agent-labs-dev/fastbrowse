@@ -357,10 +357,9 @@ def scenarios() -> list[dict[str, Any]]:
             "urls": {home: "login"},
         },
         {
-            "Plan": [plan(("r1", "Find the last order total", "information"))],
+            "Plan": [plan(("r1", "Find the last order total", "information"), checks=["the order total"])],
             "Shortcut": [{"url": None}],
             "_AnswerDraft": [{"claims": []}],
-            "_AnswerChecks": [{"checks": ["the order total"]}],
         },
         start=home,
         jev={"pick": {}, "nouls": {"login_required": 0.95}},
@@ -376,10 +375,9 @@ def scenarios() -> list[dict[str, Any]]:
             "urls": {home: "wall"},
         },
         {
-            "Plan": [plan(("r1", "Find the blue mug's price", "information"))],
+            "Plan": [plan(("r1", "Find the blue mug's price", "information"), checks=["the price"])],
             "Shortcut": [{"url": None}],
             "_AnswerDraft": [{"claims": []}],
-            "_AnswerChecks": [{"checks": ["the price"]}],
         },
         start=home,
         jev={"pick": {}, "nouls": {"bot_check": 0.97}},
@@ -460,10 +458,9 @@ def scenarios() -> list[dict[str, Any]]:
             ],
         },
         {
-            "Plan": [plan(("r1", "Find who wrote Dune", "information"))],
+            "Plan": [plan(("r1", "Find who wrote Dune", "information"), checks=["the author of Dune"])],
             "Shortcut": [{"url": None}],
             "_AnswerDraft": [{"claims": []}],
-            "_AnswerChecks": [{"checks": ["the author of Dune"]}],
             "_FieldText": [{"missing": False, "text": "dune"}],
             "_ReadResponse": [{"claims": [], "answered": False}],
             "_Recovery": [{"diagnosis": "The page lacks it", "next_subgoal": "Stop", "give_up": True}],
@@ -481,10 +478,9 @@ def scenarios() -> list[dict[str, Any]]:
             "urls": {"https://books.test/": "home"},
         },
         {
-            "Plan": [plan(("r1", "Find who wrote Dune", "information"))],
+            "Plan": [plan(("r1", "Find who wrote Dune", "information"), checks=["the author of Dune"])],
             "Shortcut": [{"url": None}],
             "_AnswerDraft": [{"claims": []}],
-            "_AnswerChecks": [{"checks": ["the author of Dune"]}],
             "_FieldText": [{"missing": False, "text": "dune"}],
         },
         start="https://books.test/",
@@ -497,9 +493,8 @@ def scenarios() -> list[dict[str, Any]]:
         "Tell me something interesting",
         {"start": "blank", "screens": {"blank": screen("about:blank", "", "")}, "urls": {}},
         {
-            "Plan": [plan(("r1", "Tell something interesting", "information"))],
+            "Plan": [plan(("r1", "Tell something interesting", "information"), checks=["something"])],
             "StartPage": [{"url": None}],
-            "_AnswerChecks": [{"checks": ["something"]}],
         },
         choose_start=True,
     )
@@ -514,10 +509,9 @@ def scenarios() -> list[dict[str, Any]]:
             "urls": {"https://shop.test/missing": "missing"},
         },
         {
-            "Plan": [plan(("r1", "Find the returns policy", "information"))],
+            "Plan": [plan(("r1", "Find the returns policy", "information"), checks=["the returns policy"])],
             "Shortcut": [{"url": None}],
             "_AnswerDraft": [{"claims": []}],
-            "_AnswerChecks": [{"checks": ["the returns policy"]}],
             "_Recovery": [{"diagnosis": "The page is gone", "next_subgoal": "Stop", "give_up": True}],
         },
         start="https://shop.test/missing",
@@ -539,10 +533,9 @@ def scenarios() -> list[dict[str, Any]]:
             "urls": {"https://files.test/": "home"},
         },
         {
-            "Plan": [plan(("r1", "Find the latest version", "information"))],
+            "Plan": [plan(("r1", "Find the latest version", "information"), checks=["the latest version"])],
             "Shortcut": [{"url": None}],
             "_AnswerDraft": [{"claims": []}],
-            "_AnswerChecks": [{"checks": ["the latest version"]}],
             "_ReadResponse": [{"claims": [], "answered": False}],
             "_Recovery": [{"diagnosis": "Stuck", "next_subgoal": "Stop", "give_up": True}],
         },
@@ -561,9 +554,8 @@ def scenarios() -> list[dict[str, Any]]:
             "urls": {"https://pypi.test/": "front", "https://pypi.test/project/httpx/": "project"},
         },
         {
-            "Plan": [plan(("r1", "Find the latest httpx version", "information"))],
+            "Plan": [plan(("r1", "Find the latest httpx version", "information"), checks=["the latest httpx version"])],
             "Shortcut": [{"url": "https://pypi.test/project/httpx/"}],
-            "_AnswerChecks": [{"checks": ["the latest httpx version"]}],
             "_ReadResponse": [{"claims": [], "answered": False}],
             "_Recovery": [{"diagnosis": "Not here", "next_subgoal": "Stop", "give_up": True}],
         },
@@ -696,7 +688,6 @@ def scenarios() -> list[dict[str, Any]]:
     }
     lookup_llm = {
         "Plan": [plan(("r1", "Find who wrote Dune", "information"), checks=["the author of Dune"])],
-        "_AnswerChecks": [{"checks": ["the author of Dune"]}],
         "LLMVerdict": [{"missing": [], "complete": True}],
     }
     scenario(
@@ -761,8 +752,9 @@ def scenarios() -> list[dict[str, Any]]:
             "actions": [{"screen": "p1", "operation": "click", "target": "next", "next": "p2"}],
         },
         {
-            "Plan": [plan(("r1", "Find the cheapest mug across every page", "information"))],
-            "_AnswerChecks": [{"checks": ["the cheapest mug"]}],
+            "Plan": [
+                plan(("r1", "Find the cheapest mug across every page", "information"), checks=["the cheapest mug"])
+            ],
             "_ReadResponse": [
                 {
                     "claims": [],
@@ -835,9 +827,8 @@ def scenarios() -> list[dict[str, Any]]:
             "urls": {"https://pypi.test/": "front", "https://pypi.test/project/httpx/": "away"},
         },
         {
-            "Plan": [plan(("r1", "Find the latest httpx version", "information"))],
+            "Plan": [plan(("r1", "Find the latest httpx version", "information"), checks=["the latest httpx version"])],
             "Shortcut": [{"url": "https://pypi.test/project/httpx/"}],
-            "_AnswerChecks": [{"checks": ["the latest httpx version"]}],
         },
         start="https://pypi.test/",
         jev={"pick": {"operation": "escalate"}, "noul": 0.1},
@@ -858,8 +849,7 @@ def scenarios() -> list[dict[str, Any]]:
             "urls": {"https://forum.test/thread": "thread"},
         },
         {
-            "Plan": [plan(("r1", "Find how many replies the thread has", "information"))],
-            "_AnswerChecks": [{"checks": ["the reply count"]}],
+            "Plan": [plan(("r1", "Find how many replies the thread has", "information"), checks=["the reply count"])],
         },
         start="https://forum.test/thread",
         jev={"pick": {"operation": "read", "r1": "absent"}, "noul": 0.1, "nouls": {"login_required": 0.95}},
@@ -910,8 +900,7 @@ def scenarios() -> list[dict[str, Any]]:
             "actions": [{"screen": "index", "operation": "click", "target": "dune", "next": "article"}],
         },
         {
-            "Plan": [plan(("r1", "Find who wrote Dune", "information"))],
-            "_AnswerChecks": [{"checks": ["the author of Dune"]}],
+            "Plan": [plan(("r1", "Find who wrote Dune", "information"), checks=["the author of Dune"])],
         },
         start="https://wiki.test/",
         jev={"pick": {"operation": ["click", "back", "back"]}, "noul": 0.1},
@@ -1016,8 +1005,7 @@ def scenarios() -> list[dict[str, Any]]:
             "urls": {"https://news.test/story": "story"},
         },
         {
-            "Plan": [plan(("r1", "Find what the council voted on", "information"))],
-            "_AnswerChecks": [{"checks": ["the vote"]}],
+            "Plan": [plan(("r1", "Find what the council voted on", "information"), checks=["the vote"])],
         },
         start="https://news.test/story",
         jev={"pick": {"operation": "scroll"}, "noul": 0.1},
@@ -1133,9 +1121,14 @@ def scenarios() -> list[dict[str, Any]]:
         },
         {
             "Plan": [
-                {**plan(("r1", "Find whether the settings page needs sign-in", "information")), "inspect_access": True}
+                {
+                    **plan(
+                        ("r1", "Find whether the settings page needs sign-in", "information"),
+                        checks=["whether sign-in is required"],
+                    ),
+                    "inspect_access": True,
+                }
             ],
-            "_AnswerChecks": [{"checks": ["whether sign-in is required"]}],
         },
         start="https://admin.test/settings",
         jev={"pick": {"operation": "read", "r1": "absent"}, "noul": 0.1, "nouls": {"login_required": 0.95}},
@@ -1150,8 +1143,7 @@ def scenarios() -> list[dict[str, Any]]:
             "urls": {"https://shop.test/missing": "missing"},
         },
         {
-            "Plan": [plan(("r1", "Find the returns policy", "information"))],
-            "_AnswerChecks": [{"checks": ["the returns policy"]}],
+            "Plan": [plan(("r1", "Find the returns policy", "information"), checks=["the returns policy"])],
             "_Recovery": [{"raise": "provider returned 500"}],
         },
         start="https://shop.test/missing",
@@ -1170,8 +1162,7 @@ def scenarios() -> list[dict[str, Any]]:
             ],
         },
         {
-            "Plan": [plan(("r1", "Find who wrote Dune", "information"))],
-            "_AnswerChecks": [{"checks": ["the author of Dune"]}],
+            "Plan": [plan(("r1", "Find who wrote Dune", "information"), checks=["the author of Dune"])],
             "_FieldText": [{"missing": False, "text": "dune"}],
         },
         start="https://books.test/",
@@ -1251,8 +1242,13 @@ def scenarios() -> list[dict[str, Any]]:
             "actions": [{"screen": "cart", "operation": "click", "target": "buy", "next": "done"}],
         },
         {
-            "Plan": [plan(("a1", "Place the order", "action"), ("r1", "Find the order number", "information"))],
-            "_AnswerChecks": [{"checks": ["the order number"]}],
+            "Plan": [
+                plan(
+                    ("a1", "Place the order", "action"),
+                    ("r1", "Find the order number", "information"),
+                    checks=["the order number"],
+                )
+            ],
             "_ReadResponse": [
                 {
                     "claims": [
@@ -1364,8 +1360,7 @@ def scenarios() -> list[dict[str, Any]]:
             "urls": {"https://books.test/": "home"},
         },
         {
-            "Plan": [plan(("r1", "Find who wrote Dune", "information"))],
-            "_AnswerChecks": [{"checks": ["the author of Dune"]}],
+            "Plan": [plan(("r1", "Find who wrote Dune", "information"), checks=["the author of Dune"])],
             "_FieldText": [{"missing": False, "text": "dune"}],
         },
         start="https://books.test/",
@@ -1410,8 +1405,7 @@ def scenarios() -> list[dict[str, Any]]:
             "urls": {"https://projects.test/replies": "replies"},
         },
         {
-            "Plan": [plan(("r0", "Report the reply for Project 0", "information"))],
-            "_AnswerChecks": [{"checks": ["the reply for Project 0"]}],
+            "Plan": [plan(("r0", "Report the reply for Project 0", "information"), checks=["the reply for Project 0"])],
         },
         start="https://projects.test/replies",
         config={"tokens": {"state_plus_largest_question": 2500, "state_plus_all_questions": 5000}},
@@ -1447,7 +1441,6 @@ def scenarios() -> list[dict[str, Any]]:
                     checks=[f"the reply for Project {n}" for n in numbers],
                 )
             ],
-            "_AnswerChecks": [{"checks": [f"the reply for Project {n}" for n in numbers]}],
             "_FinishOutputs": [
                 {
                     "groups": [

@@ -1214,3 +1214,67 @@ async fn test_a_commit_with_no_claims_falls_back_to_the_notes() {
     let answer = result.answer.expect("an answer");
     assert!(!answer.starts_with("Answer (unverified)") && answer.contains("2,245,847"), "{answer}");
 }
+
+/// The plan call, priced at a cent as a metered provider prices it.
+struct MeteredPlan;
+
+impl fastbrowse_core::llm::LLMClient for MeteredPlan {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: fastbrowse_core::models::LLMPurpose,
+        _: &'a [fastbrowse_core::llm::Message],
+        schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
+        _: i64,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
+        Box::pin(async move {
+            if let Some(ledger) = ledger {
+                ledger.reserve(CostComponent::Llm, 0.0, 1)?;
+            }
+            let reply = json!({"requirements": [], "answer_expected": true, "answer_checks": ["Report the price"]});
+            let data = schema.validate_json(&reply.to_string()).map_err(fastbrowse_core::llm::LLMError::Failed)?;
+            let cost = CostLine {
+                purpose: Some(purpose),
+                ..CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.01))
+            };
+            Ok(Generation { data, cost })
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_abandoned_head_start_bills_the_finished_plan_receipt() {
+    // tests/clients/test_openai_compatible.py: the plan is the only call, so an abandoned run bills its receipt once
+    // and starts no follow-up.
+    let head = super::HeadStart::begin(Arc::new(MeteredPlan), "Report the price", None, None);
+    head.planning.wait().await;
+    let costs = head.abandon().await;
+    assert_eq!(costs.len(), 1);
+    assert_eq!((costs[0].basis, costs[0].dollars), (CostBasis::Metered, Some(0.01)));
+}
+
+#[tokio::test]
+async fn test_a_head_start_asks_for_a_shortcut_only_at_a_sites_entry_point() {
+    let llm = Arc::new(ScriptedLLM);
+    let entry = super::HeadStart::begin(llm.clone(), "Find the price", Some("https://shop.test/"), None);
+    let inside = super::HeadStart::begin(llm, "Find the price", Some("https://shop.test/cart"), None);
+    assert!(entry.proposing.is_some());
+    assert!(inside.proposing.is_none());
+    entry.discard().await;
+    inside.discard().await;
+}
+
+#[test]
+fn test_a_shortcut_is_worth_proposing_only_from_a_sites_entry_point() {
+    for (start, worth) in [
+        ("https://shop.test", true),
+        ("https://shop.test/", true),
+        ("https://shop.test/?q=mug", true),
+        ("https://shop.test/#top", true),
+        ("https://shop.test/cart", false),
+        ("https://shop.test/cart/", false),
+        ("about:blank", false),
+    ] {
+        assert_eq!(super::shortcut_worth_proposing(start), worth, "{start}");
+    }
+}
