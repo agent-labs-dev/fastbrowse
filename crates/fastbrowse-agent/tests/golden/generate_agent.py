@@ -146,6 +146,13 @@ class FakeSite:
     def withhold_frames(self, withheld: bool) -> None:
         return None
 
+    # A scripted site reports no lifecycle events, so a wait on one ends at once with nothing new.
+    def lifecycle_mark(self) -> int:
+        return 0
+
+    async def wait_for_lifecycle(self, mark: int, seconds: float) -> bool:
+        return False
+
     async def address(self) -> str:
         return self._screen()["observation"]["url"]
 
@@ -1536,14 +1543,12 @@ def run_scenario(spec: Mapping[str, Any]) -> dict[str, Any]:
         )
 
     if spec.get("interstitial"):
-        # Wait for a page to move on, as the scenario's settling screen does; Rust waits on a paused clock.
+        # Wait for a page to move on, as the scenario's settling screen does.
         agent_module._INTERSTITIAL_SECONDS = 1.0
-        agent_module._INTERSTITIAL_POLL_SECONDS = 0.0
     try:
         result = asyncio.run(go())
     finally:
         agent_module._INTERSTITIAL_SECONDS = 0.0
-        agent_module._INTERSTITIAL_POLL_SECONDS = 0.5
     outcome = result.model_dump(mode="json")
     for step in outcome["steps"]:
         step["duration_ms"] = 0

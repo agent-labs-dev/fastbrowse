@@ -263,14 +263,8 @@ impl Agent {
             if !oversized.is_empty() {
                 let notes = state.notes.clone();
                 let error = format!("{reason}; {}", oversized.join("; "));
-                return Ok(Some(self.partial_result(
-                    &notes,
-                    Some(state),
-                    &state.ledger.clone(),
-                    Status::Unverified,
-                    Some(error),
-                    None,
-                )));
+                let ledger = state.ledger.clone();
+                return Ok(Some(self.stopping_result(&notes, state, &ledger, Status::Unverified, Some(error)).await));
             }
             state.rejected_answer_evidence = Some(answer_evidence(&state.notes, true));
             let fresh = self.observe().await?;
@@ -288,14 +282,8 @@ impl Agent {
         let result = match Box::pin(self.conclude(state, output_schema, Some(Prepared::Held(answer)), true)).await {
             Err(Flow::Agent(AgentError::NotesTooLarge(message))) => {
                 let notes = state.notes.clone();
-                return Ok(Some(self.partial_result(
-                    &notes,
-                    Some(state),
-                    &state.ledger.clone(),
-                    Status::Unverified,
-                    Some(message),
-                    None,
-                )));
+                let ledger = state.ledger.clone();
+                return Ok(Some(self.stopping_result(&notes, state, &ledger, Status::Unverified, Some(message)).await));
             }
             other => other?,
         };
@@ -733,7 +721,7 @@ impl Agent {
         Ok((held.unwrap_or(composed), supported))
     }
 
-    async fn transaction_evidence_ids(&self, state: &mut RunState) -> Step<Vec<String>> {
+    pub(super) async fn transaction_evidence_ids(&self, state: &mut RunState) -> Step<Vec<String>> {
         if !state.authorization.irreversible_actions || state.transaction_candidates.is_empty() {
             return Ok(Vec::new());
         }

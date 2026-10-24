@@ -155,6 +155,15 @@ impl Page for FakeSite {
     fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
         ready(Ok(self.screen()["observation"]["response_status"].as_i64()))
     }
+
+    // A scripted site reports no lifecycle events, so a wait on one ends at once with nothing new.
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        ready(false)
+    }
 }
 
 /// Recorded answers by the bytes of the request that got them; identical requests are answered in recorded order.

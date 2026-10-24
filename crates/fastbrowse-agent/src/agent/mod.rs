@@ -49,7 +49,7 @@ use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::planner::{Plan, RequirementKind, RunReport, make_plan};
 use crate::policy::StepContext;
-use crate::retrieval::{ComposedAnswer, assemble_answer, partial_answer};
+use crate::retrieval::{ComposeOptions, ComposedAnswer, assemble_answer, compose, partial_answer};
 use crate::shortcut::{Shortcut, propose_shortcut};
 use crate::tripwires::{Tripped, repeated_action, stagnant_plan};
 use crate::verification::RecordSchema;
@@ -57,7 +57,6 @@ use crate::verification::RecordSchema;
 /// Long enough for a browser-verification page to run its check and hand over, short enough that a page which never
 /// moves still ends as needs_login well inside a run's time budget.
 const INTERSTITIAL_SECONDS: f64 = 12.0;
-const INTERSTITIAL_POLL_SECONDS: f64 = 0.5;
 /// A fresh observation can wait three seconds for loading, and a background capture needs time to activate.
 const ENDING_FRAME_SECONDS: f64 = 6.0;
 /// How long the first load waits for a shortcut. Flash-lite answers in 0.5 to 1s, and a start page loads in one to
@@ -318,7 +317,7 @@ impl Agent {
                     loop_returned = true;
                     result
                 }
-                Some(Err(flow)) => self.stopped(flow, slot.as_ref(), &ledger),
+                Some(Err(flow)) => self.stopped(flow, slot.as_mut(), &ledger).await,
                 None => {
                     let limit = ledger.limits.max_seconds.unwrap_or_default();
                     let notes = slot.as_ref().map(|state| state.notes.clone()).unwrap_or_default();
@@ -439,28 +438,32 @@ impl Agent {
     }
 
     /// The result of a run a step stopped: the error the loop raised, as the status it means.
-    fn stopped(&self, flow: Flow, state: Option<&RunState>, ledger: &Ledger) -> RunResult {
+    async fn stopped(&self, flow: Flow, state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
+        if let Flow::Stop(stop) = &flow
+            && let Some(state) = state
+        {
+            // A stop's message can quote the page, such as a field's label, and a page can echo a typed secret there;
+            // redacting at each raise missed one, so every stop is redacted here before the caller sees it.
+            let error = stop.error.as_deref().map(|error| self.redact(error));
+            if matches!(stop.status, Status::Stuck | Status::Unverified) && !state.notes.evidence().is_empty() {
+                // What was read is still cited evidence; a caller told only "stuck" has to browse again for it.
+                let notes = state.notes.clone();
+                return self.stopping_result(&notes, state, ledger, stop.status, error).await;
+            }
+            let outcome = Outcome { error, evidence: stop.evidence.clone(), ..Outcome::default() };
+            return self.result(Some(state), ledger, stop.status, outcome);
+        }
+        let state = state.map(|state| &*state);
         let notes = || state.map(|state| state.notes.clone()).unwrap_or_default();
         match flow {
             Flow::Stop(stop) => {
-                // A stop's message can quote the page, such as a field's label, and a page can echo a typed secret
-                // there; redacting at each raise missed one, so every stop is redacted here before the caller sees it.
                 let error = stop.error.as_deref().map(|error| self.redact(error));
-                match state {
-                    Some(state)
-                        if matches!(stop.status, Status::Stuck | Status::Unverified)
-                            && !state.notes.evidence().is_empty() =>
-                    {
-                        // What was read is still cited evidence; a caller told only "stuck" has to browse again.
-                        self.partial_result(&state.notes, Some(state), ledger, stop.status, error, None)
-                    }
-                    _ => self.result(
-                        state,
-                        ledger,
-                        stop.status,
-                        Outcome { error, evidence: stop.evidence, ..Outcome::default() },
-                    ),
-                }
+                self.result(
+                    state,
+                    ledger,
+                    stop.status,
+                    Outcome { error, evidence: stop.evidence, ..Outcome::default() },
+                )
             }
             Flow::Agent(AgentError::Budget(error)) => self.partial_result(
                 &notes(),
@@ -522,10 +525,75 @@ impl Agent {
         error: Option<String>,
         budget: Option<BudgetStop>,
     ) -> RunResult {
+        self.answered_partial(notes, state, ledger, status, Outcome { error, budget, ..Outcome::default() }, None)
+    }
+
+    /// `partial_result` for a run stopping stuck or unverified, which first asks for the answer its notes support.
+    pub(super) async fn stopping_result(
+        &self,
+        notes: &Notes,
+        state: &mut RunState,
+        ledger: &Ledger,
+        status: Status,
+        error: Option<String>,
+    ) -> RunResult {
+        let committed = if !notes.facts().is_empty() && matches!(status, Status::Stuck | Status::Unverified) {
+            self.commit(state).await
+        } else {
+            None
+        };
+        self.answered_partial(notes, Some(state), ledger, status, Outcome { error, ..Outcome::default() }, committed)
+    }
+
+    /// Write the answer a stopping run can still support, instead of handing back its notes.
+    ///
+    /// A task that stopped without verifying its finish used to arrive as every quote it read, in page order, with
+    /// the value the task asked for somewhere among them: a table lookup ended with its rows dumped and no sentence
+    /// naming the country. The evidence was there; nobody had been asked to answer from it. One composer call over
+    /// the collected notes asks that, and it is spent only on a run that is already stopping.
+    async fn commit(&self, state: &mut RunState) -> Option<ComposedAnswer> {
+        if !state.plan().page_answer_expected() || state.notes.evidence().is_empty() {
+            return None;
+        }
+        // A stop is the worst moment to trade the evidence already read for an error, so every failure of this
+        // best-effort call returns the notes rather than ending the run on a composer fault.
+        let transactions = self.transaction_evidence_ids(state).await.ok()?;
+        let ledger = state.ledger.clone();
+        let plan = state.plan().clone();
+        let options = ComposeOptions {
+            tokens: self.config.tokens.clone(),
+            ledger: Some(&ledger),
+            transaction_evidence_ids: transactions,
+            preserve_collections: !state.finish_partitions.is_empty() || !state.answer_corrections.is_empty(),
+            ..ComposeOptions::new()
+        };
+        let generated = compose(&*self.llm, &state.task, &plan, &state.notes, &options).await.ok()?;
+        (!generated.data.claims.is_empty()).then_some(generated.data)
+    }
+
+    fn answered_partial(
+        &self,
+        notes: &Notes,
+        state: Option<&RunState>,
+        ledger: &Ledger,
+        status: Status,
+        outcome: Outcome,
+        committed: Option<ComposedAnswer>,
+    ) -> RunResult {
+        let Outcome { error, budget, .. } = outcome;
         if notes.facts().is_empty() {
             return self.result(state, ledger, status, Outcome { error, budget, ..Outcome::default() });
         }
-        let mut partial = partial_answer(notes, self.config.observation.working_notes_chars);
+        let mut partial = match committed {
+            None => partial_answer(notes, self.config.observation.working_notes_chars),
+            Some(mut committed) => {
+                let notice = "Answer (unverified). The run stopped before its completion check confirmed this; these \
+                              are the values its evidence supports, written as an answer rather than a dump of what \
+                              was read.";
+                committed.linked_answer = format!("{notice}\n\n{}", committed.linked_answer);
+                committed
+            }
+        };
         if let Some(state) = state
             && (!state.partition_answers.is_empty() || !state.partial_answers.is_empty())
             && !state.authorization.irreversible_actions

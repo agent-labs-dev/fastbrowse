@@ -22,8 +22,8 @@ use super::helpers::{
 };
 use super::state::{Flow, HttpFailure, RunState, Step, Stop, TransactionCandidate, Unsure};
 use super::{
-    Agent, INTERSTITIAL_POLL_SECONDS, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS, REPEATS_BEFORE_CYCLE,
-    REVERSAL_WINDOW, SHORTCUT_WAIT_SECONDS, WALL_QUOTE_CHARS,
+    Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS, REPEATS_BEFORE_CYCLE, REVERSAL_WINDOW, SHORTCUT_WAIT_SECONDS,
+    WALL_QUOTE_CHARS,
 };
 use crate::planner::RequirementKind;
 use crate::policy::{Decision, HistoryEntry, decide};
@@ -545,15 +545,27 @@ impl Agent {
     }
 
     /// Re-observe until the page is no longer `stuck`, returning whether it moved in time.
+    ///
+    /// The wait is on the page's own lifecycle events, not a fixed interval: a document that is navigating or loading
+    /// reports each transition, so a stuck page is re-read the moment it moves. A wait that reports nothing new still
+    /// re-reads once before the deadline, so a client-side move is never missed.
     pub(super) async fn outwait(&self, stuck: &Observation) -> Step<bool> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs_f64(INTERSTITIAL_SECONDS);
-        while tokio::time::Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_secs_f64(INTERSTITIAL_POLL_SECONDS)).await;
+        let mut mark = self.page.lifecycle_mark();
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Ok(false);
+            }
+            let moved = self.page.wait_for_lifecycle(mark, remaining.as_secs_f64()).await;
+            mark = self.page.lifecycle_mark();
             if self.observe().await?.page_key != stuck.page_key {
                 return Ok(true);
             }
+            if !moved {
+                return Ok(false);
+            }
         }
-        Ok(false)
     }
 
     pub(super) async fn settle_blank_opening(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {

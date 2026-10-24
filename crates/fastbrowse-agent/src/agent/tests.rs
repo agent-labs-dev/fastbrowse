@@ -12,7 +12,8 @@ use fastbrowse_core::config::ObservationLimits;
 use fastbrowse_core::effects::step_key;
 use fastbrowse_core::llm::Generation;
 use fastbrowse_core::models::{
-    Artifact, Authorization, CostBasis, CostComponent, CostLine, Evidence, FactReader, Limits, Operation, StepOutcome,
+    Artifact, Authorization, CostBasis, CostComponent, CostLine, Evidence, FactReader, Limits, Operation, Status,
+    StepOutcome,
 };
 use fastbrowse_core::page::{ActResult, Action, BlockKind, Capture, Control, Observation, Page, PageResult};
 use fastbrowse_core::py::dump::Dump;
@@ -82,6 +83,14 @@ impl Page for NoPage {
 
     fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
         unreachable!("the helpers under test do not ask the status")
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        unreachable!("the helpers under test do not wait on the page")
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        unreachable!("the helpers under test do not wait on the page")
     }
 }
 
@@ -1141,4 +1150,67 @@ async fn test_a_new_step_at_the_same_address_still_renews_recovery() {
     let second = Observation { url: FILES.into(), ..observation(&[textbox("Email"), button("Next")]) };
     agent.settle(&mut state, &second, true, false);
     assert_eq!(state.recoveries, 0);
+}
+
+// -- tests/test_accuracy_fixes.py: a stopping run commits an answer ------------------------------------------------
+
+/// An LLM that writes `answer` for the one composer call a stopping run makes.
+struct Composer(serde_json::Value);
+
+impl fastbrowse_core::llm::LLMClient for Composer {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: fastbrowse_core::models::LLMPurpose,
+        _: &'a [fastbrowse_core::llm::Message],
+        schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
+        _: i64,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
+        Box::pin(async move {
+            assert_eq!(purpose, fastbrowse_core::models::LLMPurpose::Compose);
+            let data = schema.validate_json(&self.0.to_string()).map_err(fastbrowse_core::llm::LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)) })
+        })
+    }
+}
+
+/// A run whose one requirement was read off a table, with the agent that answers its composer call with `claims`.
+async fn stopped_with(claims: impl Fn(&Fact) -> serde_json::Value) -> (Agent, RunState) {
+    let mut state = run_state().await;
+    let page = capture(&[(BlockKind::Paragraph, "| Country | IMF (2026) |\n| South Korea | 2,245,847 |")]);
+    let fact = Fact::read(Some("r1"), "South Korea 2,245,847", block_evidence(&page, "s0"), FactReader::Llm);
+    state.notes = Notes::new([fact.clone()]);
+    state.ready_plan = Some(Plan::new(vec![Requirement::new("r1", "Report the 12th-highest GDP.", INFO)], true));
+    let agent = Agent::new(
+        Arc::new(NoPage),
+        Arc::new(ScriptedJev::new(Vec::new())),
+        Arc::new(Composer(json!({"claims": claims(&fact)}))),
+    );
+    (agent, state)
+}
+
+#[tokio::test]
+async fn test_a_stopping_run_commits_an_answer_instead_of_its_notes() {
+    // A table lookup used to arrive as its rows with no sentence naming the country.
+    let (agent, mut state) = stopped_with(|fact| {
+        json!([{"text": "South Korea has the 12th-highest GDP at 2,245,847 US$ millions.", "evidence_ids": [fact_id(fact)]}])
+    })
+    .await;
+    let (notes, ledger) = (state.notes.clone(), state.ledger.clone());
+    let error = Some("ran out of recoveries".to_string());
+    let committed = agent.stopping_result(&notes, &mut state, &ledger, Status::Stuck, error).await;
+    assert_eq!(committed.status, Status::Stuck);
+    let answer = committed.answer.expect("an answer");
+    assert!(answer.starts_with("Answer (unverified)"), "{answer}");
+    assert!(answer.contains("South Korea") && answer.contains("2,245,847"), "{answer}");
+}
+
+#[tokio::test]
+async fn test_a_commit_with_no_claims_falls_back_to_the_notes() {
+    let (agent, mut state) = stopped_with(|_| json!([])).await;
+    let (notes, ledger) = (state.notes.clone(), state.ledger.clone());
+    let result = agent.stopping_result(&notes, &mut state, &ledger, Status::Unverified, None).await;
+    assert_eq!(result.status, Status::Unverified);
+    let answer = result.answer.expect("an answer");
+    assert!(!answer.starts_with("Answer (unverified)") && answer.contains("2,245,847"), "{answer}");
 }
