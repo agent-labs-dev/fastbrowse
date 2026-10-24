@@ -467,50 +467,36 @@ async def test_abandoned_generation_settles_its_response_before_propagating_canc
     ledger.check()
 
 
-async def test_abandoned_head_start_keeps_cancelled_normalization_receipt(monkeypatch):
+async def test_abandoned_head_start_bills_the_finished_plan_receipt():
+    """The plan is the only call, so an abandoned run bills its receipt once and starts no follow-up."""
     from fastbrowse.agent import HeadStart
 
-    monkeypatch.setattr("fastbrowse.clients.openai_compatible.LLM_ATTEMPT_SECONDS", 0.02)
-    waiting = asyncio.Event()
-    calls = 0
-
     async def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return httpx.Response(
-                200,
-                json={
-                    "choices": [
-                        {
-                            "message": {
-                                "content": (
-                                    '{"requirements": [], "answer_expected": true, '
-                                    '"answer_checks": ["Report the price"]}'
-                                )
-                            }
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"requirements": [], "answer_expected": true, "answer_checks": ["Report the price"]}'
+                            )
                         }
-                    ],
-                    "usage": {"cost": 0.01},
-                },
-            )
-        waiting.set()
-        await asyncio.Event().wait()
-        raise AssertionError("Cancelled normalization returned")
+                    }
+                ],
+                "usage": {"cost": 0.01},
+            },
+        )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = OpenAICompatibleLLM("key", http=http, base_url="https://llm.test", models={LLMPurpose.PLAN: "planner"})
         head = HeadStart.begin(client, "Report the price")
-        await waiting.wait()
+        await head.planning
+        await asyncio.sleep(0)  # the plan's completion callback bills its receipt
         costs = await head.abandon()
-    # The plan finished and the normalization chained after it was cancelled: both are billed, the plan by its
-    # receipt and the cancelled call as unknown.
-    assert head.checking is not None and head.checking.cancelled()
-    assert len(costs) == 2
-    planned, cancelled = sorted(costs, key=lambda cost: cost.dollars is None)
-    assert planned.dollars == 0.01
-    assert cancelled.basis is CostBasis.UNKNOWN
-    assert cancelled.dollars is None
+    assert len(costs) == 1
+    assert costs[0].basis is CostBasis.METERED
+    assert costs[0].dollars == 0.01
 
 
 @pytest.mark.parametrize("cancellations", [1, 2])

@@ -24,8 +24,9 @@ The Codex with Cua Driver arm and the upstream suites (BU Bench, Online-Mind2Web
 ### Recorded head-to-head
 
 Both agents attempted every catalog task the hosted agent supports (46), three repeats each, on Browser Use
-cloud browsers under identical limits, with the hosted agent at its defaults. Source: `docs/results/benchmarks.json`,
-campaign `release-0.5.25-48c964d`.
+cloud browsers under identical limits, with the hosted agent at its defaults. Source:
+`docs/results/benchmark-candidate.json`, campaign `release-0.5.25-48c964d`, staged and not yet approved for the
+benchmark page.
 
 | Metric | fastbrowse | Browser Use (hosted) | Delta |
 |:--|:--|:--|:--|
@@ -69,7 +70,7 @@ within a build, not across.
 
 The `internal-backend` group runs fastbrowse on the 53 fastbrowse tasks three repeats each, once on its own
 hosted browser pool and once on a Browser Use Cloud browser, so the browser backend is the only difference.
-Source: `docs/results/benchmarks.json`, campaign `release-0.5.25-48c964d`.
+Source: `docs/results/benchmark-candidate.json`, campaign `release-0.5.25-48c964d`, staged and not yet approved.
 
 | Metric | fastbrowse, Browser Use Cloud browser | fastbrowse, own pool | Delta |
 |:--|:--|:--|:--|
@@ -102,7 +103,8 @@ From publication schema 5 the gate holds every new candidate to that pairing.
 
 The earlier record is not a C3 figure: the 0.5.14 core suite ran fastbrowse on a Browser Use Cloud browser, not on
 its own pool, against `jev-ultrafast` (fastbrowse 58 of 60, median 8.6s; `jev-ultrafast` 40 of 60, median 12.6s;
-source: `docs/results/0.5.14.jsonl`). Figures approved under that pairing keep it, under their own schema.
+source: the `docs/results/0.5.14.jsonl` entry in `docs/results/publication-baselines.json`). Figures approved
+under that pairing keep it, under their own schema.
 
 ## What is not claimed here
 
