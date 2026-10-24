@@ -4,7 +4,8 @@ name: Binaries
 #
 # Each target leaves one artifact, `fastbrowse-<target>`, holding `fastbrowse-<target>.tar.gz`. The archive
 # unpacks to `fastbrowse/`, the executable with `_internal/` beside it. It is an archive because an uploaded
-# artifact loses file modes, and the executable bit with them.
+# artifact loses file modes, and the executable bit with them. The `rust` job builds the Rust binary beside it,
+# as `fastbrowse-rust-<target>`.
 on:
   workflow_call:
   workflow_dispatch:
@@ -92,3 +93,88 @@ jobs:
           if-no-files-found: error
           # Already compressed.
           compression-level: 0
+
+  # The Rust `fastbrowse` (crates/fastbrowse-cli, docs/adr/0001) and the Node addon, per target. The npm packages
+  # still carry the PyInstaller build above; the release takes these instead once `NPM_BUILD` in release.yml says
+  # `rust`, and the job above stays until then, so going back is the same one-line change.
+  #
+  # Each target leaves `fastbrowse-rust-<target>`: `fastbrowse-rust-<target>.tar.gz`, which unpacks to
+  # `fastbrowse/` holding the one executable, and the addon as `fastbrowse.node` beside it.
+  rust:
+    name: rust ${{ matrix.target }}
+    permissions: {contents: read}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each target on a runner of its own kind, the images the PyInstaller job uses, so no cross linker is
+        # needed and the Linux builds link the glibc of Ubuntu 22.04, as the PyInstaller ones do.
+        include:
+          - {target: darwin-arm64, triple: aarch64-apple-darwin, runner: macos-14, addon: libfastbrowse_node.dylib}
+          - {target: darwin-x64, triple: x86_64-apple-darwin, runner: macos-15-intel, addon: libfastbrowse_node.dylib}
+          - {target: linux-x64, triple: x86_64-unknown-linux-gnu, runner: ubuntu-22.04, addon: libfastbrowse_node.so}
+          - {target: linux-arm64, triple: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm, addon: libfastbrowse_node.so}
+          - {target: win32-x64, triple: x86_64-pc-windows-msvc, runner: windows-2022, addon: fastbrowse_node.dll}
+    env:
+      TARGET: ${{ matrix.target }}
+      TRIPLE: ${{ matrix.triple }}
+      ADDON: ${{ matrix.addon }}
+      EXE: ${{ startsWith(matrix.target, 'win32-') && '.exe' || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      # rustup reads rust-toolchain.toml and installs the pinned toolchain on first use.
+      - run: cargo build --locked --profile release-small -p fastbrowse-cli --target "$TRIPLE"
+      # The addon in `release`: `release-small` aborts on a panic, which in an addon takes the host process with it.
+      - run: cargo build --locked --release -p fastbrowse-node --target "$TRIPLE"
+      - name: Stage the build
+        run: |
+          mkdir -p stage/fastbrowse
+          cp "target/$TRIPLE/release-small/fastbrowse$EXE" stage/fastbrowse/
+          cp "target/$TRIPLE/release/$ADDON" fastbrowse.node
+      # The linker signs an arm64 executable ad hoc already. Signing here gives the Intel build and the addon the
+      # same signature, and the check holds for all of them.
+      - name: Sign ad hoc
+        if: startsWith(matrix.target, 'darwin-')
+        run: |
+          codesign --force --sign - stage/fastbrowse/fastbrowse fastbrowse.node
+          codesign --verify --strict stage/fastbrowse/fastbrowse fastbrowse.node
+      - name: Install Chromium
+        if: matrix.target == 'linux-arm64'
+        run: |
+          npx --yes playwright@1.63.0 install --with-deps chromium
+          chrome="$(find "$HOME/.cache/ms-playwright" -type f -name chrome -path '*chromium-*' | head -n 1)"
+          test -x "$chrome"
+          echo "FASTBROWSE_CHROME=$chrome" >> "$GITHUB_ENV"
+      # The smoke scripts are standard library only, so the interpreter uv installs is all they need.
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with: {python-version: "3.13"}
+      - run: uv run --no-project python scripts/smoke_binary.py "stage/fastbrowse/fastbrowse$EXE"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: {node-version: "22", package-manager-cache: false}
+      - run: npm ci --ignore-scripts
+      # The install smoke starts the binary, then the addon, each from the package npm unpacked.
+      - name: Assemble the npm platform package
+        run: |
+          uv run --no-project python scripts/npm_platform_package.py "stage/fastbrowse/fastbrowse$EXE" --rust \
+            --addon fastbrowse.node --target "$TARGET" --version "$(uv version --short)" \
+            --out "$RUNNER_TEMP/npm-package"
+      - run: uv run --no-project python scripts/smoke_npm_install.py "$RUNNER_TEMP/npm-package"
+      - name: Record the size
+        working-directory: ${{ runner.temp }}/npm-package
+        run: |
+          npm pack --dry-run --json > "$RUNNER_TEMP/pack.json"
+          # The template literal is JavaScript, for node to expand.
+          # shellcheck disable=SC2016
+          node -e 'const [p] = require(process.argv[1]); const mb = n => (n / 1048576).toFixed(1);
+            console.log(`| \`${process.env.TARGET}\` (Rust) | ${mb(p.size)} MB packed | ${mb(p.unpackedSize)} MB |`)' \
+            "$RUNNER_TEMP/pack.json" | tee -a "$GITHUB_STEP_SUMMARY"
+      - run: tar -czf "fastbrowse-rust-$TARGET.tar.gz" -C stage fastbrowse
+        env: {COPYFILE_DISABLE: "1"}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fastbrowse-rust-${{ matrix.target }}
+          path: |
+            fastbrowse-rust-${{ matrix.target }}.tar.gz
+            fastbrowse.node
+          if-no-files-found: error

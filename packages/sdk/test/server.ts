@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import type { StartOptions } from '../src/index.ts';
+
 const repository = fileURLToPath(new URL('../../../', import.meta.url));
 const scripts = process.platform === 'win32' ? 'Scripts' : 'bin';
 const suffix = process.platform === 'win32' ? '.exe' : '';
@@ -57,22 +59,36 @@ export function scriptedServer(name: string, ...args: string[]): Launcher {
 }
 
 /**
+ * The addon FASTBROWSE_TEST_ADDON names. With it, every test that starts the server through `scriptedRun` runs on
+ * the addon in this process instead, with the stand-in runs the addon carries as the binary does.
+ */
+const addon = process.env.FASTBROWSE_TEST_ADDON;
+
+/** Set as `skip` on a test of the fastbrowse process itself, which an in-process run has no counterpart of. */
+export const processOnly = addon ? 'a test of the fastbrowse process, and this run of the suite is in-process' : false;
+
+/**
  * What `Fastbrowse.start` takes to get the real server with `run`, one of the runs in `servers/scripted_run.py`,
  * in place of the agent.
  */
-export function scriptedRun(run: string): { binaryPath: string; env: Record<string, string> } {
+export function scriptedRun(run: string): StartOptions & { env: Record<string, string> } {
   // `--record` is refused without an ffmpeg to encode with, and the machine running the tests may have none.
   const tools = mkdtempSync(join(tmpdir(), 'fastbrowse-sdk-'));
   writeFileSync(join(tools, 'ffmpeg'), '#!/bin/sh\n');
   chmodSync(join(tools, 'ffmpeg'), 0o755);
+  // The server refuses a run it has no model keys for, whatever would have run it.
+  const keys = { OPENROUTER_API_KEY: 'unused', AI_GATEWAY_API_KEY: 'unused', BROWSER_USE_API_KEY: 'unused' };
+  if (addon) {
+    // The core looks programs up on this process's PATH, since in-process `env` reaches only the settings.
+    process.env.PATH = `${tools}${delimiter}${process.env.PATH}`;
+    return {
+      inProcess: true,
+      addonPath: addon,
+      env: { ...keys, FASTBROWSE_TEST_SERVER: 'scripted_run', FASTBROWSE_TEST_RUN: run },
+    };
+  }
   return {
     binaryPath: scriptedServer('scripted_run', run).path,
-    env: {
-      PATH: `${tools}${delimiter}${process.env.PATH}`,
-      // The server refuses a run it has no model keys for, whatever would have run it.
-      OPENROUTER_API_KEY: 'unused',
-      AI_GATEWAY_API_KEY: 'unused',
-      BROWSER_USE_API_KEY: 'unused',
-    },
+    env: { PATH: `${tools}${delimiter}${process.env.PATH}`, ...keys },
   };
 }

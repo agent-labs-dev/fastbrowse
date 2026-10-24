@@ -47,7 +47,12 @@ const host: Host = {
 export function resolveBinary(binaryPath: string | undefined, env: NodeJS.ProcessEnv, on: Host = host): string {
   const named = binaryPath ?? env.FASTBROWSE_BINARY;
   if (named) return named;
+  const root = dirname(platformPackage(on));
+  return join(root, 'fastbrowse', on.platform === 'win32' ? 'fastbrowse.exe' : 'fastbrowse');
+}
 
+/** The manifest of the platform package installed beside this package, which holds the binary and the addon. */
+export function platformPackage(on: Host = host): string {
   const target = `${on.platform}-${on.arch}`;
   if (!TARGETS.includes(target)) {
     throw new FastbrowseError(
@@ -76,5 +81,5 @@ export function resolveBinary(binaryPath: string | undefined, env: NodeJS.Proces
       { cause: error },
     );
   }
-  return join(dirname(manifest), 'fastbrowse', on.platform === 'win32' ? 'fastbrowse.exe' : 'fastbrowse');
+  return manifest;
 }

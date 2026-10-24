@@ -686,7 +686,7 @@ def scenarios() -> list[dict[str, Any]]:
         "screens": {"blank": screen("about:blank", "", ""), "article": article},
         "urls": {"https://wiki.test/Dune": "article"},
     }
-    lookup_llm = {
+    lookup_llm: dict[str, list[JsonValue]] = {
         "Plan": [plan(("r1", "Find who wrote Dune", "information"), checks=["the author of Dune"])],
         "LLMVerdict": [{"missing": [], "complete": True}],
     }

@@ -13,7 +13,7 @@ import {
   type Status,
   type StepEvent,
 } from '../src/index.ts';
-import { scriptedRun } from './server.ts';
+import { processOnly, scriptedRun } from './server.ts';
 
 // The codes `ErrorCode` gives them in `src/fastbrowse/protocol.py`.
 const INVALID_PARAMS = -32602;
@@ -242,7 +242,7 @@ test('a second run while one is active rejects with the busy error, and hears no
   await firstEnded;
 });
 
-test('a server that exits mid-run rejects the run with its exit code', async () => {
+test('a server that exits mid-run rejects the run with its exit code', { skip: processOnly }, async () => {
   const fb = await Fastbrowse.start(scriptedRun('exits'));
   await assert.rejects(fb.run('Add the kettle to the cart', ownBrowser), (error: unknown) => {
     assert.ok(error instanceof ProcessExitedError);
@@ -256,7 +256,7 @@ test('a server that exits mid-run rejects the run with its exit code', async () 
   await fb.close();
 });
 
-test('a server that is killed mid-run rejects the run with the signal', async () => {
+test('a server that is killed mid-run rejects the run with the signal', { skip: processOnly }, async () => {
   const fb = await Fastbrowse.start(scriptedRun('killed'));
   await assert.rejects(fb.run('Add the kettle to the cart', ownBrowser), (error: unknown) => {
     assert.ok(error instanceof ProcessExitedError);

@@ -5,12 +5,30 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
 
+type HostFunction<Argument> = (argument: Argument) => Promise<string>;
+
+interface Host {
+  onEvent?: HostFunction<string>;
+  onFrame?: HostFunction<Buffer>;
+  until?: HostFunction<string>;
+  resolveSecret?: HostFunction<string>;
+}
+
+interface RunCancel {
+  cancel(): void;
+}
+
 interface Core {
   originOf(url: string): string | null;
   parseOrigin(value: string): string;
   parseOrigins(values: string[]): string[];
   textFragment(url: string, text: string): string;
   OriginGrant: new (origins: string[]) => { allows(url: string): boolean };
+  runTask(params: string, host?: Host, cancel?: RunCancel): Promise<string>;
+  Core: new (env?: Record<string, string>) => { runTask(params: string, host?: Host, cancel?: RunCancel): Promise<string> };
+  RunCancel: new () => RunCancel;
+  version(): string;
+  protocolVersion(): number;
 }
 
 const core = createRequire(import.meta.url)('../fastbrowse.node') as Core;
@@ -51,4 +69,54 @@ test('text fragments encode terms and keep the anchor', () => {
     'https://example.test/#section:~:text=new',
   );
   assert.throws(() => core.textFragment('https://example.test', ' \n'), /nonempty quote/);
+});
+
+// The stand-in runs the binary's tests use, with the keys a run is refused without and a browser nothing connects to.
+function scripted(run: string): InstanceType<Core['Core']> {
+  const keys = { OPENROUTER_API_KEY: 'unused', AI_GATEWAY_API_KEY: 'unused', BROWSER_USE_API_KEY: 'unused' };
+  return new core.Core({ ...keys, FASTBROWSE_TEST_SERVER: 'scripted_run', FASTBROWSE_TEST_RUN: run });
+}
+
+function params(fields: Record<string, unknown> = {}): string {
+  return JSON.stringify({ run_id: 'r', task: 'Add the kettle', cdp_url: 'ws://127.0.0.1:9/devtools/browser/x', ...fields });
+}
+
+const ok = (value: unknown) => async () => JSON.stringify({ ok: value });
+
+test('runTask refuses what serve refuses, with its code and message', async () => {
+  const reply = JSON.parse(await core.runTask(params({ tsak: 1 })));
+  assert.deepEqual(reply, { error: { code: -32602, message: 'run: tsak: Extra inputs are not permitted' } });
+  assert.equal(core.protocolVersion(), 1);
+});
+
+test('a run hands each event to onEvent, in order, before it resolves', async () => {
+  const events: string[] = [];
+  const onEvent = async (event: string) => {
+    events.push(JSON.parse(event).type);
+    return JSON.stringify({ ok: null });
+  };
+  const reply = JSON.parse(await scripted('three_events').runTask(params(), { onEvent }));
+  assert.equal(reply.result.status, 'complete');
+  assert.deepEqual(events, ['browser', 'step', 'step']);
+});
+
+test('a RunCancel stops the run, which settles with the cancelled error once it has closed', async () => {
+  const cancel = new core.RunCancel();
+  const reply = scripted('never_ends').runTask(params(), { onEvent: async () => (cancel.cancel(), '{"ok":null}') }, cancel);
+  assert.deepEqual(JSON.parse(await reply), { error: { code: -32002, message: "run 'r' was cancelled" } });
+});
+
+test('until and resolveSecret answer the run, and a failed one ends it as an error that hides what was thrown', async () => {
+  const unverified = JSON.parse(await scripted('ends_on_an_order').runTask(params({ until: true }), { until: ok(false) }));
+  assert.equal(unverified.result.status, 'unverified');
+
+  const secrets = { secrets: [{ name: 'password', origins: ['https://shop.example'] }] };
+  const inputs = { inputs: { name: 'password', origin: 'https://shop.example' }, ...secrets };
+  const typed = JSON.parse(await scripted('types_secrets').runTask(params(inputs), { resolveSecret: ok('hunter2') }));
+  assert.deepEqual(typed.result.data, ['hunter2', 'hunter2']);
+
+  const resolveSecret = async () => JSON.stringify({ error: 'vault says hunter2 is wrong' });
+  const failed = JSON.parse(await scripted('types_secrets').runTask(params(inputs), { resolveSecret }));
+  assert.equal(failed.result.status, 'error');
+  assert.equal(failed.result.error, "secrets/resolve: the client could not resolve the secret 'password'");
 });

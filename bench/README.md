@@ -29,7 +29,9 @@ asked.
 ## Commands
 
 Every command takes `--agent "<command>"`. The default is this checkout's `.venv/bin/fastbrowse serve --stdio`;
-a Rust build is `--agent "target/release/fastbrowse serve --stdio"`.
+a Rust build is `--agent "target/release/fastbrowse serve --stdio"`. `--agent in-process` calls `fastbrowse.run_task`
+in the harness's own process instead: on Python, or with `FASTBROWSE_RUST_CORE=1` on the Rust core through
+`fastbrowse_native`. It measures no startup, and its CPU and peak RSS are the harness's.
 
 ```sh
 # Record every task against OpenRouter. Only the proxy gets the key; the agent gets a placeholder.

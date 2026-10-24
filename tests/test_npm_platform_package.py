@@ -196,3 +196,72 @@ def test_the_targets_are_the_ones_built_and_the_ones_the_sdk_depends_on() -> Non
     assert sorted(sdk["optionalDependencies"]) == sorted(f"@fastbrowse/{target}" for target in TARGETS)
     for target in TARGETS:
         assert _assemble(Path("no-such-build"), target, "1.2.3", Path("unused")).stderr.startswith("refused: ")
+
+
+def _rust(root: Path, *, version: str = "1.2.3", name: str = "fastbrowse") -> Path:
+    """A file shaped like the Rust executable: the version it reports is a literal among its bytes."""
+    root.mkdir(parents=True, exist_ok=True)
+    binary = root / name
+    binary.write_bytes(b"\x7fELF ... fastbrowse " + version.encode() + b"protocol_version ...")
+    binary.chmod(0o755)
+    return binary
+
+
+def _assembled_rust(binary: Path, target: str, out: Path, *extra: str) -> dict[str, Any]:
+    command = [sys.executable, str(SCRIPT), str(binary), "--rust", "--target", target, "--version", "1.2.3"]
+    done = subprocess.run([*command, "--out", str(out), *extra], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    return json.loads((out / "package.json").read_text())
+
+
+@needs_modes
+def test_a_rust_binary_is_carried_as_fastbrowse_and_as_fastbrowse_mcp(tmp_path: Path) -> None:
+    binary = _rust(tmp_path / "build")
+    out = tmp_path / "package"
+    manifest = _assembled_rust(binary, "linux-x64", out)
+
+    assert manifest["files"] == ["fastbrowse", "NOTICE"]
+    assert sorted(path.name for path in (out / "fastbrowse").iterdir()) == ["fastbrowse", "fastbrowse-mcp"]
+    for name in ("fastbrowse", "fastbrowse-mcp"):
+        # The binary serves MCP when started under that name, and npm packs no symbolic link to give it one.
+        assert not (out / "fastbrowse" / name).is_symlink()
+        assert (out / "fastbrowse" / name).read_bytes() == binary.read_bytes()
+        assert (out / "fastbrowse" / name).stat().st_mode & 0o111
+
+
+def test_a_rust_binary_in_the_workflow_archive_is_taken_as_it_is(tmp_path: Path) -> None:
+    binary = _rust(tmp_path / "build" / "fastbrowse", name="fastbrowse.exe")
+    archive = tmp_path / "fastbrowse-win32-x64.tar.gz"
+    with tarfile.open(archive, "w:gz") as packed:
+        packed.add(binary.parent, arcname="fastbrowse")
+    out = tmp_path / "package"
+    _assembled_rust(archive, "win32-x64", out)
+
+    assert sorted(path.name for path in (out / "fastbrowse").iterdir()) == ["fastbrowse-mcp.exe", "fastbrowse.exe"]
+
+
+def test_the_addon_rides_along_as_fastbrowse_node(tmp_path: Path) -> None:
+    addon = tmp_path / "libfastbrowse_node.dylib"
+    addon.write_bytes(b"\xcf\xfa\xed\xfe the addon")
+    out = tmp_path / "package"
+    manifest = _assembled_rust(_rust(tmp_path / "build"), "darwin-arm64", out, "--addon", str(addon))
+
+    assert manifest["files"] == ["fastbrowse", "NOTICE", "fastbrowse.node"]
+    assert (out / "fastbrowse.node").read_bytes() == addon.read_bytes()
+
+
+@pytest.mark.parametrize("held", ["1.2.30", "11.2.3", "1.2"])
+def test_a_rust_binary_of_another_version_is_refused(tmp_path: Path, held: str) -> None:
+    binary = tmp_path / "fastbrowse"
+    binary.write_bytes(b"\x7fELF " + held.encode() + b" more")
+    command = [sys.executable, str(SCRIPT), str(binary), "--rust", "--target", "linux-x64", "--version", "1.2.3"]
+    done = subprocess.run([*command, "--out", str(tmp_path / "package")], capture_output=True, text=True)
+
+    assert done.returncode == 1
+    assert "holds no version 1.2.3" in done.stderr
+
+
+def test_the_rust_job_builds_the_same_targets() -> None:
+    built = re.findall(r"\{target: ([\w-]+), triple:", (REPO / ".github/workflows/binaries.yml").read_text())
+
+    assert sorted(built) == sorted(TARGETS)

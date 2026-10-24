@@ -45,7 +45,8 @@ if (process.argv[2] === 'offline') {
     process.exit(1);
   }
 }
-const fb = await Fastbrowse.start();
+// In-process, the SDK loads the addon from the same package instead of starting the binary.
+const fb = await Fastbrowse.start({ inProcess: process.argv.includes('in-process') });
 console.log(fb.fastbrowseVersion);
 await fb.close();
 """
@@ -114,20 +115,30 @@ def check(package: Path) -> str:
             raise Failed(f"{executable} came out of the install without its executable bit")
 
         (project / "start.mjs").write_text(START, encoding="utf-8")
-        # Nothing but the installed platform package may supply the binary.
-        environment = {name: value for name, value in os.environ.items() if name != "FASTBROWSE_BINARY"}
+        # Nothing but the installed platform package may supply the binary or the addon.
+        drop = ("FASTBROWSE_BINARY", "FASTBROWSE_ADDON")
+        environment = {name: value for name, value in os.environ.items() if name not in drop}
         prefix = offline()
         command = [node, "start.mjs"] if prefix is None else [*prefix, node, "start.mjs", "offline"]
-        started = run(command, cwd=project, env=environment, timeout=START_SECONDS)
+        modes = ["binary"]
+        if (package / "fastbrowse.node").is_file():
+            if not (installed / "fastbrowse.node").is_file():
+                raise Failed("the install lacks fastbrowse.node, the addon the package carries")
+            modes.append("in-process")
+        versions = {
+            mode: run([*command, mode], cwd=project, env=environment, timeout=START_SECONDS).stdout.strip()
+            for mode in modes
+        }
 
-    version = started.stdout.strip()
-    if not version == sdk_version == manifest["version"]:
-        raise Failed(
-            f"the binary is fastbrowse {version!r}, in {manifest['name']} {manifest['version']}, "
-            f"started by the SDK at {sdk_version}: one release is one version"
-        )
+    for mode, version in versions.items():
+        if not version == sdk_version == manifest["version"]:
+            raise Failed(
+                f"the {mode} is fastbrowse {version!r}, in {manifest['name']} {manifest['version']}, "
+                f"started by the SDK at {sdk_version}: one release is one version"
+            )
     network = "with the network on" if prefix is None else "with no network"
-    return f"start: fastbrowse {version} from {manifest['name']}, installed without scripts, {network}"
+    started = " and ".join(modes)
+    return f"start: fastbrowse {sdk_version} from {manifest['name']} ({started}), installed without scripts, {network}"
 
 
 def main() -> int:

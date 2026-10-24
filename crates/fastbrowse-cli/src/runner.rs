@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use fastbrowse_core::BoxFuture;
+use fastbrowse_core::jev::JevClient;
+use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
     Attachment, Authorization, EventHandler, FrameHandler, Limits, LocalChrome, RunResult, SecretResolver, UntilCheck,
 };
@@ -153,13 +155,23 @@ pub fn default_runner() -> Arc<dyn Runner> {
 }
 
 async fn run_task(args: RunArgs) -> Result<RunResult, RunError> {
+    run_task_with(args, None, None).await
+}
+
+/// `run_task` with model clients of the caller's own in place of those the settings build, as Python's `run_task`
+/// takes `jev=` and `llm=`.
+pub async fn run_task_with(
+    args: RunArgs,
+    jev: Option<Arc<dyn JevClient>>,
+    llm: Option<Arc<dyn LLMClient>>,
+) -> Result<RunResult, RunError> {
     let options = run_options(&args)?;
     let cancel = args.cancel.clone();
     let cancelled = move || -> BoxFuture<'static, ()> {
         let cancel = cancel.clone();
         Box::pin(async move { cancel.tripped().await })
     };
-    let options = fastbrowse_run::RunTask { cancel: Some(Arc::new(cancelled)), ..options };
+    let options = fastbrowse_run::RunTask { cancel: Some(Arc::new(cancelled)), jev, llm, ..options };
     fastbrowse_run::run_task(&args.task, options).await.map_err(|error| match error {
         fastbrowse_run::RunError::Invalid(message) => RunError::Failed(format!("ValueError: {message}")),
         fastbrowse_run::RunError::Configuration(message) => RunError::Configuration(message),

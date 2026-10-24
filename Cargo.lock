@@ -209,10 +209,12 @@ dependencies = [
 name = "fastbrowse-node"
 version = "0.7.0"
 dependencies = [
+ "fastbrowse-cli",
  "fastbrowse-core",
  "napi",
  "napi-build",
  "napi-derive",
+ "serde_json",
 ]
 
 [[package]]
@@ -229,8 +231,11 @@ dependencies = [
 name = "fastbrowse-py"
 version = "0.7.0"
 dependencies = [
+ "fastbrowse-cli",
  "fastbrowse-core",
  "pyo3",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -683,6 +688,7 @@ dependencies = [
  "napi-sys",
  "nohash-hasher",
  "rustc-hash",
+ "tokio",
 ]
 
 [[package]]

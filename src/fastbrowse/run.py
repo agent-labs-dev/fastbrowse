@@ -6,6 +6,7 @@ an embedder gets the parts that are easy to forget: the cloud browser's own cost
 downloads kept when a directory is given, and owned tabs closed on every path out.
 """
 
+import os
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
@@ -15,6 +16,7 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import BaseModel
 
+from fastbrowse import native
 from fastbrowse.adapters.browser_use_cloud import BrowserUseCloudBrowser
 from fastbrowse.adapters.local_chrome import async_local_chrome
 from fastbrowse.agent import Agent, HeadStart
@@ -288,7 +290,14 @@ async def run_task(
     with X11; it never moves the real pointer or changes focus, and does nothing where it cannot place the cursor
     exactly, including with no `cua-driver` installed, no display, a headless or cloud browser. It implies
     `foreground`, since the cursor lies over the window's front tab.
+
+    With `FASTBROWSE_RUST_CORE=1` and `fastbrowse_native` installed, the run goes to the Rust core in this process
+    whenever its arguments fit the `serve` protocol (`fastbrowse.native`), and to this code otherwise.
     """
+    if os.environ.get("FASTBROWSE_RUST_CORE") == "1":
+        run_params = native.params(task, locals())
+        if run_params is not None:
+            return await native.run(run_params, on_event=on_event, on_frame=on_frame, until=until, secrets=secrets)
     config = config or Config()
     settings = load_settings()
     origins = None if allowed_origins is None else parse_origins(allowed_origins)
