@@ -142,3 +142,34 @@ async fn a_recording_cannot_be_combined_with_allowed_origins() {
     let refused = run_task("read the page", options).await.unwrap_err();
     assert!(matches!(refused, RunError::Invalid(message) if message.contains("allowed_origins")));
 }
+
+#[tokio::test]
+async fn a_cancelled_run_closes_its_connection_before_it_returns() {
+    // A browser that takes the connection and never answers, so the run is still opening it when it is stopped.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (accepted, connected) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let _ = accepted.send(socket);
+    });
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    let options = task(|o| {
+        o.cdp_url = Some(format!("ws://127.0.0.1:{port}/devtools/browser/x"));
+        o.cancel = Some(Arc::new(move || -> BoxFuture<'static, ()> {
+            let mut stopped = stopped.clone();
+            Box::pin(async move {
+                let _ = stopped.wait_for(|stop| *stop).await;
+            })
+        }));
+    });
+    let run = tokio::spawn(run_task("read the page", options));
+    let mut socket = connected.await.unwrap();
+    stop.send(true).unwrap();
+    let refused = run.await.unwrap().unwrap_err();
+    assert_eq!(refused, RunError::Cancelled);
+    // The run has returned, so its end of the connection is closed: what is left to read ends.
+    let mut rest = Vec::new();
+    let read = tokio::time::timeout(std::time::Duration::from_secs(5), socket.read_to_end(&mut rest)).await;
+    assert!(read.is_ok_and(|read| read.is_ok()), "the connection was left open");
+}
