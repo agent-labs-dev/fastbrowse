@@ -185,7 +185,8 @@
   // Password and agent-typed secret values never leave the page: only their length is observed.
   const secret = e => e.type === 'password' || e.dataset?.fastbrowseSecret === '1';
   const reveal = e => (typeof e.value !== 'string' ? null : secret(e) ? '•'.repeat(e.value.length) : e.value);
-  const visible = e => {
+  // Asked of each control by the walk and again by its guard, and of each text node's parent.
+  const visible = memo(e => {
     // Todo lists paint the checkmark beside a transparent native input without associating a label.
     // The input still receives clicks; opacity alone must not remove the only control for that row.
     // A transparent input with a visible label of its own keeps the label as its click target: TodoMVC's
@@ -203,7 +204,7 @@
     if (!choice) return true;
     const r = e.getBoundingClientRect();
     return r.width > 0 && r.height > 0 && !e.matches(':disabled') && !e.closest('[aria-disabled="true"]');
-  };
+  });
   registry.visible = visible;
   // Styled checkboxes and radios often hide the native input. Its visible label is the click
   // target, but the input still owns the checked/disabled state and must participate in freshness.
@@ -423,6 +424,8 @@
     h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
     return (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
   };
+  // Sibling controls share their card, so its text is hashed once per card rather than once per control.
+  const scopeDigest = memo(scope => digest(innerTextOf(scope)?.slice(0, GUARD_TEXT_CHARS) || ''));
   registry.guard = e => {
     if (!e?.isConnected || !visible(e)) return null;
     const source = sourceOf(e);
@@ -444,7 +447,7 @@
       e.getAttribute('aria-checked'),
       e.getAttribute('aria-selected'),
       e.getAttribute('href'),
-      (scope && innerTextOf(scope))?.slice(0, GUARD_TEXT_CHARS) || '',
+      scope ? scopeDigest(scope) : '',
       e.ownerDocument.location.origin,
       e.ownerDocument.defaultView.performance.timeOrigin,
       submitSemantics(e),
@@ -938,8 +941,7 @@
   // Text in a same-process child document is on screen as much as the parent's: a frameset page has no text of
   // its own at all. Each child is read in its own coordinates, shifted by where its frame sits.
   const words = [];
-  // Text nodes share their parents, and a parent's visibility is asked once; geometry, the cheaper test, goes first.
-  const shown = memo(visible);
+  // Geometry, the cheaper test, goes first.
   const readText = (doc, dx, dy) => {
     if (!doc.body) return;
     const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
@@ -961,7 +963,7 @@
         left + r.width > 0 &&
         left < innerWidth &&
         !parent.closest('script,style,noscript,template') &&
-        shown(parent)
+        visible(parent)
       ) {
         words.push(value);
       }
