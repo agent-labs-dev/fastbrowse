@@ -77,6 +77,15 @@ def test_capture_dates_are_placeholders() -> None:
     assert canonical_value(friday) == {"date": "<today>", "next_days": ["<next day>"], "captured_at": "<timestamp>"}
 
 
+def test_screenshots_are_placeholders() -> None:
+    def message(png: str) -> dict[str, object]:
+        image = {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{png}"}}
+        return {"messages": [{"role": "user", "content": [{"type": "text", "text": "page"}, image]}]}
+
+    assert request_key(LLM, message("iVBORw0KGgoAAA")) == request_key(LLM, message("iVBORw0KGgoBBB"))
+    assert "<image>" in canonical_json(message("x"))
+
+
 def test_a_date_the_task_names_is_kept() -> None:
     assert request_key(LLM, {"task": "Book 2027-03-04"}) != request_key(LLM, {"task": "Book 2027-03-05"})
 

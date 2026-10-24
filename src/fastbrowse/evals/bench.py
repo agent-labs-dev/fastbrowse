@@ -71,6 +71,11 @@ PORT_BASE = 47300
 """Task n's site is served on PORT_BASE + n. The address reaches the model's prompts, and a URL the model writes
 back (a shortcut, a link it chose) has to lead to the same site when the run is replayed."""
 
+TIMING_SENSITIVE = {
+    "mock-support-portal": "the page shows its modal 1.2 s after load, and the step it lands on depends on agent speed",
+}
+"""Tasks whose result depends on wall time, not on the model responses. A diff in one is reported, and labelled."""
+
 TASK_SECONDS = 900.0
 SHUTDOWN_SECONDS = 30.0
 
@@ -559,7 +564,8 @@ def compare(args: argparse.Namespace) -> int:
         if costs.get(entry["task"]) != entry.get("cost_usd"):
             print(f"cost  {entry['task']}: {costs.get(entry['task'])} -> {entry.get('cost_usd')}")
     for task, lines in differences.items():
-        print(f"DIFF  {task}")
+        note = TIMING_SENSITIVE.get(task)
+        print(f"DIFF  {task}" + (f" (timing-sensitive: {note})" if note else ""))
         print("\n".join(lines))
     total = len({e["task"] for e in a["tasks"]} | {e["task"] for e in b["tasks"]})
     print(f"{total - len(differences)}/{total} tasks identical")
@@ -696,7 +702,9 @@ def markdown(summary: dict[str, Any]) -> str:
                     for p in group["stability"]["pairs"]
                 )
             )
-            + f", {group['stability']['misses']} replay misses.",
+            + f", {group['stability']['misses']} replay misses. Timing-sensitive: "
+            + "; ".join(f"{task}, {why}" for task, why in TIMING_SENSITIVE.items())
+            + ".",
             "",
             "| | median | total | max |",
             "|---|---:|---:|---:|",

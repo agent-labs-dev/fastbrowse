@@ -113,6 +113,10 @@ def canonical_value(value: Any) -> Any:
     sends the model another prompt, and that is a miss.
     """
     if isinstance(value, str):
+        if value.startswith("data:image/"):
+            # A screenshot differs in its pixels from run to run (antialiasing, a caret, a frame mid-paint), and
+            # the text beside it already says which page it shows.
+            return "<image>"
         document = _embedded(value)
         if document is not None:
             return {EMBEDDED_JSON: canonical_value(document)}
