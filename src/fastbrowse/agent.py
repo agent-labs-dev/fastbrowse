@@ -47,7 +47,7 @@ from fastbrowse.batches import evaluate_batches
 from fastbrowse.citations import ANSWER_LINK, text_fragment
 from fastbrowse.clients.validation import jev_spend
 from fastbrowse.comparison import NumericComparison, complete_comparison
-from fastbrowse.config import Config, ObservationLimits, flag
+from fastbrowse.config import Config, ObservationLimits
 from fastbrowse.effects import (
     SETTING_ROLES,
     ControlKey,
@@ -4660,7 +4660,7 @@ class Agent:
         if not notes.facts:
             return self._result(state, ledger, status, error=error, budget=budget)
         partial: ComposedAnswer | None = None
-        if flag("FASTBROWSE_FIX_COMMIT") and state is not None and status in {Status.STUCK, Status.UNVERIFIED}:
+        if state is not None and status in {Status.STUCK, Status.UNVERIFIED}:
             partial = await self._commit(state)
         if partial is None:
             partial = partial_answer(notes, self._config.observation.working_notes_chars)
@@ -5505,10 +5505,9 @@ def _shortcut_worth_proposing(start: str) -> bool:
     The shortcut synthesizes a deeper page on the start site from the task's own words, worth asking for at a site's
     entry point, where the task names the page but not its address. When the caller already handed the run a page
     inside the site - a path, not just the origin - the run is at a destination the caller chose, and a proposal to
-    go elsewhere on that origin second-guesses it. `FASTBROWSE_SHORTCUT_ON_DEEP_START` asks for one anyway.
+    go elsewhere on that origin second-guesses it.
     """
-    entry_only = flag("FASTBROWSE_SHORTCUT_ENTRY_ONLY", default=False)
-    return not (entry_only and urlsplit(start).path not in ("", "/"))
+    return urlsplit(start).path in ("", "/")
 
 
 async def _propose(llm: LLMClient, task: str, start: str, ledger: Ledger) -> Shortcut:

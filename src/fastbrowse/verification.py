@@ -24,7 +24,7 @@ from pydantic import (
 )
 
 from fastbrowse.batches import Answered, evaluate_batches
-from fastbrowse.config import Config, Thresholds, TokenBudget, flag
+from fastbrowse.config import Config, Thresholds, TokenBudget
 from fastbrowse.jev import (
     MAX_CHOICE_OPTIONS,
     ChoiceAnswer,
@@ -218,7 +218,7 @@ async def check_done(
     )
     instrumental = (
         {r.id for r in plan.requirements if r.kind is RequirementKind.ACTION and _traversal_only(r.text)}
-        if flag("FASTBROWSE_FIX_GATE") and standing_answer and not unevidenced
+        if standing_answer and not unevidenced
         else set()
     )
     for requirement in plan.requirements:

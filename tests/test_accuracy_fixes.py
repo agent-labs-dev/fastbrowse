@@ -71,14 +71,6 @@ async def test_an_unconfirmed_browsing_step_does_not_hold_an_evidenced_answer() 
     assert check.verdict is DoneVerdict.ACCEPT
 
 
-async def test_the_gate_can_still_be_measured_against_the_old_rule(monkeypatch) -> None:
-    """The pre-fix policy stays reachable for a measurement arm: the browsing step blocks as it did before."""
-    monkeypatch.setenv("FASTBROWSE_FIX_GATE", "0")
-    answers = {"complete": 0.63, "unmet_r1": 0.9, "unmet_r2": 0.1}
-    check = await check_done(_Jev(answers), "Count them.", _count_plan(), _PAGE, _counted_notes(), Thresholds())
-    assert check.verdict is DoneVerdict.VERIFY
-
-
 async def test_an_unevidenced_answer_still_keeps_the_run_working() -> None:
     """The traversal exemption is for a run that has read what it was asked for, never for one that has not."""
     check = await check_done(_Jev({"complete": 0.9}), "Count them.", _count_plan(), _PAGE, Notes(), Thresholds())
@@ -146,23 +138,3 @@ async def test_a_failed_commit_falls_back_to_the_notes(monkeypatch) -> None:
     result = await agent._partial_result(state.notes, state, state.ledger, Status.UNVERIFIED, "unverified")
     assert result.status is Status.UNVERIFIED
     assert result.answer is not None and "43.18" in result.answer
-
-
-async def test_the_commit_can_still_be_measured_against_the_old_rule(monkeypatch) -> None:
-    """With the commit turned off a stopping run hands back its notes as before."""
-    monkeypatch.setenv("FASTBROWSE_FIX_COMMIT", "0")
-    state = await run_state()
-    page = capture((BlockKind.PARAGRAPH, "Total: $43.18"))
-    evidence_item = block_evidence(page, "s0")
-    fact = Fact(requirement_id="r1", text="Total: $43.18", evidence=evidence_item, reader=FactReader.LLM)
-    state.notes, state.ready_plan = (
-        Notes((fact,)),
-        Plan(
-            requirements=(Requirement(id="r1", text="Report the total.", kind=RequirementKind.INFORMATION),),
-            answer_expected=True,
-        ),
-    )
-    claim: JsonValue = {"text": "The order total is $43.18.", "evidence_ids": [fact_id(fact)]}
-    agent = Agent(Mock(spec=Page, artifacts=()), RoutingJev(), ScriptedLLM([{"claims": [claim]}]))
-    result = await agent._partial_result(state.notes, state, state.ledger, Status.UNVERIFIED, "unverified")
-    assert result.answer is not None and result.answer.startswith("Partial evidence only")

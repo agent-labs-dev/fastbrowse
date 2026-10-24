@@ -12,7 +12,6 @@ from typing import NamedTuple, Self
 
 from pydantic import Field, model_validator
 
-from fastbrowse.config import flag
 from fastbrowse.llm import Generation, LLMClient, LLMError, Message
 from fastbrowse.models import CostBasis, CostLine, Frozen, Limits, LLMPurpose, combined_basis
 from fastbrowse.telemetry import Ledger
@@ -325,7 +324,7 @@ async def answer_checks(llm: LLMClient, task: str, plan: Plan, *, ledger: Ledger
     """`plan` with its draft answer checks normalized against the task, or with none when no page answer is due."""
     if not _needs_checks(plan):
         return CheckedPlan(data=plan.model_copy(update={"answer_checks": ()}), cost=None)
-    if plan.answer_checks and flag("FASTBROWSE_SINGLE_SHOT_CHECKS", default=False):
+    if plan.answer_checks:
         # The planner is asked for the checks itself; this call exists to repair a plan that omitted or malformed
         # them. A draft is a check the planner already wrote, so trusting a nonempty one saves a whole PLAN call on
         # every page-answer task. The repair still runs when the planner wrote none, where there is nothing to trust.
