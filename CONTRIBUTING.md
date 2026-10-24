@@ -52,8 +52,10 @@ The JavaScript SDK's types in `packages/sdk/src/protocol.ts` are generated from 
 `src/fastbrowse/protocol.py` and the models those use. After changing one, run `npm run generate:sdk` and commit
 the result. CI fails when the committed file differs from what the models produce.
 
-The npm packages are published at the Python package's version. `scripts/npm_versions.py` fails when
-`packages/sdk/package.json` holds another number, and with `--write` sets it from `pyproject.toml`.
+The npm packages are published at the Python package's version, and the Rust binary reports it too.
+`scripts/npm_versions.py` fails when `packages/sdk/package.json` or the `[workspace.package]` version in
+`Cargo.toml` holds another number, and with `--write` sets both from `pyproject.toml`, along with the workspace's
+own entries in `Cargo.lock`.
 
 Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for anything a user would notice, saying
 what changed and why.

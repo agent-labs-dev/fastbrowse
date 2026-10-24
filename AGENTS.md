@@ -28,7 +28,7 @@ The gate, which CI runs in this order on Python 3.13 and 3.14 (the browser, sift
 uv run ruff check . && uv run ruff format --check .
 uv run ty check                                     # ty, not pyright
 uv run python scripts/changelog.py --check "$(uv version --short)"
-uv run python scripts/npm_versions.py               # the npm versions are the Python one
+uv run python scripts/npm_versions.py               # the npm and Rust versions are the Python one
 uv run python scripts/no_slop.py
 uv run vale sync && uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs skills src scripts tests
 uv run python -m fastbrowse.evals.storage --manifest docs/results/evidence.manifest.json --check
@@ -192,7 +192,8 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
 
 1. Add the entry under the new version's heading in `CHANGELOG.md` (Keep a Changelog, prose bullets).
 2. `uv version <x.y.z>`, then `uv run python scripts/npm_versions.py --write`, which gives the SDK's manifest
-   the same number. Open a `chore: <x.y.z>` PR. CI fails if the version has no entry or npm disagrees with it.
+   and the Rust workspace the same number. Open a `chore: <x.y.z>` PR. CI fails if the version has no entry or
+   npm or Cargo disagrees with it.
 3. After it merges, `gh workflow run evals.yml --ref main -f repeat=3`. Wait for a successful Evals run on the
    exact commit that will be tagged.
 4. `git tag v<x.y.z> <tested-sha> && git push origin v<x.y.z>`.
