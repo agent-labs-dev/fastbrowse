@@ -984,22 +984,39 @@
   const viewport_text = words.join('\n');
 
   // Page state carried by pixels: a chart, a picture, a drawing or a video is evidence the page text and the
-  // control list cannot hold, and the verifier needs the screenshot for it. Counted rather than flagged so the
-  // Python side decides, and bounded to elements large enough to be content rather than an icon or a rule.
+  // control list cannot hold, and the verifier needs the screenshot for it. Only what the viewport shows counts,
+  // because that is what a screenshot captures: an image below the fold cannot appear in it, and counting every
+  // image on a long page would ask for a screenshot on almost every page and undo the gate it exists to serve.
+  // Geometry is read in the parent's coordinates the way readText reads text, so a frame's image counts where the
+  // frame itself sits on screen. Elements small enough to be an icon or a rule are not page state.
   const VISUAL = 'img,canvas,video,svg,picture,figure,[role="img"]';
   const VISUAL_MIN_PX = 48;
-  const VISUAL_MAX = 8;
   let visual_content = 0;
-  for (const doc of docs) {
+  const readVisual = (doc, dx, dy) => {
+    if (visual_content) return;
     for (const e of doc.querySelectorAll(VISUAL)) {
       if (e.closest('[aria-hidden="true"],[inert]') || !visible(e)) continue;
       const r = e.getBoundingClientRect();
+      const top = r.top + dy,
+        left = r.left + dx;
       if (r.width < VISUAL_MIN_PX || r.height < VISUAL_MIN_PX) continue;
-      visual_content++;
-      if (visual_content >= VISUAL_MAX) break;
+      if (top + r.height <= 0 || top >= innerHeight || left + r.width <= 0 || left >= innerWidth) continue;
+      visual_content = 1;
+      return;
     }
-    if (visual_content >= VISUAL_MAX) break;
-  }
+    for (const frame of doc.querySelectorAll('iframe,frame')) {
+      let inner = null;
+      try {
+        inner = frame.contentDocument;
+      } catch {
+        inner = null;
+      }
+      if (!inner || !granted(inner)) continue;
+      const f = frame.getBoundingClientRect();
+      readVisual(inner, dx + f.left + frame.clientLeft, dy + f.top + frame.clientTop);
+    }
+  };
+  readVisual(document, 0, 0);
 
   const guards = {},
     retarget_keys = {};
