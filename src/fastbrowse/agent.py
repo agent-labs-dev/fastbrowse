@@ -1066,11 +1066,12 @@ class Agent:
                     )
                 plan = await state.await_plan()
                 if not _access_inspection(plan):
-                    await self._meet_wall(state, observation, raw, plan)
-                    continue
-                state.passed_wall = raw.url
-                # A task inspecting an access boundary needs its observed wall read and verified, not passed.
-                decision = _code_decision(Operation.READ, None)
+                    if await self._meet_wall(state, observation, raw, plan):
+                        continue
+                else:
+                    state.passed_wall = raw.url
+                    # A task inspecting an access boundary needs its observed wall read and verified, not passed.
+                    decision = _code_decision(Operation.READ, None)
             uncertain = decision.confidence < self._config.thresholds.recover_below
             decided_by = Decider.JEV
             if (state.open_answer_outputs or uncertain or decision.operation not in _NOT_ACTING) and (
@@ -1969,7 +1970,12 @@ class Agent:
         reported stuck, which tells the caller to narrow the task rather than sign in."""
         if status is not Status.STUCK:
             return status
-        walled = said or (state.passed_wall is not None and same_address(state.passed_wall, observation.url))
+        # A model's word alone is not the page's: absent controls do not establish missing authentication, so a run
+        # that stopped saying it was signed out ends needs_login only when the page itself shows a sign-in to act on,
+        # or the run is standing on a wall it actually observed. A page offering neither is stuck, not signed out.
+        walled = (said and _shows_sign_in(observation)) or (
+            state.passed_wall is not None and same_address(state.passed_wall, observation.url)
+        )
         # A held secret makes the sign-in work the run can do, so a run holding one did not stop for want of it.
         origin = origin_of(observation.url)
         return Status.NEEDS_LOGIN if walled and not (origin and self._secret_names(origin)) else status
@@ -2639,11 +2645,15 @@ class Agent:
         )
         return choice == "accept"
 
-    async def _meet_wall(self, state: _RunState, observation: Observation, raw: Observation, plan: Plan) -> None:
+    async def _meet_wall(self, state: _RunState, observation: Observation, raw: Observation, plan: Plan) -> bool:
         """Stop at a sign-in wall Jev saw only on the page's evidence for it; return once the page proved readable.
 
         A public comment list whose only sign-in prompt was a box for posting a reply ended needs_login before a
-        single step, with nothing cited: the list, empty and saying so, could be read without an account."""
+        single step, with nothing cited: the list, empty and saying so, could be read without an account.
+
+        Returns whether the run should look at this page again: True after a read changed the notes, False when the
+        page shows no sign-in at all. Absent controls do not establish missing authentication, so a page with
+        neither a credential field nor a sign-in to act on is not a wall, and the run acts on its decision."""
 
         # The error reaches the caller as it is, so it is built from what models see and redacted as well: a page
         # can echo a typed secret into its title or a field's label.
@@ -2657,6 +2667,8 @@ class Agent:
         asked = [c.label or c.input_name or "a password" for c in observation.controls if c.id in credential]
         if credential:
             raise wall(f"the page asks for {', '.join(asked) or 'a password'}")
+        if not _shows_sign_in(observation):
+            return False
         if not _unread(plan, state.notes):
             raise wall(f"{page} offers only sign-in")
         # A prompt to sign in can gate only writing, such as posting a reply, so a task that reads is asked of the
@@ -2665,6 +2677,7 @@ class Agent:
         await self._step(state, observation, _code_decision(Operation.READ, None))
         if len(state.notes.facts) == facts:
             raise wall(f"reading {page} found none of the requested information")
+        return True
 
     async def _read_before_interaction(
         self, state: _RunState, observation: Observation, decision: Decision, decided_by: Decider = Decider.JEV
@@ -5301,6 +5314,27 @@ def _unread_transaction(state: _RunState) -> bool:
             not candidate.outcome_read and candidate.committing is not False
             for candidate in state.transaction_candidates
         )
+    )
+
+
+# A page's own statement that it wants a sign-in: a control offering one, whatever language its label is in.
+_SIGN_IN_AFFORDANCE = re.compile(
+    r"\b(sign[\s-]?in|sign[\s-]?on|log[\s-]?in|log[\s-]?on|login|logon|authenticate|authentication|"
+    r"verify|verification|two[\s-]?factor|one[\s-]?time)\b",
+    re.IGNORECASE,
+)
+
+
+def _shows_sign_in(observation: Observation) -> bool:
+    """Whether the page itself offers a sign-in to act on: a credential field, or a control naming one.
+
+    Absent controls are not evidence of missing authentication. A run that stopped on a page with neither a
+    credential field nor a sign-in affordance has not been shown a wall, so it is not reported as signed out."""
+    if any(asks_for_credentials(control) for control in observation.controls):
+        return True
+    return any(
+        _SIGN_IN_AFFORDANCE.search(f"{control.label or ''} {control.href or ''}") is not None
+        for control in observation.controls
     )
 
 
