@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A benchmark row now carries the input and output token counts behind its model throughput, alongside the LLM and Jev call counts. They are what lets a comparison show speed and cost on a fixed, published basis, so a slow page or a provider's margin cannot move it. A row from a build that did not record them omits them and reads as not recorded, never as the measured wall clock or billed charge they replace.
+
 ## [0.7.0] - 2026-10-24
 
 - The plan is one call. The planner is asked for a plan's answer checks in the same request that decomposes the task, so the second PLAN call that normalized a terse draft is gone: the checks the final answer is judged against are written in full by the call that states the requirements, rather than repaired afterwards by a call that only saw the draft. A planner that wrote none for a page-answer task still gets one check per information requirement, whose text names its entity and scope.

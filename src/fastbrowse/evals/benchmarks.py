@@ -51,9 +51,14 @@ class Row(PublicModel):
     seconds: Amount
     dollars: Amount
     physical_runs: Annotated[int, Field(gt=0)]
+    # The efficiency figures a comparison is normalized onto, so a slow page or a provider's margin cannot move it.
+    # A build from before they existed omits them and they read as zero; the site then shows them as not recorded
+    # rather than falling back to the measured wall clock or billed charge they replace.
     llm_calls: Annotated[int, Field(ge=0)] = 0
     jev_calls: Annotated[int, Field(ge=0)] = 0
     tokens_per_second: Amount = 0.0
+    input_tokens: Annotated[int, Field(ge=0)] = 0
+    output_tokens: Annotated[int, Field(ge=0)] = 0
 
     @model_validator(mode="after")
     def completion(self) -> Self:
