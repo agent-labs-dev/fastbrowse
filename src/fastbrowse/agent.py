@@ -185,7 +185,6 @@ _ENDING_FRAME_SECONDS = 6.0
 # How long the first load waits for a shortcut. Flash-lite answers in 0.5 to 1s, and a start page loads in one
 # to four, so a proposal later than this is an outlier and the start page is opened instead.
 _SHORTCUT_WAIT_SECONDS = 2.0
-_INTERSTITIAL_POLL_SECONDS = 0.5
 _REDRAW_WATCH_SECONDS = 10.0
 """Longer than deciding takes: a watch ends with the work it watches, and this only bounds a stuck one."""
 _NOT_ACTING = frozenset({Operation.READ, Operation.DONE})
@@ -1378,12 +1377,21 @@ class Agent:
         return (await self._observe()).page_key != challenge.page_key
 
     async def _outwait(self, stuck: Observation) -> bool:
-        """Re-observe until the page is no longer `stuck`, returning whether it moved in time."""
+        """Re-observe until the page is no longer `stuck`, returning whether it moved in time.
+
+        The wait is on the page's own lifecycle events, not a fixed interval: a document that is navigating or
+        loading reports each transition, so a stuck page is re-read the moment it moves. A wait that reports
+        nothing new still re-reads once before the deadline, so a client-side move is never missed.
+        """
         deadline = time.monotonic() + _INTERSTITIAL_SECONDS
-        while time.monotonic() < deadline:
-            await asyncio.sleep(_INTERSTITIAL_POLL_SECONDS)
+        mark = self._page.lifecycle_mark()
+        while (remaining := deadline - time.monotonic()) > 0:
+            moved = await self._page.wait_for_lifecycle(mark, remaining)
+            mark = self._page.lifecycle_mark()
             if (await self._observe()).page_key != stuck.page_key:
                 return True
+            if not moved:
+                break
         return False
 
     async def _settle_blank_opening(self, state: _RunState, observation: Observation) -> bool:

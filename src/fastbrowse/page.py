@@ -328,6 +328,14 @@ class Page(Protocol):
         """Hold back live and recorded frames while the page may show a secret, which pixels cannot mask."""
         ...
 
+    def lifecycle_mark(self) -> int:
+        """The page's current lifecycle generation, for a caller waiting on the next transition."""
+        ...
+
+    async def wait_for_lifecycle(self, mark: int, seconds: float) -> bool:
+        """Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`."""
+        ...
+
     async def address(self) -> str:
         """The address the current document was served from, after any redirect."""
         ...

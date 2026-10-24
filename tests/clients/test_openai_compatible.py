@@ -183,61 +183,6 @@ async def test_a_retry_reserves_its_own_call_and_keeps_an_unreadable_attempts_co
     assert result.cost.dollars is None
 
 
-async def test_a_hedge_loser_is_charged_as_the_winner(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("fastbrowse.clients.openai_compatible.LLM_HEDGE_SECONDS", 0.01)
-    calls = 0
-    ledger = Ledger(Limits(max_llm_calls=2, max_dollars=1.0))
-
-    async def handler(_: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            await asyncio.Event().wait()
-        return httpx.Response(
-            200,
-            json={
-                "choices": [{"message": {"content": '{"count":1}'}}],
-                "usage": {"cost": 0.01, "prompt_tokens": 20, "completion_tokens": 5},
-            },
-        )
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        result = await OpenAICompatibleLLM(
-            "key", http=http, base_url="https://llm.test", models={LLMPurpose.READ: "reader"}
-        ).generate(LLMPurpose.READ, [], Result, ledger=ledger)
-    ledger.record(result.cost)
-    assert calls == ledger.llm_calls == 2
-    assert result.data.count == 1
-    assert (
-        result.cost.basis is CostBasis.ESTIMATED
-        and result.cost.dollars is not None
-        and round(result.cost.dollars, 6) == 0.02
-    )
-    assert not ledger.breakdown().has_unknown
-    ledger.check(0.0)
-
-
-async def test_a_hedge_loser_is_recorded_even_when_the_winner_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("fastbrowse.clients.openai_compatible.LLM_HEDGE_SECONDS", 0.01)
-    calls = 0
-    ledger = Ledger(Limits())
-
-    async def handler(_: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            await asyncio.Event().wait()
-        return httpx.Response(401)
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        with pytest.raises(LLMError, match="401"):
-            await OpenAICompatibleLLM(
-                "key", http=http, base_url="https://llm.test", models={LLMPurpose.READ: "reader"}
-            ).generate(LLMPurpose.READ, [], Result, ledger=ledger)
-    assert calls == 2 and len(ledger.lines) == 1
-    assert ledger.breakdown().has_unknown
-
-
 async def test_an_error_status_retry_does_not_add_llm_cost() -> None:
     responses = iter(
         [
@@ -609,46 +554,35 @@ async def test_abandoned_generation_recovers_its_receipt_and_joins_repeated_canc
     ledger.check()
 
 
-@pytest.mark.parametrize("answered", [False, True])
-async def test_abandoned_hedged_generation_retains_known_and_unknown_attempts(monkeypatch, answered: bool) -> None:
-    monkeypatch.setattr("fastbrowse.clients.openai_compatible.LLM_HEDGE_SECONDS", 0.001)
-    monkeypatch.setattr("fastbrowse.clients.openai_compatible.LLM_ATTEMPT_SECONDS", 0.02)
-    hedged, release = asyncio.Event(), asyncio.Event()
+async def test_abandoned_generation_retains_the_in_flight_attempt(monkeypatch) -> None:
+    """A run cancelled with a request in flight still carries that request's charge, from its receipt."""
+    monkeypatch.setattr("fastbrowse.clients.openai_compatible.LLM_ATTEMPT_SECONDS", 0.05)
+    sent, release = asyncio.Event(), asyncio.Event()
     ledger = Ledger(Limits(max_dollars=0.25))
     calls, stopped = 0, 0
 
     async def handler(_: httpx.Request) -> httpx.Response:
         nonlocal calls, stopped
         calls += 1
-        number = calls
-        if number == 2:
-            hedged.set()
+        sent.set()
         try:
-            if number == 1 and not answered:
-                await asyncio.Event().wait()
             await release.wait()
-            return httpx.Response(200, json={"usage": {"cost": 0.001 * number}})
+            return httpx.Response(200, json={"usage": {"cost": 0.001}})
         finally:
             stopped += 1
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = OpenAICompatibleLLM("key", http=http, base_url="https://llm.test", models={LLMPurpose.PLAN: "planner"})
         task = asyncio.create_task(client.generate(LLMPurpose.PLAN, [], Result, ledger=ledger))
-        await hedged.wait()
+        await sent.wait()
         task.cancel()
         await asyncio.sleep(0)
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, 1)
-    assert calls == stopped == ledger.llm_calls == 2
-    assert len(ledger.lines) == 2
-    assert ledger.breakdown().known_dollars == (0.003 if answered else 0.002)
-    assert ledger.breakdown().has_unknown is not answered
-    if answered:
-        ledger.check()
-    else:
-        with pytest.raises(BudgetExceeded, match="reported no cost"):
-            ledger.check()
+    assert calls == stopped == ledger.llm_calls == 1
+    assert [(line.basis, line.dollars) for line in ledger.lines] == [(CostBasis.METERED, 0.001)]
+    ledger.check()
 
 
 async def test_missing_field_cost_recovers_matching_provider_receipt() -> None:
@@ -849,7 +783,7 @@ async def test_receipt_does_not_double_count_normal_provider_spend(base_url, byo
         assert result.cost.dollars == pytest.approx(amount)
 
 
-async def test_twin_cancelled_after_its_sibling_answered_is_charged_as_that_answer(monkeypatch) -> None:
+async def test_a_request_abandoned_with_a_receipt_is_charged_as_that_answer(monkeypatch) -> None:
     ledger = Ledger(Limits(max_dollars=0.25))
     settled = httpx.Response(
         200,
@@ -863,18 +797,14 @@ async def test_twin_cancelled_after_its_sibling_answered_is_charged_as_that_answ
         client = OpenAICompatibleLLM("key", http=http, base_url="https://llm.test", models={LLMPurpose.PLAN: "model"})
 
         async def abandoned(body, ledger, usage, purpose):
-            usage.unaccounted_requests += 2
-            usage.cancelled_twins += 1
+            usage.unaccounted_requests += 1
             usage.discarded_responses.append(settled)
             raise asyncio.CancelledError
 
         monkeypatch.setattr(client, "_request", abandoned)
         with pytest.raises(asyncio.CancelledError):
             await client.generate(LLMPurpose.PLAN, [], Result, ledger=ledger)
-    assert [(line.basis, line.dollars) for line in ledger.lines] == [
-        (CostBasis.METERED, 0.001),
-        (CostBasis.ESTIMATED, 0.001),
-    ]
+    assert [(line.basis, line.dollars) for line in ledger.lines] == [(CostBasis.METERED, 0.001)]
     ledger.check()
 
 

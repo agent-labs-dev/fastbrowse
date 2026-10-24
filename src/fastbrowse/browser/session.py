@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import hashlib
 import json
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
@@ -21,6 +22,7 @@ from cdp_use.cdp.fetch.types import RequestPattern
 from cdp_use.cdp.page.events import (
     JavascriptDialogClosedEvent,
     JavascriptDialogOpeningEvent,
+    LifecycleEventEvent,
     ScreencastFrameEvent,
     WindowOpenEvent,
 )
@@ -122,7 +124,8 @@ _KEEP_PAINTING: dict[str, object] = {
     "maxHeight": 16,
     "everyNthFrame": 1000,
 }
-_TRACK_DOCUMENT_JS = data_file("browser", "snapshot.js").read_text(encoding="utf-8") + "('fingerprint')"
+_SNAPSHOT_JS = data_file("browser", "snapshot.js").read_text(encoding="utf-8")
+SNAPSHOT_UNINSTALLED = "fastbrowse: snapshot.js is not installed in this document"
 _REFUSE_COOKIES_JS = data_file("browser", "autoconsent", "autoconsent.standalone.js").read_text(encoding="utf-8")
 INPUT_WORLD = "fastbrowse-input"
 """The isolated world the input watch runs in: the page's own scripts cannot see a global, a listener or a binding
@@ -317,6 +320,30 @@ _DOWNLOAD_TEXT_BYTES = 16_384
 _DOWNLOAD_TEXT_TOTAL = 65_536
 
 
+class SnapshotScript:
+    """snapshot.js, compiled once in each document and called by name after that.
+
+    Sent whole with every evaluate, its source cost about 3ms of transfer and compiling per call, and each call
+    started again from unoptimized code. A document installs it as it starts, from the tracking script every new
+    document runs; a document older than the session installs it when a call first finds it missing. The key
+    names the source and the grant, so another build or another grant never calls this one's function.
+    """
+
+    def __init__(self, grant: OriginGrant | None) -> None:
+        origins = "null" if grant is None else json.dumps(sorted(grant.origins))
+        key = json.dumps(hashlib.sha256(f"{origins}\n{_SNAPSHOT_JS}".encode()).hexdigest()[:16])
+        self.install = (
+            f"((globalThis.__fastbrowseScripts ||= {{}})[{key}] ||= "
+            f"(snapshot => (mode, limits) => snapshot(mode, {origins}, limits))({_SNAPSHOT_JS}))"
+        )
+        """An expression that installs the function, if this document has none, and evaluates to it."""
+        self.function = (
+            f"(globalThis.__fastbrowseScripts?.[{key}] ?? "
+            f"(() => {{ throw new Error({json.dumps(SNAPSHOT_UNINSTALLED)}); }})())"
+        )
+        """An expression for the installed function, which throws `SNAPSHOT_UNINSTALLED` where there is none."""
+
+
 class BrowserSession:
     """Async context manager over one owned tab (plus any popups it opens).
 
@@ -341,10 +368,8 @@ class BrowserSession:
         """Document requests the grant refused, so a navigation that was cut short is told from one that failed."""
         self._artifact_sink = artifact_sink
         self._max_download_bytes = max_download_bytes
-        track = _TRACK_DOCUMENT_JS
-        if self._grant is not None:
-            origins = json.dumps(sorted(self._grant.origins))
-            track = _TRACK_DOCUMENT_JS.removesuffix("('fingerprint')") + f"('fingerprint', {origins})"
+        self.snapshot = SnapshotScript(self._grant)
+        track = f"{self.snapshot.install}('fingerprint')"
         self._new_document_scripts = (track, _REFUSE_COOKIES_JS) if refuse_cookie_banners else (track,)
         self._client: CDPClient | None = None
         self._tabs: dict[str, _TabState] = {}
@@ -388,6 +413,10 @@ class BrowserSession:
         """The address of the document each pending dialog came from, which `Dialog` does not carry."""
         """Pending JS dialog per tab session id; cleared once handled."""
         self._dialog_opened = asyncio.Event()
+        self._lifecycle_generation = 0
+        """Bumped on every `Page.lifecycleEvent`: the page's own signal that it is still loading or has settled."""
+        self._lifecycle_waiters: set[asyncio.Future[None]] = set()
+        """Resolved when the next lifecycle event arrives, so a settle waits on the page, not a fixed interval."""
         self._background: set[asyncio.Task[None]] = set()
         self._closing = False
 
@@ -797,6 +826,10 @@ class BrowserSession:
         # These domains are independent, but all must be ready before the session can be used.
         await _together(
             *(self.client.send_raw(f"{domain}.enable", session_id=session_id) for domain in _ENABLE_DOMAINS),
+            # `Page.enable` alone does not emit `Page.lifecycleEvent`: CDP gates those events behind this switch, so
+            # without it the settle path's lifecycle waits never wake and each one runs to its own deadline. The
+            # handler itself is registered in `_register_events`; this only turns the events on.
+            self.client.send_raw("Page.setLifecycleEventsEnabled", {"enabled": True}, session_id=session_id),
             self.client.send_raw(
                 "Runtime.addBinding",
                 {"name": INPUT_NAVIGATION_BINDING, "executionContextName": INPUT_WORLD},
@@ -846,6 +879,7 @@ class BrowserSession:
         client.register.Page.javascriptDialogOpening(self._on_dialog)
         client.register.Runtime.bindingCalled(self._on_binding)
         client.register.Page.javascriptDialogClosed(self._on_dialog_closed)
+        client.register.Page.lifecycleEvent(self._on_lifecycle)
         # A background run casts without a frame handler too, and a frame nobody acks stalls the cast that sent it.
         if self._on_frame is not None or not self._connection.foreground:
             client.register.Page.screencastFrame(self._on_screencast_frame)
@@ -1112,6 +1146,43 @@ class BrowserSession:
             params["promptText"] = prompt_text
         await self.client.send.Page.handleJavaScriptDialog(params=params, session_id=session_id)  # ty: ignore[invalid-argument-type]
         self._dialogs.pop(session_id, None)
+
+    def _on_lifecycle(self, event: LifecycleEventEvent, session_id: str | None) -> None:
+        """A frame reported a lifecycle transition (init, DOMContentLoaded, load, networkIdle...).
+
+        Chrome reports these as a document loads, so a settle can wait on the page's own signal instead of a fixed
+        interval. The generation is global: a wake for another tab only makes a waiter re-check the page, which is
+        what it would do anyway.
+        """
+        self._lifecycle_generation += 1
+        waiters, self._lifecycle_waiters = self._lifecycle_waiters, set()
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.set_result(None)
+
+    def lifecycle_mark(self) -> int:
+        """The current lifecycle generation: pass one back to `wait_for_lifecycle` to wait for the next event."""
+        return self._lifecycle_generation
+
+    async def wait_for_lifecycle(self, mark: int, seconds: float) -> bool:
+        """Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`.
+
+        A timeout is not a failure: the caller re-reads the page and decides. This replaces the fixed-interval poll
+        a settle used to run, so the wait costs nothing while the page reports nothing new.
+        """
+        if self._lifecycle_generation != mark:
+            return True
+        if seconds <= 0:
+            return False
+        waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._lifecycle_waiters.add(waiter)
+        try:
+            await asyncio.wait_for(waiter, seconds)
+            return True
+        except TimeoutError:
+            return False
+        finally:
+            self._lifecycle_waiters.discard(waiter)
 
     def _on_binding(self, event: BindingCalledEvent, session_id: str | None) -> None:
         if event["name"] == INPUT_NAVIGATION_BINDING:

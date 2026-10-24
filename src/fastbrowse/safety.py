@@ -91,6 +91,12 @@ def irreversible_question(
                 and (operation is Operation.ENTER or (operation is Operation.CLICK and control.role == "button"))
                 else ""
             )
+            # Without the address, a settings link labelled "Change your password" read as the change itself.
+            + (
+                f"It is a link to {control.href}\n"
+                if control.href and control.href != control.label and operation is Operation.CLICK
+                else ""
+            )
             + "Would doing so commit something that cannot be undone, such as placing an order or spending money, "
             "sending a message, submitting an application, changing or resetting an account password or "
             "credentials, or deleting or publishing data?"

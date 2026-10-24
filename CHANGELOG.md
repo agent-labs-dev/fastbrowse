@@ -11,6 +11,35 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A page with more controls than an observation keeps sends only the kept ones in full. Every control is still
+  read, named and counted, and one past the caps arrives with only what tells whether it is a pager, which
+  fastbrowse asks for in full when it keeps one. The Wikipedia article for the United States, 5,571 controls
+  of which 212 are kept, now sends 959 KB per observation instead of 2.4 MB.
+
+- Waiting for a page to settle after an action no longer reads all of its text every 100 ms. The wait watches
+  for changes alone until the page goes quiet and reads the page once then, and the check for a loading spinner
+  before each observation no longer reads the page's text at all.
+
+- Every read of the page no longer sends the 48 KB page script to the browser and compiles it again. Each
+  document compiles it once, so a step's observation and the checks around each action skip about 3 ms per call
+  locally, and a remote browser no longer receives the script on every one of them.
+
+- Each observation sends far less from the browser to fastbrowse. The per-control freshness guards and the page
+  key now leave the page as short digests, where a guard used to carry up to 6,000 characters of the text around
+  its control. A Wikipedia article's observation fell from 7.1 MB to 2.4 MB and its round trip from 508 to 291 ms;
+  over a remote browser, such as Browser Use Cloud, the saving is larger.
+
+- Reading a page's controls takes about half as long on a dense page, with the same result: the snapshot reuses
+  each label, text and section title it has already read in that pass instead of reading it again, and stops
+  asking every ancestor of each repeated button whether it holds the others. On the Wikipedia article for the
+  United States, 5,571 controls, the in-page work fell from 477 to 238 ms, and on an Amazon results page from 71
+  to 39 ms.
+
+- A JavaScript dialog that opens while a page is being read no longer stalls the run for two minutes. A page
+  showing a loading indicator is read once the indicator clears, and an alert a timer opened during that wait
+  blocked the read until the browser command deadline. The read now stops when the dialog opens and reports the
+  dialog, as it already did for a dialog open before the read began.
+
 - A run that stops before its completion check confirms the finish returns an answer rather than the notes it
   collected. One composer call over the evidence the run already read writes that answer, with its citations
   intact and marked `Answer (unverified)`. A table lookup used to arrive as its rows in page order with no

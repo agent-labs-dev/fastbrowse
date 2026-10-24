@@ -458,21 +458,19 @@ def test_a_thin_newest_baseline_does_not_hide_an_older_full_one() -> None:
     assert any(finding.check == "regression" for finding in report.blocking)
 
 
-def test_material_latency_and_cost_increases_block() -> None:
-    baseline = [baseline_row(passed=True, seconds=10.0, dollars=0.01) for _ in range(3)]
-    candidate = attempts(3, seconds=13.0, dollars=0.02)
+def test_material_call_and_cost_increases_block() -> None:
+    baseline = [baseline_row(passed=True, dollars=0.01) | {"llm_calls": 10} for _ in range(3)]
+    candidate = [r | {"llm_calls": 40} for r in attempts(3, dollars=0.02)]
     report = publication.gate(candidate, release=RELEASE, ledger=evidence(candidate), baselines_=baseline)
-    assert {finding.check for finding in report.blocking} == {"speed", "cost"}
+    assert {finding.check for finding in report.blocking} == {"efficiency", "cost"}
 
 
-@pytest.mark.parametrize(("base_seconds", "candidate_seconds"), [(10.0, 10.5), (0.1, 0.2)])
-def test_a_latency_rise_under_the_relative_bound_or_floor_does_not_block(
-    base_seconds: float, candidate_seconds: float
-) -> None:
-    baseline = [baseline_row(passed=True, seconds=base_seconds) for _ in range(3)]
-    candidate = attempts(3, seconds=candidate_seconds)
+@pytest.mark.parametrize(("base_calls", "candidate_calls"), [(10, 10), (10, 11)])
+def test_a_call_rise_under_the_relative_bound_or_floor_does_not_block(base_calls: int, candidate_calls: int) -> None:
+    baseline = [baseline_row(passed=True) | {"llm_calls": base_calls} for _ in range(3)]
+    candidate = [r | {"llm_calls": candidate_calls} for r in attempts(3)]
     report = publication.gate(candidate, release=RELEASE, ledger=evidence(candidate), baselines_=baseline)
-    assert not any(finding.check == "speed" for finding in report.blocking)
+    assert not any(finding.check == "efficiency" for finding in report.blocking)
 
 
 @pytest.mark.parametrize(("base_dollars", "candidate_dollars"), [(0.01, 0.0101), (0.0001, 0.0002)])

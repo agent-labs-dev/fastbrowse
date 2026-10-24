@@ -206,12 +206,6 @@ JEV_SLOW_SECONDS = 2.0
 25k input tokens) took 0.40 to 0.48s median and 0.93s at worst. Retries and backoff count toward it."""
 LLM_ATTEMPT_SECONDS = 30.0
 """Leaves room for long reads and verification while bounding upstream stalls; flash-lite plans take about 0.8s."""
-JEV_HEDGE_SECONDS = 1.5
-"""Over twice the slowest of 25 measured gateway calls (0.28s median, 0.62s worst); a live run once spent 34s of
-one task in Jev, and a second request sent here wins those for a fraction of a cent."""
-LLM_HEDGE_SECONDS = 4.0
-"""About twice a typical read or verify (2 to 2.7s). Live runs saw single PLAN and READ calls take 7 to 9s while
-the rest took 2s; hedging here duplicates only that tail, and these calls cost a fraction of a cent."""
 
 
 @dataclass(slots=True)
@@ -224,8 +218,6 @@ class RequestUsage:
     """Why each request that came back unusable failed, in order: its status and reason, or its transport error."""
     discarded_responses: list[httpx.Response] = field(default_factory=list[httpx.Response])
     """Successful responses withheld from the caller, whose charges can still be read."""
-    cancelled_twins: int = 0
-    """Unaccounted hedge requests cancelled because their sibling had already answered."""
 
     def history(self, seconds: float) -> str:
         """How the call went before it gave up, so an error says whether it was one blip or a sustained outage."""
@@ -233,7 +225,7 @@ class RequestUsage:
 
 
 def attempts(requests: int, seconds: float) -> str:
-    # Every request sent, hedges included: counting only this request's failures, a batch that split into singles
+    # Every request sent: counting only this request's failures, a batch that split into singles
     # reported "1 failed requests" for a call that had sent five.
     return f"{requests} request{'' if requests == 1 else 's'} in {seconds:.1f}s"
 
@@ -243,7 +235,7 @@ def exhausted(requests: int, seconds: float, last: str) -> str:
 
 
 def with_discarded(cost: CostLine, usage: RequestUsage) -> CostLine:
-    """A Jev call's cost including requests raced and discarded: each carried the same input, so each is
+    """A Jev call's cost including requests sent but not delivered: each carried the same input, so each is
     charged as the one that answered, as an estimate. A bound holds for any request with that input, so it
     stays a bound."""
     if not usage.unaccounted_requests:
@@ -267,7 +259,6 @@ async def post_with_retry(
     *,
     call: str,
     attempt_seconds: float,
-    hedge_seconds: float,
     before_retry: Callable[[], None] | None = None,
     usage: RequestUsage | None = None,
     start_attempt: int = 0,
@@ -276,12 +267,12 @@ async def post_with_retry(
 ) -> httpx.Response | None:
     """Retry an overloaded or dropped request, which produced nothing and is always safe to repeat.
 
-    Each attempt is hedged: a request still unanswered after `hedge_seconds` is raced by an identical one,
-    because a provider's slowest calls are stalls, not work, and a fresh request tends to land on a healthy
-    replica. `before_retry` runs ahead of every repeat and every hedge, so a budget counts each request
-    actually sent. `usage` counts discarded or timed-out requests that may still have been billed.
-    `settle_on_cancel` lets in-flight attempts reach their deadlines so cancellation can retain their charges;
-    no further requests are sent after cancellation.
+    Each attempt sends one request and waits for it: a provider's slowest calls are stalls, and the attempt
+    deadline bounds them, so the time they cost is excluded from evals rather than hidden by racing a duplicate
+    that doubles the bill. `before_retry` runs ahead of every repeat, so a budget counts each request actually
+    sent. `usage` counts timed-out or discarded requests that may still have been billed. `settle_on_cancel`
+    lets an in-flight attempt reach its deadline so cancellation can retain its charge; no further requests are
+    sent after cancellation.
     Returns None when the transport never completed, leaving each client to name its own failure. Every retry is
     logged as a warning naming `call`, the failure and the wait, and each failure is kept on `usage`.
     """
@@ -294,16 +285,13 @@ async def post_with_retry(
         if attempt and before_retry is not None:
             before_retry()
         attempted = time.monotonic()
-        response = await _hedged(
+        response = await _once(
             http,
             url,
             body,
             headers,
             attempt_seconds=attempt_seconds,
-            hedge_seconds=hedge_seconds,
-            before_hedge=before_retry,
             usage=usage,
-            allow_hedge=request_limit is None or usage.requests + 1 < request_limit,
             settle_on_cancel=settle_on_cancel,
         )
         if response is not None and not retryable(response):
@@ -313,7 +301,7 @@ async def post_with_retry(
         if request_limit is not None and usage.requests >= request_limit:
             break
         if split_batch and usage.consecutive_5xx >= 2 and delay is not None:
-            # Batch hedges consume requests too, so a split inherits only the requests still available.
+            # Each attempt consumes a request, so a split inherits only the requests still available.
             next_attempt = start_attempt + usage.requests
             if next_attempt > len(RETRY_DELAYS_SECONDS):
                 break
@@ -354,53 +342,39 @@ def _backoff(response: httpx.Response | None, delay: float) -> float:
     return delay
 
 
-async def _hedged(
+async def _once(
     http: httpx.AsyncClient,
     url: str,
     body: dict[str, JsonValue],
     headers: Mapping[str, str],
     *,
     attempt_seconds: float,
-    hedge_seconds: float,
-    before_hedge: Callable[[], None] | None,
     usage: RequestUsage,
-    allow_hedge: bool = True,
     settle_on_cancel: bool = False,
 ) -> httpx.Response | None:
-    """The first usable response from one request, raced by a second if the first outlasts `hedge_seconds`."""
+    """One request's response, counted on `usage` when it was sent but never delivered to the caller."""
     dispatched: set[int] = set()
-    requests = {asyncio.create_task(_send(http, url, body, headers, attempt_seconds, usage, dispatched))}
-    winner: asyncio.Task[httpx.Response | None] | None = None
+    request = asyncio.create_task(_send(http, url, body, headers, attempt_seconds, usage, dispatched))
+    delivered = False
     abandoned = False
     try:
-        done, _ = await asyncio.wait(requests, timeout=hedge_seconds)
-        if not done and allow_hedge:
-            if before_hedge is not None:
-                before_hedge()
-            requests.add(asyncio.create_task(_send(http, url, body, headers, attempt_seconds, usage, dispatched)))
-        response: httpx.Response | None = None
-        pending = set(requests)
-        while pending:
-            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-            for request in done:
-                response = request.result()
-                if response is not None and not retryable(response):
-                    winner = request
-                    return response
+        # `shield` keeps the request running when this caller is cancelled, so settle_on_cancel can retain its
+        # charge; awaiting the task directly would cancel it in flight and lose the receipt.
+        response = await asyncio.shield(request)
+        delivered = True
         return response
     except asyncio.CancelledError:
         abandoned = True
         raise
     finally:
-        # A second cancellation during transport cleanup must not abandon children or their receipts.
-        async def finish_requests() -> None:
+        # A second cancellation during transport cleanup must not abandon the request or its receipt.
+        async def finish() -> None:
             # Cancelling an LLM transport loses its charge; its attempt deadline still bounds settlement.
-            for request in requests:
-                if not (abandoned and settle_on_cancel and id(request) in dispatched):
-                    request.cancel()
-            await asyncio.gather(*requests, return_exceptions=True)
+            if not (abandoned and settle_on_cancel and id(request) in dispatched):
+                request.cancel()
+            await asyncio.gather(request, return_exceptions=True)
 
-        cleanup = asyncio.create_task(finish_requests())
+        cleanup = asyncio.create_task(finish())
         cancelled = False
         while not cleanup.done():
             try:
@@ -408,17 +382,14 @@ async def _hedged(
             except asyncio.CancelledError:
                 cancelled = True
         cleanup.result()
-        for request in requests:
-            if id(request) not in dispatched or (request is winner and not cancelled):
-                continue
+        if id(request) in dispatched:
             result = None if request.cancelled() or request.exception() else request.result()
-            # A successful winner interrupted before delivery is unaccounted too; HTTP errors remain free.
-            if result is None or result.is_success:
+            # A request that never came back may still have been billed, as may a success interrupted before
+            # delivery; a delivered response, or an HTTP error, is accounted for by the caller.
+            if result is None or (result.is_success and not delivered):
                 usage.unaccounted_requests += 1
                 if result is not None:
                     usage.discarded_responses.append(result)
-                elif winner is not None and not abandoned:
-                    usage.cancelled_twins += 1
         if cancelled:
             raise asyncio.CancelledError
 
@@ -480,7 +451,6 @@ async def post(
             auth,
             call="jev",
             attempt_seconds=JEV_ATTEMPT_SECONDS,
-            hedge_seconds=JEV_HEDGE_SECONDS,
             before_retry=check,
             usage=usage,
             start_attempt=start_attempt,
@@ -674,7 +644,7 @@ async def asking_split(
                 result = await ask({key: question}, start_attempt, False)
                 answered.append(result)
                 record_jev_spend((result.cost,))
-                # A hedge consumes a retry too; later questions retain only their first attempt for free.
+                # Each request consumes a retry too; later questions retain only their first attempt for free.
                 start_attempt = min(len(RETRY_DELAYS_SECONDS), start_attempt + result.requests - 1)
     except BaseException as error:
         record_jev_spend(paid)
@@ -692,7 +662,7 @@ async def asking_split(
         raise
     cost = merged_cost([result.cost for result in answered])
     if usage.unaccounted_requests:
-        # The failed batch carried all questions; estimate its unanswered hedges from the answered singles.
+        # The failed batch carried all questions; estimate its unanswered requests from the answered singles.
         discarded = estimated_cost(sum(result.input_tokens for result in answered) * usage.unaccounted_requests)
         cost = merged_cost([cost, discarded])
     return Evaluation(

@@ -2893,7 +2893,6 @@ async def test_a_read_waits_for_an_empty_page_to_draw_and_never_reads_nothing(
     monkeypatch: pytest.MonkeyPatch, draws: bool
 ) -> None:
     monkeypatch.setattr(agent_module, "_INTERSTITIAL_SECONDS", 0.05)
-    monkeypatch.setattr(agent_module, "_INTERSTITIAL_POLL_SECONDS", 0.01)
     state = await run_state()
     state.ready_plan = Plan(
         requirements=(Requirement(id="r1", text="When was httpx released?", kind=RequirementKind.INFORMATION),),
@@ -2903,6 +2902,8 @@ async def test_a_read_waits_for_an_empty_page_to_draw_and_never_reads_nothing(
     drawn = observation((_button("Search"),)).model_copy(update={"page_key": "drawn"})
     page = Mock(spec=Page)
     page.observe = AsyncMock(return_value=drawn if draws else empty)
+    page.lifecycle_mark = Mock(return_value=0)
+    page.wait_for_lifecycle = AsyncMock(return_value=False)
     llm = ScriptedLLM([])
     agent = Agent(page, ScriptedJev({}), llm)
     agent._capture = AsyncMock(side_effect=[capture(), capture((BlockKind.PARAGRAPH, "httpx 0.28.1"))])
@@ -3739,9 +3740,10 @@ async def test_a_start_page_this_run_guessed_falls_back_to_the_front_page_when_i
 ) -> None:
     # The wait for a page that might still be drawing is covered below; here it only has to elapse.
     monkeypatch.setattr(agent_module, "_INTERSTITIAL_SECONDS", 0.05)
-    monkeypatch.setattr(agent_module, "_INTERSTITIAL_POLL_SECONDS", 0.01)
     page = Mock(spec=Page)
     page.navigate = AsyncMock()
+    page.lifecycle_mark = Mock(return_value=0)
+    page.wait_for_lifecycle = AsyncMock(return_value=False)
     page.observe = AsyncMock(
         return_value=observation(controls).model_copy(update={"url": opened, "viewport_text": text})
     )
@@ -3759,11 +3761,13 @@ async def test_a_guessed_page_that_is_still_drawing_is_waited_for_rather_than_ab
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Navigation returns at `readyState`; a script-built page has not drawn yet. The route may be right."""
-    monkeypatch.setattr(agent_module, "_INTERSTITIAL_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(agent_module, "_INTERSTITIAL_SECONDS", 0.05)
     blank = _at("https://app.test/dashboard").model_copy(update={"page_key": "loading"})
     drawn = _at("https://app.test/dashboard", _button("Sign out")).model_copy(update={"page_key": "drawn"})
     page = Mock(spec=Page)
     page.navigate = AsyncMock()
+    page.lifecycle_mark = Mock(return_value=0)
+    page.wait_for_lifecycle = AsyncMock(side_effect=[True, True, False, False, False])
     page.observe = AsyncMock(side_effect=[blank, drawn, drawn])
     agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
 

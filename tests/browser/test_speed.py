@@ -309,7 +309,7 @@ async def test_cancelled_browser_check_drains_renderer_and_dialog_waits(
         page = CdpPage(session, Config())
         monkeypatch.setattr(page, "_move", AsyncMock())
         task = asyncio.create_task(
-            page._click_point(("session", "main", 1, []), (10, 10)) if press else page._changed_since("before")
+            page._click_point(("session", "main", 1, ""), (10, 10)) if press else page._changed_since("before")
         )
         try:
             await asyncio.wait_for(started.wait(), timeout=2)
@@ -411,6 +411,23 @@ async def test_observe_waits_for_loading_before_reading_controls(
     )
     observation = await page.observe()
     assert [control.label for control in observation.controls] == ["Nonstop result"]
+
+
+async def test_observe_reports_a_dialog_that_opens_while_it_waits_for_loading(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    await page.navigate(f"{main_site}/dispatch.html")
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "document.body.innerHTML = '<div aria-busy=true>Loading results</div>'; "
+        "setTimeout(() => alert('Session expired'), 150);",
+    )
+    # The dialog blocks the snapshot's evaluate, which otherwise waits out the 120s command deadline.
+    async with asyncio.timeout(10):
+        observation = await page.observe()
+    assert observation.dialog is not None and observation.dialog.message == "Session expired"
+    await browser_session.handle_dialog(True)
 
 
 @pytest.fixture(scope="module")

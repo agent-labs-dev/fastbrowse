@@ -19,7 +19,7 @@ evals rather than taken from Typesafe.
 | Rate limits | 1,200 requests a minute and 250k tokens a second on the direct API, subject to change ([Models](https://docs.typesafe.ai/models)); no extra gateway limit on paid tiers ([Gateway limits](https://vercel.com/docs/ai-gateway/rate-limits)) | Retries handle 429 responses; concurrent runs share their provider's limits |
 | Errors | 400/401/403/404/422/429/5xx, with 529 for overload; retry with backoff, honouring server retry headers ([Exceptions](https://docs.typesafe.ai/sdk/python/api/exceptions)) | `post_with_retry` retries 408, 429, 500, 502, 503, 504, 520 to 524 and 529 (not the 4xx request errors) and honours `retry-after-ms` and `retry-after`, capped at 10s |
 | Price | $0.042 per million input tokens; output is free ([Models](https://docs.typesafe.ai/models), [gateway catalog](https://ai-gateway.vercel.sh/v1/models)) | `CostComponent.JEV` on the ledger |
-| Latency | Provider timings do not establish end-to-end run time | The 1.5s hedge in `clients/validation.py` is **ours**; published run timings are on the [benchmark page](https://fastbrowse.ai/benchmarks) |
+| Latency | Provider timings do not establish end-to-end run time | The retry budget in `clients/validation.py` is **ours**; published run timings are on the [benchmark page](https://fastbrowse.ai/benchmarks) |
 | Streaming | Gateway evaluation does not stream ([AI SDK evaluation](https://ai-sdk.dev/docs/ai-sdk-core/evaluation)) | Not needed: answers are a few numbers |
 
 ## Provider failover
@@ -45,7 +45,7 @@ input tokens, uses Jev's list-price estimate. Direct TypeSafe responses without 
 
 The call's time includes both providers. HTTP errors add no charge; unanswered requests that may have been
 billed are estimated from the successful answer's input tokens at Jev's input price, without multiplying
-the backup's own retries or hedges. Cancelled requests without usage retain an input estimate from the
+the backup's own retries. Cancelled requests without usage retain an input estimate from the
 serialized request length divided by `TokenBudget.chars_per_token`, rounded up, at Jev's input price.
 This is estimated spend, not provider-reported billing; output is free. Cancellation before dispatch adds
 no charge. All three routes reach Typesafe, so an outage there can affect all three.

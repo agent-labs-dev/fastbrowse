@@ -5,14 +5,12 @@ import base64
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from time import monotonic
-from typing import assert_never
 
 import httpx
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from fastbrowse.clients.validation import (
     LLM_ATTEMPT_SECONDS,
-    LLM_HEDGE_SECONDS,
     RequestUsage,
     body_excerpt,
     describe,
@@ -133,27 +131,6 @@ def strict_schema(schema: JsonValue) -> JsonValue:
     if isinstance(properties := schema.get("properties"), dict):
         result["required"] = list(properties)
     return result
-
-
-def hedge_seconds(purpose: LLMPurpose) -> float:
-    """When a still-unanswered call of this purpose is raced by a twin: about its p90 on the 0.5.24 campaign.
-
-    One 4s hedge for every purpose left the short structured calls' tail alone: answer audits took 2.2s median but
-    8.6s at p99 (1,781 calls), and one slow audit holds the whole answer. A read is longer by nature (3.0s median,
-    5.2s p90), so `LLM_HEDGE_SECONDS` stays its ceiling and no purpose hedges later than it.
-    """
-    match purpose:
-        case LLMPurpose.SHORTCUT | LLMPurpose.FIELD_TEXT:
-            measured = 1.5
-        case LLMPurpose.PLAN | LLMPurpose.VERIFY | LLMPurpose.COMPOSE:
-            measured = 3.0
-        case LLMPurpose.RECOVER:
-            measured = 3.5
-        case LLMPurpose.READ:
-            measured = LLM_HEDGE_SECONDS
-        case _:
-            assert_never(purpose)
-    return min(measured, LLM_HEDGE_SECONDS)
 
 
 def _grow_cap(body: dict[str, JsonValue], attempt: int, cap: int, purpose: LLMPurpose) -> None:
@@ -298,7 +275,6 @@ class OpenAICompatibleLLM:
                 self._headers(),
                 call=f"llm {body.get('model')}",
                 attempt_seconds=LLM_ATTEMPT_SECONDS,
-                hedge_seconds=hedge_seconds(purpose),
                 before_retry=None if ledger is None else lambda: ledger.reserve(CostComponent.LLM),
                 usage=usage,
                 settle_on_cancel=True,
@@ -477,7 +453,8 @@ class OpenAICompatibleLLM:
                     offset = len(costs)
                     costs.extend(_cost({}, purpose) for _ in range(usage.unaccounted_requests))
 
-                    async def settle(responses: Sequence[httpx.Response], start: int, twins: int) -> None:
+                    async def settle(responses: Sequence[httpx.Response], start: int) -> None:
+                        # A request whose response arrived but was never delivered still carries its receipt.
                         for index, response in enumerate(responses, start=start):
                             try:
                                 receipt = json_object(response)
@@ -485,19 +462,12 @@ class OpenAICompatibleLLM:
                                 continue
                             costs[index] = _cost(receipt, purpose)
                             costs[index] = await self._settled_cost(receipt, purpose, body)
-                        # A hedge twin cancelled once its sibling answered carried the same prompt, so it is
-                        # charged as that answer was, as an estimate. Other requests without a response are bounded.
-                        known = next((c for c in costs[start:] if c.dollars is not None), None)
-                        unknown = [i for i in range(start, len(costs)) if costs[i].dollars is None]
-                        if known is not None:
-                            for index in unknown[:twins]:
-                                costs[index] = known.model_copy(update={"basis": CostBasis.ESTIMATED})
                         for index in range(start, len(costs)):
                             if costs[index].dollars is None:
                                 costs[index] = await self._bounded(costs[index], body)
 
                     # Repeated cancellation must join receipt lookups before the run reports its final spend.
-                    settling = asyncio.create_task(settle(usage.discarded_responses, offset, usage.cancelled_twins))
+                    settling = asyncio.create_task(settle(usage.discarded_responses, offset))
                     cancelled = False
                     while not settling.done():
                         try:
@@ -509,9 +479,9 @@ class OpenAICompatibleLLM:
                         raise asyncio.CancelledError from None
                     raise
                 # Recorded before the envelope is read: a generation we cannot parse was still billed, and
-                # dropping it would let an unaccounted request pass a dollar cap. A hedge's discarded twin
-                # carried the same prompt, so it is charged as the answer was; charging it as unknown instead
-                # made every run with one slow call stop at its dollar cap.
+                # dropping it would let an unaccounted request pass a dollar cap. A request sent but never
+                # delivered carried the same prompt, so it is charged as the answer was; charging it as unknown
+                # instead made every run with one slow call stop at its dollar cap.
                 costs.append(with_discarded(_cost(payload, purpose), usage))
                 costs[-1] = with_discarded(await self._settled_cost(payload, purpose, body), usage)
                 if _truncated(payload):

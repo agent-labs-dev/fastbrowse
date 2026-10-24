@@ -51,6 +51,10 @@ uv run pytest -k "next_page" -q
 uv run pytest tests/browser -q          # needs Chrome; skips without it
 ```
 
+A change to `src/fastbrowse/browser/snapshot.js` is checked against `benchmarks/golden/` (`tests/browser/test_snapshot_golden.py`;
+`FASTBROWSE_UPDATE_GOLDEN=1` rewrites them, and the diff is the behaviour change) and timed by CodSpeed
+(`.github/workflows/codspeed.yml`, locally `uv run --group bench pytest benchmarks --codspeed`).
+
 The [sift project skill](.agents/skills/sift-project/SKILL.md) records audit commands, live roots and generated files.
 
 ## Evals

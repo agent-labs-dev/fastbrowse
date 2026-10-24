@@ -3,14 +3,11 @@ import json
 import math
 from collections import Counter
 from collections.abc import Callable, Mapping
-from contextvars import ContextVar
-from typing import Any
 
 import httpx
 import pytest
 from pydantic import JsonValue, TypeAdapter
 
-from fastbrowse.clients import validation
 from fastbrowse.clients.failover import FailoverJevClient
 from fastbrowse.clients.typesafe import OPENROUTER_MODEL, OPENROUTER_URL, TypeSafeJevClient
 from fastbrowse.clients.validation import RETRY_DELAYS_SECONDS, jev_spend
@@ -517,25 +514,12 @@ async def test_a_choice_of_one_option_is_answered_without_asking(gateway: bool) 
 
 @pytest.mark.parametrize("client_type", [TypeSafeJevClient, VercelGatewayJevClient])
 @pytest.mark.parametrize("exhaust", [False, True])
-@pytest.mark.parametrize("hedged", [False, True])
 @pytest.mark.parametrize("retried_questions", [0, 3, 10])
 async def test_failed_batch_splits_with_only_remaining_attempts(
-    monkeypatch: pytest.MonkeyPatch,
     client_type: type[TypeSafeJevClient] | type[VercelGatewayJevClient],
     exhaust: bool,
-    hedged: bool,
     retried_questions: int,
 ) -> None:
-    monkeypatch.setattr("fastbrowse.clients.validation.JEV_HEDGE_SECONDS", 0.001 if hedged else 1.5)
-    may_hedge: ContextVar[bool] = ContextVar("may_hedge")
-    hedge = validation._hedged
-
-    async def deciding_hedge(*args: Any, allow_hedge: bool = True, **kwargs: Any) -> httpx.Response | None:
-        # The request runs in a task this call starts, so the handler reads the client's own hedge decision.
-        may_hedge.set(allow_hedge)
-        return await hedge(*args, allow_hedge=allow_hedge, **kwargs)
-
-    monkeypatch.setattr("fastbrowse.clients.validation._hedged", deciding_hedge)
     seen: Counter[tuple[str, ...]] = Counter()
     gateway = client_type is VercelGatewayJevClient
     attempts = len(RETRY_DELAYS_SECONDS) + 1
@@ -546,10 +530,6 @@ async def test_failed_batch_splits_with_only_remaining_attempts(
         if len(keys) > 1:
             return httpx.Response(503)
         first = seen[keys] == 1 and int(keys[0][1:]) < retried_questions
-        if first and hedged and may_hedge.get():
-            # Held until its hedge twin wins and cancels it. A 10ms release raced the 1ms hedge timer: on a
-            # loaded runner the first came back a free 503 before the twin answered, and the charge went missing.
-            await asyncio.Event().wait()
         if first or (exhaust and keys == ("q9",)):
             return httpx.Response(503)
         return httpx.Response(
@@ -575,7 +555,7 @@ async def test_failed_batch_splits_with_only_remaining_attempts(
             assert not exhaust
             assert result.answers == {key: NoulAnswer(probability=1) for key in questions}
             assert result.input_tokens == 100 * len(questions)
-            assert result.cost.input_tokens == 100 * (len(questions) + (retried_questions if hedged else 0))
+            assert result.cost.input_tokens == 100 * len(questions)
             assert result.requests == seen.total()
             assert result.cost.dollars == pytest.approx(result.cost.input_tokens * 0.042 / 1_000_000)
     assert seen[tuple(questions)] == 2
@@ -707,23 +687,14 @@ async def test_split_batch_keeps_paid_singles_on_cancellation_and_failover(cance
 
 
 @pytest.mark.parametrize("client_type", [TypeSafeJevClient, VercelGatewayJevClient])
-async def test_split_singletons_share_the_remaining_request_budget_with_hedges(
-    monkeypatch: pytest.MonkeyPatch, client_type: type[TypeSafeJevClient] | type[VercelGatewayJevClient]
+async def test_split_singletons_share_the_remaining_request_budget(
+    client_type: type[TypeSafeJevClient] | type[VercelGatewayJevClient],
 ) -> None:
-    monkeypatch.setattr("fastbrowse.clients.validation.JEV_HEDGE_SECONDS", 0.001)
     seen: Counter[tuple[str, ...]] = Counter()
-    paired = asyncio.Event()
 
     async def handler(request: httpx.Request) -> httpx.Response:
         keys = tuple(json.loads(request.content)["questions"])
         seen[keys] += 1
-        if len(keys) > 1:
-            return httpx.Response(503)
-        if seen[keys] % 2 == 0:
-            paired.set()
-        await paired.wait()
-        if seen[keys] % 2 == 0:
-            asyncio.get_running_loop().call_soon(paired.clear)
         return httpx.Response(503)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
