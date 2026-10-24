@@ -26,6 +26,7 @@ pub mod py;
 pub mod safety;
 pub mod schema;
 pub mod telemetry;
+pub mod validation;
 
 use std::future::Future;
 use std::pin::Pin;

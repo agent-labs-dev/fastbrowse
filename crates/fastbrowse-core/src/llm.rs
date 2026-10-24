@@ -13,7 +13,6 @@ use serde_json::Value;
 
 use crate::BoxFuture;
 use crate::models::{Bytes, CostLine, LLMPurpose, MaybeUnavailable};
-use crate::py::dump::Dump;
 use crate::schema::{Schema, Ty, json_schema};
 use crate::telemetry::{BudgetExceeded, Ledger};
 
@@ -109,7 +108,7 @@ impl<T: Schema + DeserializeOwned + Serialize> ResponseSchema for Typed<T> {
     }
 
     fn validate_json(&self, text: &str) -> Result<Value, String> {
-        serde_json::from_str::<T>(text).map(|data| data.dump()).map_err(|error| error.to_string())
+        crate::validation::typed_json::<T>(text)
     }
 }
 
@@ -175,6 +174,7 @@ where
 mod tests {
     use super::*;
     use crate::models::{CostBasis, CostComponent, Limits};
+    use crate::py::dump::Dump;
     use crate::testing::block_on;
 
     fn line(dollars: f64) -> CostLine {
