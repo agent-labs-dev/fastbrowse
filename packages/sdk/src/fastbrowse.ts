@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Writable } from 'node:stream';
 
 import { abortable } from './abort.ts';
+import { InProcess, loadAddon } from './addon.ts';
 import { Callbacks } from './callbacks.ts';
 import { resolveBinary } from './binary.ts';
 import { FastbrowseError, ProcessExitedError } from './errors.ts';
@@ -36,6 +37,17 @@ export interface StartOptions extends BrowserOptions {
    * process's own stderr. A stream receives it and is left open when the process ends.
    */
   stderr?: 'inherit' | 'ignore' | Writable;
+  /**
+   * Run the agent inside this process, on the fastbrowse addon, instead of starting a fastbrowse process. Runs
+   * and their results are the same; `env` then adds to the environment the settings are read from, and
+   * `binaryPath` and `stderr` mean nothing.
+   */
+  inProcess?: boolean;
+  /**
+   * The addon to load with `inProcess`. Without it, the `FASTBROWSE_ADDON` environment variable names one, and
+   * without that it is the `fastbrowse.node` in the platform package.
+   */
+  addonPath?: string;
 }
 
 export interface CloseOptions {
@@ -43,23 +55,44 @@ export interface CloseOptions {
   gracePeriodMs?: number;
 }
 
+/** Where runs go: a fastbrowse process, or the addon in this one. */
+interface Backend {
+  run(runId: string, params: RunParams, options: RunOptions): Promise<RunResult>;
+  close(gracePeriodMs: number): Promise<void>;
+}
+
+function mismatch(version: string, where: string, protocolVersion: number): FastbrowseError {
+  return new FastbrowseError(
+    `this SDK speaks protocol version ${PROTOCOL_VERSION}, and fastbrowse ${version} at ${where} speaks protocol ` +
+      `version ${protocolVersion}: install matching versions of the two`,
+  );
+}
+
 export class Fastbrowse {
   /** The version of the fastbrowse binary this instance drives. */
   readonly fastbrowseVersion: string;
-  readonly #server: Server;
+  readonly #backend: Backend;
   readonly #browser: Partial<RunParams>;
-  readonly #callbacks: Callbacks;
   #closed: Promise<void> | undefined;
 
-  private constructor(server: Server, fastbrowseVersion: string, browser: Partial<RunParams>) {
-    this.#server = server;
+  private constructor(backend: Backend, fastbrowseVersion: string, browser: Partial<RunParams>) {
+    this.#backend = backend;
     this.fastbrowseVersion = fastbrowseVersion;
     this.#browser = browser;
-    this.#callbacks = new Callbacks(server.connection);
   }
 
-  /** Start a fastbrowse process and check that it speaks this SDK's protocol version. */
+  /**
+   * Start a fastbrowse process and check that it speaks this SDK's protocol version. With `inProcess`, load the
+   * addon instead and run in this process.
+   */
   static async start(options: StartOptions = {}): Promise<Fastbrowse> {
+    if (options.inProcess) {
+      const addon = loadAddon(options.addonPath, { ...process.env, ...options.env });
+      if (addon.protocolVersion() !== PROTOCOL_VERSION) {
+        throw mismatch(addon.version(), 'the addon', addon.protocolVersion());
+      }
+      return new Fastbrowse(new InProcess(addon, options.env ?? {}), addon.version(), browserParams(options));
+    }
     const env = { ...process.env, ...options.env };
     const binary = resolveBinary(options.binaryPath, env);
     const server = new Server(binary, env, options.stderr ?? 'inherit');
@@ -67,12 +100,9 @@ export class Fastbrowse {
       const hello: InitializeParams = { protocol_version: PROTOCOL_VERSION };
       const reply = (await server.connection.request(Method.INITIALIZE, hello)) as InitializeResult;
       if (reply.protocol_version !== PROTOCOL_VERSION) {
-        throw new FastbrowseError(
-          `this SDK speaks protocol version ${PROTOCOL_VERSION}, and fastbrowse ${reply.fastbrowse_version} at ` +
-            `${binary} speaks protocol version ${reply.protocol_version}: install matching versions of the two`,
-        );
+        throw mismatch(reply.fastbrowse_version, binary, reply.protocol_version);
       }
-      return new Fastbrowse(server, reply.fastbrowse_version, browserParams(options));
+      return new Fastbrowse(new Subprocess(server), reply.fastbrowse_version, browserParams(options));
     } catch (error) {
       await server.kill();
       throw error;
@@ -100,26 +130,42 @@ export class Fastbrowse {
     // the one that is active.
     const runId = randomUUID();
     const params = runParams(runId, task, this.#browser, options);
-    const { connection } = this.#server;
-    // The reply says only that the request was read, and a process that has gone rejects the run itself.
-    const cancel = () =>
-      void connection.request(Method.RUN_CANCEL, { run_id: runId } satisfies RunCancelParams).catch(() => {});
-    const result = await this.#callbacks.during(runId, options, cancel, () =>
-      abortable(options.signal, () => connection.request(Method.RUN, params) as Promise<RunResult>, cancel),
-    );
+    const result = await this.#backend.run(runId, params, options);
     return withOutput(result, options.output);
   }
 
   /**
    * Ask the fastbrowse process to shut down and wait until it has exited. A process still running when the
-   * grace period ends is killed. Every call after the first returns the first one's promise.
+   * grace period ends is killed. In-process, stop the run under way and wait until its browser has closed.
+   * Every call after the first returns the first one's promise.
    */
   close(options: CloseOptions = {}): Promise<void> {
-    this.#closed ??= this.#close(options.gracePeriodMs ?? DEFAULT_GRACE_PERIOD_MS);
+    this.#closed ??= this.#backend.close(options.gracePeriodMs ?? DEFAULT_GRACE_PERIOD_MS);
     return this.#closed;
   }
+}
 
-  async #close(gracePeriodMs: number): Promise<void> {
+/** Runs sent to a fastbrowse process over its stdin and stdout. */
+class Subprocess implements Backend {
+  readonly #server: Server;
+  readonly #callbacks: Callbacks;
+
+  constructor(server: Server) {
+    this.#server = server;
+    this.#callbacks = new Callbacks(server.connection);
+  }
+
+  run(runId: string, params: RunParams, options: RunOptions): Promise<RunResult> {
+    const { connection } = this.#server;
+    // The reply says only that the request was read, and a process that has gone rejects the run itself.
+    const cancel = () =>
+      void connection.request(Method.RUN_CANCEL, { run_id: runId } satisfies RunCancelParams).catch(() => {});
+    return this.#callbacks.during(runId, options, cancel, () =>
+      abortable(options.signal, () => connection.request(Method.RUN, params) as Promise<RunResult>, cancel),
+    );
+  }
+
+  async close(gracePeriodMs: number): Promise<void> {
     // The reply says nothing the exit does not, and a process that died earlier answers with a rejection.
     this.#server.connection.request(Method.SHUTDOWN).catch(() => {});
     const overdue = setTimeout(() => void this.#server.kill(), gracePeriodMs);

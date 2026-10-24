@@ -2,6 +2,7 @@
 
 import { FastbrowseError, messageOf, RpcError } from './errors.ts';
 import {
+  type BrowserEvent,
   ErrorCode,
   type RunEvent,
   type RunFrame,
@@ -9,6 +10,7 @@ import {
   type RunUntilParams,
   type SecretsResolveParams,
   ServerMethod,
+  type StepEvent,
 } from './protocol.ts';
 import type { Connection } from './rpc.ts';
 import type { RunOptions } from './run.ts';
@@ -24,32 +26,49 @@ interface Served {
 export class Callbacks {
   readonly #runs = new Map<string, Served>();
 
-  constructor(connection: Connection) {
+  /** Without a connection, the in-process core calls the four methods below itself. */
+  constructor(connection?: Connection) {
+    if (!connection) return;
     connection.onNotification(ServerMethod.RUN_EVENT, params => {
       const { run_id: runId, event } = params as unknown as RunEvent;
-      this.#tell(runId, ServerMethod.RUN_EVENT, options => options.onEvent?.(event));
+      this.event(runId, event);
     });
     connection.onNotification(ServerMethod.RUN_FRAME, params => {
       const { run_id: runId, frame } = params as unknown as RunFrame;
-      const jpeg = Uint8Array.from(Buffer.from(frame, 'base64'));
-      this.#tell(runId, ServerMethod.RUN_FRAME, options => options.onFrame?.(jpeg));
+      this.frame(runId, Uint8Array.from(Buffer.from(frame, 'base64')));
     });
-    connection.onRequest(ServerMethod.RUN_UNTIL, async params => {
+    connection.onRequest(ServerMethod.RUN_UNTIL, params => {
       const { run_id: runId, url } = params as unknown as RunUntilParams;
-      // The server ends the run as an error on any reply but a boolean, and a check in plain JavaScript can
-      // return anything.
-      return (await this.#asked(runId, 'until')(url)) === true;
+      return this.until(runId, url);
     });
-    connection.onRequest(ServerMethod.SECRETS_RESOLVE, async params => {
+    connection.onRequest(ServerMethod.SECRETS_RESOLVE, params => {
       const { run_id: runId, name, origin } = params as unknown as SecretsResolveParams;
-      const secrets = this.#asked(runId, 'secrets');
-      try {
-        return await secrets.resolve(name, origin);
-      } catch {
-        // What a resolver throws may quote the value, so it stays in this process.
-        throw new FastbrowseError(`the resolver threw for the secret '${name}'`);
-      }
+      return this.resolve(runId, name, origin);
     });
+  }
+
+  event(runId: string, event: StepEvent | BrowserEvent): void {
+    this.#tell(runId, ServerMethod.RUN_EVENT, options => options.onEvent?.(event));
+  }
+
+  frame(runId: string, jpeg: Uint8Array): void {
+    this.#tell(runId, ServerMethod.RUN_FRAME, options => options.onFrame?.(jpeg));
+  }
+
+  async until(runId: string, url: string): Promise<boolean> {
+    // The server ends the run as an error on any reply but a boolean, and a check in plain JavaScript can
+    // return anything.
+    return (await this.#asked(runId, 'until')(url)) === true;
+  }
+
+  async resolve(runId: string, name: string, origin: string): Promise<string | null> {
+    const secrets = this.#asked(runId, 'secrets');
+    try {
+      return (await secrets.resolve(name, origin)) ?? null;
+    } catch {
+      // What a resolver throws may quote the value, so it stays in this process.
+      throw new FastbrowseError(`the resolver threw for the secret '${name}'`);
+    }
   }
 
   /**
