@@ -9,6 +9,7 @@ use crate::BoxFuture;
 use crate::models::{CostLine, MaybeUnavailable};
 use crate::py::lax;
 use crate::schema::{Field, ModelTy, Schema, Ty};
+use crate::telemetry::BudgetExceeded;
 
 pub const JEV_MODEL: &str = "jev-1.13.0";
 pub const MAX_CHOICE_OPTIONS: usize = 255;
@@ -293,6 +294,9 @@ pub enum JevError {
     TransportFailed(String),
     #[error("{}", .0.message)]
     RetriesExhausted(Box<RetriesExhausted>),
+    /// A request would break a limit, so it was not sent. Python raises `BudgetExceeded` through `evaluate` itself.
+    #[error(transparent)]
+    Budget(#[from] BudgetExceeded),
 }
 
 impl MaybeUnavailable for JevError {
