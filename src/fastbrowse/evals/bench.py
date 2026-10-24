@@ -2,7 +2,7 @@
 
     uv run python -m fastbrowse.evals.bench record  [--only TASK ...] [--budget 5]
     uv run python -m fastbrowse.evals.bench fill    [--only TASK ...] [--latency zero|recorded] [--passes 6]
-    uv run python -m fastbrowse.evals.bench replay  [--latency zero|recorded] [--agent "CMD"] [--out FILE]
+    uv run python -m fastbrowse.evals.bench replay  [--latency zero|recorded] [--agent "CMD" | --agent in-process] [--out FILE]
     uv run python -m fastbrowse.evals.bench compare A.json B.json
     uv run python -m fastbrowse.evals.bench report  RUN.json ... [--markdown FILE] [--json FILE]
 
@@ -31,6 +31,7 @@ import difflib
 import json
 import os
 import platform
+import resource
 import shlex
 import statistics
 import subprocess
@@ -59,9 +60,9 @@ from fastbrowse.evals.replay import JEV_MOUNT, LLM_MOUNT, Cassette, Latency, Pro
 from fastbrowse.evals.runner import LOCAL_LIMITS, MOCK_LIMITS
 from fastbrowse.evals.tasks import TASKS as LOCAL_TASKS
 from fastbrowse.evals.tasks import LocalTask
-from fastbrowse.models import LocalChrome, RunResult
+from fastbrowse.models import LocalChrome, RunResult, SecretRef
 from fastbrowse.protocol import PROTOCOL_VERSION
-from fastbrowse.safety import origin_of
+from fastbrowse.safety import ScopedSecrets, origin_of
 
 ROOT = Path(__file__).resolve().parents[3]
 CASSETTES = ROOT / "bench" / "cassettes"
@@ -314,6 +315,85 @@ async def drive(agent: AgentProcess, params: dict[str, Any], secrets: dict[str, 
     return Drive(startup, wall, result, error, events, resolved)
 
 
+IN_PROCESS = "in-process"
+"""`--agent in-process`: `fastbrowse.run_task` in the harness's own process, on the Rust core when
+FASTBROWSE_RUST_CORE=1 (`fastbrowse.native`) and on Python otherwise. Startup is not measured, and CPU and peak RSS
+are the harness's own."""
+
+
+@dataclass(frozen=True)
+class Usage:
+    ru_utime: float
+    ru_stime: float
+    ru_maxrss: int
+
+
+@contextmanager
+def in_process_environment(env: dict[str, str], cwd: Path) -> Generator[None]:
+    """`env` as this process's environment and `cwd` as its directory, as the agent process would have had them.
+
+    FASTBROWSE_RUST_CORE stays as the harness was started with it, since it picks the core under test.
+    """
+    saved, directory = dict(os.environ), Path.cwd()
+    core = {name: value for name, value in saved.items() if name == "FASTBROWSE_RUST_CORE"}
+    os.environ.clear()
+    os.environ.update(env | core)
+    os.chdir(cwd)
+    try:
+        yield
+    finally:
+        os.chdir(directory)
+        os.environ.clear()
+        os.environ.update(saved)
+
+
+async def drive_in_process(task: BenchTask, base_url: str, cdp_url: str, seconds: float) -> Drive:
+    """Run one task through `run_task` in this process, with the arguments its `run` params stand for."""
+    from fastbrowse.run import run_task
+
+    spec = task.task
+    events = resolved = 0
+
+    async def on_event(_: object) -> None:
+        nonlocal events
+        events += 1
+
+    secrets = None
+    if isinstance(spec, MockTask) and spec.secrets:
+        held = ScopedSecrets(spec.secrets, origin_of(base_url))
+
+        class Counted:
+            def available(self) -> tuple[SecretRef, ...]:
+                return held.available()
+
+            async def resolve(self, name: str, origin: str) -> str | None:
+                nonlocal resolved
+                resolved += 1
+                return await held.resolve(name, origin)
+
+        secrets = Counted()
+    started = time.perf_counter()
+    result = error = None
+    try:
+        async with asyncio.timeout(seconds):
+            answered = await run_task(
+                spec.task,
+                start=base_url + spec.start,
+                cdp_url=cdp_url,
+                limits=LOCAL_LIMITS if task.suite == "local" else MOCK_LIMITS,
+                authorization=spec.authorization,
+                inputs=dict(spec.inputs) or None,
+                output_schema=spec.output_schema,
+                attachments=spec.attachments if isinstance(spec, MockTask) else (),
+                secrets=secrets,
+                on_event=on_event,
+            )
+        result = answered.model_dump(mode="json")
+    except Exception as exc:
+        error = {"message": f"{type(exc).__name__}: {exc}"}
+    return Drive(None, time.perf_counter() - started, result, error, events, resolved)
+
+
 def normalized(result: RunResult | None, error: dict[str, Any] | None, grade: dict[str, Any]) -> dict[str, Any]:
     """What two runs given the same model responses must agree on. Timings and costs are left out."""
     if result is None:
@@ -360,11 +440,21 @@ async def bench_task(
     ):
         params = run_params(task, base_url, connection.cdp_url, f"bench-{task.id}")
         secrets = dict(task.task.secrets) if isinstance(task.task, MockTask) else {}
-        agent = AgentProcess(agent_argv, agent_environment(proxy_url), Path(cwd), logs / f"{task.id}.stderr.log")
-        try:
-            driven = await drive(agent, params, secrets, TASK_SECONDS)
-        finally:
-            exit_code, usage = await asyncio.to_thread(agent.reap, SHUTDOWN_SECONDS)
+        exit_code: int | None
+        usage: Any
+        if agent_argv == [IN_PROCESS]:
+            before = resource.getrusage(resource.RUSAGE_SELF)
+            with in_process_environment(agent_environment(proxy_url), Path(cwd)):
+                driven = await drive_in_process(task, base_url, connection.cdp_url, TASK_SECONDS)
+            after = resource.getrusage(resource.RUSAGE_SELF)
+            exit_code = None
+            usage = Usage(after.ru_utime - before.ru_utime, after.ru_stime - before.ru_stime, after.ru_maxrss)
+        else:
+            agent = AgentProcess(agent_argv, agent_environment(proxy_url), Path(cwd), logs / f"{task.id}.stderr.log")
+            try:
+                driven = await drive(agent, params, secrets, TASK_SECONDS)
+            finally:
+                exit_code, usage = await asyncio.to_thread(agent.reap, SHUTDOWN_SECONDS)
         result: RunResult | None = None
         failure: str | None
         extra: dict[str, Any] = {}
@@ -786,7 +876,11 @@ def parser() -> argparse.ArgumentParser:
     commands = root.add_subparsers(dest="command", required=True)
 
     def common(sub: argparse.ArgumentParser, mode: str) -> None:
-        sub.add_argument("--agent", default=default_agent(), help="the command that starts `serve --stdio`")
+        sub.add_argument(
+            "--agent",
+            default=default_agent(),
+            help=f"the command that starts `serve --stdio`, or {IN_PROCESS!r} for run_task in this process",
+        )
         sub.add_argument("--only", nargs="*", default=[], help="task ids; every fixture task when absent")
         sub.add_argument("--cassettes", type=Path, default=CASSETTES)
         sub.add_argument("--out", type=Path, default=ARTIFACTS / f"{mode}-{_stamp()}.json")
