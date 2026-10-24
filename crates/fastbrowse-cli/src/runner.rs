@@ -147,12 +147,65 @@ impl Cancel {
     }
 }
 
-/// The `run_task` the binary runs when nothing stands in for it.
-///
-/// The agent loop is being ported in `fastbrowse-agent`; until its `run_task` lands, a run is refused as a
-/// configuration error before any browser work, so the protocol and the CLI behave as for a misconfigured agent.
+/// The `run_task` the binary runs when nothing stands in for it: `fastbrowse_run::run_task`.
 pub fn default_runner() -> Arc<dyn Runner> {
-    Arc::new(|_: RunArgs| -> BoxFuture<'static, Result<RunResult, RunError>> {
-        Box::pin(async { Err(RunError::Configuration("this fastbrowse build has no agent to run the task".into())) })
+    Arc::new(|args: RunArgs| -> BoxFuture<'static, Result<RunResult, RunError>> { Box::pin(run_task(args)) })
+}
+
+async fn run_task(args: RunArgs) -> Result<RunResult, RunError> {
+    let options = run_options(&args)?;
+    let cancel = args.cancel.clone();
+    let cancelled = move || -> BoxFuture<'static, ()> {
+        let cancel = cancel.clone();
+        Box::pin(async move { cancel.tripped().await })
+    };
+    let options = fastbrowse_run::RunTask { cancel: Some(Arc::new(cancelled)), ..options };
+    fastbrowse_run::run_task(&args.task, options).await.map_err(|error| match error {
+        fastbrowse_run::RunError::Invalid(message) => RunError::Failed(format!("ValueError: {message}")),
+        fastbrowse_run::RunError::Configuration(message) => RunError::Configuration(message),
+        fastbrowse_run::RunError::Cancelled => RunError::Cancelled,
+    })
+}
+
+/// `RunArgs` as `fastbrowse_run::RunTask`. Numbers that fit no port or window size fail as Python's `ValueError`.
+fn run_options(args: &RunArgs) -> Result<fastbrowse_run::RunTask, RunError> {
+    let invalid = |what: &str| RunError::Failed(format!("ValueError: {what} is out of range"));
+    let cdp_port = args.cdp_port.map(|port| u16::try_from(port).map_err(|_| invalid("cdp_port"))).transpose()?;
+    let viewport = args
+        .viewport
+        .map(|(width, height)| match (u32::try_from(width), u32::try_from(height)) {
+            (Ok(width), Ok(height)) => Ok((width, height)),
+            _ => Err(invalid("viewport")),
+        })
+        .transpose()?;
+    Ok(fastbrowse_run::RunTask {
+        start: args.start.clone(),
+        browser_api_key: args.browser_api_key.clone(),
+        chrome: args.chrome.clone(),
+        cloud_profile: args.cloud_profile.clone(),
+        cdp_url: args.cdp_url.clone(),
+        cdp_port,
+        attach: args.attach,
+        target_match: args.target_match.clone(),
+        foreground: args.foreground,
+        proxy_country: args.proxy_country.clone(),
+        viewport,
+        cloud_allow_resizing: args.cloud_allow_resizing,
+        output_schema: args
+            .output_schema
+            .clone()
+            .map(|model| Arc::new(fastbrowse_agent::verification::RecordSchema::from_output(model))),
+        inputs: args.inputs.clone().unwrap_or_default(),
+        attachments: args.attachments.clone(),
+        limits: args.limits.clone(),
+        authorization: args.authorization.clone(),
+        secrets: args.secrets.clone(),
+        downloads: args.downloads.clone(),
+        on_event: args.on_event.clone(),
+        on_frame: args.on_frame.clone(),
+        until: args.until.clone(),
+        record: args.record.clone(),
+        cursor: args.cursor,
+        ..fastbrowse_run::RunTask::default()
     })
 }
