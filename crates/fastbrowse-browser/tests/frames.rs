@@ -525,6 +525,21 @@ async fn test_capture_session_after_last_target_closes_is_unavailable() {
     session.close().await.unwrap();
 }
 
+/// The decision loop holds the page as `Arc<dyn Page>`, and reads an outage there as core's `Unavailable`.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_closed_tab_reaches_the_loop_as_unavailable() {
+    use fastbrowse_browser::page::CdpPage;
+    use fastbrowse_core::page::{BrowserError as PageError, Page};
+
+    let fake = FakeChrome::start().await;
+    let session = fake.session(fake.connection()).await;
+    let page: Arc<dyn Page> = Arc::new(CdpPage::new(session.clone(), Default::default()));
+    testing::dispatch(&session, "Target.targetDestroyed", json!({"targetId": session.active_target_id()}), None);
+    let error = page.capture().await.unwrap_err();
+    assert!(matches!(&error, PageError::Unavailable(m) if m.contains("active browser tab closed")), "{error:?}");
+    session.close().await.unwrap();
+}
+
 // -- test_attached_recording.py --------------------------------------------------------------------------------------
 //
 // test_recording_preserves_attached_page_geometry_and_reattachment is not ported: it runs `run_task` and `Agent`,

@@ -19,7 +19,8 @@ use fastbrowse_core::addresses::search_address;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Artifact, Operation, SourceControl};
 use fastbrowse_core::page::{
-    Block, BlockKind, Capture, Control, Dialog, Observation, cut_marker, loads_more, pager_link,
+    ActResult, Action, Block, BlockKind, Capture, Control, Dialog, Observation, Page, PageResult, cut_marker,
+    loads_more, pager_link,
 };
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::text;
@@ -1434,6 +1435,62 @@ impl CdpPage {
             }
             () = self.session.wait_for_dialog() => None,
         }
+    }
+}
+
+/// Lift a browser failure to the variant the decision loop reads; the loop holds the page as `Arc<dyn Page>`.
+fn seam<T>(result: Result<T, BrowserError>) -> PageResult<T> {
+    result.map_err(Into::into)
+}
+
+impl Page for CdpPage {
+    fn artifacts(&self) -> Vec<Artifact> {
+        CdpPage::artifacts(self)
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        Box::pin(async move { seam(CdpPage::observe(self).await) })
+    }
+
+    fn document_changed<'a>(&'a self, observation: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async move { seam(CdpPage::document_changed(self, observation).await) })
+    }
+
+    fn navigate<'a>(&'a self, url: &'a str, back_to: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        Box::pin(async move { seam(CdpPage::navigate(self, url, back_to).await) })
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        Box::pin(async move { seam(CdpPage::capture(self).await) })
+    }
+
+    fn act<'a>(&'a self, action: &'a Action, observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        Box::pin(async move { seam(CdpPage::act(self, action, observation).await) })
+    }
+
+    fn redrawn<'a>(
+        &'a self,
+        observation: &'a Observation,
+        timeout_seconds: f64,
+        target_id: Option<&'a str>,
+    ) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async move { seam(CdpPage::redrawn(self, observation, timeout_seconds, target_id).await) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        Box::pin(async move { seam(CdpPage::screenshot(self).await) })
+    }
+
+    fn withhold_frames(&self, withheld: bool) {
+        CdpPage::withhold_frames(self, withheld);
+    }
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        Box::pin(async move { seam(CdpPage::address(self).await) })
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async move { seam(CdpPage::response_status(self).await) })
     }
 }
 
