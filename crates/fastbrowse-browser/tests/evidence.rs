@@ -90,6 +90,50 @@ async fn test_a_list_that_hosts_a_shadow_root_is_not_frameless() {
 // -- test_image_evidence.py: rendered image elements need DOM evidence even when they contain no text -----------
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_figure_is_visual_content_but_an_icon_sized_drawing_is_not() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<h1>Report</h1><p>' + 'word '.repeat(40) + '</p>' +
+          '<canvas width="320" height="240"></canvas>';
+        "#,
+    )
+    .await;
+    assert!(h.observe().await.visual_content);
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<h1>Report</h1><p>' + 'word '.repeat(40) + '</p>' +
+          '<canvas width="16" height="16"></canvas>';
+        "#,
+    )
+    .await;
+    assert!(!h.observe().await.visual_content);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_drawing_below_the_fold_does_not_ask_for_a_screenshot() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<h1>Report</h1><p>' + 'word '.repeat(40) + '</p>' +
+          '<div style="height:4000px"></div><canvas width="320" height="240"></canvas>';
+        "#,
+    )
+    .await;
+    assert!(!h.observe().await.visual_content);
+    // Scrolled into view, the same drawing is page state the screenshot does carry.
+    eval_active(&h.session, "scrollTo(0, document.body.scrollHeight)").await;
+    assert!(h.observe().await.visual_content);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_capture_reports_visible_image_metadata_without_inventing_pixels() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");

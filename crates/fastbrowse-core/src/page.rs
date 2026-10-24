@@ -252,7 +252,7 @@ pub struct Observation {
     pub viewport_text: String,
     /// Whether the page's visible state is carried by pixels: a chart, picture, drawing or video with no control
     /// for it. snapshot.js reads it from the viewport, so page text and the control list cannot stand in for it.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lax::boolean")]
     pub visual_content: bool,
     pub tabs: Vec<Tab>,
     #[serde(default)]

@@ -33,7 +33,8 @@ use crate::retrieval::{
 use crate::support::generate;
 use crate::verification::{
     CheckOptions, DoneCheck, DoneOptions, DoneVerdict, ExtractOptions, Extraction, LLMVerdict, RecordSchema,
-    VerifyOptions, check_claims, check_done, extract, verify_cache_key, verify_messages, visual_only_state,
+    VERDICT_TOKENS, VerifyOptions, check_claims, check_done, extract, verify_cache_key, verify_messages,
+    visual_only_state,
 };
 
 /// An answer whose claims passed, or what a composer sent beside the verifier came back with.
@@ -608,7 +609,8 @@ impl Agent {
             return Ok((request.key, reused));
         }
         let judged =
-            generate::<LLMVerdict>(&*self.llm, LLMPurpose::Verify, &request.messages, 2000, Some(&ledger)).await?;
+            generate::<LLMVerdict>(&*self.llm, LLMPurpose::Verify, &request.messages, VERDICT_TOKENS, Some(&ledger))
+                .await?;
         ledger.record([judged.cost.clone()])?;
         Ok((request.key, judged))
     }

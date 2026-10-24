@@ -86,6 +86,7 @@ class FakeSite:
         self.screen: str = site["start"]
         self.back: list[str] = []
         self.seen: dict[str, int] = {}
+        self.visits: dict[str, int] = {}
 
     def _screen(self) -> Mapping[str, Any]:
         return self.site["screens"][self.screen]
@@ -111,6 +112,11 @@ class FakeSite:
         screen = self.site["urls"].get(url)
         if screen is None:
             raise BrowserError(f"no page at {url}")
+        # A list is one screen per visit, the last repeated: a reload that mints a new document each time.
+        if isinstance(screen, list):
+            visit = self.visits.get(url, 0)
+            self.visits[url] = visit + 1
+            screen = screen[min(visit, len(screen) - 1)]
         self.back.append(self.screen)
         self.screen = screen
 
@@ -373,6 +379,28 @@ def scenarios() -> list[dict[str, Any]]:
             "start": "blank",
             "screens": {"blank": screen("about:blank", "", ""), "wall": challenge},
             "urls": {home: "wall"},
+        },
+        {
+            "Plan": [plan(("r1", "Find the blue mug's price", "information"), checks=["the price"])],
+            "Shortcut": [{"url": None}],
+            "_AnswerDraft": [{"claims": []}],
+        },
+        start=home,
+        jev={"pick": {}, "nouls": {"bot_check": 0.97}},
+    )
+
+    # Each load mints a new document with its own ray id, as a Cloudflare interstitial does.
+    reloaded = [
+        screen(home, "Just a moment", f"Checking your browser\n\nRay ID: {n}f3a.", document_key=f"d{n}")
+        for n in range(3)
+    ]
+    scenario(
+        "a bot check that survives its reload as a new document is reloaded once per address, then blocks",
+        "Find the price of the blue mug on shop.test",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), **{f"wall{n}": wall for n, wall in enumerate(reloaded)}},
+            "urls": {home: ["wall0", "wall1", "wall2"]},
         },
         {
             "Plan": [plan(("r1", "Find the blue mug's price", "information"), checks=["the price"])],
@@ -698,6 +726,28 @@ def scenarios() -> list[dict[str, Any]]:
         start="https://wiki.test/Dune",
         step_frames=True,
         jev={"pick": {"operation": "read", "r1": "c1"}, "noul": 0.5, "nouls": {"draft_needs_writing": 0.0}},
+    )
+    menu_article = screen(
+        "https://wiki.test/Dune",
+        "Dune",
+        "Dune (novel)\n\nDune is a 1965 novel by Frank Herbert.",
+        [control("menu", "button", "Menu", "click")],
+    )
+    scenario(
+        "a wall Jev sees on a page offering no sign-in is not one, and the run reads and completes",
+        "Who wrote Dune? Use https://wiki.test/Dune",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "article": menu_article},
+            "urls": {"https://wiki.test/Dune": "article"},
+        },
+        lookup_llm,
+        start="https://wiki.test/Dune",
+        jev={
+            "pick": {"operation": "read", "r1": "c1"},
+            "noul": 0.5,
+            "nouls": {"draft_needs_writing": 0.0, "login_required": 0.95},
+        },
     )
     scenario(
         "an until check that refuses the final address sends the run back to recovery",
@@ -1319,29 +1369,31 @@ def scenarios() -> list[dict[str, Any]]:
         },
     )
 
-    portal = screen(
-        "https://portal.test/",
-        "Portal",
-        "Portal\n\nMembers area.",
-        [control("enter", "button", "Continue", "click")],
-    )
-    scenario(
-        "recovery that gives up at a sign-in prompt ends the run needing login",
-        "Download my invoice from https://portal.test/",
-        {
-            "start": "blank",
-            "screens": {"blank": screen("about:blank", "", ""), "portal": portal},
-            "urls": {"https://portal.test/": "portal"},
-        },
-        {
-            "Plan": [plan(("a1", "Download the invoice", "action"), answer=False)],
-            "_Recovery": [
-                {"diagnosis": "A sign-in blocks it", "next_subgoal": "Sign in", "give_up": True, "needs_login": True}
-            ],
-        },
-        start="https://portal.test/",
-        jev={"pick": {"operation": "click"}, "noul": 0.1, "confidence": 0.3},
-    )
+    signed_out = {"diagnosis": "A sign-in blocks it", "next_subgoal": "Sign in", "give_up": True, "needs_login": True}
+    for name, label, href in (
+        ("recovery that gives up at a localized sign-in prompt ends the run needing login", "Se connecter", None),
+        ("recovery that gives up at a federated sign-in ends the run needing login", "Continue", "/sso/start"),
+        ("recovery that says a sign-in blocks a page offering none ends the run stuck", "Continue", None),
+    ):
+        fields = {} if href is None else {"href": href}
+        portal = screen(
+            "https://portal.test/",
+            "Portal",
+            "Portal\n\nMembers area.",
+            [control("enter", "link" if href else "button", label, "click", **fields)],
+        )
+        scenario(
+            name,
+            "Download my invoice from https://portal.test/",
+            {
+                "start": "blank",
+                "screens": {"blank": screen("about:blank", "", ""), "portal": portal},
+                "urls": {"https://portal.test/": "portal"},
+            },
+            {"Plan": [plan(("a1", "Download the invoice", "action"), answer=False)], "_Recovery": [signed_out]},
+            start="https://portal.test/",
+            jev={"pick": {"operation": "click"}, "noul": 0.1, "confidence": 0.3},
+        )
 
     scenario(
         "a password field with no stored secret stops needs_login",

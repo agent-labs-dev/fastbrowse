@@ -16,6 +16,7 @@ mod finishing;
 pub mod helpers;
 mod reading;
 mod recovery;
+mod sign_in;
 pub(crate) mod state;
 #[cfg(test)]
 mod tests;
@@ -887,7 +888,10 @@ impl Agent {
         if status != Status::Stuck {
             return status;
         }
-        let walled = said
+        // A model's word alone is not the page's: absent controls do not establish missing authentication, so a run
+        // that stopped saying it was signed out ends needs_login only when the page itself shows a sign-in to act on,
+        // or the run is standing on a wall it actually observed. A page offering neither is stuck, not signed out.
+        let walled = (said && sign_in::shows_sign_in(observation))
             || state
                 .passed_wall
                 .as_deref()

@@ -232,12 +232,14 @@ impl Agent {
                 }
                 let plan = state.await_plan().await?;
                 if !access_inspection(&plan) {
-                    Box::pin(self.meet_wall(state, &observation, &raw, &plan)).await?;
-                    continue;
+                    if Box::pin(self.meet_wall(state, &observation, &raw, &plan)).await? {
+                        continue;
+                    }
+                } else {
+                    state.passed_wall = Some(raw.url.clone());
+                    // A task inspecting an access boundary needs its observed wall read and verified, not passed.
+                    decision = code_decision(Operation::Read, None);
                 }
-                state.passed_wall = Some(raw.url.clone());
-                // A task inspecting an access boundary needs its observed wall read and verified, not passed.
-                decision = code_decision(Operation::Read, None);
             }
             let mut uncertain = decision.confidence() < self.config.thresholds.recover_below;
             let mut decided_by = Decider::Jev;
@@ -531,10 +533,12 @@ impl Agent {
         Ok((vec![opened], HashSet::from([shortcut, landed])))
     }
 
-    /// Reload a bot check that offers nothing to act on, once per document.
+    /// Reload a bot check that offers nothing to act on, once per address.
+    ///
+    /// Keyed on the address, not the document: the reload mints a new document key, so a document key would let a
+    /// challenge that survives its reload be reloaded on every iteration instead of being reported as blocked.
     pub(super) async fn reload_challenge(&self, state: &mut RunState, challenge: &Observation) -> Step<bool> {
-        let key = format!("{}|{}", challenge.url, challenge.document_key);
-        if !state.challenge_reloads.insert(key) {
+        if !state.challenge_reloads.insert(challenge.url.clone()) {
             return Ok(false);
         }
         self.event("challenge_reload", || Map::from_iter([("url".into(), challenge.url.clone().into())]));
