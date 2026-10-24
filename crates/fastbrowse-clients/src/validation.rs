@@ -877,8 +877,8 @@ pub fn check_jev_spend(spend: Option<&JevSpend>, estimate_dollars: f64) -> Resul
     for paid in held.iter().filter(|paid| paid.id() != own) {
         lines.extend(paid.snapshot());
     }
-    let mut probe = Ledger::new(ledger.limits.clone());
-    probe.started = ledger.started;
+    let probe = Ledger::new(ledger.limits.clone());
+    probe.set_started(ledger.started());
     *probe.state() = LedgerState { lines, ..state };
     probe.reserve(CostComponent::Jev, estimate_dollars, 0)
 }
