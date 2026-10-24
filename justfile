@@ -2,6 +2,16 @@
 evals-local *args:
     uv run python -m fastbrowse.evals.runner {{args}}
 
+# Benchmark any `fastbrowse serve --stdio` on the fixture suites with recorded model traffic (bench/README.md).
+bench *args:
+    uv run python -m fastbrowse.evals.bench {{args}}
+
+# Replay every cassette three times at zero latency and once at recorded latency, then report.
+bench-baseline out="artifacts/bench/baseline" agent=".venv/bin/fastbrowse serve --stdio":
+    for i in 1 2 3; do uv run python -m fastbrowse.evals.bench replay --agent {{quote(agent)}} --out {{out}}/zero-$i.json; done
+    uv run python -m fastbrowse.evals.bench replay --agent {{quote(agent)}} --latency recorded --out {{out}}/recorded.json
+    uv run python -m fastbrowse.evals.bench report {{out}}/zero-*.json {{out}}/recorded.json --footprint --markdown {{out}}/report.md --json {{out}}/summary.json
+
 # Validate and publish rows under their recorded release, then regenerate all outputs.
 evals-publish rows:
     uv run python -m fastbrowse.evals.versions --publish auto {{quote(rows)}}
