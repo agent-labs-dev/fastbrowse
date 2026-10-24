@@ -18,6 +18,8 @@ scripted = ["tokio/signal"]
 [dependencies]
 fastbrowse-core = { path = "../fastbrowse-core" }
 fastbrowse-clients = { path = "../fastbrowse-clients" }
+fastbrowse-agent = { path = "../fastbrowse-agent" }
+fastbrowse-run = { path = "../fastbrowse-run" }
 indexmap = { version = "2", features = ["serde"] }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }

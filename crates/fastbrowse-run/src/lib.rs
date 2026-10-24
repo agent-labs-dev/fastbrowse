@@ -18,6 +18,7 @@ use fastbrowse_browser::page::CdpPage;
 use fastbrowse_browser::session::{BrowserSession, CheckAccess, SessionOptions, check_browser_access};
 use fastbrowse_clients::environment::{ConfigurationError, Settings};
 use fastbrowse_clients::http::Http;
+use fastbrowse_core::BoxFuture;
 use fastbrowse_core::artifacts::DirectorySink;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::jev::JevClient;
@@ -37,12 +38,15 @@ pub enum RunError {
     /// Python's `ValueError` from `run_task`'s own checks.
     Invalid(String),
     Configuration(String),
+    /// [`RunTask::cancel`] resolved; the browser was closed before this returned.
+    Cancelled,
 }
 
 impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RunError::Invalid(message) | RunError::Configuration(message) => f.write_str(message),
+            RunError::Cancelled => f.write_str("the run was cancelled"),
         }
     }
 }
@@ -91,6 +95,9 @@ pub struct RunTask {
     pub http: Option<Http>,
     pub record: Option<PathBuf>,
     pub cursor: bool,
+    /// Makes a future that resolves when the caller stops the run. Python cancels the task and its `finally` closes
+    /// the browser; here the run stops where it is, closes what it opened, then returns [`RunError::Cancelled`].
+    pub cancel: Option<Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>>,
 }
 
 impl Default for RunTask {
@@ -129,6 +136,7 @@ impl Default for RunTask {
             http: None,
             record: None,
             cursor: false,
+            cancel: None,
         }
     }
 }
@@ -414,7 +422,8 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
     let mut session: Option<BrowserSession> = None;
     let mut owned: Option<Owned> = None;
     let mut head = Some(head);
-    let outcome: Result<RunResult, Refused> = async {
+    let cancel = options.cancel.take();
+    let work = async {
         check_browser_access(options.check_access.as_ref()).await?;
         let (connection, started) = browser(&options, &chrome, &http).await?;
         owned = Some(started);
@@ -459,8 +468,15 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
             head_start: head.take(),
         };
         agent.run(task, run).await.map_err(|error| refused(&error.to_string()))
-    }
-    .await;
+    };
+    let outcome: Option<Result<RunResult, Refused>> = match cancel {
+        None => Some(work.await),
+        Some(cancel) => tokio::select! {
+            biased;
+            () = cancel() => None,
+            done = work => Some(done),
+        },
+    };
     if let Some(session) = &session {
         let _ = session.close().await;
     }
@@ -468,8 +484,14 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
         stop(owned, &mut browser_cost).await;
     }
     let mut result = match outcome {
-        Ok(result) => result,
-        Err(refusal) => {
+        None => {
+            if let Some(head) = &head {
+                head.discard().await;
+            }
+            return Err(RunError::Cancelled);
+        }
+        Some(Ok(result)) => result,
+        Some(Err(refusal)) => {
             // A cloud browser that cannot be started is an outage, not a failed run. The plan and shortcut were asked
             // for before the browser failed, and what they spent is real.
             let lines = match &head {
