@@ -160,6 +160,7 @@ from fastbrowse.shortcut import Shortcut, accept, accept_start, propose_shortcut
 from fastbrowse.telemetry import BudgetExceeded, Ledger, trace
 from fastbrowse.tripwires import Tripped, Tripwire, repeated_action, stagnant_plan
 from fastbrowse.verification import (
+    VERDICT_TOKENS,
     DoneCheck,
     DoneVerdict,
     Extraction,
@@ -1316,14 +1317,15 @@ class Agent:
         return [opened], {shortcut, landed}
 
     async def _reload_challenge(self, state: _RunState, challenge: Observation) -> bool:
-        """Reload a bot check that offers nothing to act on, once per document.
+        """Reload a bot check that offers nothing to act on, once per address.
 
         PyPI's client challenge is a script that replaces itself with the page it cleared; a fresh navigation to
         the same address is what a person does when the interstitial does not advance, and it clears it. A check
-        that drew controls is not reloaded: it is a CAPTCHA to be answered, or a wall to report. Once per
-        document, so a challenge that survives its reload is reported rather than looped on.
+        that drew controls is not reloaded: it is a CAPTCHA to be answered, or a wall to report. Keyed on the
+        address, not the document: the reload mints a new document key, so a document key would let a challenge
+        that survives its reload be reloaded on every iteration instead of being reported as blocked.
         """
-        key = f"{challenge.url}|{challenge.document_key}"
+        key = challenge.url
         if key in state.challenge_reloads:
             return False
         state.challenge_reloads.add(key)
@@ -4086,7 +4088,9 @@ class Agent:
         if (reused := state.verify_cache.get(key)) is not None:
             trace("verify_reused", doubted=list(check.doubted))
             return reused
-        verifying = self._llm.generate(LLMPurpose.VERIFY, messages, LLMVerdict, ledger=state.ledger)
+        verifying = self._llm.generate(
+            LLMPurpose.VERIFY, messages, LLMVerdict, max_output_tokens=VERDICT_TOKENS, ledger=state.ledger
+        )
         judged = await recorded(verifying, state.ledger)
         state.verify_cache[key] = judged
         return judged

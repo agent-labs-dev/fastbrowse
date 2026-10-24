@@ -153,6 +153,9 @@ class Observation(Frozen):
     omitted_controls: int = Field(ge=0)
     """Controls present but not offered because of observation limits."""
     viewport_text: str
+    visual_content: bool = False
+    """A visible image, canvas, drawing or video carries state the text and the controls do not, so the verifier
+    needs the screenshot even on a text-rich page whose state is the picture itself."""
     tabs: tuple[Tab, ...]
     dialog: Dialog | None = None
     inaccessible_frames: int = Field(default=0, ge=0)

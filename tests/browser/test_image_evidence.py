@@ -4,6 +4,52 @@ from fastbrowse.browser import BrowserSession, CdpPage
 from tests.browser.test_browser import eval_value
 
 
+async def test_a_figure_is_visual_content_but_an_icon_sized_drawing_is_not(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    """The verifier needs a screenshot when the page's state is a picture, but an icon is not page state, so
+    the observation reports a figure and ignores a drawing too small to carry anything."""
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        """
+        document.body.innerHTML = '<h1>Report</h1><p>' + 'word '.repeat(40) + '</p>' +
+          '<canvas width="320" height="240"></canvas>';
+        """,
+    )
+    assert (await page.observe()).visual_content
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        """
+        document.body.innerHTML = '<h1>Report</h1><p>' + 'word '.repeat(40) + '</p>' +
+          '<canvas width="16" height="16"></canvas>';
+        """,
+    )
+    assert not (await page.observe()).visual_content
+
+
+async def test_a_drawing_below_the_fold_does_not_ask_for_a_screenshot(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    """A screenshot captures the viewport, so an image it cannot show must not be what asks for one: counting
+    every image on a long page would fire the gate on nearly every page and undo what it is for."""
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        """
+        document.body.innerHTML = '<h1>Report</h1><p>' + 'word '.repeat(40) + '</p>' +
+          '<div style="height:4000px"></div><canvas width="320" height="240"></canvas>';
+        """,
+    )
+    assert not (await page.observe()).visual_content
+    # Scrolled into view, the same drawing is page state the screenshot does carry.
+    await eval_value(browser_session, browser_session.active_session_id, "scrollTo(0, document.body.scrollHeight)")
+    assert (await page.observe()).visual_content
+
+
 async def test_capture_reports_visible_image_metadata_without_inventing_pixels(
     page: CdpPage, browser_session: BrowserSession, main_site: str
 ) -> None:

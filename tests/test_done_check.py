@@ -510,6 +510,27 @@ def test_a_visual_only_page_sends_the_screenshot() -> None:
     assert visual_only_state(sparse)
 
 
+def test_a_text_rich_page_with_visual_content_still_sends_the_screenshot() -> None:
+    """snapshot.js offers ordinary images and canvases as content, not as controls, so the control list alone
+    would drop the screenshot on a text-rich page whose state is a chart or a picture."""
+    from fastbrowse.verification import visual_only_state
+
+    pictured = Observation(
+        url="https://example.test/report",
+        title="Report",
+        page_key="k",
+        captured_at=datetime.now(UTC),
+        controls=(),
+        omitted_controls=0,
+        viewport_text="A paragraph long enough to judge a form from, with plenty of words to read.",
+        visual_content=True,
+        tabs=(),
+    )
+    assert visual_only_state(pictured)
+    # The same page with no image or canvas is read from its text alone.
+    assert not visual_only_state(pictured.model_copy(update={"visual_content": False}))
+
+
 def test_the_verifier_prompt_keeps_the_page_last_and_a_byte_identical_request_is_one_key() -> None:
     from fastbrowse.verification import verify_cache_key, verify_messages
 

@@ -387,6 +387,10 @@ def visual_only_state(observation: Observation) -> bool:
     """
     if observation.dialog is not None:
         return True
+    # A page can carry its state in pixels without a single visual control: snapshot.js offers ordinary images
+    # and canvases as content, not as controls, so the control list alone cannot see a chart or a picture.
+    if observation.visual_content:
+        return True
     if len(observation.viewport_text.strip()) < 40:
         return True
     return any(
