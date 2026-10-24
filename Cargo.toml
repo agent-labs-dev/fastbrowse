@@ -5,6 +5,7 @@ members = [
     "crates/fastbrowse-clients",
     "crates/fastbrowse-browser",
     "crates/fastbrowse-agent",
+    "crates/fastbrowse-cli",
     "crates/fastbrowse-run",
     "crates/fastbrowse-py",
     "crates/fastbrowse-node",

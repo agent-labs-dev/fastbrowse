@@ -1,0 +1,36 @@
+[package]
+name = "fastbrowse-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "fastbrowse"
+path = "src/main.rs"
+
+[features]
+default = ["scripted"]
+# The stand-in runs and test servers the SDK and protocol tests start the binary with, as `--run-task NAME` and
+# FASTBROWSE_TEST_SERVER. Python ships its hidden `--run-task` too; a release build can leave them out.
+scripted = ["tokio/signal"]
+
+[dependencies]
+fastbrowse-core = { path = "../fastbrowse-core" }
+fastbrowse-clients = { path = "../fastbrowse-clients" }
+indexmap = { version = "2", features = ["serde"] }
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+# float_roundtrip: a cost read one unit off is written back as another number.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+tokio = { version = "1", features = ["rt", "time", "macros", "sync", "net"] }
+# The MCP server's streamable HTTP transport: a server, HTTP/1.1 only, as uvicorn serves it.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["server", "http1", "tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+sha1 = { version = "0.10", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "time", "macros", "sync", "net", "test-util"] }
