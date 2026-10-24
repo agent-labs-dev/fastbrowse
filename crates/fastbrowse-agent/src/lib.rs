@@ -3,8 +3,12 @@
 //! Every prompt, Jev request and structured-output schema built here is byte for byte the one Python builds for the
 //! same inputs, since a run is proven by replaying recorded model traffic keyed on a hash of the request body.
 
+#[macro_use]
+mod macros;
+
 pub mod batches;
 pub mod error;
+pub mod planner;
 mod support;
 
 pub use error::AgentError;

@@ -1,8 +1,33 @@
-//! What the ported modules share and Python gets from its runtime: `asyncio.gather` over requests sent side by side.
+//! What the ported modules share and Python gets from its runtime: a typed `generate` through a `dyn` client, and
+//! `asyncio.gather` over requests sent side by side.
 
 use std::task::Poll;
 
 use fastbrowse_core::BoxFuture;
+use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, Typed};
+use fastbrowse_core::models::LLMPurpose;
+use fastbrowse_core::schema::Schema;
+use fastbrowse_core::telemetry::Ledger;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+
+/// `llm.generate(purpose, messages, T, ...)`. `LLMClientExt::generate` needs a sized client, and the modules hold
+/// theirs as `dyn` so a failover can stand in for one provider.
+pub(crate) async fn generate<T>(
+    llm: &dyn LLMClient,
+    purpose: LLMPurpose,
+    messages: &[Message],
+    max_output_tokens: i64,
+    ledger: Option<&Ledger>,
+) -> Result<Generation<T>, LLMError>
+where
+    T: Schema + DeserializeOwned + Serialize,
+{
+    let schema = Typed::<T>::default();
+    let generated = llm.generate_value(purpose, messages, &schema, max_output_tokens, ledger).await?;
+    let data = serde_json::from_value(generated.data).map_err(|error| LLMError::Failed(error.to_string()))?;
+    Ok(Generation { data, cost: generated.cost })
+}
 
 /// `asyncio.gather` that stops at the first error: every future is polled in the order given, so requests leave in
 /// the order Python created their tasks, and the first failure drops the rest, as cancelling their tasks does.
