@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import hashlib
 import json
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
@@ -122,7 +123,8 @@ _KEEP_PAINTING: dict[str, object] = {
     "maxHeight": 16,
     "everyNthFrame": 1000,
 }
-_TRACK_DOCUMENT_JS = data_file("browser", "snapshot.js").read_text(encoding="utf-8") + "('fingerprint')"
+_SNAPSHOT_JS = data_file("browser", "snapshot.js").read_text(encoding="utf-8")
+SNAPSHOT_UNINSTALLED = "fastbrowse: snapshot.js is not installed in this document"
 _REFUSE_COOKIES_JS = data_file("browser", "autoconsent", "autoconsent.standalone.js").read_text(encoding="utf-8")
 INPUT_WORLD = "fastbrowse-input"
 """The isolated world the input watch runs in: the page's own scripts cannot see a global, a listener or a binding
@@ -317,6 +319,30 @@ _DOWNLOAD_TEXT_BYTES = 16_384
 _DOWNLOAD_TEXT_TOTAL = 65_536
 
 
+class SnapshotScript:
+    """snapshot.js, compiled once in each document and called by name after that.
+
+    Sent whole with every evaluate, its source cost about 3ms of transfer and compiling per call, and each call
+    started again from unoptimized code. A document installs it as it starts, from the tracking script every new
+    document runs; a document older than the session installs it when a call first finds it missing. The key
+    names the source and the grant, so another build or another grant never calls this one's function.
+    """
+
+    def __init__(self, grant: OriginGrant | None) -> None:
+        origins = "null" if grant is None else json.dumps(sorted(grant.origins))
+        key = json.dumps(hashlib.sha256(f"{origins}\n{_SNAPSHOT_JS}".encode()).hexdigest()[:16])
+        self.install = (
+            f"((globalThis.__fastbrowseScripts ||= {{}})[{key}] ||= "
+            f"(snapshot => mode => snapshot(mode, {origins}))({_SNAPSHOT_JS}))"
+        )
+        """An expression that installs the function, if this document has none, and evaluates to it."""
+        self.function = (
+            f"(globalThis.__fastbrowseScripts?.[{key}] ?? "
+            f"(() => {{ throw new Error({json.dumps(SNAPSHOT_UNINSTALLED)}); }})())"
+        )
+        """An expression for the installed function, which throws `SNAPSHOT_UNINSTALLED` where there is none."""
+
+
 class BrowserSession:
     """Async context manager over one owned tab (plus any popups it opens).
 
@@ -341,10 +367,8 @@ class BrowserSession:
         """Document requests the grant refused, so a navigation that was cut short is told from one that failed."""
         self._artifact_sink = artifact_sink
         self._max_download_bytes = max_download_bytes
-        track = _TRACK_DOCUMENT_JS
-        if self._grant is not None:
-            origins = json.dumps(sorted(self._grant.origins))
-            track = _TRACK_DOCUMENT_JS.removesuffix("('fingerprint')") + f"('fingerprint', {origins})"
+        self.snapshot = SnapshotScript(self._grant)
+        track = f"{self.snapshot.install}('fingerprint')"
         self._new_document_scripts = (track, _REFUSE_COOKIES_JS) if refuse_cookie_banners else (track,)
         self._client: CDPClient | None = None
         self._tabs: dict[str, _TabState] = {}
