@@ -5507,9 +5507,8 @@ def _shortcut_worth_proposing(start: str) -> bool:
     inside the site - a path, not just the origin - the run is at a destination the caller chose, and a proposal to
     go elsewhere on that origin second-guesses it. `FASTBROWSE_SHORTCUT_ON_DEEP_START` asks for one anyway.
     """
-    if flag("FASTBROWSE_SHORTCUT_ENTRY_ONLY", default=False) and urlsplit(start).path not in ("", "/"):
-        return False
-    return True
+    entry_only = flag("FASTBROWSE_SHORTCUT_ENTRY_ONLY", default=False)
+    return not (entry_only and urlsplit(start).path not in ("", "/"))
 
 
 async def _propose(llm: LLMClient, task: str, start: str, ledger: Ledger) -> Shortcut:
