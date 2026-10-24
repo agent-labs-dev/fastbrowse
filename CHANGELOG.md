@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Waiting for a page to settle after an action no longer reads all of its text every 100 ms. The wait watches
+  for changes alone until the page goes quiet and reads the page once then, and the check for a loading spinner
+  before each observation no longer reads the page's text at all.
+
 - Every read of the page no longer sends the 48 KB page script to the browser and compiles it again. Each
   document compiles it once, so a step's observation and the checks around each action skip about 3 ms per call
   locally, and a remote browser no longer receives the script on every one of them.
