@@ -10,6 +10,7 @@ import asyncio
 import json
 import sys
 import time
+from pathlib import Path
 
 from fastbrowse.adapters.local_chrome import async_local_chrome
 from fastbrowse.browser.page import CdpPage
@@ -23,7 +24,9 @@ class _NullSink:
     """Downloads are dropped: the check compares what the page reports, and a capture of a download's text."""
 
     async def put(self, kind: ArtifactKind, name: str, mime_type: str, content: bytes) -> Artifact:
-        return Artifact(kind=kind, name=name, mime_type=mime_type, size_bytes=len(content), sha256="", uri=f"memory://{name}")
+        return Artifact(
+            kind=kind, name=name, mime_type=mime_type, size_bytes=len(content), sha256="", uri=f"memory://{name}"
+        )
 
 
 def _error(error: Exception) -> dict:
@@ -101,9 +104,7 @@ async def _page(connection: BrowserConnection, base: str, spec: dict) -> dict:
         return {"name": spec["name"], "steps": steps}
 
 
-async def main(script_path: str, base: str, only: str | None) -> None:
-    with open(script_path, encoding="utf-8") as file:
-        script = json.load(file)
+async def main(script: dict, base: str, only: str | None) -> None:
     started = time.perf_counter()
     async with async_local_chrome(LocalChrome()) as connection:
         launch_ms = (time.perf_counter() - started) * 1000
@@ -112,4 +113,10 @@ async def main(script_path: str, base: str, only: str | None) -> None:
 
 
 _args = sys.argv[1:]
-asyncio.run(main(_args[0], _args[1], _args[_args.index("--only") + 1] if "--only" in _args else None))
+asyncio.run(
+    main(
+        json.loads(Path(_args[0]).read_text(encoding="utf-8")),
+        _args[1],
+        _args[_args.index("--only") + 1] if "--only" in _args else None,
+    )
+)

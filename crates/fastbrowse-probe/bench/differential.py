@@ -155,7 +155,8 @@ def main(runs: int, only: str | None) -> None:
         print(f"  {name:20}{totals['rust']:>10.0f}{totals['python']:>10.0f}{totals['python'] / totals['rust']:>8.2f}x")
     launch = {arm: statistics.median(r["launch_ms"] for r in results[arm]) for arm in arms}
     print(f"\nChrome launch to DevTools, median ms: rust {launch['rust']:.0f}, python {launch['python']:.0f}")
-    print(f"process wall time, median s: rust {statistics.median(wall['rust']):.1f}, python {statistics.median(wall['python']):.1f}")
+    seconds = {arm: statistics.median(wall[arm]) for arm in arms}
+    print(f"process wall time, median s: rust {seconds['rust']:.1f}, python {seconds['python']:.1f}")
 
 
 _args = sys.argv[1:]
