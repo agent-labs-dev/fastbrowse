@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use fastbrowse_browser::page::CdpPage;
 use fastbrowse_browser::session::BrowserSession;
-use fastbrowse_browser::shared::{Action, Control, Observation, Operation};
+use fastbrowse_core::models::Operation;
+use fastbrowse_core::page::{Action, Control, Observation};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;

@@ -9,11 +9,12 @@ use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use fastbrowse_core::models::{BrowserConnection, LocalChrome};
 use serde_json::{Map, Value};
 use tokio::process::{Child, Command};
 
 use crate::adapters::http;
-use crate::shared::{BrowserConnection, BrowserError, LocalChrome};
+use crate::error::BrowserError;
 
 /// How long a started Chrome has to report its DevTools address.
 ///
@@ -245,12 +246,8 @@ impl LocalChromeProcess {
         match process.start(&binary, options).await {
             Ok(cdp_url) => {
                 // Headless Chrome has no window for an activated tab to raise, so it keeps the foreground path.
-                let connection = BrowserConnection {
-                    cdp_url,
-                    remote: false,
-                    foreground: !options.headed,
-                    ..BrowserConnection::default()
-                };
+                let connection =
+                    BrowserConnection { foreground: !options.headed, ..BrowserConnection::new(cdp_url, false) };
                 Ok((process, connection))
             }
             Err(error) => {
@@ -370,7 +367,7 @@ fn quiet_password_manager(profile: &Path) -> Result<(), LocalChromeError> {
     };
     let Some(Value::Object(mut held)) = held else {
         let message = format!("{} is not a Chrome preferences file", preferences.display());
-        return Err(LocalChromeError::Browser(BrowserError::Browser(message)));
+        return Err(LocalChromeError::Browser(BrowserError::Failed(message)));
     };
     held.insert("credentials_enable_service".into(), Value::Bool(false));
     let mut owned = match held.remove("profile") {

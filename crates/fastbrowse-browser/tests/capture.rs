@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use common::{Harness, harness, sites};
-use fastbrowse_browser::shared::BlockKind;
+use fastbrowse_core::page::BlockKind;
 use misc_support::{content_capture, eval_active, path, set_body, text_of, texts, visible, wait_until};
 
 // -- test_capture.py: capture blocks preserve the records a reader needs to cite together -----------------------
@@ -747,8 +747,8 @@ async fn test_a_guard_after_the_snapshot_reads_the_changed_page() {
 // -- test_snapshot_caps.py: the snapshot sends whole rows only within the observation caps; the observation is the
 // one sending all would give ---------------------------------------------------------------------------------------
 
-fn capped_config() -> fastbrowse_browser::shared::Config {
-    let mut config = fastbrowse_browser::shared::Config::default();
+fn capped_config() -> fastbrowse_core::config::Config {
+    let mut config = fastbrowse_core::config::Config::default();
     config.observation.max_controls = 12;
     config.observation.max_offscreen_controls = 4;
     config

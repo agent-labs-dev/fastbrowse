@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use fastbrowse_browser::session::{BrowserSession, SessionOptions};
-use fastbrowse_browser::shared::BrowserConnection;
+use fastbrowse_core::models::BrowserConnection;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::net::{TcpListener, TcpStream};
@@ -198,7 +198,7 @@ impl FakeChrome {
 
     /// `CONNECTION`: what headless local Chrome yields, where no window follows the tab, so the run activates it.
     pub fn connection(&self) -> BrowserConnection {
-        BrowserConnection { cdp_url: self.url.clone(), remote: false, foreground: true, ..Default::default() }
+        BrowserConnection { foreground: true, ..BrowserConnection::new(self.url.clone(), false) }
     }
 
     /// `BACKGROUND`: a visible window someone sits in front of.

@@ -14,13 +14,13 @@ use std::time::Duration;
 use common::{Harness, RecordingArtifactSink, chrome, harness, harness_on, sites};
 use data_encoding::HEXLOWER;
 use fastbrowse_browser::adapters::local_chrome::{LocalChromeProcess, find_chrome};
+use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::page::CdpPage;
 use fastbrowse_browser::session::{BrowserSession, SessionOptions};
-use fastbrowse_browser::shared::{
-    ActResult, Action, Attachment, BlockKind, BrowserConnection, BrowserError, Capture, Config, Control, LocalChrome,
-    Observation, ObservationLimits, Operation, StepOutcome,
-};
 use fastbrowse_browser::testing;
+use fastbrowse_core::config::{Config, ObservationLimits};
+use fastbrowse_core::models::{Attachment, BrowserConnection, Bytes, LocalChrome, Operation, StepOutcome};
+use fastbrowse_core::page::{ActResult, Action, BlockKind, Capture, Control, Observation};
 use serde_json::{Value, json};
 use tokio::time::{Instant, sleep, timeout};
 
@@ -100,8 +100,8 @@ fn truthy(value: &Value) -> bool {
 }
 
 /// `capture.text[start:end]`: block offsets count code points, as Python indexes a `str`.
-fn slice(capture: &Capture, start: usize, end: usize) -> String {
-    capture.text.chars().skip(start).take(end.saturating_sub(start)).collect()
+fn slice(capture: &Capture, start: i64, end: i64) -> String {
+    capture.text.chars().skip(start.max(0) as usize).take((end - start).max(0) as usize).collect()
 }
 
 fn sha256_hex(content: &[u8]) -> String {
@@ -420,7 +420,7 @@ async fn test_upload_bytes_match_sha256() {
     let attachment = Attachment {
         name: "payload.bin".into(),
         mime_type: "application/octet-stream".into(),
-        content: content.clone(),
+        content: Bytes(content.clone()),
     };
 
     let action =
@@ -1375,12 +1375,7 @@ async fn test_a_browser_handed_over_by_cdp_url_drives_and_survives_the_run() {
     let _gate = gate().await;
     let Some(chrome_connection) = chrome().cloned() else { return };
     let sink = Arc::new(RecordingArtifactSink::default());
-    let handed = BrowserConnection {
-        cdp_url: chrome_connection.cdp_url.clone(),
-        live_url: None,
-        remote: true,
-        ..Default::default()
-    };
+    let handed = BrowserConnection::new(chrome_connection.cdp_url.clone(), true);
     let session = BrowserSession::new(handed, sink.clone(), SessionOptions::default());
     session.open().await.expect("session opens");
     let page = CdpPage::new(session.clone(), Config::default());
@@ -1507,7 +1502,7 @@ async fn test_http_error_status_travels_with_the_observed_document() {
         let Some(h) = harness().await else { return };
         h.goto(&format!("/http-error/{status}")).await;
         let failed = h.observe().await;
-        assert_eq!(failed.response_status, Some(status));
+        assert_eq!(failed.response_status, Some(i64::from(status)));
         assert_eq!(failed.viewport_text, "Sorry");
         h.goto("").await;
         assert_eq!(h.observe().await.response_status, Some(200));

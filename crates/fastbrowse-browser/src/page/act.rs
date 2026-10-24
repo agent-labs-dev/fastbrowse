@@ -3,6 +3,8 @@
 use std::future::Future;
 
 use data_encoding::BASE64;
+use fastbrowse_core::models::{Attachment, Operation, StepOutcome};
+use fastbrowse_core::page::{ActResult, Action, Observation};
 use serde_json::{Value, json};
 use tokio::time::{Instant, sleep, timeout};
 
@@ -12,8 +14,9 @@ use super::scripts::{
 };
 use super::{BackTarget, CdpPage, Target, truthy};
 use crate::cdp::secs;
+use crate::error::BrowserError;
 use crate::session::py_json;
-use crate::shared::{ActResult, Action, Attachment, BrowserError, Observation, Operation, StepOutcome, urlsplit};
+use crate::urlsplit::urlsplit;
 
 const TARGET_STABILITY_SECONDS: f64 = 1.0;
 /// Points the pointer travels through between a drag's press and its release.
@@ -68,7 +71,7 @@ enum Cover {
 type Outcome = (StepOutcome, Option<String>);
 
 fn bad(shape: &str) -> BrowserError {
-    BrowserError::Browser(format!("page script returned an unexpected {shape}"))
+    BrowserError::Failed(format!("page script returned an unexpected {shape}"))
 }
 
 fn parse_point(value: &Value, unsettled: bool) -> Result<Point, BrowserError> {
@@ -170,7 +173,7 @@ impl CdpPage {
         let pointer_first = matches!(action.operation, Operation::Click | Operation::Fill | Operation::Hover);
         let mut drawn = pointer_first && target.as_ref().is_some_and(|t| t.0 == active);
         if self.session.pending_dialog().is_none() {
-            let hit_test = action.operation.targeted();
+            let hit_test = action.operation.is_targeted();
             // The frame wait runs on the page's own timers, which a page can replace with ones that never fire; past
             // this bound the point is measured again and the pointer move waits for its own frame.
             let measured = if drawn {
@@ -448,7 +451,7 @@ impl CdpPage {
                 self.session.handle_dialog(accept, action.text.as_deref()).await?;
                 Ok((StepOutcome::Executed, None))
             }
-            Operation::Read | Operation::Done | Operation::Escalate => Err(BrowserError::Browser(format!(
+            Operation::Read | Operation::Done | Operation::Escalate => Err(BrowserError::Failed(format!(
                 "{} does not dispatch through the browser layer",
                 action.operation.as_str()
             ))),
@@ -973,7 +976,7 @@ impl CdpPage {
             "Enter" => ("Enter", "\r", 13),
             "Escape" => ("Escape", "", 27),
             " " => ("Space", " ", 32),
-            _ => return Err(BrowserError::Browser(format!("unknown key {key}"))),
+            _ => return Err(BrowserError::Failed(format!("unknown key {key}"))),
         };
         let down =
             json!({"type": "keyDown", "key": key, "code": code, "text": text, "windowsVirtualKeyCode": virtual_key});
@@ -1019,7 +1022,7 @@ impl CdpPage {
         if files.is_empty() {
             return Ok((StepOutcome::Failed, Some("no files supplied".into())));
         }
-        let total: usize = files.iter().map(|f| f.content.len()).sum();
+        let total: i64 = files.iter().map(|f| f.content.0.len() as i64).sum();
         let limit = self.config.max_upload_bytes;
         if total > limit {
             return Ok((StepOutcome::Failed, Some(format!("{total} bytes exceeds max_upload_bytes ({limit})"))));
@@ -1034,7 +1037,7 @@ impl CdpPage {
         let allowed = self.session.grant_origins().map(<[String]>::to_vec);
         let payload: Vec<Value> = files
             .iter()
-            .map(|f| json!({"name": f.name, "type": f.mime_type, "data": BASE64.encode(&f.content)}))
+            .map(|f| json!({"name": f.name, "type": f.mime_type, "data": BASE64.encode(&f.content.0)}))
             .collect();
         let script = format!(
             "((id, files, allowed) => {{ const node = window.__fastbrowse?.nodes.get(id); \

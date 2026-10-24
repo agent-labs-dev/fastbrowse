@@ -11,7 +11,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use data_encoding::BASE64;
+use fastbrowse_core::BoxFuture;
+use fastbrowse_core::models::{Artifact, ArtifactKind, ArtifactSink, BrowserConnection, FrameHandler};
 use fastbrowse_core::origins::OriginGrant;
+use fastbrowse_core::page::{Dialog, Tab};
 use futures_util::future::{BoxFuture as FBoxFuture, try_join_all};
 use serde_json::{Value, json};
 use tokio::sync::watch;
@@ -19,10 +22,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{Instant, timeout};
 
 use crate::cdp::{Cdp, Event, secs};
-use crate::shared::{
-    Artifact, ArtifactKind, ArtifactSink, BoxError, BoxFuture, BrowserConnection, BrowserError, Dialog, FrameHandler,
-    Tab,
-};
+use crate::error::BrowserError;
 use crate::warn;
 
 const SCREENCAST_COMMAND_SECONDS: f64 = 0.5;
@@ -126,6 +126,8 @@ fn keep_painting() -> Value {
     json!({"format": "jpeg", "quality": 1, "maxWidth": 16, "maxHeight": 16, "everyNthFrame": 1000})
 }
 
+/// The error a caller's `check_access` returns; the session reports only that it refused, never its message.
+pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 /// `check_access`: the caller's live permission, awaited before browser startup and every read and action.
 pub type CheckAccess = Arc<dyn Fn() -> BoxFuture<'static, Result<(), BoxError>> + Send + Sync>;
 /// Sees every `Page.screencastFrame` after the session has handled it, as a recording does.
@@ -136,7 +138,7 @@ pub async fn check_browser_access(check: Option<&CheckAccess>) -> Result<(), Bro
     let Some(check) = check else { return Ok(()) };
     check()
         .await
-        .map_err(|_| BrowserError::Browser("check_access refused the browser (Exception, caller supplied)".into()))
+        .map_err(|_| BrowserError::Failed("check_access refused the browser (Exception, caller supplied)".into()))
 }
 
 pub struct SessionOptions {
@@ -507,7 +509,7 @@ impl BrowserSession {
     }
 
     pub fn client(&self) -> Result<Cdp, BrowserError> {
-        self.client_opt().ok_or_else(|| BrowserError::Browser("CDP.client failed (SessionClosed)".into()))
+        self.client_opt().ok_or_else(|| BrowserError::Failed("CDP.client failed (SessionClosed)".into()))
     }
 
     /// A command through the client's deadlines.
@@ -665,7 +667,7 @@ impl BrowserSession {
 
     pub async fn switch_tab(&self, target_id: &str) -> Result<(), BrowserError> {
         if !self.0.state.lock().unwrap().tabs.iter().any(|t| t.target_id == target_id) {
-            return Err(BrowserError::Browser(format!("Unknown tab {target_id}")));
+            return Err(BrowserError::Failed(format!("Unknown tab {target_id}")));
         }
         Shared::set_active_target(&self.0, target_id);
         self.bring_to_front().await
@@ -758,7 +760,7 @@ impl BrowserSession {
                 Some(needle) => format!("no page matching {}", py_repr(needle)),
             };
             let seen = seen.iter().map(|s| py_repr(s)).collect::<Vec<_>>().join(", ");
-            return Err(BrowserError::Browser(format!("{wanted} to attach to; pages: [{seen}]")));
+            return Err(BrowserError::Failed(format!("{wanted} to attach to; pages: [{seen}]")));
         };
         let target_id = str_of(&target["targetId"]);
         let attach = self.send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None).await?;
@@ -973,7 +975,7 @@ impl BrowserSession {
         };
         // Python's `next(...)` raises when nothing is pending; a dispatch for a dialog that is gone fails the same way.
         let Some(session_id) = session_id else {
-            return Err(BrowserError::Browser("Page.handleJavaScriptDialog failed (StopIteration)".into()));
+            return Err(BrowserError::Failed("Page.handleJavaScriptDialog failed (StopIteration)".into()));
         };
         let mut params = json!({"accept": accept});
         if let Some(text) = prompt_text {
@@ -991,7 +993,7 @@ impl State {
             .iter()
             .find(|t| t.target_id == self.active_target_id)
             .map(|t| t.session_id.clone())
-            .ok_or_else(|| BrowserError::BrowserUnavailable("active browser tab closed; no owned tab remains".into()))
+            .ok_or_else(|| BrowserError::Unavailable("active browser tab closed; no owned tab remains".into()))
     }
 
     fn frame_sessions_of_active(&self) -> Vec<(String, String)> {
@@ -1460,7 +1462,7 @@ pub(crate) async fn deliver_frames(shared: &Arc<Shared>) {
         let mut failed = false;
         if deliver && let Some(on_frame) = &shared.on_frame {
             match BASE64.decode(frame.data.as_bytes()) {
-                Ok(bytes) => failed = on_frame(bytes).await.is_err(),
+                Ok(bytes) => on_frame(bytes).await,
                 Err(_) => failed = true,
             }
         }
@@ -1523,7 +1525,7 @@ async fn capture_download(
     let stored_mime = if kind.is_empty() { "application/octet-stream".to_owned() } else { kind.clone() };
     let readable = readable_text(mime, &raw);
     let size = raw.len();
-    let artifact = shared.artifact_sink.put(ArtifactKind::Download, &name, &stored_mime, raw).await?;
+    let artifact = shared.artifact_sink.put(ArtifactKind::Download, &name, &stored_mime, &raw).await?;
     let mut state = shared.state.lock().unwrap();
     state.artifacts.push(artifact);
     state.downloads_captured += 1;

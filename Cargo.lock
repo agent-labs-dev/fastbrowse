@@ -196,6 +196,7 @@ name = "fastbrowse-probe"
 version = "0.0.0"
 dependencies = [
  "fastbrowse-browser",
+ "fastbrowse-core",
  "serde_json",
  "tokio",
 ]

@@ -18,13 +18,15 @@ use std::time::Duration;
 
 use common::{RecordingArtifactSink, chrome, harness, sites, sites_dir};
 use fastbrowse_browser::adapters::local_chrome::{LocalChromeProcess, find_chrome};
+use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::page::CdpPage;
-use fastbrowse_browser::session::{BrowserSession, CheckAccess, SessionOptions};
-use fastbrowse_browser::shared::{
-    Action, Attachment, BoxError, BrowserConnection, BrowserError, Config, FrameHandler, LocalChrome, Operation,
-    StepOutcome,
-};
+use fastbrowse_browser::session::{BoxError, BrowserSession, CheckAccess, SessionOptions};
 use fastbrowse_browser::testing;
+use fastbrowse_core::config::Config;
+use fastbrowse_core::models::{
+    Attachment, BrowserConnection, Bytes, FrameHandler, LocalChrome, Operation, StepOutcome,
+};
+use fastbrowse_core::page::Action;
 use safety_support::{
     Reply, eval_active, eval_value, find, observe_until, one_at_a_time, query_param, quote, serve_on, wait_until,
 };
@@ -50,8 +52,8 @@ fn fill(target_id: &str, text: &str) -> Action {
 }
 
 /// `text[start:end]` with Python's code point offsets, as `Block` carries them.
-fn slice(text: &str, start: usize, end: usize) -> String {
-    text.chars().skip(start).take(end.saturating_sub(start)).collect()
+fn slice(text: &str, start: i64, end: i64) -> String {
+    text.chars().skip(start.max(0) as usize).take((end - start).max(0) as usize).collect()
 }
 
 fn session_of(session: &BrowserSession, frame_id: Option<&str>) -> String {
@@ -174,7 +176,7 @@ async fn test_covered_controls_are_not_modified() {
             files: vec![Attachment {
                 name: "data.txt".into(),
                 mime_type: "text/plain".into(),
-                content: b"data".to_vec(),
+                content: Bytes(b"data".to_vec()),
             }],
             ..targeted(operation, &target.id)
         };
@@ -577,7 +579,7 @@ async fn test_an_upload_script_checks_the_origin_it_runs_in() {
     let s = scoped(connection, &sites.granted, false, None).await.expect("scoped session");
     s.page.navigate(&format!("{}/", sites.granted), None).await.expect("navigate");
     let control = find(&s.page.observe().await.expect("observe"), "Resume").clone();
-    let files = [Attachment { name: "cv.txt".into(), mime_type: "text/plain".into(), content: b"cv".to_vec() }];
+    let files = [Attachment { name: "cv.txt".into(), mime_type: "text/plain".into(), content: Bytes(b"cv".to_vec()) }];
     let (outcome, _) = testing::safety::upload(&s.page, &control.id, &files, None).await.expect("upload");
     assert_eq!(outcome, StepOutcome::Executed);
     // The document changed between the check in `act` and the write: the grant no longer names this origin.
@@ -624,7 +626,7 @@ async fn test_a_scoped_run_delivers_no_live_frames() {
     let received = frames.clone();
     let receive: FrameHandler = Arc::new(move |frame| {
         received.lock().unwrap().push(frame);
-        Box::pin(async { Ok(()) })
+        Box::pin(async {})
     });
     let options = SessionOptions { on_frame: Some(receive), ..SessionOptions::default() };
     let s = scoped_on(connection, &sites.granted, false, None, options).await.expect("scoped session");
@@ -758,7 +760,7 @@ async fn test_access_is_checked_before_connecting_to_a_browser() {
     // Python enters through `run.connect_cdp`; the browser layer's own entry is the session's open, which asks
     // before it connects, so no browser needs to be there.
     let check: CheckAccess = Arc::new(|| Box::pin(async { Err(BoxError::from("private caller detail")) }));
-    let connection = BrowserConnection { cdp_url: "ws://127.0.0.1:1".into(), ..BrowserConnection::default() };
+    let connection = BrowserConnection::new("ws://127.0.0.1:1", false);
     let options = SessionOptions { check_access: Some(check), ..SessionOptions::default() };
     let session = BrowserSession::new(connection, Arc::new(RecordingArtifactSink::default()), options);
     let failure = refused(session.open().await).to_string();

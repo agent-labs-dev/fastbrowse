@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use fastbrowse_browser::page::CdpPage;
 use fastbrowse_browser::session::BrowserSession;
-use fastbrowse_browser::shared::{Control, Observation};
+use fastbrowse_core::page::{Control, Observation};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::time::{Instant, sleep};

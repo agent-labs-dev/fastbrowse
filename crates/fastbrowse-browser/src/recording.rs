@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use data_encoding::BASE64;
+use fastbrowse_core::models::{Decider, Operation, StepResult};
 use serde_json::json;
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin, Command};
@@ -25,7 +26,7 @@ use tokio::time::{sleep, timeout};
 use crate::adapters::local_chrome::which;
 use crate::cdp::secs;
 use crate::session::BrowserSession;
-use crate::shared::{Decider, Operation, StepResult, urlsplit};
+use crate::urlsplit::urlsplit;
 use crate::warn;
 
 const FPS: u32 = 25;
@@ -174,13 +175,14 @@ impl Recording {
 
     /// Caption `step` from when its action began; it arrives once the step is over.
     pub fn caption(&mut self, step: &StepResult) {
-        let began =
-            Instant::now().checked_sub(std::time::Duration::from_millis(step.duration_ms)).unwrap_or(self.started);
+        let began = Instant::now()
+            .checked_sub(std::time::Duration::from_millis(step.duration_ms.max(0) as u64))
+            .unwrap_or(self.started);
         self.captions.push((began, format!("{} \u{b7} {}", step.index + 1, describe(step))));
     }
 
     /// End the video on the task and its outcome, in the tab being recorded.
-    pub async fn show_result(&mut self, task: &str, result: &ResultCard) -> Result<(), crate::shared::BrowserError> {
+    pub async fn show_result(&mut self, task: &str, result: &ResultCard) -> Result<(), crate::error::BrowserError> {
         let text = result.answer.clone().or_else(|| result.error.clone()).unwrap_or_default();
         let parts = split_citation_links(&text);
         let cited: Vec<u32> = parts.iter().skip(1).step_by(2).filter_map(|n| n.parse().ok()).collect();
@@ -551,11 +553,18 @@ mod tests {
 
     #[test]
     fn steps_are_described_as_python_does() {
+        use fastbrowse_core::models::StepOutcome;
         let step = StepResult {
             index: 0,
             operation: Operation::SwitchTab,
             decided_by: Decider::Jev,
+            outcome: StepOutcome::Executed,
+            url: "https://example.test/".into(),
             target: Some("Docs".into()),
+            confidence: None,
+            note: None,
+            facts: vec![],
+            page_changed: None,
             duration_ms: 10,
         };
         assert_eq!(describe(&step), "switch tab Docs \u{b7} picked by Jev");
