@@ -592,25 +592,29 @@ def _directory_bytes(path: Path) -> int:
 
 
 def _runtime_closure(name: str) -> list[str]:
-    """The installed distributions `name` needs at runtime, extras left out, itself included."""
-    seen: list[str] = []
-    pending = [name]
+    """The installed distributions `name` needs at runtime, itself included: its own extras left out, the extras
+    it asks of a dependency (`httpx[http2]`) followed."""
+    seen: set[tuple[str, str]] = set()
+    found: list[str] = []
+    pending: list[tuple[str, str]] = [(name, "")]
     while pending:
-        current = pending.pop()
+        current, extra = pending.pop()
         try:
             dist = distribution(current)
         except PackageNotFoundError:
             continue
         canonical = dist.metadata["Name"].lower().replace("_", "-")
-        if canonical in seen:
+        if (canonical, extra) in seen:
             continue
-        seen.append(canonical)
+        seen.add((canonical, extra))
+        if canonical not in found:
+            found.append(canonical)
         for spec in dist.requires or []:
             requirement = Requirement(spec)
-            if requirement.marker is not None and not requirement.marker.evaluate({"extra": ""}):
+            if requirement.marker is not None and not requirement.marker.evaluate({"extra": extra}):
                 continue
-            pending.append(requirement.name)
-    return seen
+            pending.extend((requirement.name, wanted) for wanted in ("", *requirement.extras))
+    return found
 
 
 def python_footprint() -> dict[str, Any]:
@@ -704,7 +708,7 @@ def markdown(summary: dict[str, Any]) -> str:
                 if group["stability"]["identical"]
                 else "differing tasks "
                 + "; ".join(
-                    f"run {p['against']}: {', '.join(p['differing_tasks']) or 'none'}"
+                    f"run {p['against'] + 1} against run 1: {', '.join(p['differing_tasks']) or 'none'}"
                     for p in group["stability"]["pairs"]
                 )
             )
