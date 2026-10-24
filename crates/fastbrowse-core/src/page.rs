@@ -523,6 +523,12 @@ pub trait Page: Send + Sync {
 
     /// The HTTP status the current document was served with, or None when the browser does not say.
     fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>>;
+
+    /// The page's current lifecycle generation, for a caller waiting on the next transition.
+    fn lifecycle_mark(&self) -> u64;
+
+    /// Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`.
+    fn wait_for_lifecycle(&self, mark: u64, seconds: f64) -> BoxFuture<'_, bool>;
 }
 
 #[cfg(test)]

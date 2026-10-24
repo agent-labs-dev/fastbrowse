@@ -689,6 +689,8 @@ def functions() -> dict[str, Any]:
                 "Tidy up \u00e9", Operation.CLICK, target, destination
             ).model_dump_json(),
             "enter": irreversible_question("Send it", Operation.ENTER, target).model_dump_json(),
+            "link": irreversible_question("Go on", Operation.CLICK, LINK).model_dump_json(),
+            "link_enter": irreversible_question("Go on", Operation.ENTER, LINK).model_dump_json(),
             "downloads": downloads_question("Read the report, do not save anything").model_dump_json(),
         },
         "redact": [

@@ -649,7 +649,7 @@ pub struct Limits {
     /// Steps that reached the page. A click whose element was redrawn before it landed is not counted.
     #[serde(default, deserialize_with = "lax::opt_int_gt0")]
     pub max_steps: Option<i64>,
-    /// Logical Jev evaluations. A hedged or retried request adds cost but not a call.
+    /// Logical Jev evaluations. A retried request adds cost but not a call.
     #[serde(default, deserialize_with = "lax::opt_int_gt0")]
     pub max_jev_calls: Option<i64>,
     #[serde(default, deserialize_with = "lax::opt_int_gt0")]
@@ -673,7 +673,7 @@ impl Schema for Limits {
                     "Steps that reached the page. A click whose element was redrawn before it landed dispatched nothing and is\nnot counted; the stall budget ends a page that keeps redrawing.",
                 ),
                 Field::default("max_jev_calls", int(), Value::Null)
-                    .doc("Logical Jev evaluations. A hedged or retried request adds cost but not a call."),
+                    .doc("Logical Jev evaluations. A retried request adds cost but not a call."),
                 Field::default("max_llm_calls", int(), Value::Null),
                 Field::default("max_dollars", float(), Value::Null).doc(
                     "Bounds Jev and LLM spend as it happens. A cloud browser bills when it stops, after the run, so its\ncost is reported in the result but cannot stop the run that incurred it.",

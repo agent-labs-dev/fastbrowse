@@ -215,6 +215,14 @@ fn the_questions_jev_is_asked_are_the_bytes_python_sends() {
         irreversible_question("Send it", Operation::Enter, &target, None).dump_json(),
         text_of(questions, "enter")
     );
+    // A link names where it goes, unless its label already says so; only a click follows it.
+    let mut link = Control::new("l1", "link", "Next \u{203a}", [Operation::Click]);
+    link.href = Some("/page/2".into());
+    assert_eq!(irreversible_question("Go on", Operation::Click, &link, None).dump_json(), text_of(questions, "link"));
+    assert_eq!(
+        irreversible_question("Go on", Operation::Enter, &link, None).dump_json(),
+        text_of(questions, "link_enter")
+    );
     assert_eq!(
         downloads_question("Read the report, do not save anything").dump_json(),
         text_of(questions, "downloads")

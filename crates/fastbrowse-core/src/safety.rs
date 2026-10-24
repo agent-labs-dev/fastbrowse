@@ -116,6 +116,12 @@ pub fn irreversible_question(
     {
         instructions.push_str(&format!("The action submits this form: {semantics}\n"));
     }
+    // Without the address, a settings link labelled "Change your password" read as the change itself.
+    if let Some(href) = control.href.as_deref().filter(|href| !href.is_empty() && *href != control.label)
+        && operation == Operation::Click
+    {
+        instructions.push_str(&format!("It is a link to {href}\n"));
+    }
     instructions.push_str(
         "Would doing so commit something that cannot be undone, such as placing an order or spending money, sending a \
          message, submitting an application, changing or resetting an account password or credentials, or deleting or \

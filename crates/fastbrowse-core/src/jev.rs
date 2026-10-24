@@ -206,7 +206,7 @@ pub struct Evaluation {
     #[serde(deserialize_with = "lax::int_ge0")]
     pub input_tokens: i64,
     pub cost: CostLine,
-    /// HTTP requests, including retries and hedges, made to obtain these answers.
+    /// HTTP requests, including retries, made to obtain these answers.
     #[serde(default = "one", deserialize_with = "lax::int_ge0")]
     pub requests: i64,
 }
@@ -260,7 +260,7 @@ impl Schema for Evaluation {
                 Field::required("input_tokens", Ty::Int.ge(0)),
                 Field::required("cost", <CostLine as Schema>::ty()),
                 Field::default("requests", Ty::Int.ge(0), 1)
-                    .doc("HTTP requests, including retries and hedges, made to obtain these answers."),
+                    .doc("HTTP requests, including retries, made to obtain these answers."),
             ],
         )
         .ty()
