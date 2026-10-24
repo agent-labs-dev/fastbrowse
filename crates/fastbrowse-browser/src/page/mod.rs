@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use tokio::time::{Instant, sleep, timeout};
 
 use crate::cdp::secs;
-use crate::session::{BrowserSession, CAPTURE_JS, SNAPSHOT_JS, STATUS_WORLD, py_json};
+use crate::session::{BrowserSession, CAPTURE_JS, SNAPSHOT_UNINSTALLED, STATUS_WORLD, py_json};
 use crate::shared::{
     Artifact, Block, BlockKind, BrowserError, Capture, Config, Control, Dialog, Observation, Operation, SourceControl,
     Timestamp, cut_marker, loads_more, pager_link, search_address, urlsplit,
@@ -129,7 +129,13 @@ struct SnapshotControl {
     blocking: Option<bool>,
     next_page: Option<bool>,
     download: Option<bool>,
+    /// Past the observation caps: sent with only the fields that decide whether it is a pager.
+    #[serde(default)]
+    partial: bool,
 }
+
+/// The whole rows a snapshot kept in the page for its partial controls: (control, guard, retarget key).
+type SentRows = Option<Vec<(SnapshotControl, Option<String>, Option<String>)>>;
 
 pub(crate) trait FrameText: DeserializeOwned {
     const SHAPE: &'static str;
@@ -161,6 +167,9 @@ struct Snapshot {
     guards: HashMap<String, Option<String>>,
     /// Digest of the guard without the node ids at its ends, which a redraw changes.
     retarget_keys: HashMap<String, Option<String>>,
+    /// Names this snapshot to the page, which keeps the whole rows of its partial controls under it.
+    #[serde(default)]
+    token: Option<i64>,
 }
 
 impl FrameText for Snapshot {
@@ -324,6 +333,24 @@ fn capped(controls: Vec<Control>, limit: usize) -> Vec<Control> {
     controls.into_iter().filter(|c| keep.contains(&c.id)).collect()
 }
 
+/// The control a snapshot row names in `frame`, recorded in `control_state` for `act` to find again.
+fn add_control(
+    control_state: &mut HashMap<String, Target>,
+    frame_key: &str,
+    frame: &FrameObservation<Snapshot>,
+    c: &SnapshotControl,
+    guard: Option<String>,
+    retarget: Option<String>,
+) -> Control {
+    let control_id = format!("{frame_key}:{}", c.id);
+    let fid = match c.frame_path.as_deref().filter(|p| !p.is_empty()) {
+        Some(path) => Some(format!("{frame_key}/{path}")),
+        None => frame.frame_id.clone(),
+    };
+    control_state.insert(control_id.clone(), (frame.session_id.clone(), frame_key.to_owned(), c.id, guard));
+    control_from_raw(control_id, fid, c, retarget)
+}
+
 fn control_from_raw(
     control_id: String,
     frame_id: Option<String>,
@@ -397,7 +424,7 @@ impl CdpPage {
             None => "null".to_owned(),
             Some(origins) => py_json(&json!(origins)),
         };
-        let page_js = format!("(mode => ({SNAPSHOT_JS})(mode, {origins}))");
+        let page_js = session.snapshot().function.clone();
         let capture_js = format!("({CAPTURE_JS})({origins})");
         let fingerprint_js = format!("{page_js}('fingerprint').fingerprint");
         Self {
@@ -485,7 +512,7 @@ impl CdpPage {
         match self.until_dialog(settle).await {
             Some(Err(BrowserError::ContextLost(_))) => {
                 // The new document can be replaced in turn while this waits; the next read is what counts.
-                sleep(secs(SETTLE_POLL_SECONDS)).await;
+                self.wait_for_lifecycle(self.lifecycle_mark(), SETTLE_POLL_SECONDS).await;
                 Ok(())
             }
             Some(Err(error)) => Err(error),
@@ -527,18 +554,17 @@ impl CdpPage {
             }
             let mut controls: Vec<Control> = vec![];
             let mut control_state: HashMap<String, Target> = HashMap::new();
+            let mut partial: HashSet<String> = HashSet::new();
             for (frame_key, frame) in &frames {
                 for c in &frame.raw.controls {
-                    let control_id = format!("{frame_key}:{}", c.id);
-                    let fid = match c.frame_path.as_deref().filter(|p| !p.is_empty()) {
-                        Some(path) => Some(format!("{frame_key}/{path}")),
-                        None => frame.frame_id.clone(),
-                    };
                     let key = c.id.to_string();
                     let guard = frame.raw.guards.get(&key).cloned().flatten();
                     let retarget = frame.raw.retarget_keys.get(&key).cloned().flatten();
-                    controls.push(control_from_raw(control_id.clone(), fid, c, retarget));
-                    control_state.insert(control_id, (frame.session_id.clone(), frame_key.clone(), c.id, guard));
+                    let control = add_control(&mut control_state, frame_key, frame, c, guard, retarget);
+                    if c.partial {
+                        partial.insert(control.id.clone());
+                    }
+                    controls.push(control);
                 }
             }
 
@@ -550,6 +576,7 @@ impl CdpPage {
             let both = onscreen.len() + offscreen.len();
             let kept = capped(onscreen.into_iter().chain(offscreen).collect(), limits.max_controls);
             omitted += both - kept.len();
+            let kept = self.whole_rows(&frames, kept, &partial, &mut control_state).await?;
             let control_state: HashMap<String, Target> =
                 kept.iter().map(|c| (c.id.clone(), control_state[&c.id].clone())).collect();
             let mut labels: HashMap<String, Vec<String>> = HashMap::new();
@@ -662,9 +689,58 @@ impl CdpPage {
         }
     }
 
+    /// `kept` with each partial control replaced by the whole row the page kept for it.
+    ///
+    /// A pager past the caps was sent with only what made it one; the page kept the rest of its row under the
+    /// snapshot's token, and is asked for it only once the control is kept.
+    async fn whole_rows(
+        &self,
+        frames: &[(String, FrameObservation<Snapshot>)],
+        kept: Vec<Control>,
+        partial: &HashSet<String>,
+        control_state: &mut HashMap<String, Target>,
+    ) -> Result<Vec<Control>, BrowserError> {
+        let mut wanted: Vec<(String, Vec<i64>)> = vec![];
+        for c in kept.iter().filter(|c| partial.contains(&c.id)) {
+            let (_, frame_key, id, _) = &control_state[&c.id];
+            match wanted.iter_mut().find(|(key, _)| key == frame_key) {
+                Some((_, ids)) => ids.push(*id),
+                None => wanted.push((frame_key.clone(), vec![*id])),
+            }
+        }
+        let mut whole: HashMap<String, Control> = HashMap::new();
+        for (frame_key, ids) in wanted {
+            let Some((_, frame)) = frames.iter().find(|(key, _)| *key == frame_key) else { continue };
+            let rows = self
+                .evaluate(
+                    &frame.session_id,
+                    &format!(
+                        "((r, token, ids) => r?.sent?.token === token && ids.every(id => r.sent.rows.has(id)) \
+                         ? ids.map(id => r.sent.rows.get(id)) : null)(window.__fastbrowse, {}, {})",
+                        py_json(&json!(frame.raw.token)),
+                        py_json(&json!(ids))
+                    ),
+                )
+                .await?;
+            let sent: SentRows = parse(rows, "list[tuple[_SnapshotControl, str | None, str | None]] | None")?;
+            let Some(sent) = sent else {
+                // Another snapshot or a new document replaced the rows this one kept.
+                return Err(BrowserError::ContextLost("the page changed before its pagers were read".into()));
+            };
+            for (c, guard, retarget) in &sent {
+                let control = add_control(control_state, &frame_key, frame, c, guard.clone(), retarget.clone());
+                whole.insert(control.id.clone(), control);
+            }
+        }
+        Ok(kept.into_iter().map(|c| whole.remove(&c.id).unwrap_or(c)).collect())
+    }
+
     async fn snapshot_all_frames(&self) -> Result<(Vec<(String, FrameObservation<Snapshot>)>, usize), BrowserError> {
         // A results page that hides its controls behind a loading indicator reads as empty until it clears.
-        let result = self.read_frames::<Snapshot>(&format!("{}('snapshot')", self.page_js), true).await?;
+        let limits = &self.config.observation;
+        let caps = py_json(&json!({"onscreen": limits.max_controls, "offscreen": limits.max_offscreen_controls}));
+        let script = format!("{}('snapshot', {caps})", self.page_js);
+        let result = self.read_frames::<Snapshot>(&script, true).await?;
         let coverage: Vec<(String, usize)> =
             result.iter().map(|(_, f)| (f.session_id.clone(), f.raw.inaccessible_frames)).collect();
         let inaccessible = self.inaccessible_frames(&coverage)?;
@@ -927,17 +1003,26 @@ impl CdpPage {
              return ids.some(id => r.observed.has(id) && r.guardKey(r.nodes.get(id)) !== r.observed.get(id)); }})({})",
             py_json(&json!(ids))
         );
-        let deadline = Instant::now() + secs(timeout_seconds);
-        while Instant::now() < deadline {
-            let Ok(changed) = self.evaluate(&session_id, &check).await else {
-                // A navigation destroys the context mid-check; `act` refuses the old controls on its own.
-                return Ok(false);
-            };
-            if truthy(&changed) {
-                let _ = self.settled_fingerprint(SETTLE_SECONDS).await;
-                return Ok(true);
-            }
-            sleep(secs(SETTLE_POLL_SECONDS)).await;
+        // One renderer call waits for the guard to change, as `settled_fingerprint` waits for quiet: a poll from here
+        // paid a cloud round trip per interval and could let the wait outlast the change it was watching for.
+        let watch = format!(
+            "new Promise(resolve => {{ const changed = () => {check}; \
+             const deadline = performance.now() + {}; \
+             const poll = () => {{ \
+             let moved = false; try {{ moved = changed(); }} catch {{ resolve(true); return; }} \
+             if (moved) {{ resolve(true); return; }} \
+             if (performance.now() >= deadline) {{ resolve(false); return; }} \
+             setTimeout(poll, {}); }}; poll(); }})",
+            py_float(timeout_seconds * 1000.0),
+            py_float(SETTLE_POLL_SECONDS * 1000.0)
+        );
+        let Ok(changed) = self.evaluate(&session_id, &watch).await else {
+            // A navigation destroys the context mid-check; `act` refuses the old controls on its own.
+            return Ok(false);
+        };
+        if truthy(&changed) {
+            let _ = self.settled_fingerprint(SETTLE_SECONDS).await;
+            return Ok(true);
         }
         Ok(false)
     }
@@ -1205,7 +1290,9 @@ impl CdpPage {
         // Fills already check retention after insertion. Other inputs start the top renderer's quiet clock; events in
         // a separate frame cannot reach it, so those still need the delay.
         if !input_settling {
-            sleep(secs(SETTLE_QUIET_SECONDS)).await;
+            // Let the renderer's own quiet clock start. The page's lifecycle events say when the document is still
+            // moving, so this waits on the page rather than a flat interval that expires regardless.
+            self.wait_for_lifecycle(self.lifecycle_mark(), SETTLE_QUIET_SECONDS).await;
         }
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -1226,21 +1313,36 @@ impl CdpPage {
                     Err(_) => {}
                 },
             }
-            sleep(secs(SETTLE_POLL_SECONDS)).await;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            self.wait_for_lifecycle(self.lifecycle_mark(), remaining.as_secs_f64()).await;
         }
+    }
+
+    /// The page's current lifecycle generation, to pass to `wait_for_lifecycle`.
+    pub fn lifecycle_mark(&self) -> u64 {
+        self.session.lifecycle_mark()
+    }
+
+    /// Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`.
+    pub async fn wait_for_lifecycle(&self, mark: u64, seconds: f64) -> bool {
+        self.session.wait_for_lifecycle(mark, seconds).await
     }
 
     #[doc(hidden)]
     pub async fn settled_fingerprint(&self, timeout_seconds: f64) -> Result<(bool, Option<String>), BrowserError> {
         // Poll inside the renderer: a cloud round trip can exceed the entire old per-poll timeout. Hidden tabs throttle
-        // timers, so return a single sample for the caller to poll in that case.
+        // timers, so return a single sample for the caller to poll in that case. The fingerprint walks the whole
+        // document, so it is taken only once the clock says quiet, or as the wait ends; taking it tracks any shadow
+        // root or frame added since, which restarts the quiet clock.
         let script = format!(
             "new Promise(resolve => {{ const sample = {page_js}; \
              const deadline = performance.now() + {deadline}; \
              const spinning = performance.now() + {spinning}; \
+             const quietOf = state => state.ready && state.quietFor >= {quiet}; \
              const poll = () => {{ \
-             const state = sample('fingerprint'); \
-             const quiet = state.ready && state.quietFor >= {quiet}; \
+             let state = sample('quiet'); \
+             if (quietOf(state) || state.hidden || performance.now() >= deadline) state = sample('fingerprint'); \
+             const quiet = quietOf(state); \
              const stable = quiet && (!state.loading || performance.now() >= spinning); \
              if (stable || state.hidden || performance.now() >= deadline) {{ \
              resolve([stable, state.ready ? state.fingerprint : null]); return; }} \
@@ -1272,7 +1374,7 @@ impl CdpPage {
         format!(
             "new Promise(resolve => {{ const sample = {}; \
              const deadline = performance.now() + {}; \
-             const poll = () => {{ const state = sample('fingerprint'); \
+             const poll = () => {{ const state = sample('loading'); \
              if (!state.loading || state.hidden || performance.now() >= deadline) {{ resolve(null); return; }} \
              setTimeout(poll, {}); }}; poll(); }})",
             self.page_js,
@@ -1302,7 +1404,15 @@ impl CdpPage {
         if let Some(unique) = unique_context_id {
             params["uniqueContextId"] = unique.into();
         }
-        let mut out = self.session.send("Runtime.evaluate", params, Some(session_id)).await?;
+        let mut out = self.session.send("Runtime.evaluate", params.clone(), Some(session_id)).await?;
+        if out.get("exceptionDetails").is_some_and(|details| details.to_string().contains(SNAPSHOT_UNINSTALLED)) {
+            // A document older than the session never ran the script that installs snapshot.js. The call threw as it
+            // looked the function up, before doing anything, so it is made again once installed.
+            let mut install = params.clone();
+            install["expression"] = format!("void {}", self.session.snapshot().install).into();
+            self.session.send("Runtime.evaluate", install, Some(session_id)).await?;
+            out = self.session.send("Runtime.evaluate", params, Some(session_id)).await?;
+        }
         if out.get("exceptionDetails").is_some() {
             return Err(BrowserError::Script);
         }

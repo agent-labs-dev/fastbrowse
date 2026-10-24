@@ -32,6 +32,40 @@ const FRAME_RELEASE_SECONDS: f64 = 2.0;
 
 pub const SNAPSHOT_JS: &str = include_str!("../../../src/fastbrowse/browser/snapshot.js");
 pub const CAPTURE_JS: &str = include_str!("../../../src/fastbrowse/browser/capture.js");
+/// What a call to the installed snapshot function throws in a document that never installed it.
+pub const SNAPSHOT_UNINSTALLED: &str = "fastbrowse: snapshot.js is not installed in this document";
+
+/// snapshot.js, compiled once in each document and called by name after that.
+///
+/// Sent whole with every evaluate, its source cost about 3ms of transfer and compiling per call, and each call started
+/// again from unoptimized code. A document installs it as it starts, from the tracking script every new document runs;
+/// a document older than the session installs it when a call first finds it missing. The key names the source and the
+/// grant, so another build or another grant never calls this one's function.
+#[derive(Debug, Clone)]
+pub struct SnapshotScript {
+    /// An expression that installs the function, if this document has none, and evaluates to it.
+    pub install: String,
+    /// An expression for the installed function, which throws `SNAPSHOT_UNINSTALLED` where there is none.
+    pub function: String,
+}
+
+impl SnapshotScript {
+    /// `origins` is the grant as the page script reads it: `null`, or the sorted origins as a JSON list.
+    pub fn new(origins: &str) -> Self {
+        let digest = crate::page::sha256_hex(&format!("{origins}\n{SNAPSHOT_JS}"));
+        let key = py_json(&json!(&digest[..16]));
+        Self {
+            install: format!(
+                "((globalThis.__fastbrowseScripts ||= {{}})[{key}] ||= \
+                 (snapshot => (mode, limits) => snapshot(mode, {origins}, limits))({SNAPSHOT_JS}))"
+            ),
+            function: format!(
+                "(globalThis.__fastbrowseScripts?.[{key}] ?? (() => {{ throw new Error({}); }})())",
+                py_json(&json!(SNAPSHOT_UNINSTALLED))
+            ),
+        }
+    }
+}
 /// DuckDuckGo's autoconsent (MPL-2.0, unmodified): refuses consent banners on known platforms and hides them
 /// before they paint, so neither the agent's steps nor a recording are spent on one.
 const REFUSE_COOKIES_JS: &str = include_str!("../../../src/fastbrowse/browser/autoconsent/autoconsent.standalone.js");
@@ -208,6 +242,10 @@ pub(crate) struct Shared {
     pub(crate) client: Mutex<Option<Cdp>>,
     pub(crate) state: Mutex<State>,
     pub(crate) dialog_opened: watch::Sender<u64>,
+    /// Bumped on every `Page.lifecycleEvent`: the page's own signal that it is still loading or has settled, so a
+    /// settle waits on the page rather than a fixed interval.
+    pub(crate) lifecycle: watch::Sender<u64>,
+    pub(crate) snapshot: SnapshotScript,
     /// Bumped each time a popup is begun, so a wait for one wakes as it is announced.
     pub(crate) popup_signal: watch::Sender<u64>,
     pub(crate) screencast_lock: tokio::sync::Mutex<()>,
@@ -238,11 +276,11 @@ impl BrowserSession {
         let grant = connection.allowed_origins.clone().map(OriginGrant::new);
         let mut origins = connection.allowed_origins.clone().unwrap_or_default();
         origins.sort();
-        let track = match &grant {
-            None => format!("{SNAPSHOT_JS}('fingerprint')"),
-            Some(_) => format!("{SNAPSHOT_JS}('fingerprint', {})", py_json(&json!(origins))),
-        };
-        let mut new_document_scripts = vec![track];
+        let snapshot = SnapshotScript::new(&match &grant {
+            None => "null".to_owned(),
+            Some(_) => py_json(&json!(origins)),
+        });
+        let mut new_document_scripts = vec![format!("{}('fingerprint')", snapshot.install)];
         if options.refuse_cookie_banners {
             new_document_scripts.push(REFUSE_COOKIES_JS.to_owned());
         }
@@ -261,9 +299,37 @@ impl BrowserSession {
             client: Mutex::new(None),
             state: Mutex::default(),
             dialog_opened: watch::channel(0).0,
+            lifecycle: watch::channel(0).0,
+            snapshot,
             popup_signal: watch::channel(0).0,
             screencast_lock: tokio::sync::Mutex::new(()),
         }))
+    }
+
+    /// snapshot.js as this session's documents install it.
+    pub fn snapshot(&self) -> &SnapshotScript {
+        &self.0.snapshot
+    }
+
+    /// The current lifecycle generation: pass one back to `wait_for_lifecycle` to wait for the next event.
+    pub fn lifecycle_mark(&self) -> u64 {
+        *self.0.lifecycle.borrow()
+    }
+
+    /// Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`.
+    ///
+    /// A timeout is not a failure: the caller re-reads the page and decides. This replaces the fixed-interval poll a
+    /// settle used to run, so the wait costs nothing while the page reports nothing new. The generation counts every
+    /// tab's events: a wake for another tab only makes a waiter re-check the page, which is what it would do anyway.
+    pub async fn wait_for_lifecycle(&self, mark: u64, seconds: f64) -> bool {
+        let mut generation = self.0.lifecycle.subscribe();
+        if *generation.borrow_and_update() != mark {
+            return true;
+        }
+        if seconds <= 0.0 {
+            return false;
+        }
+        matches!(timeout(secs(seconds), generation.changed()).await, Ok(Ok(())))
     }
 
     /// `__aenter__`: connect, then open the run's tab or attach to the window asked for.
@@ -810,6 +876,9 @@ impl BrowserSession {
                 .push(Box::pin(async move { self.send(&format!("{domain}.enable"), json!({}), s).await.map(drop) }));
         }
         let sends: Vec<(&str, Value)> = vec![
+            // `Page.enable` alone does not emit `Page.lifecycleEvent`: CDP gates those events behind this switch, so
+            // without it the settle path's lifecycle waits never wake and each one runs to its own deadline.
+            ("Page.setLifecycleEventsEnabled", json!({"enabled": true})),
             ("Runtime.addBinding", json!({"name": INPUT_NAVIGATION_BINDING, "executionContextName": INPUT_WORLD})),
             ("Page.addScriptToEvaluateOnNewDocument", json!({"source": INPUT_HISTORY_JS, "worldName": INPUT_WORLD})),
             ("Target.setAutoAttach", json!({"autoAttach": true, "waitForDebuggerOnStart": scoped, "flatten": true})),
@@ -1013,6 +1082,8 @@ impl Shared {
                 }
             }
             "Page.windowOpen" => self.state.lock().unwrap().window_opens += 1,
+            // A frame reported a lifecycle transition (init, DOMContentLoaded, load, networkIdle...).
+            "Page.lifecycleEvent" => self.lifecycle.send_modify(|generation| *generation += 1),
             "Target.attachedToTarget" => self.on_attached(params, session),
             "Target.detachedFromTarget" => {
                 let child = str_of(&params["sessionId"]);

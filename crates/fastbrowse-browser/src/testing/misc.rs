@@ -16,3 +16,24 @@ pub fn fingerprint_js(page: &CdpPage) -> &str {
 pub fn rereads() -> u32 {
     crate::page::REREADS
 }
+
+/// Replace `page._page_js`, as a test that has the snapshot send every row does.
+pub fn set_page_js(page: &mut CdpPage, page_js: String) {
+    page.page_js = page_js;
+}
+
+/// One observed control as `act` finds it again: (control id, session id, frame key, node id, guard digest).
+pub type ObservedControl = (String, String, String, i64, Option<String>);
+
+/// `page._last.controls`, sorted by control id.
+pub fn last_controls(page: &CdpPage) -> Option<Vec<ObservedControl>> {
+    let state = page.state.lock().unwrap();
+    let last = state.last.as_ref()?;
+    let mut controls: Vec<_> = last
+        .controls
+        .iter()
+        .map(|(id, (session, frame, node, guard))| (id.clone(), session.clone(), frame.clone(), *node, guard.clone()))
+        .collect();
+    controls.sort();
+    Some(controls)
+}

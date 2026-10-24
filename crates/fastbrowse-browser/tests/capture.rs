@@ -743,3 +743,114 @@ async fn test_a_guard_after_the_snapshot_reads_the_changed_page() {
         h.close().await;
     }
 }
+
+// -- test_snapshot_caps.py: the snapshot sends whole rows only within the observation caps; the observation is the
+// one sending all would give ---------------------------------------------------------------------------------------
+
+fn capped_config() -> fastbrowse_browser::shared::Config {
+    let mut config = fastbrowse_browser::shared::Config::default();
+    config.observation.max_controls = 12;
+    config.observation.max_offscreen_controls = 4;
+    config
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_capped_snapshot_observes_what_an_uncapped_one_would() {
+    use fastbrowse_browser::session::SessionOptions;
+    use fastbrowse_browser::testing::misc::{last_controls, page_js, set_page_js};
+    for name in ["links", "cards", "forms", "frames"] {
+        let Some(mut h) = common::harness_with(capped_config(), SessionOptions::default()).await else { return };
+        benchmark::open_page(&h.page, benchmark::origin(), name, 200).await;
+        // A load-more button and a next-page link at the foot of the page, past both caps, which only a pager keeps.
+        eval_active(
+            &h.session,
+            "(() => { const foot = document.createElement('div'); foot.style.marginTop = '3000px'; \
+             foot.innerHTML = '<button>Show 20 more</button><a href=\"/page/3\">Next page</a>'; \
+             document.body.append(foot); })()",
+        )
+        .await;
+        let capped = h.observe().await;
+        let capped_state = last_controls(&h.page);
+
+        let sends_all = format!("((mode) => ({})(mode))", page_js(&h.page));
+        set_page_js(&mut h.page, sends_all);
+        let whole = h.observe().await;
+        let whole_state = last_controls(&h.page);
+
+        assert!(capped.controls.iter().any(|c| c.label == "Show 20 more"), "{name}");
+        assert!(capped.controls.iter().any(|c| c.label == "Next page"), "{name}");
+        assert_eq!(capped.controls, whole.controls, "{name}");
+        assert_eq!(capped.omitted_controls, whole.omitted_controls, "{name}");
+        assert_eq!(capped.page_key, whole.page_key, "{name}");
+        assert_eq!(capped_state, whole_state, "{name}");
+        h.close().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_rows_lost_before_they_are_read_make_observe_read_the_page_again() {
+    use fastbrowse_browser::session::SessionOptions;
+    use fastbrowse_browser::testing::misc::{page_js, set_page_js};
+    let Some(mut h) = common::harness_with(capped_config(), SessionOptions::default()).await else { return };
+    benchmark::open_page(&h.page, benchmark::origin(), "links", 200).await;
+    // As if another snapshot, or a new document, had come between the read and the fetch: the first snapshot's kept
+    // rows are gone by the time observe asks for them.
+    let losing = format!(
+        "((mode, limits) => {{ const out = ({})(mode, limits); \
+         if (mode === 'snapshot' && !window.__lost) {{ window.__lost = 1; delete window.__fastbrowse.sent; }} \
+         return out; }})",
+        page_js(&h.page)
+    );
+    set_page_js(&mut h.page, losing);
+    let observation = h.observe().await;
+    assert_eq!(eval_active(&h.session, "window.__lost").await, serde_json::json!(1));
+    assert!(observation.controls.iter().any(|c| c.next_page == Some(true)));
+    h.close().await;
+}
+
+// -- test_snapshot_install.py: snapshot.js is compiled once per document, and a document that never installed it
+// still gets observed ----------------------------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_new_document_installs_snapshot_as_it_starts() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    let installed = eval_active(&h.session, "Object.keys(globalThis.__fastbrowseScripts || {}).length").await;
+    assert_eq!(installed, serde_json::json!(1));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_document_without_snapshot_installs_it_on_the_first_call() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    // As a document older than the session would be, or one whose script removed the global.
+    eval_active(&h.session, "delete globalThis.__fastbrowseScripts").await;
+    let observation = h.observe().await;
+    assert!(!observation.controls.is_empty());
+    assert_eq!(eval_active(&h.session, "!!globalThis.__fastbrowseScripts").await, serde_json::json!(true));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_settle_waits_for_a_shadow_root_added_while_it_reads_the_clock() {
+    let Some(h) = harness().await else { return };
+    // A hidden tab returns one sample instead of waiting for quiet.
+    visible(&h.session).await;
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    // The host lands in the light DOM once; everything after happens inside its shadow root, which the document's
+    // observer cannot see until a full sample starts watching it.
+    eval_active(
+        &h.session,
+        "(() => { const host = document.createElement('div'); document.body.append(host); \
+         const root = host.attachShadow({mode: 'open'}); let n = 0; \
+         const tick = () => { root.textContent = String(n++); if (n < 16) setTimeout(tick, 50); }; tick(); })()",
+    )
+    .await;
+    let started = Instant::now();
+    let (stable, _) = h.page.settled_fingerprint(3.0).await.expect("settle");
+    assert!(stable);
+    // 16 changes 50ms apart end about 750ms in; settling needs 200ms of quiet after the last.
+    assert!(started.elapsed().as_secs_f64() >= 0.8);
+    h.close().await;
+}

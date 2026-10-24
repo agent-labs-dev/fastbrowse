@@ -3,13 +3,14 @@
 use std::sync::{Arc, Mutex};
 
 use fastbrowse_core::origins::OriginGrant;
+use serde_json::json;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::cdp::secs;
 use crate::page::act::Point;
 use crate::page::{CdpPage, FRAME_READ_SECONDS, FRAME_RECHECK_SECONDS, SETTLE_QUIET_SECONDS, SETTLE_SECONDS};
-use crate::session::{BrowserSession, Shared, State};
+use crate::session::{BrowserSession, Shared, SnapshotScript, State, py_json};
 use crate::shared::{Attachment, BrowserError, Config, StepOutcome};
 
 /// `page_module._SETTLE_SECONDS`: the longest an action waits for the page to settle.
@@ -52,6 +53,7 @@ pub async fn upload(
     let shared = &page.session().0;
     let mut origins = grant.clone();
     origins.sort();
+    let snapshot = SnapshotScript::new(&py_json(&json!(origins)));
     let state = {
         let state = shared.state.lock().unwrap();
         State { tabs: state.tabs.clone(), active_target_id: state.active_target_id.clone(), ..State::default() }
@@ -70,6 +72,8 @@ pub async fn upload(
         client: Mutex::new(shared.client.lock().unwrap().clone()),
         state: Mutex::new(state),
         dialog_opened: watch::channel(0).0,
+        lifecycle: watch::channel(0).0,
+        snapshot,
         popup_signal: watch::channel(0).0,
         screencast_lock: tokio::sync::Mutex::new(()),
     }));
