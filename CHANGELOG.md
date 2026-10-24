@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-24
+
+- Two optional cuts to the model calls a run makes, off by default so behaviour is unchanged unless a deployment opts in. `FASTBROWSE_SINGLE_SHOT_CHECKS` skips the second plan call that normalizes answer checks when the planner has already written them; `FASTBROWSE_SHORTCUT_ENTRY_ONLY` asks for the direct-address shortcut only at a site's entry point, not when the caller has already handed the run a page inside the site. Measured on the fixture suites by calls per purpose, not wall clock: mock model calls fall from 269 to 231 and the local suite from 19 to 10, with both suites still 30/30 and 6/6. The plan cut is left opt-in because a non-empty draft check can lose a task's every-item scope, which the normalizing call is what restores.
+
+- The browser-use adapter moves to browser-use-sdk 3.12.1.
+
 ## [0.6.0] - 2026-10-24
 
 - A slow model call is no longer raced by a duplicate request. The per-purpose hedge fired before the gateway's median for a verify, plan or compose call, so nearly every audit was sent twice and the discarded twin was billed in full; each call is now one request, bounded by its attempt deadline, and the eval harness records the transient time rather than hiding it behind a twin.
@@ -1498,7 +1504,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.6.0...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.0
 [0.6.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.6.0
 [0.5.25]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.25
 [0.5.23]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.23

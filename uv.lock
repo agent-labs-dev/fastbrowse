@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -56,16 +56,16 @@ wheels = [
 
 [[package]]
 name = "browser-use-sdk"
-version = "3.11.3"
+version = "3.12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "idna" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f8/20/860b3e48c49d1fc0a8caa04408fb408e6ff14648d467e38f8f651c73742b/browser_use_sdk-3.11.3.tar.gz", hash = "sha256:aff39ae047af66de50685b152108d9a898d918d042f096f3e02c8bff31beb226", size = 222811, upload-time = "2026-09-04T04:21:34.155Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/eb/3f/f315f76246b0793cbb287c5373541eaec86736cd6b7a25410c8664d7564e/browser_use_sdk-3.12.1.tar.gz", hash = "sha256:94c2a870e5ec5072b21661a6f4fecbf106dabe1c40e8790c6702081c52f39d2f", size = 74124, upload-time = "2026-10-17T04:34:08.005Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/50/6c/f780025e151a7af07b867588c47bd6897bf80ab3bca03187cd18dde06dca/browser_use_sdk-3.11.3-py3-none-any.whl", hash = "sha256:da69bb16af3732fd841b79715a5bb7350f3c193356e161ebfb5fef631aeda762", size = 86336, upload-time = "2026-09-04T04:21:33.187Z" },
+    { url = "https://files.pythonhosted.org/packages/00/37/691c9185d6736bf58995500fe019bef4fa818c29031b682dbe20bb3534a6/browser_use_sdk-3.12.1-py3-none-any.whl", hash = "sha256:4b3be371f38b4103384b7288dacdfc90d1265d06912d56974f9d67fcbe605fd7", size = 100214, upload-time = "2026-10-17T04:34:06.794Z" },
 ]
 
 [[package]]
@@ -252,7 +252,7 @@ wheels = [
 
 [[package]]
 name = "fastbrowse"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "cdp-use" },
@@ -293,7 +293,7 @@ freeze = [
 
 [package.metadata]
 requires-dist = [
-    { name = "browser-use-sdk", marker = "extra == 'browser-use'", specifier = "==3.11.3" },
+    { name = "browser-use-sdk", marker = "extra == 'browser-use'", specifier = "==3.12.1" },
     { name = "cdp-use", specifier = "==1.4.5" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.28,<1" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.20,<2" },
@@ -420,11 +420,11 @@ wheels = [
 
 [[package]]
 name = "idna"
-version = "3.18"
+version = "3.20"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/cd/63/9496c57188a2ee585e0f1db071d75089a11e98aa86eb99d9d7618fc1edce/idna-3.18.tar.gz", hash = "sha256:ffb385a7e039654cef1ab9ef32c6fafe283c0c0467bba1d9029738ce4a14a848", size = 196711, upload-time = "2026-06-02T14:34:07.794Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f5/08/8eea9d4b8302028f3abb2c0813953f7aec26d33b7a8960ed760e65ff29fa/idna-3.20.tar.gz", hash = "sha256:a7db850025b95ded1eae8a46181a1a6c56c92c96f0e2b005d9ff8dc0210cab44", size = 216463, upload-time = "2026-09-17T14:11:04.752Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1e/5e/d4e9f1a599fb8e573b7b87160658329fbf28d19eac2718f51fc3def3aa5a/idna-3.18-py3-none-any.whl", hash = "sha256:7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2", size = 65455, upload-time = "2026-06-02T14:34:06.319Z" },
+    { url = "https://files.pythonhosted.org/packages/58/a2/bb081bab032533a855d44de1d56f8e8426114ff1ba5d1f07a438a0a654f8/idna-3.20-py3-none-any.whl", hash = "sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c", size = 69583, upload-time = "2026-09-17T14:11:03.168Z" },
 ]
 
 [[package]]
@@ -468,7 +468,7 @@ name = "macholib"
 version = "1.16.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "altgraph" },
+    { name = "altgraph", marker = "sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/10/2f/97589876ea967487978071c9042518d28b958d87b17dceb7cdc1d881f963/macholib-1.16.4.tar.gz", hash = "sha256:f408c93ab2e995cd2c46e34fe328b130404be143469e41bc366c807448979362", size = 59427, upload-time = "2025-11-22T08:28:38.373Z" }
 wheels = [

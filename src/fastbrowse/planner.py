@@ -12,6 +12,7 @@ from typing import NamedTuple, Self
 
 from pydantic import Field, model_validator
 
+from fastbrowse.config import flag
 from fastbrowse.llm import Generation, LLMClient, LLMError, Message
 from fastbrowse.models import CostBasis, CostLine, Frozen, Limits, LLMPurpose, combined_basis
 from fastbrowse.telemetry import Ledger
@@ -289,21 +290,21 @@ async def make_plan(
         billing = ledger or Ledger(Limits())
         billing.record(generated.cost)
         checked = await answer_checks(llm, task, plan, ledger=billing)
-        assert checked.cost is not None
-        cost = checked.cost
-        if ledger is None:
-            # Without an external ledger the returned line accounts for both calls, rather than hiding the repair.
-            lines = (generated.cost, checked.cost)
-            basis = CostBasis.UNKNOWN if any(line.dollars is None for line in lines) else combined_basis(lines)
-            cost = cost.model_copy(
-                update={
-                    "basis": basis,
-                    "dollars": None if basis is CostBasis.UNKNOWN else sum(line.dollars or 0 for line in lines),
-                    "input_tokens": sum(line.input_tokens for line in lines),
-                    "output_tokens": sum(line.output_tokens for line in lines),
-                    "seconds": None,
-                }
-            )
+        if checked.cost is not None:
+            cost = checked.cost
+            if ledger is None:
+                # Without an external ledger the returned line accounts for both calls, rather than hiding the repair.
+                lines = (generated.cost, checked.cost)
+                basis = CostBasis.UNKNOWN if any(line.dollars is None for line in lines) else combined_basis(lines)
+                cost = cost.model_copy(
+                    update={
+                        "basis": basis,
+                        "dollars": None if basis is CostBasis.UNKNOWN else sum(line.dollars or 0 for line in lines),
+                        "input_tokens": sum(line.input_tokens for line in lines),
+                        "output_tokens": sum(line.output_tokens for line in lines),
+                        "seconds": None,
+                    }
+                )
         plan = checked.data
     elif plan.answer_checks:
         plan = plan.model_copy(update={"answer_checks": ()})
@@ -324,6 +325,11 @@ async def answer_checks(llm: LLMClient, task: str, plan: Plan, *, ledger: Ledger
     """`plan` with its draft answer checks normalized against the task, or with none when no page answer is due."""
     if not _needs_checks(plan):
         return CheckedPlan(data=plan.model_copy(update={"answer_checks": ()}), cost=None)
+    if plan.answer_checks and flag("FASTBROWSE_SINGLE_SHOT_CHECKS", default=False):
+        # The planner is asked for the checks itself; this call exists to repair a plan that omitted or malformed
+        # them. A draft is a check the planner already wrote, so trusting a nonempty one saves a whole PLAN call on
+        # every page-answer task. The repair still runs when the planner wrote none, where there is nothing to trust.
+        return CheckedPlan(data=plan, cost=None)
     information = tuple(r.text for r in plan.requirements if r.kind is RequirementKind.INFORMATION)
     proposed = tuple(dict.fromkeys(check.strip() for check in plan.answer_checks if check.strip()))
     # Nonempty field labels lost the task's every-item scope; normalize checks without replanning discovery.
