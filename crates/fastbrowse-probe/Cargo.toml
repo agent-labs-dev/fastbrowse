@@ -3,13 +3,9 @@ name = "fastbrowse-probe"
 version = "0.0.0"
 edition = "2024"
 publish = false
-description = "Spike: drive Chrome over raw CDP and take one snapshot.js observation, to measure a Rust core's size and start-up."
+description = "Bench binary on the browser crate: scripted observe, capture and act steps for the differential check against Python, and the binary whose size the port is measured by."
 
 [dependencies]
-futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-# The provider for wss:// (cloud browsers). tokio-tungstenite leaves the choice to the binary.
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-serde = { version = "1", features = ["derive"] }
+fastbrowse-browser = { path = "../fastbrowse-browser" }
 serde_json = "1"
-tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "macros", "sync", "signal"] }
-tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "time"] }

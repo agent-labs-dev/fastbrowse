@@ -1,271 +1,173 @@
-//! Spike: launch or attach to Chrome, open (or attach to) a tab, navigate, and observe it as `CdpPage.observe`
-//! does: the main frame and every cross-origin iframe in its own session, merged into one control list.
+//! Drive the browser crate through scripted steps and print what each step produced, for the differential check
+//! against Python's `CdpPage` (bench/differential.py) and for timing it (bench/run.py).
 //!
-//! Prints `{"steps": [observation, ...]}` on stdout and phase timings on stderr.
+//! Usage: fastbrowse-probe <script.json> <main-origin> [--only <page>]
 //!
-//! Usage: fastbrowse-probe [url] [--cdp-url ws://...] [--attach <url-or-title-part>] [--chrome <name-or-path>]
-//!            [--timeout-ms N] [--click <js>] [--accept-dialog] [--pause-new-targets]
-//!
-//! `--click` evaluates a script after the first observation (a click that may open a dialog) and observes again;
-//! `--accept-dialog` then accepts the pending dialog and observes once more. `--timeout-ms` and Ctrl-C cancel the
-//! run wherever it is; the tab is closed if the probe opened it and left open if it attached.
-//!
-//! `FASTBROWSE_PROBE_T0_NS` (Unix epoch nanoseconds) moves the timing origin to before the process was spawned,
-//! so a harness can time the Rust and Python paths from the same point.
-
-mod cdp;
-mod page;
-mod session;
+//! The script lists pages, each a fixture path and steps: `observe`, `capture`, or an action naming its target by
+//! label (the first control in the latest observation with that label, optionally the nth). Every page runs in a
+//! fresh session on one launched Chrome, as each Python browser test does. Prints `{"pages": [...]}` with each
+//! step's output and its wall time in milliseconds.
 
 use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::Instant;
 
+use fastbrowse_browser::adapters::local_chrome::LocalChromeProcess;
+use fastbrowse_browser::page::CdpPage;
+use fastbrowse_browser::session::{BrowserSession, SessionOptions};
+use fastbrowse_browser::shared::{
+    Action, Artifact, ArtifactKind, ArtifactSink, BoxError, BoxFuture, BrowserConnection, BrowserError, Config,
+    LocalChrome, Observation, Operation,
+};
 use serde_json::{Value, json};
-use tokio::net::TcpStream;
-use tokio::time::{sleep, timeout};
 
-use crate::cdp::Cdp;
-use crate::page::{evaluate, observe, until_dialog};
-use crate::session::{Options, Session};
+/// Downloads are dropped: the check compares what the page reports, and a capture of a download's text.
+struct NullSink;
 
-type Error = Box<dyn std::error::Error>;
-type Result<T> = std::result::Result<T, Error>;
-
-fn now_ns() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos())
-}
-
-struct Clock(u128);
-
-impl Clock {
-    fn mark(&self, phase: &str) {
-        eprintln!("{phase}: {:.1} ms", (now_ns() - self.0) as f64 / 1e6);
+impl ArtifactSink for NullSink {
+    fn put<'a>(
+        &'a self,
+        kind: ArtifactKind,
+        name: &'a str,
+        mime_type: &'a str,
+        content: Vec<u8>,
+    ) -> BoxFuture<'a, Result<Artifact, BoxError>> {
+        Box::pin(async move {
+            Ok(Artifact {
+                kind,
+                name: name.to_owned(),
+                mime_type: mime_type.to_owned(),
+                size_bytes: content.len() as u64,
+                sha256: String::new(),
+                uri: format!("memory://{name}"),
+            })
+        })
     }
 }
 
-#[derive(Default)]
-struct Args {
-    url: Option<String>,
-    cdp_url: Option<String>,
-    attach: Option<String>,
-    chrome: Option<String>,
-    timeout_ms: Option<u64>,
-    click: Option<String>,
-    accept_dialog: bool,
-    pause_new_targets: bool,
+fn error_json(error: &BrowserError) -> Value {
+    json!({"error": error.kind(), "message": error.to_string()})
 }
 
-fn parse_args() -> Result<Args> {
-    let mut parsed = Args::default();
-    let mut args = env::args().skip(1);
-    while let Some(arg) = args.next() {
-        let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
-        match arg.as_str() {
-            "--cdp-url" => parsed.cdp_url = Some(value()?),
-            "--attach" => parsed.attach = Some(value()?),
-            "--chrome" => parsed.chrome = Some(value()?),
-            "--timeout-ms" => parsed.timeout_ms = Some(value()?.parse()?),
-            "--click" => parsed.click = Some(value()?),
-            "--accept-dialog" => parsed.accept_dialog = true,
-            "--pause-new-targets" => parsed.pause_new_targets = true,
-            _ if parsed.url.is_none() && !arg.starts_with("--") => parsed.url = Some(arg),
-            _ => return Err(format!("unexpected argument {arg}").into()),
+fn operation(name: &str) -> Option<Operation> {
+    serde_json::from_value(Value::String(name.to_owned())).ok()
+}
+
+/// The control a step names: `label` (and `nth`, from 0) among the latest observation's controls.
+fn target(observation: &Observation, step: &Value, key: &str) -> Option<String> {
+    let label = step[key].as_str()?;
+    let nth = step[format!("{key}_nth")].as_u64().unwrap_or(0) as usize;
+    observation.controls.iter().filter(|c| c.label == label).nth(nth).map(|c| c.id.clone())
+}
+
+async fn run_step(page: &CdpPage, last: &mut Option<Observation>, base: &str, step: &Value) -> Value {
+    let op = step["op"].as_str().unwrap_or_default();
+    match op {
+        "observe" => match page.observe().await {
+            Ok(observation) => {
+                let out = serde_json::to_value(&observation).unwrap_or(Value::Null);
+                *last = Some(observation);
+                out
+            }
+            Err(error) => error_json(&error),
+        },
+        "capture" => match page.capture().await {
+            Ok(capture) => serde_json::to_value(&capture).unwrap_or(Value::Null),
+            Err(error) => error_json(&error),
+        },
+        "goto" => match page.navigate(&format!("{base}{}", step["path"].as_str().unwrap_or("/")), None).await {
+            Ok(()) => json!({"ok": true}),
+            Err(error) => error_json(&error),
+        },
+        "sleep" => {
+            tokio::time::sleep(std::time::Duration::from_secs_f64(step["seconds"].as_f64().unwrap_or(0.0))).await;
+            json!({"ok": true})
+        }
+        name => {
+            let Some(operation) = operation(name) else { return json!({"error": "UnknownStep", "message": name}) };
+            let Some(observation) = last.as_ref() else { return json!({"error": "NoObservation"}) };
+            let mut action = Action::new(operation);
+            if step.get("label").is_some() {
+                match target(observation, step, "label") {
+                    Some(id) => action.target_id = Some(id),
+                    None => return json!({"error": "NoSuchControl", "message": step["label"]}),
+                }
+            }
+            if step.get("to").is_some() {
+                action.destination_id = target(observation, step, "to");
+            }
+            action.text = step["text"].as_str().map(str::to_owned);
+            action.accept_dialog = step["accept"].as_bool();
+            action.url = step["path"].as_str().map(|p| format!("{base}{p}"));
+            if let Some(index) = step["tab"].as_u64() {
+                action.tab_id = observation.tabs.get(index as usize).map(|t| t.id.clone());
+            }
+            match page.act(&action, observation).await {
+                Ok(result) => serde_json::to_value(&result).unwrap_or(Value::Null),
+                Err(error) => error_json(&error),
+            }
         }
     }
-    if parsed.url.is_none() && parsed.attach.is_none() {
-        return Err("usage: fastbrowse-probe [url] [--cdp-url ws://...] [--attach <match>] [--timeout-ms N] ...".into());
+}
+
+async fn run_page(connection: &BrowserConnection, base: &str, spec: &Value) -> Value {
+    let session = BrowserSession::new(connection.clone(), Arc::new(NullSink), SessionOptions::default());
+    if let Err(error) = session.open().await {
+        return json!({"name": spec["name"], "error": error_json(&error)});
     }
-    Ok(parsed)
+    let page = CdpPage::new(session.clone(), Config::default());
+    let mut steps = vec![];
+    let started = Instant::now();
+    let goto = page.navigate(&format!("{base}{}", spec["path"].as_str().unwrap_or("/")), None).await;
+    let navigate_ms = started.elapsed().as_secs_f64() * 1000.0;
+    if let Err(error) = goto {
+        steps.push(json!({"op": "navigate", "ms": navigate_ms, "out": error_json(&error)}));
+    } else {
+        steps.push(json!({"op": "navigate", "ms": navigate_ms, "out": {"ok": true}}));
+        let mut last = None;
+        for step in spec["steps"].as_array().into_iter().flatten() {
+            let started = Instant::now();
+            let out = run_step(&page, &mut last, base, step).await;
+            steps.push(json!({"op": step["op"], "ms": started.elapsed().as_secs_f64() * 1000.0, "out": out}));
+        }
+    }
+    let _ = session.close().await;
+    json!({"name": spec["name"], "steps": steps})
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() {
-    let clock = Clock(env::var("FASTBROWSE_PROBE_T0_NS").ok().and_then(|v| v.parse().ok()).unwrap_or_else(now_ns));
-    match run(&clock).await {
-        Ok(true) => {}
-        Ok(false) => std::process::exit(130),
-        Err(err) => {
-            eprintln!("fastbrowse-probe: {err}");
-            std::process::exit(1);
-        }
-    }
-}
-
-/// Ok(false) when the run was cancelled.
-async fn run(clock: &Clock) -> Result<bool> {
-    let args = parse_args()?;
-    let launched = match args.cdp_url {
-        Some(_) => None,
-        None => Some(LocalChrome::launch(args.chrome.as_deref())?),
+async fn main() -> ExitCode {
+    let args: Vec<String> = env::args().skip(1).collect();
+    let (Some(script), Some(base)) = (args.first(), args.get(1)) else {
+        eprintln!("usage: fastbrowse-probe <script.json> <main-origin> [--only <page>]");
+        return ExitCode::from(2);
     };
-    let result = async {
-        let ws = match (&args.cdp_url, &launched) {
-            (Some(ws), _) => ws.clone(),
-            (None, Some(local)) => local.wait_for_ws().await?,
-            (None, None) => unreachable!(),
-        };
-        let cdp = Cdp::connect(&ws).await?;
-        clock.mark("connected");
-        let options = Options { pause_new_targets: args.pause_new_targets };
-        let session = match &args.attach {
-            Some(needle) => Session::attach(&cdp, needle, options).await?,
-            None => Session::open(&cdp, options).await?,
-        };
-        clock.mark("tab");
-        let limit = args.timeout_ms.map_or(Duration::MAX, Duration::from_millis);
-        let mut work = Box::pin(steps(&session, &args, clock));
-        let outcome = tokio::select! {
-            out = &mut work => Ok(out),
-            () = sleep(limit) => Err("timeout"),
-            _ = tokio::signal::ctrl_c() => Err("interrupt"),
-        };
-        if let Err(why) = outcome {
-            let in_flight = cdp.pending();
-            // Dropping the run drops every call it had in flight; their replies are discarded when they come.
-            drop(work);
-            eprintln!("cancelled ({why}) with {in_flight} calls in flight; pending once dropped: {}", cdp.pending());
+    let only = args.iter().position(|a| a == "--only").and_then(|i| args.get(i + 1));
+    let script: Value = match std::fs::read_to_string(script).map(|text| serde_json::from_str(&text)) {
+        Ok(Ok(script)) => script,
+        _ => {
+            eprintln!("fastbrowse-probe: cannot read {script}");
+            return ExitCode::from(2);
         }
-        session.close().await;
-        eprintln!("calls pending after close: {}", cdp.pending());
-        match outcome {
-            Ok(steps) => {
-                println!("{}", serde_json::to_string(&steps?)?);
-                Ok(true)
-            }
-            Err(_) => Ok(false),
+    };
+    let started = Instant::now();
+    let (mut chrome, connection) = match LocalChromeProcess::launch(&LocalChrome::default()).await {
+        Ok(launched) => launched,
+        Err(error) => {
+            eprintln!("fastbrowse-probe: {error}");
+            return ExitCode::from(1);
         }
-    }
-    .await;
-    if let Some(local) = launched {
-        local.close();
-    }
-    result
-}
-
-async fn steps(session: &Session, args: &Args, clock: &Clock) -> Result<Value> {
-    if let Some(url) = &args.url {
-        navigate(session, url).await?;
-        clock.mark("navigated");
-    }
-    let mut steps = vec![serde_json::to_value(observe(session).await?)?];
-    clock.mark("snapshot");
-    if let Some(script) = &args.click {
-        // A click whose handler opens a dialog holds the evaluate until the dialog is handled.
-        match until_dialog(session, evaluate(session, &session.session_id, script)).await {
-            Some(result) => drop(result?),
-            None => eprintln!("the click opened a dialog"),
+    };
+    let launch_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let mut pages = vec![];
+    for spec in script["pages"].as_array().into_iter().flatten() {
+        if only.is_some_and(|only| spec["name"].as_str() != Some(only)) {
+            continue;
         }
-        steps.push(serde_json::to_value(observe(session).await?)?);
-        if args.accept_dialog {
-            session.handle_dialog(true, None).await?;
-            steps.push(serde_json::to_value(observe(session).await?)?);
-        }
+        pages.push(run_page(&connection, base, spec).await);
     }
-    Ok(json!({"steps": steps, "input_navigations": session.input_navigations()}))
-}
-
-/// Navigate and wait for the load event, or for a dialog that blocks it.
-async fn navigate(session: &Session, url: &str) -> Result<()> {
-    let sid = Some(session.session_id.as_str());
-    let mut loaded = session.cdp.subscribe("Page.loadEventFired", sid);
-    let navigated = session.cdp.call("Page.navigate", json!({"url": url}), sid).await?;
-    if let Some(error) = navigated["errorText"].as_str() {
-        return Err(format!("Page.navigate failed ({error})").into());
-    }
-    match timeout(Duration::from_secs(30), until_dialog(session, loaded.recv())).await {
-        Err(_) => Err("no Page.loadEventFired within 30s".into()),
-        Ok(Some(None)) => Err("the browser closed the connection".into()),
-        Ok(_) => Ok(()),
-    }
-}
-
-/// Chrome launched as `adapters/local_chrome.py` launches it: headless, a throwaway profile, port chosen by Chrome.
-struct LocalChrome {
-    child: Child,
-    profile: PathBuf,
-}
-
-impl LocalChrome {
-    fn launch(binary: Option<&str>) -> Result<Self> {
-        let binary = find_chrome(binary).ok_or("Chrome is not installed")?;
-        let profile = env::temp_dir().join(format!("fastbrowse-probe-{}-{}", std::process::id(), now_ns()));
-        quiet_password_manager(&profile)?;
-        let child = Command::new(binary)
-            .args([
-                "--headless=new",
-                "--window-size=1280,900",
-                "--remote-debugging-port=0",
-                &format!("--user-data-dir={}", profile.display()),
-                "--no-first-run",
-                "--disable-popup-blocking",
-                "--no-startup-window",
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
-        Ok(Self { child, profile })
-    }
-
-    /// DevToolsActivePort holds the port and the browser target's path, so no HTTP request is needed.
-    async fn wait_for_ws(&self) -> Result<String> {
-        let active = self.profile.join("DevToolsActivePort");
-        for _ in 0..9000 {
-            if let Ok(text) = fs::read_to_string(&active) {
-                let mut lines = text.lines();
-                if let (Some(port), Some(path)) = (lines.next(), lines.next()) {
-                    let ws = format!("ws://127.0.0.1:{port}{path}");
-                    // Written before it listens, so a refused connect is retried.
-                    if TcpStream::connect(format!("127.0.0.1:{port}")).await.is_ok() {
-                        return Ok(ws);
-                    }
-                }
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
-        Err("Chrome did not start DevTools within 90s".into())
-    }
-
-    fn close(mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = fs::remove_dir_all(&self.profile);
-    }
-}
-
-fn find_chrome(binary: Option<&str>) -> Option<PathBuf> {
-    if let Some(binary) = binary {
-        return which(binary);
-    }
-    [
-        "google-chrome-stable",
-        "google-chrome",
-        "chromium",
-        "chromium-browser",
-        "chrome",
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    ]
-    .into_iter()
-    .find_map(which)
-}
-
-fn which(name: &str) -> Option<PathBuf> {
-    let path = Path::new(name);
-    if path.components().count() > 1 {
-        return path.is_file().then(|| path.to_owned());
-    }
-    env::split_paths(&env::var_os("PATH")?).map(|dir| dir.join(name)).find(|p| p.is_file())
-}
-
-fn quiet_password_manager(profile: &Path) -> Result<()> {
-    let default = profile.join("Default");
-    fs::create_dir_all(&default)?;
-    let preferences = json!({
-        "credentials_enable_service": false,
-        "profile": {"password_manager_enabled": false, "password_manager_leak_detection": false},
-    });
-    fs::write(default.join("Preferences"), preferences.to_string())?;
-    Ok(())
+    chrome.close().await;
+    println!("{}", json!({"launch_ms": launch_ms, "pages": pages}));
+    ExitCode::SUCCESS
 }

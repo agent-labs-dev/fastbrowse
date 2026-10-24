@@ -1,82 +1,115 @@
-"""The Python path doing what fastbrowse-probe does: launch Chrome, open a tab, navigate, wait for load, observe.
+"""Python's `CdpPage` running the probe's script, step for step, printing the same JSON fastbrowse-probe prints.
 
-Uses fastbrowse's own local_chrome, BrowserSession and CdpPage, so the session setup is what a run pays.
+    uv run python crates/fastbrowse-probe/bench/python_reference.py <script.json> <main-origin> [--only <page>]
 
-    FASTBROWSE_PROBE_T0_NS=$(python3 -c 'import time; print(time.time_ns())') \
-        uv run python crates/fastbrowse-probe/bench/python_reference.py <url> [--click <js> [--accept-dialog]]
+Uses fastbrowse's own local_chrome, BrowserSession and CdpPage, with the default `Config`, one session per page on
+one launched Chrome, so what each step reads and does is what a run's browser layer reads and does.
 """
 
-import os
+import asyncio
+import json
 import sys
 import time
 
-T0 = int(os.environ.get("FASTBROWSE_PROBE_T0_NS", time.time_ns()))
+from fastbrowse.adapters.local_chrome import async_local_chrome
+from fastbrowse.browser.page import CdpPage
+from fastbrowse.browser.session import BrowserSession
+from fastbrowse.config import Config
+from fastbrowse.models import Artifact, ArtifactKind, BrowserConnection, LocalChrome, Operation
+from fastbrowse.page import Action, BrowserError, Observation
 
 
-def mark(phase: str) -> None:
-    print(f"{phase}: {(time.time_ns() - T0) / 1e6:.1f} ms", file=sys.stderr)
+class _NullSink:
+    """Downloads are dropped: the check compares what the page reports, and a capture of a download's text."""
+
+    async def put(self, kind: ArtifactKind, name: str, mime_type: str, content: bytes) -> Artifact:
+        return Artifact(kind=kind, name=name, mime_type=mime_type, size_bytes=len(content), sha256="", uri=f"memory://{name}")
 
 
-import asyncio  # noqa: E402
-import json  # noqa: E402
-import tempfile  # noqa: E402
-from pathlib import Path  # noqa: E402
-
-from fastbrowse.adapters.local_chrome import async_local_chrome  # noqa: E402
-from fastbrowse.artifacts import DirectorySink  # noqa: E402
-from fastbrowse.browser.page import CdpPage  # noqa: E402
-from fastbrowse.browser.session import BrowserSession  # noqa: E402
-from fastbrowse.config import Config, ObservationLimits  # noqa: E402
-from fastbrowse.models import LocalChrome  # noqa: E402
-from fastbrowse.page import Observation  # noqa: E402
-
-mark("imported")
-
-# The probe waits for Page.loadEventFired; this is the same moment, read from the page.
-_LOADED = (
-    "new Promise(resolve => document.readyState === 'complete' ? resolve(true) "
-    ": addEventListener('load', () => resolve(true), { once: true }))"
-)
+def _error(error: Exception) -> dict:
+    kind = type(error).__name__
+    return {"error": kind, "message": str(error)}
 
 
-def _observation(observation: Observation) -> dict:
-    """The fields fastbrowse-probe prints for one observation."""
-    return {
-        "url": observation.url,
-        "title": observation.title,
-        "inaccessible_frames": observation.inaccessible_frames,
-        "dialog": observation.dialog.model_dump(mode="json") if observation.dialog else None,
-        "controls": [c.model_dump(mode="json", exclude_unset=True) for c in observation.controls],
-    }
+def _target(observation: Observation, step: dict, key: str) -> str | None:
+    label = step.get(key)
+    nth = step.get(f"{key}_nth", 0)
+    matches = [c.id for c in observation.controls if c.label == label]
+    return matches[nth] if len(matches) > nth else None
 
 
-async def main(url: str, click: str | None, accept_dialog: bool) -> None:
-    # The caps are observation policy, not the browser layer; the probe merges without them.
-    config = Config(observation=ObservationLimits(max_controls=100_000, max_offscreen_controls=100_000))
-    with tempfile.TemporaryDirectory() as artifacts:
-        async with (
-            async_local_chrome(LocalChrome()) as connection,
-            BrowserSession(connection, DirectorySink(Path(artifacts))) as session,
-        ):
-            mark("tab")
-            page = CdpPage(session, config)
-            sid = session.active_session_id
-            result = await session.client.send.Page.navigate(params={"url": url}, session_id=sid)
-            if error := result.get("errorText"):
-                raise SystemExit(f"Page.navigate failed ({error})")
-            await page._until_dialog(page._evaluate(sid, _LOADED))
-            mark("navigated")
-            steps = [_observation(await page.observe())]
-            mark("snapshot")
-            if click is not None:
-                await page._until_dialog(page._evaluate(sid, click))
-                steps.append(_observation(await page.observe()))
-                if accept_dialog:
-                    await session.handle_dialog(True)
-                    steps.append(_observation(await page.observe()))
-            print(json.dumps({"steps": steps}))
+async def _step(page: CdpPage, last: list[Observation], base: str, step: dict) -> object:
+    op = step["op"]
+    try:
+        if op == "observe":
+            observation = await page.observe()
+            last[:] = [observation]
+            return observation.model_dump(mode="json")
+        if op == "capture":
+            return (await page.capture()).model_dump(mode="json")
+        if op == "goto":
+            await page.navigate(f"{base}{step.get('path', '/')}")
+            return {"ok": True}
+        if op == "sleep":
+            await asyncio.sleep(step.get("seconds", 0))
+            return {"ok": True}
+        try:
+            operation = Operation(op)
+        except ValueError:
+            return {"error": "UnknownStep", "message": op}
+        if not last:
+            return {"error": "NoObservation"}
+        observation = last[0]
+        fields: dict[str, object] = {"operation": operation}
+        if "label" in step:
+            target = _target(observation, step, "label")
+            if target is None:
+                return {"error": "NoSuchControl", "message": step["label"]}
+            fields["target_id"] = target
+        if "to" in step:
+            fields["destination_id"] = _target(observation, step, "to")
+        if "text" in step:
+            fields["text"] = step["text"]
+        if "accept" in step:
+            fields["accept_dialog"] = step["accept"]
+        if "path" in step:
+            fields["url"] = f"{base}{step['path']}"
+        if "tab" in step and step["tab"] < len(observation.tabs):
+            fields["tab_id"] = observation.tabs[step["tab"]].id
+        return (await page.act(Action.model_validate(fields), observation)).model_dump(mode="json")
+    except BrowserError as error:
+        return _error(error)
+
+
+async def _page(connection: BrowserConnection, base: str, spec: dict) -> dict:
+    async with BrowserSession(connection, _NullSink()) as session:
+        page = CdpPage(session, Config())
+        steps = []
+        started = time.perf_counter()
+        try:
+            await page.navigate(f"{base}{spec['path']}")
+            out: object = {"ok": True}
+        except BrowserError as error:
+            out = _error(error)
+        steps.append({"op": "navigate", "ms": (time.perf_counter() - started) * 1000, "out": out})
+        if out == {"ok": True}:
+            last: list[Observation] = []
+            for step in spec["steps"]:
+                started = time.perf_counter()
+                out = await _step(page, last, base, step)
+                steps.append({"op": step["op"], "ms": (time.perf_counter() - started) * 1000, "out": out})
+        return {"name": spec["name"], "steps": steps}
+
+
+async def main(script_path: str, base: str, only: str | None) -> None:
+    with open(script_path, encoding="utf-8") as file:
+        script = json.load(file)
+    started = time.perf_counter()
+    async with async_local_chrome(LocalChrome()) as connection:
+        launch_ms = (time.perf_counter() - started) * 1000
+        pages = [await _page(connection, base, spec) for spec in script["pages"] if only in (None, spec["name"])]
+    print(json.dumps({"launch_ms": launch_ms, "pages": pages}))
 
 
 _args = sys.argv[1:]
-_click = _args[_args.index("--click") + 1] if "--click" in _args else None
-asyncio.run(main(_args[0], _click, "--accept-dialog" in _args))
+asyncio.run(main(_args[0], _args[1], _args[_args.index("--only") + 1] if "--only" in _args else None))
