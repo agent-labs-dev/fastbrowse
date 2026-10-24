@@ -826,6 +826,12 @@ class BrowserSession:
         # These domains are independent, but all must be ready before the session can be used.
         await _together(
             *(self.client.send_raw(f"{domain}.enable", session_id=session_id) for domain in _ENABLE_DOMAINS),
+            # `Page.enable` alone does not emit `Page.lifecycleEvent`: CDP gates those events behind this switch, so
+            # without it the settle path's lifecycle waits never wake and each one runs to its own deadline. The
+            # handler itself is registered in `_register_events`; this only turns the events on.
+            self.client.send_raw(
+                "Page.setLifecycleEventsEnabled", {"enabled": True}, session_id=session_id
+            ),
             self.client.send_raw(
                 "Runtime.addBinding",
                 {"name": INPUT_NAVIGATION_BINDING, "executionContextName": INPUT_WORLD},
