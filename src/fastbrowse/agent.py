@@ -691,7 +691,11 @@ class HeadStart:
         bill = _PlanBill(ledger)
         planning.add_done_callback(bill)
         checking = asyncio.create_task(_normalize_checks(llm, task, planning, ledger, bill))
-        proposing = None if start is None else asyncio.create_task(_propose(llm, task, start, ledger))
+        proposing = (
+            asyncio.create_task(_propose(llm, task, start, ledger))
+            if start is not None and _shortcut_worth_proposing(start)
+            else None
+        )
         return cls(ledger, task, start, planning, proposing, checking, plan_billed=True)
 
     @property
@@ -812,7 +816,7 @@ class Agent:
                     # from a page it opened itself wants. `choose_start` is the other case: a caller with a goal
                     # and no page at all, who wants the first address worked out from the task.
                     opening = start if start is not None or not choose_start else await self._first_page(task, ledger)
-                    if opening is not None and head.proposing is None:
+                    if opening is not None and head.proposing is None and _shortcut_worth_proposing(opening):
                         # A chosen first address arrives after startup; its shortcut still needs owned, bounded waiting.
                         head.proposing = asyncio.create_task(_propose(self._llm, task, opening, ledger))
                     proposing = head.proposing
@@ -1320,11 +1324,14 @@ class Agent:
         `proposing` is the proposal a head start already asked for, and a run without one asks now.
         """
         try:
-            if proposing is None:
-                proposal = await _propose(self._llm, task, start, ledger)
-            else:
+            if proposing is not None:
                 # Cancelling a dispatched shortcut loses its bill and stops capped runs; the head start owns cleanup.
                 proposal = await asyncio.wait_for(asyncio.shield(proposing), _SHORTCUT_WAIT_SECONDS)
+            elif _shortcut_worth_proposing(start):
+                proposal = await _propose(self._llm, task, start, ledger)
+            else:
+                # The caller named the page; going elsewhere on its origin is not the run's to propose.
+                proposal = None
         except (TimeoutError, LLMError):
             proposal = None
         shortcut = None if proposal is None else accept(proposal.url, start)
@@ -5490,6 +5497,19 @@ def _follow_recovery(
     if target is None:
         return None
     return decision.model_copy(update={"operation": operation, "target": target, "directed": True})
+
+
+def _shortcut_worth_proposing(start: str) -> bool:
+    """Whether to ask for a direct address from `start`.
+
+    The shortcut synthesizes a deeper page on the start site from the task's own words, worth asking for at a site's
+    entry point, where the task names the page but not its address. When the caller already handed the run a page
+    inside the site - a path, not just the origin - the run is at a destination the caller chose, and a proposal to
+    go elsewhere on that origin second-guesses it. `FASTBROWSE_SHORTCUT_ON_DEEP_START` asks for one anyway.
+    """
+    if flag("FASTBROWSE_SHORTCUT_ENTRY_ONLY", default=False) and urlsplit(start).path not in ("", "/"):
+        return False
+    return True
 
 
 async def _propose(llm: LLMClient, task: str, start: str, ledger: Ledger) -> Shortcut:

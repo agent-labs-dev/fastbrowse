@@ -1,6 +1,6 @@
 [project]
 name = "fastbrowse"
-version = "0.6.0"
+version = "0.7.0"
 description = "Browser automation with cited answers, structured output and code-controlled credentials and authorization."
 readme = "README.md"
 license = "MIT"
@@ -23,9 +23,10 @@ Repository = "https://github.com/agent-labs-dev/fastbrowse"
 Issues = "https://github.com/agent-labs-dev/fastbrowse/issues"
 
 [project.optional-dependencies]
-browser-use = ["browser-use-sdk==3.11.3"]
+browser-use = ["browser-use-sdk==3.12.1"]
 eval-data = ["pyyaml>=6,<7"]
 # The MCP server, `fastbrowse-mcp`.
+# mcp 2.x renamed FastMCP to MCPServer and changed other APIs; migrating the server is its own change.
 mcp = ["mcp>=1.20,<2"]
 
 [project.scripts]
