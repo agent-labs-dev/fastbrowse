@@ -8,6 +8,7 @@ mod macros;
 
 pub mod batches;
 pub mod error;
+pub mod memory;
 pub mod planner;
 mod support;
 
