@@ -216,24 +216,28 @@ pub fn shows(text: &str, quote: &str) -> bool {
     false
 }
 
+/// `urlsplit`'s scheme, lowercased, and what follows it, after the leading C0 controls and spaces and every tab and
+/// line break are dropped as CPython 3.13 drops them.
+pub(crate) fn split_scheme(url: &str) -> (String, String) {
+    let url: String =
+        url.trim_start_matches(|c| c <= ' ').chars().filter(|c| !matches!(c, '\t' | '\r' | '\n')).collect();
+    if let Some(colon) = url.find(':')
+        && colon > 0
+        && url.starts_with(|c: char| c.is_ascii_alphabetic())
+        && url[..colon].chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    {
+        return (url[..colon].to_ascii_lowercase(), url[colon + 1..].to_string());
+    }
+    (String::new(), url)
+}
+
 /// `urlsplit(url)._replace(fragment="").geturl()`, as CPython 3.13 splits and joins.
 ///
 /// An evidence id hashes this address, and ids reach every prompt that shows notes, so it is CPython's reading of
 /// the address rather than WHATWG's: a recorded prompt holds the id Python computed.
 pub(crate) fn address(url: &str) -> String {
-    const C0_OR_SPACE: fn(char) -> bool = |c| c <= ' ';
-    let url: String =
-        url.trim_start_matches(C0_OR_SPACE).chars().filter(|c| !matches!(c, '\t' | '\r' | '\n')).collect();
-    let mut rest = url.as_str();
-    let mut scheme = String::new();
-    if let Some(colon) = rest.find(':')
-        && colon > 0
-        && rest.starts_with(|c: char| c.is_ascii_alphabetic())
-        && rest[..colon].chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-    {
-        scheme = rest[..colon].to_ascii_lowercase();
-        rest = &rest[colon + 1..];
-    }
+    let (scheme, cleaned) = split_scheme(url);
+    let mut rest = cleaned.as_str();
     let mut netloc = "";
     if let Some(after) = rest.strip_prefix("//") {
         let end = after.find(['/', '?', '#']).unwrap_or(after.len());
