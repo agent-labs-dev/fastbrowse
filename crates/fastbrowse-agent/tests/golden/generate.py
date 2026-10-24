@@ -76,6 +76,8 @@ from fastbrowse.policy import (
     decide,
     fits,
 )
+from fastbrowse.scripted import ScriptedJev, steps
+from fastbrowse.shortcut import accept, accept_start, propose_shortcut, propose_start
 from fastbrowse.telemetry import BudgetExceeded, Ledger, traced
 
 HERE = Path(__file__).parent
@@ -1879,6 +1881,91 @@ def compact_json(value: Any) -> str:
     return compact(value)
 
 
+# --- shortcut and scripted ----------------------------------------------------------------------------------------
+
+
+def shortcuts() -> dict[str, Any]:
+    proposals = []
+    for function, task, start, url in (
+        ("propose_shortcut", "Find the httpx package \u00e9", "https://pypi.org/", "https://pypi.org/project/httpx/"),
+        ("propose_shortcut", "Open my orders", "https://shop.test/", None),
+        ("propose_start", "Find the weather in \u6771\u4eac", None, "https://weather.test/"),
+    ):
+        calls: list[dict[str, Any]] = []
+        llm = RecordingLLM(calls, lambda purpose, messages, schema, url=url: {"url": url}, llm_cost())
+        book = Ledger(Limits())
+        if function == "propose_shortcut":
+            assert start is not None
+            generated = asyncio.run(propose_shortcut(llm, task, start, ledger=book))
+        else:
+            generated = asyncio.run(propose_start(llm, task, ledger=book))
+        proposals.append(
+            {
+                "name": f"{function} {task}",
+                "function": function,
+                "task": task,
+                "start": start,
+                "calls": calls,
+                "outcome": {"url": generated.data.url, "cost": generated.cost.model_dump(mode="json")},
+                "ledger_after": ledger_state(book),
+            }
+        )
+    accepted = []
+    start = "https://pypi.org/"
+    for proposed in (
+        None,
+        "https://pypi.org/project/httpx/",
+        "https://pypi.org",
+        "https://pypi.org//",
+        "HTTPS://pypi.org/search?q=x",
+        "http://pypi.org/project/httpx/",
+        "https://evil.test/project",
+        "javascript:alert(1)",
+        "pypi.org/project",
+        "  https://pypi.org/x",
+        "https://PYPI.org/y",
+        "https://pypi.org:443/z",
+    ):
+        accepted.append(
+            {
+                "proposed": proposed,
+                "start": start,
+                "accept": accept(proposed, start),
+                "accept_start": accept_start(proposed),
+            }
+        )
+    scripts = []
+    for task in ("click Add one; fill Token = secret:token", " ; ;", "scroll", "select Size = M = L;done", "fly away"):
+        try:
+            parsed: JsonValue = [step.model_dump(mode="json") for step in steps(task)]
+        except ValueError:
+            parsed = {"error": "ValueError"}
+        scripts.append({"task": task, "steps": parsed})
+    operation = ChoiceQuestion(instructions="next", criteria={"read": "Read", "click": "Click", "fill": "Fill"})
+    target = ChoiceQuestion(
+        instructions="which",
+        criteria={"c1": {"label": "Remove"}, "c2": "Add one", "c3": {"label": "Add one", "role": "button"}},
+    )
+    pick = ChoiceQuestion(instructions="value", criteria={"none": "Nothing", "secret:token": "The token"})
+    ask = NoulQuestion(instructions="?")
+    jev = ScriptedJev(steps("click Add one; fill Token = secret:token"))
+    exchanges = []
+    for questions in (
+        {"operation": operation, "click_target": target, "read_assessment": pick, "complete": ask},
+        {"pick": pick, "fill_target": target, "irreversible": ask},
+        {"operation": operation, "fill_target": target, "pick": pick},
+        {"operation": operation, "click_target": target, "complete": ask},
+    ):
+        answered = asyncio.run(jev.evaluate({}, questions))
+        exchanges.append(
+            {
+                "questions": {key: question.model_dump(mode="json") for key, question in questions.items()},
+                "evaluation": answered.model_dump(mode="json"),
+            }
+        )
+    return {"proposals": proposals, "accept": accepted, "steps": scripts, "scripted_jev": exchanges}
+
+
 def write(name: str, value: Any) -> None:
     (HERE / name).write_text(json.dumps(sort_operations(value), indent=1) + "\n", encoding="ascii")
 
@@ -1887,4 +1974,5 @@ if __name__ == "__main__":
     write("batches.json", batches())
     write("planner.json", planner())
     write("policy.json", {"cases": policy(), "build_request": build_requests()})
+    write("shortcut.json", shortcuts())
     write("memory.json", {"cases": memory(), "quoted_fields": quoted_fields(), "shows": shows_cases()})

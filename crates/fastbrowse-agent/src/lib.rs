@@ -12,6 +12,7 @@ pub mod error;
 pub mod memory;
 pub mod planner;
 pub mod policy;
+pub mod scripted;
 pub mod shortcut;
 mod support;
 pub mod tripwires;
