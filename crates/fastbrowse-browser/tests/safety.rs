@@ -341,6 +341,19 @@ fn origin_sites() -> OriginSites {
     OriginSites { granted: format!("http://127.0.0.1:{granted}"), foreign_port, hits }
 }
 
+#[test]
+fn a_preconnect_is_not_counted_as_a_hit() {
+    let sites = origin_sites();
+    let address = ("127.0.0.1", sites.foreign_port);
+    // What Chrome does beside a meta refresh: a socket opened and closed with nothing sent.
+    drop(std::net::TcpStream::connect(address).expect("connect"));
+    std::thread::sleep(Duration::from_millis(100));
+    let mut request = std::net::TcpStream::connect(address).expect("connect");
+    std::io::Write::write_all(&mut request, b"GET /page HTTP/1.1\r\n\r\n").expect("write");
+    std::io::Read::read_to_end(&mut request, &mut Vec::new()).expect("read");
+    assert_eq!(sites.hits(), ["/page"]);
+}
+
 struct Scoped {
     session: BrowserSession,
     page: CdpPage,

@@ -113,7 +113,9 @@ pub type Handler = Arc<dyn Fn(&str) -> Reply + Send + Sync>;
 fn answer(stream: TcpStream, handler: &Handler) {
     let mut reader = BufReader::new(stream.try_clone().expect("clone"));
     let mut request_line = String::new();
-    if reader.read_line(&mut request_line).is_err() {
+    // Chrome preconnects (two sockets for a meta refresh) and closes them unused. As `BaseHTTPRequestHandler` does,
+    // a connection that sends no request line is not a request, so the handler, which may count requests, never sees it.
+    if reader.read_line(&mut request_line).is_err() || request_line.trim().is_empty() {
         return;
     }
     loop {

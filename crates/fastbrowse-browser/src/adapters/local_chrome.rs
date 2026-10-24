@@ -661,9 +661,14 @@ mod tests {
 
     #[test]
     fn free_ports_are_bindable() {
-        let port = free_port().unwrap();
-        assert!(port > 0);
-        std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+        // Another test binding port 0 can take a released port before this one binds it again, so one taken port is
+        // a race between tests; three in a row is a broken `free_port`.
+        let bound = (0..3).any(|_| {
+            let port = free_port().unwrap();
+            assert!(port > 0);
+            std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+        });
+        assert!(bound, "three free ports in a row could not be bound");
     }
 
     #[test]
