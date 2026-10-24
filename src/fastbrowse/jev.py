@@ -65,7 +65,7 @@ class Evaluation(Frozen):
     input_tokens: int = Field(ge=0)
     cost: CostLine
     requests: int = Field(default=1, ge=0)
-    """HTTP requests, including retries and hedges, made to obtain these answers."""
+    """HTTP requests, including retries, made to obtain these answers."""
 
 
 class JevError(RuntimeError):

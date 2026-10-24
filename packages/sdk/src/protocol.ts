@@ -172,7 +172,7 @@ export interface Limits {
    */
   max_steps?: number | null;
   /**
-   * Logical Jev evaluations. A hedged or retried request adds cost but not a call.
+   * Logical Jev evaluations. A retried request adds cost but not a call.
    */
   max_jev_calls?: number | null;
   max_llm_calls?: number | null;
