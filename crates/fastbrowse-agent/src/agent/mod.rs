@@ -17,6 +17,8 @@ pub mod helpers;
 mod reading;
 mod recovery;
 pub(crate) mod state;
+#[cfg(test)]
+mod tests;
 
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};

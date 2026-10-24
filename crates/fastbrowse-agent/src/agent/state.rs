@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use fastbrowse_core::effects::{ControlKey, ControlValue, Move};
 use fastbrowse_core::jev::{JevError, NoulQuestion};
@@ -171,6 +171,10 @@ pub(crate) struct ObservedLink {
 /// same search up itself arrived back at the guessed address. The browser's own history says which page the run is
 /// on: Back, Forward and a reload return to an entry, and its lineage with it. A read is judged by what the run was
 /// doing when it read, so a quote read on the guess stays guessed.
+///
+/// A hold `Notes::discredit` keeps asks the lineage again each time it is checked, as Python's closure over the run's
+/// one `_Lineage` does, so the readings and addresses are shared by every clone rather than copied: a snapshot kept a
+/// reading held after the run read the same page again off the guess.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Lineage {
     /// Each history entry, by whether the run was on the guess when the entry was made.
@@ -178,23 +182,42 @@ pub(crate) struct Lineage {
     /// Each history entry's address when last observed, so a site action that moved it there is told apart.
     pub entry_addresses: HashMap<String, String>,
     /// Each address by the lineage of the entry last observed there, for a quote with no recorded reading.
-    pub addresses: HashMap<String, bool>,
+    addresses: Arc<Mutex<HashMap<String, bool>>>,
     /// Each reading, by source address and capture, by whether it was read on the guess.
-    pub captures: HashMap<(String, String), bool>,
+    captures: Arc<Mutex<HashMap<(String, String), bool>>>,
+}
+
+fn locked<T>(shared: &Mutex<T>) -> MutexGuard<'_, T> {
+    shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl Lineage {
     pub fn read(&mut self, capture: &str, sources: &[String], guessing: bool) {
         // The same page read again off the guess is the page the run reached itself, so that reading stands. Text
         // alone does not name a page: another address drawing identical text released the guessed one's hold.
+        let mut captures = locked(&self.captures);
         for source in sources {
             let key = (fastbrowse_core::addresses::search_address(source), capture.to_string());
             if guessing {
-                self.captures.entry(key).or_insert(true);
+                captures.entry(key).or_insert(true);
             } else {
-                self.captures.insert(key, false);
+                captures.insert(key, false);
             }
         }
+    }
+
+    /// Whether this reading, by search address and capture, was taken on the guess.
+    pub fn reading(&self, address: &str, capture: &str) -> Option<bool> {
+        locked(&self.captures).get(&(address.to_string(), capture.to_string())).copied()
+    }
+
+    /// Whether the entry last observed at this search address was on the guess.
+    pub fn address(&self, address: &str) -> Option<bool> {
+        locked(&self.addresses).get(address).copied()
+    }
+
+    pub fn set_address(&mut self, address: String, guessing: bool) {
+        locked(&self.addresses).insert(address, guessing);
     }
 }
 

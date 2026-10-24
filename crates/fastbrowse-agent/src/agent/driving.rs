@@ -1128,7 +1128,7 @@ impl Agent {
             state.lineage.entries.insert(entry.clone(), state.guessing);
             state.lineage.entry_addresses.insert(entry, address.clone());
         }
-        state.lineage.addresses.insert(address, state.guessing);
+        state.lineage.set_address(address, state.guessing);
     }
 
     /// Record on the last action what it did, which the next choice and recovery both read.

@@ -227,16 +227,13 @@ pub(crate) fn guessed_page(
 ) -> impl Fn(&Evidence) -> bool + Send + Sync + 'static {
     let places: IndexMap<(String, String), bool> =
         invented.iter().map(|url| (place(url), fastbrowse_core::addresses::searched(url))).collect();
+    // A clone shares the run's lineage, so a later reading off the guess frees what this judges held.
     let known = lineage.cloned().unwrap_or_default();
     move |evidence: &Evidence| {
         let url = &evidence.url;
         // Lineage only clears a path match, never adds one: a page clicked to off the guess is judged by its path.
         let address = fastbrowse_core::addresses::search_address(url);
-        let reading = (address.clone(), evidence.capture_sha256.clone());
-        let on_guess = match known.captures.get(&reading) {
-            Some(guessing) => Some(*guessing),
-            None => known.addresses.get(&address).copied(),
-        };
+        let on_guess = known.reading(&address, &evidence.capture_sha256).or_else(|| known.address(&address));
         let here = place(url);
         on_guess != Some(false)
             && places.contains_key(&here)
