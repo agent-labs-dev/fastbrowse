@@ -1,0 +1,25 @@
+[package]
+name = "fastbrowse-clients"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+fastbrowse-core = { path = "../fastbrowse-core" }
+indexmap = { version = "2", features = ["serde"] }
+# float_roundtrip: the default parser can land a float one unit off, and a cost read one unit off is a different cost.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+url = "2.5"
+log = "0.4"
+tokio = { version = "1", features = ["rt", "time", "macros", "sync"] }
+# HTTP/1.1 only: Python builds its httpx client without `http2=True`, so it never negotiates h2 either.
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+# ring rather than aws-lc-rs, which compiles C; the webpki roots are the Mozilla bundle, as certifi is for httpx.
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "tls12", "ring", "webpki-tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "time", "macros", "sync", "test-util"] }
