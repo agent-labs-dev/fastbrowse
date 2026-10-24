@@ -15,7 +15,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - A slow model call is no longer raced by a duplicate request. The per-purpose hedge fired before the gateway's median for a verify, plan or compose call, so nearly every audit was sent twice and the discarded twin was billed in full; each call is now one request, bounded by its attempt deadline, and the eval harness records the transient time rather than hiding it behind a twin.
 
-- Waiting for a page to settle after an action waits on the page's own CDP lifecycle events instead of a fixed interval, so a settle wakes when the document reports init, DOMContentLoaded, load or networkIdle rather than re-reading the page on a timer. A release is also gated on the work a run did — the LLM and Jev calls it made and the tokens it sent — instead of median wall time, which moves with cloud load rather than with the build; wall time is recorded and never blocks.
+- Waiting for a page to settle after an action waits on the page's own CDP lifecycle events instead of a fixed interval, so a settle wakes when the document reports init, DOMContentLoaded, load or networkIdle rather than re-reading the page on a timer. A release is also gated on the work a run did (the LLM and Jev calls it made and the tokens it sent) instead of median wall time, which moves with cloud load rather than with the build; wall time is recorded and never blocks.
 
 - A run that stops before its completion check confirms the finish returns an answer rather than the notes it collected, and a browsing requirement no longer holds an evidenced answer open.
 
