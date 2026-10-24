@@ -5,6 +5,7 @@ It scopes documents, not the network: images, scripts and requests a granted pag
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable
 from urllib.parse import urlsplit
 
@@ -69,3 +70,9 @@ class OriginGrant:
         never grants access, including about:, data:, blob:, file: and javascript:.
         """
         return origin_of(url) in self.origins
+
+
+# The Rust core (crates/fastbrowse-py) in place of the two parsers above, while the port is checked against
+# these tests; the default stays Python.
+if os.environ.get("FASTBROWSE_RUST_CORE") == "1":
+    from fastbrowse_native import origin_of, parse_origin  # ty: ignore[unresolved-import]

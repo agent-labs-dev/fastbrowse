@@ -1,5 +1,6 @@
 """Links derived from captured quotes, without asking a model for a URL."""
 
+import os
 import re
 from urllib.parse import quote
 
@@ -19,3 +20,9 @@ def text_fragment(url: str, text: str) -> str:
     base, _, fragment = url.partition("#")
     anchor = fragment.partition(":~:")[0]
     return f"{base}#{anchor}:~:text={directive}"
+
+
+# The Rust core (crates/fastbrowse-py) in place of the function above, while the port is checked against
+# these tests; the default stays Python.
+if os.environ.get("FASTBROWSE_RUST_CORE") == "1":
+    from fastbrowse_native import text_fragment  # ty: ignore[unresolved-import]  # noqa: F401

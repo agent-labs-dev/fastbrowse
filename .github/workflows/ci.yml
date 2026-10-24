@@ -110,6 +110,34 @@ jobs:
         with: {node-version: "20", package-manager-cache: false}
       - run: node packages/sdk/test/node_floor.mjs .venv/bin/fastbrowse
 
+  # The Rust core (docs/adr/0001): its own checks, then the Python suites that cover it run against it, and the
+  # Node addon against cases taken from those suites.
+  rust:
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with: {python-version: "3.13"}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: {node-version: "22", package-manager-cache: false}
+      # rustup reads rust-toolchain.toml and installs the pinned toolchain on first use.
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: uv sync --locked --all-extras
+      - run: uvx maturin==1.15.0 build --release --locked -m crates/fastbrowse-py/Cargo.toml -i .venv/bin/python --out target/wheels
+      - run: uv pip install target/wheels/fastbrowse_native-*.whl
+      # `uv run` without --no-sync would sync the environment exactly and uninstall the module just installed.
+      - env: {FASTBROWSE_RUST_CORE: "1"}
+        run: >-
+          uv run --no-sync pytest -q tests/test_citations.py tests/test_page.py tests/test_safety.py
+          tests/test_retrieval.py tests/test_agent.py tests/browser/test_safety.py
+      - run: cargo build -p fastbrowse-node --release --locked
+      - run: cp target/release/libfastbrowse_node.so crates/fastbrowse-node/fastbrowse.node
+      - run: node --test crates/fastbrowse-node/test/core.test.ts
+
   # Five builds on five runners cost more than the rest of CI together, so a pull request pays for them only
   # when it touches what is frozen, what freezes it, what packs it for npm, or the SDK that the install smoke
   # packs and starts it with. The eval and audit packages are not in the executable.
@@ -159,17 +187,18 @@ jobs:
     uses: ./.github/workflows/aur.yml
 
   # `check` is the required status check, so its name must not move when the matrix gains a version.
-  # It passes only when the Python matrix, secret scan, sift and SDK checks pass, and the binaries and the
+  # It passes only when the Python matrix, secret scan, sift, SDK and Rust checks pass, and the binaries and the
   # Arch package each either passed or were left unbuilt by a change that could not alter them.
   check:
     runs-on: ubuntu-latest
-    needs: [gate, sift, sdk, secrets, changes, binaries, aur]
+    needs: [gate, sift, sdk, rust, secrets, changes, binaries, aur]
     if: always()
     steps:
       - env:
           GATE_RESULT: ${{ needs.gate.result }}
           SIFT_RESULT: ${{ needs.sift.result }}
           SDK_RESULT: ${{ needs.sdk.result }}
+          RUST_RESULT: ${{ needs.rust.result }}
           SECRETS_RESULT: ${{ needs.secrets.result }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           BINARIES_RESULT: ${{ needs.binaries.result }}
@@ -178,6 +207,7 @@ jobs:
           test "$GATE_RESULT" = success
           test "$SIFT_RESULT" = success
           test "$SDK_RESULT" = success
+          test "$RUST_RESULT" = success
           test "$SECRETS_RESULT" = success
           test "$CHANGES_RESULT" = success
           test "$BINARIES_RESULT" = success || test "$BINARIES_RESULT" = skipped
