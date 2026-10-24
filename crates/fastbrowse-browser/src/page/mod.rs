@@ -222,7 +222,7 @@ struct FrameObservation<T> {
 }
 
 /// The tab's history read: whether BACK is offered, which entry of which tab the page is, and its address.
-type HistoryRead = (bool, Option<String>, Option<String>);
+pub type HistoryRead = (bool, Option<String>, Option<String>);
 
 #[derive(Debug, Clone, PartialEq)]
 enum BackTarget {
@@ -231,18 +231,18 @@ enum BackTarget {
 }
 
 #[derive(Default)]
-struct PageState {
-    last: Option<ObservedState>,
+pub(crate) struct PageState {
+    pub(crate) last: Option<ObservedState>,
     /// The count of navigations the run's input had begun, and the page's address, when the last action began. A
     /// dialog blocks the page, so accepting one is judged against this mark, and only when the dialog came from that
     /// same address: a dialog a page opened as it loaded after a navigation is not the action's, and accepting it
     /// moved nothing.
-    marked: Option<(u32, String)>,
-    back_to: HashMap<String, String>,
+    pub(crate) marked: Option<(u32, String)>,
+    pub(crate) back_to: HashMap<String, String>,
     /// Child frame session -> when its last read missed the full deadline.
-    unanswered: HashMap<String, Instant>,
+    pub(crate) unanswered: HashMap<String, Instant>,
     /// Tab session -> the unique id of the isolated world its HTTP status is read in.
-    status_worlds: HashMap<String, String>,
+    pub(crate) status_worlds: HashMap<String, String>,
 }
 
 pub struct CdpPage {
@@ -251,7 +251,7 @@ pub struct CdpPage {
     page_js: String,
     capture_js: String,
     fingerprint_js: String,
-    state: Mutex<PageState>,
+    pub(crate) state: Mutex<PageState>,
     #[cfg(feature = "cursor")]
     cursor: Option<Arc<crate::cursor::CursorFeedback>>,
     #[cfg(feature = "cursor")]
@@ -607,7 +607,8 @@ impl CdpPage {
     ///
     /// Only these hang on it, and BACK reads history again before it goes. A history read that failed (CDP -32000)
     /// as a run's first page opened ended the run at step 0.
-    async fn history(&self) -> HistoryRead {
+    #[doc(hidden)]
+    pub async fn history(&self) -> HistoryRead {
         let Ok(session_id) = self.session.active_session_id() else { return (false, None, None) };
         let Ok(history) = self.session.send("Page.getNavigationHistory", json!({}), Some(&session_id)).await else {
             return (false, None, None);
@@ -1154,7 +1155,8 @@ impl CdpPage {
         Err(BrowserError::Browser(message))
     }
 
-    async fn ready(&self, session_id: &str, timeout_seconds: f64) -> Result<bool, BrowserError> {
+    #[doc(hidden)]
+    pub async fn ready(&self, session_id: &str, timeout_seconds: f64) -> Result<bool, BrowserError> {
         let deadline = Instant::now() + secs(timeout_seconds);
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -1184,7 +1186,8 @@ impl CdpPage {
 
     // -- settling ---------------------------------------------------------------------------------------------
 
-    pub(crate) async fn fingerprint(&self) -> Result<String, BrowserError> {
+    #[doc(hidden)]
+    pub async fn fingerprint(&self) -> Result<String, BrowserError> {
         let result = self.evaluate(&self.session.active_session_id()?, &self.fingerprint_js).await?;
         Ok(value_str(&result))
     }
@@ -1194,7 +1197,8 @@ impl CdpPage {
     /// A click that navigates returns before the navigation starts, so an immediate fingerprint would describe the old
     /// page. Settled means an interactive document with a quiet DOM. A blocking JavaScript dialog freezes the renderer,
     /// and an evaluate that fails mid-navigation is itself evidence of change.
-    pub(crate) async fn changed_since(&self, before: &str, input_settling: bool) -> Result<bool, BrowserError> {
+    #[doc(hidden)]
+    pub async fn changed_since(&self, before: &str, input_settling: bool) -> Result<bool, BrowserError> {
         let deadline = Instant::now() + secs(SETTLE_SECONDS);
         let dialog = self.session.wait_for_dialog();
         tokio::pin!(dialog);
@@ -1226,10 +1230,8 @@ impl CdpPage {
         }
     }
 
-    pub(crate) async fn settled_fingerprint(
-        &self,
-        timeout_seconds: f64,
-    ) -> Result<(bool, Option<String>), BrowserError> {
+    #[doc(hidden)]
+    pub async fn settled_fingerprint(&self, timeout_seconds: f64) -> Result<(bool, Option<String>), BrowserError> {
         // Poll inside the renderer: a cloud round trip can exceed the entire old per-poll timeout. Hidden tabs throttle
         // timers, so return a single sample for the caller to poll in that case.
         let script = format!(
@@ -1281,7 +1283,8 @@ impl CdpPage {
 
     // -- evaluation -------------------------------------------------------------------------------------------
 
-    pub(crate) async fn evaluate(&self, session_id: &str, expression: &str) -> Result<Value, BrowserError> {
+    #[doc(hidden)]
+    pub async fn evaluate(&self, session_id: &str, expression: &str) -> Result<Value, BrowserError> {
         self.evaluate_in(session_id, expression, None, None).await
     }
 
@@ -1309,7 +1312,8 @@ impl CdpPage {
     /// `_until_dialog`: `work`'s result, or `None` once a dialog blocks the page. Input and focus handlers can open a
     /// dialog before CDP answers, blocking every following renderer check. `work` is dropped then, which cancels its
     /// pending calls.
-    pub(crate) async fn until_dialog<T>(&self, work: impl Future<Output = T>) -> Option<T> {
+    #[doc(hidden)]
+    pub async fn until_dialog<T>(&self, work: impl Future<Output = T>) -> Option<T> {
         tokio::pin!(work);
         tokio::select! {
             out = &mut work => {

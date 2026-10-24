@@ -119,12 +119,12 @@ impl Default for SessionOptions {
 }
 
 #[derive(Debug, Clone)]
-struct TabState {
-    target_id: String,
-    session_id: String,
-    url: String,
-    title: String,
-    opener_id: Option<String>,
+pub(crate) struct TabState {
+    pub(crate) target_id: String,
+    pub(crate) session_id: String,
+    pub(crate) url: String,
+    pub(crate) title: String,
+    pub(crate) opener_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,86 +137,86 @@ pub struct DownloadText {
 }
 
 #[derive(Clone)]
-struct Frame {
-    data: String,
-    ack_id: Value,
-    session_id: Option<String>,
+pub(crate) struct Frame {
+    pub(crate) data: String,
+    pub(crate) ack_id: Value,
+    pub(crate) session_id: Option<String>,
 }
 
-struct Popup {
-    target_id: String,
-    opener_id: String,
-    adopted: watch::Sender<Option<bool>>,
+pub(crate) struct Popup {
+    pub(crate) target_id: String,
+    pub(crate) opener_id: String,
+    pub(crate) adopted: watch::Sender<Option<bool>>,
 }
 
 #[derive(Default)]
-struct State {
+pub(crate) struct State {
     /// Insertion ordered, as Python's dict: `tabs()` lists them in this order and a closed active tab hands over to
     /// the first.
-    tabs: Vec<TabState>,
-    owned: HashSet<String>,
+    pub(crate) tabs: Vec<TabState>,
+    pub(crate) owned: HashSet<String>,
     /// Tab target id -> the session whose cast keeps that tab painting, in a background run.
-    keepers: HashMap<String, String>,
+    pub(crate) keepers: HashMap<String, String>,
     /// Targets already open when an attached session began, which never join the run.
-    open_before: HashSet<String>,
+    pub(crate) open_before: HashSet<String>,
     /// Popup target id -> (opener target id, whether it was adopted), in the order they opened.
-    popups: Vec<Popup>,
+    pub(crate) popups: Vec<Popup>,
     /// `Page.windowOpen` events from the run's pages: each one is a window on its way, announced or not.
-    window_opens: u32,
+    pub(crate) window_opens: u32,
     /// (session, context id) -> unique id, for each world named `STATUS_WORLD` Chrome reported creating.
-    status_contexts: HashMap<(String, i64), String>,
-    active_target_id: String,
+    pub(crate) status_contexts: HashMap<(String, i64), String>,
+    pub(crate) active_target_id: String,
     /// Set while the page may show a secret: frames are still acked, so the cast keeps pace, but not delivered.
-    frames_withheld: bool,
-    screencast_session_id: Option<String>,
-    pending_frame: Option<Frame>,
-    frame_scheduled: bool,
-    delivery: Option<JoinHandle<()>>,
+    pub(crate) frames_withheld: bool,
+    pub(crate) screencast_session_id: Option<String>,
+    pub(crate) pending_frame: Option<Frame>,
+    pub(crate) frame_scheduled: bool,
+    pub(crate) delivery: Option<JoinHandle<()>>,
     /// OOPIF frame_id -> session_id, in attach order, keyed by target id.
-    frame_sessions: Vec<(String, String)>,
-    frame_parents: HashMap<String, String>,
-    artifacts: Vec<Artifact>,
+    pub(crate) frame_sessions: Vec<(String, String)>,
+    pub(crate) frame_parents: HashMap<String, String>,
+    pub(crate) artifacts: Vec<Artifact>,
     /// Captured downloads by count: a navigation that aborts on one is not a navigation that failed.
-    downloads_captured: u32,
+    pub(crate) downloads_captured: u32,
     /// A captured download's readable text, oldest first: kept as evidence for a capture, not consumed.
-    download_texts: Vec<DownloadText>,
+    pub(crate) download_texts: Vec<DownloadText>,
     /// How many of them an observation has already shown, so each is shown to the run once.
-    download_texts_shown: usize,
+    pub(crate) download_texts_shown: usize,
     /// Pending JS dialog per tab session id; cleared once handled.
-    dialogs: HashMap<String, Dialog>,
+    pub(crate) dialogs: HashMap<String, Dialog>,
     /// The address of the document each pending dialog came from, which `Dialog` does not carry.
-    dialog_urls: HashMap<String, String>,
-    input_navigations: u32,
+    pub(crate) dialog_urls: HashMap<String, String>,
+    pub(crate) input_navigations: u32,
     /// Document requests the grant refused, so a navigation that was cut short is told from one that failed.
-    denials: u32,
+    pub(crate) denials: u32,
     /// Requests paused and not yet released, so closing can release what a stopped task left paused.
-    paused: HashSet<(String, String)>,
-    background: Vec<JoinHandle<()>>,
-    closing: bool,
-    frame_tap: Option<FrameTap>,
+    pub(crate) paused: HashSet<(String, String)>,
+    pub(crate) background: Vec<JoinHandle<()>>,
+    pub(crate) closing: bool,
+    pub(crate) frame_tap: Option<FrameTap>,
 }
 
-struct Shared {
-    connection: BrowserConnection,
-    check_access: Option<CheckAccess>,
-    grant: Option<OriginGrant>,
-    origins: Vec<String>,
-    artifact_sink: Arc<dyn ArtifactSink>,
-    max_download_bytes: usize,
-    new_document_scripts: Vec<String>,
-    on_frame: Option<FrameHandler>,
-    client: Mutex<Option<Cdp>>,
-    state: Mutex<State>,
-    dialog_opened: watch::Sender<u64>,
+pub(crate) struct Shared {
+    pub(crate) connection: BrowserConnection,
+    pub(crate) check_access: Option<CheckAccess>,
+    pub(crate) grant: Option<OriginGrant>,
+    pub(crate) origins: Vec<String>,
+    pub(crate) artifact_sink: Arc<dyn ArtifactSink>,
+    pub(crate) max_download_bytes: usize,
+    pub(crate) new_document_scripts: Vec<String>,
+    pub(crate) on_frame: Option<FrameHandler>,
+    pub(crate) client: Mutex<Option<Cdp>>,
+    pub(crate) state: Mutex<State>,
+    pub(crate) dialog_opened: watch::Sender<u64>,
     /// Bumped each time a popup is begun, so a wait for one wakes as it is announced.
-    popup_signal: watch::Sender<u64>,
-    screencast_lock: tokio::sync::Mutex<()>,
+    pub(crate) popup_signal: watch::Sender<u64>,
+    pub(crate) screencast_lock: tokio::sync::Mutex<()>,
 }
 
 /// Async handle over one owned tab (plus any popups it opens). Closes only the targets it owns; the caller's browser
 /// and any of its other tabs are never touched. Holds no global state, so many sessions can run in one process.
 #[derive(Clone)]
-pub struct BrowserSession(Arc<Shared>);
+pub struct BrowserSession(pub(crate) Arc<Shared>);
 
 impl BrowserSession {
     pub fn new(connection: BrowserConnection, artifact_sink: Arc<dyn ArtifactSink>, options: SessionOptions) -> Self {
@@ -595,7 +595,7 @@ impl BrowserSession {
     }
 
     /// Have a tab that joins the run render: in front of its window, or behind it and kept painting.
-    async fn show(&self, target_id: &str) -> Result<(), BrowserError> {
+    pub(crate) async fn show(&self, target_id: &str) -> Result<(), BrowserError> {
         if self.activate(target_id).await? {
             return Ok(());
         }
@@ -744,7 +744,7 @@ impl BrowserSession {
             .map(drop)
     }
 
-    async fn open_owned_tab(&self, url: &str) -> Result<(), BrowserError> {
+    pub(crate) async fn open_owned_tab(&self, url: &str) -> Result<(), BrowserError> {
         // A tab that is neither in front nor focus-emulated does not render: animation frames never fire, so menus
         // that animate open never become visible, screenshots hang and clicks read as covered. A foreground run
         // activates its tab. A background run opens it behind the window's current tab, because Chrome focuses the
@@ -771,7 +771,7 @@ impl BrowserSession {
         Ok(())
     }
 
-    async fn prepare_session(&self, session_id: &str) -> Result<(), BrowserError> {
+    pub(crate) async fn prepare_session(&self, session_id: &str) -> Result<(), BrowserError> {
         self.check_access().await?;
         let scoped = self.0.grant.is_some();
         let mut patterns = vec![download_pattern()];
@@ -948,7 +948,11 @@ impl Shared {
         BrowserSession(self.clone())
     }
 
-    fn spawn(self: &Arc<Self>, state: &mut State, work: impl Future<Output = ()> + Send + 'static) -> Option<()> {
+    pub(crate) fn spawn(
+        self: &Arc<Self>,
+        state: &mut State,
+        work: impl Future<Output = ()> + Send + 'static,
+    ) -> Option<()> {
         if state.closing {
             return None;
         }
@@ -969,7 +973,7 @@ impl Shared {
         }
     }
 
-    fn on_event(self: &Arc<Self>, event: &Event) {
+    pub(crate) fn on_event(self: &Arc<Self>, event: &Event) {
         let params = &event.params;
         let session = event.session.as_deref();
         match event.method.as_str() {
@@ -1141,7 +1145,13 @@ impl Shared {
         None
     }
 
-    fn begin_popup(self: &Arc<Self>, state: &mut State, target_id: &str, opener_id: &str, session: Option<String>) {
+    pub(crate) fn begin_popup(
+        self: &Arc<Self>,
+        state: &mut State,
+        target_id: &str,
+        opener_id: &str,
+        session: Option<String>,
+    ) {
         if state.popups.iter().any(|p| p.target_id == target_id) {
             return;
         }
@@ -1242,7 +1252,7 @@ impl Shared {
     }
 }
 
-async fn adopt_popup(shared: &Arc<Shared>, target_id: &str, opener_id: &str, session: Option<String>) {
+pub(crate) async fn adopt_popup(shared: &Arc<Shared>, target_id: &str, opener_id: &str, session: Option<String>) {
     let session_handle = shared.session();
     let adopt = async {
         let session_id = match session {
@@ -1325,7 +1335,7 @@ async fn update_screencast(shared: &Arc<Shared>) {
     }
 }
 
-async fn deliver_frames(shared: &Arc<Shared>) {
+pub(crate) async fn deliver_frames(shared: &Arc<Shared>) {
     loop {
         let (frame, deliver) = {
             let mut state = shared.state.lock().unwrap();
