@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import itertools
 import json
+import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from enum import StrEnum
 from typing import Any, Literal, assert_never
@@ -23,7 +24,7 @@ from pydantic import (
 )
 
 from fastbrowse.batches import Answered, evaluate_batches
-from fastbrowse.config import Config, Thresholds, TokenBudget
+from fastbrowse.config import Config, Thresholds, TokenBudget, flag
 from fastbrowse.jev import (
     MAX_CHOICE_OPTIONS,
     ChoiceAnswer,
@@ -205,7 +206,24 @@ async def check_done(
         r.id for r in plan.requirements if r.kind is RequirementKind.INFORMATION and not notes.evidenced(r.id)
     }
     unmet = sorted(unevidenced)
+    # A requirement that only directs the browsing -- go through every page, browse the category, visit each
+    # listing -- is how the run reaches the information, not something the caller receives. Once every
+    # information requirement is evidenced, holding the run open for one of these buys nothing: a count read off
+    # the site's own exhaustive tag listing still looped on "navigate through every page" until its recoveries ran
+    # out. The answer stands; the browsing step is reported as unconfirmed rather than blocking an evidenced answer.
+    # The exemption stands in for an answer that is already proved. A plan that asks for no answer, or one with no
+    # information requirement to prove, has no answer for a visit to stand in for, so its navigation is the task.
+    standing_answer = plan.page_answer_expected and any(
+        r.kind is RequirementKind.INFORMATION for r in plan.requirements
+    )
+    instrumental = (
+        {r.id for r in plan.requirements if r.kind is RequirementKind.ACTION and _traversal_only(r.text)}
+        if flag("FASTBROWSE_FIX_GATE") and standing_answer and not unevidenced
+        else set()
+    )
     for requirement in plan.requirements:
+        if requirement.id in instrumental:
+            continue
         match requirement.kind:
             case RequirementKind.ACTION:
                 questions[f"unmet_{requirement.id}"] = NoulQuestion(
@@ -276,6 +294,8 @@ async def check_done(
         )
     evaluation = await jev.evaluate(state, questions)
     for requirement in plan.requirements:
+        if requirement.id in instrumental:
+            continue
         if _probability(evaluation.answers, f"unmet_{requirement.id}") > thresholds.claim_problem_above:
             unmet.append(requirement.id)
     complete = _probability(evaluation.answers, "complete")
@@ -285,7 +305,8 @@ async def check_done(
     doubted = tuple(
         r.id
         for r in plan.requirements
-        if not (
+        if r.id not in instrumental
+        and not (
             isinstance(doubt := evaluation.answers.get(f"unmet_{r.id}"), NoulAnswer)
             and doubt.probability < thresholds.requirement_confirmed_below
         )
@@ -1888,6 +1909,31 @@ async def extract(
 
 
 _OMITTED = "requirement_omitted"
+
+# How a requirement that only moves through pages is worded, and the verbs that make it something the caller
+# receives instead (a submission, an account, a purchase). A requirement naming either of these is not traversal.
+_TRAVERSAL = re.compile(
+    r"\b(?:navigate|browse|go through|going through|go to each|visit|scroll|page through|paging through|"
+    r"read through|look through|open each|move through|click through|walk through|search through|explore)\b",
+    re.IGNORECASE,
+)
+_COMMITTING = re.compile(
+    r"\b(?:submit|send|sign in|sign up|log in|log out|login|logout|register|add to (?:the )?(?:cart|basket|bag)|"
+    r"place (?:the |an |your )?order|buy|purchase|pay|check ?out|book|reserve|delete|remove|upload|download|"
+    r"fill|type|enter|apply|save|create|post|publish|confirm|accept|subscribe|checkout)\b",
+    re.IGNORECASE,
+)
+
+
+def _traversal_only(text: str) -> bool:
+    """Whether a requirement only directs the browsing, rather than naming something the caller receives.
+
+    A traversal requirement is instrumental: its point is the information it reaches, so once that information is
+    evidenced and verified, an unconfirmed visit does not leave the task unanswered. Anything that changes state
+    on the site keeps blocking, because a run that never submitted the form or placed the order has not done what
+    the caller asked for however good its evidence is.
+    """
+    return bool(_TRAVERSAL.search(text)) and not _COMMITTING.search(text)
 
 
 def _probability(answers: Mapping[str, object], key: str) -> float:

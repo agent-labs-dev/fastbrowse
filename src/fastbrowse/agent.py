@@ -47,7 +47,7 @@ from fastbrowse.batches import evaluate_batches
 from fastbrowse.citations import ANSWER_LINK, text_fragment
 from fastbrowse.clients.validation import jev_spend
 from fastbrowse.comparison import NumericComparison, complete_comparison
-from fastbrowse.config import Config, ObservationLimits
+from fastbrowse.config import Config, ObservationLimits, flag
 from fastbrowse.effects import (
     SETTING_ROLES,
     ControlKey,
@@ -855,7 +855,7 @@ class Agent:
                 stop.error = None if stop.error is None else self._redactor.redact(stop.error)
                 if stop.status in {Status.STUCK, Status.UNVERIFIED} and state is not None and state.notes.evidence:
                     # What was read is still cited evidence; a caller told only "stuck" has to browse again for it.
-                    result = self._partial_result(state.notes, state, ledger, stop.status, stop.error)
+                    result = await self._partial_result(state.notes, state, ledger, stop.status, stop.error)
                 else:
                     result = self._result(state, ledger, stop.status, error=stop.error, evidence=stop.evidence)
             except TimeoutError:
@@ -863,7 +863,7 @@ class Agent:
                     raise
                 assert ledger.limits.max_seconds is not None
                 limit = f"time limit {ledger.limits.max_seconds}s reached"
-                result = self._partial_result(
+                result = await self._partial_result(
                     state.notes if state else Notes(),
                     state,
                     ledger,
@@ -872,7 +872,7 @@ class Agent:
                     budget=BudgetStop(resource="seconds", limit=ledger.limits.max_seconds),
                 )
             except BudgetExceeded as error:
-                result = self._partial_result(
+                result = await self._partial_result(
                     state.notes if state else Notes(),
                     state,
                     ledger,
@@ -881,7 +881,7 @@ class Agent:
                     budget=error.budget,
                 )
             except NotesTooLarge as error:
-                result = self._partial_result(
+                result = await self._partial_result(
                     state.notes if state else Notes(),
                     state,
                     ledger,
@@ -889,7 +889,7 @@ class Agent:
                     self._redactor.redact(str(error)),
                 )
             except ObservationTooLarge as error:
-                result = self._partial_result(
+                result = await self._partial_result(
                     state.notes if state else Notes(), state, ledger, Status.OBSERVATION_LIMIT, str(error)
                 )
             except (JevError, LLMError, BrowserError) as error:
@@ -899,7 +899,7 @@ class Agent:
                     state is None and isinstance(error, NavigationTimeout | SiteUnreachable)
                 )
                 status = Status.UNAVAILABLE if unavailable else Status.ERROR
-                result = self._partial_result(state.notes if state else Notes(), state, ledger, status, message)
+                result = await self._partial_result(state.notes if state else Notes(), state, ledger, status, message)
             finally:
                 # Cancelling a paid startup call loses its receipt, so a finished run joins it before reporting cost.
                 if loop_returned:
@@ -3842,7 +3842,7 @@ class Agent:
         if missing:
             reason = "DONE rejected: " + "; ".join(f"Answer output not verified: {item}" for item in missing)
             if oversized:
-                return self._partial_result(
+                return await self._partial_result(
                     state.notes, state, state.ledger, Status.UNVERIFIED, reason + "; " + "; ".join(oversized)
                 )
             state.rejected_answer_evidence = _answer_evidence(state.notes)
@@ -3858,7 +3858,7 @@ class Agent:
         try:
             result = await self._conclude(state, output_schema, answer)
         except NotesTooLarge as error:
-            return self._partial_result(state.notes, state, state.ledger, Status.UNVERIFIED, str(error))
+            return await self._partial_result(state.notes, state, state.ledger, Status.UNVERIFIED, str(error))
         if until is not None and not await until((self._raw_observation or await self._observe()).url):
             await self._recover(state, await self._observe(), "Completion condition not satisfied")
             return None
@@ -4213,6 +4213,34 @@ class Agent:
                 # Recovery follows the returned answer's failure, not a sparser fallback's missing fields.
                 state.missing_answer_outputs, state.open_answer_outputs, state.answer_corrections = failure
         return held or composed, held is not None
+
+    async def _commit(self, state: _RunState) -> ComposedAnswer | None:
+        """Write the answer a stopping run can still support, instead of handing back its notes.
+
+        A task that stopped without verifying its finish used to arrive as every quote it read, in page order,
+        with the value the task asked for somewhere among them: a table lookup ended with its rows dumped and no
+        sentence naming the country. The evidence was there; nobody had been asked to answer from it. One composer
+        call over the collected notes asks that, and it is spent only on a run that is already stopping.
+        """
+        if not state.plan.page_answer_expected or not state.notes.evidence:
+            return None
+        try:
+            generated = await compose(
+                self._llm,
+                state.task,
+                state.plan,
+                state.notes,
+                tokens=self._config.tokens,
+                ledger=state.ledger,
+                transaction_evidence_ids=await self._transaction_evidence_ids(state),
+                preserve_collections=bool(state.finish_partitions or state.answer_corrections),
+            )
+        except Exception:
+            # A stop is the worst moment to trade the evidence already read for an exception, so every failure of
+            # this best-effort call returns the notes rather than ending the run on a composer fault.
+            logger.warning("The commit composer failed; returning the read facts", exc_info=True)
+            return None
+        return generated.data if generated.data.claims else None
 
     async def _transaction_evidence_ids(self, state: _RunState) -> tuple[str, ...]:
         if not state.authorization.irreversible_actions or not state.transaction_candidates:
@@ -4611,7 +4639,7 @@ class Agent:
             start_landing_url=state.start_landing_url,
         )
 
-    def _partial_result(
+    async def _partial_result(
         self,
         notes: Notes,
         state: _RunState | None,
@@ -4624,7 +4652,17 @@ class Agent:
         """A run that could not finish still returns the claims it read, each with its evidence."""
         if not notes.facts:
             return self._result(state, ledger, status, error=error, budget=budget)
-        partial = partial_answer(notes, self._config.observation.working_notes_chars)
+        partial: ComposedAnswer | None = None
+        if flag("FASTBROWSE_FIX_COMMIT") and state is not None and status in {Status.STUCK, Status.UNVERIFIED}:
+            partial = await self._commit(state)
+        if partial is None:
+            partial = partial_answer(notes, self._config.observation.working_notes_chars)
+        else:
+            notice = (
+                "Answer (unverified). The run stopped before its completion check confirmed this; these are the "
+                "values its evidence supports, written as an answer rather than a dump of what was read."
+            )
+            partial = partial.model_copy(update={"linked_answer": notice + "\n\n" + partial.linked_answer})
         if (
             state is not None
             and (state.partition_answers or state.partial_answers)
