@@ -405,8 +405,8 @@ def cases() -> list[dict[str, Any]]:
     case(
         "llm unicode prompt",
         OPENROUTER_LLM,
-        [generate(messages=[{"role": "user", "content": 'Café — \U0001f600 "quoted" \\ \n\t\u0001'}])],
-        [completion('{"count":1,"tags":["été"]}')],
+        [generate(messages=[{"role": "user", "content": 'Caf\u00e9 \u2014 \U0001f600 "quoted" \\ \n\t\u0001'}])],
+        [completion('{"count":1,"tags":["\u00e9t\u00e9"]}')],
     )
     case(
         "llm gateway route",
@@ -706,7 +706,13 @@ def cases() -> list[dict[str, Any]]:
         [
             evaluate(
                 {"q": q_noul()},
-                {"price": 1e-05, "n": 1.0, "big": 1e16, "text": "café \U0001f600 </>", "list": [1, 2.5, None, True]},
+                {
+                    "price": 1e-05,
+                    "n": 1.0,
+                    "big": 1e16,
+                    "text": "caf\u00e9 \U0001f600 </>",
+                    "list": [1, 2.5, None, True],
+                },
             )
         ],
         [jev_answer(noul("q"))],
