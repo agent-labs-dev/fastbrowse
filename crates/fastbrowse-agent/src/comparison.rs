@@ -6,6 +6,7 @@ use std::collections::HashSet;
 
 use fastbrowse_core::models::FactReader;
 use fastbrowse_core::py::text;
+use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::memory::{Comparison, Fact, Notes, unique};
@@ -101,7 +102,7 @@ const DIGIT_ZEROS: [u32; 68] = [
 ];
 
 /// The value of `c` as a decimal digit, as `\d` in a `str` pattern matches it.
-fn digit(c: char) -> Option<u8> {
+pub(crate) fn digit(c: char) -> Option<u8> {
     let code = c as u32;
     DIGIT_ZEROS.iter().find(|zero| (**zero..*zero + 10).contains(&code)).map(|zero| (code - zero) as u8)
 }
@@ -232,6 +233,28 @@ pub fn complete_comparison(notes: &mut Notes, requirement_id: &str, comparison: 
         scope: None,
     });
     true
+}
+
+impl Schema for QuotedField {
+    fn ty() -> Ty {
+        ModelTy::frozen("QuotedField", vec![Field::required("prefix", Ty::Str), Field::required("suffix", Ty::Str)])
+            .ty()
+    }
+}
+
+impl Schema for NumericComparison {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "NumericComparison",
+            vec![
+                Field::required("order", Ty::literals(&["lowest", "highest"])),
+                Field::required("limit", Ty::Int.ge(1).le(60)),
+                Field::required("label", QuotedField::ty()),
+                Field::required("value", QuotedField::ty()),
+            ],
+        )
+        .ty()
+    }
 }
 
 #[cfg(test)]

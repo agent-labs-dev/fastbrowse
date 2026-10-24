@@ -347,7 +347,7 @@ pub struct CapturedPage {
 pub type Guessed = Arc<dyn Fn(&Evidence) -> bool + Send + Sync>;
 
 /// A requirement-scoped row identity: requirement, address without its fragment, squashed quote.
-type RecordIdentity = (String, String, String);
+pub type RecordIdentity = (String, String, String);
 
 #[derive(Clone, Default)]
 pub struct Notes {
@@ -367,6 +367,26 @@ pub struct Notes {
     pages: IndexMap<(String, String, DateTime), CapturedPage>,
 }
 
+/// Everything a `Notes` holds, as `tests/golden/capture.py` writes it, so a recorded call can start from the notes a
+/// Python test had built. Sets are sorted; maps keep insertion order. A guess test cannot be written down, so it is
+/// kept as the evidence ids it accepted when the state was taken.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotesState {
+    pub facts: Vec<(String, Fact)>,
+    pub requirements: Vec<(String, Vec<String>)>,
+    pub owners: Vec<(String, Vec<String>)>,
+    pub retired: Vec<String>,
+    pub discredited: Vec<String>,
+    pub guessed: Option<Vec<String>>,
+    pub tally_records: Vec<String>,
+    pub record_ids: Vec<(RecordIdentity, Vec<IndexMap<String, String>>)>,
+    pub continuation_records: Vec<(String, Vec<String>)>,
+    pub collection_pages: Vec<(String, Vec<CollectionRead>)>,
+    pub pages: Vec<((String, String, DateTime), CapturedPage)>,
+}
+
 impl fmt::Debug for Notes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Notes").field("facts", &self.facts).field("requirements", &self.requirements).finish()
@@ -380,6 +400,76 @@ impl Notes {
             notes.add(fact);
         }
         notes
+    }
+
+    #[doc(hidden)]
+    pub fn from_state(state: NotesState) -> Notes {
+        let sorted = |values: Vec<String>| values.into_iter().collect::<HashSet<_>>();
+        let on_guess: Option<Guessed> = state.guessed.map(|ids| {
+            let ids: HashSet<String> = ids.into_iter().collect();
+            Arc::new(move |evidence: &Evidence| ids.contains(&evidence_id(evidence))) as Guessed
+        });
+        Notes {
+            facts: state.facts.into_iter().collect(),
+            requirements: state.requirements.into_iter().map(|(k, v)| (k, v.into_iter().collect())).collect(),
+            owners: state.owners.into_iter().map(|(k, v)| (k, v.into_iter().collect())).collect(),
+            retired: sorted(state.retired),
+            discredited: sorted(state.discredited),
+            on_guess,
+            tally_records: sorted(state.tally_records),
+            record_ids: state.record_ids.into_iter().collect(),
+            continuation_records: state
+                .continuation_records
+                .into_iter()
+                .map(|(k, v)| (k, v.into_iter().collect()))
+                .collect(),
+            collection_pages: state.collection_pages.into_iter().map(|(k, v)| (k, v.into_iter().collect())).collect(),
+            pages: state.pages.into_iter().collect(),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn state(&self) -> NotesState {
+        let sorted = |values: &HashSet<String>| {
+            let mut values: Vec<String> = values.iter().cloned().collect();
+            values.sort();
+            values
+        };
+        let guessed = self.on_guess.as_ref().map(|on_guess| {
+            let mut ids: Vec<String> = self
+                .facts
+                .values()
+                .filter_map(|fact| fact.evidence.as_ref())
+                .filter(|evidence| on_guess(evidence))
+                .map(evidence_id)
+                .collect();
+            ids.sort();
+            ids.dedup();
+            ids
+        });
+        NotesState {
+            facts: self.facts.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            requirements: self.requirements.iter().map(|(k, v)| (k.clone(), v.iter().cloned().collect())).collect(),
+            owners: {
+                // A HashMap has no order to keep, so owners are listed by fact id; compare Python's sorted too.
+                let mut owners: Vec<(String, Vec<String>)> =
+                    self.owners.iter().map(|(k, v)| (k.clone(), v.iter().cloned().collect())).collect();
+                owners.sort();
+                owners
+            },
+            retired: sorted(&self.retired),
+            discredited: sorted(&self.discredited),
+            guessed,
+            tally_records: sorted(&self.tally_records),
+            record_ids: self.record_ids.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            continuation_records: self.continuation_records.iter().map(|(k, v)| (k.clone(), sorted(v))).collect(),
+            collection_pages: self
+                .collection_pages
+                .iter()
+                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
+                .collect(),
+            pages: self.pages.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        }
     }
 
     fn requirements_of(&self, key: &str) -> Option<&BTreeSet<String>> {

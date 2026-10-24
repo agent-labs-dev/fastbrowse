@@ -8,10 +8,13 @@ mod macros;
 
 pub mod batches;
 pub mod comparison;
+mod difflib;
 pub mod error;
 pub mod memory;
 pub mod planner;
 pub mod policy;
+mod pyre;
+pub mod retrieval;
 pub mod scripted;
 pub mod shortcut;
 mod support;
