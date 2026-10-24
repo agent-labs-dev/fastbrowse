@@ -10,7 +10,9 @@ answers apart, because they fail for different reasons:
 - The regression check is bounded and matched. It compares fastbrowse against fastbrowse at the same suite,
   task and task version, only against the latest published release that ran them at the same protocol and model
   route, and it refuses a pass rate that declines, a live task with fewer than three distinct measured repeats
-  even before a baseline exists, or a median wall time or cost that grows past its bound. It picks the newest
+  even before a baseline exists, or a median call count or cost that grows past its bound, or model throughput
+  that falls past it. Wall time is recorded but never gates: it moves with cloud load, not with the build. It picks
+  the newest
   matching release that itself has three attempts, so a thin newest release cannot hide an older full one; a
   task with no matching baseline, or a matching baseline too small to be a rate, is reported and never blocks
   once the candidate has its three repeats. Other arms and older protocols are never pooled into the comparison.
@@ -54,8 +56,10 @@ REGRESSION_MIN_ATTEMPTS = 3
 """Below this a rate is a diagnostic, not a comparison: fewer repeats than this are never published as one."""
 REGRESSION_FACTOR = 1.2
 """A candidate median over this much of the baseline's is a material movement."""
-REGRESSION_SPEED_FLOOR_SECONDS = 1.0
-"""The smallest wall-time rise, in seconds, that counts beside the relative bound."""
+REGRESSION_CALL_FLOOR = 1.0
+"""The smallest rise in a median call count that counts beside the relative bound."""
+REGRESSION_TOKENS_PER_SECOND_FLOOR = 1.0
+"""The smallest fall in median model throughput (tokens a second) that counts beside the relative bound."""
 REGRESSION_COST_FLOOR_DOLLARS = 0.001
 """The smallest cost rise, in dollars, that counts beside the relative bound."""
 
@@ -706,6 +710,16 @@ def _prices(rows: Sequence[Mapping[str, Any]]) -> list[float]:
     ]
 
 
+def _median_metric(rows: Sequence[Mapping[str, Any]], field: str) -> float | None:
+    """The median of a numeric metric, or None when any row omits it: a partial set is not a median."""
+    values = [
+        float(row[field])
+        for row in rows
+        if isinstance(row.get(field), int | float) and not isinstance(row.get(field), bool)
+    ]
+    return statistics.median(values) if values and len(values) == len(rows) else None
+
+
 def _over(base: float, candidate: float, floor: float) -> bool:
     """A movement counts only past both the relative bound and the absolute floor, so noise under the floor
     never blocks."""
@@ -718,17 +732,44 @@ def _moves(
     measured_base: Sequence[Mapping[str, Any]],
     measured_candidate: Sequence[Mapping[str, Any]],
 ) -> list[Finding]:
-    """Wall time and cost move with cloud load, so each is gated only past its relative bound and floor together."""
+    """Efficiency moves gate a release; wall time does not.
+
+    Wall time and cloud load move together, so a median wall-time comparison is noise across releases. The calls a
+    run made and its model throughput are properties of the build, so those are what a release is compared on, and
+    wall time stays a diagnostic.
+    """
     findings = []
-    base_seconds = statistics.median(float(row.get("seconds") or 0.0) for row in measured_base)
-    candidate_seconds = statistics.median(float(row.get("seconds") or 0.0) for row in measured_candidate)
-    if _over(base_seconds, candidate_seconds, REGRESSION_SPEED_FLOOR_SECONDS):
+    for field, label in (("llm_calls", "LLM calls"), ("jev_calls", "Jev calls")):
+        base_calls = _median_metric(measured_base, field)
+        candidate_calls = _median_metric(measured_candidate, field)
+        if (
+            base_calls is not None
+            and candidate_calls is not None
+            and _over(base_calls, candidate_calls, REGRESSION_CALL_FLOOR)
+        ):
+            findings.append(
+                _finding(
+                    REGRESS,
+                    "efficiency",
+                    f"{where}: median {candidate_calls:.0f} {label} against {release} {base_calls:.0f}; "
+                    f"over {round((REGRESSION_FACTOR - 1) * 100)}% and more than {REGRESSION_CALL_FLOOR:.0f}",
+                )
+            )
+    base_tps = _median_metric(measured_base, "tokens_per_second")
+    candidate_tps = _median_metric(measured_candidate, "tokens_per_second")
+    if (
+        base_tps is not None
+        and candidate_tps is not None
+        and base_tps > 0
+        and candidate_tps < base_tps / REGRESSION_FACTOR
+        and base_tps - candidate_tps > REGRESSION_TOKENS_PER_SECOND_FLOOR
+    ):
         findings.append(
             _finding(
                 REGRESS,
-                "speed",
-                f"{where}: median {candidate_seconds:.1f}s against {release} {base_seconds:.1f}s; "
-                f"over {round((REGRESSION_FACTOR - 1) * 100)}% and more than {REGRESSION_SPEED_FLOOR_SECONDS:.0f}s",
+                "efficiency",
+                f"{where}: median {candidate_tps:.1f} tokens/s against {release} {base_tps:.1f}; "
+                f"under {round(100 / REGRESSION_FACTOR)}% and more than {REGRESSION_TOKENS_PER_SECOND_FLOOR:.0f}",
             )
         )
     base_prices = _prices(measured_base)
