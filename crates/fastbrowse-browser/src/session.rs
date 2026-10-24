@@ -218,6 +218,21 @@ pub(crate) struct Shared {
 #[derive(Clone)]
 pub struct BrowserSession(pub(crate) Arc<Shared>);
 
+/// Closes a session whose `open` was dropped before it finished.
+struct OpenGuard(Option<BrowserSession>);
+
+impl Drop for OpenGuard {
+    fn drop(&mut self) {
+        if let Some(session) = self.0.take()
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            runtime.spawn(async move {
+                let _ = session.close().await;
+            });
+        }
+    }
+}
+
 impl BrowserSession {
     pub fn new(connection: BrowserConnection, artifact_sink: Arc<dyn ArtifactSink>, options: SessionOptions) -> Self {
         let grant = connection.allowed_origins.clone().map(OriginGrant::new);
@@ -263,6 +278,9 @@ impl BrowserSession {
             }
         }));
         *self.0.client.lock().unwrap() = Some(client);
+        // A caller that gives up while the tab is being set up (a run's time budget) drops this future; the tab it may
+        // already own and the socket are then closed in the background, as Python's `except BaseException` closes them.
+        let mut guard = OpenGuard(Some(self.clone()));
         let opened = async {
             self.check_access().await?;
             if self.0.connection.attach {
@@ -294,6 +312,7 @@ impl BrowserSession {
             Ok::<(), BrowserError>(())
         }
         .await;
+        guard.0 = None;
         if let Err(error) = opened {
             let _ = self.close().await;
             return Err(error);
@@ -320,6 +339,12 @@ impl BrowserSession {
             if timeout(secs(FRAME_RELEASE_SECONDS), delivery).await.is_err() {
                 warn("The frame callback ignored cancellation; closing without it");
             }
+        }
+        {
+            // What the stopped delivery's `finally` would have reset, so a session opened again delivers frames.
+            let mut state = self.0.state.lock().unwrap();
+            state.frame_scheduled = false;
+            state.pending_frame = None;
         }
         // Download finalizers still need the socket to release intercepted requests; a stopped one is released here.
         if let Some(client) = self.client_opt() {
@@ -1289,13 +1314,26 @@ pub(crate) async fn adopt_popup(shared: &Arc<Shared>, target_id: &str, opener_id
         );
         Ok::<(), BrowserError>(())
     };
+    // Settled however this ends, as Python's `finally` does: a session closing mid-adoption drops this future, and a
+    // `follow_popup` waiting on the popup must still learn it never joined.
+    let _settle = AdoptionSettled { shared, target_id };
     let _ = adopt.await;
-    let state = shared.state.lock().unwrap();
-    let joined = state.has_tab(target_id);
-    if let Some(popup) = state.popups.iter().find(|p| p.target_id == target_id)
-        && popup.adopted.borrow().is_none()
-    {
-        popup.adopted.send_replace(Some(joined));
+}
+
+struct AdoptionSettled<'a> {
+    shared: &'a Arc<Shared>,
+    target_id: &'a str,
+}
+
+impl Drop for AdoptionSettled<'_> {
+    fn drop(&mut self) {
+        let state = self.shared.state.lock().unwrap();
+        let joined = state.has_tab(self.target_id);
+        if let Some(popup) = state.popups.iter().find(|p| p.target_id == self.target_id)
+            && popup.adopted.borrow().is_none()
+        {
+            popup.adopted.send_replace(Some(joined));
+        }
     }
 }
 

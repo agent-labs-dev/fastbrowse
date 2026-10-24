@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, timeout, timeout_at};
+use tokio_tungstenite::tungstenite::error::ProtocolError;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
@@ -140,15 +141,24 @@ impl WeakCdp {
 fn unreachable(error: &WsError) -> bool {
     match error {
         WsError::Http(response) => RETRYABLE_STATUS.contains(&response.status().as_u16()),
-        WsError::Io(_) | WsError::ConnectionClosed | WsError::AlreadyClosed => true,
+        WsError::Io(io) => !tls_failure(io),
+        // A handshake the endpoint closed before its status line is Python's `InvalidMessage` from an EOF.
+        WsError::Protocol(ProtocolError::HandshakeIncomplete) => true,
+        WsError::ConnectionClosed | WsError::AlreadyClosed => true,
         _ => false,
     }
+}
+
+/// rustls reports a refused certificate through the stream as an I/O error carrying its own error.
+fn tls_failure(io: &std::io::Error) -> bool {
+    io.get_ref().is_some_and(|inner| inner.downcast_ref::<rustls::Error>().is_some())
 }
 
 /// The exception class name Python reports for a handshake failure; its text can carry the credential in the URL.
 fn handshake_detail(error: &WsError) -> &'static str {
     match error {
         WsError::Http(_) => "InvalidStatus",
+        WsError::Io(io) if tls_failure(io) => "SSLError",
         WsError::Io(io) => match io.kind() {
             std::io::ErrorKind::ConnectionRefused => "ConnectionRefusedError",
             std::io::ErrorKind::ConnectionReset => "ConnectionResetError",
@@ -330,15 +340,17 @@ impl Cdp {
             None => {
                 // The browser can go during the last wait, after the probe before it answered, so it is asked once
                 // more: only a browser that is still there makes this the page's failure rather than an outage.
+                let mut alive = true;
+                if timeout(Duration::ZERO, &mut reply).await.is_err() {
+                    alive = self.alive().await;
+                }
                 if let Ok(outcome) = timeout(Duration::ZERO, &mut reply).await {
+                    // The page answered while the browser was being asked: the command is done, however late.
                     outcome
-                } else if !self.alive().await {
+                } else if !alive {
                     return Err(BrowserError::BrowserUnresponsive(format!(
                         "{method} got no reply, and the browser stopped answering"
                     )));
-                } else if let Ok(outcome) = timeout(Duration::ZERO, &mut reply).await {
-                    // The page answered while the browser was being asked: the command is done, however late.
-                    outcome
                 } else {
                     self.0.deadlines.fetch_add(1, Ordering::Relaxed);
                     return Err(BrowserError::PageUnresponsive(format!(
