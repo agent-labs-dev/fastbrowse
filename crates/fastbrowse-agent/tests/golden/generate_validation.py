@@ -15,7 +15,7 @@ from typing import Any
 from pydantic import BaseModel, Field, ValidationError, create_model
 
 from fastbrowse.models import Frozen
-from fastbrowse.planner import Plan, _AnswerChecks, _FinishOutputs
+from fastbrowse.planner import Plan, _FinishOutputs
 from fastbrowse.retrieval import (
     Claim,
     _AnswerDraft,
@@ -64,13 +64,6 @@ CASES: dict[type[BaseModel], list[Any]] = {
         {"requirements": [{"id": 1, "text": None, "kind": "action", "count_records": "no"}], "answer_expected": 0},
         {"requirements": [{"id": "r", "text": "t", "kind": "action", "count_records": 2}], "answer_expected": 1.0},
         {"requirements": [{"id": "r", "text": "t", "kind": "action", "count_records": 1.5}], "answer_expected": True},
-    ],
-    _AnswerChecks: [
-        {"checks": ["The price"]},
-        {"checks": []},
-        {"checks": ["  "]},
-        {"checks": [1, None]},
-        {"checks": "price"},
     ],
     _FinishOutputs: [
         {

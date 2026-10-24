@@ -17,8 +17,8 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 /// Golden cases whose Rust model is not ported yet, or is private to its module. Wire each once its type lands:
-/// - `_AnswerChecks`, `_FinishOutputs`: private to `planner.rs`.
-const PENDING: &[&str] = &["_AnswerChecks", "_FinishOutputs"];
+/// - `_FinishOutputs`: private to `planner.rs`.
+const PENDING: &[&str] = &["_FinishOutputs"];
 
 fn check<T: Schema + DeserializeOwned + Serialize>(case: &Value) {
     check_schema(&Typed::<T>::default(), case);
