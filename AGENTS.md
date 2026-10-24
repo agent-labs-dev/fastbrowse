@@ -31,7 +31,10 @@ uv run python scripts/changelog.py --check "$(uv version --short)"
 uv run python scripts/npm_versions.py               # the npm versions are the Python one
 uv run python scripts/no_slop.py
 uv run vale sync && uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs skills src scripts tests
+uv run python -m fastbrowse.evals.storage --manifest docs/results/evidence.manifest.json --check
 uv run pytest -q
+uv run python -m fastbrowse.evals.benchmarks --check-diff origin/main
+uv run python -m fastbrowse.evals.publication --check-diff origin/main
 npm ci --ignore-scripts && npm run check:browser
 npm run generate:sdk && git diff --exit-code -- packages/sdk/src/protocol.ts
 npm run check:sdk                                   # starts `fastbrowse serve` from the uv environment
@@ -143,6 +146,14 @@ a tracked text file (write a hyphen, a comma, or two sentences); Vale owns wordi
 comments and docstrings, and rejects weasel words, cliches and marketing verbs. This applies to commit
 messages and PR descriptions in spirit, and to everything in the repository by check.
 
+**The docs move with the code.** A user-visible change updates what describes it in the same PR: `README.md`,
+`docs/`, `skills/fastbrowse/`, `packages/sdk/README.md` and the changelog entry. fastbrowse.ai builds its docs,
+skill and `llms` pages from those files, so a stale sentence here is stale on the site too. Write and review
+prose with the [copywriting skill](https://github.com/cjber/skills/blob/main/copywriting/SKILL.md) and its
+[docs and interface guidance](https://github.com/cjber/skills/blob/main/copywriting/references/docs-and-ui.md):
+check each claim against the code, put the useful point first, and keep prerequisites, limits and recovery
+steps. The checks above catch punctuation and wording; the skill covers whether the sentence is true.
+
 ## Agent skills
 
 ### Issue tracker
@@ -188,9 +199,9 @@ the build.
 After PyPI the workflow asks fastbrowse.ai to rebuild, since its changelog page reads this file at build
 time. `scripts/changelog.py` is what reads the entry, so the repository, the release and the site never tell
 three stories about one version. `.github/workflows/site.yml` asks for the same rebuild whenever
-`CHANGELOG.md`, `README.md` or `docs/` change on `main`, so the site never waits for a release to catch up. It
-needs `SITE_DEPLOY_HOOK` (a Vercel deploy hook for `agent-labs-dev/fastbrowse-site`) in this repository's
-secrets; without it the workflows still succeed and warn that the site was not rebuilt.
+`CHANGELOG.md`, `README.md`, `docs/` or `skills/` change on `main`, so the site never waits for a release to
+catch up. It needs `SITE_DEPLOY_HOOK` (a Vercel deploy hook for `agent-labs-dev/fastbrowse-site`) in this
+repository's secrets; without it the workflows still succeed and warn that the site was not rebuilt.
 
 Pull requests also get an advisory Jev review (`.github/workflows/jev-review.yml`, `scripts/jev_review.py`):
 Jev judges whether changed prose is true to the diff and whether the changelog misses a user-visible change.

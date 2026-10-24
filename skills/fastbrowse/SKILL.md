@@ -19,7 +19,7 @@ local browsing is unavailable; explain the fallback.
 Use a connected fastbrowse MCP `browse` tool when its browser configuration matches that choice. Inspect its
 schema and pass `task` and `start` when known. Pass resource limits when the user supplies them or an
 existing task budget requires them. Server ceilings still apply. If the server's browser configuration is unknown,
-use the CLI to make the browser choice explicit. The tool returns `status`, `answer`, evidence, and
+use the CLI to make the browser choice explicit. The tool returns `status`, `answer`, `citations`, and
 `next_step` when the task is unfinished.
 
 Otherwise use the CLI. Check `fastbrowse --help` if installed; otherwise check `uvx --from fastbrowse fastbrowse
@@ -36,7 +36,8 @@ for generated commands, use an argument array rather than interpolating user tex
 Allow time for the browser run and wait for the process to finish. Progress goes to stderr and the JSON result
 goes to stdout. Preserve stdout even on a nonzero exit, since it can contain an unfinished run's evidence.
 
-fastbrowse needs an `OPENROUTER_API_KEY` configured in its environment or `.env`. Local browsing needs Chrome;
+fastbrowse needs `OPENROUTER_API_KEY` or `AI_GATEWAY_API_KEY` configured in its environment or `.env`; either
+serves both Jev and the LLM. Local browsing needs Chrome;
 cloud browsing also needs `BROWSER_USE_API_KEY`. Pass `--local` or the existing browser's `--cdp-url` explicitly,
 since the CLI itself defaults to cloud. A cloud browser cannot reach the caller's localhost. Check for
 configured keys without printing their values; if missing, ask the user to configure them outside the conversation.
@@ -81,7 +82,7 @@ verified facts from your own inference. A plausible answer with `unverified` is 
 | `unverified` | Report what could not be verified and preserve partial evidence. |
 | `budget_exceeded` | Report the exhausted resource; respect the user's total budget across retries. |
 | `observation_limit` | Narrow the task or required evidence to fit the observation limit. |
-| `stuck`, `unavailable`, `error` | Read the error or MCP `next_step`; report the obstacle if no concrete fix is available. |
+| `stuck`, `unavailable`, `error` | Read the error or MCP `next_step`; report the obstacle if no concrete fix is available. A `stuck` answer that starts `Answer (unverified)` is cited but unconfirmed; present it as partial. |
 
 Retry only after a concrete change, such as corrected input, a completed sign-in, or a resolved provider outage.
 Before repeating a write, inspect whether it already happened to avoid sending or purchasing twice.

@@ -43,9 +43,10 @@ identical limits, with the hosted agent at its defaults. C2 compares browsers, n
 fastbrowse build, tasks and repeats, and only the browser differs. On that backend fastbrowse passes fewer tasks
 on its own pool than on the Browser Use Cloud browser, 96.2% against 98.1%. [Benchmark results](docs/benchmarks.md)
 gives each comparison's sources, the campaigns behind C1, the browser cost basis and the limitations. The
-[benchmark page](https://fastbrowse.ai/benchmarks) renders only figures the maintainer approved. Rows are
-comparable only at matching task versions; the upstream suites and the Codex with Cua Driver arm are diagnostics,
-described in [eval results and workflow](docs/evals.md).
+[benchmark page](https://fastbrowse.ai/benchmarks) renders only figures the maintainer approved; the C1 and C2
+figures come from the 0.5.25 campaign staged in `docs/results/benchmark-candidate.json`, which awaits approval.
+Rows are comparable only at matching task versions; the upstream suites and the Codex with Cua Driver arm are
+diagnostics, described in [eval results and workflow](docs/evals.md).
 
 ### Why fastbrowse, against each kind of agent
 
@@ -70,13 +71,14 @@ A Node program needs neither uv nor Python: see [Use it from JavaScript](#use-it
 
 ```sh
 export OPENROUTER_API_KEY=...   # for Jev and the LLM that plans and reads
-# export AI_GATEWAY_API_KEY=... # Vercel AI Gateway: Jev backup, and the LLM when OPENROUTER_API_KEY is unset
+# export AI_GATEWAY_API_KEY=... # Vercel AI Gateway: Jev backup, and Jev and the LLM when OPENROUTER_API_KEY is unset
 export BROWSER_USE_API_KEY=...  # the cloud browser; or pass --local to use Chrome
 uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
 
-Jev uses direct TypeSafe when `TYPESAFE_API_KEY` is supplied; otherwise OpenRouter is primary.
-Vercel AI Gateway is supported as a backup or an explicit primary. `FASTBROWSE_JEV_SOURCE` overrides
+Jev uses direct TypeSafe when `TYPESAFE_API_KEY` is supplied, otherwise OpenRouter when `OPENROUTER_API_KEY` is
+set, and the Vercel AI Gateway when neither is. With `AI_GATEWAY_API_KEY` beside another key, the gateway is the
+backup. `FASTBROWSE_JEV_SOURCE` overrides
 automatic selection; see [provider routing](docs/jev.md#provider-failover). The LLM uses OpenRouter when
 `OPENROUTER_API_KEY` is set, otherwise the Vercel AI Gateway's OpenAI-compatible chat completions.
 
@@ -97,8 +99,8 @@ cp .env.example .env   # then fill in the keys, BROWSER_USE_API_KEY included, or
 uv run fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
 
-Steps go to stderr; the status, cost, step count and answer go to stdout. `--json` prints every step,
-the quotes behind the answer, and cost by component.
+Steps go to stderr; the status, cost, step count, the reason a run stopped short and the answer go to stdout.
+`--json` prints every step, the quotes behind the answer, and cost by component.
 
 | Flag | Effect |
 |:--|:--|
@@ -235,7 +237,7 @@ Only `complete` exits 0, so a program can also check zero versus nonzero.
 
 | Status | Exit | Meaning |
 |:--|--:|:--|
-| `complete` | 0 | every information requirement is backed by a quote, and every action is confirmed on the page |
+| `complete` | 0 | every information requirement is backed by a quote, and every action that changes the site is confirmed on the page |
 | `unverified` | 10 | it believes it finished but could not back every claim |
 | `needs_confirmation` | 3 | stopped before an irreversible action; re-run with `--authorize` |
 | `needs_login` | 4 | a sign-in wall that no `--secret` covers |
@@ -251,12 +253,18 @@ A `budget_exceeded` JSON result includes `budget.resource` (`steps`, `seconds`, 
 `llm_calls`) and `budget.limit`. Other results have `budget: null`. The embedding and MCP APIs carry the same
 optional object, so callers can identify the affected limit without parsing an error message.
 
+A run that stops `stuck` or `unverified` before writing its answer, with evidence read for a task that asks for
+one, returns a cited answer that starts `Answer (unverified)`, written by one more composer call. If that call
+fails, the answer is the list of quotes the run collected, as it is for the other statuses that stop with evidence.
+
 A bot check can block a cloud browser before any task steps execute. Retry with an attached local browser
 or choose another source for the research. Credentials do not resolve a CAPTCHA.
 The `blocked` result's `evidence` quotes the opening text of the challenge page, with its address.
 
 If a model completion omits its cost, fastbrowse looks up the matching OpenRouter or Vercel generation
-receipt. If that receipt is still unavailable, a run with a dollar cap stops with `budget_exceeded`;
+receipt. If that receipt is still unavailable, an OpenRouter call is charged at an upper bound from the model's
+listed prices: its whole context window at the highest price. A call that cannot be bounded, through the Vercel AI
+Gateway or a custom endpoint, leaves the cost unknown, and a run with a dollar cap stops with `budget_exceeded`;
 this does not mean the known charges reached the cap. Supplied `inputs` can provide exact field text
 without a field-writing generation.
 
@@ -288,7 +296,7 @@ More in [docs/design.md](docs/design.md).
 | Signing in | yes | password fields excluded | `--secret` or a Bitwarden vault item; models see names only |
 | Irreversible actions | explicit task instructions in our fixture tests | no authorization parameter in Agent | classifier plus a code-enforced authorization gate |
 | Browser | cloud | Chrome through Browser Harness; cloud in these evals | cloud by default, or local Chrome with `--local` |
-| Benchmarked in | C1 | C3 | C1 on a cloud browser; C2 and C3 on its own browser pool |
+| Benchmarked in | C1 | C3 | C1 on a cloud browser; C2 on its own pool and on a Browser Use Cloud browser; C3 on its own pool |
 
 Browser Use Ultrafast (`jev-ultrafast`) is Browser Use's navigation agent, separate from its hosted
 LLM agent; fastbrowse shares its core techniques. Its column describes

@@ -6,8 +6,9 @@ statuses and exit codes is in [the README](../README.md#results).
 
 The CLI prints the status, cost and step count, then the error and anything the run read before it stopped.
 `--json` prints the whole result, including every step and the quotes behind the answer. A run that stops
-`stuck`, `unverified`, `budget_exceeded` or `observation_limit` after it has read something still returns
-those cited quotes, so check `evidence` before browsing again.
+`stuck`, `unverified`, `budget_exceeded`, `observation_limit`, `unavailable` or `error` after it has read
+something still returns those cited quotes, so check `evidence` before browsing again. A `stuck` or `unverified`
+run also writes an answer from them, marked `Answer (unverified)`, when the task asks for one.
 
 ## needs_login (exit 4)
 
