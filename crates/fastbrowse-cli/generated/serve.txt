@@ -1,0 +1,7 @@
+usage: fastbrowse serve [-h] --stdio
+
+Serve browser runs to another process over JSON-RPC.
+
+options:
+  -h, --help  show this help message and exit
+  --stdio     speak on stdin and stdout

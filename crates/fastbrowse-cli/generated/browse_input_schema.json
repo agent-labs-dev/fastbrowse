@@ -1,0 +1,141 @@
+{
+  "$defs": {
+    "OutputField": {
+      "properties": {
+        "type": {
+          "enum": [
+            "string",
+            "integer",
+            "number",
+            "boolean",
+            "date"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "OutputField",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "task": {
+      "description": "What to do, with every value it needs.",
+      "maxLength": 4000,
+      "minLength": 1,
+      "title": "Task",
+      "type": "string"
+    },
+    "start": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The http or https URL to open first. Omit it and the first address is worked out from the task; a secret is then not offered, because there is no origin to scope it to.",
+      "title": "Start"
+    },
+    "fields": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/OutputField"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Typed values to return in `data`, by name, supported by page evidence.",
+      "title": "Fields"
+    },
+    "authorize": {
+      "default": false,
+      "description": "Go through irreversible actions. Needs the server's --allow-authorize.",
+      "title": "Authorize",
+      "type": "boolean"
+    },
+    "bitwarden": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "A Bitwarden item this server offers, to sign in with.",
+      "title": "Bitwarden"
+    },
+    "max_steps": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Stop after this many steps.",
+      "title": "Max Steps"
+    },
+    "max_dollars": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Stop past this model spend in USD.",
+      "title": "Max Dollars"
+    },
+    "max_seconds": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Stop past this wall time.",
+      "title": "Max Seconds"
+    }
+  },
+  "required": [
+    "task"
+  ],
+  "title": "browseArguments",
+  "type": "object"
+}

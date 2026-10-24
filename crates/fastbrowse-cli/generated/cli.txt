@@ -1,0 +1,64 @@
+usage: fastbrowse [-h] [--version] [--start START] [--cloud | --local]
+                  [--headed] [--profile PROFILE] [--cloud-profile ID]
+                  [--cdp-url URL] [--cdp-port PORT] [--attach]
+                  [--target-match PATTERN] [--foreground] [--proxy-country CC]
+                  [--authorize] [--secret NAME=ENV_VAR[@ORIGIN]]
+                  [--bitwarden ITEM] [--max-steps MAX_STEPS]
+                  [--max-dollars MAX_DOLLARS] [--downloads DOWNLOADS] [--json]
+                  [--record FILE] [--cursor]
+                  task
+
+Run one browser task.
+
+positional arguments:
+  task
+
+options:
+  -h, --help            show this help message and exit
+  --version             show program's version number and exit
+  --start START         URL to open before the task starts; worked out from
+                        the task if omitted
+  --cloud               use cloud Chrome, overriding local environment
+                        defaults
+  --local               use local Chrome instead of a Browser Use Cloud
+                        browser
+  --headed              show the local Chrome window (implies --local)
+  --profile PROFILE     Chrome profile directory kept between runs (implies
+                        --local)
+  --cloud-profile ID    a Browser Use Cloud profile to run signed in as
+  --cdp-url URL         attach to a browser already running at this CDP
+                        websocket URL, instead of starting one
+  --cdp-port PORT       attach to a browser or Electron app on this DevTools
+                        port (http://127.0.0.1:<port>/json/version)
+  --attach              attach to an existing page/window without creating a
+                        new tab or closing it on exit
+  --target-match PATTERN
+                        substring match on page title or URL when attaching to
+                        an existing window (implies --attach)
+  --foreground          bring the run's tab and its browser window to the
+                        front, to watch it; otherwise a visible window stays
+                        in the background
+  --proxy-country CC    country the cloud browser browses from, as Browser
+                        Use's two-letter code, e.g. uk (default: us)
+  --authorize           allow irreversible actions without confirmation
+  --secret NAME=ENV_VAR[@ORIGIN]
+                        secret from an environment variable, scoped to ORIGIN
+                        or the --start origin (repeatable)
+  --bitwarden ITEM      type this vault login's username, password and
+                        authenticator code (unlocked bw CLI)
+  --max-steps MAX_STEPS
+                        optional step limit (default: no step limit)
+  --max-dollars MAX_DOLLARS
+                        optional model-spend limit in USD, excluding browser
+                        charges
+  --downloads DOWNLOADS
+                        directory for downloaded files
+  --json                print the full result as JSON
+  --record FILE         save a video of the run, ending on its answer (needs
+                        ffmpeg)
+  --cursor              draw the agent's cursor over a visible Chrome with the
+                        Cua Driver (Linux X11; skipped where unsupported)
+
+Exit codes: 2 usage error; 0 complete; 1 error; 3 needs_confirmation; 4
+needs_login; 5 needs_input; 6 blocked; 7 budget_exceeded; 8 unavailable; 9
+stuck; 10 unverified; 11 observation_limit

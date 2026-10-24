@@ -1,0 +1,40 @@
+usage: fastbrowse-mcp [-h] [--transport {stdio,http}] [--host HOST]
+                      [--port PORT] [--local] [--headed] [--profile PROFILE]
+                      [--foreground] [--cloud-profile ID] [--allow-authorize]
+                      [--secret NAME=ENV_VAR@ORIGIN] [--bitwarden ITEM]
+                      [--max-steps MAX_STEPS] [--max-dollars MAX_DOLLARS]
+                      [--max-seconds MAX_SECONDS]
+                      [--max-concurrent MAX_CONCURRENT]
+                      [--downloads DOWNLOADS] [--cursor]
+
+Serve fastbrowse as an MCP tool.
+
+options:
+  -h, --help            show this help message and exit
+  --transport {stdio,http}
+  --host HOST           HTTP only: address to bind
+  --port PORT           HTTP only: port to bind
+  --local               run on local Chrome instead of Browser Use Cloud
+  --headed              show the local Chrome window (implies --local)
+  --profile PROFILE     Chrome profile directory kept between runs (implies
+                        --local)
+  --foreground          bring each run's tab and its browser window to the
+                        front, to watch it; otherwise a visible window stays
+                        in the background
+  --cloud-profile ID    a Browser Use Cloud profile to run signed in as
+  --allow-authorize     let a call pass authorize
+  --secret NAME=ENV_VAR@ORIGIN
+                        repeatable
+  --bitwarden ITEM      repeatable
+  --max-steps MAX_STEPS
+                        optional ceiling per call
+  --max-dollars MAX_DOLLARS
+                        optional ceiling per call, in USD
+  --max-seconds MAX_SECONDS
+                        optional ceiling per call
+  --max-concurrent MAX_CONCURRENT
+                        runs at once; more wait
+  --downloads DOWNLOADS
+                        directory to keep downloaded files in
+  --cursor              draw the agent's cursor over a headed Chrome with the
+                        Cua Driver (Linux X11)

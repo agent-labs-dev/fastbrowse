@@ -1,0 +1,230 @@
+{
+  "$defs": {
+    "BudgetStop": {
+      "additionalProperties": false,
+      "properties": {
+        "resource": {
+          "enum": [
+            "steps",
+            "dollars",
+            "seconds",
+            "jev_calls",
+            "llm_calls"
+          ],
+          "title": "Resource",
+          "type": "string"
+        },
+        "limit": {
+          "title": "Limit",
+          "type": "number"
+        }
+      },
+      "required": [
+        "resource",
+        "limit"
+      ],
+      "title": "BudgetStop",
+      "type": "object"
+    },
+    "Citation": {
+      "description": "`models.Evidence` as a caller needs it: the words and where they were, without the capture offsets and\nhashes that only mean something inside a run.",
+      "properties": {
+        "quote": {
+          "title": "Quote",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "quote",
+        "url"
+      ],
+      "title": "Citation",
+      "type": "object"
+    },
+    "Download": {
+      "description": "`models.Artifact` without its `kind` (every artifact here is a download) or its `sha256`, which a caller\ncannot check against bytes it never receives.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "mime_type": {
+          "title": "Mime Type",
+          "type": "string"
+        },
+        "size_bytes": {
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "uri": {
+          "title": "Uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "mime_type",
+        "size_bytes",
+        "uri"
+      ],
+      "title": "Download",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "Status": {
+      "enum": [
+        "complete",
+        "unverified",
+        "needs_confirmation",
+        "needs_login",
+        "blocked",
+        "needs_input",
+        "stuck",
+        "budget_exceeded",
+        "observation_limit",
+        "unavailable",
+        "error"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "budget": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BudgetStop"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "status": {
+      "$ref": "#/$defs/Status"
+    },
+    "answer": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Answer"
+    },
+    "data": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonValue"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "citations": {
+      "items": {
+        "$ref": "#/$defs/Citation"
+      },
+      "title": "Citations",
+      "type": "array"
+    },
+    "next_step": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Next Step"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Error"
+    },
+    "final_url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Final Url"
+    },
+    "live_url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Live Url"
+    },
+    "steps": {
+      "title": "Steps",
+      "type": "integer"
+    },
+    "dollars": {
+      "title": "Dollars",
+      "type": "number"
+    },
+    "cost_complete": {
+      "title": "Cost Complete",
+      "type": "boolean"
+    },
+    "downloads": {
+      "items": {
+        "$ref": "#/$defs/Download"
+      },
+      "title": "Downloads",
+      "type": "array"
+    },
+    "screenshot": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Download"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "status",
+    "answer",
+    "data",
+    "citations",
+    "next_step",
+    "error",
+    "final_url",
+    "live_url",
+    "steps",
+    "dollars",
+    "cost_complete",
+    "downloads"
+  ],
+  "title": "BrowseResult",
+  "type": "object"
+}
