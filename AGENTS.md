@@ -135,10 +135,9 @@ These are the things a change must not quietly break.
 
 A prompt is code, and a model's output is untrusted until code accepts it.
 
-- **One call does one job, completely.** A request that states a task states everything the next step needs
-  from it. The plan call writes its own answer checks instead of leaving a terse draft for a second call to
-  repair. Split a job across calls only when the two cannot be asked in the same breath, and give each half
-  its own contract.
+- **One call does one job.** A request that states a task states everything the next step needs from it. The
+  plan call writes its own answer checks instead of leaving a terse draft for a second call to repair. Split a
+  job across calls only when the two cannot be asked in the same breath, and give each half its own contract.
 - **Code decides, the model proposes.** A check, a count, a citation or a stop decision is settled by code
   against the schema, the quotes or the page state. Trust a model's output only where code can prove it
   complete; where it cannot, repair it deterministically or ask again. A partial result is reported as
