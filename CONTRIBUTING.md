@@ -31,7 +31,10 @@ uv run python scripts/changelog.py --check "$(uv version --short)"
 uv run python scripts/npm_versions.py
 uv run python scripts/no_slop.py
 uv run vale sync && uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs skills src scripts tests
+uv run python -m fastbrowse.evals.storage --manifest docs/results/evidence.manifest.json --check
 uv run pytest -q
+uv run python -m fastbrowse.evals.benchmarks --check-diff origin/main
+uv run python -m fastbrowse.evals.publication --check-diff origin/main
 npm ci --ignore-scripts && npm run check:browser
 npm run generate:sdk && git diff --exit-code -- packages/sdk/src/protocol.ts
 npm run check:sdk

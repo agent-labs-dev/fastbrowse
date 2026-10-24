@@ -13,12 +13,14 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.6.0] - 2026-10-24
 
-- A slow model call is no longer raced by a duplicate request. The per-purpose hedge fired before the gateway's median for a verify, plan or compose call, so nearly every audit was sent twice and the discarded twin was billed in full; each call is now one request, bounded by its attempt deadline, and the eval harness records the transient time rather than hiding it behind a twin.
+- A slow model call is no longer raced by a duplicate request. The per-purpose hedge fired before the gateway's
+  median for a verify, plan or compose call, so nearly every audit was sent twice and the discarded twin was billed
+  in full. Each call is now one request, bounded by its attempt deadline, and the eval harness records the
+  transient time rather than hiding it behind a twin.
 
-- Waiting for a page to settle after an action waits on the page's own CDP lifecycle events instead of a fixed interval, so a settle wakes when the document reports init, DOMContentLoaded, load or networkIdle rather than re-reading the page on a timer. A release is also gated on the work a run did (the LLM and Jev calls it made and the tokens it sent) instead of median wall time, which moves with cloud load rather than with the build; wall time is recorded and never blocks.
-
-- A run that stops before its completion check confirms the finish returns an answer rather than the notes it collected, and a browsing requirement no longer holds an evidenced answer open.
-
+- Releases are gated on the work a run did instead of its median wall time, which moves with cloud load rather
+  than with the build. A candidate is held back when its median LLM calls, Jev calls or cost rise past their
+  bounds or its model throughput falls past it; wall time is recorded and never blocks.
 
 - A page with more controls than an observation keeps sends only the kept ones in full. Every control is still
   read, named and counted, and one past the caps arrives with only what tells whether it is a pager, which
@@ -28,6 +30,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Waiting for a page to settle after an action no longer reads all of its text every 100 ms. The wait watches
   for changes alone until the page goes quiet and reads the page once then, and the check for a loading spinner
   before each observation no longer reads the page's text at all.
+
+- The waits around that check now follow the page's own CDP lifecycle events (init, DOMContentLoaded, load,
+  networkIdle) instead of fixed sleeps of 0.1 to 0.5 seconds. The pause before the first check, the retry after a
+  navigation interrupts a read, and the wait for a challenge or error page to move on each end as soon as the
+  document reports a transition. Watching a control for a redraw while the next step is decided is one browser
+  call instead of one every 100 ms.
 
 - Every read of the page no longer sends the 48 KB page script to the browser and compiles it again. Each
   document compiles it once, so a step's observation and the checks around each action skip about 3 ms per call
