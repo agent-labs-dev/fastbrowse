@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-RESULTS = ("GATE_RESULT", "SIFT_RESULT", "SDK_RESULT", "SECRETS_RESULT", "CHANGES_RESULT")
+RESULTS = ("GATE_RESULT", "SIFT_RESULT", "SDK_RESULT", "RUST_RESULT", "SECRETS_RESULT", "CHANGES_RESULT")
 # Left unbuilt by a change that cannot alter them, which is a pass.
 OPTIONAL = ("BINARIES_RESULT", "AUR_RESULT")
 

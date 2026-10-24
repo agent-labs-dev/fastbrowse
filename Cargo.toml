@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+members = ["crates/fastbrowse-core", "crates/fastbrowse-py", "crates/fastbrowse-node"]
+
+[workspace.package]
+version = "0.5.25"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+# Stripping at link time left a dylib whose LINKEDIT string pool dyld refused on macOS 27.
+strip = "none"
