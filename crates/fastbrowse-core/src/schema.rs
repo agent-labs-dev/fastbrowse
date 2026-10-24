@@ -113,6 +113,8 @@ pub struct EnumTy {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelTy {
     pub name: String,
+    /// The Python module that defines it, which pydantic writes into a `$defs` name two models would share.
+    pub module: &'static str,
     pub doc: Option<String>,
     /// `extra="forbid"`, written as `"additionalProperties": false`.
     pub forbid_extra: bool,
@@ -153,7 +155,7 @@ impl Field {
 impl ModelTy {
     /// A `Frozen` model: `extra="forbid"`, field docstrings as descriptions.
     pub fn frozen(name: &str, fields: Vec<Field>) -> ModelTy {
-        ModelTy { name: name.into(), doc: None, forbid_extra: true, fields }
+        ModelTy { name: name.into(), module: "fastbrowse.models", doc: None, forbid_extra: true, fields }
     }
     pub fn doc(mut self, doc: &str) -> ModelTy {
         self.doc = Some(doc.into());
@@ -192,6 +194,7 @@ impl<T: Schema> Schema for Vec<T> {
 /// `model_json_schema()` of a model or any other type.
 pub fn json_schema(ty: &Ty) -> Value {
     let mut generator = Generator::default();
+    generator.collect(ty);
     let root = match ty {
         Ty::Model(model) => generator.model(model),
         other => generator.schema(other),
@@ -215,9 +218,46 @@ pub fn json_schema_of<T: Schema>() -> Value {
 #[derive(Default)]
 struct Generator {
     defs: BTreeMap<String, Value>,
+    /// Each distinct model under a name, in the order they are met.
+    models: BTreeMap<String, Vec<Arc<ModelTy>>>,
 }
 
 impl Generator {
+    /// Every model the type holds, so two different models sharing a name can be told apart.
+    fn collect(&mut self, ty: &Ty) {
+        match ty {
+            Ty::Model(model) => {
+                let seen = self.models.entry(model.name.clone()).or_default();
+                if seen.iter().any(|other| other == model) {
+                    return;
+                }
+                seen.push(model.clone());
+                for field in &model.fields {
+                    self.collect(&field.ty);
+                }
+            }
+            Ty::List(inner) | Ty::Set(inner) | Ty::Map(inner) | Ty::Optional(inner) | Ty::Alias(_, inner) => {
+                self.collect(inner)
+            }
+            Ty::Constrained(inner, _) => self.collect(inner),
+            Ty::Tuple(items) | Ty::Union(items) => items.iter().for_each(|item| self.collect(item)),
+            Ty::Tagged { variants, .. } => variants.iter().for_each(|(_, variant)| self.collect(variant)),
+            _ => {}
+        }
+    }
+
+    /// A model's `$defs` name: its own, unless another model has it too. Then pydantic writes each as its module and
+    /// name with a count, `fastbrowse__output_schema__item__1`, as an output schema with two `item` objects gets.
+    fn def_name(&self, model: &ModelTy) -> String {
+        match self.models.get(&model.name) {
+            Some(models) if models.len() > 1 => {
+                let index = models.iter().position(|other| **other == *model).unwrap_or(0) + 1;
+                format!("{}__{}__{index}", model.module.replace('.', "__"), model.name)
+            }
+            _ => model.name.clone(),
+        }
+    }
+
     fn reference(&mut self, name: &str, build: impl FnOnce(&mut Self) -> Value) -> Value {
         if !self.defs.contains_key(name) {
             // Held before it is built, so a model that refers to itself finds its own name.
@@ -248,22 +288,12 @@ impl Generator {
                 json!({"maxItems": count, "minItems": count, "prefixItems": items, "type": "array"})
             }
             Ty::Map(value) => json!({"additionalProperties": self.schema(value), "type": "object"}),
-            Ty::Optional(inner) => json!({"anyOf": [self.schema(inner), {"type": "null"}]}),
-            Ty::Union(options) => {
-                let mut branches = Vec::new();
-                for option in options {
-                    // pydantic flattens a union of unions into one `anyOf`.
-                    match self.schema(option) {
-                        Value::Object(map) if map.len() == 1 && map.contains_key("anyOf") => {
-                            if let Some(Value::Array(inner)) = map.get("anyOf") {
-                                branches.extend(inner.iter().cloned());
-                            }
-                        }
-                        other => branches.push(other),
-                    }
-                }
+            Ty::Optional(inner) => {
+                let mut branches = self.branches(std::slice::from_ref(&**inner));
+                branches.push(json!({"type": "null"}));
                 json!({ "anyOf": branches })
             }
+            Ty::Union(options) => json!({ "anyOf": self.branches(options) }),
             Ty::Literal(values) => literal(values),
             Ty::Enum(definition) => {
                 let definition = definition.clone();
@@ -282,7 +312,7 @@ impl Generator {
             }
             Ty::Model(model) => {
                 let model = model.clone();
-                let name = model.name.clone();
+                let name = self.def_name(&model);
                 self.reference(&name, |generator| generator.model(&model))
             }
             Ty::Alias(name, inner) => {
@@ -311,6 +341,22 @@ impl Generator {
         }
     }
 
+    /// The `anyOf` branches of a union. pydantic flattens a union of unions, `None` included, into one `anyOf`.
+    fn branches(&mut self, options: &[Ty]) -> Vec<Value> {
+        let mut branches = Vec::new();
+        for option in options {
+            match self.schema(option) {
+                Value::Object(mut map) if map.len() == 1 && map.contains_key("anyOf") => {
+                    if let Some(Value::Array(inner)) = map.remove("anyOf") {
+                        branches.extend(inner);
+                    }
+                }
+                other => branches.push(other),
+            }
+        }
+        branches
+    }
+
     fn model(&mut self, model: &ModelTy) -> Value {
         let mut properties = Map::new();
         let mut required = Vec::new();
@@ -333,19 +379,20 @@ impl Generator {
             }
             properties.insert(field.key().to_string(), Value::Object(schema));
         }
+        // pydantic's own order, which the final sort keeps for a model defined under the name `default`.
         let mut schema = Map::new();
-        if model.forbid_extra {
-            schema.insert("additionalProperties".into(), false.into());
-        }
-        if let Some(doc) = &model.doc {
-            schema.insert("description".into(), doc.clone().into());
-        }
+        schema.insert("type".into(), "object".into());
         schema.insert("properties".into(), Value::Object(properties));
         if !required.is_empty() {
             schema.insert("required".into(), Value::Array(required));
         }
         schema.insert("title".into(), model.name.clone().into());
-        schema.insert("type".into(), "object".into());
+        if let Some(doc) = &model.doc {
+            schema.insert("description".into(), doc.clone().into());
+        }
+        if model.forbid_extra {
+            schema.insert("additionalProperties".into(), false.into());
+        }
         Value::Object(schema)
     }
 }

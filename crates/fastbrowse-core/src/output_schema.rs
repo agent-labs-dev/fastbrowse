@@ -575,23 +575,28 @@ impl OutputType {
             },
             OutputType::Object(object) => object.validate(value, at),
             OutputType::Union(members) => {
-                // pydantic's smart union: a member whose type the value has exactly wins over one that takes it.
-                let exact = members.iter().find(|m| match m {
-                    OutputType::Int(_) => value.is_i64() || value.is_u64(),
-                    OutputType::Number(_) => value.is_f64(),
-                    _ => false,
-                });
-                if let Some(Ok(valid)) = exact.map(|m| m.validate(value, at)) {
-                    return Ok(valid);
-                }
+                // pydantic's smart union: the member that takes the value most exactly wins, the first of equals. A
+                // float only takes an int; the int validator, behind its whole-number conversion, counts as exact.
+                let mut best: Option<(u8, Value)> = None;
                 let mut errors = Vec::new();
                 for member in members {
                     match member.validate(value, at) {
-                        Ok(valid) => return Ok(valid),
+                        Ok(valid) => {
+                            let exactness = match member {
+                                OutputType::Number(_) if !value.is_f64() => 1,
+                                _ => 2,
+                            };
+                            if best.as_ref().is_none_or(|(score, _)| exactness > *score) {
+                                best = Some((exactness, valid));
+                            }
+                        }
                         Err(error) => errors.push(error.message),
                     }
                 }
-                invalid(at, errors.join("; "))
+                match best {
+                    Some((_, valid)) => Ok(valid),
+                    None => invalid(at, errors.join("; ")),
+                }
             }
             OutputType::OneOf { allowed, literal } => match allowed.iter().find(|option| same(value, option)) {
                 // A `Literal` hands back its own value; `Any` the value it was given.
@@ -653,7 +658,14 @@ impl ObjectType {
                 description: field.description.clone(),
             })
             .collect();
-        ModelTy { name: self.name.clone(), doc: None, forbid_extra: self.closed, fields }.ty()
+        ModelTy {
+            name: self.name.clone(),
+            module: "fastbrowse.output_schema",
+            doc: None,
+            forbid_extra: self.closed,
+            fields,
+        }
+        .ty()
     }
 
     /// `model_validate(data).model_dump(mode="json")`. A run fills the model by field name, a caller by property name;
