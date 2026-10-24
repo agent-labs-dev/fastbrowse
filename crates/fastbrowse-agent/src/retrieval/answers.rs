@@ -123,6 +123,18 @@ impl Schema for AnswerDraft {
     }
 }
 
+/// `create_model("_FieldAnswerDraft", ...)`: one list of claims per requested field, described by its check.
+pub(crate) fn field_answer_draft(fields: &[(usize, String)]) -> Ty {
+    ModelTy::frozen(
+        "_FieldAnswerDraft",
+        fields
+            .iter()
+            .map(|(index, check)| Field::required(&format!("output_{index}"), Ty::list(Claim::ty())).doc(check))
+            .collect(),
+    )
+    .ty()
+}
+
 /// `retain_fields`: fields the previous answer had verified keep their claims when the new answer left them empty.
 pub fn retain_fields(answer: ComposedAnswer, previous: &ComposedAnswer, notes: &Notes) -> ComposedAnswer {
     let Some(previous_outputs) = &previous.output_claims else { return answer };
@@ -305,18 +317,7 @@ pub async fn compose(
     {
         fields.retain(|(_, check)| !verified.contains_key(check));
     }
-    let schema = if fields.is_empty() {
-        AnswerDraft::ty()
-    } else {
-        ModelTy::frozen(
-            "_FieldAnswerDraft",
-            fields
-                .iter()
-                .map(|(index, check)| Field::required(&format!("output_{index}"), Ty::list(Claim::ty())).doc(check))
-                .collect(),
-        )
-        .ty()
-    };
+    let schema = if fields.is_empty() { AnswerDraft::ty() } else { field_answer_draft(&fields) };
     let facts = notes.facts();
     let labels: IndexMap<String, String> =
         facts.iter().enumerate().map(|(index, fact)| (fact_id(fact), format!("e{index}"))).collect();

@@ -5,6 +5,7 @@ mod common;
 
 use common::*;
 use fastbrowse_agent::planner::Plan;
+use fastbrowse_agent::retrieval;
 use fastbrowse_agent::shortcut::{Shortcut, StartPage};
 use fastbrowse_core::llm::{ResponseSchema, Typed};
 use fastbrowse_core::py::json::dumps;
@@ -15,27 +16,15 @@ use serde_json::{Value, json};
 
 /// Golden cases whose Rust model is not ported yet, or is private to its module. Wire each once its type lands:
 /// - `_AnswerChecks`, `_FinishOutputs`: private to `planner.rs`.
-/// - TODO(retrieval): `_ReadResponse`, `_CollectionResponse`, `_RecordsResponse`, `_TextProposals`, `_ListOrder`,
-///   `_AnswerDraft`, `_FieldAnswerDraft` (a `ModelSchema` built as `compose` builds it).
 /// - TODO(verification): `LLMVerdict`, `_OutputIdentities` (`_identity_schema(["output_0"])`), `_OutputAssessment`
 ///   (`_assessment_schema("output_0")`).
-const PENDING: &[&str] = &[
-    "_AnswerChecks",
-    "_FinishOutputs",
-    "_ReadResponse",
-    "_CollectionResponse",
-    "_RecordsResponse",
-    "_TextProposals",
-    "_ListOrder",
-    "_AnswerDraft",
-    "_FieldAnswerDraft",
-    "LLMVerdict",
-    "_OutputIdentities",
-    "_OutputAssessment",
-];
+const PENDING: &[&str] = &["_AnswerChecks", "_FinishOutputs", "LLMVerdict", "_OutputIdentities", "_OutputAssessment"];
 
 fn check<T: Schema + DeserializeOwned + Serialize>(case: &Value) {
-    let schema = Typed::<T>::default();
+    check_schema(&Typed::<T>::default(), case);
+}
+
+fn check_schema(schema: &dyn ResponseSchema, case: &Value) {
     let input = case["input"].as_str().unwrap();
     assert_eq!(dumps(&schema.json_schema()), case["schema"].as_str().unwrap(), "{input}: schema");
     let result = match schema.validate_json(input) {
@@ -53,6 +42,9 @@ fn responses_validate_as_pydantic_validates_them() {
             "Plan" => check::<Plan>(&case),
             "Shortcut" => check::<Shortcut>(&case),
             "StartPage" => check::<StartPage>(&case),
+            name if retrieval::response_schema(name).is_some() => {
+                check_schema(&retrieval::response_schema(name).unwrap(), &case)
+            }
             other => {
                 assert!(PENDING.contains(&other), "a golden model with no check: {other}");
                 continue;
