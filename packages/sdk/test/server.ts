@@ -1,4 +1,5 @@
-// The server the SDK is tested against: `fastbrowse serve --stdio` from the repository's uv environment.
+// The server the SDK is tested against: `fastbrowse serve --stdio` from the repository's uv environment, or the Rust
+// binary FASTBROWSE_TEST_RUST_BINARY names, which carries the same altered servers behind FASTBROWSE_TEST_SERVER.
 
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,7 +10,8 @@ const repository = fileURLToPath(new URL('../../../', import.meta.url));
 const scripts = process.platform === 'win32' ? 'Scripts' : 'bin';
 const suffix = process.platform === 'win32' ? '.exe' : '';
 
-export const serverBinary = join(repository, '.venv', scripts, `fastbrowse${suffix}`);
+const rust = process.env.FASTBROWSE_TEST_RUST_BINARY;
+export const serverBinary = rust ?? join(repository, '.venv', scripts, `fastbrowse${suffix}`);
 const python = join(repository, '.venv', scripts, `python${suffix}`);
 
 export interface Launcher {
@@ -47,6 +49,10 @@ export function launcher(...command: string[]): Launcher {
 
 /** One of the scripts in `servers/`. Each is the real server with one thing about it changed. */
 export function scriptedServer(name: string, ...args: string[]): Launcher {
+  if (rust) {
+    const run = args.length > 0 ? [`FASTBROWSE_TEST_RUN=${args[0]}`] : [];
+    return launcher('/usr/bin/env', `FASTBROWSE_TEST_SERVER=${name}`, ...run, rust);
+  }
   return launcher(python, fileURLToPath(new URL(`./servers/${name}.py`, import.meta.url)), ...args);
 }
 
