@@ -484,13 +484,25 @@ class _NoRedirect(request.HTTPRedirectHandler):
         return None
 
 
-def _answered_without_following(base: str, path: str, fields: dict[str, str]) -> tuple[int, str | None]:
-    opener = request.build_opener(request.HTTPCookieProcessor(CookieJar()), _NoRedirect())
+def _client() -> request.OpenerDirector:
+    """A client with a cookie jar of its own, the way a second browser is a second jar."""
+    return request.build_opener(request.HTTPCookieProcessor(CookieJar()), _NoRedirect())
+
+
+def _posted(base: str, opener: request.OpenerDirector, path: str, fields: dict[str, str]) -> tuple[int, str | None]:
     try:
         with opener.open(request.Request(base + path, data=urlencode(fields).encode(), method="POST")) as response:
             return response.status, response.headers.get("Location")
     except urllib.error.HTTPError as error:
         return error.code, error.headers.get("Location")
+
+
+def _opened(base: str, opener: request.OpenerDirector, path: str) -> tuple[int, str]:
+    try:
+        with opener.open(base + path) as response:
+            return response.status, response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode("utf-8", "replace")
 
 
 @pytest.mark.parametrize(
@@ -506,23 +518,41 @@ def test_a_second_step_is_a_page_with_an_address_of_its_own(
     back to it: it re-entered the password it already had until the stall budget ended the run.
     """
     caller, site = browser
-    status, location = _answered_without_following(caller.base, "/login", {"email": email, "password": password})
+    opener = _client()
+    status, location = _posted(caller.base, opener, "/login", {"email": email, "password": password})
     assert status == 303, f"the step must answer with a redirect, not a page: {status}"
     assert location is not None and location.startswith(address + "?"), location
     assert site.sign_ins == [], "the password alone must not open the session"
-    opened, body = caller.get(location)
+    opened, body = _opened(caller.base, opener, location)
     assert opened == 200
     assert "Two-step sign-in" in body
+
+
+def test_a_second_step_only_opens_for_the_browser_that_typed_the_password(browser: tuple[Browser, Site]) -> None:
+    """The continuation is the browser's, not the account's: a code read in public is not a second factor."""
+    caller, site = browser
+    signed_in = _client()
+    _, location = _posted(caller.base, signed_in, "/login", {"email": KATHERINE, "password": KATHERINE_PASSWORD})
+    assert location is not None
+    other = _client()
+    opened, body = _opened(caller.base, other, location)
+    assert opened == 403
+    assert "no sign-in waiting" in body
+    digits = {f"d{n}": digit for n, digit in enumerate(code_for(KATHERINE), 1)}
+    status, _ = _posted(caller.base, other, "/login/otp", digits)
+    assert status == 403, "another client finished a sign-in it never started"
+    assert site.sign_ins == []
 
 
 def test_a_code_is_refused_when_no_password_opened_the_step(browser: tuple[Browser, Site]) -> None:
     """A second factor is only a second step if the first one happened."""
     caller, site = browser
-    status, body = caller.get(f"/login/otp?email={KATHERINE}")
+    stranger = _client()
+    status, body = _opened(caller.base, stranger, f"/login/otp?email={KATHERINE}")
     assert status == 403
     assert "no sign-in waiting" in body
     digits = {f"d{n}": digit for n, digit in enumerate(code_for(KATHERINE), 1)}
-    status, _ = caller.post("/login/otp", {"email": KATHERINE, **digits})
+    status, _ = _posted(caller.base, stranger, "/login/otp", {"email": KATHERINE, **digits})
     assert status == 403
     assert site.sign_ins == [], "a code alone must not open a session"
 
@@ -532,7 +562,7 @@ def test_the_per_digit_step_takes_the_code_one_box_at_a_time(browser: tuple[Brow
     _, body = caller.sign_in(KATHERINE, KATHERINE_PASSWORD)
     assert body.count("maxlength='1'") == 6
     digits = {f"d{n}": digit for n, digit in enumerate(code_for(KATHERINE), 1)}
-    status, body = caller.post("/login/otp", {"email": KATHERINE, **digits})
+    status, body = caller.post("/login/otp", digits)
     assert status == 200
     assert "Signed in as" in body
     assert site.sign_ins == [KATHERINE]
