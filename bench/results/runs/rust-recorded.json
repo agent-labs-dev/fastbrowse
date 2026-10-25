@@ -1,15 +1,15 @@
 {
  "meta": {
   "mode": "replay",
-  "agent": "/tmp/fbstack/top-target/release-small/fastbrowse serve --stdio",
+  "agent": "/Users/jnsdls/fastbrowse/.claude/worktrees/agent-af7576a2383dac2f6/target/release-small/fastbrowse serve --stdio",
   "latency": "recorded",
-  "started": "2026-10-24T19:38:38+00:00",
-  "harness_fastbrowse": "0.7.0",
+  "started": "2026-10-25T02:46:19+00:00",
+  "harness_fastbrowse": "0.7.1",
   "platform": "Darwin 27.0.0 arm64",
   "cpu_count": 16,
   "python": "3.13.13",
   "chrome": "Google Chrome 155.0.8059.86",
-  "finished": "2026-10-24T19:54:35+00:00"
+  "finished": "2026-10-25T03:00:26+00:00"
  },
  "tasks": [
   {
@@ -18,12 +18,12 @@
    "port": 47300,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.01,
-    "wall_s": 8.2534,
-    "cpu_user_s": 0.025,
-    "cpu_sys_s": 0.0187,
-    "cpu_s": 0.0437,
-    "rss_bytes": 10911744,
+    "startup_s": 0.0034,
+    "wall_s": 8.2376,
+    "cpu_user_s": 0.0246,
+    "cpu_sys_s": 0.0104,
+    "cpu_s": 0.0349,
+    "rss_bytes": 10584064,
     "steps": 5,
     "events": 6,
     "model_requests": 14
@@ -96,11 +96,11 @@
    "exit_code": 0,
    "metrics": {
     "startup_s": 0.0036,
-    "wall_s": 7.1952,
-    "cpu_user_s": 0.0228,
-    "cpu_sys_s": 0.0126,
-    "cpu_s": 0.0354,
-    "rss_bytes": 10616832,
+    "wall_s": 7.1335,
+    "cpu_user_s": 0.0199,
+    "cpu_sys_s": 0.0088,
+    "cpu_s": 0.0287,
+    "rss_bytes": 10420224,
     "steps": 5,
     "events": 6,
     "model_requests": 8
@@ -161,12 +161,12 @@
    "port": 47302,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0035,
-    "wall_s": 30.6264,
-    "cpu_user_s": 0.0216,
-    "cpu_sys_s": 0.014,
-    "cpu_s": 0.0356,
-    "rss_bytes": 10485760,
+    "startup_s": 0.0037,
+    "wall_s": 30.6077,
+    "cpu_user_s": 0.0194,
+    "cpu_sys_s": 0.0095,
+    "cpu_s": 0.0289,
+    "rss_bytes": 10371072,
     "steps": 5,
     "events": 6,
     "model_requests": 7
@@ -227,12 +227,12 @@
    "port": 47303,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0036,
-    "wall_s": 7.4177,
-    "cpu_user_s": 0.012,
-    "cpu_sys_s": 0.006,
-    "cpu_s": 0.018,
-    "rss_bytes": 10764288,
+    "startup_s": 0.0032,
+    "wall_s": 7.4103,
+    "cpu_user_s": 0.0122,
+    "cpu_sys_s": 0.0052,
+    "cpu_s": 0.0174,
+    "rss_bytes": 10420224,
     "steps": 1,
     "events": 2,
     "model_requests": 9
@@ -284,11 +284,11 @@
    "exit_code": 0,
    "metrics": {
     "startup_s": 0.0034,
-    "wall_s": 2.3929,
-    "cpu_user_s": 0.0063,
-    "cpu_sys_s": 0.0038,
-    "cpu_s": 0.0101,
-    "rss_bytes": 9682944,
+    "wall_s": 2.4005,
+    "cpu_user_s": 0.0062,
+    "cpu_sys_s": 0.0035,
+    "cpu_s": 0.0097,
+    "rss_bytes": 9568256,
     "steps": 0,
     "events": 1,
     "model_requests": 2
@@ -318,12 +318,12 @@
    "port": 47305,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0034,
-    "wall_s": 2.7728,
-    "cpu_user_s": 0.0118,
-    "cpu_sys_s": 0.0072,
-    "cpu_s": 0.019,
-    "rss_bytes": 10043392,
+    "startup_s": 0.0036,
+    "wall_s": 2.7757,
+    "cpu_user_s": 0.0113,
+    "cpu_sys_s": 0.0067,
+    "cpu_s": 0.0179,
+    "rss_bytes": 9977856,
     "steps": 2,
     "events": 3,
     "model_requests": 6
@@ -367,11 +367,11 @@
    "exit_code": 0,
    "metrics": {
     "startup_s": 0.0033,
-    "wall_s": 21.7255,
-    "cpu_user_s": 0.0399,
-    "cpu_sys_s": 0.0212,
-    "cpu_s": 0.0611,
-    "rss_bytes": 11468800,
+    "wall_s": 21.7101,
+    "cpu_user_s": 0.0397,
+    "cpu_sys_s": 0.0171,
+    "cpu_s": 0.0568,
+    "rss_bytes": 11354112,
     "steps": 5,
     "events": 6,
     "model_requests": 22
@@ -451,11 +451,11 @@
    "exit_code": 0,
    "metrics": {
     "startup_s": 0.0038,
-    "wall_s": 44.7142,
-    "cpu_user_s": 0.0467,
-    "cpu_sys_s": 0.0204,
+    "wall_s": 44.7088,
+    "cpu_user_s": 0.0482,
+    "cpu_sys_s": 0.0189,
     "cpu_s": 0.0671,
-    "rss_bytes": 11386880,
+    "rss_bytes": 11255808,
     "steps": 6,
     "events": 7,
     "model_requests": 25
@@ -541,11 +541,11 @@
    "exit_code": 0,
    "metrics": {
     "startup_s": 0.0036,
-    "wall_s": 13.6527,
-    "cpu_user_s": 0.0365,
-    "cpu_sys_s": 0.0192,
-    "cpu_s": 0.0557,
-    "rss_bytes": 11386880,
+    "wall_s": 13.6414,
+    "cpu_user_s": 0.0382,
+    "cpu_sys_s": 0.0125,
+    "cpu_s": 0.0507,
+    "rss_bytes": 11534336,
     "steps": 5,
     "events": 6,
     "model_requests": 22
@@ -624,20 +624,20 @@
    "port": 47309,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0034,
-    "wall_s": 53.2042,
-    "cpu_user_s": 0.0984,
-    "cpu_sys_s": 0.0452,
-    "cpu_s": 0.1435,
-    "rss_bytes": 12337152,
-    "steps": 17,
-    "events": 18,
-    "model_requests": 47
+    "startup_s": 0.0036,
+    "wall_s": 34.821,
+    "cpu_user_s": 0.0654,
+    "cpu_sys_s": 0.0217,
+    "cpu_s": 0.0871,
+    "rss_bytes": 11485184,
+    "steps": 10,
+    "events": 11,
+    "model_requests": 32
    },
-   "cost_usd": 0.037967,
+   "cost_usd": 0.026343,
    "result": {
     "status": "complete",
-    "answer": "The most expensive order listed on the orders page is Burr Grinder with a total of GBP 89.99. [4](<http://127.0.0.1:47309/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1001%20%7C%20Blue%20Kettle%20%7C%20GBP%2034.50%20%7C>) [5](<http://127.0.0.1:47309/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1002%20%7C%20Burr%20Grinder%20%7C%20GBP%2089.99%20%7C>) [6](<http://127.0.0.1:47309/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1003%20%7C%20Serving%20Jug%20%7C%20GBP%2015.30%20%7C>)",
+    "answer": "The orders listed are Blue Kettle (GBP 34.50), Burr Grinder (GBP 89.99), and Serving Jug (GBP 15.30). The most expensive order is the Burr Grinder with a total of GBP 89.99. [3](<http://127.0.0.1:47309/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1001%20%7C%20Blue%20Kettle%20%7C%20GBP%2034.50%20%7C>) [4](<http://127.0.0.1:47309/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1002%20%7C%20Burr%20Grinder%20%7C%20GBP%2089.99%20%7C>) [5](<http://127.0.0.1:47309/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1003%20%7C%20Serving%20Jug%20%7C%20GBP%2015.30%20%7C>)",
     "data": null,
     "error": null,
     "final_url": "http://127.0.0.1:47309/account/orders",
@@ -690,50 +690,8 @@
       "detail": "Read this content. Still missing evidence for req_2: Find the item and total of the most expensive order on the orders page.. Re-reading this unchanged content will not supply it; find additional content."
      },
      {
-      "operation": "escalate",
-      "target": null,
-      "outcome": "executed",
-      "detail": "uncertain next step (0.51)\nThe verification code 587373 for ada@example.com was retrieved from the Phone page. We need to return to the login verification step to enter the code.\nNavigate back to the verification page to enter the code."
-     },
-     {
       "operation": "back",
       "target": null,
-      "outcome": "executed",
-      "detail": null
-     },
-     {
-      "operation": "read",
-      "target": null,
-      "outcome": "executed",
-      "detail": "Read this content. Still missing evidence for req_2: Find the item and total of the most expensive order on the orders page.. Re-reading this unchanged content will not supply it; find additional content."
-     },
-     {
-      "operation": "escalate",
-      "target": null,
-      "outcome": "executed",
-      "detail": "uncertain next step (0.46)\nNavigating back resulted in a Chrome ERR_CACHE_MISS error page because the previous page was reached via POST. We should navigate back to the caller-supplied start page to re-enter login or continue.\nNavigate to the caller start page http://127.0.0.1:47309/login"
-     },
-     {
-      "operation": "navigate",
-      "target": "http://127.0.0.1:47309/login",
-      "outcome": "executed",
-      "detail": null
-     },
-     {
-      "operation": "fill",
-      "target": "Email",
-      "outcome": "executed",
-      "detail": null
-     },
-     {
-      "operation": "fill",
-      "target": "Password",
-      "outcome": "executed",
-      "detail": null
-     },
-     {
-      "operation": "click",
-      "target": "Sign in",
       "outcome": "executed",
       "detail": null
      },
@@ -770,7 +728,6 @@
      ],
      "posts": [
       "/login",
-      "/login",
       "/login/code"
      ],
      "orders_placed": 0
@@ -779,7 +736,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 45
+   "unused_responses": 80
   },
   {
    "task": "mock-sign-in-code-given",
@@ -787,17 +744,17 @@
    "port": 47310,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0039,
-    "wall_s": 28.8378,
-    "cpu_user_s": 0.0476,
-    "cpu_sys_s": 0.0243,
-    "cpu_s": 0.072,
-    "rss_bytes": 11567104,
+    "startup_s": 0.0033,
+    "wall_s": 28.6477,
+    "cpu_user_s": 0.0436,
+    "cpu_sys_s": 0.0161,
+    "cpu_s": 0.0597,
+    "rss_bytes": 11272192,
     "steps": 7,
     "events": 8,
     "model_requests": 25
    },
-   "cost_usd": 0.015591,
+   "cost_usd": 0.015608,
    "result": {
     "status": "complete",
     "answer": "The reference of the first order listed on the orders page is A-1001. [1](<http://127.0.0.1:47310/account/orders#:~:text=Your%20orders>) [2](<http://127.0.0.1:47310/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1001%20%7C%20Blue%20Kettle%20%7C%20GBP%2034.50%20%7C>)",
@@ -876,7 +833,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 14
+   "unused_responses": 23
   },
   {
    "task": "mock-sign-out",
@@ -884,12 +841,12 @@
    "port": 47311,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0034,
+    "startup_s": 0.0037,
     "wall_s": 14.4002,
-    "cpu_user_s": 0.0286,
-    "cpu_sys_s": 0.0142,
-    "cpu_s": 0.0428,
-    "rss_bytes": 11141120,
+    "cpu_user_s": 0.0316,
+    "cpu_sys_s": 0.0119,
+    "cpu_s": 0.0436,
+    "rss_bytes": 10829824,
     "steps": 5,
     "events": 6,
     "model_requests": 15
@@ -963,17 +920,17 @@
    "port": 47312,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0038,
-    "wall_s": 53.7536,
-    "cpu_user_s": 0.0661,
-    "cpu_sys_s": 0.0329,
-    "cpu_s": 0.0989,
-    "rss_bytes": 11304960,
+    "startup_s": 0.0036,
+    "wall_s": 36.0893,
+    "cpu_user_s": 0.0657,
+    "cpu_sys_s": 0.0234,
+    "cpu_s": 0.0891,
+    "rss_bytes": 11599872,
     "steps": 11,
     "events": 12,
     "model_requests": 28
    },
-   "cost_usd": 0.015909,
+   "cost_usd": 0.015913,
    "result": {
     "status": "complete",
     "answer": "With both the Blue Kettle and the Stoneware Mug in the basket, the subtotal is GBP 43.25. [4](<http://127.0.0.1:47312/cart#:~:text=Your%20basket%20Home%20%7C%20Shop%20%7C%20Account%20%7C%20Phone%20Blue%20Kettle%20Remove%20Stoneware%20Mug%20Remove%20Subtotal%3A%20GBP%2043.25>)",
@@ -1072,7 +1029,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 42
+   "unused_responses": 43
   },
   {
    "task": "mock-order-validation",
@@ -1080,12 +1037,12 @@
    "port": 47313,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0037,
-    "wall_s": 46.123,
-    "cpu_user_s": 0.094,
-    "cpu_sys_s": 0.0343,
-    "cpu_s": 0.1283,
-    "rss_bytes": 11911168,
+    "startup_s": 0.0033,
+    "wall_s": 46.1023,
+    "cpu_user_s": 0.0897,
+    "cpu_sys_s": 0.0228,
+    "cpu_s": 0.1125,
+    "rss_bytes": 11714560,
     "steps": 19,
     "events": 20,
     "model_requests": 32
@@ -1241,10 +1198,10 @@
    "exit_code": 0,
    "metrics": {
     "startup_s": 0.0036,
-    "wall_s": 22.0511,
-    "cpu_user_s": 0.0482,
-    "cpu_sys_s": 0.0269,
-    "cpu_s": 0.0751,
+    "wall_s": 22.0116,
+    "cpu_user_s": 0.0476,
+    "cpu_sys_s": 0.0185,
+    "cpu_s": 0.0661,
     "rss_bytes": 10862592,
     "steps": 10,
     "events": 11,
@@ -1344,17 +1301,17 @@
    "port": 47315,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0035,
-    "wall_s": 13.8603,
-    "cpu_user_s": 0.0375,
-    "cpu_sys_s": 0.0161,
-    "cpu_s": 0.0536,
-    "rss_bytes": 11288576,
+    "startup_s": 0.0032,
+    "wall_s": 15.9257,
+    "cpu_user_s": 0.0341,
+    "cpu_sys_s": 0.0119,
+    "cpu_s": 0.0461,
+    "rss_bytes": 10911744,
     "steps": 9,
     "events": 10,
     "model_requests": 16
    },
-   "cost_usd": 0.013068,
+   "cost_usd": 0.01337,
    "result": {
     "status": "complete",
     "answer": null,
@@ -1434,7 +1391,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 5
+   "unused_responses": 12
   },
   {
    "task": "mock-password-pause",
@@ -1442,17 +1399,17 @@
    "port": 47316,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0036,
-    "wall_s": 19.2832,
-    "cpu_user_s": 0.0321,
-    "cpu_sys_s": 0.0141,
-    "cpu_s": 0.0461,
-    "rss_bytes": 10731520,
+    "startup_s": 0.0044,
+    "wall_s": 20.1205,
+    "cpu_user_s": 0.034,
+    "cpu_sys_s": 0.0133,
+    "cpu_s": 0.0472,
+    "rss_bytes": 10502144,
     "steps": 8,
     "events": 9,
     "model_requests": 14
    },
-   "cost_usd": 0.00584,
+   "cost_usd": 0.005953,
    "result": {
     "status": "needs_confirmation",
     "answer": null,
@@ -1489,7 +1446,7 @@
       "operation": "escalate",
       "target": null,
       "outcome": "executed",
-      "detail": "uncertain next step (0.42)\nWe are on the 'Change your password' page and need to enter the current password into control 4.\nFill the Current password field with the stored password."
+      "detail": "uncertain next step (0.24)\nThe browser is on the 'Change your password' form. The current password needs to be filled with the stored secret 'password'.\nFill the 'Current password' field with the saved secret 'password'"
      },
      {
       "operation": "fill",
@@ -1525,7 +1482,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 4
+   "unused_responses": 9
   },
   {
    "task": "mock-cheapest-product",
@@ -1533,12 +1490,12 @@
    "port": 47317,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0034,
-    "wall_s": 39.6546,
-    "cpu_user_s": 0.0394,
-    "cpu_sys_s": 0.0131,
-    "cpu_s": 0.0525,
-    "rss_bytes": 12025856,
+    "startup_s": 0.0035,
+    "wall_s": 39.6618,
+    "cpu_user_s": 0.0447,
+    "cpu_sys_s": 0.0127,
+    "cpu_s": 0.0575,
+    "rss_bytes": 12173312,
     "steps": 5,
     "events": 6,
     "model_requests": 21
@@ -1686,12 +1643,12 @@
    "port": 47318,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0037,
-    "wall_s": 25.0252,
-    "cpu_user_s": 0.0572,
-    "cpu_sys_s": 0.0154,
-    "cpu_s": 0.0726,
-    "rss_bytes": 12500992,
+    "startup_s": 0.0038,
+    "wall_s": 24.9587,
+    "cpu_user_s": 0.0545,
+    "cpu_sys_s": 0.0109,
+    "cpu_s": 0.0654,
+    "rss_bytes": 12550144,
     "steps": 8,
     "events": 9,
     "model_requests": 22
@@ -1879,12 +1836,12 @@
    "port": 47319,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0037,
-    "wall_s": 19.9971,
-    "cpu_user_s": 0.0137,
-    "cpu_sys_s": 0.0088,
-    "cpu_s": 0.0225,
-    "rss_bytes": 10567680,
+    "startup_s": 0.0034,
+    "wall_s": 19.9785,
+    "cpu_user_s": 0.0084,
+    "cpu_sys_s": 0.0042,
+    "cpu_s": 0.0126,
+    "rss_bytes": 10223616,
     "steps": 1,
     "events": 2,
     "model_requests": 8
@@ -1935,20 +1892,20 @@
    "port": 47320,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0033,
-    "wall_s": 122.8029,
-    "cpu_user_s": 0.1112,
-    "cpu_sys_s": 0.049,
-    "cpu_s": 0.1602,
-    "rss_bytes": 12107776,
-    "steps": 22,
-    "events": 23,
-    "model_requests": 43
+    "startup_s": 0.0036,
+    "wall_s": 50.3339,
+    "cpu_user_s": 0.052,
+    "cpu_sys_s": 0.0197,
+    "cpu_s": 0.0717,
+    "rss_bytes": 12009472,
+    "steps": 15,
+    "events": 16,
+    "model_requests": 29
    },
-   "cost_usd": 0.035962,
+   "cost_usd": 0.023595,
    "result": {
     "status": "complete",
-    "answer": "The account is signed in as katherine@example.com. [6](<http://127.0.0.1:47320/account#:~:text=Your%20account>) [7](<http://127.0.0.1:47320/account#:~:text=Signed%20in%20as%20katherine%40example.com.>)",
+    "answer": "The account is signed in as katherine@example.com. [3](<http://127.0.0.1:47320/account#:~:text=Your%20account>) [4](<http://127.0.0.1:47320/account#:~:text=Signed%20in%20as%20katherine%40example.com.>)",
     "data": null,
     "error": null,
     "final_url": "http://127.0.0.1:47320/account",
@@ -1984,12 +1941,6 @@
       "detail": null
      },
      {
-      "operation": "read",
-      "target": null,
-      "outcome": "executed",
-      "detail": "Read this content. Still missing evidence for requirement-2: Find your account email.. Re-reading this unchanged content will not supply it; find additional content."
-     },
-     {
       "operation": "click",
       "target": "Phone",
       "outcome": "executed",
@@ -2005,47 +1956,11 @@
       "operation": "escalate",
       "target": null,
       "outcome": "executed",
-      "detail": "uncertain next step (0.18)\nWe obtained the authenticator code (423345) from the Phone page, but now need to return back to the login/verification page to input the digits.\nGo back to the verification code entry page"
+      "detail": "uncertain next step (0.35)\nThe code for katherine@example.com is observed (423345). We need to return to the OTP verification page to enter it.\nNavigate back to the OTP verification page."
      },
      {
       "operation": "back",
       "target": null,
-      "outcome": "executed",
-      "detail": null
-     },
-     {
-      "operation": "escalate",
-      "target": null,
-      "outcome": "executed",
-      "detail": "uncertain next step (0.31)\nGoing back landed on a form resubmission error page (ERR_CACHE_MISS) with no controls. Navigate back to the caller start page to log in and enter the verification code.\nNavigate to http://127.0.0.1:47320/login"
-     },
-     {
-      "operation": "navigate",
-      "target": "http://127.0.0.1:47320/login",
-      "outcome": "executed",
-      "detail": null
-     },
-     {
-      "operation": "escalate",
-      "target": null,
-      "outcome": "executed",
-      "detail": "uncertain next step (0.24)\nThe browser is back on the initial login form after retrieving the 2FA code (423345) from the Phone page. We need to submit the email and password again to reach the verification code step.\nFill the Email field with katherine@example.com."
-     },
-     {
-      "operation": "fill",
-      "target": "Email",
-      "outcome": "executed",
-      "detail": null
-     },
-     {
-      "operation": "fill",
-      "target": "Password",
-      "outcome": "executed",
-      "detail": null
-     },
-     {
-      "operation": "click",
-      "target": "Sign in",
       "outcome": "executed",
       "detail": null
      },
@@ -2106,7 +2021,6 @@
      ],
      "posts": [
       "/login",
-      "/login",
       "/login/otp"
      ],
      "orders_placed": 0
@@ -2115,7 +2029,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 40
+   "unused_responses": 69
   },
   {
    "task": "mock-iframe-note",
@@ -2123,12 +2037,12 @@
    "port": 47321,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0037,
-    "wall_s": 4.7905,
-    "cpu_user_s": 0.0175,
-    "cpu_sys_s": 0.0103,
-    "cpu_s": 0.0278,
-    "rss_bytes": 10616832,
+    "startup_s": 0.0036,
+    "wall_s": 4.7745,
+    "cpu_user_s": 0.0146,
+    "cpu_sys_s": 0.006,
+    "cpu_s": 0.0207,
+    "rss_bytes": 10420224,
     "steps": 2,
     "events": 3,
     "model_requests": 7
@@ -2176,12 +2090,12 @@
    "port": 47322,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0033,
-    "wall_s": 5.0267,
-    "cpu_user_s": 0.0185,
-    "cpu_sys_s": 0.0102,
-    "cpu_s": 0.0287,
-    "rss_bytes": 10567680,
+    "startup_s": 0.0037,
+    "wall_s": 4.9636,
+    "cpu_user_s": 0.0104,
+    "cpu_sys_s": 0.0047,
+    "cpu_s": 0.0151,
+    "rss_bytes": 10403840,
     "steps": 2,
     "events": 3,
     "model_requests": 7
@@ -2229,12 +2143,12 @@
    "port": 47323,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0034,
-    "wall_s": 29.3042,
-    "cpu_user_s": 0.0869,
-    "cpu_sys_s": 0.0148,
-    "cpu_s": 0.1018,
-    "rss_bytes": 14680064,
+    "startup_s": 0.004,
+    "wall_s": 29.3183,
+    "cpu_user_s": 0.0899,
+    "cpu_sys_s": 0.0123,
+    "cpu_s": 0.1022,
+    "rss_bytes": 14139392,
     "steps": 6,
     "events": 7,
     "model_requests": 23
@@ -2607,7 +2521,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 31
+   "unused_responses": 32
   },
   {
    "task": "mock-support-portal",
@@ -2615,12 +2529,12 @@
    "port": 47324,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.004,
-    "wall_s": 12.7105,
-    "cpu_user_s": 0.0301,
-    "cpu_sys_s": 0.0136,
-    "cpu_s": 0.0437,
-    "rss_bytes": 11042816,
+    "startup_s": 0.0035,
+    "wall_s": 13.5199,
+    "cpu_user_s": 0.0233,
+    "cpu_sys_s": 0.0081,
+    "cpu_s": 0.0314,
+    "rss_bytes": 10780672,
     "steps": 6,
     "events": 7,
     "model_requests": 14
@@ -2684,7 +2598,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 293
+   "unused_responses": 298
   },
   {
    "task": "mock-compare-prices",
@@ -2692,12 +2606,12 @@
    "port": 47325,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0035,
-    "wall_s": 24.0592,
-    "cpu_user_s": 0.0331,
-    "cpu_sys_s": 0.0142,
-    "cpu_s": 0.0473,
-    "rss_bytes": 11370496,
+    "startup_s": 0.0034,
+    "wall_s": 24.0126,
+    "cpu_user_s": 0.0288,
+    "cpu_sys_s": 0.0108,
+    "cpu_s": 0.0396,
+    "rss_bytes": 11059200,
     "steps": 5,
     "events": 6,
     "model_requests": 19
@@ -2772,17 +2686,17 @@
    "port": 47326,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0035,
-    "wall_s": 30.7042,
-    "cpu_user_s": 0.045,
-    "cpu_sys_s": 0.0154,
-    "cpu_s": 0.0604,
-    "rss_bytes": 12320768,
+    "startup_s": 0.0039,
+    "wall_s": 50.124,
+    "cpu_user_s": 0.0416,
+    "cpu_sys_s": 0.0115,
+    "cpu_s": 0.0531,
+    "rss_bytes": 12206080,
     "steps": 5,
     "events": 6,
     "model_requests": 19
    },
-   "cost_usd": 0.031937,
+   "cost_usd": 0.031941,
    "result": {
     "status": "complete",
     "answer": "The shop listing spans three pages. [7](<http://127.0.0.1:47326/shop?page=1#:~:text=Shop>) [8](<http://127.0.0.1:47326/shop?page=1#:~:text=Page%201%20of%203.%20Sort%20by%20price%20or%20price%20descending.>) [15](<http://127.0.0.1:47326/shop?page=2&sort=#:~:text=Shop>) [16](<http://127.0.0.1:47326/shop?page=2&sort=#:~:text=Page%202%20of%203>) [19](<http://127.0.0.1:47326/shop?page=3&sort=#:~:text=Shop>) [20](<http://127.0.0.1:47326/shop?page=3&sort=#:~:text=Page%203%20of%203.%20Sort%20by%20price%20or%20price%20descending.>)\n\nAcross all pages of the shop, there are a total of 14 products listed. [1](<http://127.0.0.1:47326/shop?page=1#:~:text=Blue%20Kettle%20%2D%20GBP%2034.50>) [2](<http://127.0.0.1:47326/shop?page=1#:~:text=Chrome%20Toaster%20%2D%20GBP%2041.00>) [3](<http://127.0.0.1:47326/shop?page=1#:~:text=Stoneware%20Mug%20%2D%20GBP%208.75>) [4](<http://127.0.0.1:47326/shop?page=1#:~:text=Burr%20Grinder%20%2D%20GBP%2089.99>) [5](<http://127.0.0.1:47326/shop?page=1#:~:text=Kitchen%20Scale%20%2D%20GBP%2019.20>) [6](<http://127.0.0.1:47326/shop?page=1#:~:text=Milk%20Thermometer%20%2D%20GBP%2012.40>) [9](<http://127.0.0.1:47326/shop?page=2&sort=#:~:text=French%20Press%20%2D%20GBP%2027.00>) [10](<http://127.0.0.1:47326/shop?page=2&sort=#:~:text=Paper%20Filters%20%2D%20GBP%204.60>) [11](<http://127.0.0.1:47326/shop?page=2&sort=#:~:text=House%20Beans%20%2D%20GBP%2011.50>) [12](<http://127.0.0.1:47326/shop?page=2&sort=#:~:text=Drum%20Roaster%20%2D%20GBP%20210.00>) [13](<http://127.0.0.1:47326/shop?page=2&sort=#:~:text=Serving%20Jug%20%2D%20GBP%2015.30>) [14](<http://127.0.0.1:47326/shop?page=2&sort=#:~:text=Drip%20Tray%20%2D%20GBP%209.95>) [17](<http://127.0.0.1:47326/shop?page=3&sort=#:~:text=Bar%20Cloth%20%2D%20GBP%206.20>) [18](<http://127.0.0.1:47326/shop?page=3&sort=#:~:text=Water%20Tap%20%2D%20GBP%2052.75>)",
@@ -2934,7 +2848,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 22
+   "unused_responses": 23
   },
   {
    "task": "mock-report-total",
@@ -2942,12 +2856,12 @@
    "port": 47327,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0037,
-    "wall_s": 16.7793,
-    "cpu_user_s": 0.0213,
-    "cpu_sys_s": 0.0127,
-    "cpu_s": 0.0339,
-    "rss_bytes": 11255808,
+    "startup_s": 0.0039,
+    "wall_s": 16.7508,
+    "cpu_user_s": 0.0239,
+    "cpu_sys_s": 0.0112,
+    "cpu_s": 0.0351,
+    "rss_bytes": 11108352,
     "steps": 2,
     "events": 3,
     "model_requests": 16
@@ -3010,11 +2924,11 @@
    "exit_code": 0,
    "metrics": {
     "startup_s": 0.0038,
-    "wall_s": 26.6651,
-    "cpu_user_s": 0.0256,
-    "cpu_sys_s": 0.0154,
-    "cpu_s": 0.041,
-    "rss_bytes": 11026432,
+    "wall_s": 13.9463,
+    "cpu_user_s": 0.0189,
+    "cpu_sys_s": 0.012,
+    "cpu_s": 0.0309,
+    "rss_bytes": 11042816,
     "steps": 2,
     "events": 3,
     "model_requests": 15
@@ -3065,7 +2979,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 34
+   "unused_responses": 35
   },
   {
    "task": "mock-new-tab-story",
@@ -3073,12 +2987,12 @@
    "port": 47329,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0032,
-    "wall_s": 8.2761,
-    "cpu_user_s": 0.0155,
-    "cpu_sys_s": 0.0069,
-    "cpu_s": 0.0223,
-    "rss_bytes": 12255232,
+    "startup_s": 0.0036,
+    "wall_s": 8.2963,
+    "cpu_user_s": 0.0165,
+    "cpu_sys_s": 0.0066,
+    "cpu_s": 0.023,
+    "rss_bytes": 11501568,
     "steps": 2,
     "events": 3,
     "model_requests": 8
@@ -3136,11 +3050,11 @@
    "exit_code": 0,
    "metrics": {
     "startup_s": 0.0035,
-    "wall_s": 15.8688,
-    "cpu_user_s": 0.0284,
-    "cpu_sys_s": 0.0137,
-    "cpu_s": 0.0421,
-    "rss_bytes": 11206656,
+    "wall_s": 15.8513,
+    "cpu_user_s": 0.0221,
+    "cpu_sys_s": 0.0095,
+    "cpu_s": 0.0316,
+    "rss_bytes": 11255808,
     "steps": 3,
     "events": 4,
     "model_requests": 18
@@ -3205,12 +3119,12 @@
    "port": 47331,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0036,
-    "wall_s": 41.3745,
-    "cpu_user_s": 0.0221,
-    "cpu_sys_s": 0.0125,
-    "cpu_s": 0.0346,
-    "rss_bytes": 11124736,
+    "startup_s": 0.0035,
+    "wall_s": 41.3697,
+    "cpu_user_s": 0.0208,
+    "cpu_sys_s": 0.0109,
+    "cpu_s": 0.0317,
+    "rss_bytes": 10584064,
     "steps": 3,
     "events": 4,
     "model_requests": 12
@@ -3271,11 +3185,11 @@
    "exit_code": 0,
    "metrics": {
     "startup_s": 0.0037,
-    "wall_s": 50.1291,
-    "cpu_user_s": 0.0599,
-    "cpu_sys_s": 0.0242,
-    "cpu_s": 0.0842,
-    "rss_bytes": 11763712,
+    "wall_s": 39.8311,
+    "cpu_user_s": 0.0693,
+    "cpu_sys_s": 0.0272,
+    "cpu_s": 0.0964,
+    "rss_bytes": 11714560,
     "steps": 12,
     "events": 13,
     "model_requests": 37
@@ -3398,7 +3312,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 31
+   "unused_responses": 32
   },
   {
    "task": "mock-upload-document",
@@ -3406,12 +3320,12 @@
    "port": 47333,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0036,
-    "wall_s": 14.4182,
-    "cpu_user_s": 0.0272,
-    "cpu_sys_s": 0.0101,
-    "cpu_s": 0.0373,
-    "rss_bytes": 11288576,
+    "startup_s": 0.0034,
+    "wall_s": 14.3947,
+    "cpu_user_s": 0.0174,
+    "cpu_sys_s": 0.0066,
+    "cpu_s": 0.024,
+    "rss_bytes": 11223040,
     "steps": 5,
     "events": 6,
     "model_requests": 19
@@ -3488,12 +3402,12 @@
    "port": 47334,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0036,
-    "wall_s": 39.0162,
-    "cpu_user_s": 0.0234,
-    "cpu_sys_s": 0.0094,
-    "cpu_s": 0.0328,
-    "rss_bytes": 10960896,
+    "startup_s": 0.0037,
+    "wall_s": 38.9319,
+    "cpu_user_s": 0.0207,
+    "cpu_sys_s": 0.008,
+    "cpu_s": 0.0287,
+    "rss_bytes": 10878976,
     "steps": 6,
     "events": 7,
     "model_requests": 10
@@ -3565,12 +3479,12 @@
    "port": 47335,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0041,
-    "wall_s": 8.424,
-    "cpu_user_s": 0.0151,
-    "cpu_sys_s": 0.0067,
-    "cpu_s": 0.0219,
-    "rss_bytes": 11173888,
+    "startup_s": 0.0033,
+    "wall_s": 8.4357,
+    "cpu_user_s": 0.0157,
+    "cpu_sys_s": 0.0068,
+    "cpu_s": 0.0225,
+    "rss_bytes": 10944512,
     "steps": 1,
     "events": 2,
     "model_requests": 13

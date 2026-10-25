@@ -34,6 +34,8 @@ struct FakeSite {
     at: Mutex<(String, Vec<String>)>,
     /// Times each settling screen has been observed.
     seen: Mutex<HashMap<String, u64>>,
+    /// Times each address has been navigated to, for an address that opens a different screen per visit.
+    visits: Mutex<HashMap<String, usize>>,
 }
 
 impl FakeSite {
@@ -42,6 +44,7 @@ impl FakeSite {
             site: site.clone(),
             at: Mutex::new((site["start"].as_str().unwrap().to_string(), Vec::new())),
             seen: Mutex::default(),
+            visits: Mutex::default(),
         }
     }
 
@@ -80,7 +83,18 @@ impl Page for FakeSite {
     }
 
     fn navigate<'a>(&'a self, url: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
-        let Some(screen) = self.site["urls"][url].as_str() else {
+        // A list is one screen per visit, the last repeated: a reload that mints a new document each time.
+        let screens = &self.site["urls"][url];
+        let screen = match screens.as_array() {
+            Some(list) => {
+                let mut visits = self.visits.lock().unwrap();
+                let visit = visits.entry(url.to_string()).or_default();
+                *visit += 1;
+                list[(*visit - 1).min(list.len() - 1)].as_str()
+            }
+            None => screens.as_str(),
+        };
+        let Some(screen) = screen else {
             return ready(Err(BrowserError::Failed(format!("no page at {url}"))));
         };
         let mut at = self.at.lock().unwrap();

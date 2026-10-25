@@ -232,12 +232,14 @@ impl Agent {
                 }
                 let plan = state.await_plan().await?;
                 if !access_inspection(&plan) {
-                    Box::pin(self.meet_wall(state, &observation, &raw, &plan)).await?;
-                    continue;
+                    if Box::pin(self.meet_wall(state, &observation, &raw, &plan)).await? {
+                        continue;
+                    }
+                } else {
+                    state.passed_wall = Some(raw.url.clone());
+                    // A task inspecting an access boundary needs its observed wall read and verified, not passed.
+                    decision = code_decision(Operation::Read, None);
                 }
-                state.passed_wall = Some(raw.url.clone());
-                // A task inspecting an access boundary needs its observed wall read and verified, not passed.
-                decision = code_decision(Operation::Read, None);
             }
             let mut uncertain = decision.confidence() < self.config.thresholds.recover_below;
             let mut decided_by = Decider::Jev;
@@ -531,10 +533,12 @@ impl Agent {
         Ok((vec![opened], HashSet::from([shortcut, landed])))
     }
 
-    /// Reload a bot check that offers nothing to act on, once per document.
+    /// Reload a bot check that offers nothing to act on, once per address.
+    ///
+    /// Keyed on the address, not the document: the reload mints a new document key, so a document key would let a
+    /// challenge that survives its reload be reloaded on every iteration instead of being reported as blocked.
     pub(super) async fn reload_challenge(&self, state: &mut RunState, challenge: &Observation) -> Step<bool> {
-        let key = format!("{}|{}", challenge.url, challenge.document_key);
-        if !state.challenge_reloads.insert(key) {
+        if !state.challenge_reloads.insert(challenge.url.clone()) {
             return Ok(false);
         }
         self.event("challenge_reload", || Map::from_iter([("url".into(), challenge.url.clone().into())]));
@@ -790,6 +794,16 @@ impl Agent {
                 written.insert(target.id.clone());
             }
             progressed = result.outcome == StepOutcome::Executed && edit.unwrap_or(changed);
+            if edit == Some(false) && result.outcome == StepOutcome::Executed {
+                // The field already held the value, so this step moved nothing and cannot count: three of them trip
+                // the stall budget. A run that went back to a credentials form re-entered the password it already had
+                // exactly this way, and nothing told it the form was ready to submit instead.
+                // An edit always has a target, so the label is there; "None" is what Python's f-string would write.
+                let named = label.as_deref().unwrap_or("None");
+                state.hint = Some(self.redact(&format!(
+                    "{named} already holds that value: submit the form, or read the page, instead of typing it again."
+                )));
+            }
             if progressed
                 && decision.operation.is_scrolling()
                 && !state.open_answer_outputs.is_empty()

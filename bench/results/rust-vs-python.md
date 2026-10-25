@@ -4,10 +4,15 @@ The Rust `fastbrowse` binary and the Python package both ran `serve --stdio` und
 (`src/fastbrowse/evals/bench.py`, described in `bench/README.md`). Each replayed the same committed cassettes in
 `bench/cassettes`, so both agents got the same model responses for the same requests.
 
-This run is on fastbrowse 0.7.0. Main's snapshot and settle changes (#397, #406, #407, #409, #410, #414), the link
+This run is on fastbrowse 0.7.1. Main's snapshot and settle changes (#397, #406, #407, #409, #410, #414), the link
 question in the click classifier (#412), the end of request hedging (#413), the committed answer and browsing-step
-gate (#415), and the one-call plan with an entry-only shortcut (#417) are ported to Rust. The link question and the
-one-call plan changed what Python asks, so the cassettes were filled again (`bench fill`) before these runs.
+gate (#415), the one-call plan with an entry-only shortcut (#417), the sign-in a page must show before a run ends
+`needs_login` (#434), the screenshot gate on visual content, the per-address challenge reload and the verdict cap
+(#437), and the hint after a fill the field already held (#439) are ported to Rust. The link question and the one-call plan changed what Python asks, so the cassettes were
+filled again (`bench fill`) before these runs. The verdict cap changed the verify request, so six tasks were filled
+once more for #437 at zero latency and `mock-support-portal` at recorded latency, for $0.017 in all. #439 moved the
+fixture's second sign-in step to a page of its own, so the five tasks that sign in or change a password were filled
+again at zero latency for $0.039; they needed nothing new at recorded latency.
 
 ## Result
 
@@ -15,12 +20,15 @@ one-call plan changed what Python asks, so the cassettes were filled again (`ben
   status, answer, data, error, final URL, citations, grade and every step. At recorded latency they match on all
   36 too.
 - **No new requests.** Neither agent asked anything the recording never asked: 0 replay misses in all eight runs.
+- **In process too.** `bench replay --agent in-process` at zero latency gives the same result on all 36 tasks for
+  the Python core and for the Rust core through `fastbrowse_native`, and both match the `serve` runs.
 - **Every run agrees with itself.** The three zero-latency runs of each agent are identical to each other. That
   includes `mock-support-portal`, which both agents finish stuck at zero latency and complete at recorded latency.
-- **Fewer calls.** The one-call plan and the entry-only shortcut take a zero-latency replay from 732 model requests
-  to 664 in both agents, and a recorded-latency one from 695 to 642.
-- **CPU, startup and memory are well past 2x. Wall time is not.** At zero latency Rust uses 11x less agent CPU,
-  starts 55x faster and peaks at 7.1x less memory. Wall time is 1.1x better in total, and 1.0x at recorded
+- **Fewer calls.** The one-call plan and the entry-only shortcut took a zero-latency replay from 732 model requests
+  to 664 in both agents, and a recorded-latency one from 695 to 642. #439's second sign-in step takes them to 635
+  and 613, and steps from 232 to 218 and 218 to 204: at zero latency `mock-sign-in-per-digit` and `mock-sign-in-two-step` each take seven fewer.
+- **CPU, startup and memory are well past 2x. Wall time is not.** At zero latency Rust uses 12x less agent CPU,
+  starts 55x faster and peaks at 7.2x less memory. Wall time is 1.1x better in total, and 1.0x at recorded
   latency, where the model's own response time dominates.
 - **Footprint.** The binary is 4.0 MiB, against 13.0 MiB of Python packages (before the interpreter) and the 50.4
   MiB npm package that carries the PyInstaller build.
@@ -31,16 +39,16 @@ Medians across the 3 runs per task, then the median and total across the 36 task
 
 | metric | Python | Rust | Python / Rust |
 |---|---:|---:|---:|
-| wall s, median of tasks | 1.85 | 1.57 | 1.2x |
-| wall s, total | 111.81 | 100.90 | 1.1x |
-| agent CPU s, median of tasks | 0.38 | 0.03 | 12.3x |
-| agent CPU s, total | 14.27 | 1.34 | 10.6x |
-| startup s, median of tasks | 0.204 | 0.004 | 55.2x |
-| startup s, total | 7.371 | 0.140 | 52.6x |
-| peak RSS MiB, median of tasks | 74.7 | 10.6 | 7.1x |
-| peak RSS MiB, max | 76.4 | 13.4 | 5.7x |
-| steps, total | 232 | 232 | - |
-| model requests, total | 664 | 664 | - |
+| wall s, median of tasks | 1.81 | 1.55 | 1.2x |
+| wall s, total | 107.80 | 96.73 | 1.1x |
+| agent CPU s, median of tasks | 0.38 | 0.03 | 12.8x |
+| agent CPU s, total | 13.87 | 1.16 | 12.0x |
+| startup s, median of tasks | 0.207 | 0.004 | 57.4x |
+| startup s, total | 7.447 | 0.136 | 54.7x |
+| peak RSS MiB, median of tasks | 74.9 | 10.4 | 7.2x |
+| peak RSS MiB, max | 76.6 | 13.5 | 5.7x |
+| steps, total | 218 | 218 | - |
+| model requests, total | 635 | 635 | - |
 
 
 The laptop ran nothing else heavy during these runs. Each Python run and each Rust run started a fresh agent per
@@ -48,42 +56,42 @@ task against one headless Chrome the harness owned.
 
 | task | pass Py | pass Rs | wall Py | wall Rs | CPU Py | CPU Rs | CPU | startup Py | startup Rs | RSS Py | RSS Rs |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| search-price | 3/3 | 3/3 | 2.61 | 2.35 | 0.36 | 0.03 | 12.4x | 0.199 | 0.010 | 74.2 | 10.3 |
-| contact-form | 3/3 | 3/3 | 2.32 | 2.02 | 0.37 | 0.03 | 11.8x | 0.209 | 0.003 | 74.3 | 10.0 |
-| contact-needs-confirmation | 3/3 | 3/3 | 2.00 | 1.72 | 0.36 | 0.03 | 12.7x | 0.202 | 0.004 | 74.1 | 10.0 |
-| table-extract | 3/3 | 3/3 | 0.61 | 0.35 | 0.32 | 0.01 | 30.0x | 0.202 | 0.004 | 74.4 | 10.1 |
-| login-wall | 3/3 | 3/3 | 0.59 | 0.34 | 0.30 | 0.01 | 36.7x | 0.205 | 0.004 | 73.8 | 9.0 |
-| confirm-dialog | 3/3 | 3/3 | 0.89 | 0.64 | 0.33 | 0.01 | 27.0x | 0.203 | 0.004 | 73.8 | 9.2 |
-| mock-cold-sign-in | 3/3 | 3/3 | 14.23 | 13.89 | 0.40 | 0.03 | 13.8x | 0.204 | 0.004 | 74.9 | 10.9 |
-| mock-supplied-sign-in-route | 3/3 | 3/3 | 14.47 | 14.15 | 0.40 | 0.03 | 11.5x | 0.205 | 0.004 | 74.9 | 11.0 |
-| mock-sign-in | 3/3 | 3/3 | 2.04 | 1.74 | 0.40 | 0.04 | 10.4x | 0.210 | 0.004 | 74.8 | 10.8 |
-| mock-sign-in-two-step | 3/3 | 3/3 | 4.80 | 4.40 | 0.53 | 0.09 | 6.2x | 0.202 | 0.004 | 75.5 | 11.3 |
-| mock-sign-in-code-given | 3/3 | 3/3 | 2.75 | 2.42 | 0.42 | 0.04 | 10.2x | 0.204 | 0.004 | 74.8 | 10.7 |
-| mock-sign-out | 3/3 | 3/3 | 2.02 | 1.73 | 0.38 | 0.03 | 11.3x | 0.199 | 0.004 | 74.5 | 10.5 |
-| mock-basket | 3/3 | 3/3 | 3.58 | 3.23 | 0.46 | 0.06 | 7.4x | 0.202 | 0.004 | 74.7 | 10.8 |
-| mock-order-validation | 3/3 | 3/3 | 4.91 | 4.50 | 0.54 | 0.09 | 6.2x | 0.200 | 0.004 | 75.2 | 11.2 |
-| mock-order-pause | 3/3 | 3/3 | 3.70 | 3.37 | 0.46 | 0.05 | 8.4x | 0.205 | 0.004 | 74.4 | 10.3 |
-| mock-password-change | 3/3 | 3/3 | 3.16 | 2.83 | 0.45 | 0.05 | 8.6x | 0.210 | 0.004 | 74.5 | 10.5 |
-| mock-password-pause | 3/3 | 3/3 | 2.82 | 2.53 | 0.40 | 0.04 | 9.3x | 0.199 | 0.004 | 74.5 | 10.1 |
-| mock-cheapest-product | 3/3 | 3/3 | 1.20 | 0.89 | 0.38 | 0.04 | 10.7x | 0.204 | 0.004 | 75.4 | 11.5 |
-| mock-priciest-product | 3/3 | 3/3 | 1.44 | 1.13 | 0.41 | 0.04 | 9.2x | 0.205 | 0.004 | 75.7 | 11.9 |
-| mock-stock-count | 3/3 | 3/3 | 0.60 | 0.34 | 0.31 | 0.01 | 30.5x | 0.203 | 0.004 | 74.0 | 10.0 |
-| mock-sign-in-per-digit | 3/3 | 3/3 | 6.59 | 6.21 | 0.58 | 0.10 | 5.6x | 0.203 | 0.004 | 75.8 | 11.5 |
-| mock-iframe-note | 3/3 | 3/3 | 1.71 | 1.43 | 0.36 | 0.02 | 14.6x | 0.205 | 0.004 | 74.1 | 10.0 |
-| mock-shadow-dom | 3/3 | 3/3 | 1.53 | 1.25 | 0.35 | 0.02 | 14.9x | 0.203 | 0.004 | 74.2 | 9.9 |
-| mock-infinite-scroll | 3/3 | 3/3 | 1.12 | 0.84 | 0.40 | 0.06 | 7.2x | 0.206 | 0.004 | 76.4 | 13.4 |
-| mock-support-portal | 0/3 | 0/3 | 2.77 | 2.40 | 0.49 | 0.06 | 8.2x | 0.205 | 0.004 | 75.1 | 10.9 |
-| mock-compare-prices | 3/3 | 3/3 | 1.47 | 1.18 | 0.39 | 0.03 | 12.5x | 0.203 | 0.004 | 74.7 | 10.7 |
-| mock-pagination-exhaustion | 3/3 | 3/3 | 1.20 | 0.90 | 0.39 | 0.04 | 10.9x | 0.209 | 0.004 | 75.2 | 11.6 |
-| mock-report-total | 3/3 | 3/3 | 0.90 | 0.63 | 0.34 | 0.02 | 22.6x | 0.204 | 0.004 | 74.6 | 10.6 |
-| mock-drag-card | 3/3 | 3/3 | 1.12 | 0.85 | 0.36 | 0.02 | 14.6x | 0.208 | 0.004 | 74.8 | 10.6 |
-| mock-new-tab-story | 3/3 | 3/3 | 1.02 | 0.78 | 0.35 | 0.02 | 19.2x | 0.204 | 0.004 | 74.4 | 10.8 |
-| mock-book-table | 3/3 | 3/3 | 1.34 | 1.05 | 0.37 | 0.02 | 14.7x | 0.205 | 0.004 | 74.9 | 10.5 |
-| mock-newsletter-gate | 3/3 | 3/3 | 1.33 | 1.04 | 0.36 | 0.02 | 15.1x | 0.208 | 0.004 | 74.4 | 10.4 |
-| mock-invoice-export | 3/3 | 3/3 | 3.31 | 2.95 | 0.48 | 0.06 | 7.7x | 0.208 | 0.004 | 75.1 | 11.1 |
-| mock-upload-document | 3/3 | 3/3 | 1.22 | 0.94 | 0.36 | 0.02 | 14.6x | 0.202 | 0.004 | 74.8 | 10.7 |
-| mock-false-success | 3/3 | 3/3 | 13.79 | 13.50 | 0.37 | 0.03 | 11.8x | 0.202 | 0.004 | 74.4 | 10.4 |
-| mock-hidden-instruction | 3/3 | 3/3 | 0.66 | 0.36 | 0.34 | 0.01 | 28.2x | 0.222 | 0.004 | 74.6 | 10.4 |
+| search-price | 3/3 | 3/3 | 2.58 | 2.32 | 0.35 | 0.02 | 15.3x | 0.213 | 0.009 | 74.6 | 10.0 |
+| contact-form | 3/3 | 3/3 | 2.28 | 2.01 | 0.36 | 0.03 | 11.9x | 0.207 | 0.004 | 74.4 | 9.7 |
+| contact-needs-confirmation | 3/3 | 3/3 | 1.94 | 1.69 | 0.33 | 0.03 | 12.8x | 0.206 | 0.004 | 74.5 | 9.7 |
+| table-extract | 3/3 | 3/3 | 0.61 | 0.33 | 0.32 | 0.01 | 31.3x | 0.207 | 0.003 | 74.7 | 9.8 |
+| login-wall | 3/3 | 3/3 | 0.59 | 0.33 | 0.32 | 0.01 | 38.5x | 0.212 | 0.004 | 74.2 | 9.0 |
+| confirm-dialog | 3/3 | 3/3 | 0.88 | 0.62 | 0.31 | 0.01 | 29.2x | 0.207 | 0.003 | 74.0 | 9.3 |
+| mock-cold-sign-in | 3/3 | 3/3 | 14.21 | 13.89 | 0.40 | 0.03 | 15.2x | 0.215 | 0.004 | 75.4 | 10.6 |
+| mock-supplied-sign-in-route | 3/3 | 3/3 | 14.44 | 14.13 | 0.40 | 0.03 | 12.1x | 0.207 | 0.004 | 75.1 | 10.8 |
+| mock-sign-in | 3/3 | 3/3 | 2.03 | 1.74 | 0.40 | 0.04 | 11.3x | 0.207 | 0.004 | 75.1 | 10.8 |
+| mock-sign-in-two-step | 3/3 | 3/3 | 3.25 | 2.77 | 0.45 | 0.05 | 8.8x | 0.203 | 0.004 | 75.2 | 11.0 |
+| mock-sign-in-code-given | 3/3 | 3/3 | 2.72 | 2.39 | 0.42 | 0.04 | 10.8x | 0.206 | 0.004 | 75.1 | 10.7 |
+| mock-sign-out | 3/3 | 3/3 | 2.03 | 1.71 | 0.38 | 0.03 | 11.5x | 0.207 | 0.004 | 74.8 | 10.3 |
+| mock-basket | 3/3 | 3/3 | 3.55 | 3.14 | 0.46 | 0.05 | 9.4x | 0.206 | 0.004 | 75.1 | 10.7 |
+| mock-order-validation | 3/3 | 3/3 | 4.75 | 4.38 | 0.52 | 0.08 | 6.7x | 0.208 | 0.004 | 75.4 | 11.0 |
+| mock-order-pause | 3/3 | 3/3 | 3.65 | 3.30 | 0.43 | 0.04 | 10.5x | 0.207 | 0.004 | 74.9 | 10.1 |
+| mock-password-change | 3/3 | 3/3 | 3.09 | 2.75 | 0.42 | 0.05 | 9.1x | 0.203 | 0.004 | 75.0 | 10.5 |
+| mock-password-pause | 3/3 | 3/3 | 2.80 | 2.51 | 0.39 | 0.04 | 10.7x | 0.206 | 0.004 | 74.7 | 10.0 |
+| mock-cheapest-product | 3/3 | 3/3 | 1.19 | 0.89 | 0.38 | 0.04 | 10.8x | 0.208 | 0.004 | 75.6 | 11.4 |
+| mock-priciest-product | 3/3 | 3/3 | 1.41 | 1.11 | 0.39 | 0.04 | 9.0x | 0.205 | 0.004 | 75.7 | 11.9 |
+| mock-stock-count | 3/3 | 3/3 | 0.61 | 0.33 | 0.32 | 0.01 | 31.5x | 0.210 | 0.004 | 74.5 | 9.9 |
+| mock-sign-in-per-digit | 3/3 | 3/3 | 4.93 | 4.60 | 0.47 | 0.06 | 8.1x | 0.204 | 0.004 | 75.6 | 11.1 |
+| mock-iframe-note | 3/3 | 3/3 | 1.68 | 1.41 | 0.35 | 0.02 | 16.2x | 0.211 | 0.004 | 74.4 | 9.8 |
+| mock-shadow-dom | 3/3 | 3/3 | 1.52 | 1.24 | 0.35 | 0.02 | 16.5x | 0.207 | 0.004 | 74.6 | 9.7 |
+| mock-infinite-scroll | 3/3 | 3/3 | 1.11 | 0.84 | 0.39 | 0.06 | 6.9x | 0.202 | 0.004 | 76.6 | 13.5 |
+| mock-support-portal | 0/3 | 0/3 | 2.75 | 2.37 | 0.48 | 0.06 | 8.2x | 0.206 | 0.004 | 75.8 | 10.8 |
+| mock-compare-prices | 3/3 | 3/3 | 1.46 | 1.15 | 0.38 | 0.03 | 13.2x | 0.203 | 0.004 | 75.1 | 10.6 |
+| mock-pagination-exhaustion | 3/3 | 3/3 | 1.19 | 0.88 | 0.39 | 0.03 | 11.5x | 0.216 | 0.004 | 75.5 | 11.5 |
+| mock-report-total | 3/3 | 3/3 | 0.91 | 0.61 | 0.35 | 0.01 | 23.9x | 0.211 | 0.004 | 74.8 | 10.3 |
+| mock-drag-card | 3/3 | 3/3 | 1.12 | 0.83 | 0.36 | 0.02 | 16.9x | 0.207 | 0.004 | 74.9 | 10.4 |
+| mock-new-tab-story | 3/3 | 3/3 | 0.98 | 0.77 | 0.34 | 0.02 | 22.4x | 0.204 | 0.004 | 74.6 | 10.7 |
+| mock-book-table | 3/3 | 3/3 | 1.36 | 1.05 | 0.37 | 0.03 | 14.5x | 0.208 | 0.004 | 74.9 | 10.4 |
+| mock-newsletter-gate | 3/3 | 3/3 | 1.32 | 1.04 | 0.35 | 0.02 | 15.9x | 0.204 | 0.004 | 74.6 | 10.2 |
+| mock-invoice-export | 3/3 | 3/3 | 3.30 | 2.93 | 0.48 | 0.05 | 9.0x | 0.204 | 0.004 | 75.3 | 11.1 |
+| mock-upload-document | 3/3 | 3/3 | 1.22 | 0.88 | 0.36 | 0.02 | 17.3x | 0.203 | 0.004 | 75.0 | 10.6 |
+| mock-false-success | 3/3 | 3/3 | 13.77 | 13.48 | 0.36 | 0.03 | 13.1x | 0.205 | 0.004 | 74.8 | 10.3 |
+| mock-hidden-instruction | 3/3 | 3/3 | 0.61 | 0.34 | 0.32 | 0.01 | 26.1x | 0.203 | 0.004 | 74.8 | 10.3 |
 
 Steps and model requests match per task in every run. `mock-support-portal` fails its grade in both: its modal opens
 1.2 s after load, and at zero latency both agents reach it on the step that leaves them stuck.
@@ -98,22 +106,20 @@ Each response is held as long as the provider took when it was recorded.
 
 | metric | Python | Rust | Python / Rust |
 |---|---:|---:|---:|
-| wall s, median of tasks | 21.15 | 20.86 | 1.0x |
-| wall s, total | 938.52 | 925.29 | 1.0x |
-| agent CPU s, median of tasks | 0.45 | 0.04 | 10.4x |
-| agent CPU s, total | 17.56 | 1.97 | 8.9x |
-| startup s, median of tasks | 0.204 | 0.004 | 56.6x |
-| startup s, total | 8.390 | 0.135 | 62.0x |
-| peak RSS MiB, median of tasks | 74.7 | 10.7 | 7.0x |
-| peak RSS MiB, max | 76.4 | 14.0 | 5.5x |
-| steps, total | 218 | 218 | - |
-| model requests, total | 642 | 642 | - |
+| wall s, median of tasks | 20.33 | 20.05 | 1.0x |
+| wall s, total | 826.74 | 816.20 | 1.0x |
+| agent CPU s, median of tasks | 0.41 | 0.04 | 10.9x |
+| agent CPU s, total | 15.19 | 1.66 | 9.2x |
+| startup s, median of tasks | 0.209 | 0.004 | 58.1x |
+| startup s, total | 7.633 | 0.129 | 59.1x |
+| peak RSS MiB, median of tasks | 75.0 | 10.5 | 7.1x |
+| peak RSS MiB, max | 76.8 | 13.5 | 5.7x |
+| steps, total | 204 | 204 | - |
+| model requests, total | 613 | 613 | - |
 
 
 Both runs pass 36/36, and their results are identical on every task. Request counts match too: with hedging gone
-from both clients, no second request races a slow one, so the two counts no longer drift with timing. The plan
-responses recorded for #417 took the provider longer than the old ones, so recorded-latency wall is longer than in
-the last comparison for both agents.
+from both clients, no second request races a slow one, so the two counts no longer drift with timing.
 
 ## Where the time goes
 
@@ -136,7 +142,7 @@ the last comparison for both agents.
 | Python packages: fastbrowse and its runtime dependencies, without the interpreter | 13.0 |
 | npm package with the PyInstaller binary, darwin-arm64, unpacked | 50.4 |
 
-The Rust binary is 4,215,296 bytes. It carries the CLI, `serve --stdio`, the MCP server and the page scripts.
+The Rust binary is 4,231,904 bytes. It carries the CLI, `serve --stdio`, the MCP server and the page scripts.
 
 ## Bugs found by the replay
 
@@ -173,6 +179,6 @@ The raw runs are in `bench/results/runs/`.
 - Apple M4 Max, 16 cores, 64 GB, macOS 27.0.1
 - Google Chrome 155.0.8059.86, headless, started by the harness and handed over by `cdp_url`
 - Python 3.13.13, rustc 1.95.0
-- Rust binary built from `stack/13-bindings` on fastbrowse 0.7.0, whose Rust sources are this branch's. The
-  Python runs used the same Python sources, the harness aside.
-- Cassettes from `stack/03-bench`, filled on 2026-10-24 for the link question and the one-call plan
+- Rust binary built from `fix/rust-port-434-437` on fastbrowse 0.7.1, with main's Python sources at #439. The
+  Python runs used the same Python sources.
+- Cassettes from `stack/03-bench`, filled on 2026-10-24 for the link question and the one-call plan, then for #437 and #439

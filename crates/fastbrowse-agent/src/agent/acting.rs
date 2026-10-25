@@ -25,6 +25,7 @@ use super::helpers::{
     caller_link, code_decision, describe, dialog_question, lookup, misfit, navigation_question, next_value,
     only_typed_since_read, read_exhausted, record, seen, unread, unread_transaction,
 };
+use super::sign_in::shows_sign_in;
 use super::state::{FieldText, Flow, RunState, Step, Stop, Unsure};
 use super::{Agent, GENERATE};
 use crate::memory::shows;
@@ -875,13 +876,17 @@ impl Agent {
     }
 
     /// Stop at a sign-in wall Jev saw only on the page's evidence for it; return once the page proved readable.
+    ///
+    /// Returns whether the run should look at this page again: true after a read changed the notes, false when the
+    /// page shows no sign-in at all. Absent controls do not establish missing authentication, so a page with neither a
+    /// credential field nor a sign-in to act on is not a wall, and the run acts on its decision.
     pub(super) async fn meet_wall(
         &self,
         state: &mut RunState,
         observation: &Observation,
         raw: &Observation,
         plan: &Plan,
-    ) -> Step {
+    ) -> Step<bool> {
         let origin = fastbrowse_core::safety::origin_of(&observation.url);
         // The error reaches the caller as it is, so it is built from what models see and redacted as well: a page can
         // echo a typed secret into its title or a field's label.
@@ -908,6 +913,9 @@ impl Agent {
             let asked = if asked.is_empty() { "a password".to_string() } else { asked.join(", ") };
             return Err(wall(format!("the page asks for {asked}")));
         }
+        if !shows_sign_in(observation) {
+            return Ok(false);
+        }
         if !unread(plan, &state.notes) {
             return Err(wall(format!("{page} offers only sign-in")));
         }
@@ -919,7 +927,7 @@ impl Agent {
         if state.notes.facts().len() == facts {
             return Err(wall(format!("reading {page} found none of the requested information")));
         }
-        Ok(())
+        Ok(true)
     }
 
     pub(super) async fn read_before_interaction(
