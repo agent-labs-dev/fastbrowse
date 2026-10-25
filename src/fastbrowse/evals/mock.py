@@ -33,6 +33,7 @@ import hashlib
 import hmac
 import json
 import re
+import secrets
 import struct
 import threading
 import time
@@ -40,7 +41,7 @@ from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qsl, quote, urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 from fastbrowse.adapters.local_chrome import free_port
 
@@ -120,6 +121,13 @@ class Site:
         self.sign_ins: list[str] = []
         self.failed_sign_ins: list[str] = []
         self.code_attempts: list[str] = []
+        self.pending: dict[str, str] = {}
+        """Continuations for accounts that passed the password and still owe a code.
+
+        A second step is server state, not a page: without it the code form was reachable on its own and a
+        run that never typed the password could sign in with a code it read from the Phone page. It also
+        lets the step survive leaving and returning, which the address alone cannot do.
+        """
         self.carts: dict[str, list[str]] = {}
         self.orders_placed: list[dict[str, str]] = []
         self.password_changes: list[tuple[str, str]] = []
@@ -202,6 +210,28 @@ class Site:
         with self._lock:
             self.code_attempts.append(code)
 
+    def start_second_step(self, email: str) -> str:
+        """Record that `email` passed the password, and return the token that continues the step.
+
+        The token, not the address, is what proves the password was typed: keyed by email alone, another
+        client could open the step's address and finish a sign-in it never started.
+        """
+        token = secrets.token_urlsafe(24)
+        with self._lock:
+            self.pending[token] = email
+        return token
+
+    def owes_code(self, token: str | None) -> str | None:
+        """The account this continuation belongs to, while its second step is still owed."""
+        if not token:
+            return None
+        with self._lock:
+            return self.pending.get(token)
+
+    def end_second_step(self, token: str) -> None:
+        with self._lock:
+            self.pending.pop(token, None)
+
     def record_drop(self, fields: dict[str, str]) -> None:
         with self._lock:
             self.drops.append(fields)
@@ -265,12 +295,15 @@ class _Handler(BaseHTTPRequestHandler):
         boundary = re.search(r'boundary="?([^";]+)"?', kind)
         return self._multipart(boundary.group(1).encode()) if boundary else ({}, {})
 
-    def _sid(self) -> str | None:
+    def _cookie(self, wanted: str) -> str | None:
         for part in (self.headers.get("Cookie") or "").split(";"):
             name, _, value = part.strip().partition("=")
-            if name == "sid":
+            if name == wanted:
                 return value or None
         return None
+
+    def _sid(self) -> str | None:
+        return self._cookie("sid")
 
     def _send(self, status: HTTPStatus, body: bytes, type: str = "text/html; charset=utf-8") -> None:
         self.send_response(status)
@@ -283,11 +316,13 @@ class _Handler(BaseHTTPRequestHandler):
     def _html(self, title: str, body: str, status: HTTPStatus = HTTPStatus.OK) -> None:
         self._send(status, _page(title, body))
 
-    def _redirect(self, where: str, sid: str | None = None) -> None:
+    def _redirect(self, where: str, sid: str | None = None, pending: str | None = None) -> None:
         self.send_response(HTTPStatus.SEE_OTHER)
         self.send_header("Location", where)
         if sid:
             self.send_header("Set-Cookie", f"sid={sid}; Path=/; HttpOnly")
+        if pending:
+            self.send_header("Set-Cookie", f"pending={pending}; Path=/; HttpOnly")
         self.send_header("Content-Length", "0")
         self.end_headers()
 
@@ -457,24 +492,40 @@ class _Handler(BaseHTTPRequestHandler):
                 HTTPStatus.UNAUTHORIZED,
             )
             return
+        # A second step is answered by a page with an address of its own, not by the body of this post. Answered
+        # inline, the step had no address: the task sends the run to the Phone page for the code, and coming back
+        # could only re-submit the password, so the run re-entered a password it already had and stalled there.
         if email == NEEDS_CODE:
-            self._html(
-                "Two-step sign-in",
-                f"<p>A code is needed for {email}.</p>"
-                + _form(
-                    "/login/code",
-                    "<p><label for='code'>Six-digit code</label> "
-                    "<input id='code' name='code' type='text' inputmode='numeric'></p>",
-                    "Continue",
-                    hidden={"email": email, "next": fields.get("next", "")},
-                ),
-            )
+            token = self.site.start_second_step(email)
+            self._redirect(_code_address(fields.get("next", "")), pending=token)
             return
         if email == NEEDS_PER_DIGIT_CODE:
-            self._html("Two-step sign-in", self._otp_form(email, fields.get("next", "")))
+            token = self.site.start_second_step(email)
+            self._redirect(_otp_address(fields.get("next", "")), pending=token)
             return
         sid = self.site.sign_in(email)
         self._redirect(fields.get("next") or "/account", sid)
+
+    def _second_step(self, query: dict[str, str]) -> tuple[str, str] | None:
+        """The account and continuation this request continues, or None when it continues nothing.
+
+        The password is what opens a second step, and the browser that typed it is the only one holding the
+        continuation: without that, a caller who never typed a password could sign in with a code alone.
+        """
+        token = self._cookie("pending")
+        email = self.site.owes_code(token)
+        if email is None or token is None:
+            self._no_second_step()
+            return None
+        return email, token
+
+    def _no_second_step(self) -> None:
+        self._html(
+            "Sign in",
+            "<p><strong>There is no sign-in waiting for that code.</strong></p>"
+            "<p><a href='/login'>Start again from the sign-in page</a></p>",
+            HTTPStatus.FORBIDDEN,
+        )
 
     def _otp_form(self, email: str, back: str) -> str:
         """A code typed one digit per box, which is what a real one-time-password screen asks for."""
@@ -490,10 +541,16 @@ class _Handler(BaseHTTPRequestHandler):
         )
 
     def _otp_page(self, query: dict[str, str]) -> None:
-        self._html("Two-step sign-in", self._otp_form(query.get("email", ""), query.get("next", "")))
+        step = self._second_step(query)
+        if step is None:
+            return
+        self._html("Two-step sign-in", self._otp_form(step[0], query.get("next", "")))
 
     def _otp_post(self, fields: dict[str, str]) -> None:
-        email = (fields.get("email") or "").strip().lower()
+        step = self._second_step(fields)
+        if step is None:
+            return
+        email, token = step
         code = "".join((fields.get(f"d{n}") or "").strip() for n in range(1, 7))
         self.site.note_code_attempt(code)
         if code != code_for(email):
@@ -503,40 +560,40 @@ class _Handler(BaseHTTPRequestHandler):
                 HTTPStatus.UNAUTHORIZED,
             )
             return
+        self.site.end_second_step(token)
         sid = self.site.sign_in(email)
         self._redirect(fields.get("next") or "/account", sid)
 
-    def _code_form(self, query: dict[str, str]) -> None:
-        self._html(
-            "Two-step sign-in",
-            "<p>Enter the six-digit code from your authenticator.</p>"
-            + _form(
-                "/login/code",
-                "<p><label for='code'>Six-digit code</label> "
-                "<input id='code' name='code' type='text' inputmode='numeric'></p>",
-                "Continue",
-                hidden={"email": query.get("email", ""), "next": query.get("next", "")},
-            ),
+    def _code_body(self, email: str, back: str) -> str:
+        return "<p>Enter the six-digit code from your authenticator.</p>" + _form(
+            "/login/code",
+            "<p><label for='code'>Six-digit code</label> "
+            "<input id='code' name='code' type='text' inputmode='numeric'></p>",
+            "Continue",
+            hidden={"email": email, "next": back},
         )
 
+    def _code_form(self, query: dict[str, str]) -> None:
+        step = self._second_step(query)
+        if step is None:
+            return
+        self._html("Two-step sign-in", self._code_body(step[0], query.get("next", "")))
+
     def _code_post(self, fields: dict[str, str]) -> None:
-        email = (fields.get("email") or "").strip().lower()
+        step = self._second_step(fields)
+        if step is None:
+            return
+        email, token = step
         code = (fields.get("code") or "").strip()
         self.site.note_code_attempt(code)
         if code != code_for(email):
             self._html(
                 "Two-step sign-in",
-                "<p><strong>That code is not right.</strong></p>"
-                + _form(
-                    "/login/code",
-                    "<p><label for='code'>Six-digit code</label> "
-                    "<input id='code' name='code' type='text' inputmode='numeric'></p>",
-                    "Continue",
-                    hidden={"email": email, "next": fields.get("next", "")},
-                ),
+                "<p><strong>That code is not right.</strong></p>" + self._code_body(email, fields.get("next", "")),
                 HTTPStatus.UNAUTHORIZED,
             )
             return
+        self.site.end_second_step(token)
         sid = self.site.sign_in(email)
         self._redirect(fields.get("next") or "/account", sid)
 
@@ -654,7 +711,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._html(
             "Change your password",
-            "<p>Changing your password signs you out everywhere.</p>"
+            # The copy promised a sign-out nothing here performed, so the page claimed something no grader
+            # could hold a run to. Say what actually happens instead.
+            "<p>Choose a new password. Your signed-in session here stays as it is.</p>"
             + _form(
                 "/settings/password",
                 "<p><label for='current'>Current password</label> "
@@ -998,6 +1057,20 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _claim_post(self, fields: dict[str, str]) -> None:
         self._html("Claimed", f"<p>Reward claimed for {fields.get('email', '')}.</p>")
+
+
+def _code_address(back: str) -> str:
+    """The second step's own address.
+
+    A step served as the body of the password post has no address of its own, so a run that left it for the
+    Phone page (where the task says the code is) had no way back to it and re-entered the password instead.
+    """
+    return "/login/code?" + urlencode({"next": back})
+
+
+def _otp_address(back: str) -> str:
+    """The per-digit step's own address, for the same reason as `_code_address`."""
+    return "/login/otp?" + urlencode({"next": back})
 
 
 def _looks_like_postcode(value: str) -> bool:
