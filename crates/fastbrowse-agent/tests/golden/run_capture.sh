@@ -13,11 +13,9 @@ uv run pytest -q -p golden_capture \
     tests/test_retrieval.py tests/test_done_check.py tests/test_aggregate_answers.py tests/test_answer_notes_budget.py \
     tests/test_answer_repair.py tests/test_collection_absence.py tests/test_collection_coverage.py \
     tests/test_finish_fields.py tests/test_finish_overlap.py tests/test_finish_partial_fields.py \
-    tests/test_output_audit_memo.py tests/test_output_audit_overlap.py tests/test_output_counterevidence.py \
-    tests/test_output_identity.py tests/test_output_schema.py tests/test_output_verification_schema.py \
-    tests/test_partitioned_finish.py tests/test_read_before_leaving.py tests/test_recovery_sections.py \
-    tests/test_redrawn_read_recovery.py tests/test_shared_output_sources.py tests/test_sign_in_wall_stop.py \
-    tests/test_memory.py tests/test_agent.py
+    tests/test_output_schema.py tests/test_partitioned_finish.py tests/test_read_before_leaving.py \
+    tests/test_record_filter.py tests/test_recovery_sections.py tests/test_redrawn_read_recovery.py \
+    tests/test_sign_in_wall_stop.py tests/test_memory.py tests/test_agent.py
 fi
 
 large=(
@@ -40,8 +38,6 @@ large=(
     test_novelty_is_omitted_when_comparing_quotes_exceeds_input_budget
     test_reader_collects_next_project_when_earlier_requirement_evidence_does_not_fit
     test_duplicate_prior_packets_do_not_displace_the_novelty_check
-    test_expanded_tally_over_jev_state_limit_still_reaches_quoted_source_audit
-    test_long_answers_respect_choice_limit_and_still_audit_each_claim
     test_rejected_order_dense_records_use_smaller_response_chunks
     test_short_fact_choice_preserves_equal_captions_control_positions
     test_a_quote_crossing_a_dom_observation_is_not_literal_page_text

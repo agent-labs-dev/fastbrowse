@@ -49,6 +49,7 @@ RETRIEVAL = (
     "leading_quotes",
     "read",
     "read_tallies",
+    "filter_tallies",
     "compose",
     "partial_answer",
     "draft_answer",
@@ -84,10 +85,7 @@ VERIFICATION = (
     "check_claims",
     "extract",
     "_output_context",
-    "_share_output_sources",
     "_grounding",
-    "_identity_schema",
-    "_assessment_schema",
 )
 # Lists a function appends its findings to; they are written again after the call.
 OUT_LISTS = ("missing_outputs", "corrections", "verified_outputs", "verified_fields")
@@ -95,7 +93,7 @@ PER_TEST = int(os.environ.get("GOLDEN_PER_TEST", "3"))
 # These drive the whole loop, so one test calls the same function many times with near-identical inputs.
 LOOP_TESTS = ("tests/test_agent.py", "tests/test_partitioned_finish.py")
 PER_LOOP_TEST = 1
-# A case holding a long answer's every audit ran to 27 MB; one that size proves nothing a smaller one does not.
+# A case holding a long answer's every check ran to 27 MB; one that size proves nothing a smaller one does not.
 MAX_CASE_BYTES = int(os.environ.get("GOLDEN_MAX_CASE_BYTES", "100000"))
 # Long-page cases (the relevance pass, multi-chunk reads) are written to their own files, kept apart so the common
 # cases stay small to review: `GOLDEN_SUFFIX=_large` with a larger byte cap and only the tests that need it.
@@ -292,9 +290,8 @@ class _Case:
 class _Proxy:
     """Stands in for a test's fake client and writes down what was asked and answered.
 
-    One proxy per fake for the whole session, so `id(llm)` (part of the output audit cache's key) is as stable as
-    the fake's own, and an audit a test expects to be cached is still cached. Which case a request belongs to is
-    read from the context the request runs in, since calls from concurrent tasks interleave."""
+    One proxy per fake for the whole session, so `id(llm)` is as stable as the fake's own. Which case a request
+    belongs to is read from the context the request runs in, since calls from concurrent tasks interleave."""
 
     def __init__(self, inner: Any, kind: str) -> None:
         self._inner = inner
@@ -425,9 +422,6 @@ class _Recording:
         self.unsupported = False
         self.args: dict[str, Any] = {}
         for key, value in bound.arguments.items():
-            if key == "audit_cache" and isinstance(value, dict):
-                self.args[key] = {"$audit_cache": len(value)}
-                continue
             try:
                 self.args[key] = serialize(value)
             except Unsupported as error:
