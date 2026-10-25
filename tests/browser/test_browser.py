@@ -253,6 +253,32 @@ async def test_download_becomes_artifact_with_checksum(
     assert browser_session.artifacts == (artifact,)
 
 
+async def test_a_click_that_downloads_is_a_page_change_not_a_dead_click(
+    page: CdpPage, browser_session: BrowserSession, main_site: str
+) -> None:
+    """The orders-report shape: a link whose target is a file, which Chrome downloads instead of navigating.
+
+    The tab keeps its page, so nothing on the page changed, and the click was reported as having done nothing: the
+    run then treated a successful download as an idle step, and could observe the page before the captured file was
+    there to read. The download is the click's whole effect, and the rows it carried are what the run reads next.
+    """
+    await page.navigate(main_site)
+    await eval_value(
+        browser_session,
+        browser_session.active_session_id,
+        "const link = document.createElement('a'); link.id = 'report-link'; link.href = '/report.csv?short'; "
+        "link.textContent = 'Orders report'; document.body.appendChild(link);",
+    )
+    observation = await observe_until(page, "Orders report")
+    result = await page.act(
+        Action(operation=Operation.CLICK, target_id=find(observation, "Orders report").id), observation
+    )
+    assert result.outcome is StepOutcome.EXECUTED
+    assert result.page_changed is True, "a click that downloaded a file moved the run, not the page"
+    landed = await page.observe()
+    assert "139.79" in landed.viewport_text
+
+
 async def test_cross_origin_iframe_control_is_observed_and_clickable(
     loaded_page: CdpPage, browser_session: BrowserSession
 ) -> None:
