@@ -4,16 +4,20 @@ name: AUR
 # has left the range fastbrowse accepts, is seen before a user sees it.
 #
 # CI calls this when a change touches the package, and the required `check` waits for it. A release calls it
-# with its version once PyPI holds it, which builds the package that version will be. A weekly schedule builds
-# the committed package between changes, since Arch moves without one, and fails when it is older than the PyPI
+# with its version once PyPI holds it: that builds the package the version will be, and then publishes it to
+# the AUR, so a release reaches Arch without anyone copying two files by hand. A weekly schedule builds the
+# committed package between changes, since Arch moves without one, and fails when it is older than the PyPI
 # release in pyproject.toml, which a release that skipped `scripts/aur_package.py --write` leaves behind.
-# Nothing here publishes: pushing to aur.archlinux.org needs the maintainer's key.
 on:
   workflow_call:
     inputs:
       version:
         description: The PyPI release to package in place of the committed one.
         type: string
+        required: false
+    secrets:
+      AUR_SSH_PRIVATE_KEY:
+        description: A key the package's AUR maintainer registered with the AUR. Without it nothing is published.
         required: false
   workflow_dispatch:
   schedule:
@@ -23,10 +27,16 @@ jobs:
   package:
     runs-on: ubuntu-latest
     permissions: {contents: read}
+    # The push to the AUR authenticates over SSH rather than with this job's token. A step `if` may not read
+    # `secrets`, so the key is read once into the environment and every step tests that instead.
+    env:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
-      # PyPI can take a moment to list what was uploaded to it, and the job before this one uploaded it.
+      # PyPI can take a moment to list what was uploaded to it, and to serve the files it lists, and the job
+      # before this one uploaded it. `--wait` waits for both, so a release does not fail on a 404 from the file
+      # host seconds after the upload was accepted.
       - name: Move the package to the release
         if: inputs.version != ''
         env: {VERSION: "${{ inputs.version }}"}
@@ -37,6 +47,29 @@ jobs:
       - name: Check the package is the PyPI release
         if: ${{ !cancelled() && github.event_name == 'schedule' }}
         run: python3 scripts/aur_package.py
+      # The release publishes the package it has just built, so nobody copies PKGBUILD and .SRCINFO into the
+      # AUR by hand. AUR commits are made over SSH with a key the package's maintainer registered; with no key
+      # set the step says so and the release keeps its artifact instead.
+      - name: Publish to the AUR
+        if: inputs.version != '' && env.AUR_SSH_PRIVATE_KEY != ''
+        env: {VERSION: "${{ inputs.version }}"}
+        run: |
+          set -euo pipefail
+          key="$(mktemp)"
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$key"
+          chmod 600 "$key"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          # Trust on first use: the AUR publishes no key of its own to pin in this repository.
+          ssh-keyscan -t ed25519,rsa aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
+          git config --global user.name "fastbrowse release"
+          git config --global user.email "cillian@nebula.gg"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+          python3 scripts/aur_package.py "$VERSION" --publish
+      - name: Say the AUR was not published
+        if: inputs.version != '' && env.AUR_SSH_PRIVATE_KEY == ''
+        run: |
+          echo "::warning title=AUR not published::AUR_SSH_PRIVATE_KEY is not set, so this release's package was built and kept as the 'aur' artifact but not pushed to aur.archlinux.org."
       # What the maintainer pushes to the AUR for this release, when the release moved it.
       - if: inputs.version != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -187,14 +187,77 @@ jobs:
             npm publish ./packages/sdk --access public
           fi
 
-  # The Arch package for this release, built from the sources PyPI now holds and run in a clean Arch container.
-  # Its PKGBUILD and .SRCINFO are this run's `aur` artifact. Nothing is pushed to the AUR from here.
+  # The Arch package for this release, built from the sources PyPI now holds and run in a clean Arch container,
+  # then pushed to the AUR so Arch users get the release without anyone copying two files by hand. Its
+  # PKGBUILD and .SRCINFO are this run's `aur` artifact too, and it opens the PR that keeps `packaging/aur` on
+  # `main` at the same version, which is what the weekly AUR check compares against.
   aur:
     needs: [build, pypi]
-    permissions: {contents: read}
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/aur.yml
     with:
       version: ${{ needs.build.outputs.version }}
+    secrets:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+
+  # A release regenerates `packaging/aur` from the PyPI release in its own checkout, and `main` keeps the previous
+  # version until someone copies it back. That difference is exactly what the weekly AUR check fails on, so this
+  # opens the PR that closes it. A token is needed because a PR opened with the run's own token starts no checks,
+  # and the required `check` could never report on it; with none set the release says so and leaves it to a human.
+  aur-sync:
+    needs: [build, pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Move the package to the release
+        env: {VERSION: "${{ needs.build.outputs.version }}"}
+        run: python3 scripts/aur_package.py "$VERSION" --write --wait 300
+      - name: Open the PR that keeps packaging/aur current
+        env:
+          TOKEN: ${{ secrets.AUR_SYNC_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- packaging/aur; then
+            echo "main already pins this release"
+            exit 0
+          fi
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::warning title=packaging/aur left behind::AUR_SYNC_TOKEN is not set, so main keeps the previous package and the weekly AUR check will read it as a release behind."
+            exit 0
+          fi
+          branch="chore/aur-$VERSION"
+          # A rerun after a failure later in this job finds the branch it already pushed, so it is reused rather
+          # than pushed over. Rerunning the failed jobs is the documented way to recover a half-finished release.
+          git remote set-url origin "https://x-access-token:$TOKEN@github.com/$GITHUB_REPOSITORY.git"
+          git fetch --quiet origin "$branch" || true
+          if git rev-parse --verify --quiet "origin/$branch" > /dev/null; then
+            git checkout --quiet -B "$branch" "origin/$branch"
+            git checkout --quiet "$GITHUB_SHA" -- packaging/aur
+          else
+            git checkout --quiet -b "$branch"
+          fi
+          git add packaging/aur
+          if git diff --cached --quiet; then
+            echo "the branch already carries this package"
+          else
+            git -c user.name="fastbrowse release" -c user.email="cillian@nebula.gg" \
+              commit -m "chore(aur): package fastbrowse $VERSION from the PyPI release"
+            git push origin "$branch"
+          fi
+          if ! GH_TOKEN="$TOKEN" gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state open --json number --jq '.[0].number' | grep -q .; then
+            GH_TOKEN="$TOKEN" gh pr create --base main --head "$branch" \
+              --title "chore(aur): package fastbrowse $VERSION from the PyPI release" \
+              --body "The v$VERSION release regenerated \`packaging/aur\` from the PyPI release it had just published. These are the same bytes on \`main\`, so the weekly AUR check does not read the committed package as a release behind."
+          else
+            echo "the PR for $branch is already open"
+          fi
 
   # The site shows this release only once it builds again after the version is on PyPI, when its
   # "runs exactly the release below it" is true; site.yml asks it to.
