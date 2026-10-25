@@ -46,10 +46,10 @@ never a new AUR revision that changes nothing.
 Two repository secrets make that automatic. Without either, a release still builds and smoke-tests the package and
 keeps its `aur` artifact, and the run says in a warning what did not happen:
 
-- `AUR_SSH_PRIVATE_KEY` — a private key whose public half is registered to the AUR account that owns
+- `AUR_SSH_PRIVATE_KEY`: a private key whose public half is registered to the AUR account that owns
   `fastbrowse`. This is the one step of a release that cannot run without a secret, because the AUR authenticates
   the maintainer and not the repository.
-- `AUR_SYNC_TOKEN` — a token that may push and open pull requests here. The `aur-sync` job regenerates
+- `AUR_SYNC_TOKEN`: a token that may push and open pull requests here. The `aur-sync` job regenerates
   `packaging/aur` from the PyPI release and opens the PR that puts those bytes on `main`; the token is needed
   because a PR opened with the run's own token starts no checks, and the required `check` could never report on
   it. When it is unset the job says so and `main` keeps the previous package.
