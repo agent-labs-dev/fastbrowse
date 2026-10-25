@@ -634,6 +634,42 @@ def scenarios() -> list[dict[str, Any]]:
         limits={"max_steps": 2},
     )
 
+    filled = screen(
+        "https://forms.test/",
+        "Contact",
+        "Contact us\n\nTell us who you are.",
+        [
+            control("first", "textbox", "First name", "fill", form_id="c", value="Ada"),
+            control("last", "textbox", "Last name", "fill", form_id="c", value="Lovelace"),
+            control("send", "button", "Send", "click", form_id="c", submit_semantics="submit"),
+        ],
+    )
+    scenario(
+        "typing a value a field already holds is no progress, and the next decision is told to submit instead",
+        "Fill the contact form on forms.test as Ada Lovelace",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "form": filled},
+            "urls": {"https://forms.test/": "form"},
+            "actions": [
+                {
+                    "screen": "form",
+                    "operation": "fill",
+                    "result": {"outcome": "executed", "page_changed": False, "form_unchanged": True},
+                }
+            ],
+        },
+        {
+            "Plan": [plan(("a1", "Fill the contact form as Ada Lovelace", "action"), answer=False)],
+            "Shortcut": [{"url": None}],
+            "_AnswerDraft": [{"claims": []}],
+            "_FieldText": [{"missing": False, "text": "Ada"}],
+        },
+        start="https://forms.test/",
+        jev={"pick": {"operation": "fill", "target:fill": "first"}, "noul": 0.1},
+        limits={"max_steps": 2},
+    )
+
     signin = screen(
         "https://acme.test/login",
         "Log in",

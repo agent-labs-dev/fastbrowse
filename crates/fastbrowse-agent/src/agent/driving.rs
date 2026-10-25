@@ -794,6 +794,16 @@ impl Agent {
                 written.insert(target.id.clone());
             }
             progressed = result.outcome == StepOutcome::Executed && edit.unwrap_or(changed);
+            if edit == Some(false) && result.outcome == StepOutcome::Executed {
+                // The field already held the value, so this step moved nothing and cannot count: three of them trip
+                // the stall budget. A run that went back to a credentials form re-entered the password it already had
+                // exactly this way, and nothing told it the form was ready to submit instead.
+                // An edit always has a target, so the label is there; "None" is what Python's f-string would write.
+                let named = label.as_deref().unwrap_or("None");
+                state.hint = Some(self.redact(&format!(
+                    "{named} already holds that value: submit the form, or read the page, instead of typing it again."
+                )));
+            }
             if progressed
                 && decision.operation.is_scrolling()
                 && !state.open_answer_outputs.is_empty()
