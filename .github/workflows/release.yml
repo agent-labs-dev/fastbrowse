@@ -201,7 +201,47 @@ jobs:
       version: ${{ needs.build.outputs.version }}
     secrets:
       AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-      AUR_SYNC_TOKEN: ${{ secrets.AUR_SYNC_TOKEN }}
+
+  # A release regenerates `packaging/aur` from the PyPI release in its own checkout, and `main` keeps the previous
+  # version until someone copies it back. That difference is exactly what the weekly AUR check fails on, so this
+  # opens the PR that closes it. A token is needed because a PR opened with the run's own token starts no checks,
+  # and the required `check` could never report on it; with none set the release says so and leaves it to a human.
+  aur-sync:
+    needs: [build, pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Move the package to the release
+        env: {VERSION: "${{ needs.build.outputs.version }}"}
+        run: python3 scripts/aur_package.py "$VERSION" --write --wait 300
+      - name: Open the PR that keeps packaging/aur current
+        env:
+          TOKEN: ${{ secrets.AUR_SYNC_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- packaging/aur; then
+            echo "main already pins this release"
+            exit 0
+          fi
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::warning title=packaging/aur left behind::AUR_SYNC_TOKEN is not set, so main keeps the previous package and the weekly AUR check will read it as a release behind."
+            exit 0
+          fi
+          branch="chore/aur-$VERSION"
+          git checkout -b "$branch"
+          git add packaging/aur
+          git -c user.name="fastbrowse release" -c user.email="cillian@nebula.gg" \
+            commit -m "chore(aur): package fastbrowse $VERSION from the PyPI release"
+          git remote set-url origin "https://x-access-token:$TOKEN@github.com/$GITHUB_REPOSITORY.git"
+          git push origin "$branch"
+          GH_TOKEN="$TOKEN" gh pr create --base main --head "$branch" \
+            --title "chore(aur): package fastbrowse $VERSION from the PyPI release" \
+            --body "The v$VERSION release regenerated \`packaging/aur\` from the PyPI release it had just published. These are the same bytes on \`main\`, so the weekly AUR check does not read the committed package as a release behind."
 
   # The site shows this release only once it builds again after the version is on PyPI, when its
   # "runs exactly the release below it" is true; site.yml asks it to.

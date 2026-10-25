@@ -26,10 +26,11 @@ permissions: {}
 jobs:
   package:
     runs-on: ubuntu-latest
-    permissions:
-      # Only the sync step below writes to this repository; the push to the AUR authenticates with SSH.
-      contents: write
-      pull-requests: write
+    permissions: {contents: read}
+    # The push to the AUR authenticates over SSH rather than with this job's token. A step `if` may not read
+    # `secrets`, so the key is read once into the environment and every step tests that instead.
+    env:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
@@ -50,10 +51,8 @@ jobs:
       # AUR by hand. AUR commits are made over SSH with a key the package's maintainer registered; with no key
       # set the step says so and the release keeps its artifact instead.
       - name: Publish to the AUR
-        if: inputs.version != '' && secrets.AUR_SSH_PRIVATE_KEY != ''
-        env:
-          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          VERSION: ${{ inputs.version }}
+        if: inputs.version != '' && env.AUR_SSH_PRIVATE_KEY != ''
+        env: {VERSION: "${{ inputs.version }}"}
         run: |
           set -euo pipefail
           key="$(mktemp)"
@@ -68,33 +67,9 @@ jobs:
           export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
           python3 scripts/aur_package.py "$VERSION" --publish
       - name: Say the AUR was not published
-        if: inputs.version != '' && secrets.AUR_SSH_PRIVATE_KEY == ''
+        if: inputs.version != '' && env.AUR_SSH_PRIVATE_KEY == ''
         run: |
           echo "::warning title=AUR not published::AUR_SSH_PRIVATE_KEY is not set, so this release's package was built and kept as the 'aur' artifact but not pushed to aur.archlinux.org."
-      # A release regenerates the package in its own checkout, and `main` would keep the previous version until
-      # someone copied it back. The weekly schedule fails on exactly that difference, so a release opens the PR
-      # that closes it. The token is the one CI already uses to open a PR that runs CI; without it the branch is
-      # pushed and the PR is left to a human.
-      - name: Keep packaging/aur current on main
-        if: inputs.version != ''
-        env:
-          GH_TOKEN: ${{ secrets.AUR_SYNC_TOKEN || github.token }}
-          VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          if git diff --quiet -- packaging/aur; then
-            echo "main already pins this release"
-            exit 0
-          fi
-          branch="chore/aur-$VERSION"
-          git checkout -b "$branch"
-          git add packaging/aur
-          git -c user.name="fastbrowse release" -c user.email="cillian@nebula.gg" \
-            commit -m "chore(aur): package fastbrowse $VERSION from the PyPI release"
-          git push origin "$branch"
-          gh pr create --base main --head "$branch" \
-            --title "chore(aur): package fastbrowse $VERSION from the PyPI release" \
-            --body "The v$VERSION release regenerated \`packaging/aur\` from the PyPI release it had just built and pushed it to the AUR. This is the same bytes on \`main\`, so the weekly AUR check does not read the committed package as a release behind."
       # What the maintainer pushes to the AUR for this release, when the release moved it.
       - if: inputs.version != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
