@@ -399,7 +399,7 @@ def scenarios() -> list[dict[str, Any]]:
         "Find the price of the blue mug on shop.test",
         {
             "start": "blank",
-            "screens": {"blank": screen("about:blank", "", ""), **{f"wall{n}": wall for n, wall in enumerate(reloaded)}},
+            "screens": {"blank": screen("about:blank", "", ""), **{f"wall{n}": w for n, w in enumerate(reloaded)}},
             "urls": {home: ["wall0", "wall1", "wall2"]},
         },
         {
