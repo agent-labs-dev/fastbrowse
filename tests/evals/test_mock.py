@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 import pytest
 
 from fastbrowse.evals.mock import ACCOUNTS, ORDERS, PRODUCTS, Site, code_for, mock_site
-from fastbrowse.evals.mock_tasks import ADA, GRACE, TASKS, MockTask
+from fastbrowse.evals.mock_tasks import ADA, GRACE, KATHERINE, KATHERINE_PASSWORD, TASKS, MockTask
 from fastbrowse.models import RunResult, Status
 
 ADA_PASSWORD = ACCOUNTS[ADA]
@@ -475,3 +475,64 @@ def test_feed_count_requires_loading_every_remaining_batch(browser: tuple[Browse
     client.get("/api/feed.json?after=40")
     assert task.check(answer, site) is None
     assert task.check(_run("40 items"), site) is not None
+
+
+class _NoRedirect(request.HTTPRedirectHandler):
+    """Keep the first response, so a redirect can be read rather than followed."""
+
+    def redirect_request(self, *args: object, **kwargs: object) -> None:
+        return None
+
+
+def _answered_without_following(base: str, path: str, fields: dict[str, str]) -> tuple[int, str | None]:
+    opener = request.build_opener(request.HTTPCookieProcessor(CookieJar()), _NoRedirect())
+    try:
+        with opener.open(request.Request(base + path, data=urlencode(fields).encode(), method="POST")) as response:
+            return response.status, response.headers.get("Location")
+    except urllib.error.HTTPError as error:
+        return error.code, error.headers.get("Location")
+
+
+@pytest.mark.parametrize(
+    ("email", "password", "address"),
+    [(ADA, ADA_PASSWORD, "/login/code"), (KATHERINE, KATHERINE_PASSWORD, "/login/otp")],
+)
+def test_a_second_step_is_a_page_with_an_address_of_its_own(
+    browser: tuple[Browser, Site], email: str, password: str, address: str
+) -> None:
+    """The step after the password is a document, not the body of the password post.
+
+    Served inline it had no address, so a run the task sends to the Phone page for the code could not come
+    back to it: it re-entered the password it already had until the stall budget ended the run.
+    """
+    caller, site = browser
+    status, location = _answered_without_following(caller.base, "/login", {"email": email, "password": password})
+    assert status == 303, f"the step must answer with a redirect, not a page: {status}"
+    assert location is not None and location.startswith(address + "?"), location
+    assert site.sign_ins == [], "the password alone must not open the session"
+    opened, body = caller.get(location)
+    assert opened == 200
+    assert "Two-step sign-in" in body
+
+
+def test_a_code_is_refused_when_no_password_opened_the_step(browser: tuple[Browser, Site]) -> None:
+    """A second factor is only a second step if the first one happened."""
+    caller, site = browser
+    status, body = caller.get(f"/login/otp?email={KATHERINE}")
+    assert status == 403
+    assert "no sign-in waiting" in body
+    digits = {f"d{n}": digit for n, digit in enumerate(code_for(KATHERINE), 1)}
+    status, _ = caller.post("/login/otp", {"email": KATHERINE, **digits})
+    assert status == 403
+    assert site.sign_ins == [], "a code alone must not open a session"
+
+
+def test_the_per_digit_step_takes_the_code_one_box_at_a_time(browser: tuple[Browser, Site]) -> None:
+    caller, site = browser
+    _, body = caller.sign_in(KATHERINE, KATHERINE_PASSWORD)
+    assert body.count("maxlength='1'") == 6
+    digits = {f"d{n}": digit for n, digit in enumerate(code_for(KATHERINE), 1)}
+    status, body = caller.post("/login/otp", {"email": KATHERINE, **digits})
+    assert status == 200
+    assert "Signed in as" in body
+    assert site.sign_ins == [KATHERINE]

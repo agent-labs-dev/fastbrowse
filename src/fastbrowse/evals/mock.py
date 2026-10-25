@@ -40,7 +40,7 @@ from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qsl, quote, urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 from fastbrowse.adapters.local_chrome import free_port
 
@@ -120,6 +120,13 @@ class Site:
         self.sign_ins: list[str] = []
         self.failed_sign_ins: list[str] = []
         self.code_attempts: list[str] = []
+        self.pending: set[str] = set()
+        """Accounts that passed the password and still owe a code.
+
+        A second step is server state, not a page: without it the code form was reachable on its own and a
+        run that never typed the password could sign in with a code it read from the Phone page. It also
+        lets the step survive leaving and returning, which the address alone cannot do.
+        """
         self.carts: dict[str, list[str]] = {}
         self.orders_placed: list[dict[str, str]] = []
         self.password_changes: list[tuple[str, str]] = []
@@ -201,6 +208,19 @@ class Site:
     def note_code_attempt(self, code: str) -> None:
         with self._lock:
             self.code_attempts.append(code)
+
+    def start_second_step(self, email: str) -> None:
+        """Record that `email` passed the password and still owes a code."""
+        with self._lock:
+            self.pending.add(email)
+
+    def owes_code(self, email: str) -> bool:
+        with self._lock:
+            return email in self.pending
+
+    def end_second_step(self, email: str) -> None:
+        with self._lock:
+            self.pending.discard(email)
 
     def record_drop(self, fields: dict[str, str]) -> None:
         with self._lock:
@@ -457,24 +477,40 @@ class _Handler(BaseHTTPRequestHandler):
                 HTTPStatus.UNAUTHORIZED,
             )
             return
+        # A second step is answered by a page with an address of its own, not by the body of this post. Answered
+        # inline, the step had no address: the task sends the run to the Phone page for the code, and coming back
+        # could only re-submit the password, so the run re-entered a password it already had and stalled there.
         if email == NEEDS_CODE:
-            self._html(
-                "Two-step sign-in",
-                f"<p>A code is needed for {email}.</p>"
-                + _form(
-                    "/login/code",
-                    "<p><label for='code'>Six-digit code</label> "
-                    "<input id='code' name='code' type='text' inputmode='numeric'></p>",
-                    "Continue",
-                    hidden={"email": email, "next": fields.get("next", "")},
-                ),
-            )
+            self.site.start_second_step(email)
+            self._redirect(_code_address(email, fields.get("next", "")))
             return
         if email == NEEDS_PER_DIGIT_CODE:
-            self._html("Two-step sign-in", self._otp_form(email, fields.get("next", "")))
+            self.site.start_second_step(email)
+            self._redirect(_otp_address(email, fields.get("next", "")))
             return
         sid = self.site.sign_in(email)
         self._redirect(fields.get("next") or "/account", sid)
+
+    def _second_step_email(self, query: dict[str, str]) -> str | None:
+        """The account whose second step this is, or None once no sign-in is waiting for a code.
+
+        The password is what opens a second step, and the site remembers that it did: without the memory a
+        caller who never typed a password could sign in with a code alone, and the fixture would pass a run
+        that skipped the step it exists to test.
+        """
+        email = (query.get("email") or "").strip().lower()
+        if not self.site.owes_code(email):
+            self._no_second_step()
+            return None
+        return email
+
+    def _no_second_step(self) -> None:
+        self._html(
+            "Sign in",
+            "<p><strong>There is no sign-in waiting for that code.</strong></p>"
+            "<p><a href='/login'>Start again from the sign-in page</a></p>",
+            HTTPStatus.FORBIDDEN,
+        )
 
     def _otp_form(self, email: str, back: str) -> str:
         """A code typed one digit per box, which is what a real one-time-password screen asks for."""
@@ -490,10 +526,15 @@ class _Handler(BaseHTTPRequestHandler):
         )
 
     def _otp_page(self, query: dict[str, str]) -> None:
-        self._html("Two-step sign-in", self._otp_form(query.get("email", ""), query.get("next", "")))
+        email = self._second_step_email(query)
+        if email is None:
+            return
+        self._html("Two-step sign-in", self._otp_form(email, query.get("next", "")))
 
     def _otp_post(self, fields: dict[str, str]) -> None:
-        email = (fields.get("email") or "").strip().lower()
+        email = self._second_step_email(fields)
+        if email is None:
+            return
         code = "".join((fields.get(f"d{n}") or "").strip() for n in range(1, 7))
         self.site.note_code_attempt(code)
         if code != code_for(email):
@@ -503,43 +544,44 @@ class _Handler(BaseHTTPRequestHandler):
                 HTTPStatus.UNAUTHORIZED,
             )
             return
+        self.site.end_second_step(email)
         sid = self.site.sign_in(email)
         self._redirect(fields.get("next") or "/account", sid)
 
-    def _code_form(self, query: dict[str, str]) -> None:
-        self._html(
-            "Two-step sign-in",
+    def _code_body(self, email: str, back: str) -> str:
+        return (
             "<p>Enter the six-digit code from your authenticator.</p>"
             + _form(
                 "/login/code",
                 "<p><label for='code'>Six-digit code</label> "
                 "<input id='code' name='code' type='text' inputmode='numeric'></p>",
                 "Continue",
-                hidden={"email": query.get("email", ""), "next": query.get("next", "")},
-            ),
+                hidden={"email": email, "next": back},
+            )
         )
 
+    def _code_form(self, query: dict[str, str]) -> None:
+        email = self._second_step_email(query)
+        if email is None:
+            return
+        self._html("Two-step sign-in", self._code_body(email, query.get("next", "")))
+
     def _code_post(self, fields: dict[str, str]) -> None:
-        email = (fields.get("email") or "").strip().lower()
+        email = self._second_step_email(fields)
+        if email is None:
+            return
         code = (fields.get("code") or "").strip()
         self.site.note_code_attempt(code)
         if code != code_for(email):
             self._html(
                 "Two-step sign-in",
-                "<p><strong>That code is not right.</strong></p>"
-                + _form(
-                    "/login/code",
-                    "<p><label for='code'>Six-digit code</label> "
-                    "<input id='code' name='code' type='text' inputmode='numeric'></p>",
-                    "Continue",
-                    hidden={"email": email, "next": fields.get("next", "")},
-                ),
+                "<p><strong>That code is not right.</strong></p>" + self._code_body(email, fields.get("next", "")),
                 HTTPStatus.UNAUTHORIZED,
             )
             return
+        self.site.end_second_step(email)
         sid = self.site.sign_in(email)
         self._redirect(fields.get("next") or "/account", sid)
-
     def _logout(self, _: dict[str, str]) -> None:
         self.site.sign_out(self._sid())
         # A real site confirms the sign-out; without it the agent has no evidence that the task finished.
@@ -654,7 +696,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._html(
             "Change your password",
-            "<p>Changing your password signs you out everywhere.</p>"
+            # The copy promised a sign-out nothing here performed, so the page claimed something no grader
+            # could hold a run to. Say what actually happens instead.
+            "<p>Choose a new password. Your signed-in session here stays as it is.</p>"
             + _form(
                 "/settings/password",
                 "<p><label for='current'>Current password</label> "
@@ -998,6 +1042,20 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _claim_post(self, fields: dict[str, str]) -> None:
         self._html("Claimed", f"<p>Reward claimed for {fields.get('email', '')}.</p>")
+
+
+def _code_address(email: str, back: str) -> str:
+    """The second step's own address.
+
+    A step served as the body of the password post has no address of its own, so a run that left it for the
+    Phone page (where the task says the code is) had no way back to it and re-entered the password instead.
+    """
+    return "/login/code?" + urlencode({"email": email, "next": back})
+
+
+def _otp_address(email: str, back: str) -> str:
+    """The per-digit step's own address, for the same reason as `_code_address`."""
+    return "/login/otp?" + urlencode({"email": email, "next": back})
 
 
 def _looks_like_postcode(value: str) -> bool:

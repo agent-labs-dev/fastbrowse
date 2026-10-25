@@ -1502,6 +1502,14 @@ class Agent:
             if act.outcome is StepOutcome.EXECUTED and edit is not None and decision.target is not None:
                 written.add(decision.target.id)
             progressed = act.outcome is StepOutcome.EXECUTED and (changed if edit is None else edit)
+            if edit is False and act.outcome is StepOutcome.EXECUTED:
+                # The field already held the value, so this step moved nothing and cannot count: three of them
+                # trip the stall budget. A run that went back to a credentials form re-entered the password it
+                # already had exactly this way, and nothing told it the form was ready to submit instead. The
+                # hint names the honest next step rather than letting the budget end the run in silence.
+                state.hint = self._redactor.redact(
+                    f"{label} already holds that value: submit the form, or read the page, instead of typing it again."
+                )
             if (
                 progressed
                 and decision.operation in SCROLLING
