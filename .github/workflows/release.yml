@@ -233,15 +233,31 @@ jobs:
             exit 0
           fi
           branch="chore/aur-$VERSION"
-          git checkout -b "$branch"
-          git add packaging/aur
-          git -c user.name="fastbrowse release" -c user.email="cillian@nebula.gg" \
-            commit -m "chore(aur): package fastbrowse $VERSION from the PyPI release"
+          # A rerun after a failure later in this job finds the branch it already pushed, so it is reused rather
+          # than pushed over. Rerunning the failed jobs is the documented way to recover a half-finished release.
           git remote set-url origin "https://x-access-token:$TOKEN@github.com/$GITHUB_REPOSITORY.git"
-          git push origin "$branch"
-          GH_TOKEN="$TOKEN" gh pr create --base main --head "$branch" \
-            --title "chore(aur): package fastbrowse $VERSION from the PyPI release" \
-            --body "The v$VERSION release regenerated \`packaging/aur\` from the PyPI release it had just published. These are the same bytes on \`main\`, so the weekly AUR check does not read the committed package as a release behind."
+          git fetch --quiet origin "$branch" || true
+          if git rev-parse --verify --quiet "origin/$branch" > /dev/null; then
+            git checkout --quiet -B "$branch" "origin/$branch"
+            git checkout --quiet "$GITHUB_SHA" -- packaging/aur
+          else
+            git checkout --quiet -b "$branch"
+          fi
+          git add packaging/aur
+          if git diff --cached --quiet; then
+            echo "the branch already carries this package"
+          else
+            git -c user.name="fastbrowse release" -c user.email="cillian@nebula.gg" \
+              commit -m "chore(aur): package fastbrowse $VERSION from the PyPI release"
+            git push origin "$branch"
+          fi
+          if ! GH_TOKEN="$TOKEN" gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state open --json number --jq '.[0].number' | grep -q .; then
+            GH_TOKEN="$TOKEN" gh pr create --base main --head "$branch" \
+              --title "chore(aur): package fastbrowse $VERSION from the PyPI release" \
+              --body "The v$VERSION release regenerated \`packaging/aur\` from the PyPI release it had just published. These are the same bytes on \`main\`, so the weekly AUR check does not read the committed package as a release behind."
+          else
+            echo "the PR for $branch is already open"
+          fi
 
   # The site shows this release only once it builds again after the version is on PyPI, when its
   # "runs exactly the release below it" is true; site.yml asks it to.

@@ -38,8 +38,23 @@ release in `pyproject.toml`. A release that skipped this step shows there.
 
 ## Publishing it
 
-No workflow pushes to the AUR. The maintainer does, with an SSH key registered to the AUR account that owns
-`fastbrowse`:
+The release publishes it. Once the Arch build in the `aur` job has passed, a release that was given a version
+runs `scripts/aur_package.py <version> --publish`, which clones `ssh://aur@aur.archlinux.org/fastbrowse.git`,
+copies `PKGBUILD` and `.SRCINFO`, and commits only the files whose bytes differ, so republishing a version is
+never a new AUR revision that changes nothing.
+
+Two repository secrets make that automatic. Without either, a release still builds and smoke-tests the package and
+keeps its `aur` artifact, and the run says in a warning what did not happen:
+
+- `AUR_SSH_PRIVATE_KEY` — a private key whose public half is registered to the AUR account that owns
+  `fastbrowse`. This is the one step of a release that cannot run without a secret, because the AUR authenticates
+  the maintainer and not the repository.
+- `AUR_SYNC_TOKEN` — a token that may push and open pull requests here. The `aur-sync` job regenerates
+  `packaging/aur` from the PyPI release and opens the PR that puts those bytes on `main`; the token is needed
+  because a PR opened with the run's own token starts no checks, and the required `check` could never report on
+  it. When it is unset the job says so and `main` keeps the previous package.
+
+To publish by hand, with the same key:
 
 ```sh
 git clone ssh://aur@aur.archlinux.org/fastbrowse.git ~/fastbrowse-aur
@@ -48,3 +63,11 @@ git -C ~/fastbrowse-aur add PKGBUILD .SRCINFO
 git -C ~/fastbrowse-aur commit -m "fastbrowse <x.y.z>"
 git -C ~/fastbrowse-aur push origin master
 ```
+
+### Recovering a release that published nothing
+
+A release can stop after PyPI accepted the upload but before its file host served the file; `--wait 300` now waits
+for the two source distributions themselves, so this should not recur. If the `aur` job still fails, its
+`Move the package to the release` step says which address did not answer, and re-running the failed jobs from the
+Actions page publishes again: `--publish` reads what the AUR already holds before committing, so a rerun after a
+half-finished push commits only what is still missing.
