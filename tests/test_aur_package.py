@@ -56,3 +56,31 @@ def test_equal_version_numbers_stay_with_their_own_wheel() -> None:
 
     assert "/fastbrowse-9.9.9.tar.gz" in moved
     assert "/cdp_use-8.8.8.tar.gz" in moved
+
+
+def test_a_source_is_named_by_the_stable_url_the_package_fetches() -> None:
+    # The PKGBUILD names its sources by these addresses, so these are the ones a release has to wait for.
+    assert (
+        aur_package.source_url("fastbrowse", "fastbrowse-0.7.1.tar.gz")
+        == "https://files.pythonhosted.org/packages/source/f/fastbrowse/fastbrowse-0.7.1.tar.gz"
+    )
+    assert (
+        aur_package.source_url("cdp-use", "cdp_use-1.4.5.tar.gz")
+        == "https://files.pythonhosted.org/packages/source/c/cdp-use/cdp_use-1.4.5.tar.gz"
+    )
+
+
+def test_the_package_files_the_repository_commits_are_the_ones_the_aur_is_compared_on() -> None:
+    committed = {name: _committed(name) for name in aur_package.FILES}
+
+    assert aur_package.changed(committed, committed) == []
+    assert aur_package.changed({}, committed) == list(aur_package.FILES)
+
+
+def test_a_publish_rewrites_only_the_files_that_differ() -> None:
+    committed = {name: _committed(name) for name in aur_package.FILES}
+    moved = aur_package.rewrite(
+        committed["PKGBUILD"], aur_package.pinned(committed["PKGBUILD"]), NEW
+    )
+
+    assert aur_package.changed(committed, {**committed, "PKGBUILD": moved}) == ["PKGBUILD"]
