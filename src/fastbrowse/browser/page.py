@@ -465,6 +465,9 @@ _SUGGESTION_SECONDS = 1.2
 # A lazily built menu or dialog arrived 0.15-0.7s after the click on the pages this was measured on.
 # Paid only by a control that advertised a popup and had not opened one yet.
 _POPUP_SECONDS = 1.2
+# A download's bytes are taken off the paused response in a task of its own, which normally finishes before the
+# click's settle does. Paid only by a click whose own input began a navigation and left the page unchanged.
+_DOWNLOAD_SETTLE_SECONDS = 1.5
 
 _DATE_INPUT_TYPES = ("date", "datetime-local", "month", "week", "time")
 """Types whose committed value is the type's own ISO shape, set through the value setter, not typed keystrokes."""
@@ -1020,6 +1023,7 @@ class CdpPage(Page):
         else:
             document = await self._input_mark()
         window_opens = self._session.window_opens
+        downloads_before = self._session.downloads_captured
         try:
             outcome, detail = await self._dispatch(action, target, point, drawn=drawn)
         except BrowserError:
@@ -1047,6 +1051,14 @@ class CdpPage(Page):
             return ActResult(
                 outcome=StepOutcome.EXECUTED, page_changed=True, detail="opened a new tab, now active", moved=True
             )
+        moved = self._moved_by_input(document)
+        if not changed and moved and await self._download_landed(downloads_before):
+            # A link whose target is a file downloads it: Chrome aborts the document navigation and the tab keeps
+            # the page it was on, so nothing on the page changed. The download is the action's whole effect, and
+            # the text it carries is only read by the next observation, so the run must not be told the click did
+            # nothing and must not observe before the captured file is there to read.
+            changed = True
+            detail = detail or "downloaded the file the link points at"
         unchanged = False
         if action.form_fill and not changed and target is not None and not action.secret:
             unchanged = await self._form_unchanged(target, action.text or "")
@@ -1055,8 +1067,18 @@ class CdpPage(Page):
             page_changed=changed,
             detail=detail,
             form_unchanged=unchanged,
-            moved=self._moved_by_input(document),
+            moved=moved,
         )
+
+    async def _download_landed(self, since: int) -> bool:
+        """Whether a download landed since `since`, waiting the capture's own task out briefly.
+
+        Bounded and only asked after an input the run made began a navigation that left the page unchanged, so a
+        plain click that only redrew its page pays nothing for it. A download already captured returns at once.
+        """
+        if self._session.downloads_captured > since:
+            return True
+        return await self._session.download_settled(since, timeout_seconds=_DOWNLOAD_SETTLE_SECONDS)
 
     async def _input_mark(self) -> int | None:
         """How many moves the run's input had made before an action, as the input watch reports them."""
