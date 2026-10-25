@@ -11,7 +11,6 @@ use fastbrowse_agent::verification;
 use fastbrowse_core::llm::{ResponseSchema, Typed};
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::schema::Schema;
-use fastbrowse_core::validation::ModelSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -43,12 +42,6 @@ fn responses_validate_as_pydantic_validates_them() {
             "Shortcut" => check::<Shortcut>(&case),
             "StartPage" => check::<StartPage>(&case),
             "LLMVerdict" => check::<verification::LLMVerdict>(&case),
-            "_OutputIdentities" => {
-                check_schema(&ModelSchema { ty: verification::identity_schema(["output_0"]) }, &case)
-            }
-            "_OutputAssessment" => {
-                check_schema(&ModelSchema { ty: verification::assessment_schema("output_0") }, &case)
-            }
             name if retrieval::response_schema(name).is_some() => {
                 check_schema(&retrieval::response_schema(name).unwrap(), &case)
             }

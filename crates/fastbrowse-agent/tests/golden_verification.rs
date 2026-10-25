@@ -12,12 +12,11 @@ use fastbrowse_agent::policy::HistoryEntry;
 use fastbrowse_agent::retrieval::{Annotation, AnswerCorrection, ComposedAnswer, ScalarField};
 use fastbrowse_agent::verification::{self, *};
 use fastbrowse_core::config::{Config, Thresholds, TokenBudget};
-use fastbrowse_core::llm::{LLMClient, Message};
+use fastbrowse_core::llm::Message;
 use fastbrowse_core::output_schema::output_model;
 use fastbrowse_core::page::{Capture, Observation};
 use fastbrowse_core::py::base64;
 use fastbrowse_core::py::dump::Dump;
-use fastbrowse_core::schema::json_schema;
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use serde_json::{Map, Value, json};
 
@@ -93,10 +92,6 @@ fn outcome<T: Dump>(result: fastbrowse_agent::error::Result<T>) -> Value {
     }
 }
 
-fn schema_outcome(ty: &fastbrowse_core::schema::Ty) -> Value {
-    json!({"result": {"$schema": {"json_schema": json_schema(ty)}}})
-}
-
 /// Runs one case and returns every way Rust differed from Python.
 fn replay(case: &Value) -> Result<(), String> {
     let args = &case["args"];
@@ -107,27 +102,20 @@ fn replay(case: &Value) -> Result<(), String> {
     let ledgers: Vec<&Ledger> = ledger.iter().collect();
     let jev = KeyedJev::new(case, ledgers.clone());
     let llm = KeyedLLM::new(case, ledgers);
-    let llm_arg: Option<&dyn LLMClient> = args.get("llm").filter(|l| !l.is_null()).map(|_| &llm as &dyn LLMClient);
     let trace = Trace::collecting();
     let tokens: TokenBudget = opt(args, "tokens").unwrap_or_default();
     let notes: Option<Notes> = args.get("notes").filter(|n| n.get("$notes").is_some()).map(notes_arg);
     let missing: Mutex<Vec<String>> = Mutex::new(opt(args, "missing_outputs").unwrap_or_default());
     let corrections: Mutex<Vec<AnswerCorrection>> = Mutex::new(opt(args, "corrections").unwrap_or_default());
     let verified_fields: Mutex<Vec<ComposedAnswer>> = Mutex::new(opt(args, "verified_fields").unwrap_or_default());
-    let cache: OutputAuditCache = Mutex::default();
     let has = |key: &str| args.get(key).is_some_and(|v| !v.is_null());
     let check_options = || CheckOptions {
         tokens: tokens.clone(),
         ledger: ledger.as_ref(),
         missing_outputs: has("missing_outputs").then_some(&missing),
         corrections: has("corrections").then_some(&corrections),
-        allow_scalar_jev: flag(args, "allow_scalar_jev", false),
-        task: args.get("task").and_then(Value::as_str).unwrap_or("").to_string(),
-        audit_cache: has("audit_cache").then_some(&cache),
-        bounded: flag(args, "bounded", false),
         verified_outputs: None,
         independent_fields: flag(args, "independent_fields", true),
-        today: opt(args, "today"),
         trace: trace.clone(),
         transaction_evidence_ids: strings(args.get("transaction_evidence_ids").unwrap_or(&Value::Null)),
         answer_checks: strings(args.get("answer_checks").unwrap_or(&Value::Null)),
@@ -148,11 +136,6 @@ fn replay(case: &Value) -> Result<(), String> {
     let result: Value = match name {
         "visual_only_state" => json!({"result": visual_only_state(&parse::<Observation>(&args["observation"]))}),
         "verify_cache_key" => json!({"result": verify_cache_key(&parse::<Vec<Message>>(&args["messages"]))}),
-        "_identity_schema" => {
-            let keys = strings(&args["keys"]);
-            schema_outcome(&identity_schema(keys.iter().map(String::as_str)))
-        }
-        "_assessment_schema" => schema_outcome(&assessment_schema(args["key"].as_str().unwrap())),
         "_grounding" => json!({"result": grounding(notes_ref(), &parse::<Plan>(&args["plan"]), &invented)}),
         "_output_context" => {
             let composed: ComposedAnswer = parse(&args["composed"]);
@@ -212,14 +195,7 @@ fn replay(case: &Value) -> Result<(), String> {
         "check_answer_outputs" => {
             let composed: ComposedAnswer = parse(&args["composed"]);
             let options = check_options();
-            outcome(block_on(check_answer_outputs(
-                &jev,
-                llm_arg,
-                &composed,
-                notes_ref(),
-                &strings(&args["checks"]),
-                &options,
-            )))
+            json!({"result": check_answer_outputs(&composed, notes_ref(), &strings(&args["checks"]), &options)})
         }
         "check_claims" => {
             let composed: ComposedAnswer = parse(&args["composed"]);
@@ -229,7 +205,6 @@ fn replay(case: &Value) -> Result<(), String> {
                 &composed,
                 notes_ref(),
                 &parse::<Thresholds>(&args["thresholds"]),
-                llm_arg,
                 &options,
             )))
         }

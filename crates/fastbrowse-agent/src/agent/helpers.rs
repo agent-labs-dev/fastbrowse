@@ -296,13 +296,29 @@ pub(crate) fn plan_ids(ids: &[String], plan: &Plan) -> HashSet<String> {
     found
 }
 
+/// Whether an action the run chose was covered or failed: it may still be on the page it meant to leave.
+pub(crate) fn blocked_action(history: &[HistoryEntry]) -> bool {
+    history.iter().any(|entry| {
+        matches!(entry.outcome, StepOutcome::Covered | StepOutcome::Failed)
+            && entry.operation.is_some_and(|op| !matches!(op, Operation::Done | Operation::Read))
+    })
+}
+
 /// Whether the verifier's doubts leave the run finished.
+///
+/// An information requirement the notes cite facts for is not left open by the verifier alone: the answer's claims are
+/// checked against those quotes before it is given. On flash-lite the verifier named "compare the two release dates"
+/// missing with both dates in the notes, one run in three, until the run stopped stuck. Evidence read on a guessed
+/// address is not excused, since that is the wrong page the citing check cannot see. Nor is a requirement Jev's done
+/// check also held unmet: the claim check sees a quote and its claim, not which page the quote came from, and a run
+/// whose link was covered by an ad read the heading of the page it was still on and called it the new window's.
 pub(crate) fn verified(
     verdict: &LLMVerdict,
     plan: &Plan,
     notes: &Notes,
     invented: &HashSet<String>,
     lineage: Option<&Lineage>,
+    held_unmet: &[String],
 ) -> bool {
     let cited: HashSet<String> = plan
         .requirements
@@ -313,7 +329,8 @@ pub(crate) fn verified(
     let misread = misread(verdict, plan, notes, invented, lineage);
     let named: HashSet<String> =
         plan_ids(&verdict.missing, plan).union(&plan_ids(&verdict.ungrounded, plan)).cloned().collect();
-    let excused: HashSet<String> = cited.difference(&misread).cloned().collect();
+    let excused: HashSet<String> =
+        cited.iter().filter(|id| !misread.contains(*id) && !held_unmet.contains(*id)).cloned().collect();
     let doubted: Vec<&String> = named.iter().filter(|id| !excused.contains(*id)).collect();
     doubted.is_empty() && (verdict.complete || !named.is_empty())
 }

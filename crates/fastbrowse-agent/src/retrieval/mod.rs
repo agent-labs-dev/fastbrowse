@@ -21,8 +21,9 @@ use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::schema::{Ty, json_schema};
 
 pub use answers::{
-    AnswerCorrection, Claim, ComposeOptions, ComposedAnswer, Stage, TRANSACTION_CONTRADICTED, assemble_answer,
-    claim_check_questions, compose, draft_answer, partial_answer, retain_fields, transaction_check_question,
+    AnswerCorrection, Claim, ComposeOptions, ComposedAnswer, OUTPUT_MISSING, Stage, TRANSACTION_CONTRADICTED,
+    assemble_answer, claim_check_questions, compose, draft_answer, partial_answer, retain_fields,
+    transaction_check_question,
 };
 pub use choices::read_candidates;
 pub use chunks::{Chunk, chunk, leading_quotes, read_message_for};
@@ -32,8 +33,27 @@ pub use fields::{
     merge_candidates, propose_text_fields, propose_text_fields_from_notes,
 };
 pub use reading::{
-    ReadOptions, ReadOutcome, TallyReader, counted_collections_for, names_subject, read, read_tallies, subject_words,
+    ReadOptions, ReadOutcome, TallyReader, counted_collections_for, filter_tallies, names_subject, read, read_tallies,
+    subject_words,
 };
+
+/// `_route`: records which reader answers a read and why, so a run's trace shows where its LLM reads come from.
+pub(crate) fn route(
+    trace: &fastbrowse_core::telemetry::Trace,
+    reader: &str,
+    reason: &str,
+    requirement: Option<&str>,
+    fields: Vec<(&str, serde_json::Value)>,
+) {
+    trace.event("read_route", || {
+        let mut record = serde_json::Map::new();
+        record.insert("reader".into(), reader.into());
+        record.insert("reason".into(), reason.into());
+        record.insert("requirement".into(), requirement.into());
+        record.extend(fields.into_iter().map(|(key, value)| (key.to_string(), value)));
+        record
+    });
+}
 
 /// `_READ_CHUNK_CHARS`, the default chunk for `propose_text_fields`.
 pub const READ_CHUNK_CHARS: i64 = reading::READ_CHUNK_CHARS;

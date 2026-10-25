@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use fastbrowse_core::llm::Message;
 use fastbrowse_core::models::{Bytes, Decider, LLMPurpose, Operation, Status, StepOutcome, StepResult, UNTRUSTED};
-use fastbrowse_core::navigation::navigation_urls;
+use fastbrowse_core::navigation::{navigation_urls, same_address};
 use fastbrowse_core::page::Observation;
 use fastbrowse_core::safety::{origin_of, starts_download};
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
@@ -208,6 +208,42 @@ impl Agent {
             };
             return Err(Stop::new(self.walled(state, observation, gives_up_as, false), detail).into());
         }
+        if let Some(start) = state.caller_start.clone()
+            && observation.dialog.is_none()
+            && !remaining.is_empty()
+            && state.invented.contains(&observation.url)
+            && !same_address(&observation.url, &start)
+            && !state.left_guesses.contains(&observation.url)
+            && state.read_here
+            // A list being paged, or a task with something to do on the page, can still be on the right page.
+            && state.continuing.is_empty()
+            && !state.through_end
+            && !state
+                .ready_plan
+                .as_ref()
+                .is_some_and(|plan| plan.requirements.iter().any(|r| r.kind == RequirementKind::Action))
+            // Context a read kept from the page, a biography beside the quotes it lacked, answers nothing.
+            && !state.notes.facts().iter().any(|fact| {
+                fact.requirement_id.is_some() && fact.evidence.as_ref().is_some_and(|e| e.url == observation.url)
+            })
+        {
+            // A guessed opening page that was read and gave nothing: the way on is the caller's start page, which is
+            // what the recovery model chose there every time, after 3 to 4 seconds and a screenshot.
+            state.left_guesses.insert(observation.url.clone());
+            state.directed = Some((Operation::Navigate, Some(start)));
+            state.section_read = true;
+            state.hint = Some(
+                "The guessed opening page held nothing the task needs; continue from the caller's start page.".into(),
+            );
+            self.event("recover", || {
+                Map::from_iter([
+                    ("reader".into(), "code".into()),
+                    ("reason".into(), "guessed_page_gave_nothing".into()),
+                    ("reason_detail".into(), reason.clone().into()),
+                ])
+            });
+            return Ok(());
+        }
         let caller_destinations = navigation_urls(
             &state.task,
             &observation.url,
@@ -342,7 +378,7 @@ impl Agent {
             }
             // A reader filed a date picker's selected date as context rather than as the requested value, and three
             // runs stopped stuck on the first recovery with the date on screen. The reader is asked once more; the
-            // done check and the answer audit still judge whatever it binds.
+            // done check and the claim check still judge whatever it binds.
             state.unread_rereads.insert(page_read);
             state.reads.retain(|key| key.0 != observation.document_key);
             state.barren.retain(|key, _| key.0 != observation.document_key);

@@ -42,9 +42,6 @@ pub fn skip_reason(case: &Value) -> Option<String> {
     if case.get("unsupported").and_then(Value::as_bool) == Some(true) {
         return Some("an argument Rust cannot rebuild".into());
     }
-    if case["args"].get("audit_cache").and_then(|cache| cache["$audit_cache"].as_i64()).unwrap_or(0) > 0 {
-        return Some("an audit cache filled with Python's keys".into());
-    }
     None
 }
 

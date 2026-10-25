@@ -17,8 +17,8 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
 use super::helpers::{
-    EvidenceKey, answer_evidence, guessed, guessed_page, lookup, misread, not_acting, partition_proof, path_of, record,
-    unread, verified, visited,
+    EvidenceKey, answer_evidence, blocked_action, guessed, guessed_page, lookup, misread, not_acting, partition_proof,
+    path_of, record, unread, verified, visited,
 };
 use super::state::{Flow, HttpFailure, RunState, Step, Stop, TransactionCandidate};
 use super::{Agent, Outcome};
@@ -107,7 +107,7 @@ impl Agent {
                     .map(|(key, _)| key)
                     .collect();
                 // A description can supply one field without answering a bundled requirement. Its captured target
-                // identity keeps that source in the group before an audit can reject the missing field.
+                // identity keeps that source in the group before a check can reject the missing field.
                 let ids: Vec<&str> = group.requirements.iter().map(|r| r.id.as_str()).collect();
                 if state.notes.retain_for(ids, sources.iter().map(String::as_str)) {
                     state.rejected_answer_evidence = None;
@@ -198,7 +198,7 @@ impl Agent {
             let outcome = async {
                 let mut supported = true;
                 if state.oversized_answer && lookup(&plan) && unread(&plan, &state.notes) {
-                    // Separate source reads can leave a bundled requirement unbound. Only a fully audited field answer
+                    // Separate source reads can leave a bundled requirement unbound. Only a fully checked field answer
                     // can bind their combined quotes before the normal completion check.
                     let (answer, held) = Box::pin(self.answer(state, None)).await?;
                     supported = held;
@@ -355,7 +355,7 @@ impl Agent {
         let task = state.task.clone();
         let checking =
             check_done(&*self.jev, &task, &plan, &fresh, &notes, &self.config.thresholds, draft.as_ref(), &options);
-        // Legacy claim checks use only Jev; atomic output audits must wait until the draft is actually offered.
+        // Without answer checks the draft's claims are checked beside the done check; with them, once it is offered.
         let (check, claimed) = match draft.as_ref().filter(|_| plan.answer_checks.is_empty()) {
             Some(draft) => {
                 let claiming = self.holds(state, draft.clone());
@@ -372,11 +372,11 @@ impl Agent {
                 let doubted = self.doubt(state, &check);
                 let answer = check.answer.clone().expect("matched on an answer");
                 if doubted == DoneVerdict::Verify && !state.ledger.capped() {
-                    // The verifier judges completion from the page and the notes, and the audit judges the draft's
-                    // claims against their quotes; neither reads the other's verdict, so they are asked side by side.
-                    // Under a cap it still waits, so it reserves against the audit's receipts.
+                    // The verifier judges completion from the page and the notes, and the claim check judges the
+                    // draft's claims against their quotes; neither reads the other's verdict, so they run side by
+                    // side. Under a cap the verifier waits, so it reserves against the claim check's receipts.
                     // Python builds the request inside the verifier's task, so notes too large for it fail only when
-                    // the verdict is awaited, after the audit has run.
+                    // the verdict is awaited, after the claim check has run.
                     let request = self.verify_request(state, &fresh, &check).await;
                     let ledger = state.ledger.clone();
                     let judging = async {
@@ -417,7 +417,7 @@ impl Agent {
         if check.verdict == DoneVerdict::Verify {
             // Write the answer while the verifier is still deciding. Both read the same finished notes, and every
             // accepted run wants an answer, so the whole cost of guessing wrong is one discarded call.
-            // A verdict already in hand, from the verifier sent beside the audit, needs no answer drafted against it:
+            // A verdict already in hand, from the verifier sent beside the claim check, needs no answer drafted against it:
             // Python cancels that draft before it starts when its verifier has already answered.
             let drafting = plan.page_answer_expected()
                 && check.answer.is_none()
@@ -457,7 +457,13 @@ impl Agent {
                 Some(Err(other)) => return Err(other),
                 None => None,
             };
-            accepted = verified(&judged.data, &plan, &state.notes, &state.invented, Some(&state.lineage));
+            // After a covered or failed action, a requirement Jev did not confirm is not excused by its quote: an ad
+            // covered a new window's link, and the run cited the heading of the page it was on.
+            let mut held_unmet = check.unmet.clone();
+            if blocked_action(&state.history) {
+                held_unmet.extend(check.doubted.iter().cloned());
+            }
+            accepted = verified(&judged.data, &plan, &state.notes, &state.invented, Some(&state.lineage), &held_unmet);
             // Asked to open httpx's project page, a run picked DONE on pypi.org before acting, Jev held the one
             // requirement unmet, and flash-lite called it complete. Only an action can do what Jev says is undone.
             let idle = !state.history.iter().any(|h| {
@@ -564,9 +570,11 @@ impl Agent {
             && check.unmet.is_empty()
             && guessed_ids.is_empty()
             && lookup(plan)
+            && !blocked_action(&state.history)
         {
             // A doubted lookup reaches here with every requirement cited, and the verifier excuses a cited requirement,
-            // so all it could still do was refuse naming nothing, which it never did in 76 0.5.7 verifications.
+            // so all it could still do was refuse naming nothing, which it never did in 76 0.5.7 verifications. A run
+            // with a covered or failed action is the exception: it may be reading the page it meant to leave.
             DoneVerdict::Accept
         } else {
             check.verdict
@@ -598,7 +606,7 @@ impl Agent {
         Ok(VerifyRequest { messages, key, reused })
     }
 
-    /// The verifier's verdict, billed as it arrives: run beside the audit, it can finish before a failure there
+    /// The verifier's verdict, billed as it arrives: run beside the claim check, it can finish before a failure there
     /// discards it. A request byte-identical to an earlier one in this run reuses the earlier verdict.
     async fn verify_done(
         &self,
@@ -873,6 +881,8 @@ impl Agent {
                 let corrections = Mutex::new(Vec::new());
                 let verified_fields = Mutex::new(Vec::new());
                 let mut checks: Vec<String> = Vec::new();
+                // Each information requirement is asked after the plan's checks, so a requirement the generated checks
+                // leave out (a release's date beside its version) is still found missing.
                 if !plan.answer_checks.is_empty() {
                     for check in plan.answer_checks.iter().chain(
                         plan.requirements.iter().filter(|r| r.kind == RequirementKind::Information).map(|r| &r.text),
@@ -883,33 +893,19 @@ impl Agent {
                     }
                 }
                 let collect_fields = state.oversized_answer && answer.is_field_answer();
-                let information = plan.requirements.iter().filter(|r| r.kind == RequirementKind::Information).count();
                 let options = CheckOptions {
                     tokens: self.config.tokens.clone(),
                     ledger: Some(&state.ledger),
                     missing_outputs: Some(&missing),
                     corrections: Some(&corrections),
-                    allow_scalar_jev: plan.answer_checks.len() == 1 && information == 1,
-                    task: state.task.clone(),
-                    audit_cache: Some(&state.output_audit_cache),
-                    bounded: true,
                     verified_outputs: None,
                     independent_fields: state.oversized_answer,
-                    today: self.observed().map(|observed| observed.today()),
                     trace: self.trace.clone(),
                     transaction_evidence_ids: transactions,
                     answer_checks: checks,
                     verified_fields: collect_fields.then_some(&verified_fields),
                 };
-                let held = check_claims(
-                    &*self.jev,
-                    &answer,
-                    &state.notes,
-                    &self.config.thresholds,
-                    Some(&*self.llm),
-                    &options,
-                )
-                .await?;
+                let held = check_claims(&*self.jev, &answer, &state.notes, &self.config.thresholds, &options).await?;
                 drop(options);
                 let mut missing = missing.into_inner().unwrap_or_else(|p| p.into_inner());
                 let corrections = corrections.into_inner().unwrap_or_else(|p| p.into_inner());

@@ -144,6 +144,14 @@ fn replay(case: &Value) -> Result<(), String> {
                 Err(error) => error_outcome(&error),
             }
         }
+        "filter_tallies" => {
+            let readers: Vec<TallyReader> = parse(&args["readers"]);
+            let ids = strings(&args["requirement_ids"]);
+            match block_on(filter_tallies(&jev, &capture(), &readers, &ids, &tokens, ledger.as_ref(), &trace)) {
+                Ok(found) => json!({"result": found.as_ref().map(read_outcome)}),
+                Err(error) => error_outcome(&error),
+            }
+        }
         "merge_records" => {
             let outcome: ReadOutcome = parse(&args["self"]);
             match outcome.merge_records(notes.as_mut().unwrap()) {
@@ -178,7 +186,8 @@ fn replay(case: &Value) -> Result<(), String> {
         "claim_check_questions" => {
             let composed: ComposedAnswer = parse(&args["composed"]);
             let check = args.get("check_omission").and_then(Value::as_bool).unwrap_or(true);
-            outcome(claim_check_questions(&composed, notes.as_ref().unwrap(), &tokens, check))
+            let checks = strings(args.get("answer_checks").unwrap_or(&Value::Null));
+            outcome(claim_check_questions(&composed, notes.as_ref().unwrap(), &tokens, check, &checks))
         }
         "field_question" => {
             let candidates: Vec<Candidate> = parse(&args["candidates"]);

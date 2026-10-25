@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
-use fastbrowse_core::jev::JevClient;
+use fastbrowse_core::jev::{Answer, JevClient, NoulQuestion, Question};
 use fastbrowse_core::llm::{LLMClient, Message};
 use fastbrowse_core::models::{CostLine, Evidence, FactReader, LLMPurpose, UNTRUSTED};
 use fastbrowse_core::page::{Block, BlockKind, Capture};
@@ -16,12 +16,13 @@ use fastbrowse_core::telemetry::{Ledger, Trace};
 use fastbrowse_core::validation::ModelSchema;
 use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::choices::read_choices;
 use super::chunks::{Chunk, Cite, chunk_page, cited, evidence, offered, read_message, source_marker};
-use super::notes_room;
 use super::text::{Page, alnum_runs, counted_heading, lines_of, loose_matches, loose_search, numbers, states_empty};
+use super::{notes_room, route};
+use crate::batches::evaluate_batches;
 use crate::comparison::{NumericComparison, QuotedField, digit};
 use crate::error::{AgentError, Result};
 use crate::memory::{Comparison, Fact, Notes, RenderOptions, Tally, evidence_id, fact_id, unique};
@@ -328,6 +329,21 @@ pub struct TallyReader {
     pub frame_id: Option<String>,
     pub prefix: String,
     pub suffix: String,
+    /// For a filtered count or comparison, the requirement each later record is matched against by Jev.
+    #[serde(default)]
+    pub filter: Option<String>,
+    /// The filter feeds a comparison's records rather than a tally: code picks the winner from their values.
+    #[serde(default)]
+    pub compares: bool,
+    /// The block kind of the records the first page's reader cited, which a later page's records must share.
+    #[serde(default)]
+    pub record_kind: Option<BlockKind>,
+    /// Records the first page's reader matched, shown to Jev so it applies the filter the same way.
+    #[serde(default)]
+    pub examples: Vec<String>,
+    /// For a comparison, the delimiters every kept record must yield a label and a value from.
+    #[serde(default)]
+    pub comparison: Option<NumericComparison>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -575,9 +591,9 @@ fn remember(
 
 /// `_block_context`: the whole block a narrowed quote was cut from, kept beside it as context.
 ///
-/// The answer audit binds a requested subject only to literal quotes it is offered. Cut to "by Marilyn Monroe", or to
-/// a quote's text without the "C.S. Lewis (god)" line under it, a correct answer had no quote naming what it answered
-/// for, and the run ended unverified with the record that named it in its notes.
+/// The claim check judges a requested subject only by the literal quotes it is offered. Cut to "by Marilyn Monroe", or
+/// to a quote's text without the "C.S. Lewis (god)" line under it, a correct answer had no quote naming what it
+/// answered for, and the run ended unverified with the record that named it in its notes.
 pub(crate) fn block_context(page: &Page<'_>, quote: &Evidence, reader: FactReader) -> Option<Fact> {
     let capture = page.capture;
     let block = capture.blocks.iter().find(|block| {
@@ -907,6 +923,9 @@ pub fn read_tallies(
     if records.is_empty() || wanted != have {
         return Ok(None);
     }
+    if readers.iter().any(|reader| reader.filter.is_some()) {
+        return Ok(None);
+    }
     let parts = chunk_page(&page, READ_CHUNK_CHARS, 1);
     if parts.len() != 1 {
         return Ok(None);
@@ -945,6 +964,146 @@ pub fn read_tallies(
         }
     }
     Ok(Some(ReadOutcome::new(notes.facts().into_iter().cloned().collect(), vec![0], 0, Vec::new())))
+}
+
+/// A record Jev matches at or above the first, or rejects at or below the second, is settled; any record between sends
+/// the whole page back to the LLM reader. Jev's yes for a plain author or rating match sits at 0.78 to 0.84, and a
+/// wrongly dropped record leaves no trace, so a rejection needs more certainty than a match.
+const RECORD_MATCH_FROM: f64 = 0.70;
+const RECORD_REJECT_TO: f64 = 0.20;
+
+/// `filter_tallies`: a later page of a filtered count, counted by asking Jev whether each record matches, in one
+/// request.
+///
+/// None when the page does not have the first page's shape or Jev is unsure of any record: the LLM reader then reads
+/// the page as before. The records are code-cut blocks, so every counted one is still a quote.
+pub async fn filter_tallies(
+    jev: &dyn JevClient,
+    capture: &Capture,
+    readers: &[TallyReader],
+    requirement_ids: &[String],
+    tokens: &TokenBudget,
+    ledger: Option<&Ledger>,
+    trace: &Trace,
+) -> Result<Option<ReadOutcome>> {
+    let wanted: HashSet<&String> = requirement_ids.iter().collect();
+    let have: HashSet<&String> = readers.iter().map(|r| &r.requirement_id).collect();
+    if readers.is_empty()
+        || readers.iter().any(|reader| reader.filter.is_none())
+        || wanted != have
+        || capture.inaccessible_frames > 0
+    {
+        return Ok(None);
+    }
+    let shapes: HashSet<(&Vec<String>, &Option<String>, Option<BlockKind>)> =
+        readers.iter().map(|reader| (&reader.heading_path, &reader.frame_id, reader.record_kind)).collect();
+    if shapes.len() != 1 || readers.iter().any(|reader| capture.title != reader.title) {
+        return Ok(None);
+    }
+    let shaped = |b: &Block| counted_kind(b.kind) && shapes.contains(&(&b.heading_path, &b.frame_id, Some(b.kind)));
+    // The records are the blocks shaped like the ones the first page's reader cited; a sidebar or a footer list sits
+    // under another heading and is not asked about. They must also run unbroken: a featured strip of the same shape
+    // elsewhere on the page would be counted again on every page that repeats it.
+    let positions: Vec<usize> =
+        capture.blocks.iter().enumerate().filter(|(_, b)| shaped(b)).map(|(index, _)| index).collect();
+    if positions.is_empty() || positions.len() > MAX_CONTINUING_RECORDS {
+        return Ok(None);
+    }
+    let between = &capture.blocks[positions[0]..=positions[positions.len() - 1]];
+    if between.iter().any(|b| counted_kind(b.kind) && !shaped(b))
+        || between.iter().filter(|b| counted_kind(b.kind)).count() != positions.len()
+    {
+        return Ok(None);
+    }
+    let page = Page::new(capture);
+    let records: Vec<&Block> = positions.iter().map(|index| &capture.blocks[*index]).collect();
+    let mut questions: IndexMap<String, Question> = IndexMap::new();
+    for reader in readers {
+        let filter = reader.filter.as_deref().unwrap_or_default();
+        for (index, block) in records.iter().enumerate() {
+            let question = NoulQuestion::new(
+                format!(
+                    "{UNTRUSTED}\n\n# Requirement\n{filter}\n\n# Record\n{}\n\nDoes this record pass every filter the requirement states, so that it is one of the records the requirement counts or compares? Judge this record alone; do not judge whether it wins.",
+                    page.slice(block.start, block.end)
+                ),
+                Some("Yes, this record matches the requirement."),
+                Some("No, this record does not match."),
+            );
+            questions.insert(format!("{}::{index}", reader.requirement_id), question.into());
+        }
+    }
+    let reader = &readers[0];
+    let state = json!({
+        "page": {"url": capture.url, "title": capture.title, "heading": reader.heading_path},
+        // How the first page's reader applied the filter, so each later record is judged by the same reading.
+        "matching_examples_from_the_first_page": reader.examples,
+    });
+    let Some(answered) = evaluate_batches(jev, &state, &questions, tokens, ledger, None, true).await? else {
+        return Ok(None);
+    };
+    let mut notes = Notes::default();
+    let mut continuation_records: IndexMap<String, Vec<String>> = IndexMap::new();
+    for reader in readers {
+        let mut keys: Vec<String> = Vec::new();
+        for (index, block) in records.iter().enumerate() {
+            let Some(Answer::Noul(answer)) = answered.answers.get(&format!("{}::{index}", reader.requirement_id))
+            else {
+                return Ok(None);
+            };
+            let probability = answer.probability;
+            if RECORD_REJECT_TO < probability && probability < RECORD_MATCH_FROM {
+                trace.event("record_filter", || {
+                    let mut fields = Map::new();
+                    fields.insert("reader".into(), "llm".into());
+                    fields.insert("reason".into(), "uncertain_record".into());
+                    fields.insert("probability".into(), probability.into());
+                    fields
+                });
+                return Ok(None);
+            }
+            if probability >= RECORD_MATCH_FROM {
+                let text = page.slice(block.start, block.end);
+                // Code picks the winner from each kept record's label and value; one it cannot read them from sends
+                // the page to the LLM reader rather than leaving a record the comparison cannot rank.
+                if let Some(comparison) = &reader.comparison
+                    && (comparison.label.extract(text).is_none() || comparison.value.extract(text).is_none())
+                {
+                    trace.event("record_filter", || {
+                        let mut fields = Map::new();
+                        fields.insert("reader".into(), "llm".into());
+                        fields.insert("reason".into(), "unreadable_value".into());
+                        fields
+                    });
+                    return Ok(None);
+                }
+                let fact = quoted(evidence(&page, block, block.start, block.end));
+                keys.push(fact_id(&fact));
+                notes.add(fact);
+            }
+        }
+        let matched = keys.len();
+        if reader.compares {
+            continuation_records.insert(reader.requirement_id.clone(), keys);
+        } else if !keys.is_empty() {
+            notes.add_tally(Tally {
+                requirement_id: reader.requirement_id.clone(),
+                key: reader.count_label.clone().filter(|label| !label.is_empty()).unwrap_or_else(|| "records".into()),
+                records: keys,
+            })?;
+        }
+        trace.event("record_filter", || {
+            let mut fields = Map::new();
+            fields.insert("reader".into(), "jev".into());
+            fields.insert("requirement".into(), reader.requirement_id.clone().into());
+            fields.insert("records".into(), records.len().into());
+            fields.insert("matched".into(), matched.into());
+            fields
+        });
+    }
+    let mut outcome = ReadOutcome::new(notes.facts().into_iter().cloned().collect(), vec![0], 0, Vec::new());
+    outcome.continues = readers.iter().map(|r| r.requirement_id.clone()).collect();
+    outcome.continuation_records = continuation_records;
+    Ok(Some(outcome))
 }
 
 // --- read ---------------------------------------------------------------------------------------------------------
@@ -1111,6 +1270,7 @@ async fn read_inner(
     // LLM claims reach the run's notes only once the whole page is read. Carry earlier chunks and Jev's facts into each
     // chunk so a count or comparison is not asked in ignorance of what was already collected.
     let mut so_far = notes.clone();
+    route(&options.trace, "llm", "remaining_requirements", None, vec![("requirements", json!(requirement_ids))]);
     let collection_schema = options.field_outputs && !options.records_only;
     let parts = chunk_page(&page, max_chars, 1);
     let mut last: Option<(Chunk, bool)> = None;
@@ -1312,6 +1472,11 @@ async fn read_inner(
                     frame_id: records[0].frame_id.clone(),
                     prefix: field.prefix.clone(),
                     suffix: field.suffix.clone(),
+                    filter: None,
+                    compares: false,
+                    record_kind: None,
+                    examples: Vec::new(),
+                    comparison: None,
                 };
                 if read_tallies(capture, std::slice::from_ref(&reader), std::slice::from_ref(&reader.requirement_id))?
                     .is_some()
@@ -1319,6 +1484,58 @@ async fn read_inner(
                     tally_readers.push(reader);
                 }
             }
+        }
+        let texts: IndexMap<&str, &str> =
+            options.requirements.iter().map(|r| (r.id.as_str(), r.text.as_str())).collect();
+        for continuation in &carried {
+            // A filtered count or a comparison names its matches record by record, so a later page of the same list
+            // is matched by Jev record by record rather than read again by the LLM. Code counts the matches, or picks
+            // the winner from their values with the comparison's delimiters.
+            let compares = continuation.comparison.is_some() && !counting.contains_key(&continuation.requirement_id);
+            let Some(requirement_text) = texts.get(continuation.requirement_id.as_str()).copied() else { continue };
+            if continuation.reuse_field
+                || !continuation.through_end
+                || tally_readers.iter().any(|r| r.requirement_id == continuation.requirement_id)
+                || !(compares
+                    || (counting.contains_key(&continuation.requirement_id)
+                        && continuation.tallies.len() == 1
+                        && continuation.tallies[0].field.is_none()))
+            {
+                continue;
+            }
+            let cites = if compares { &continuation.records } else { &continuation.tallies[0].records };
+            let quotes: Vec<Evidence> = cites.iter().filter_map(|cite| cited(&page, &part, cite)).collect();
+            let blocks_by_id: IndexMap<(&String, &Option<String>), &Block> =
+                capture.blocks.iter().map(|b| ((&b.source_id, &b.frame_id), b)).collect();
+            let shapes: IndexSet<(Vec<String>, Option<String>, BlockKind)> = quotes
+                .iter()
+                .filter_map(|evidence| blocks_by_id.get(&(&evidence.source_id, &evidence.frame_id)))
+                .filter(|block| counted_kind(block.kind))
+                .map(|block| (block.heading_path.clone(), block.frame_id.clone(), block.kind))
+                .collect();
+            // The filter needs one record shape to find the next page's records by; matches cited across more than one
+            // shape, or none, stay with the LLM reader. A comparison record that spans blocks would be asked about a
+            // block at a time and lose its value, so only one-block records are filtered.
+            if shapes.len() != 1 || quotes.is_empty() || (compares && cites.iter().any(|cite| cite.first != cite.last))
+            {
+                continue;
+            }
+            let Some((heading_path, frame_id, record_kind)) = shapes.into_iter().next() else { continue };
+            tally_readers.push(TallyReader {
+                requirement_id: continuation.requirement_id.clone(),
+                // Keyed as the LLM reader keys a filtered count, so every page adds to one tally.
+                count_label: if compares { None } else { Some(requirement_text.to_string()) },
+                title: capture.title.clone(),
+                heading_path,
+                frame_id,
+                prefix: String::new(),
+                suffix: String::new(),
+                filter: Some(requirement_text.to_string()),
+                compares,
+                record_kind: Some(record_kind),
+                examples: quotes.iter().take(3).map(|evidence| evidence.quote.clone()).collect(),
+                comparison: if compares { continuation.comparison.clone() } else { None },
+            });
         }
         let mut references: IndexMap<String, String> = offered_notes
             .evidence_ids

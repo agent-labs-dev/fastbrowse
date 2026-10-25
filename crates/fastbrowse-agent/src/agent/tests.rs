@@ -402,7 +402,7 @@ fn test_the_verifier_cannot_hold_open_a_requirement_the_notes_cite() {
         (false, &[][..], false),
     ] {
         let doubt = verdict(complete, missing, &[]);
-        assert_eq!(verified(&doubt, &plan, &notes, &HashSet::new(), None), accepted, "{complete} {missing:?}");
+        assert_eq!(verified(&doubt, &plan, &notes, &HashSet::new(), None, &[]), accepted, "{complete} {missing:?}");
     }
 }
 
@@ -430,7 +430,7 @@ fn test_evidence_does_not_excuse_a_requirement_read_off_a_guessed_address() {
         (&["invented-id"][..], &["https://example.test/"][..], true, true),
     ] {
         let doubt = verdict(complete, &[], ungrounded);
-        assert_eq!(verified(&doubt, &plan, &notes, &set(invented), None), accepted, "{ungrounded:?} {invented:?}");
+        assert_eq!(verified(&doubt, &plan, &notes, &set(invented), None, &[]), accepted, "{ungrounded:?} {invented:?}");
     }
 }
 
