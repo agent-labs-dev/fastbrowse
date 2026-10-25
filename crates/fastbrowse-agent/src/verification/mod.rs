@@ -518,6 +518,11 @@ pub fn visual_only_state(observation: &Observation) -> bool {
     if observation.dialog.is_some() {
         return true;
     }
+    // A page can carry its state in pixels without a single visual control: snapshot.js offers ordinary images
+    // and canvases as content, not as controls, so the control list alone cannot see a chart or a picture.
+    if observation.visual_content {
+        return true;
+    }
     if text::len(text::strip(&observation.viewport_text)) < 40 {
         return true;
     }
@@ -2462,6 +2467,18 @@ mod tests {
         let options = DoneOptions::default();
         block_on(check_done(&jev, "Count them.", &count_plan(), &page(), notes, &Thresholds::default(), None, &options))
             .expect("check")
+    }
+
+    #[test]
+    fn a_page_whose_state_is_a_picture_is_judged_with_the_screenshot() {
+        // A chart, picture or drawing is offered as content, not as a control, so the control list cannot see it.
+        // Only the snapshot's own read of the viewport can, and the verifier needs the screenshot for it.
+        let mut observation = page();
+        observation.viewport_text =
+            "a long stretch of article prose that no one could mistake for a picture on the page".into();
+        assert!(!visual_only_state(&observation));
+        observation.visual_content = true;
+        assert!(visual_only_state(&observation));
     }
 
     #[test]

@@ -169,6 +169,9 @@ struct Snapshot {
     inaccessible_frames: usize,
     viewport_text: String,
     document_key: String,
+    /// 1 when the viewport shows a picture, chart, drawing or video that no control carries; snapshot.js sends 0/1.
+    #[serde(default)]
+    visual_content: i64,
     controls: Vec<SnapshotControl>,
     page_key: String,
     /// Digest of each control's freshness guard, keyed by its local id as a string (a JSON object key).
@@ -622,6 +625,8 @@ impl CdpPage {
                 controls: kept,
                 omitted_controls: int(omitted),
                 viewport_text,
+                // Any frame's picture counts: a screenshot spans every frame the observation read.
+                visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
                 tabs: self.session.tabs(),
                 dialog: self.session.pending_dialog(),
                 inaccessible_frames: int(inaccessible),
@@ -682,6 +687,7 @@ impl CdpPage {
             controls: vec![],
             omitted_controls: 0,
             viewport_text: String::new(),
+            visual_content: false,
             tabs: self.session.tabs(),
             dialog: Some(dialog),
             inaccessible_frames: 0,

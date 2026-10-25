@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-24
+
 - A run ends `needs_login` only when the page itself shows a sign-in to act on: a credential field, or a control that names one. A model that called a page with no such control a sign-in wall, or a page with nothing left to read, no longer makes the run claim the caller is signed out; it ends `stuck` instead.
 - A verifier keeps the screenshot on a page whose state is a picture. An observation now reports a visible chart, image, drawing or video even where the page offers no control for it, so a text-rich page is no longer judged from its text alone. A control-less bot-check interstitial is reloaded once per address rather than once per document, so a challenge that survives its reload is reported as blocked instead of looping. And the run's own verifier caps its verdict at 400 output tokens, the bound the standalone `llm_verify` already applied.
 
@@ -1521,7 +1523,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.7.0...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.1
 [0.7.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.0
 [0.6.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.6.0
 [0.5.25]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.5.25

@@ -313,6 +313,7 @@ mod tests {
             controls,
             omitted_controls: 0,
             viewport_text: String::new(),
+            visual_content: false,
             tabs: vec![],
             dialog: None,
             inaccessible_frames: 0,

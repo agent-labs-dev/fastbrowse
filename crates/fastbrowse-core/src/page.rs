@@ -250,6 +250,10 @@ pub struct Observation {
     #[serde(deserialize_with = "lax::int_ge0")]
     pub omitted_controls: i64,
     pub viewport_text: String,
+    /// Whether the page's visible state is carried by pixels: a chart, picture, drawing or video with no control
+    /// for it. snapshot.js reads it from the viewport, so page text and the control list cannot stand in for it.
+    #[serde(default)]
+    pub visual_content: bool,
     pub tabs: Vec<Tab>,
     #[serde(default)]
     pub dialog: Option<Dialog>,
@@ -641,6 +645,7 @@ mod tests {
             controls: vec![],
             omitted_controls: 0,
             viewport_text: String::new(),
+            visual_content: false,
             tabs: vec![],
             dialog: None,
             inaccessible_frames: 0,
