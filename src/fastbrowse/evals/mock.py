@@ -549,15 +549,12 @@ class _Handler(BaseHTTPRequestHandler):
         self._redirect(fields.get("next") or "/account", sid)
 
     def _code_body(self, email: str, back: str) -> str:
-        return (
-            "<p>Enter the six-digit code from your authenticator.</p>"
-            + _form(
-                "/login/code",
-                "<p><label for='code'>Six-digit code</label> "
-                "<input id='code' name='code' type='text' inputmode='numeric'></p>",
-                "Continue",
-                hidden={"email": email, "next": back},
-            )
+        return "<p>Enter the six-digit code from your authenticator.</p>" + _form(
+            "/login/code",
+            "<p><label for='code'>Six-digit code</label> "
+            "<input id='code' name='code' type='text' inputmode='numeric'></p>",
+            "Continue",
+            hidden={"email": email, "next": back},
         )
 
     def _code_form(self, query: dict[str, str]) -> None:
@@ -582,6 +579,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.site.end_second_step(email)
         sid = self.site.sign_in(email)
         self._redirect(fields.get("next") or "/account", sid)
+
     def _logout(self, _: dict[str, str]) -> None:
         self.site.sign_out(self._sid())
         # A real site confirms the sign-out; without it the agent has no evidence that the task finished.
