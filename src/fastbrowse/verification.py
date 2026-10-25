@@ -6,12 +6,11 @@ when those answers leave completion uncertain.
 
 import asyncio
 import hashlib
-import itertools
 import json
 import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from enum import StrEnum
-from typing import Any, Literal, assert_never
+from typing import assert_never
 
 from pydantic import (
     BaseModel,
@@ -19,31 +18,27 @@ from pydantic import (
     JsonValue,
     SerializerFunctionWrapHandler,
     ValidationError,
-    create_model,
     model_serializer,
 )
 
-from fastbrowse.batches import Answered, evaluate_batches
+from fastbrowse.batches import evaluate_batches
 from fastbrowse.config import Config, Thresholds, TokenBudget
 from fastbrowse.jev import (
-    MAX_CHOICE_OPTIONS,
-    ChoiceAnswer,
-    ChoiceQuestion,
     JevClient,
     NoulAnswer,
     NoulQuestion,
     Question,
 )
-from fastbrowse.llm import Generation, LLMClient, Message, recorded
+from fastbrowse.llm import Generation, LLMClient, Message
 from fastbrowse.memory import CollectionFact, Notes, NotesTooLarge, Standing, fact_id
-from fastbrowse.models import UNTRUSTED, CostLine, Evidence, FactReader, Frozen, LLMPurpose, SourceControl
+from fastbrowse.models import UNTRUSTED, CostLine, Evidence, Frozen, LLMPurpose, SourceControl
 from fastbrowse.page import Capture, Control, Observation, cut_text
-from fastbrowse.planner import FIELD_CATEGORIES, Plan, RequirementKind
+from fastbrowse.planner import Plan, RequirementKind
 from fastbrowse.policy import HistoryEntry
 from fastbrowse.retrieval import (
+    OUTPUT_MISSING,
     TRANSACTION_CONTRADICTED,
     AnswerCorrection,
-    Claim,
     ComposedAnswer,
     FieldAnswer,
     UnsupportedField,
@@ -502,7 +497,7 @@ def verify_messages(
 def verify_cache_key(messages: Sequence[Message]) -> str:
     """A digest of the exact request: the prompt and every image byte, in order.
 
-    Two finish attempts whose rendered request is byte-identical cannot need a second audit, so the
+    Two finish attempts whose rendered request is byte-identical cannot need a second verdict, so the
     verdict paid for by the first is reused (see `Agent._verify_done`).
     """
     digest = hashlib.sha256()
@@ -571,7 +566,7 @@ class _CollectionMetadata(Frozen):
     @model_serializer(mode="wrap")
     def _omit_unset(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
         # A single-page list or a lone group has no pages or standing to show; an empty field there would only
-        # tell the audit about a proof that does not apply.
+        # describe a proof that does not apply.
         return {key: value for key, value in handler(self).items() if key not in _OPTIONAL_METADATA or value}
 
 
@@ -611,67 +606,6 @@ class _OutputContext(Frozen):
     urls: dict[str, str]
 
 
-class _OutputAssessment(Frozen):
-    judgments: dict[str, Literal["yes", "no", "uncertain"]]
-    reason: str
-
-
-class OutputAuditVerdict(Frozen):
-    judgment: Literal["yes", "no", "uncertain"]
-    reason: str
-
-
-class _QuotedIdentity(Frozen):
-    source_ref: str
-    quote: str
-
-
-class _IdentityScope(Frozen):
-    scope: Literal["entities", "subjectless", "unresolved"]
-    identities: tuple[_QuotedIdentity, ...] = ()
-
-
-class _OutputIdentities(Frozen):
-    bindings: dict[str, _IdentityScope]
-
-
-class _IdentityReferenceScope(Frozen):
-    scope: Literal["entities", "subjectless", "unresolved"]
-    identity_ids: tuple[str, ...] = ()
-
-
-class _KeyedIdentity(Frozen):
-    id: str
-    source_ref: str
-    quote: str
-
-
-def _identity_schema(keys: Iterable[str]) -> type[BaseModel]:
-    # An open dictionary permits an empty response even when every requested subject needs a binding.
-    fields: dict[str, Any] = {key: (_IdentityReferenceScope, ...) for key in keys}
-    bindings = create_model("_RequiredBindings", __base__=Frozen, **fields)
-    # The shared identities are a list of keyed entries: one provider route returns a map with free keys empty,
-    # which leaves every binding without its quote.
-    return create_model(
-        "_OutputIdentities", __base__=Frozen, identities=(tuple[_KeyedIdentity, ...], ...), bindings=(bindings, ...)
-    )
-
-
-def _assessment_schema(key: str) -> type[BaseModel]:
-    fields: dict[str, Any] = {key: (Literal["yes", "no", "uncertain"], ...)}
-    judgments = create_model("_RequiredJudgments", __base__=Frozen, **fields)
-    return create_model("_OutputAssessment", __base__=Frozen, judgments=(judgments, ...), reason=(str, ...))
-
-
-type OutputAuditCache = dict[str, OutputAuditVerdict | _OutputIdentities]
-
-# Jev's agreement that a quoted answer satisfies a criterion, from which the two LLM audits are not sent. The
-# criterion question is strict, so a correct answer rarely scores high: on a real-Jev probe of 21 correct quoted
-# answers (0.22 to 0.71) and 21 wrong ones (a wrong value, another entity, a missing field, an unsupported extra
-# value: 0.04 to 0.13), 0.8 settled none of the correct answers and 0.5 settled 12 with every wrong one still audited.
-_OUTPUT_SETTLED_FROM = 0.5
-
-
 def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | None:
     requirements = {requirement.id: requirement.text for requirement in composed.requirements}
     urls: dict[str, str] = {}
@@ -687,7 +621,7 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
         expanded = notes.expand_evidence_ids(claim.evidence_ids)
         if any(not notes.current(key) for key in expanded):
             return None
-        # A refused quote is dropped from what the audit is shown, so a claim resting on it alone has no source and
+        # A refused quote is dropped from the check, so a claim resting on it alone has no source and
         # one resting on it beside a valid quote is judged against the valid quote only.
         known = notes.usable_citations(expanded)
         keys = tuple(key for key in expanded if key in known)
@@ -770,138 +704,64 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
     )
 
 
-async def check_answer_outputs(
-    jev: JevClient,
-    llm: LLMClient | None,
+def check_answer_outputs(
     composed: ComposedAnswer,
     notes: Notes,
     checks: Sequence[str],
     *,
-    tokens: TokenBudget = _DEFAULT_CONFIG.tokens,
-    ledger: Ledger | None = None,
     missing_outputs: list[str] | None = None,
     corrections: list[AnswerCorrection] | None = None,
-    allow_scalar_jev: bool = False,
-    task: str = "",
-    audit_cache: OutputAuditCache | None = None,
-    bounded: bool = False,
     verified_outputs: list[str] | None = None,
     independent_fields: bool = True,
-    today: str | None = None,
 ) -> bool:
+    """Whether code can ground every answer check: each one has a claim, and every claim cites current quotes
+    and the records its count or comparison rests on.
+
+    No model is asked. A second LLM opinion on quoted answers used to follow, and over the 0.7.1 campaign and 27
+    traced reruns it never caught a wrong answer while rejecting correct ones (a version cited without the
+    "latest release" label beside it, a table total without proof the rows were all the rows); it was most of a
+    lookup's wall time. Whether the claims are supported, contradicted or leave a requirement out is Jev's claim
+    check beside this one.
+    """
     if independent_fields and isinstance(composed, FieldAnswer):
         passed = []
-        obligations = {r.text for r in composed.requirements}
-        ordered = (*[c for c in checks if c not in obligations], *[c for c in checks if c in obligations])
-        for check in ordered:
-            if check in obligations and any(c not in passed for c in checks if c not in obligations):
-                continue
+        for check in checks:
             indices = composed.output_claims.get(check, ())
             if any(index < 0 or index >= len(composed.claims) for index in indices):
                 indices = ()
+            # A field with no claim is still checked, so its rejection carries the correction the composer needs.
             claims = tuple(composed.claims[index] for index in indices)
             base = assemble_answer(claims, notes, composed.requirements)
             field = FieldAnswer(**base.model_dump(), output_claims={check: tuple(range(len(claims)))})
-            if await _check_answer_outputs(
-                jev,
-                llm,
-                field,
-                notes,
-                (check,),
-                tokens=tokens,
-                ledger=ledger,
-                missing_outputs=missing_outputs,
-                corrections=corrections,
-                task=task,
-                audit_cache=audit_cache,
-                bounded=bounded,
-                today=today,
-            ):
+            if _outputs_grounded(field, notes, (check,), missing_outputs=missing_outputs, corrections=corrections):
                 passed.append(check)
         if verified_outputs is not None:
             verified_outputs.extend(passed)
-        return len(passed) == len(checks)
-    return await _check_answer_outputs(
-        jev,
-        llm,
-        composed,
-        notes,
-        checks,
-        tokens=tokens,
-        ledger=ledger,
-        missing_outputs=missing_outputs,
-        corrections=corrections,
-        allow_scalar_jev=allow_scalar_jev,
-        task=task,
-        audit_cache=audit_cache,
-        bounded=bounded,
-        independent_fields=independent_fields,
-        today=today,
-    )
+        missing = [check for check in checks if check not in passed]
+        if missing and missing_outputs is not None:
+            missing_outputs.extend(c for c in missing if c not in missing_outputs)
+        return not missing
+    return _outputs_grounded(composed, notes, checks, missing_outputs=missing_outputs, corrections=corrections)
 
 
-def _share_output_sources(messages: Sequence[Message]) -> list[Message]:
-    payload = json.loads(messages[-1].content)
-    sources = {}
-    refs = {}
-
-    def reference(source: dict[str, object]) -> dict[str, str]:
-        key = json.dumps(source, sort_keys=True)
-        if key not in refs:
-            refs[key] = f"shared_{len(refs)}"
-            sources[refs[key]] = source
-        return {"source_ref": refs[key]}
-
-    for criterion in payload["criteria"].values():
-        for record in criterion.get("reported_claims", criterion.get("sources", ())):
-            record["cited_sources"] = [reference(source) for source in record["cited_sources"]]
-        criterion["counterevidence"] = [reference(source) for source in criterion["counterevidence"]]
-    payload["shared_sources"] = sources
-    return [
-        messages[0].model_copy(
-            update={
-                "content": messages[0].content
-                + " Cited sources and counterevidence use source_ref entries into shared_sources. Resolve every "
-                "reference to its full source. Repeated references preserve each claim's own citation; record "
-                "indices still index that claim's cited_sources in order. Check every claim and every source."
-            }
-        ),
-        *messages[1:-1],
-        messages[-1].model_copy(update={"content": json.dumps(payload)}),
-    ]
-
-
-async def _check_answer_outputs(
-    jev: JevClient,
-    llm: LLMClient | None,
+def _outputs_grounded(
     composed: ComposedAnswer,
     notes: Notes,
     checks: Sequence[str],
     *,
-    tokens: TokenBudget,
-    ledger: Ledger | None,
     missing_outputs: list[str] | None,
     corrections: list[AnswerCorrection] | None,
-    allow_scalar_jev: bool = False,
-    task: str,
-    audit_cache: OutputAuditCache | None,
-    bounded: bool,
-    independent_fields: bool = True,
-    today: str | None = None,
 ) -> bool:
-    def fit(messages: Sequence[Message], schema: type[BaseModel]) -> None:
-        size = sum(len(message.content) for message in messages) + len(json.dumps(schema.model_json_schema()))
-        if bounded and size > tokens.input_chars():
-            raise NotesTooLarge(f"Answer evidence exceeds the {tokens.input_chars()} character verification budget")
-
-    def reject(failed: Sequence[str], *, repair: str | None = None) -> bool:
+    def reject(failed: Sequence[str], *, repair: str) -> bool:
         if missing_outputs is not None:
-            missing_outputs.extend(failed)
-        if repair is not None and corrections is not None:
-            # Missing identities or outputs can be repaired from uncited notes before browsing again.
+            missing_outputs.extend(check for check in failed if check not in missing_outputs)
+        if corrections is not None:
+            # Missing outputs can be repaired from uncited notes before browsing again.
+            corrected = {(correction.stage, correction.criterion) for correction in corrections}
             corrections.extend(
                 AnswerCorrection(stage="source", criterion=criterion, claims=composed.claims, reason=repair)
                 for criterion in failed
+                if ("source", criterion) not in corrected
             )
         return False
 
@@ -928,693 +788,17 @@ async def _check_answer_outputs(
             repair="Some cited facts are no longer current or collection records are missing. "
             "Use current source quotes and preserve their collection scope; do not cite superseded conclusions.",
         )
-    criteria = {f"output_{index}": check for index, check in enumerate(checks)}
-    verbatim = False
-    if allow_scalar_jev and len(composed.claims) == 1:
-        claim = composed.claims[0]
-        verbatim = any(
-            fact.reader is FactReader.JEV_CHOICE
-            and fact.evidence is not None
-            and claim.evidence_ids == (fact_id(fact),)
-            and claim.text == fact.text
-            for fact in notes.facts
+    # A count, ranking, winner or absence is only as good as the reading of its list: code knows whether every
+    # page and chunk was read, so an unfinished one is refused here rather than argued over by a model.
+    if any(
+        not record.complete for claim in context.claims for record in (*claim.counted_records, *claim.compared_records)
+    ):
+        return reject(
+            checks,
+            repair="A count, ranking, winner or absence rests on a list that was not read to its end. Read the rest "
+            "of the list before reporting it.",
         )
-    # Jev is the first tier for every answer that only restates quotes: a confident vote spares the two serial LLM
-    # audits, which were a third of a lookup's wall time. The claims check beside this one still has to find each
-    # claim supported by its quote. Counts, totals, comparisons and other calculations are derived across records,
-    # the class of answer the LLM audit exists for, so they always reach it: a claim qualifies only when every fact
-    # it cites is a direct read with no basis, whether or not the reader stored its derivation as a tally. A Jev
-    # choice is the exception that is still a copy: code cut its value from the page, and its basis only lists the
-    # other places the same value appears, as a repeated version string or price does on most lookups.
-    facts = {fact_id(fact): fact for fact in notes.facts}
-    quoted = not isinstance(composed, FieldAnswer) and all(
-        (fact := facts.get(key)) is not None
-        and fact.tally is None
-        and fact.comparison is None
-        and (fact.reader is FactReader.JEV_CHOICE or (fact.evidence is not None and not fact.basis))
-        for claim in composed.claims
-        for key in claim.evidence_ids
-    )
-    current_sources = notes.current_evidence()
-
-    def counterevidence(claims: Sequence[_OutputClaim]) -> list[dict[str, object]]:
-        cited = {source.model_dump_json() for claim in claims for source in claim.cited_sources}
-        locations = {(source.url_ref, source.frame_id) for claim in claims for source in claim.cited_sources}
-        refs = {url: alias for alias, url in context.urls.items()}
-        sources = {}
-        # Selecting a field's quote hid conflicting values retained in another claim or uncited note.
-        for evidence in current_sources.values():
-            alias = refs.get(evidence.url)
-            if alias is None or (alias, evidence.frame_id) not in locations:
-                continue
-            page = notes.captured_page(evidence)
-            source = _OutputSource(
-                url_ref=alias,
-                quote=evidence.quote,
-                complete_source=evidence.complete_source,
-                control_context=evidence.control_context,
-                source_id=evidence.source_id,
-                frame_id=evidence.frame_id,
-                page_title=page.title if page and evidence.frame_id is None else None,
-            )
-            serialized = source.model_dump_json()
-            if serialized not in cited:
-                sources[serialized] = source.model_dump(exclude={"page_title"})
-        return list(sources.values())
-
-    scores = {}
-    if verbatim or quoted:
-        questions = {
-            key: NoulQuestion(
-                instructions=(
-                    f"{UNTRUSTED} Does the actual answer satisfy this criterion completely, with every requested "
-                    "output explicitly stated and directly supported by its own cited sources? Judge every requested "
-                    "entity separately. Related items, implied values and ambiguous source associations do not "
-                    "satisfy it. A derived count or comparison can rest on the cited source records that support its "
-                    "calculation; the sources need not state the derived result. Observed page titles can reveal "
-                    "shortened exact strings but cannot replace a missing citation. Other quotes retained from the "
-                    "same pages are in counterevidence: they never support the answer, and when one conflicts with, "
-                    "qualifies or gives another value for a requested output, the answer does not satisfy the "
-                    f"criterion. Criterion: {criterion}"
-                ),
-                true="Yes, every part is answered and directly evidenced.",
-                false="No, a requested output is missing, unsupported, ambiguous or uncertain.",
-            )
-            for key, criterion in criteria.items()
-        }
-        # The LLM audits see every other quote retained from the cited pages, so a vote that settles in their
-        # place must see them too: a conflicting or condition-dependent value otherwise passes unseen.
-        state = context.model_dump(mode="json")
-        if conflicts := counterevidence(context.claims):
-            state["counterevidence"] = conflicts
-        result = await evaluate_batches(jev, state, questions, tokens=tokens, ledger=ledger, allow_failed_batches=False)
-        if (
-            verbatim
-            and result is not None
-            and any(not isinstance(result.answers.get(key), NoulAnswer) for key in questions)
-        ):
-            return False
-        # An unscored criterion, or an oversized answer Jev could not score, still reaches the LLM audit.
-        scores = {key: _probability(result.answers, key) if result is not None else 0.0 for key in questions}
-        trace("answer_outputs", scores=scores)
-    uncertain = (
-        {key: criteria[key] for key, probability in scores.items() if probability < _OUTPUT_SETTLED_FROM}
-        if scores
-        else criteria
-    )
-    if not uncertain:
-        return True
-    if llm is None:
-        return False
-    choices = {f"claim_{index}": claim.text for index, claim in enumerate(context.claims)}
-    choices["all"] = "The requested output spans multiple claims; no single claim states all of it."
-    choices["none"] = "The requested output is missing from the actual answer."
-    selecting = {
-        key: ChoiceQuestion(
-            instructions=(
-                f"{UNTRUSTED} Select the claim that explicitly states the requested output for the correct entity. "
-                "Preserve the original task's each-item and all-item scope. One item's value cannot discharge "
-                "a field requested for several items. A truthful statement about another item does not report "
-                "that field for the requested item. "
-                "Select all only when the criterion needs multiple claims, and none when absent or only implied. "
-                f"Task: {task}\nCriterion: {criterion}"
-            ),
-            criteria=choices,
-        )
-        for key, criterion in uncertain.items()
-    }
-
-    async def select() -> Answered | None:
-        # Large list answers exceed Jev's option ceiling; the source and assertion audits still check every claim.
-        if len(choices) > MAX_CHOICE_OPTIONS or isinstance(composed, FieldAnswer):
-            return None
-        return await evaluate_batches(
-            jev, {"answer": composed.answer}, selecting, tokens=tokens, ledger=ledger, allow_failed_batches=False
-        )
-
-    # Under a cap each call must see the receipts of the calls it used to follow; see `Ledger.capped`.
-    together = ledger is None or not ledger.capped
-
-    async def resolve_identities() -> dict[str, list[dict[str, JsonValue]]] | bool:
-        """Each uncertain criterion's requested subjects as code-checked identifying quotes, or the rejection."""
-        identities: dict[str, list[dict[str, JsonValue]]] = {}
-        if not context.claims:
-            return identities
-        offered = {}
-        refs = {}
-        for claim in context.claims:
-            for source in claim.cited_sources:
-                serialized = source.model_dump_json()
-                if serialized not in refs:
-                    ref = f"q{len(refs)}"
-                    refs[serialized] = ref
-                    offered[ref] = source
-        messages = [
-            Message(
-                role="system",
-                content=(
-                    f"{UNTRUSTED} Resolve each requested output's subjects to literal identifying quotes. "
-                    "The answer declares which named entities correspond to its numbered results. It cannot "
-                    "supply identity evidence. For each criterion return scope entities and every requested "
-                    "subject's offered source_ref and exact identifying quote from its body or captured page title. "
-                    "Copy only the entity name or identifying description, not the reported field value. "
-                    # A table row named only by its reference left a strict reading with no legal quote, so every
-                    # binding came back unresolved and a finished run ended stuck.
-                    "When a record's only identifier is itself a requested field, such as an order reference, "
-                    "quote that identifier for each of the record's outputs. "
-                    "Code-captured control context binds a quote to its actual hovered DOM ancestor "
-                    "and sibling position; "
-                    "it can identify a positional subject but cannot supply an absent quoted value. "
-                    "Do not infer identity from a URL, shared page, item count or a neighboring table column. "
-                    "A numbered subject must bind to the entity the answer actually labels with that number. "
-                    "Comparisons can require several subjects. Use scope subjectless only for a criterion "
-                    "with no individual entity identity to establish, such as answer format or an aggregate "
-                    "zero-record result. Missing identity evidence is scope unresolved, never subjectless. "
-                    "Do not change requested entities or omit subjects. List each distinct source_ref and literal "
-                    "identifying quote once in identities, each with a short unique id. Bind each criterion to every "
-                    "required subject through identity_ids. Scope entities requires at least one valid id; "
-                    "subjectless and unresolved have no ids."
-                ),
-            ),
-            Message(
-                role="user",
-                content=json.dumps(
-                    {
-                        "task": task,
-                        "criteria": uncertain,
-                        "answer": context.answer,
-                        "urls": context.urls,
-                        # The key is the only handle a binding may name. Shown a source's page block id as
-                        # well, the resolver once filed a correct quote under "s15729" instead of "q0", and a
-                        # right answer failed as an identity missing from its cited sources.
-                        "sources": {ref: source.model_dump(exclude={"source_id"}) for ref, source in offered.items()},
-                    }
-                ),
-            ),
-        ]
-        fingerprint = hashlib.sha256(
-            json.dumps(
-                {"client": id(llm), "messages": [message.model_dump() for message in messages], "kind": "identities"},
-                sort_keys=True,
-            ).encode()
-        ).hexdigest()
-        cached = audit_cache.get(fingerprint) if audit_cache is not None else None
-        if isinstance(cached, _OutputIdentities):
-            resolved = cached
-        else:
-            fit(messages, _identity_schema(uncertain))
-            identifying = recorded(
-                llm.generate(
-                    LLMPurpose.VERIFY, messages, _identity_schema(uncertain), max_output_tokens=8000, ledger=ledger
-                ),
-                ledger,
-            )
-            generated = await identifying
-            payload = generated.data.model_dump()
-            shared: dict[str, _QuotedIdentity] = {}
-            for entry in payload["identities"]:
-                identity = _QuotedIdentity(source_ref=entry["source_ref"], quote=entry["quote"])
-                # One id naming two quotes leaves every binding through it ambiguous.
-                if shared.setdefault(entry["id"], identity) != identity:
-                    return reject(tuple(uncertain.values()))
-            scopes = {}
-            for key, value in payload["bindings"].items():
-                refs = value["identity_ids"]
-                if any(ref not in shared for ref in refs):
-                    return reject((uncertain[key],), repair="The requested subject has no valid quoted identity.")
-                scopes[key] = _IdentityScope(
-                    scope=value["scope"], identities=tuple(dict.fromkeys(shared[ref] for ref in refs))
-                )
-            resolved = _OutputIdentities(bindings=scopes)
-            if audit_cache is not None:
-                audit_cache[fingerprint] = resolved
-        for key, criterion in uncertain.items():
-            scope = resolved.bindings.get(key)
-            if scope is None or scope.scope == "unresolved":
-                return reject((criterion,), repair="Cite a literal identifying quote for every requested subject.")
-            if scope.scope == "subjectless":
-                if scope.identities:
-                    return reject((criterion,), repair="The subject binding contradicts its quoted identities.")
-                continue
-            bindings = scope.identities
-            if not bindings:
-                return reject((criterion,), repair="Cite a literal identifying quote for every requested subject.")
-            identities[key] = []
-            for binding in bindings:
-                source = offered.get(binding.source_ref)
-                if (
-                    source is None
-                    or not binding.quote.strip()
-                    or not any(binding.quote in text for text in (source.quote, source.page_title or ""))
-                ):
-                    return reject((criterion,), repair="The requested subject's identity is not in its cited sources.")
-                identity: dict[str, JsonValue] = {
-                    "reference": criterion,
-                    "url_ref": source.url_ref,
-                    "quote": binding.quote,
-                }
-                if source.control_context is not None:
-                    identity.update(
-                        source_id=source.source_id,
-                        frame_id=source.frame_id,
-                        control_context=source.control_context.model_dump(mode="json"),
-                    )
-                identities[key].append(identity)
-        return identities
-
-    def build(
-        context: _OutputContext, selected: Answered | None, identities: dict[str, list[dict[str, JsonValue]]]
-    ) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]], dict[str, tuple[Claim, ...]]] | bool:
-        """The audit fields for this claim selection and these subject identities, or the rejection."""
-        fields: dict[str, dict[str, object]] = {}
-        source_fields: dict[str, dict[str, object]] = {}
-        covered: set[int] = set()
-        selected_claims: dict[str, tuple[Claim, ...]] = {}
-
-        for key, criterion in uncertain.items():
-            chosen = selected.answers.get(key) if selected is not None else None
-            choice = chosen.choice if isinstance(chosen, ChoiceAnswer) else "all"
-            if isinstance(composed, FieldAnswer):
-                indices = composed.output_claims[criterion]
-                selected_claims[key] = tuple(composed.claims[index] for index in indices)
-                claims = tuple(context.claims[index] for index in indices)
-                covered.update(indices)
-            elif choice == "none":
-                return reject(
-                    (criterion,),
-                    repair="The answer does not state this requested output. Use retained quotes to answer it.",
-                )
-            elif choice == "all":
-                selected_claims[key] = composed.claims
-                claims = context.claims
-                if len(claims) == 1:
-                    covered.add(0)
-            elif choice in choices:
-                index = int(choice.removeprefix("claim_"))
-                claims = (context.claims[index],)
-                selected_claims[key] = (composed.claims[index],)
-                covered.add(index)
-            else:
-                return False
-            fields[key] = {
-                "criterion": criterion,
-                "requested_entities": identities.get(key, []),
-                "reported_claims": [
-                    claim.model_dump(exclude={"cited_sources": {"__all__": {"page_title"}}}) for claim in claims
-                ],
-                "counterevidence": counterevidence(claims),
-            }
-            source_fields[key] = {
-                "criterion": criterion,
-                "requested_entities": identities.get(key, []),
-                "sources": [
-                    {
-                        "cited_sources": [source.model_dump(exclude={"page_title"}) for source in claim.cited_sources],
-                        "counted_records": [count.model_dump() for count in claim.counted_records],
-                        "compared_records": [comparison.model_dump() for comparison in claim.compared_records],
-                    }
-                    for claim in claims
-                ],
-                "counterevidence": fields[key]["counterevidence"],
-            }
-        for index, claim in enumerate(context.claims):
-            if index not in covered:
-                key = f"claim_only_{index}"
-                selected_claims[key] = (composed.claims[index],)
-                fields[key] = {
-                    "criterion": "Every factual assertion is supported by its own cited sources.",
-                    "reported_claims": [claim.model_dump(exclude={"cited_sources": {"__all__": {"page_title"}}})],
-                    "counterevidence": counterevidence((claim,)),
-                }
-        return fields, source_fields, selected_claims
-
-    # One cap over both audits, which run side by side. Four sent a second wave of audits in 37 of 91 audited runs of
-    # the 0.5.24 campaign (about 2.3s each); eight sends a three-criterion answer's six audits at once.
-    semaphore = asyncio.Semaphore(8)
-
-    type _Stage = tuple[list[Message], Mapping[str, object], dict[str, str]]
-
-    async def audit(*stages: _Stage) -> list[dict[str, str] | BaseException]:
-        """Each stage's judgments, or the first error that stage raised.
-
-        The fields of every stage are queued at the cap alternately, one stage's field then the next: queued stage
-        by stage, the first stage's fields took every slot of the shared cap, and the stage beside it waited behind
-        all of them as if the two ran one after the other."""
-
-        async def one(messages: list[Message], key: str, field: object, reasons: dict[str, str]) -> tuple[str, str]:
-            schema = _assessment_schema(key)
-            records = field.get("reported_claims", field.get("sources", ())) if isinstance(field, dict) else ()
-            refs = {source["url_ref"] for record in records for source in record["cited_sources"]}
-            refs.update(
-                ref
-                for record in records
-                for metadata in (*record.get("counted_records", ()), *record.get("compared_records", ()))
-                for ref in (read["url_ref"] for read in metadata.get("pages_read", ()))
-            )
-            if isinstance(field, dict):
-                refs.update(identity["url_ref"] for identity in field.get("requested_entities", ()))
-            urls = {alias: url for alias, url in context.urls.items() if alias in refs}
-            payload: dict[str, object] = {"task": task, "criteria": {key: field}, "urls": urls}
-            if today is not None:
-                payload["current_date"] = today
-            request = [*messages, Message(role="user", content=json.dumps(payload))]
-            if independent_fields and isinstance(composed, FieldAnswer):
-                request[0] = request[0].model_copy(update={"content": request[0].content + "\n\n" + FIELD_CATEGORIES})
-            try:
-                fit(request, schema)
-            except NotesTooLarge:
-                # Answer claims can cite the same full collection. Share its bytes while preserving each
-                # claim's source membership, collection metadata and counterevidence.
-                request = _share_output_sources(request)
-                fit(request, schema)
-            fingerprint = hashlib.sha256(
-                json.dumps(
-                    {
-                        "client": id(llm),
-                        "purpose": LLMPurpose.VERIFY,
-                        "messages": [message.model_dump(mode="json") for message in request],
-                        "schema": schema.model_json_schema(),
-                        "max_output_tokens": 512,
-                    },
-                    sort_keys=True,
-                ).encode()
-            ).hexdigest()
-            cached = audit_cache.get(fingerprint) if audit_cache is not None else None
-            if isinstance(cached, OutputAuditVerdict):
-                reasons[key] = cached.reason
-                return key, cached.judgment
-            async with semaphore:
-                generated = await llm.generate(
-                    LLMPurpose.VERIFY,
-                    request,
-                    schema,
-                    max_output_tokens=512,
-                    ledger=ledger,
-                )
-                if ledger is not None:
-                    ledger.record(generated.cost)
-                assessment = _OutputAssessment.model_validate(generated.data.model_dump())
-                verdict = OutputAuditVerdict(judgment=assessment.judgments[key], reason=assessment.reason)
-                # Repairing one assertion used to repeat audits whose exact sources and question had not changed.
-                if audit_cache is not None:
-                    audit_cache[fingerprint] = verdict
-                reasons[key] = verdict.reason
-                return key, verdict.judgment
-
-        queues = [
-            [(index, (messages, key, field, reasons)) for key, field in fields.items()]
-            for index, (messages, fields, reasons) in enumerate(stages)
-        ]
-        jobs = [job for row in itertools.zip_longest(*queues) for job in row if job is not None]
-        # One field's quoted value cannot answer another field; every receipt settles before an error returns.
-        assessed = await asyncio.gather(*(one(*job) for _, job in jobs), return_exceptions=True)
-        results: list[dict[str, str] | BaseException] = [{} for _ in stages]
-        for (index, _), result in zip(jobs, assessed, strict=True):
-            judged = results[index]
-            if isinstance(judged, BaseException):
-                continue
-            if isinstance(result, BaseException):
-                results[index] = result
-            else:
-                judged[result[0]] = result[1]
-        return results
-
-    # Asked for "the last Saturday of the month after next", the audit saw 26/12/2026 quoted from the field and
-    # refused it for want of today's date, which no page states. The run's clock is code's, not the page's.
-    dated = (
-        " current_date is the run's own date, supplied by code rather than read from a page. Judge a criterion "
-        "relative to today, such as the next Monday or the month after next, against it; the quoted value must "
-        "still be on the page."
-        if today is not None
-        else ""
-    )
-    # Seeing the reported value let the audit fill gaps in ambiguous quotes; check sources with assertions withheld.
-    source_messages = [
-        Message(
-            role="system",
-            content=(
-                f"{UNTRUSTED} Check source availability separately for each criterion. Judge whether its "
-                "selected quoted sources provide every requested output value for the correct entity. "
-                "Answer assertions are withheld and cannot fill missing source values. Return no when a "
-                "requested value or its association with the entity is absent or ambiguous. Eligibility "
-                "qualifiers identify the entity; unrelated fields need not appear in each field's quote. "
-                "Entity ordinals label the compared answer entities, not search rankings, unless a ranking "
-                "is explicitly requested by the task. The task defines scope, not evidence; criteria cannot add "
-                "requirements the task did not ask for. Claim selection is provisional: independently prove "
-                "the field belongs to each requested entity identified by its literal quote. A quote for one "
-                "subject cannot answer another subject's field. A shared page, title, collection or total count "
-                "does not bind a comparison-table column or related model to the requested subject. "
-                "An explicitly labeled value remains available alongside an eligibility-dependent alternative; "
-                "preserve those conditions rather than assuming one value supersedes the other. "
-                "An explicit exhaustive description can establish that no other members exist; absence from a "
-                "partial description cannot. An explicit empty-result quote can answer a request to find records "
-                "with a finding of none within its stated scope. Missing or unread content cannot. "
-                "A total alone does not provide a component breakdown. A value scoped "
-                "to one component, mode, tier or single-item configuration does not establish an aggregate value "
-                "or another configuration. Require the source scope to match the requested scope and preserve "
-                "explicit distinctions. Do not add independent component maxima unless quoted sources state "
-                "that they apply simultaneously and combine additively. An explicit aggregate rating need not "
-                "equal their sum. "
-                "Counterevidence contains other retained quotes from the same exact source address and frame. "
-                "Check whether it conflicts with the requested value for the same literal entity and scope. "
-                "Conflicting explicit values remain available as alternatives, not a single settled value; "
-                "the assertion audit must require their conflict to be acknowledged. Unclear entity or scope "
-                "associations make availability uncertain. Different entities or explicitly "
-                "different configurations are not contradictions. Counterevidence cannot supply missing "
-                "support or subject bindings for the selected quotes. "
-                "A requested recommendation does not require the page to recommend anything: quoted facts "
-                "can provide grounds for the answer's preference. A quoted property of one option can "
-                "support a subjective preference. Do not require every compared option's values for a "
-                "recommendation criterion merely because another task output compares options. The assertion "
-                "audit separately requires all operands for any factual comparative advantage the answer claims. "
-                "Control context identifies the quoted content's actual DOM container and sibling position, "
-                "not an absent field value. Derived outputs can calculate from quoted records only when "
-                "every operand and its association "
-                "is explicit; the source need not state the conclusion literally. A quote marked complete_source "
-                "contains the entire downloaded text file. "
-                "This proves coverage of that file only, not a wider collection or missing operand associations. "
-                "Counted-record metadata gives "
-                "code-maintained distinct counts, their scope, cited record indices and collection completeness. "
-                "A complete count can rest on its matching quoted records without a page stating the total. "
-                "An incomplete or differently scoped count cannot establish the requested whole-list total. "
-                "A count's standing, given for a claim that states a rank or order, ranks its group among all "
-                "group_count groups code counted in that scope: rank is 1 plus the number of groups with a "
-                "higher count, and tied is how many other groups share its count. groups lists the leading "
-                "groups and those around this one, each with its own rank and code-maintained count; ranks "
-                "between them are left out, not missing. When standing.complete is true, it establishes the "
-                "group's rank and order without citing the other groups' records. When it is false, no rank is "
-                "established. A count without a standing establishes no rank. "
-                "pages_read lists every read code made of the collection, in order, including reads with no "
-                "matching record; one url_ref can appear in several reads when the list loads more or pages in "
-                "place at one address. A listed read with no cited record was read and held no match, so it is "
-                "not missing coverage. "
-                "Compared-record metadata preserves the reader's collection scope, completeness and indices "
-                "into these cited sources. A complete comparison establishes coverage of that scope, not "
-                "missing values, operand associations or the correctness of a conclusion. An incomplete "
-                "comparison cannot establish a whole-list winner or absence. An absence can be derived from a "
-                "complete collection only when its quoted context identifies the collection and every cited "
-                "member includes the identity and fields needed to exclude a match. Check every member. "
-                "Coverage alone does not prove that none match, and establishes nothing outside that scope. "
-                "The quoted records must still identify matching entities and filters. Observed page titles provide "
-                "identity context, not missing field "
-                "evidence. Never reconstruct missing table column labels from prior knowledge. Return "
-                "yes/no/uncertain per field and explain missing source values." + dated
-            ),
-        ),
-    ]
-    assertion_messages = [
-        Message(
-            role="system",
-            content=(
-                f"{UNTRUSTED} Judge each requested output independently. First determine its value from each "
-                "selected claim's cited quotes alone, without using the reported claim or prior knowledge to "
-                "fill missing subject associations. Literal requested-entity quotes identify the subjects, "
-                "but their URL alone does not bind a field in a related model's table column. Never transfer "
-                "a field value from one subject to another. Determine the evidenced value without filling "
-                "missing information. Then check that the claim explicitly states that value for the "
-                "correct requested entity in the actual answer. Missing fields, unsupported component "
-                "breakdowns, incomplete exact strings, ambiguous sources and claims for another entity fail. "
-                "Eligibility qualifiers identify the entity and are checked across the answer, not demanded "
-                "in every individual quote. Entity ordinals label compared answer entities, not search rankings "
-                "unless explicitly requested by the task. The task defines scope, not evidence; do not add "
-                "requirements beyond it. Preserve explicitly stated conditions on alternative values; "
-                "do not assume an eligibility-dependent alternative supersedes an unrestricted value. "
-                "An explicit exhaustive description can establish absence of other "
-                "members. A quoted empty-result message supports reporting no records within that page's scope, "
-                "not an unbounded claim that none exist elsewhere. Missing or unread content cannot prove absence. "
-                "A total alone does not evidence a component breakdown. A value scoped to one "
-                "component, mode, tier or single-item configuration does not establish an aggregate value or "
-                "another configuration. Preserve the quoted scope and explicit distinctions in every assertion. "
-                "Do not add independent component maxima unless quoted sources state that they apply "
-                "simultaneously and combine additively. An explicit aggregate rating need not equal their sum. "
-                "Other retained quotes are supplied as counterevidence only: they cannot support an assertion "
-                "whose own citations do not support it. A conflicting value for the same literal entity and "
-                "scope must be acknowledged with both values and their quoted conditions, or fail. Do not "
-                "treat different entities or explicitly different configurations as contradictions. "
-                "Derived outputs can "
-                "calculate from quoted records only when every operand and its association is explicit. "
-                "A quote marked complete_source contains the entire downloaded text file and establishes coverage "
-                "of that file only. Partial excerpts and truncated downloads do not establish whole-file totals. "
-                "Control context binds quoted content to its actual DOM container and sibling position, "
-                "but cannot replace a missing quoted value. Counted-record metadata supplies code-maintained "
-                "counts and collection completeness, with "
-                "indices into that claim's cited sources. Check the reported count against that matching scope "
-                "and quoted record membership. An incomplete count cannot establish a whole-list total. "
-                "Check a reported rank or order by count against the count's standing, code's ranking of "
-                "every group counted in that scope, and its tied count for a shared rank; it holds only when "
-                "standing.complete is true, and a count without a standing establishes no rank. "
-                "pages_read lists every read code made of the collection, in order; one address can be read "
-                "in several states, and a listed read with no cited record was read and held no match. "
-                "Compared-record metadata preserves the reader's collection scope, completeness and cited "
-                "source indices. Check the conclusion against every compared operand and the matching scope. "
-                "Completeness establishes coverage only, not values, associations or the winning result. "
-                "An incomplete comparison cannot establish a whole-list winner or absence. An absence claim "
-                "needs a complete collection identified by quoted context and every member's identity and "
-                "relevant fields. Check every member for a match and preserve the collection's bounded scope. "
-                "Observed page titles provide identity "
-                "context, not missing field evidence. Return yes only if every part of the requested output "
-                "is stated and evidenced by its own cited sources. For a criterion naming several fields, "
-                "check that the answer explicitly reports each one; other fields passing cannot cover an "
-                "omitted field. A collection with no matches supports an absence only when the answer "
-                "explicitly reports that bounded absence. Every factual assertion in every selected "
-                "claim must also be supported, including extra details the user did not request. One supported "
-                "value cannot excuse another unsupported value in the same claim. A subjective recommendation "
-                "may rest on a quoted property. A factual comparative advantage, including highest, lowest "
-                "or best on a measured property, requires all compared operands in that claim's own citations. "
-                "Quotes cited only by another claim cannot supply missing operands or support. "
-                "Preserve uncertainty and explain failures." + dated
-            ),
-        ),
-    ]
-
-    def settled(verdicts: Sequence[dict[str, str] | BaseException], built: Sequence[Mapping[str, object]]) -> bool:
-        return all(
-            not isinstance(v, BaseException) and all(v.get(k) == "yes" for k in f)
-            for v, f in zip(verdicts, built, strict=True)
-        )
-
-    source_reasons: dict[str, str] = {}
-    reasons: dict[str, str] = {}
-    # Neither audit reads the other's verdict: the source audit withholds the assertions, and the assertion audit
-    # judges them from the same quotes. Run one after the other, they were two model round trips on every audited
-    # answer. A source failure still decides first, so the assertion verdict is only ever used when sources hold.
-    # Both settle before either failure propagates, so neither is billed after the check has returned.
-    generated: dict[str, str] | BaseException | None = None
-    if together:
-        # The identity call was a whole model round trip before any audit could start: 2.5s median, and the second
-        # of two serial rounds on 92 of 159 runs of the 0.5.24 campaign. The audits are sent beside it as soon as
-        # Jev's claim selection is back, without the subject quotes. They only stand when the identities then pass
-        # code's quote check and every speculative verdict, in both audits, is yes; anything else is audited again
-        # with the checked identities, exactly as before, so a speculative no never rejects an answer.
-        identifying_task = asyncio.ensure_future(resolve_identities())
-        try:
-            selected = await select()
-        except BaseException:
-            await asyncio.gather(identifying_task, return_exceptions=True)
-            raise
-        if selected is not None and any(not isinstance(selected.answers.get(key), ChoiceAnswer) for key in selecting):
-            await asyncio.gather(identifying_task, return_exceptions=True)
-            return False
-        # A repeated audit finds its speculative verdicts in the audit cache too, so it is never billed twice.
-        # A selection that already fails the answer is decided after the identities, as it was when they came
-        # first: what the speculative build recorded is taken back, so one failure is never reported twice.
-        recorded_missing = len(missing_outputs) if missing_outputs is not None else 0
-        recorded_corrections = len(corrections) if corrections is not None else 0
-        speculative = build(context, selected, {})
-        if isinstance(speculative, bool):
-            if missing_outputs is not None:
-                missing_outputs[recorded_missing:] = []
-            if corrections is not None:
-                corrections[recorded_corrections:] = []
-            speculative = None
-        spec_source_reasons: dict[str, str] = {}
-        spec_reasons: dict[str, str] = {}
-        auditing = (
-            None
-            if speculative is None
-            else asyncio.ensure_future(
-                audit(
-                    (source_messages, speculative[1], spec_source_reasons),
-                    (assertion_messages, speculative[0], spec_reasons),
-                )
-            )
-        )
-
-        async def settle_speculation() -> None:
-            if auditing is not None:
-                await asyncio.gather(auditing, return_exceptions=True)
-
-        try:
-            identities = await identifying_task
-        except BaseException:
-            await settle_speculation()
-            raise
-        if isinstance(identities, bool):
-            await settle_speculation()
-            return identities
-        built = build(context, selected, identities)
-        if isinstance(built, bool):
-            await settle_speculation()
-            return built
-        fields, source_fields, selected_claims = built
-        spec_available, spec_generated = await auditing if auditing is not None else ({}, {})
-        if auditing is not None and (
-            not any(identities.values()) or settled((spec_available, spec_generated), (source_fields, fields))
-        ):
-            # With no subject quotes the speculative fields are the real ones, so their verdicts stand either way.
-            available, generated = spec_available, spec_generated
-            source_reasons, reasons = spec_source_reasons, spec_reasons
-            trace("output_audit", speculative="accepted")
-        else:
-            if auditing is not None:
-                trace("output_audit", speculative="reaudited")
-            available, generated = await audit(
-                (source_messages, source_fields, source_reasons), (assertion_messages, fields, reasons)
-            )
-    else:
-        identities = await resolve_identities()
-        if isinstance(identities, bool):
-            return identities
-        selected = await select()
-        if selected is not None and any(not isinstance(selected.answers.get(key), ChoiceAnswer) for key in selecting):
-            return False
-        built = build(context, selected, identities)
-        if isinstance(built, bool):
-            return built
-        fields, source_fields, selected_claims = built
-        (available,) = await audit((source_messages, source_fields, source_reasons))
-    if isinstance(available, BaseException):
-        raise available
-    absent = [criterion for key, criterion in uncertain.items() if available.get(key) != "yes"]
-    if absent:
-        if corrections is not None:
-            # A selected claim can omit a quote already in the notes; rereading cannot repair its citations.
-            corrections.extend(
-                AnswerCorrection(
-                    stage="source", criterion=criterion, claims=selected_claims[key], reason=source_reasons[key]
-                )
-                for key, criterion in uncertain.items()
-                if available.get(key) != "yes"
-            )
-        return reject(absent)
-    if generated is None:
-        (generated,) = await audit((assertion_messages, fields, reasons))
-    if isinstance(generated, BaseException):
-        raise generated
-    failed = [
-        uncertain[key]
-        if key in uncertain
-        else "Unsupported answer detail: " + context.claims[int(key.removeprefix("claim_only_"))].text
-        for key in fields
-        if generated.get(key) != "yes"
-    ]
-    if failed and corrections is not None:
-        corrections.extend(
-            AnswerCorrection(criterion=str(fields[key]["criterion"]), claims=selected_claims[key], reason=reasons[key])
-            for key in fields
-            if generated.get(key) != "yes"
-        )
-    return reject(failed) if failed else True
+    return True
 
 
 async def check_claims(
@@ -1627,16 +811,10 @@ async def check_claims(
     ledger: Ledger | None = None,
     transaction_evidence_ids: Collection[str] = (),
     answer_checks: Sequence[str] = (),
-    llm: LLMClient | None = None,
     missing_outputs: list[str] | None = None,
     corrections: list[AnswerCorrection] | None = None,
-    allow_scalar_jev: bool = False,
-    task: str = "",
-    audit_cache: OutputAuditCache | None = None,
-    bounded: bool = False,
     verified_fields: list[FieldAnswer] | None = None,
     independent_fields: bool = True,
-    today: str | None = None,
 ) -> ComposedAnswer | None:
     """The answer without any claim a check doubts, or None when a requirement is omitted from what is left or the
     pages where the run committed an action contradict it.
@@ -1645,8 +823,7 @@ async def check_claims(
     those failed three runs in four of a correct sign-in answer. Removing a doubted claim asserts nothing new,
     so it is honest as long as the rest still answers: the omission check is asked again of what remains.
     """
-    # Explicit output audits replace the omission question; rendering its unused notes can exceed the budget.
-    questions = claim_check_questions(composed, notes, tokens=tokens, check_omission=not answer_checks)
+    questions = claim_check_questions(composed, notes, tokens=tokens, answer_checks=answer_checks)
     # An action-only task can finish without factual claims. Its completion was checked already,
     # and Jev rejects an empty question batch; dropped or uncited answer text still cannot pass.
     if not questions and not answer_checks:
@@ -1671,33 +848,16 @@ async def check_claims(
         return {**claimed, **committed}
 
     verified_outputs: list[str] = []
-    checked, outputs_supported = await asyncio.gather(
-        claims(),
-        check_answer_outputs(
-            jev,
-            llm,
-            composed,
-            notes,
-            answer_checks,
-            tokens=tokens,
-            ledger=ledger,
-            missing_outputs=missing_outputs,
-            corrections=corrections,
-            allow_scalar_jev=allow_scalar_jev,
-            task=task,
-            audit_cache=audit_cache,
-            bounded=bounded,
-            verified_outputs=verified_outputs,
-            independent_fields=independent_fields,
-            today=today,
-        ),
-        return_exceptions=True,
+    outputs_supported = check_answer_outputs(
+        composed,
+        notes,
+        answer_checks,
+        missing_outputs=missing_outputs,
+        corrections=corrections,
+        verified_outputs=verified_outputs,
+        independent_fields=independent_fields,
     )
-    if isinstance(checked, BaseException):
-        raise checked
-    if isinstance(outputs_supported, BaseException):
-        raise outputs_supported
-    answers = checked
+    answers = await claims()
     if transaction is not None:
         questions = {**questions, TRANSACTION_CONTRADICTED: transaction}
     if any(not isinstance(answers.get(key), NoulAnswer) for key in questions):
@@ -1720,11 +880,19 @@ async def check_claims(
         for index, claim in enumerate(composed.claims)
         if max(_probability(answers, f"unsupported_{index}"), _probability(answers, f"contradicted_{index}")) <= limit
     )
+    unstated = [
+        check for index, check in enumerate(answer_checks) if _probability(answers, f"{OUTPUT_MISSING}{index}") > limit
+    ]
     if verified_fields is not None and isinstance(composed, FieldAnswer):
+        # Fields Jev found stated and supported are kept even when a sibling is missing, so the next compose
+        # rewrites only what failed.
         outputs = {
             check: indices
             for check, indices in composed.output_claims.items()
-            if check in verified_outputs and indices and all(composed.claims[i] in kept for i in indices)
+            if check in verified_outputs
+            and check not in unstated
+            and indices
+            and all(composed.claims[i] in kept for i in indices)
         }
         accepted = tuple(dict.fromkeys(composed.claims[i] for indices in outputs.values() for i in indices))
         if accepted:
@@ -1738,6 +906,24 @@ async def check_claims(
                     },
                 )
             )
+    if unstated:
+        # Named, so recovery looks for the missing output and the composer is told what to add.
+        if missing_outputs is not None:
+            missing_outputs.extend(check for check in unstated if check not in missing_outputs)
+        if corrections is not None:
+            corrected = {(correction.stage, correction.criterion) for correction in corrections}
+            corrections.extend(
+                AnswerCorrection(
+                    stage="source",
+                    criterion=check,
+                    claims=composed.claims,
+                    reason="The answer does not state this output. Report it from the notes or a supported bounded "
+                    "absence.",
+                )
+                for check in unstated
+                if ("source", check) not in corrected
+            )
+        return None
     if not outputs_supported:
         return None
     if len(kept) == len(composed.claims):
@@ -1764,29 +950,20 @@ async def check_claims(
                 for check, indices in composed.output_claims.items()
             },
         )
-    if answer_checks:
-        return (
-            pruned
-            if await check_answer_outputs(
-                jev,
-                llm,
-                pruned,
-                notes,
-                answer_checks,
-                tokens=tokens,
-                ledger=ledger,
-                missing_outputs=missing_outputs,
-                corrections=corrections,
-                allow_scalar_jev=allow_scalar_jev,
-                task=task,
-                audit_cache=audit_cache,
-                bounded=bounded,
-                independent_fields=independent_fields,
-                today=today,
-            )
-            else None
-        )
-    omission = {key: q for key, q in claim_check_questions(pruned, notes, tokens=tokens).items() if key == _OMITTED}
+    if answer_checks and not check_answer_outputs(
+        pruned,
+        notes,
+        answer_checks,
+        missing_outputs=missing_outputs,
+        corrections=corrections,
+        independent_fields=independent_fields,
+    ):
+        return None
+    omission = {
+        key: q
+        for key, q in claim_check_questions(pruned, notes, tokens=tokens, answer_checks=answer_checks).items()
+        if key == _OMITTED or key.startswith(OUTPUT_MISSING)
+    }
     # A grouped requirement can retain citations while pruning one of its requested fields.
     # Check each removed claim against the remaining answer without notes supplying the missing output.
     information = [r for r in composed.requirements if r.kind is RequirementKind.INFORMATION]
@@ -1812,7 +989,8 @@ async def check_claims(
         # Removing a requested field cannot be waved through on an uncertain coverage decision.
         if any(
             not isinstance(answers.get(key), NoulAnswer)
-            or _probability(answers, key) > (limit if key == _OMITTED else min(limit, 1 - limit))
+            or _probability(answers, key)
+            > (limit if key == _OMITTED or key.startswith(OUTPUT_MISSING) else min(limit, 1 - limit))
             for key in omission
         ):
             return None

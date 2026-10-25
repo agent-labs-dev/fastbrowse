@@ -65,6 +65,7 @@ from fastbrowse.models import (
 )
 from fastbrowse.run import run_task
 from fastbrowse.safety import ScopedSecrets, origin_of, secret_allowed
+from fastbrowse.telemetry import trace_to
 
 type Runner = Callable[..., Awaitable[RunResult]]
 """`run_task`'s shape; tests pass a fake so the tool can be driven without a browser or model keys."""
@@ -608,6 +609,7 @@ async def _main(args: argparse.Namespace) -> None:
 def main() -> None:
     # stdout carries the protocol under stdio, so every log line goes to stderr.
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING, format="fastbrowse-mcp: %(levelname)s %(message)s")
+    trace_to()
     args = parse(sys.argv[1:])
     try:
         asyncio.run(_main(args))

@@ -44,6 +44,7 @@ from fastbrowse.models import (
 )
 from fastbrowse.run import run_task
 from fastbrowse.safety import ScopedSecrets, origin_of
+from fastbrowse.telemetry import trace_to
 
 EXIT_CODES: dict[Status, int] = {
     Status.COMPLETE: 0,
@@ -191,6 +192,13 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         "--record", type=Path, metavar="FILE", help="save a video of the run, ending on its answer (needs ffmpeg)"
     )
     parser.add_argument(
+        "--trace",
+        metavar="FILE",
+        default=None,
+        help="append the run's trace to FILE as JSON lines, or - for stderr: every model call with its purpose and "
+        "timing, which reader answered each read and why, and every check's scores (also FASTBROWSE_TRACE)",
+    )
+    parser.add_argument(
         "--cursor",
         action="store_true",
         help="draw the agent's cursor over a visible Chrome with the Cua Driver (Linux X11; skipped where unsupported)",
@@ -296,6 +304,7 @@ def main() -> None:
     args = _parse(sys.argv[1:])
     # Retries, failovers and a recording that could not be written are warnings; say whose they are.
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING, format="fastbrowse: %(levelname)s %(message)s")
+    trace_to(args.trace)
     try:
         sys.exit(asyncio.run(run(args)))
     except ConfigurationError as exc:

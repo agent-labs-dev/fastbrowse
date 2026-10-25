@@ -92,7 +92,9 @@ The run loop is `src/fastbrowse/agent.py`, and everything else is a seam it call
   blocks and code copies its quote from them; a count the page does not state rests on its basis facts; [memory.py](src/fastbrowse/memory.py) holds notes with citation ids, and [citations.py](src/fastbrowse/citations.py) builds deep links.
 - **[verification.py](src/fastbrowse/verification.py)** decides whether a run may finish: Jev's done check against the plan's requirements,
   then the LLM verifier for what Jev doubted and for any requirement evidenced on an address the run guessed
-  from the task, then the answer's claims checked against the quotes.
+  from the task, then the answer: code checks each claim cites a current quote and each cited count or comparison
+  rests on a list read to its end, and Jev checks each claim against its quotes and the page's other current quotes,
+  and that the answer states each answer check and information requirement.
 - **[safety.py](src/fastbrowse/safety.py)** owns secrets and irreversible actions. **[effects.py](src/fastbrowse/effects.py)** says what an action actually did,
   which is how a no-op is told from progress. **[telemetry.py](src/fastbrowse/telemetry.py)** is the ledger: steps, calls, dollars.
 - **[cli.py](src/fastbrowse/cli.py)**, **[mcp_server.py](src/fastbrowse/mcp_server.py)**, **[serve.py](src/fastbrowse/serve.py)** and **`run_task`** are the four entry points; [options.py](src/fastbrowse/options.py) holds the rules

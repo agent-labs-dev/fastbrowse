@@ -351,13 +351,10 @@ def test_the_last_requirement_left_still_needs_its_target_named(title, covered):
 async def test_an_unopened_frame_outside_a_list_leaves_its_finding_of_none_supported(members, covered):
     """An advertisement frame that did not load left a fully read "Comments (2)" without coverage, so the
     output audit rejected "no feature requests" while agreeing that none of the comments asked for one."""
-    import json
-
     from fastbrowse.memory import fact_id
     from fastbrowse.planner import Requirement, RequirementKind
     from fastbrowse.retrieval import Claim, FieldAnswer, assemble_answer
     from fastbrowse.verification import _output_context, check_answer_outputs
-    from tests.test_answer_repair import RoutingJev
 
     page = capture(
         (BlockKind.HEADING, "Birch"),
@@ -401,16 +398,4 @@ async def test_an_unopened_frame_outside_a_list_leaves_its_finding_of_none_suppo
     answer = FieldAnswer(**base.model_dump(), output_claims={check: (0,)})
     context = _output_context(answer, notes)
     assert context is not None and context.claims[0].compared_records[0].complete
-
-    class CoverageJudge(ScriptedLLM):
-        async def generate(self, purpose, messages, schema, **kwargs):
-            if schema.__name__ != "_OutputIdentities":
-                field = json.loads(messages[-1].content)["criteria"]["output_0"]
-                claims = field.get("sources", field.get("reported_claims"))
-                complete = any(c["complete"] for claim in claims for c in claim["compared_records"])
-                self.responses.append(
-                    {"judgments": {"output_0": "yes" if complete else "no"}, "reason": "No comment asks for a feature."}
-                )
-            return await super().generate(purpose, messages, schema, **kwargs)
-
-    assert await check_answer_outputs(RoutingJev(), CoverageJudge([]), answer, notes, (check,))
+    assert check_answer_outputs(answer, notes, (check,))

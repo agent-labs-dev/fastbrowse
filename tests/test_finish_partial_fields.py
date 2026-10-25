@@ -1,13 +1,13 @@
 """A failed answer field leaves independently checked siblings available for recovery."""
 
-import json
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from fastbrowse.agent import Agent
+from fastbrowse.jev import NoulAnswer
 from fastbrowse.memory import Fact, Notes, fact_id
-from fastbrowse.models import FactReader, LLMPurpose, Status
+from fastbrowse.models import FactReader, Status
 from fastbrowse.page import BlockKind, Page
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 from fastbrowse.retrieval import FieldAnswer, assemble_answer
@@ -17,17 +17,20 @@ from tests.test_policy import observation
 from tests.test_retrieval import ScriptedLLM, block_evidence, capture
 
 
-class SiblingJudge(ScriptedLLM):
-    async def generate(self, purpose, messages, schema, **kwargs):
-        if schema.__name__ != "_OutputIdentities":
-            key, field = next(iter(json.loads(messages[-1].content)["criteria"].items()))
-            self.responses.append(
-                {
-                    "judgments": {key: "no" if "links" in field["criterion"] else "yes"},
-                    "reason": "Only the reply is quoted.",
-                }
-            )
-        return await super().generate(purpose, messages, schema, **kwargs)
+class DoubtingJev(RoutingJev):
+    """Doubts every claim whose text holds `doubted`, as Jev doubts a link that a reply's quote does not carry."""
+
+    def __init__(self, doubted: str):
+        self.doubted = doubted
+
+    async def evaluate(self, state, questions):
+        evaluation = await super().evaluate(state, questions)
+        answers = dict(evaluation.answers)
+        for key, question in questions.items():
+            claim = question.instructions.split("# Claim\n", 1)[-1].split("\n\n# Evidence", 1)[0]
+            if key.startswith("unsupported_") and self.doubted in claim:
+                answers[key] = NoulAnswer(probability=1)
+        return evaluation.model_copy(update={"answers": answers})
 
 
 @pytest.mark.parametrize("empty", [False, True])
@@ -52,20 +55,13 @@ async def test_failed_sibling_retains_only_fully_verified_field(empty):
     answer = FieldAnswer(
         **base.model_dump(), output_claims={plan.answer_checks[0]: (0,), plan.answer_checks[1]: () if empty else (1,)}
     )
-    judge = SiblingJudge([])
-    agent = Agent(Mock(spec=Page, artifacts=()), RoutingJev(), judge)
+    agent = Agent(Mock(spec=Page, artifacts=()), DoubtingJev("source.test/birch"), ScriptedLLM([]))
     assert await agent._holds(state, answer) is None
     partial = await agent._partial_result(state.notes, state, state.ledger, Status.UNVERIFIED, "Missing links")
     assert partial.answer is not None
     assert partial.answer.startswith("Partial answer.")
     assert "Fixed in the next release." in partial.answer
     assert "source.test/birch" not in partial.answer
-    audited = [
-        json.loads(messages[-1].content)
-        for purpose, messages in judge.calls
-        if purpose is LLMPurpose.VERIFY and '"reported_claims"' in messages[-1].content
-    ]
-    assert any("replies for Birch" in json.dumps(item) for item in audited)
     assert state.open_answer_outputs == (plan.answer_checks[1],)
 
 
@@ -146,16 +142,69 @@ async def test_collection_completeness_survives_an_unanswered_neighbor(notice):
     assert not notes.evidenced("r")
     assert len(collection.comparison.records) == 3
     assert f"complete={str(not notice).lower()}" in scoped.render_with_ids(20000, preserve_collections=True).text
-    from fastbrowse.retrieval import Claim
-    from fastbrowse.verification import check_answer_outputs
-    from tests.test_finish_fields import FieldJudge
 
+
+async def test_an_absence_over_an_unfinished_collection_does_not_pass():
+    from fastbrowse.config import Thresholds
+    from fastbrowse.memory import CollectionFact
+    from fastbrowse.retrieval import AnswerCorrection, Claim, read
+    from fastbrowse.verification import check_claims
+
+    page = capture(
+        (BlockKind.HEADING, "Birch comments (2)"),
+        (BlockKind.RECORD, "Player Elm: Please add a compact view."),
+        (BlockKind.RECORD, "Player Oak: Thanks for the update."),
+    )
+    llm = ScriptedLLM(
+        [
+            {
+                "claims": [],
+                "answered": False,
+                "collections": [
+                    {
+                        "requirement_id": "r",
+                        "scope": "Birch's two comments",
+                        "records": [{"first": f"s{i}", "last": f"s{i}"} for i in range(3)],
+                    }
+                ],
+            }
+        ]
+    )
+    notes = Notes()
+    await read(
+        llm,
+        page,
+        "Read comments and links for Birch.",
+        ["r"],
+        notes,
+        preserve_collections=True,
+        field_outputs=True,
+        notice="Next page remains unread",
+    )
+    scoped = notes.for_requirements(("r",))
+    collection = next(f for f in scoped.facts if isinstance(f, CollectionFact))
+    assert not collection.comparison.complete
     claim = Claim(text="No author replies occur in Birch's two comments.", evidence_ids=(fact_id(collection),))
     base = assemble_answer((claim,), scoped, ())
-    answer = FieldAnswer(**base.model_dump(), output_claims={"Report author replies for Birch.": (0,)})
-    assert await check_answer_outputs(RoutingJev(), FieldJudge([]), answer, scoped, tuple(answer.output_claims)) is (
-        not notice
+    check = "Report author replies for Birch."
+    answer = FieldAnswer(**base.model_dump(), output_claims={check: (0,)})
+    missing: list[str] = []
+    corrections: list[AnswerCorrection] = []
+    assert (
+        await check_claims(
+            RoutingJev(),
+            answer,
+            scoped,
+            Thresholds(),
+            answer_checks=(check,),
+            missing_outputs=missing,
+            corrections=corrections,
+        )
+        is None
     )
+    # Code refuses the absence itself and names the output, so recovery reads on instead of retrying the claim.
+    assert missing == [check]
+    assert [(c.stage, c.criterion) for c in corrections] == [("source", check)]
 
 
 async def test_composer_keeps_verified_sibling_while_writing_only_missing_slot():

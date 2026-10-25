@@ -56,6 +56,12 @@ requirement evidenced.
 Missing or uncertain answers use the normal readers. This check is omitted when the full comparison does
 not fit the input budget or the read needs pagination, continuation or incomplete-comparison context.
 
+A filtered count or a comparison over a list that runs to further pages is read by the LLM on its first page,
+which cites the matching records. Each later page of the same shape is then put to Jev in one request, a yes or
+no for each block shaped like those records, and code counts the matches or keeps them as the comparison's
+records. A record Jev judges between 0.20 and 0.70 sends that page back to the LLM reader, and so does a page
+whose title or record shape differs. The last page is still read by the LLM, which closes the list.
+
 For a count, total or superlative, the reader cites every compared record on every page. Its conclusion
 lists those facts in `draws_on`, using evidence ids from collected notes or `claim:N` for earlier claims in
 the same response, indexed from zero. Code resolves these references and drops unknown ones with a debug

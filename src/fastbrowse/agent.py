@@ -34,7 +34,7 @@ import math
 import re
 import time
 from collections import deque
-from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence, Set
+from collections.abc import Callable, Collection, Coroutine, Iterable, Mapping, Sequence, Set
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import Any, Self
@@ -134,6 +134,7 @@ from fastbrowse.retrieval import (
     assemble_answer,
     compose,
     draft_answer,
+    filter_tallies,
     leading_quotes,
     names_subject,
     partial_answer,
@@ -165,7 +166,6 @@ from fastbrowse.verification import (
     DoneVerdict,
     Extraction,
     LLMVerdict,
-    OutputAuditCache,
     check_claims,
     check_done,
     extract,
@@ -437,7 +437,6 @@ class _RunState:
     verified_answer: ComposedAnswer | None = None
     missing_answer_outputs: tuple[str, ...] = ()
     answer_corrections: tuple[AnswerCorrection, ...] = ()
-    output_audit_cache: OutputAuditCache = field(default_factory=dict)
     verify_cache: dict[str, Generation[LLMVerdict]] = field(default_factory=dict)
     challenge_reloads: set[str] = field(default_factory=set)
     """Bot-check documents this run has already reloaded once, so a challenge that survives is reported."""
@@ -465,6 +464,8 @@ class _RunState:
     section_read: bool = False
     """An observed output section must be opened and read before another model chooses an action."""
     recovery_sections: set[str] = field(default_factory=set)
+    left_guesses: set[str] = field(default_factory=set)
+    """Guessed opening pages the run already left for the caller's start page, so it leaves each once."""
     unsure_commit: _Commit | None = None
     """The commit an authorized run was last refused as unsure it is the one the task means."""
     confirmed_commit: _Commit | None = None
@@ -2919,13 +2920,13 @@ class Agent:
         for requirement in wanted:
             # The first page of a list that goes on, each later page and the closing read all belong to that
             # requirement's collection, whether or not they held a matching record. Another requirement read
-            # alongside it does not: its audit would be told these pages were its own and held no match.
+            # alongside it does not: its check would be told these pages were its own and held no match.
             if requirement.id in outcome.continues or requirement.id in state.continuing:
                 state.notes.add_collection_page(requirement.id, capture.url, capture.sha256)
         context_added = False
         if state.oversized_answer and state.open_answer_outputs:
             # A field read can return context while another field or collection is still open. Its quotes
-            # must reach that target's audit even when the reader cannot bind the whole requirement.
+            # must reach that target's check even when the reader cannot bind the whole requirement.
             context_added = state.notes.retain_for((r.id for r in wanted), (fact_id(fact) for fact in outcome.facts))
             if context_added:
                 state.rejected_answer_evidence = None
@@ -3004,6 +3005,17 @@ class Agent:
         state.lineage.read(capture.sha256, _sources(capture), guessing=state.guessing)
         if reuse and (counted := read_tallies(capture, state.tally_readers, [r.id for r in wanted])) is not None:
             return counted
+        if reuse and (
+            matched := await filter_tallies(
+                self._jev,
+                capture,
+                state.tally_readers,
+                [r.id for r in wanted],
+                tokens=self._config.tokens,
+                ledger=state.ledger,
+            )
+        ):
+            return matched
         costs: list[CostLine] = []
         retried = False
         while True:
@@ -3032,7 +3044,13 @@ class Agent:
             retried = True
 
     async def _join_page(
-        self, state: _RunState, page: _PageRead, wanted: Sequence[Requirement], collecting: Sequence[str] = ()
+        self,
+        state: _RunState,
+        page: _PageRead,
+        wanted: Sequence[Requirement],
+        collecting: Sequence[str] = (),
+        *,
+        last: bool = False,
     ) -> ReadOutcome | None:
         """`collecting` names the requirements whose list continued onto these pages; the rest are read alongside."""
         try:
@@ -3041,7 +3059,8 @@ class Agent:
             # The browser has moved on, so retry the saved capture, never the page now on screen.
             state.paging_failed = True
             try:
-                outcome = await self._page_records(state, page.capture, wanted)
+                # The last page is read by the LLM, which closes the list; a retry keeps that.
+                outcome = await self._page_records(state, page.capture, wanted, reuse=not last)
             except LLMError as error:
                 state.incomplete.update(r.id for r in wanted)
                 reason = self._redactor.redact(f"Could not read saved page {page.capture.url}: {error}")
@@ -3263,7 +3282,7 @@ class Agent:
                         state, observation, Operation.CLICK, state.hint, target=label, decided_by=Decider.LLM
                     )
             for page in pending:
-                outcome = await self._join_page(state, page, wanted, collecting)
+                outcome = await self._join_page(state, page, wanted, collecting, last=page is last_records)
                 if page is last_records and outcome is not None:
                     ended = outcome.ended
         finally:
@@ -3429,6 +3448,35 @@ class Agent:
                 raise state.http_failure.stop()
             detail = f"{reason}\nStill to find:\n{open_requirements}" if open_requirements else reason
             raise _Stop(self._walled(state, observation, gives_up_as), detail)
+        start = state.caller_start
+        if (
+            start is not None
+            and observation.dialog is None
+            and remaining
+            and observation.url in state.invented
+            and not same_address(observation.url, start)
+            and observation.url not in state.left_guesses
+            and state.read_here
+            # A list being paged, or a task with something to do on the page, can still be on the right page.
+            and not state.continuing
+            and not state.through_end
+            and not any(
+                r.kind is RequirementKind.ACTION for r in (state.ready_plan.requirements if state.ready_plan else ())
+            )
+            # Context a read kept from the page, a biography beside the quotes it lacked, answers nothing.
+            and not any(
+                fact.requirement_id is not None and fact.evidence is not None and fact.evidence.url == observation.url
+                for fact in state.notes.facts
+            )
+        ):
+            # A guessed opening page that was read and gave nothing: the way on is the caller's start page, which
+            # is what the recovery model chose there every time, after 3 to 4 seconds and a screenshot.
+            state.left_guesses.add(observation.url)
+            state.directed = (Operation.NAVIGATE, start)
+            state.section_read = True
+            state.hint = "The guessed opening page held nothing the task needs; continue from the caller's start page."
+            trace("recover", reader="code", reason="guessed_page_gave_nothing", reason_detail=reason)
+            return
         destinations = navigation_urls(
             state.task,
             observation.url,
@@ -3603,7 +3651,7 @@ class Agent:
             # A reader filed a date picker's "Date Picker 2 (dd/mm/yyyy) : SelectedDate: 27/12/2026" as context for
             # the action rather than as the requested value, the page was not read again because its content had
             # not changed, and three runs stopped stuck on the first recovery with the date on screen. The reader
-            # is asked once more; the done check and the answer audit still judge whatever it binds.
+            # is asked once more; the done check and the claim check still judge whatever it binds.
             state.unread_rereads.add(page_read)
             state.reads = {key for key in state.reads if key[0] != observation.document_key}
             state.barren = {key: count for key, count in state.barren.items() if key[0] != observation.document_key}
@@ -3721,7 +3769,7 @@ class Agent:
                 )
             )
             # A description can supply one field without answering a bundled requirement. Its captured
-            # target identity keeps that source in the group before an audit can reject the missing field.
+            # target identity keeps that source in the group before a check can reject the missing field.
             if state.notes.retain_for((r.id for r in group.requirements), sources):
                 state.rejected_answer_evidence = None
         return await self._finish_partitioned(state, output_schema, until)
@@ -3790,7 +3838,7 @@ class Agent:
             try:
                 supported = True
                 if state.oversized_answer and _lookup(plan) and _unread(plan, notes):
-                    # Separate source reads can leave a bundled requirement unbound. Only a fully audited
+                    # Separate source reads can leave a bundled requirement unbound. Only a fully checked
                     # field answer can bind their combined quotes before the normal completion check.
                     answer, supported = await self._answer(child, None)
                     if supported:
@@ -3892,7 +3940,7 @@ class Agent:
                 visited=_visited(state.visited, self._config.observation, self._redactor.redact),
             )
         )
-        # Legacy claim checks use only Jev; atomic output audits must wait until the draft is actually offered.
+        # Without answer checks the draft's claims are checked beside the done check; with them, once it is offered.
         claiming = (
             asyncio.create_task(self._holds(state, draft))
             if draft is not None and not state.plan.answer_checks
@@ -3907,21 +3955,27 @@ class Agent:
             if verdict is DoneVerdict.ACCEPT and _guessed(state.plan, state.notes, state.invented, searches=True):
                 # Jev judges the notes, not where they were read, so only the verifier is shown the guessed searches.
                 verdict = DoneVerdict.VERIFY
-            elif verdict is DoneVerdict.VERIFY and not check.unmet and not guessed and _lookup(state.plan):
+            elif (
+                verdict is DoneVerdict.VERIFY
+                and not check.unmet
+                and not guessed
+                and _lookup(state.plan)
+                and not _blocked_action(state.history)
+            ):
                 # A doubted lookup reaches here with every requirement cited, and the verifier excuses a cited
                 # requirement (`_verified`), so all it could still do was refuse naming nothing, which it never did
                 # in 76 0.5.7 verifications. It cost a screenshot and a vision call, 3 to 8s, on half of all runs.
-                # Every claim of the answer is still checked against its quotes.
+                # Every claim of the answer is still checked against its quotes. A run with a covered or failed
+                # action is the exception: it may be reading the page it meant to leave.
                 verdict = DoneVerdict.ACCEPT
             held = None
             if claiming is not None:
                 held = await claiming
             elif check.answer is not None and check.verdict is not DoneVerdict.REJECT:
                 if verdict is DoneVerdict.VERIFY and not state.ledger.capped:
-                    # The verifier judges completion from the page and the notes, and the audit judges the draft's
-                    # claims against their quotes; neither reads the other's verdict. Asked one after the other,
-                    # the verifier's vision call waited on the audit's model calls every time Jev doubted a run
-                    # whose draft was ready. Under a cap it still waits, so it reserves against the audit's receipts.
+                    # The verifier judges completion from the page and the notes, and the claim check judges the
+                    # draft's claims against their quotes; neither reads the other's verdict, so they run side by
+                    # side. Under a cap the verifier waits, so it reserves against the claim check's receipts.
                     verifying = asyncio.create_task(self._verify_done(state, fresh, check))
                 held = await self._holds(state, check.answer)
         except BaseException:
@@ -3991,7 +4045,16 @@ class Agent:
                         )
                     )
                 judged = await verifying
-                accepted = _verified(judged.data, state.plan, state.notes, state.invented, state.lineage)
+                accepted = _verified(
+                    judged.data,
+                    state.plan,
+                    state.notes,
+                    state.invented,
+                    state.lineage,
+                    # After a covered or failed action, a requirement Jev did not confirm is not excused by its
+                    # quote: an ad covered a new window's link, and the run cited the heading of the page it was on.
+                    held_unmet=(*check.unmet, *(check.doubted if _blocked_action(state.history) else ())),
+                )
                 # Asked to open httpx's project page, a run picked DONE on pypi.org before acting, Jev held the one
                 # requirement unmet, and flash-lite called it complete. Only an action can do what Jev says is
                 # undone, so a run that has taken none cannot be talked past it. The history, not the steps, since
@@ -4072,13 +4135,13 @@ class Agent:
                     await _discard(pending)
 
     async def _verify_done(self, state: _RunState, fresh: Observation, check: DoneCheck) -> Generation[LLMVerdict]:
-        """The verifier's verdict, billed as it arrives: run beside the audit, it can finish before a failure there
-        discards it.
+        """The verifier's verdict, billed as it arrives: run beside the claim check, it can finish before a failure
+        there discards it.
 
         Two things keep this from being paid for twice. The screenshot goes only when the page carries state that
         the text cannot (see `visual_only_state`), which is most of verified wall time. And a finish attempt whose
         rendered request is byte-identical to an earlier one in this run reuses the earlier verdict: identical
-        input cannot need a second audit, and a recovery that changed nothing used to buy one.
+        input cannot need a second verdict, and a recovery that changed nothing used to buy one.
         """
         messages = verify_messages(
             state.task,
@@ -4348,6 +4411,8 @@ class Agent:
                 tokens=self._config.tokens,
                 ledger=state.ledger,
                 transaction_evidence_ids=transactions,
+                # Each information requirement is asked after the plan's checks, so a requirement the generated
+                # checks leave out (a release's date beside its version) is still found missing.
                 answer_checks=tuple(
                     dict.fromkeys(
                         (
@@ -4358,17 +4423,10 @@ class Agent:
                 )
                 if state.plan.answer_checks
                 else (),
-                llm=self._llm,
                 missing_outputs=missing,
                 corrections=corrections,
-                audit_cache=state.output_audit_cache,
-                bounded=True,
-                allow_scalar_jev=len(state.plan.answer_checks) == 1
-                and sum(r.kind is RequirementKind.INFORMATION for r in state.plan.requirements) == 1,
-                task=state.task,
                 verified_fields=verified_fields if state.oversized_answer and isinstance(answer, FieldAnswer) else None,
                 independent_fields=state.oversized_answer,
-                today=self._observed.today if self._observed is not None else None,
             )
             if verified_fields:
                 partial = verified_fields[0]
@@ -4937,20 +4995,38 @@ def _plan_ids(ids: Iterable[str], plan: Plan) -> set[str]:
     return found
 
 
+def _blocked_action(history: Sequence[HistoryEntry]) -> bool:
+    """Whether an action the run chose was covered or failed: it may still be on the page it meant to leave."""
+    return any(
+        entry.outcome in (StepOutcome.COVERED, StepOutcome.FAILED)
+        and entry.operation not in (None, Operation.DONE, Operation.READ)
+        for entry in history
+    )
+
+
 def _verified(
-    verdict: LLMVerdict, plan: Plan, notes: Notes, invented: Set[str], lineage: _Lineage | None = None
+    verdict: LLMVerdict,
+    plan: Plan,
+    notes: Notes,
+    invented: Set[str],
+    lineage: _Lineage | None = None,
+    *,
+    held_unmet: Collection[str] = (),
 ) -> bool:
     """Whether the verifier's doubts leave the run finished.
 
-    An information requirement the notes cite facts for is not left open by the verifier: the answer's claims are
-    checked against those quotes before it is given. On flash-lite the verifier named "compare the two release
-    dates" missing with both dates in the notes, one run in three, until the run stopped stuck. Only evidence read
-    on a guessed address is not excused, since that is the wrong page the citing check cannot see.
+    An information requirement the notes cite facts for is not left open by the verifier alone: the answer's claims
+    are checked against those quotes before it is given. On flash-lite the verifier named "compare the two release
+    dates" missing with both dates in the notes, one run in three, until the run stopped stuck. Evidence read on a
+    guessed address is not excused, since that is the wrong page the citing check cannot see. Nor is a requirement
+    Jev's done check also held unmet: the claim check sees a quote and its claim, not which page the quote came
+    from, and a run whose link was covered by an ad read the heading of the page it was still on and called it the
+    new window's.
     """
     cited = {r.id for r in plan.requirements if r.kind is RequirementKind.INFORMATION and notes.evidenced(r.id)}
     misread = _misread(verdict, plan, notes, invented, lineage)
     named = _plan_ids(verdict.missing, plan) | _plan_ids(verdict.ungrounded, plan)
-    doubted = named - (cited - misread)
+    doubted = named - (cited - misread - set(held_unmet))
     return not doubted and (verdict.complete or bool(named))
 
 

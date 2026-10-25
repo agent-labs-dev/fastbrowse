@@ -42,8 +42,6 @@ from fastbrowse.config import Config, ObservationLimits, StallRules, Thresholds
 from fastbrowse.effects import state_key
 from fastbrowse.jev import (
     Answer,
-    ChoiceAnswer,
-    ChoiceQuestion,
     Evaluation,
     JevError,
     JevRetriesExhausted,
@@ -1173,6 +1171,39 @@ async def test_recovery_can_direct_a_page_operation_with_no_control_to_name(oper
     assert followed is not None and followed.operation is operation and followed.target is None
 
 
+async def test_a_read_guessed_page_that_gave_nothing_returns_to_the_start_page_without_a_model() -> None:
+    """The recovery model chose the caller's start page from a barren guessed opening every time, after a
+    screenshot and 3 to 4 seconds; code takes that step once, and the model decides anything after it."""
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r", text="Count the quotes", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    state.caller_start = "https://catalogue.test/"
+    guessed = "https://catalogue.test/author/someone"
+    state.invented = {guessed}
+    state.read_here = True
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"png")
+    recovery: JsonValue = {
+        "diagnosis": "still nothing",
+        "next_subgoal": "Try the search",
+        "give_up": False,
+        "operation": "back",
+        "control": None,
+    }
+    llm = ScriptedLLM([recovery])
+    agent = Agent(page, ScriptedJev({}), llm)
+
+    await agent._recover(state, _at(guessed), "uncertain next step (0.4)")
+    assert state.directed == (Operation.NAVIGATE, state.caller_start) and state.section_read
+    assert not llm.calls
+
+    state.directed, state.section_read = None, False
+    await agent._recover(state, _at(guessed), "uncertain next step (0.4)")
+    assert len(llm.calls) == 1
+
+
 async def test_recovery_can_return_from_a_guessed_address_after_the_opening_leaves_recent_history() -> None:
     state = await run_state()
     state.started_url = "https://catalogue.test/entry"
@@ -1467,25 +1498,6 @@ async def test_the_extra_read_before_stopping_is_once_per_page(second_page: bool
         with pytest.raises(_Stop) as stopped:
             await agent._recover(state, first, "missing r1")
         assert stopped.value.status is Status.STUCK
-
-
-async def test_the_answer_audit_is_given_the_runs_date(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A criterion such as "the last Saturday of the month after next" is relative to the day the run read the page.
-    state = await run_state()
-    state.ready_plan = Plan(
-        requirements=(Requirement(id="r1", text="Find the date shown", kind=RequirementKind.INFORMATION),),
-        answer_checks=("The date shown",),
-        answer_expected=True,
-    )
-    page = Mock(spec=Page)
-    page.artifacts = ()
-    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
-    agent._observed = observation(())
-    checked = AsyncMock(return_value=None)
-    monkeypatch.setattr(agent_module, "check_claims", checked)
-    await agent._holds(state, ComposedAnswer(answer="", linked_answer="", claims=()))
-    assert checked.await_args is not None
-    assert checked.await_args.kwargs["today"] == agent._observed.today
 
 
 @pytest.mark.parametrize(("lookup", "recovered"), [(True, False), (False, False), (True, True)])
@@ -2124,6 +2136,39 @@ def test_the_verifier_cannot_hold_open_a_requirement_the_notes_cite(
         for i, r in enumerate(("httpx", "compare"))
     )
     assert _verified(LLMVerdict(complete=complete, missing=missing), plan, notes, set()) is accepted
+
+
+@pytest.mark.parametrize(
+    ("operation", "outcome", "blocked"),
+    [
+        (Operation.CLICK, StepOutcome.COVERED, True),
+        (Operation.FILL, StepOutcome.FAILED, True),
+        (Operation.CLICK, StepOutcome.STALE, False),
+        (Operation.DONE, StepOutcome.FAILED, False),
+        (Operation.READ, StepOutcome.FAILED, False),
+        (Operation.CLICK, StepOutcome.EXECUTED, False),
+    ],
+)
+def test_only_a_covered_or_failed_action_keeps_the_verifier_on_a_lookup(
+    operation: Operation, outcome: StepOutcome, blocked: bool
+) -> None:
+    entry = HistoryEntry(operation=operation, target="Click Here", outcome=outcome, page_changed=False)
+    assert agent_module._blocked_action([entry]) is blocked
+
+
+def test_the_verifier_holds_open_a_cited_requirement_jev_also_held_unmet() -> None:
+    """The claim check sees a quote and its claim, not which page the quote came from: a run whose link was covered
+    read the heading of the page it was still on, and only the done check and the verifier saw no new window."""
+    plan = Plan(
+        requirements=(
+            Requirement(id="heading", text="Report the new window's heading", kind=RequirementKind.INFORMATION),
+        ),
+        answer_expected=True,
+    )
+    notes = Notes((Fact(reader=FactReader.JEV_CHOICE, requirement_id="heading", text="Opening", evidence=evidence()),))
+    verdict = LLMVerdict(complete=False, missing=("heading",))
+    assert _verified(verdict, plan, notes, set())
+    assert not _verified(verdict, plan, notes, set(), held_unmet=("heading",))
 
 
 @pytest.mark.parametrize(
@@ -5039,12 +5084,12 @@ async def test_pipeline_read_failure_retries_saved_capture_and_returns_to_serial
     original = agent._page_records
     calls = 0
 
-    async def fail_once(state: _RunState, captured: Capture, wanted: Any) -> Any:
+    async def fail_once(state: _RunState, captured: Capture, wanted: Any, *, reuse: bool = True) -> Any:
         nonlocal calls
         calls += 1
         if calls == 1:
             raise agent_module.LLMError("reader unavailable")
-        return await original(state, captured, wanted)
+        return await original(state, captured, wanted, reuse=reuse)
 
     agent._page_records = AsyncMock(side_effect=fail_once)
     await agent._pipeline_pages(state, observations[0])
@@ -6730,32 +6775,27 @@ async def test_final_frame_deadline_cancels_a_hung_page_check(monkeypatch: pytes
     page.screenshot.assert_not_awaited()
 
 
-class RequestedAuditLLM(ScriptedLLM):
-    async def generate(self, purpose, messages, schema, **kwargs):
-        if schema.__name__ == "_OutputAssessment":
-            criteria = json.loads(messages[-1].content)["criteria"]
-            self.responses.append({"judgments": {key: "yes" for key in criteria}, "reason": "Both fields are quoted."})
-        return await super().generate(purpose, messages, schema, **kwargs)
-
-
 @pytest.mark.parametrize("missing", [True, False])
 async def test_final_answer_checks_each_output_without_notes_filling_a_missing_field(missing: bool) -> None:
     from fastbrowse.retrieval import Claim, assemble_answer
 
     class Jev(ScriptedJev):
+        """Finds the opening hours left out when the answer does not state them, whatever the notes hold."""
+
         async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
-            scores = {"output_0": 0.99, "output_1": 0.01 if missing else 0.99, "output_2": 0.01 if missing else 0.99}
+            assert isinstance(state, dict)
+            omitted = "9am" not in str(state.get("answer", ""))
             return Evaluation(
                 model="test",
                 answers={
-                    key: ChoiceAnswer(
-                        choice="none" if missing and key in {"output_1", "output_2"} else "all",
-                        probabilities={"all": 1.0},
-                        confidence=1.0,
+                    key: NoulAnswer(
+                        probability=0.99
+                        if key.startswith("output_missing_")
+                        and "opening hours" in questions[key].instructions
+                        and omitted
+                        else 0.01
                     )
-                    if isinstance(question, ChoiceQuestion)
-                    else NoulAnswer(probability=scores.get(key, 0.05))
-                    for key, question in questions.items()
+                    for key in questions
                 },
                 input_tokens=1,
                 cost=FREE,
@@ -6785,11 +6825,7 @@ async def test_final_answer_checks_each_output_without_notes_filling_a_missing_f
     if not missing:
         claims.append(Claim(text="It opens at 9am.", evidence_ids=(evidence_id(hours.evidence),)))
     composed = assemble_answer(claims, state.notes, state.plan.requirements)
-    agent = Agent(
-        Mock(spec=Page),
-        Jev({}),
-        RequestedAuditLLM([]),
-    )
+    agent = Agent(Mock(spec=Page), Jev({}), ScriptedLLM([]))
     held = await agent._holds(state, composed)
     assert (held is None) is missing
 
@@ -6815,7 +6851,7 @@ async def test_missing_answer_output_recovers_evidence_then_completes() -> None:
         evidence=evidence(start=5, end=8).model_copy(update={"quote": "9am"}),
     )
     state.notes.add(price)
-    llm = RequestedAuditLLM([{"claims": [{"text": price.text, "evidence_ids": [fact_id(price)]}]}])
+    llm = ScriptedLLM([{"claims": [{"text": price.text, "evidence_ids": [fact_id(price)]}]}])
 
     plan = state.ready_plan
     agent, _ = await _finishing(state, llm, noul=0.0)
@@ -6828,20 +6864,17 @@ async def test_missing_answer_output_recovers_evidence_then_completes() -> None:
             return Evaluation(
                 model="test",
                 answers={
-                    key: ChoiceAnswer(
-                        choice="none" if not answered and key in {"output_1", "output_2"} else "all",
-                        probabilities={"all": 1.0},
-                        confidence=1.0,
-                    )
-                    if isinstance(question, ChoiceQuestion)
-                    else NoulAnswer(
-                        probability=(
-                            0.99
-                            if key == "complete" or key == "output_0" or (key in {"output_1", "output_2"} and answered)
-                            else 0.01
+                    key: NoulAnswer(
+                        probability=0.99
+                        if key == "complete"
+                        or (
+                            key.startswith("output_missing_")
+                            and "opening hours" in questions[key].instructions
+                            and not answered
                         )
+                        else 0.01
                     )
-                    for key, question in questions.items()
+                    for key in questions
                 },
                 input_tokens=1,
                 cost=FREE,

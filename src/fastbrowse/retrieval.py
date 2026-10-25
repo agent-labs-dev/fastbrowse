@@ -55,6 +55,7 @@ from fastbrowse.telemetry import Ledger, trace
 
 # A mistaken choice marks a requirement evidenced; favor the reader whenever selection is uncertain.
 _READ_CONFIDENCE = 0.90
+_ABSENT_CONFIDENCE = 0.90
 _NO_NEW_EVIDENCE_CONFIDENCE = 0.80
 # Long passages belong with the reader; bounded spans keep one batched choice cheaper than generation.
 _READ_SPAN_CHARS = 320
@@ -77,6 +78,12 @@ _LLM_READ_CHUNK_CHARS = 24_000
 _CHUNK_OVERLAP_BLOCKS = 1
 _DEFAULT_TOKENS = TokenBudget()
 logger = logging.getLogger(__name__)
+
+
+def _route(reader: str, reason: str, *, requirement: str | None = None, **fields: object) -> None:
+    """Records which reader answers a read and why, so a run's trace shows where its LLM reads come from."""
+    logger.debug("read reader=%s requirement=%s reason=%s %s", reader, requirement, reason, fields or "")
+    trace("read_route", reader=reader, reason=reason, requirement=requirement, **fields)
 
 
 class Chunk(Frozen):
@@ -542,7 +549,7 @@ def _remember(
 def _block_context(capture: Capture, evidence: Evidence, reader: FactReader) -> Fact | None:
     """The whole block a narrowed quote was cut from, kept beside it as context.
 
-    The answer audit binds a requested subject only to literal quotes it is offered. Cut to "by Marilyn Monroe",
+    The claim check judges a requested subject only by the literal quotes it is offered. Cut to "by Marilyn Monroe",
     or to a quote's text without the "C.S. Lewis (god)" line under it, a correct answer had no quote naming what
     it answered for, and the run ended unverified with the record that named it in its notes."""
     block = next(
@@ -963,6 +970,16 @@ class TallyReader(Frozen):
     frame_id: str | None
     prefix: str
     suffix: str
+    filter: str | None = None
+    """For a filtered count or comparison, the requirement each later record is matched against by Jev."""
+    compares: bool = False
+    """The filter feeds a comparison's records rather than a tally: code picks the winner from their values."""
+    record_kind: BlockKind | None = None
+    """The block kind of the records the first page's reader cited, which a later page's records must share."""
+    examples: tuple[str, ...] = ()
+    """Records the first page's reader matched, shown to Jev so it applies the filter the same way."""
+    comparison: NumericComparison | None = None
+    """For a comparison, the delimiters every kept record must yield a label and a value from."""
 
 
 def _quoted(evidence: Evidence) -> Fact:
@@ -1014,6 +1031,8 @@ def read_tallies(
     records = [b for b in capture.blocks if b.kind in _COUNTED_KINDS]
     if not records or {r.requirement_id for r in readers} != set(requirement_ids):
         return None
+    if any(reader.filter is not None for reader in readers):
+        return None
     parts = chunk(capture, _READ_CHUNK_CHARS)
     if len(parts) != 1:
         return None
@@ -1047,6 +1066,115 @@ def read_tallies(
                 )
             )
     return ReadOutcome(facts=notes.facts, coverage=(0,), rejected_claims=0, cost_lines=())
+
+
+# A record Jev matches at or above the first, or rejects at or below the second, is settled; any record between sends
+# the whole page back to the LLM reader. Jev's yes for a plain author or rating match sits at 0.78 to 0.84, and a
+# wrongly dropped record leaves no trace, so a rejection needs more certainty than a match.
+_RECORD_MATCH_FROM = 0.70
+_RECORD_REJECT_TO = 0.20
+
+
+async def filter_tallies(
+    jev: JevClient,
+    capture: Capture,
+    readers: Sequence[TallyReader],
+    requirement_ids: Sequence[str],
+    *,
+    tokens: TokenBudget = _DEFAULT_TOKENS,
+    ledger: Ledger | None = None,
+) -> ReadOutcome | None:
+    """A later page of a filtered count, counted by asking Jev whether each record matches, in one request.
+
+    None when the page does not have the first page's shape or Jev is unsure of any record: the LLM reader then
+    reads the page as before. The records are code-cut blocks, so every counted one is still a quote."""
+    if (
+        not readers
+        or any(reader.filter is None for reader in readers)
+        or {r.requirement_id for r in readers} != set(requirement_ids)
+        or capture.inaccessible_frames
+    ):
+        return None
+    shapes = {(reader.heading_path, reader.frame_id, reader.record_kind) for reader in readers}
+    if len(shapes) != 1 or any(capture.title != reader.title for reader in readers):
+        return None
+    # The records are the blocks shaped like the ones the first page's reader cited; a sidebar or a footer list
+    # sits under another heading and is not asked about. They must also run unbroken: a featured strip of the same
+    # shape elsewhere on the page would be counted again on every page that repeats it.
+    positions = [
+        index
+        for index, b in enumerate(capture.blocks)
+        if b.kind in _COUNTED_KINDS and (b.heading_path, b.frame_id, b.kind) in shapes
+    ]
+    if not positions or len(positions) > _MAX_CONTINUING_RECORDS:
+        return None
+    between = capture.blocks[positions[0] : positions[-1] + 1]
+    if any(b.kind in _COUNTED_KINDS and (b.heading_path, b.frame_id, b.kind) not in shapes for b in between) or len(
+        [b for b in between if b.kind in _COUNTED_KINDS]
+    ) != len(positions):
+        return None
+    records = [capture.blocks[index] for index in positions]
+    questions: dict[str, NoulQuestion] = {}
+    for reader in readers:
+        for index, block in enumerate(records):
+            questions[f"{reader.requirement_id}::{index}"] = NoulQuestion(
+                instructions=(
+                    f"{UNTRUSTED}\n\n# Requirement\n{reader.filter}\n\n# Record\n"
+                    f"{capture.text[block.start : block.end]}\n\n"
+                    "Does this record pass every filter the requirement states, so that it is one of the records "
+                    "the requirement counts or compares? Judge this record alone; do not judge whether it wins."
+                ),
+                true="Yes, this record matches the requirement.",
+                false="No, this record does not match.",
+            )
+    (reader, *_) = readers
+    state: JsonValue = {
+        "page": {"url": capture.url, "title": capture.title, "heading": list(reader.heading_path)},
+        # How the first page's reader applied the filter, so each later record is judged by the same reading.
+        "matching_examples_from_the_first_page": list(reader.examples),
+    }
+    answered = await evaluate_batches(jev, state, questions, tokens=tokens, ledger=ledger)
+    if answered is None:
+        return None
+    notes = Notes()
+    continuation_records: dict[str, tuple[str, ...]] = {}
+    for reader in readers:
+        keys: list[str] = []
+        for index, block in enumerate(records):
+            answer = answered.answers.get(f"{reader.requirement_id}::{index}")
+            if not isinstance(answer, NoulAnswer):
+                return None
+            if _RECORD_REJECT_TO < answer.probability < _RECORD_MATCH_FROM:
+                trace("record_filter", reader="llm", reason="uncertain_record", probability=answer.probability)
+                return None
+            if answer.probability >= _RECORD_MATCH_FROM:
+                text = capture.text[block.start : block.end]
+                comparison = reader.comparison
+                # Code picks the winner from each kept record's label and value; one it cannot read them from
+                # sends the page to the LLM reader rather than leaving a record the comparison cannot rank.
+                if comparison is not None and (
+                    comparison.label.extract(text) is None or comparison.value.extract(text) is None
+                ):
+                    trace("record_filter", reader="llm", reason="unreadable_value")
+                    return None
+                fact = _quoted(_evidence(capture, block, block.start, block.end))
+                notes.add(fact)
+                keys.append(fact_id(fact))
+        if reader.compares:
+            continuation_records[reader.requirement_id] = tuple(keys)
+        elif keys:
+            notes.add_tally(
+                Tally(requirement_id=reader.requirement_id, key=reader.count_label or "records", records=tuple(keys))
+            )
+        trace("record_filter", reader="jev", requirement=reader.requirement_id, records=len(records), matched=len(keys))
+    return ReadOutcome(
+        facts=notes.facts,
+        coverage=(0,),
+        rejected_claims=0,
+        cost_lines=(),
+        continues=tuple(r.requirement_id for r in readers),
+        continuation_records=continuation_records,
+    )
 
 
 def _notes_room(tokens: TokenBudget, messages: Sequence[Message], response: type[Frozen]) -> int:
@@ -1212,7 +1340,7 @@ async def read(
     # LLM claims reach the run's notes only once the whole page is read. Carry earlier chunks and Jev's facts
     # into each chunk so a count or comparison is not asked in ignorance of what was already collected.
     so_far = deepcopy(notes)
-    logger.debug("read reader=llm requirements=%s reason=remaining_requirements", list(requirement_ids))
+    _route("llm", "remaining_requirements", requirements=list(requirement_ids))
     for part in chunk(capture, max_chars):
         messages = [
             Message(
@@ -1522,6 +1650,60 @@ async def read(
                 )
                 if read_tallies(capture, [reader], [reader.requirement_id]) is not None:
                     tally_readers.append(reader)
+        texts = {r.id: r.text for r in requirements}
+        for continuation in carried:
+            # A filtered count or a comparison names its matches record by record, so a later page of the same
+            # list is matched by Jev record by record rather than read again by the LLM. Code counts the matches,
+            # or picks the winner from their values with the comparison's delimiters.
+            compares = continuation.comparison is not None and continuation.requirement_id not in counting
+            requirement_text = texts.get(continuation.requirement_id)
+            if (
+                requirement_text is None
+                or continuation.reuse_field
+                or not continuation.through_end
+                or any(r.requirement_id == continuation.requirement_id for r in tally_readers)
+                or not (
+                    compares
+                    or (
+                        continuation.requirement_id in counting
+                        and len(continuation.tallies) == 1
+                        and continuation.tallies[0].field is None
+                    )
+                )
+            ):
+                continue
+            cites = continuation.records if compares else continuation.tallies[0].records
+            cited = [evidence for cite in cites if (evidence := _cited(capture, part, cite)) is not None]
+            blocks_by_id = {(b.source_id, b.frame_id): b for b in capture.blocks}
+            shapes = {
+                (block.heading_path, block.frame_id, block.kind)
+                for evidence in cited
+                if (block := blocks_by_id.get((evidence.source_id, evidence.frame_id))) is not None
+                and block.kind in _COUNTED_KINDS
+            }
+            # The filter needs one record shape to find the next page's records by; matches cited across more than one
+            # shape, or none, stay with the LLM reader. A comparison record that spans blocks would be asked about
+            # a block at a time and lose its value, so only one-block records are filtered.
+            if len(shapes) != 1 or not cited or (compares and any(cite.first != cite.last for cite in cites)):
+                continue
+            ((heading_path, frame_id, record_kind),) = shapes
+            tally_readers.append(
+                TallyReader(
+                    requirement_id=continuation.requirement_id,
+                    # Keyed as the LLM reader keys a filtered count, so every page adds to one tally.
+                    count_label=None if compares else requirement_text,
+                    title=capture.title,
+                    heading_path=heading_path,
+                    frame_id=frame_id,
+                    prefix="",
+                    suffix="",
+                    filter=requirement_text,
+                    compares=compares,
+                    record_kind=record_kind,
+                    examples=tuple(evidence.quote for evidence in cited[:3]),
+                    comparison=continuation.comparison if compares else None,
+                )
+            )
         references = {labels[key]: key for key in offered.evidence_ids}
         references.update((key, key) for key in offered.evidence_ids)
         tally_reads = [t for t in result.data.tallies if t.requirement_id in requirement_ids]
@@ -2670,7 +2852,7 @@ async def _read_choices(
         previous.append(packet)
     candidates = read_candidates(capture)
     if not candidates and not previous and next(_iter_read_candidates(capture, capture.blocks), None) is None:
-        logger.debug("read reader=llm reason=no_bounded_candidate_set")
+        _route("llm", "no_bounded_candidate_set")
         return _ChoiceRead()
     state, questions = _read_request(capture, requirements, candidates)
     asked: dict[str, Question] = dict(questions)
@@ -2706,14 +2888,14 @@ async def _read_choices(
     if (not candidates and not compare_previous) or not _read_fits(state, asked, tokens):
         blocks, candidates, costs = await _focus(jev, capture, requirements, tokens=tokens, ledger=ledger)
         if not blocks:
-            logger.debug("read reader=llm reason=unfocused")
+            _route("llm", "unfocused")
             return _ChoiceRead(cost_lines=costs)
         state, questions = _read_request(capture, requirements, candidates, blocks=blocks)
         asked = dict(questions)
         focused = True
     # Oversized captures should reach the chunked reader without paying for a doomed choice request.
     if not _read_fits(state, asked, tokens):
-        logger.debug("read reader=llm reason=choice_input_too_large")
+        _route("llm", "choice_input_too_large")
         return _ChoiceRead(cost_lines=costs)
     if ledger is not None:
         ledger.reserve(CostComponent.JEV)
@@ -2721,13 +2903,13 @@ async def _read_choices(
         evaluation = await jev.evaluate(state, asked)
     except JevError:
         # An optional shortcut's rejected input or malformed answer must still reach the reader.
-        logger.debug("read reader=llm reason=choice_error")
+        _route("llm", "choice_error")
         return _ChoiceRead(cost_lines=costs)
     if ledger is not None:
         ledger.record(evaluation.cost)
     novelty_answer = evaluation.answers.get("novelty") if compare_previous and not focused else None
     if isinstance(novelty_answer, NoulAnswer) and 1 - novelty_answer.probability >= _NO_NEW_EVIDENCE_CONFIDENCE:
-        logger.debug("read reader=none reason=preserved_evidence")
+        _route("none", "preserved_evidence")
         return _ChoiceRead(
             absent=tuple(requirement.id for requirement in requirements), cost_lines=(*costs, evaluation.cost)
         )
@@ -2736,22 +2918,31 @@ async def _read_choices(
     groups = _read_groups(candidates)
     for requirement in requirements:
         answer = evaluation.answers.get(requirement.id)
-        if not isinstance(answer, ChoiceAnswer) or answer.confidence < _READ_CONFIDENCE:
-            logger.debug("read reader=llm requirement=%s reason=uncertain_choice answer=%r", requirement.id, answer)
+        if not isinstance(answer, ChoiceAnswer) or answer.confidence < (
+            _ABSENT_CONFIDENCE if answer.choice == "absent" else _READ_CONFIDENCE
+        ):
+            _route(
+                "llm",
+                "uncertain_choice",
+                requirement=requirement.id,
+                choice=answer.choice if isinstance(answer, ChoiceAnswer) else None,
+                confidence=round(answer.confidence, 3) if isinstance(answer, ChoiceAnswer) else None,
+            )
             continue
         if answer.choice == "absent":
             if focused:
-                logger.debug("read reader=llm requirement=%s reason=absent_after_focus", requirement.id)
+                _route("llm", "absent_after_focus", requirement=requirement.id)
                 continue
-            logger.debug("read reader=none requirement=%s reason=absent", requirement.id)
+            _route("none", "absent", requirement=requirement.id)
             absent.append(requirement.id)
             continue
         group = groups.get(answer.choice)
         if group is None:
-            logger.debug(
-                "read reader=llm requirement=%s reason=%s",
-                requirement.id,
+            _route(
+                "llm",
                 "synthesis" if answer.choice == "synthesis" else "invalid_choice",
+                requirement=requirement.id,
+                confidence=round(answer.confidence, 3),
             )
             continue
         selected = group[0]
@@ -2776,7 +2967,7 @@ async def _read_choices(
         }
         headings = (*headings, *enclosing.values())
         facts.extend((*context, *headings))
-        logger.debug("read reader=jev_choice requirement=%s reason=scalar_candidate", requirement.id)
+        _route("jev_choice", "scalar_candidate", requirement=requirement.id, confidence=round(answer.confidence, 3))
         # The candidate's evidence was cut from this capture by code, so it is kept as selected, not re-found.
         # The text is the value alone: the draft answer states a fact's text, and prefixed with the requirement it
         # answered "Find the latest released version of httpx. httpx 0.28.1". The notes name the requirement.
@@ -2797,7 +2988,7 @@ class Claim(Frozen):
     evidence_ids: tuple[str, ...]
     ranks: bool = Field(default=False, description="True if it states a rank or order among counted groups.")
     """Whether the checks are shown each cited tally's standing among the other groups. A count alone needs only
-    its own tally, and a standing for every tally put hundreds of group labels into each audit question."""
+    its own tally, and a standing for every tally put hundreds of group labels into each claim question."""
 
 
 class AnswerCorrection(Frozen):
@@ -3252,15 +3443,28 @@ def transaction_check_question(
     return transaction.model_copy(update={"instructions": context + "\n".join(kept) + question}) if kept else None
 
 
+OUTPUT_MISSING = "output_missing_"
+# Room for the other quotes a contradiction question shows beside a claim's own evidence.
+_COUNTEREVIDENCE_CHARS = 4000
+
+
 def claim_check_questions(
     composed: ComposedAnswer,
     notes: Notes,
     *,
     tokens: TokenBudget = _DEFAULT_TOKENS,
     check_omission: bool = True,
+    answer_checks: Sequence[str] = (),
 ) -> Mapping[str, NoulQuestion]:
+    """Jev's questions about a composed answer: whether each claim is unsupported or contradicted by its cited
+    evidence, and whether the answer leaves a requested output out.
+
+    With answer checks the omission question is asked once per check, of the answer alone, so a refusal names the
+    output to recover and the notes never have to fit beside it. Whether each stated output is evidenced is the
+    claim questions' job.
+    """
     questions: dict[str, NoulQuestion] = {}
-    # A refused quote backs no claim here either: shown as a source, it let Jev pass a claim the audit then refused.
+    # A refused quote backs no claim: shown as a source, it let Jev pass a claim its quote could not carry.
     known = {key: evidence for key, evidence in notes.evidence.items() if not notes.refused(key)}
     # A counted record is shown as its tally's line: code checked each quote against the group when it was read and
     # counted them, and a ranking citing every record put a hundred quotes into each of its questions.
@@ -3285,25 +3489,51 @@ def claim_check_questions(
                 ensure_ascii=False,
             )
             for record in fact.basis:
-                if record not in compared:
+                # A comparison's operands are shown as their quotes, but a rank needs its standing beside them.
+                if record not in compared or standing is not None:
                     counted.setdefault(record, []).append(metadata)
         # A derived fact is judged from the records it expands to, never from the reader's own conclusion.
         keys = [key for key in expanded if not notes.derived(key)]
-        evidence = "\n".join(
+
+        def shown(key: str, counted: dict[str, list[str]] = counted) -> str:
+            quote = known[key].model_dump_json() if key in known else f"MISSING: {key}"
+            if key not in counted:
+                return quote
+            tally = "\n".join(dict.fromkeys(counted[key]))
+            # A comparison operand keeps its quote beside its rank: the claim may state the field compared.
+            return f"{quote}\n{tally}" if key in compared and key in known else tally
+
+        evidence = "\n".join(dict.fromkeys(shown(key) for key in keys))
+        cited = {(known[key].url, known[key].frame_id) for key in keys if key in known}
+        cited_quotes = {known[key].quote for key in keys if key in known}
+        # Other quotes still current on the cited pages: a value that was withdrawn, replaced or qualified there
+        # contradicts the claim even though the claim never cited it.
+        others = list(
             dict.fromkeys(
-                "\n".join(dict.fromkeys(counted[key]))
-                if key in counted
-                else known[key].model_dump_json()
-                if key in known
-                else f"MISSING: {key}"
-                for key in keys
+                source.quote
+                for source in notes.current_evidence().values()
+                if (source.url, source.frame_id) in cited and source.quote not in cited_quotes
             )
         )
+        context = ""
+        if others:
+            context = cut_text(
+                "\n".join(json.dumps(quote, ensure_ascii=False) for quote in others), _COUNTEREVIDENCE_CHARS
+            )
+            context = f"\n\n# Other current quotes from the same pages\n{context}"
         for issue in ("unsupported", "contradicted"):
             questions[f"{issue}_{index}"] = NoulQuestion(
                 instructions=(
-                    f"{UNTRUSTED}\n\n# Claim\n{claim.text}\n\n# Evidence\n{evidence}\n\n"
-                    f"Is the claim {issue} by its cited evidence?"
+                    f"{UNTRUSTED}\n\n# Claim\n{claim.text}\n\n# Evidence\n{evidence}"
+                    + (context if issue == "contradicted" else "")
+                    + f"\n\nIs the claim {issue} by its cited evidence"
+                    + (
+                        ", or by another current quote from the same pages? Another quote contradicts it only "
+                        "when it gives a different value for the same entity and field, or withdraws, replaces or "
+                        "qualifies the claimed fact; values for other entities do not."
+                        if issue == "contradicted" and others
+                        else "?"
+                    )
                 ),
                 true=f"Yes, the claim is {issue}.",
                 false=f"No, the claim is not {issue}.",
@@ -3311,6 +3541,32 @@ def claim_check_questions(
     # Actions are evidenced by the page, which the done check already judged; quotes only evidence information.
     information = [r for r in composed.requirements if r.kind is RequirementKind.INFORMATION]
     if not information or not check_omission:
+        return questions
+    if answer_checks:
+        # Where the answer's quotes were read: a heading read on the page a link was meant to open from states
+        # nothing about the page it opens, and the answer text alone cannot show that.
+        read_on = list(
+            dict.fromkeys(
+                known[key].url
+                for claim in composed.claims
+                for key in notes.expand_evidence_ids(claim.evidence_ids)
+                if key in known
+            )
+        )
+        sources = f"# The answer's quotes were read on\n{json.dumps(read_on)}\n\n" if read_on else ""
+        for index, check in enumerate(answer_checks):
+            questions[f"{OUTPUT_MISSING}{index}"] = NoulQuestion(
+                instructions=(
+                    f"{UNTRUSTED}\n\n# Requested output\n{check}\n\n{sources}"
+                    "Does the answer in the state leave this requested output unstated? Judge each requested "
+                    "entity and field separately. A value stated for another entity, or only implied, leaves it "
+                    "unstated. So does a value read only on the page the task says to leave, when the output is "
+                    "about the window, tab or page a link or search there opens. A page reached on the way to the "
+                    "answer may hold it. A stated absence the task allows, such as no matching records, states it."
+                ),
+                true="Yes, the requested output is not stated.",
+                false="No, the answer states the requested output.",
+            )
         return questions
     requirements = "\n".join(requirement.model_dump_json() for requirement in information)
     context = f"{UNTRUSTED}\n\n# Requirements\n{requirements}\n\n# Answer\n{composed.answer}\n\n# Notes\n"
