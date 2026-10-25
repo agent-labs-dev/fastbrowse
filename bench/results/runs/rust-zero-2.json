@@ -3,13 +3,13 @@
   "mode": "replay",
   "agent": "/Users/jnsdls/fastbrowse/.claude/worktrees/agent-af7576a2383dac2f6/target/release-small/fastbrowse serve --stdio",
   "latency": "zero",
-  "started": "2026-10-24T23:49:27+00:00",
-  "harness_fastbrowse": "0.7.0",
+  "started": "2026-10-25T02:25:13+00:00",
+  "harness_fastbrowse": "0.7.1",
   "platform": "Darwin 27.0.0 arm64",
   "cpu_count": 16,
   "python": "3.13.13",
   "chrome": "Google Chrome 155.0.8059.86",
-  "finished": "2026-10-24T23:51:43+00:00"
+  "finished": "2026-10-25T02:27:25+00:00"
  },
  "tasks": [
   {
@@ -18,12 +18,12 @@
    "port": 47300,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0038,
-    "wall_s": 2.3179,
+    "startup_s": 0.0036,
+    "wall_s": 2.3167,
     "cpu_user_s": 0.016,
-    "cpu_sys_s": 0.0068,
-    "cpu_s": 0.0228,
-    "rss_bytes": 10485760,
+    "cpu_sys_s": 0.007,
+    "cpu_s": 0.023,
+    "rss_bytes": 10665984,
     "steps": 5,
     "events": 6,
     "model_requests": 14
@@ -95,11 +95,11 @@
    "port": 47301,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.003,
-    "wall_s": 2.011,
-    "cpu_user_s": 0.0185,
-    "cpu_sys_s": 0.0105,
-    "cpu_s": 0.029,
+    "startup_s": 0.0033,
+    "wall_s": 2.0085,
+    "cpu_user_s": 0.0201,
+    "cpu_sys_s": 0.0113,
+    "cpu_s": 0.0314,
     "rss_bytes": 10190848,
     "steps": 5,
     "events": 6,
@@ -161,12 +161,12 @@
    "port": 47302,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0032,
-    "wall_s": 1.6844,
-    "cpu_user_s": 0.0161,
-    "cpu_sys_s": 0.0097,
-    "cpu_s": 0.0257,
-    "rss_bytes": 10485760,
+    "startup_s": 0.0033,
+    "wall_s": 1.721,
+    "cpu_user_s": 0.0171,
+    "cpu_sys_s": 0.0089,
+    "cpu_s": 0.026,
+    "rss_bytes": 10141696,
     "steps": 5,
     "events": 6,
     "model_requests": 7
@@ -227,12 +227,12 @@
    "port": 47303,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0029,
-    "wall_s": 0.3298,
-    "cpu_user_s": 0.0068,
-    "cpu_sys_s": 0.0029,
-    "cpu_s": 0.0096,
-    "rss_bytes": 10354688,
+    "startup_s": 0.0032,
+    "wall_s": 0.3344,
+    "cpu_user_s": 0.007,
+    "cpu_sys_s": 0.003,
+    "cpu_s": 0.01,
+    "rss_bytes": 10338304,
     "steps": 1,
     "events": 2,
     "model_requests": 8
@@ -283,12 +283,12 @@
    "port": 47304,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0032,
-    "wall_s": 0.3261,
-    "cpu_user_s": 0.005,
+    "startup_s": 0.0031,
+    "wall_s": 0.3325,
+    "cpu_user_s": 0.0051,
     "cpu_sys_s": 0.0028,
-    "cpu_s": 0.0078,
-    "rss_bytes": 9519104,
+    "cpu_s": 0.0079,
+    "rss_bytes": 9469952,
     "steps": 0,
     "events": 1,
     "model_requests": 2
@@ -318,12 +318,12 @@
    "port": 47305,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.003,
-    "wall_s": 0.6191,
-    "cpu_user_s": 0.0072,
-    "cpu_sys_s": 0.0036,
-    "cpu_s": 0.0109,
-    "rss_bytes": 9912320,
+    "startup_s": 0.0034,
+    "wall_s": 0.6205,
+    "cpu_user_s": 0.0075,
+    "cpu_sys_s": 0.004,
+    "cpu_s": 0.0115,
+    "rss_bytes": 9797632,
     "steps": 2,
     "events": 3,
     "model_requests": 6
@@ -367,11 +367,11 @@
    "exit_code": 0,
    "metrics": {
     "startup_s": 0.0035,
-    "wall_s": 13.9017,
-    "cpu_user_s": 0.0224,
-    "cpu_sys_s": 0.0076,
-    "cpu_s": 0.03,
-    "rss_bytes": 11321344,
+    "wall_s": 13.8675,
+    "cpu_user_s": 0.02,
+    "cpu_sys_s": 0.0064,
+    "cpu_s": 0.0264,
+    "rss_bytes": 11091968,
     "steps": 5,
     "events": 6,
     "model_requests": 22
@@ -450,12 +450,12 @@
    "port": 47307,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0034,
-    "wall_s": 14.1109,
-    "cpu_user_s": 0.0233,
-    "cpu_sys_s": 0.0079,
-    "cpu_s": 0.0312,
-    "rss_bytes": 11583488,
+    "startup_s": 0.0036,
+    "wall_s": 14.1201,
+    "cpu_user_s": 0.0246,
+    "cpu_sys_s": 0.0086,
+    "cpu_s": 0.0333,
+    "rss_bytes": 11321344,
     "steps": 6,
     "events": 7,
     "model_requests": 25
@@ -540,12 +540,12 @@
    "port": 47308,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0035,
-    "wall_s": 1.7152,
-    "cpu_user_s": 0.0265,
-    "cpu_sys_s": 0.0097,
-    "cpu_s": 0.0362,
-    "rss_bytes": 11255808,
+    "startup_s": 0.0039,
+    "wall_s": 1.739,
+    "cpu_user_s": 0.0267,
+    "cpu_sys_s": 0.0099,
+    "cpu_s": 0.0366,
+    "rss_bytes": 11288576,
     "steps": 5,
     "events": 6,
     "model_requests": 22
@@ -624,20 +624,20 @@
    "port": 47309,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0034,
-    "wall_s": 4.3649,
-    "cpu_user_s": 0.0615,
-    "cpu_sys_s": 0.019,
-    "cpu_s": 0.0805,
-    "rss_bytes": 12238848,
-    "steps": 17,
-    "events": 18,
-    "model_requests": 47
+    "startup_s": 0.0042,
+    "wall_s": 2.7653,
+    "cpu_user_s": 0.0383,
+    "cpu_sys_s": 0.0128,
+    "cpu_s": 0.0511,
+    "rss_bytes": 11436032,
+    "steps": 10,
+    "events": 11,
+    "model_requests": 32
    },
-   "cost_usd": 0.037969,
+   "cost_usd": 0.026345,
    "result": {
     "status": "complete",
-    "answer": "The most expensive order listed on the orders page is Burr Grinder with a total of GBP 89.99. [4](<http://127.0.0.1:47309/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1001%20%7C%20Blue%20Kettle%20%7C%20GBP%2034.50%20%7C>) [5](<http://127.0.0.1:47309/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1002%20%7C%20Burr%20Grinder%20%7C%20GBP%2089.99%20%7C>) [6](<http://127.0.0.1:47309/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1003%20%7C%20Serving%20Jug%20%7C%20GBP%2015.30%20%7C>)",
+    "answer": "The orders listed are Blue Kettle (GBP 34.50), Burr Grinder (GBP 89.99), and Serving Jug (GBP 15.30). The most expensive order is the Burr Grinder with a total of GBP 89.99. [3](<http://127.0.0.1:47309/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1001%20%7C%20Blue%20Kettle%20%7C%20GBP%2034.50%20%7C>) [4](<http://127.0.0.1:47309/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1002%20%7C%20Burr%20Grinder%20%7C%20GBP%2089.99%20%7C>) [5](<http://127.0.0.1:47309/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1003%20%7C%20Serving%20Jug%20%7C%20GBP%2015.30%20%7C>)",
     "data": null,
     "error": null,
     "final_url": "http://127.0.0.1:47309/account/orders",
@@ -690,50 +690,8 @@
       "detail": "Read this content. Still missing evidence for req_2: Find the item and total of the most expensive order on the orders page.. Re-reading this unchanged content will not supply it; find additional content."
      },
      {
-      "operation": "escalate",
-      "target": null,
-      "outcome": "executed",
-      "detail": "uncertain next step (0.51)\nThe verification code 587373 for ada@example.com was retrieved from the Phone page. We need to return to the login verification step to enter the code.\nNavigate back to the verification page to enter the code."
-     },
-     {
       "operation": "back",
       "target": null,
-      "outcome": "executed",
-      "detail": null
-     },
-     {
-      "operation": "read",
-      "target": null,
-      "outcome": "executed",
-      "detail": "Read this content. Still missing evidence for req_2: Find the item and total of the most expensive order on the orders page.. Re-reading this unchanged content will not supply it; find additional content."
-     },
-     {
-      "operation": "escalate",
-      "target": null,
-      "outcome": "executed",
-      "detail": "uncertain next step (0.46)\nNavigating back resulted in a Chrome ERR_CACHE_MISS error page because the previous page was reached via POST. We should navigate back to the caller-supplied start page to re-enter login or continue.\nNavigate to the caller start page http://127.0.0.1:47309/login"
-     },
-     {
-      "operation": "navigate",
-      "target": "http://127.0.0.1:47309/login",
-      "outcome": "executed",
-      "detail": null
-     },
-     {
-      "operation": "fill",
-      "target": "Email",
-      "outcome": "executed",
-      "detail": null
-     },
-     {
-      "operation": "fill",
-      "target": "Password",
-      "outcome": "executed",
-      "detail": null
-     },
-     {
-      "operation": "click",
-      "target": "Sign in",
       "outcome": "executed",
       "detail": null
      },
@@ -770,7 +728,6 @@
      ],
      "posts": [
       "/login",
-      "/login",
       "/login/code"
      ],
      "orders_placed": 0
@@ -779,7 +736,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 45
+   "unused_responses": 80
   },
   {
    "task": "mock-sign-in-code-given",
@@ -787,17 +744,17 @@
    "port": 47310,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0033,
-    "wall_s": 2.3984,
-    "cpu_user_s": 0.0308,
-    "cpu_sys_s": 0.0127,
-    "cpu_s": 0.0435,
-    "rss_bytes": 11304960,
+    "startup_s": 0.0037,
+    "wall_s": 2.3735,
+    "cpu_user_s": 0.0281,
+    "cpu_sys_s": 0.0105,
+    "cpu_s": 0.0386,
+    "rss_bytes": 11190272,
     "steps": 7,
     "events": 8,
     "model_requests": 25
    },
-   "cost_usd": 0.015593,
+   "cost_usd": 0.015611,
    "result": {
     "status": "complete",
     "answer": "The reference of the first order listed on the orders page is A-1001. [1](<http://127.0.0.1:47310/account/orders#:~:text=Your%20orders>) [2](<http://127.0.0.1:47310/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1001%20%7C%20Blue%20Kettle%20%7C%20GBP%2034.50%20%7C>)",
@@ -876,7 +833,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 14
+   "unused_responses": 23
   },
   {
    "task": "mock-sign-out",
@@ -884,12 +841,12 @@
    "port": 47311,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0035,
-    "wall_s": 1.7211,
-    "cpu_user_s": 0.0245,
-    "cpu_sys_s": 0.0098,
-    "cpu_s": 0.0342,
-    "rss_bytes": 11108352,
+    "startup_s": 0.0033,
+    "wall_s": 1.7057,
+    "cpu_user_s": 0.0242,
+    "cpu_sys_s": 0.0096,
+    "cpu_s": 0.0338,
+    "rss_bytes": 10829824,
     "steps": 5,
     "events": 6,
     "model_requests": 15
@@ -963,12 +920,12 @@
    "port": 47312,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0039,
-    "wall_s": 3.1718,
-    "cpu_user_s": 0.0425,
-    "cpu_sys_s": 0.0144,
-    "cpu_s": 0.0569,
-    "rss_bytes": 11386880,
+    "startup_s": 0.0035,
+    "wall_s": 3.1378,
+    "cpu_user_s": 0.0367,
+    "cpu_sys_s": 0.0122,
+    "cpu_s": 0.0489,
+    "rss_bytes": 11108352,
     "steps": 11,
     "events": 12,
     "model_requests": 28
@@ -1081,11 +1038,11 @@
    "exit_code": 0,
    "metrics": {
     "startup_s": 0.0036,
-    "wall_s": 4.4372,
-    "cpu_user_s": 0.0646,
-    "cpu_sys_s": 0.017,
-    "cpu_s": 0.0816,
-    "rss_bytes": 11599872,
+    "wall_s": 4.381,
+    "cpu_user_s": 0.0596,
+    "cpu_sys_s": 0.0177,
+    "cpu_s": 0.0773,
+    "rss_bytes": 11485184,
     "steps": 19,
     "events": 20,
     "model_requests": 32
@@ -1240,12 +1197,12 @@
    "port": 47314,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0036,
-    "wall_s": 3.3809,
-    "cpu_user_s": 0.0372,
-    "cpu_sys_s": 0.0142,
-    "cpu_s": 0.0514,
-    "rss_bytes": 10633216,
+    "startup_s": 0.0032,
+    "wall_s": 3.3004,
+    "cpu_user_s": 0.0294,
+    "cpu_sys_s": 0.0112,
+    "cpu_s": 0.0406,
+    "rss_bytes": 10584064,
     "steps": 10,
     "events": 11,
     "model_requests": 19
@@ -1344,17 +1301,17 @@
    "port": 47315,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0033,
-    "wall_s": 2.7824,
-    "cpu_user_s": 0.0378,
-    "cpu_sys_s": 0.0137,
-    "cpu_s": 0.0515,
-    "rss_bytes": 11206656,
+    "startup_s": 0.0035,
+    "wall_s": 2.7497,
+    "cpu_user_s": 0.0344,
+    "cpu_sys_s": 0.0116,
+    "cpu_s": 0.046,
+    "rss_bytes": 10960896,
     "steps": 9,
     "events": 10,
     "model_requests": 16
    },
-   "cost_usd": 0.013056,
+   "cost_usd": 0.013359,
    "result": {
     "status": "complete",
     "answer": null,
@@ -1434,7 +1391,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 5
+   "unused_responses": 12
   },
   {
    "task": "mock-password-pause",
@@ -1442,17 +1399,17 @@
    "port": 47316,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0037,
-    "wall_s": 2.5422,
-    "cpu_user_s": 0.0295,
-    "cpu_sys_s": 0.0112,
-    "cpu_s": 0.0407,
-    "rss_bytes": 10649600,
+    "startup_s": 0.0035,
+    "wall_s": 2.4635,
+    "cpu_user_s": 0.0238,
+    "cpu_sys_s": 0.0086,
+    "cpu_s": 0.0325,
+    "rss_bytes": 10551296,
     "steps": 8,
     "events": 9,
     "model_requests": 14
    },
-   "cost_usd": 0.005828,
+   "cost_usd": 0.005941,
    "result": {
     "status": "needs_confirmation",
     "answer": null,
@@ -1489,7 +1446,7 @@
       "operation": "escalate",
       "target": null,
       "outcome": "executed",
-      "detail": "uncertain next step (0.42)\nWe are on the 'Change your password' page and need to enter the current password into control 4.\nFill the Current password field with the stored password."
+      "detail": "uncertain next step (0.24)\nThe browser is on the 'Change your password' form. The current password needs to be filled with the stored secret 'password'.\nFill the 'Current password' field with the saved secret 'password'"
      },
      {
       "operation": "fill",
@@ -1525,7 +1482,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 4
+   "unused_responses": 9
   },
   {
    "task": "mock-cheapest-product",
@@ -1533,12 +1490,12 @@
    "port": 47317,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0036,
-    "wall_s": 0.8966,
-    "cpu_user_s": 0.0294,
-    "cpu_sys_s": 0.0065,
-    "cpu_s": 0.0358,
-    "rss_bytes": 12189696,
+    "startup_s": 0.0034,
+    "wall_s": 0.8774,
+    "cpu_user_s": 0.0289,
+    "cpu_sys_s": 0.0062,
+    "cpu_s": 0.0351,
+    "rss_bytes": 11911168,
     "steps": 5,
     "events": 6,
     "model_requests": 21
@@ -1686,12 +1643,12 @@
    "port": 47318,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0035,
-    "wall_s": 1.1127,
-    "cpu_user_s": 0.0377,
-    "cpu_sys_s": 0.0072,
-    "cpu_s": 0.045,
-    "rss_bytes": 12468224,
+    "startup_s": 0.0034,
+    "wall_s": 1.0936,
+    "cpu_user_s": 0.0297,
+    "cpu_sys_s": 0.0059,
+    "cpu_s": 0.0357,
+    "rss_bytes": 12271616,
     "steps": 8,
     "events": 9,
     "model_requests": 21
@@ -1879,12 +1836,12 @@
    "port": 47319,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0037,
-    "wall_s": 0.3352,
+    "startup_s": 0.0038,
+    "wall_s": 0.331,
     "cpu_user_s": 0.0067,
-    "cpu_sys_s": 0.0031,
-    "cpu_s": 0.0098,
-    "rss_bytes": 10190848,
+    "cpu_sys_s": 0.0035,
+    "cpu_s": 0.0101,
+    "rss_bytes": 10387456,
     "steps": 1,
     "events": 2,
     "model_requests": 7
@@ -1935,20 +1892,20 @@
    "port": 47320,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0034,
-    "wall_s": 6.1887,
-    "cpu_user_s": 0.0702,
-    "cpu_sys_s": 0.024,
-    "cpu_s": 0.0942,
-    "rss_bytes": 11894784,
-    "steps": 22,
-    "events": 23,
-    "model_requests": 43
+    "startup_s": 0.0124,
+    "wall_s": 4.7764,
+    "cpu_user_s": 0.0457,
+    "cpu_sys_s": 0.0139,
+    "cpu_s": 0.0596,
+    "rss_bytes": 11599872,
+    "steps": 15,
+    "events": 16,
+    "model_requests": 29
    },
-   "cost_usd": 0.035963,
+   "cost_usd": 0.023597,
    "result": {
     "status": "complete",
-    "answer": "The account is signed in as katherine@example.com. [6](<http://127.0.0.1:47320/account#:~:text=Your%20account>) [7](<http://127.0.0.1:47320/account#:~:text=Signed%20in%20as%20katherine%40example.com.>)",
+    "answer": "The account is signed in as katherine@example.com. [3](<http://127.0.0.1:47320/account#:~:text=Your%20account>) [4](<http://127.0.0.1:47320/account#:~:text=Signed%20in%20as%20katherine%40example.com.>)",
     "data": null,
     "error": null,
     "final_url": "http://127.0.0.1:47320/account",
@@ -1984,12 +1941,6 @@
       "detail": null
      },
      {
-      "operation": "read",
-      "target": null,
-      "outcome": "executed",
-      "detail": "Read this content. Still missing evidence for requirement-2: Find your account email.. Re-reading this unchanged content will not supply it; find additional content."
-     },
-     {
       "operation": "click",
       "target": "Phone",
       "outcome": "executed",
@@ -2005,47 +1956,11 @@
       "operation": "escalate",
       "target": null,
       "outcome": "executed",
-      "detail": "uncertain next step (0.18)\nWe obtained the authenticator code (423345) from the Phone page, but now need to return back to the login/verification page to input the digits.\nGo back to the verification code entry page"
+      "detail": "uncertain next step (0.35)\nThe code for katherine@example.com is observed (423345). We need to return to the OTP verification page to enter it.\nNavigate back to the OTP verification page."
      },
      {
       "operation": "back",
       "target": null,
-      "outcome": "executed",
-      "detail": null
-     },
-     {
-      "operation": "escalate",
-      "target": null,
-      "outcome": "executed",
-      "detail": "uncertain next step (0.31)\nGoing back landed on a form resubmission error page (ERR_CACHE_MISS) with no controls. Navigate back to the caller start page to log in and enter the verification code.\nNavigate to http://127.0.0.1:47320/login"
-     },
-     {
-      "operation": "navigate",
-      "target": "http://127.0.0.1:47320/login",
-      "outcome": "executed",
-      "detail": null
-     },
-     {
-      "operation": "escalate",
-      "target": null,
-      "outcome": "executed",
-      "detail": "uncertain next step (0.24)\nThe browser is back on the initial login form after retrieving the 2FA code (423345) from the Phone page. We need to submit the email and password again to reach the verification code step.\nFill the Email field with katherine@example.com."
-     },
-     {
-      "operation": "fill",
-      "target": "Email",
-      "outcome": "executed",
-      "detail": null
-     },
-     {
-      "operation": "fill",
-      "target": "Password",
-      "outcome": "executed",
-      "detail": null
-     },
-     {
-      "operation": "click",
-      "target": "Sign in",
       "outcome": "executed",
       "detail": null
      },
@@ -2106,7 +2021,6 @@
      ],
      "posts": [
       "/login",
-      "/login",
       "/login/otp"
      ],
      "orders_placed": 0
@@ -2115,7 +2029,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 40
+   "unused_responses": 69
   },
   {
    "task": "mock-iframe-note",
@@ -2124,11 +2038,11 @@
    "exit_code": 0,
    "metrics": {
     "startup_s": 0.0038,
-    "wall_s": 1.4093,
-    "cpu_user_s": 0.0166,
-    "cpu_sys_s": 0.0066,
-    "cpu_s": 0.0232,
-    "rss_bytes": 10207232,
+    "wall_s": 1.4218,
+    "cpu_user_s": 0.0159,
+    "cpu_sys_s": 0.0068,
+    "cpu_s": 0.0227,
+    "rss_bytes": 10305536,
     "steps": 2,
     "events": 3,
     "model_requests": 7
@@ -2177,11 +2091,11 @@
    "exit_code": 0,
    "metrics": {
     "startup_s": 0.0034,
-    "wall_s": 1.245,
-    "cpu_user_s": 0.0147,
-    "cpu_sys_s": 0.0064,
-    "cpu_s": 0.021,
-    "rss_bytes": 10240000,
+    "wall_s": 1.2397,
+    "cpu_user_s": 0.0148,
+    "cpu_sys_s": 0.0065,
+    "cpu_s": 0.0214,
+    "rss_bytes": 10125312,
     "steps": 2,
     "events": 3,
     "model_requests": 7
@@ -2229,12 +2143,12 @@
    "port": 47323,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0037,
-    "wall_s": 0.8221,
-    "cpu_user_s": 0.0495,
-    "cpu_sys_s": 0.0058,
-    "cpu_s": 0.0553,
-    "rss_bytes": 13877248,
+    "startup_s": 0.0039,
+    "wall_s": 0.9635,
+    "cpu_user_s": 0.0643,
+    "cpu_sys_s": 0.0069,
+    "cpu_s": 0.0712,
+    "rss_bytes": 14139392,
     "steps": 6,
     "events": 7,
     "model_requests": 23
@@ -2615,12 +2529,12 @@
    "port": 47324,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0035,
-    "wall_s": 2.403,
-    "cpu_user_s": 0.0487,
-    "cpu_sys_s": 0.012,
-    "cpu_s": 0.0608,
-    "rss_bytes": 11141120,
+    "startup_s": 0.0055,
+    "wall_s": 2.368,
+    "cpu_user_s": 0.0337,
+    "cpu_sys_s": 0.0087,
+    "cpu_s": 0.0424,
+    "rss_bytes": 11370496,
     "steps": 21,
     "events": 22,
     "model_requests": 41
@@ -2805,7 +2719,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 270
+   "unused_responses": 271
   },
   {
    "task": "mock-compare-prices",
@@ -2813,12 +2727,12 @@
    "port": 47325,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0035,
-    "wall_s": 1.1597,
-    "cpu_user_s": 0.0229,
-    "cpu_sys_s": 0.0073,
-    "cpu_s": 0.0302,
-    "rss_bytes": 10928128,
+    "startup_s": 0.0036,
+    "wall_s": 1.1521,
+    "cpu_user_s": 0.0219,
+    "cpu_sys_s": 0.0071,
+    "cpu_s": 0.029,
+    "rss_bytes": 10813440,
     "steps": 5,
     "events": 6,
     "model_requests": 19
@@ -2893,12 +2807,12 @@
    "port": 47326,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0036,
-    "wall_s": 0.8807,
-    "cpu_user_s": 0.0288,
-    "cpu_sys_s": 0.0061,
-    "cpu_s": 0.0349,
-    "rss_bytes": 11927552,
+    "startup_s": 0.0034,
+    "wall_s": 0.8774,
+    "cpu_user_s": 0.0286,
+    "cpu_sys_s": 0.0058,
+    "cpu_s": 0.0343,
+    "rss_bytes": 12075008,
     "steps": 5,
     "events": 6,
     "model_requests": 19
@@ -3063,12 +2977,12 @@
    "port": 47327,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0032,
-    "wall_s": 0.6144,
-    "cpu_user_s": 0.0106,
-    "cpu_sys_s": 0.0043,
-    "cpu_s": 0.0149,
-    "rss_bytes": 10944512,
+    "startup_s": 0.0037,
+    "wall_s": 0.6058,
+    "cpu_user_s": 0.0104,
+    "cpu_sys_s": 0.0042,
+    "cpu_s": 0.0146,
+    "rss_bytes": 10813440,
     "steps": 2,
     "events": 3,
     "model_requests": 16
@@ -3130,12 +3044,12 @@
    "port": 47328,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0037,
-    "wall_s": 0.8362,
-    "cpu_user_s": 0.0161,
-    "cpu_sys_s": 0.0064,
-    "cpu_s": 0.0224,
-    "rss_bytes": 11042816,
+    "startup_s": 0.0036,
+    "wall_s": 0.839,
+    "cpu_user_s": 0.0156,
+    "cpu_sys_s": 0.0056,
+    "cpu_s": 0.0212,
+    "rss_bytes": 10862592,
     "steps": 2,
     "events": 3,
     "model_requests": 15
@@ -3194,12 +3108,12 @@
    "port": 47329,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0032,
-    "wall_s": 0.7525,
-    "cpu_user_s": 0.0099,
-    "cpu_sys_s": 0.0037,
-    "cpu_s": 0.0137,
-    "rss_bytes": 11026432,
+    "startup_s": 0.0085,
+    "wall_s": 0.7702,
+    "cpu_user_s": 0.013,
+    "cpu_sys_s": 0.0056,
+    "cpu_s": 0.0186,
+    "rss_bytes": 10633216,
     "steps": 2,
     "events": 3,
     "model_requests": 8
@@ -3256,12 +3170,12 @@
    "port": 47330,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0035,
-    "wall_s": 1.0438,
-    "cpu_user_s": 0.0184,
-    "cpu_sys_s": 0.0067,
-    "cpu_s": 0.0251,
-    "rss_bytes": 11223040,
+    "startup_s": 0.0069,
+    "wall_s": 1.1511,
+    "cpu_user_s": 0.0189,
+    "cpu_sys_s": 0.0068,
+    "cpu_s": 0.0256,
+    "rss_bytes": 10862592,
     "steps": 3,
     "events": 4,
     "model_requests": 18
@@ -3326,12 +3240,12 @@
    "port": 47331,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0035,
-    "wall_s": 1.0353,
-    "cpu_user_s": 0.0162,
-    "cpu_sys_s": 0.0073,
-    "cpu_s": 0.0235,
-    "rss_bytes": 10764288,
+    "startup_s": 0.0039,
+    "wall_s": 1.0364,
+    "cpu_user_s": 0.0148,
+    "cpu_sys_s": 0.0061,
+    "cpu_s": 0.0209,
+    "rss_bytes": 10649600,
     "steps": 3,
     "events": 4,
     "model_requests": 11
@@ -3391,12 +3305,12 @@
    "port": 47332,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0035,
-    "wall_s": 2.9289,
-    "cpu_user_s": 0.043,
-    "cpu_sys_s": 0.0142,
-    "cpu_s": 0.0572,
-    "rss_bytes": 11485184,
+    "startup_s": 0.0034,
+    "wall_s": 2.9292,
+    "cpu_user_s": 0.04,
+    "cpu_sys_s": 0.0132,
+    "cpu_s": 0.0532,
+    "rss_bytes": 11616256,
     "steps": 12,
     "events": 13,
     "model_requests": 37
@@ -3527,12 +3441,12 @@
    "port": 47333,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0036,
-    "wall_s": 0.9082,
-    "cpu_user_s": 0.0185,
-    "cpu_sys_s": 0.0054,
-    "cpu_s": 0.0238,
-    "rss_bytes": 11288576,
+    "startup_s": 0.0037,
+    "wall_s": 0.8555,
+    "cpu_user_s": 0.0123,
+    "cpu_sys_s": 0.0046,
+    "cpu_s": 0.0169,
+    "rss_bytes": 11091968,
     "steps": 4,
     "events": 5,
     "model_requests": 18
@@ -3603,12 +3517,12 @@
    "port": 47334,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0034,
-    "wall_s": 13.4837,
-    "cpu_user_s": 0.0211,
-    "cpu_sys_s": 0.0092,
-    "cpu_s": 0.0304,
-    "rss_bytes": 10682368,
+    "startup_s": 0.0036,
+    "wall_s": 13.4766,
+    "cpu_user_s": 0.0139,
+    "cpu_sys_s": 0.005,
+    "cpu_s": 0.0189,
+    "rss_bytes": 10780672,
     "steps": 6,
     "events": 7,
     "model_requests": 10
@@ -3680,12 +3594,12 @@
    "port": 47335,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.0035,
-    "wall_s": 0.3448,
-    "cpu_user_s": 0.0089,
-    "cpu_sys_s": 0.0034,
-    "cpu_s": 0.0122,
-    "rss_bytes": 10780672,
+    "startup_s": 0.0041,
+    "wall_s": 0.3445,
+    "cpu_user_s": 0.0087,
+    "cpu_sys_s": 0.0037,
+    "cpu_s": 0.0124,
+    "rss_bytes": 10813440,
     "steps": 1,
     "events": 2,
     "model_requests": 13
