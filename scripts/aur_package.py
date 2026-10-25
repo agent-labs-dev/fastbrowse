@@ -191,8 +191,12 @@ def main() -> int:
     parser.add_argument("version", nargs="?", help="the PyPI release to package; the one in pyproject.toml by default")
     parser.add_argument("--root", type=Path, default=REPO, help="the checkout to read, this one by default")
     parser.add_argument("--write", action="store_true", help="set the package to the PyPI release")
-    parser.add_argument("--wait", type=float, default=0, metavar="SECONDS", help="how long to wait for PyPI to list and serve it")
-    parser.add_argument("--publish", action="store_true", help="push packaging/aur to the AUR, when it already pins this release")
+    parser.add_argument(
+        "--wait", type=float, default=0, metavar="SECONDS", help="how long to wait for PyPI to list and serve it"
+    )
+    parser.add_argument(
+        "--publish", action="store_true", help="push packaging/aur to the AUR, when it already pins this release"
+    )
     args = parser.parse_args()
     project = tomllib.loads((args.root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     version = args.version or project["version"]
