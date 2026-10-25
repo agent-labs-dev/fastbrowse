@@ -1128,10 +1128,26 @@ async def filter_tallies(
                 false="No, this record does not match.",
             )
     (reader, *_) = readers
+    # Two requirements can filter the same records differently, such as a count of Ada's records and a count of
+    # Ben's. Each requirement keeps the examples its own first-page reader matched, keyed by the filter the reader
+    # states, so its records are never judged by another requirement's reading.
+    by_filter: dict[str, list[TallyReader]] = {}
+    for one in readers:
+        assert one.filter is not None
+        by_filter.setdefault(one.filter, []).append(one)
+    examples: dict[str, JsonValue] = {}
+    for stated, group in by_filter.items():
+        kept: list[JsonValue] = []
+        for one in group:
+            for quote in one.examples:
+                if quote not in kept:
+                    kept.append(quote)
+        examples[stated] = kept
     state: JsonValue = {
         "page": {"url": capture.url, "title": capture.title, "heading": list(reader.heading_path)},
-        # How the first page's reader applied the filter, so each later record is judged by the same reading.
-        "matching_examples_from_the_first_page": list(reader.examples),
+        # How each requirement's reader applied its filter on the first page, so a later record is judged by the
+        # same reading the requirement's own records were kept under.
+        "matching_examples_from_the_first_page": examples,
     }
     answered = await evaluate_batches(jev, state, questions, tokens=tokens, ledger=ledger)
     if answered is None:

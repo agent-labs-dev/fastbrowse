@@ -1033,10 +1033,23 @@ pub async fn filter_tallies(
         }
     }
     let reader = &readers[0];
+    // Two requirements can filter the same records differently, such as a count of Ada's records and a count of
+    // Ben's. Each requirement keeps the examples its own first-page reader matched, keyed by the filter the reader
+    // states, so its records are never judged by another requirement's reading.
+    let mut examples: IndexMap<&str, Vec<&str>> = IndexMap::new();
+    for one in readers {
+        let kept = examples.entry(one.filter.as_deref().unwrap_or_default()).or_default();
+        for quote in &one.examples {
+            if !kept.contains(&quote.as_str()) {
+                kept.push(quote);
+            }
+        }
+    }
     let state = json!({
         "page": {"url": capture.url, "title": capture.title, "heading": reader.heading_path},
-        // How the first page's reader applied the filter, so each later record is judged by the same reading.
-        "matching_examples_from_the_first_page": reader.examples,
+        // How each requirement's reader applied its filter on the first page, so a later record is judged by the
+        // same reading the requirement's own records were kept under.
+        "matching_examples_from_the_first_page": examples,
     });
     let Some(answered) = evaluate_batches(jev, &state, &questions, tokens, ledger, None, true).await? else {
         return Ok(None);

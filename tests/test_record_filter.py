@@ -18,6 +18,7 @@ from tests.test_policy import FREE
 from tests.test_retrieval import ScriptedLLM, capture
 
 ADA = Requirement(id="r", text="Count records owned by Ada", kind=RequirementKind.INFORMATION, count_records=True)
+BEN = Requirement(id="r2", text="Count records owned by Ben", kind=RequirementKind.INFORMATION, count_records=True)
 CHEAPEST = Requirement(id="r", text="The cheapest open record", kind=RequirementKind.INFORMATION)
 
 
@@ -31,9 +32,11 @@ class RecordJev:
     def __init__(self, match: Mapping[str, float]) -> None:
         self.match = match
         self.requests: list[Mapping[str, Question]] = []
+        self.states: list[JsonValue] = []
 
     async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
         self.requests.append(questions)
+        self.states.append(state)
         answers = {}
         for key, question in questions.items():
             assert isinstance(question, NoulQuestion)
@@ -41,6 +44,24 @@ class RecordJev:
             answers[key] = NoulAnswer(
                 probability=next((p for owner, p in self.match.items() if f"Owner: {owner}" in record), 0.0)
             )
+        return Evaluation(model="test", answers=answers, input_tokens=1, cost=FREE)
+
+
+class FilterJev(RecordJev):
+    """Answers each question for the record's own requirement: Ada's count keeps Ada's records, Ben's keeps Ben's."""
+
+    def __init__(self) -> None:
+        super().__init__({})
+
+    async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        self.requests.append(questions)
+        self.states.append(state)
+        answers = {}
+        for key, question in questions.items():
+            assert isinstance(question, NoulQuestion)
+            requirement, record = question.instructions.split("# Requirement\n", 1)[1].split("\n\n# Record\n", 1)
+            owner = requirement.removeprefix("Count records owned by ")
+            answers[key] = NoulAnswer(probability=0.97 if f"Owner: {owner}" in record else 0.02)
         return Evaluation(model="test", answers=answers, input_tokens=1, cost=FREE)
 
 
@@ -257,3 +278,38 @@ async def test_a_comparison_record_without_a_readable_value_goes_to_the_llm_read
     )
     later = capture((BlockKind.RECORD, "Record 9\nOwner: Ada\nPrice on request"))
     assert await filter_tallies(RecordJev({"Ada": 0.99}), later, result.tally_readers, ["r"]) is None
+
+
+async def test_each_requirement_keeps_its_own_matching_examples() -> None:
+    """Two requirements filtering the same record shape are each judged by their own first page's matches."""
+    _, result = await first_page(
+        ADA,
+        {
+            "requirement_id": "r",
+            "through_end": True,
+            "tallies": [{"key": "Ada", "records": [{"first": "s0", "last": "s0"}, {"first": "s2", "last": "s2"}]}],
+        },
+    )
+    (reader,) = result.tally_readers
+    ada = reader.model_copy(update={"examples": ("Record 0\nOwner: Ada\nPrice: $1",)})
+    ben = reader.model_copy(
+        update={
+            "requirement_id": "r2",
+            "count_label": BEN.text,
+            "filter": BEN.text,
+            "examples": ("Record 1\nOwner: Ben\nPrice: $2",),
+        }
+    )
+    later = capture(*records("Ben", "Ada"))
+    jev = FilterJev()
+    counted = await filter_tallies(jev, later, [ada, ben], ["r", "r2"])
+    assert counted is not None and len(jev.states) == 1
+    state = jev.states[0]
+    assert isinstance(state, dict)
+    # Each requirement's examples, keyed by its own filter: the second requirement is not judged by the first's.
+    assert state["matching_examples_from_the_first_page"] == {
+        ADA.text: ["Record 0\nOwner: Ada\nPrice: $1"],
+        BEN.text: ["Record 1\nOwner: Ben\nPrice: $2"],
+    }
+    # Each requirement counts only the records its own filter keeps, so neither count is inflated by the other's.
+    assert [(f.tally.key, f.tally.count) for f in counted.facts if f.tally] == [(ADA.text, 1), (BEN.text, 1)]
