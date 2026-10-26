@@ -2314,8 +2314,11 @@ class Agent:
         raise _Stop(Status.NEEDS_CONFIRMATION, reason)
 
     async def _text(self, state: _RunState, observation: Observation, target: Control) -> str:
-        secrets = tuple(ref.name for ref in self._secrets.available()) if self._secrets else ()
         origin = self._target_origin(target)
+        # Only what this field's own frame may receive: a password manager offers its names across every site it
+        # holds, and offering one that cannot be typed here ended a sign-in at needs_input, naming a secret the
+        # page was never going to get, where needs_login says what the caller can fix.
+        secrets = self._secret_names(origin)
         if target.sensitive:
             return await self._sensitive_text(state, observation, target, secrets, origin)
         criteria: dict[str, JsonValue] = {

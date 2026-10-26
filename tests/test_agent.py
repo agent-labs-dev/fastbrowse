@@ -5836,6 +5836,21 @@ async def test_new_password_without_replacement_never_uses_existing_secret() -> 
     assert "--secret new_password=" in str(stopped.value)
 
 
+async def test_a_password_field_no_stored_secret_may_reach_stops_at_needs_login() -> None:
+    """A vault offers its names across every site it holds; on a field none of them covers, that is a login to
+    supply, not an input the caller left out."""
+    agent = Agent(
+        Mock(spec=Page),
+        ScriptedJev({}),
+        ScriptedLLM([]),
+        secrets=ScopedSecrets({"vault_password": "kept"}, "https://shop.test"),
+    )
+    target = field("Password").model_copy(update={"sensitive": True, "frame_origin": "https://accounts.example"})
+    with pytest.raises(_Stop) as stopped:
+        await agent._text(await run_state(), observation((target,)), target)
+    assert stopped.value.status is Status.NEEDS_LOGIN
+
+
 async def test_a_stop_message_built_from_page_text_reaches_the_caller_redacted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

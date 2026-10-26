@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A field is offered only the stored secrets its own origin may receive. A password manager offers its names across every site it holds, so a sign-in on a site none of them covers used to offer those names anyway, and the run ended `needs_input` naming a secret the page could never get. It now ends `needs_login`, which tells the caller a login for that site is what is missing.
+
 ## [0.7.2] - 2026-10-26
 
 - An answer finishes once code and Jev have checked it, without a second opinion from an LLM. Every quoted answer used to go through LLM source and assertion audits: two calls per answer check, often a second round, and a retry whenever the 512-token verdict ran out mid-reasoning. They were about two thirds of a run's model time, and they turned correct answers into `stuck` or `unverified`: a version cited without the "latest release" label beside it, a table total without proof that its four rows were all the rows.
@@ -26,7 +28,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - A guessed opening page that was read and held nothing for the task sends the run back to the caller's start page without asking the recovery model, which chose that every time after a screenshot and 3 to 4 seconds.
 
 - `--trace FILE` writes the run's trace as JSON lines, and `FASTBROWSE_TRACE` does the same for `serve` and the MCP server: each model call with its purpose and timing, which reader answered each read and why, every check's scores and each recovery's reason. Reads now say why the LLM reader was used, and record filters and code-taken recoveries are traced.
-
 ## [0.7.1] - 2026-10-24
 
 - A run ends `needs_login` only when the page itself shows a sign-in to act on: a credential field, or a control that names one. A model that called a page with no such control a sign-in wall, or a page with nothing left to read, no longer makes the run claim the caller is signed out; it ends `stuck` instead.

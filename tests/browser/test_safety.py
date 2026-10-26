@@ -71,15 +71,12 @@ async def test_window_origin_cannot_spoof_secret_scope(
     target = find(obs, label)
     assert target.frame_origin == (iframe_site if target.frame_id else main_site)
 
+    # The field is offered only what its observed frame origin may receive, so the spoofed origin cannot put
+    # the bank's secret among the choices.
     secrets = Secrets("https://bank.example")
-    result = await Agent(
-        page,
-        ScriptedJev({"operation": "fill", "fill_target": target.id, "pick": "secret:token"}),
-        ScriptedLLM([PLAN]),
-        config=CONFIG,
-        secrets=secrets,
-    ).run("Fill the token")
-    assert result.status is Status.NEEDS_INPUT and secrets.resolved == []
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]), config=CONFIG, secrets=secrets)
+    assert agent._secret_names(agent._target_origin(target)) == ()
+    assert secrets.resolved == []
 
     obs = await page.observe()
     result = await page.act(
@@ -102,17 +99,12 @@ async def test_secret_resolution_uses_receiving_origin(
     await page.navigate(main_site)
     observed = await observe_until(page, "Frame field")
     target = find(observed, "Frame field")
+    # The secret is the page's and the field is in a cross-origin frame, so the field is never offered it.
     secrets = Secrets(main_site)
-    agent = Agent(
-        page,
-        ScriptedJev({"operation": "fill", "fill_target": target.id, "pick": "secret:token"}),
-        ScriptedLLM([PLAN]),
-        config=CONFIG,
-        secrets=secrets,
-    )
-    result = await agent.run("Fill the frame field with the token")
-    assert result.status is Status.NEEDS_INPUT and secrets.resolved == []
-    assert find(await page.observe(), "Frame field").value == ""
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]), config=CONFIG, secrets=secrets)
+    assert agent._secret_names(main_site) == ("token",)
+    assert agent._secret_names(agent._target_origin(target)) == ()
+    assert secrets.resolved == []
 
 
 async def test_page_rechecks_secret_origin_before_insertion(

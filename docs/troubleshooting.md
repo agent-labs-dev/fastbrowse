@@ -38,8 +38,11 @@ variable; credentials in task text are not used.`
 Over MCP, the server's operator adds the secret with `--secret` or `--bitwarden`, or signs in once in the
 server's `--profile`.
 
-A secret declared for a different origin than the one the run is typing on does not end `needs_login`: the
-run ends `needs_input` with `secret <name> is not available for <origin>`. Fix the origin in `--secret`.
+A field is offered only the secrets declared for the origin of the frame it sits in. When none is, a sign-in
+field ends `needs_login` with `'<label>' wants a secret and none is stored`, so a secret declared for the
+wrong origin reads the same as no secret: check the origin in `--secret` against the address the form is on.
+A secret that is declared for the origin but resolves to nothing, such as a password manager item that
+changed during the run, ends `needs_input` with `secret <name> is not available for <origin>`.
 
 ## blocked (exit 6)
 
