@@ -445,3 +445,39 @@ async def test_a_response_cut_off_mid_json_fails_validation_as_pydantic_reports_
         )
     assert errors
     assert _ends_mid_json(errors[0])
+
+
+@needs_native
+@pytest.mark.usefixtures("rust_core")
+async def test_cancelling_a_run_stops_the_plan_it_began_before_run_task_raises() -> None:
+    counted = Counted()
+    planning = asyncio.Event()
+    stopped: list[str] = []
+
+    async def hanging(purpose: LLMPurpose, *_: Any, ledger: Any, **__: Any) -> Any:
+        ledger.reserve(CostComponent.LLM)
+        planning.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            stopped.append(purpose.value)
+            raise
+
+    counted.llm.generate = hanging  # ty: ignore[invalid-assignment]
+    async with counted.http:
+        run = asyncio.create_task(
+            run_task(
+                "Read the version",
+                start="https://pypi.example/httpx",
+                fetch=True,
+                jev=counted.jev,
+                llm=counted.llm,
+                http=counted.http,
+            )
+        )
+        await asyncio.wait_for(planning.wait(), 10)
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run
+        # Python's `run_task` cancels the plan it began and joins it before the cancellation reaches the caller.
+        assert stopped == ["plan"]
