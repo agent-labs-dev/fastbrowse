@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- `--fetch` reads a task's pages over HTTP and starts no browser: the document is turned into the same capture blocks a browser capture produces, so reads, quotes and citations are unchanged, and a step that would click, fill, download or screenshot ends the run `blocked` naming why rather than failing a step. It is for a task that only has to read a page. On six public pages the read took a median 0.21s against 1.12s for starting Chrome, navigating and capturing the same page; a page whose text is a sliver of its markup, or that answers with a challenge, is refused as needing the browser, which is what Wikipedia did (HTTP 403) where Chrome passed.
+
 ## [0.7.2] - 2026-10-26
 
 - An answer finishes once code and Jev have checked it, without a second opinion from an LLM. Every quoted answer used to go through LLM source and assertion audits: two calls per answer check, often a second round, and a retry whenever the 512-token verdict ran out mid-reasoning. They were about two thirds of a run's model time, and they turned correct answers into `stuck` or `unverified`: a version cited without the "latest release" label beside it, a table total without proof that its four rows were all the rows.

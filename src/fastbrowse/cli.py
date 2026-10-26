@@ -192,6 +192,12 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         "--record", type=Path, metavar="FILE", help="save a video of the run, ending on its answer (needs ffmpeg)"
     )
     parser.add_argument(
+        "--fetch",
+        action="store_true",
+        help="read pages over HTTP with no browser: for a task that only has to read one (no clicking, forms or "
+        "screenshots; a step that needs the browser ends the run blocked)",
+    )
+    parser.add_argument(
         "--trace",
         metavar="FILE",
         default=None,
@@ -237,6 +243,27 @@ async def run(args: argparse.Namespace) -> int:
     settings = load_settings()
     if args.cloud and (args.headed or args.profile is not None):
         raise ConfigurationError("--cloud cannot be combined with --headed or --profile")
+    if args.fetch:
+        # No browser is started, so the flags that shape one are refused rather than resolved: a cloud key
+        # demanded for a browserless run would be a key never used.
+        for flag, asked in (
+            ("--cloud", args.cloud),
+            ("--local", args.local),
+            ("--headed", args.headed),
+            ("--profile", args.profile is not None),
+            ("--cloud-profile", args.cloud_profile is not None),
+            ("--cdp-url", args.cdp_url is not None),
+            ("--cdp-port", args.cdp_port is not None),
+            ("--attach", args.attach),
+            ("--target-match", args.target_match is not None),
+            ("--foreground", args.foreground),
+            ("--proxy-country", args.proxy_country is not None),
+            ("--record", args.record is not None),
+            ("--cursor", args.cursor),
+            ("--downloads", args.downloads is not None),
+        ):
+            if asked:
+                raise ConfigurationError(f"--fetch starts no browser, so it cannot be combined with {flag}")
     chrome = LocalChrome() if args.cloud else options.chrome(settings, args.headed, args.profile)
     handed_over = options.handed_over(
         args.cdp_url,
@@ -253,9 +280,9 @@ async def run(args: argparse.Namespace) -> int:
         args.task,
         start=args.start,
         browser_api_key=None
-        if handed_over
+        if args.fetch or handed_over
         else options.browser_key(settings, options.cloud(args.local, chrome, args.cloud_profile, args.proxy_country)),
-        chrome=chrome,
+        chrome=None if args.fetch else chrome,
         cloud_profile=args.cloud_profile,
         cdp_url=args.cdp_url,
         cdp_port=args.cdp_port,
@@ -270,6 +297,7 @@ async def run(args: argparse.Namespace) -> int:
         on_event=_print_step,
         record=args.record,
         cursor=args.cursor,
+        fetch=args.fetch,
     )
     if result.status is Status.NEEDS_LOGIN:
         error = (
