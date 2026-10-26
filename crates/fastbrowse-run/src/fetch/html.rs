@@ -11,7 +11,7 @@ use fastbrowse_core::py::text;
 const SKIPPED: [&str; 11] =
     ["script", "style", "noscript", "template", "svg", "canvas", "iframe", "object", "embed", "audio", "video"];
 /// Whether two runs of text belong to one block: a block-level tag ends one, an inline tag does not.
-const BLOCKS: [&str; 26] = [
+const BLOCKS: [&str; 27] = [
     "address",
     "article",
     "aside",
@@ -38,6 +38,7 @@ const BLOCKS: [&str; 26] = [
     "tbody",
     "tfoot",
     "thead",
+    "ul",
 ];
 /// Elements `HTMLParser` reads as raw text up to their own end tag, character references left as written.
 const RAW_TEXT: [&str; 6] = ["script", "style", "xmp", "iframe", "noembed", "noframes"];
@@ -315,6 +316,10 @@ fn tokens(source: &str) -> Vec<Token> {
 
 /// Where `</element` followed by a tag space, `/` or `>` begins, from `at`, ignoring ASCII case.
 fn raw_text_end(source: &str, at: usize, element: &str) -> Option<usize> {
+    // Nothing ends `<plaintext>`: the rest of the document is its text.
+    if element == "plaintext" {
+        return None;
+    }
     let bytes = source.as_bytes();
     let mut from = at;
     while let Some(offset) = source[from..].find("</") {

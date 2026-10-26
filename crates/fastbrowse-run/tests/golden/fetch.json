@@ -2978,6 +2978,32 @@
   ]
  },
  {
+  "name": "list-in-block",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<div>Before<ul></ul>After</div><plaintext><b>kept</b></plaintext>tail",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "Before",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "After",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "<b>kept</b></plaintext>tail",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
   "name": "unicode",
   "url": "https://shop.example.com/a/page.html",
   "html": "<h1>Caf\u00e9 \u2615</h1><p>na\u00efve \u2014 \u201cquoted\u201d \ud835\udd18</p>",

@@ -133,30 +133,38 @@ fn outside(url: &str, allowed_origins: Option<&[String]>, lead: &str) -> Result<
     }
 }
 
-/// The body decoded by the charset its response names, UTF-8 when it names none, as httpx decodes `response.text`.
-/// UTF-8 and windows-1252 (which WHATWG reads `latin1` and `ascii` as) are decoded; another charset is refused, as
-/// Python refuses one it has no codec for.
+/// The body decoded by the charset its response names, UTF-8 when it names none, as httpx decodes `response.text`
+/// with `errors="replace"`. UTF-8, Latin-1, cp1252 and ASCII are decoded as Python's codecs decode them; another
+/// charset is refused, as Python refuses one it has no codec for.
 fn decode(content_type: &str, body: &[u8]) -> Result<String, NotFetched> {
     let charset = content_type.split(';').skip(1).find_map(|parameter| {
         let (name, value) = parameter.split_once('=')?;
-        name.trim().eq_ignore_ascii_case("charset").then(|| value.trim().trim_matches(['"', '\'']).to_ascii_lowercase())
+        name.trim()
+            .eq_ignore_ascii_case("charset")
+            .then(|| value.trim().trim_matches(['"', '\'']).to_ascii_lowercase().replace(['-', ' '], "_"))
     });
-    match charset.as_deref() {
-        None | Some("utf-8" | "utf8" | "unicode-1-1-utf-8") => Ok(String::from_utf8_lossy(body).into_owned()),
-        Some(
-            "windows-1252" | "cp1252" | "x-cp1252" | "latin1" | "latin-1" | "iso-8859-1" | "iso8859-1" | "l1" | "ascii"
-            | "us-ascii",
-        ) => Ok(body.iter().map(|&byte| windows_1252(byte)).collect()),
-        Some(_) => Err(refused("the document's character set is not one this can decode")),
-    }
+    let decoded = match charset.as_deref() {
+        None | Some("utf_8" | "utf8" | "u8" | "utf") => String::from_utf8_lossy(body).into_owned(),
+        Some("latin_1" | "latin1" | "iso8859_1" | "iso_8859_1" | "l1" | "latin" | "8859" | "cp819") => {
+            body.iter().map(|&byte| char::from(byte)).collect()
+        }
+        Some("cp1252" | "windows_1252" | "1252") => body.iter().map(|&byte| cp1252(byte)).collect(),
+        Some("ascii" | "us_ascii" | "646") => body
+            .iter()
+            .map(|&byte| if byte.is_ascii() { char::from(byte) } else { char::REPLACEMENT_CHARACTER })
+            .collect(),
+        Some(_) => return Err(refused("the document's character set is not one this can decode")),
+    };
+    Ok(decoded)
 }
 
-fn windows_1252(byte: u8) -> char {
+/// Python's cp1252, whose five undefined bytes decode to U+FFFD under `errors="replace"`.
+fn cp1252(byte: u8) -> char {
     const HIGH: [char; 32] = [
-        '\u{20ac}', '\u{81}', '\u{201a}', '\u{192}', '\u{201e}', '\u{2026}', '\u{2020}', '\u{2021}', '\u{2c6}',
-        '\u{2030}', '\u{160}', '\u{2039}', '\u{152}', '\u{8d}', '\u{17d}', '\u{8f}', '\u{90}', '\u{2018}', '\u{2019}',
-        '\u{201c}', '\u{201d}', '\u{2022}', '\u{2013}', '\u{2014}', '\u{2dc}', '\u{2122}', '\u{161}', '\u{203a}',
-        '\u{153}', '\u{9d}', '\u{17e}', '\u{178}',
+        '\u{20ac}', '\u{fffd}', '\u{201a}', '\u{192}', '\u{201e}', '\u{2026}', '\u{2020}', '\u{2021}', '\u{2c6}',
+        '\u{2030}', '\u{160}', '\u{2039}', '\u{152}', '\u{fffd}', '\u{17d}', '\u{fffd}', '\u{fffd}', '\u{2018}',
+        '\u{2019}', '\u{201c}', '\u{201d}', '\u{2022}', '\u{2013}', '\u{2014}', '\u{2dc}', '\u{2122}', '\u{161}',
+        '\u{203a}', '\u{153}', '\u{fffd}', '\u{17e}', '\u{178}',
     ];
     match byte {
         0x80..=0x9f => HIGH[usize::from(byte - 0x80)],
@@ -173,7 +181,8 @@ pub async fn fetch_capture(
 ) -> Result<Capture, NotFetched> {
     eligible(url, allowed_origins)?;
     let headers = [("accept".to_string(), "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8".to_string())];
-    let mut target = url.to_string();
+    // Sent as WHATWG serializes it, the address the capture reports: hyper takes no space or non-ASCII path.
+    let mut target = url::Url::parse(url).map_or_else(|_| url.to_string(), String::from);
     let mut hops = 0;
     // Followed here rather than by the client: a redirect to an origin outside the grant has to be refused before it
     // is sent, not after the request arrived. The body is read only up to one byte past the bound, so a long document
@@ -201,6 +210,10 @@ pub async fn fetch_capture(
     }
     if response.body.len() > MAX_BYTES {
         return Err(refused(format!("the document is past {MAX_BYTES} bytes, more than a text read takes")));
+    }
+    // Nothing here asks for compression, so a body sent compressed anyway is not text this can read.
+    if response.header("content-encoding").is_some_and(|coding| !coding.trim().eq_ignore_ascii_case("identity")) {
+        return Err(refused("the response is compressed, which a browserless read does not decode"));
     }
     let content_type = response.header("content-type").unwrap_or_default();
     let mime = content_type.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();

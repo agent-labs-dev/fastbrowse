@@ -29,18 +29,21 @@ EDGES = {
     "self-closing": "<p>a<br/>b<div/>c</p><h2/>d",
     "hidden": "<div hidden>no</div><p style='DISPLAY : none'>no</p><p style='visibility:hidden'>no</p><p>yes</p>",
     "hidden-void": "<p>yes</p><input hidden><p>after a hidden void element</p>",
-    "nested-table": "<table><tr><th>a</th><td>b<table><tr><td>c</td></tr></table></td></tr><tr><td>x|y</td></tr></table>",
+    "nested-table": (
+        "<table><tr><th>a</th><td>b<table><tr><td>c</td></tr></table></td></tr><tr><td>x|y</td></tr></table>"
+    ),
     "table-no-header": "<h3>T</h3><table><tr><td>1</td><td><img alt=' flag  '></td></tr></table>",
     "headings": "<h1>One</h1><p>a</p><h3>Three</h3><p>b</p><h2>Two</h2><p>c</p><h2></h2><p>d</p>",
     "pre": "<pre>\n\n  line one\n    line two  \n\n</pre><pre>   </pre>",
     "links": "<p>see <a href='/x'>x</a></p><a href='https://other.example/y'> whole </a><a href=''>empty</a>",
-    "whitespace": "<p>  a \t b\r\n\n\n\n c   d  </p>",
+    "whitespace": "<p>  a \t b\r\n\n\n\n c \u00a0 d  </p>",
     "uppercase": "<DIV CLASS=gone>x</DIV><STYLE>.GONE{display:none}</STYLE><P CLASS=GONE>hidden</P>",
-    "attributes-odd": "<p class=\"a\"title='t'data-x = 1 / >odd</p><p =x>eq</p><p \"q\">quoted</p>",
+    "attributes-odd": '<p class="a"title=\'t\'data-x = 1 / >odd</p><p =x>eq</p><p "q">quoted</p>',
     "lone-lt": "<p>1 < 2 and 3 <3 4 <</p>",
     "cdata": "<p>a<![CDATA[ x > y ]]>b</p><!doctype html><?pi x?>",
     "style-in-hidden": "<div hidden><style>.k{display:none}</style></div><p class=k>k</p><p>after</p>",
-    "unicode": "<h1>Café ☕</h1><p>naïve — “quoted” 𝔘</p>",
+    "list-in-block": "<div>Before<ul></ul>After</div><plaintext><b>kept</b></plaintext>tail",
+    "unicode": "<h1>Caf\u00e9 \u2615</h1><p>na\u00efve \u2014 \u201cquoted\u201d \U0001d518</p>",
 }
 
 
@@ -52,10 +55,13 @@ def case(name: str, html: str) -> dict:
         "html": html,
         "title": title,
         "blocks": [
-            {"kind": b.kind.value, "text": b.text, "heading_path": list(b.heading_path), "href": b.href}
-            for b in blocks
+            {"kind": b.kind.value, "text": b.text, "heading_path": list(b.heading_path), "href": b.href} for b in blocks
         ],
     }
+
+
+def _name(path: Path) -> str:
+    return str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else path.name
 
 
 def main() -> None:
@@ -66,7 +72,7 @@ def main() -> None:
         out = HERE / "fetch.json"
         listed = subprocess.run(["git", "ls-files", "*.html"], cwd=ROOT, capture_output=True, text=True, check=True)
         files = [ROOT / p for p in sorted(listed.stdout.split())]
-    cases = [case(str(f.relative_to(ROOT) if f.is_relative_to(ROOT) else f.name), f.read_text("utf-8", errors="replace")) for f in files]
+    cases = [case(_name(f), f.read_text("utf-8", errors="replace")) for f in files]
     if len(sys.argv) <= 2:
         cases += [case(name, html) for name, html in EDGES.items()]
     out.write_text(json.dumps(cases, indent=1, ensure_ascii=True) + "\n", encoding="utf-8")

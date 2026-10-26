@@ -222,15 +222,39 @@ async fn test_a_body_past_the_size_bound_is_refused() {
 }
 
 #[tokio::test]
-async fn test_a_charset_is_decoded_or_refused() {
-    let latin = client("<p>caf\u{e9}</p>", 200, "text/html");
-    let bytes = serving(|_| {
-        Response::new(200, b"<p>caf\xe9 \x80</p>".to_vec()).with_header("content-type", "text/html; charset=ISO-8859-1")
+async fn test_a_charset_is_decoded_as_python_decodes_it_or_refused() {
+    let bytes = |charset: &'static str| {
+        serving(move |_| {
+            Response::new(200, b"<p>caf\xe9 \x80\x81</p>".to_vec())
+                .with_header("content-type", &format!("text/html; charset={charset}"))
+        })
+    };
+    let read = |http: Http| async move { fetched(&http, "https://a.example/").await.map(|capture| capture.text) };
+    assert_eq!(read(html("<p>caf\u{e9}</p>")).await.unwrap(), "caf\u{e9}\n\n");
+    assert_eq!(read(bytes("ISO-8859-1")).await.unwrap(), "caf\u{e9} \u{80}\u{81}\n\n");
+    assert_eq!(read(bytes("windows-1252")).await.unwrap(), "caf\u{e9} \u{20ac}\u{fffd}\n\n");
+    assert_eq!(read(bytes("us-ascii")).await.unwrap(), "caf\u{fffd} \u{fffd}\u{fffd}\n\n");
+    assert!(read(bytes("shift_jis")).await.unwrap_err().0.contains("character set"));
+}
+
+#[tokio::test]
+async fn test_an_address_is_sent_as_whatwg_serializes_it() {
+    let http = serving(|request| {
+        Response::new(200, format!("<p>{}</p>", request.url)).with_header("content-type", "text/html")
     });
-    assert_eq!(fetched(&latin, "https://a.example/").await.expect("utf-8").text, "caf\u{e9}\n\n");
-    assert_eq!(fetched(&bytes, "https://a.example/").await.expect("latin-1").text, "caf\u{e9} \u{20ac}\n\n");
-    let other = client("<p>x</p>", 200, "text/html; charset=shift_jis");
-    assert!(fetched(&other, "https://a.example/").await.unwrap_err().0.contains("character set"));
+    let capture = fetched(&http, "https://a.example/caf\u{e9} menu").await.expect("fetched");
+    assert_eq!(capture.text, "https://a.example/caf%C3%A9%20menu\n\n");
+    assert_eq!(capture.url, "https://a.example/caf%C3%A9%20menu");
+}
+
+#[tokio::test]
+async fn test_a_compressed_body_is_refused_rather_than_quoted() {
+    let http = serving(|_| {
+        Response::new(200, vec![0x1f, 0x8b, 0x08])
+            .with_header("content-type", "text/plain")
+            .with_header("content-encoding", "gzip")
+    });
+    assert!(fetched(&http, "https://a.example/").await.unwrap_err().0.contains("compressed"));
 }
 
 #[tokio::test]
