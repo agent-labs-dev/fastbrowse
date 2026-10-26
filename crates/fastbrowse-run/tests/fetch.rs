@@ -249,7 +249,8 @@ async fn test_an_address_is_sent_as_whatwg_serializes_it() {
 
 #[tokio::test]
 async fn test_a_compressed_body_is_refused_rather_than_quoted() {
-    let http = serving(|_| {
+    let http = serving(|request| {
+        assert_eq!(request.header("accept-encoding"), Some("identity"), "the request asks for no compression");
         Response::new(200, vec![0x1f, 0x8b, 0x08])
             .with_header("content-type", "text/plain")
             .with_header("content-encoding", "gzip")

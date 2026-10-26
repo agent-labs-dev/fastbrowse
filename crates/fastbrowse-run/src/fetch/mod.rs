@@ -180,7 +180,11 @@ pub async fn fetch_capture(
     seconds: f64,
 ) -> Result<Capture, NotFetched> {
     eligible(url, allowed_origins)?;
-    let headers = [("accept".to_string(), "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8".to_string())];
+    // httpx decodes gzip and deflate; this reads only what arrives uncompressed, so it says so (RFC 9110 12.5.3).
+    let headers = [
+        ("accept".to_string(), "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8".to_string()),
+        ("accept-encoding".to_string(), "identity".to_string()),
+    ];
     // Sent as WHATWG serializes it, the address the capture reports: hyper takes no space or non-ASCII path.
     let mut target = url::Url::parse(url).map_or_else(|_| url.to_string(), String::from);
     let mut hops = 0;
@@ -211,7 +215,7 @@ pub async fn fetch_capture(
     if response.body.len() > MAX_BYTES {
         return Err(refused(format!("the document is past {MAX_BYTES} bytes, more than a text read takes")));
     }
-    // Nothing here asks for compression, so a body sent compressed anyway is not text this can read.
+    // The request asked for no compression, so a body sent compressed anyway is not text this can read.
     if response.header("content-encoding").is_some_and(|coding| !coding.trim().eq_ignore_ascii_case("identity")) {
         return Err(refused("the response is compressed, which a browserless read does not decode"));
     }
