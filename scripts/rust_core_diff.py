@@ -1,6 +1,6 @@
 """Where the Rust core (WHATWG URL, UTS #46) and the Python modules (urlsplit, IDNA 2003) disagree, by cause.
 
-An opt-in report, not a test: the two are meant to differ. Needs `fastbrowse_native` installed.
+An opt-in report, not a test: the two are meant to differ. Needs the `fastbrowse._native` module `uv sync` builds.
 
     uv run --inexact python scripts/rust_core_diff.py [--examples N]
 
@@ -20,7 +20,7 @@ from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
-import fastbrowse_native as native
+from fastbrowse import _native as native  # ty: ignore[unresolved-import]
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "fastbrowse"
 

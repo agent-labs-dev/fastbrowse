@@ -22,6 +22,9 @@ uv sync --all-extras
 uv run pre-commit install
 ```
 
+`uv sync` builds the package's Rust core, `fastbrowse._native`, so it needs a Rust toolchain: install
+[rustup](https://rustup.rs), and it reads the pinned version from `rust-toolchain.toml`.
+
 Run the gate before you push. CI runs the same checks, and `main` requires them:
 
 ```sh

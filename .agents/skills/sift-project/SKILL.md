@@ -63,7 +63,7 @@ gitleaks detect --source . --no-banner --redact
 ## Live roots
 
 - `fastbrowse.run_task`, package exports, public Pydantic models and callback protocols are consumed by embedders.
-- `pyproject.toml` registers `fastbrowse.cli:main` and `fastbrowse.mcp_server:main` console scripts.
+- `pyproject.toml` registers `fastbrowse.commands:fastbrowse` and `fastbrowse.commands:fastbrowse_mcp` console scripts, which run `fastbrowse.cli:main` and `fastbrowse.mcp_server:main`, or the Rust CLI in `fastbrowse._native`.
 - `fastbrowse serve` is reached through `cli.main`; `fastbrowse.protocol` models are the wire the npm SDK reads.
 - `packages/sdk/src/index.ts` exports are the npm package's public API. `fastbrowse.scripted` is named at run
   time by `serve --run-task` in the smoke scripts and is a hidden import of the frozen build.

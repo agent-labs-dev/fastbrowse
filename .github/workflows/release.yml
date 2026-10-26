@@ -1,6 +1,6 @@
 name: Release
-# One tag publishes one version to PyPI and to npm. Nothing is published until the wheel and the five binaries
-# have all passed, and then in an order that never leaves a package pointing at one that is not there yet:
+# One tag publishes one version to PyPI and to npm. Nothing is published until the sdist, the five wheels and the
+# five binaries have all passed, and then in an order that never leaves a package pointing at one that is not there yet:
 # PyPI, the five platform packages, the SDK.
 #
 # A tag runs the fixture suites itself, before anything is published: the release carries its own proof that the
@@ -42,10 +42,8 @@ jobs:
         run: echo "version=$(uv version --short)" >> "$GITHUB_OUTPUT"
       # The tag is the Python version, and every npm version is published from it.
       - run: uv run python scripts/npm_versions.py
-      - run: uv build
-      # Install the wheel alone, outside the checkout, before anything is published: a module or data file
-      # (snapshot.js is read at import) missing from the wheel fails here instead of on users' machines.
-      - run: uv run --isolated --no-project --with dist/*.whl python -c "import fastbrowse.browser.page, fastbrowse.cli"
+      # The sdist here; the wheels are one per platform, built and smoke-tested by the binaries workflow.
+      - run: uv build --sdist
       # The release notes ARE the changelog entry, so the GitHub release, the repository and the site all
       # say the same thing about a version. A tag whose version has no entry fails here rather than
       # publishing notes nobody wrote.
@@ -119,6 +117,11 @@ jobs:
           path: dist/
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: wheel-*
+          path: dist/
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
           name: notes
           path: notes/
       - run: gh release create "$GITHUB_REF_NAME" dist/* --notes-file notes/notes.md --verify-tag
@@ -138,6 +141,11 @@ jobs:
         with:
           name: dist
           path: dist/
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: wheel-*
+          path: dist/
+          merge-multiple: true
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
 
   # The six npm packages, by trusted publishing as PyPI is: npm accepts this job's OIDC identity for each

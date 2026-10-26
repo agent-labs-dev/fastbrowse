@@ -126,12 +126,10 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # Builds the package and its Rust core, `fastbrowse._native`.
       - run: uv sync --locked --all-extras
-      - run: uvx maturin==1.15.0 build --release --locked -m crates/fastbrowse-py/Cargo.toml -i .venv/bin/python --out target/wheels
-      - run: uv pip install target/wheels/fastbrowse_native-*.whl
       # The browser suites go last and together: pytest collecting a file outside tests/browser between two inside it
       # loses the fixtures tests/browser/conftest.py gives the later one.
-      # `uv run` without --no-sync would sync the environment exactly and uninstall the module just installed.
       - env: {FASTBROWSE_RUST_CORE: "1"}
         run: >-
           uv run --no-sync pytest -q tests/test_citations.py tests/test_page.py tests/test_safety.py

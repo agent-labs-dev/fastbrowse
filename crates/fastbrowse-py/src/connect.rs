@@ -24,7 +24,7 @@ use serde::de::DeserializeOwned;
 use crate::host::awaitable;
 
 pyo3::create_exception!(
-    fastbrowse_native,
+    fastbrowse._native,
     PageFailed,
     PyException,
     "A browser failure: `args` is the Python class it stands for and its message."

@@ -13,11 +13,11 @@ from fastbrowse.run import connect_cdp
 from tests.browser.conftest import RecordingArtifactSink
 
 try:
-    NATIVE = hasattr(importlib.import_module("fastbrowse_native"), "connect_cdp")
+    NATIVE = hasattr(importlib.import_module("fastbrowse._native"), "connect_cdp")
 except ImportError:
     NATIVE = False
 
-pytestmark = pytest.mark.skipif(not NATIVE, reason="fastbrowse_native with connect_cdp is not installed")
+pytestmark = pytest.mark.skipif(not NATIVE, reason="fastbrowse._native with connect_cdp is not installed")
 
 
 async def read(cdp_url: str, url: str) -> dict[str, object]:

@@ -306,7 +306,7 @@ async def run_task(
     is refused as needing a browser. Browser, recording, download and cursor options mean nothing here and
     are an error rather than ignored.
 
-    With `FASTBROWSE_RUST_CORE=1` and `fastbrowse_native` installed, the run goes to the Rust core in this process,
+    With `FASTBROWSE_RUST_CORE=1`, the run goes to the Rust core in this process,
     every argument with it (`fastbrowse.native`).
     """
     if os.environ.get("FASTBROWSE_RUST_CORE") == "1":

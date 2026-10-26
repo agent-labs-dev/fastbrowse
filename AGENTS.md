@@ -16,7 +16,7 @@ assumption checked against Typesafe's documentation.
 ## Commands
 
 ```sh
-uv sync --all-extras          # the browser-use SDK and the mcp extra too, which ty checks
+uv sync --all-extras          # the browser-use SDK and the mcp extra too, which ty checks; builds the Rust core (cargo)
 uv run fastbrowse "..." --start https://example.com/
 uv run fastbrowse-mcp         # the MCP server, stdio
 uv run fastbrowse serve --stdio   # JSON-RPC for another process; the JavaScript SDK starts this
@@ -41,7 +41,7 @@ npm run check:sdk                                   # starts `fastbrowse serve` 
 uv run actionlint
 uv run python .sift/agents.py check
 uv run python .sift/gate.py --base origin/main
-just rust                                           # the Rust workspace (docs/adr/0001); needs cargo and just
+just rust                                           # the Rust workspace (docs/adr/0001, 0004); needs cargo and just
 ```
 
 `uv run pre-commit install` runs ruff and ty before each commit; the hook versions and the pinned tools move
