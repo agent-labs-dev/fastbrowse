@@ -30,7 +30,7 @@ pyo3::create_exception!(
     fastbrowse_native,
     RunRefused,
     PyException,
-    "A run that ended without a result: `args` is why (`invalid`, `configuration`, `cancelled` or `callback`) and \
+    "A run that ended without a result: `args` is why (`invalid`, `configuration`, `recording`, `cancelled` or `callback`) and \
      the message."
 );
 
@@ -289,6 +289,7 @@ fn run_task(
                             Err(RunError::Cancelled) => Some(refused("cancelled", "the run was cancelled".into())),
                             Err(RunError::Invalid(message)) => Some(refused("invalid", message.clone())),
                             Err(RunError::Configuration(message)) => Some(refused("configuration", message.clone())),
+                            Err(RunError::Recording(message)) => Some(refused("recording", message.clone())),
                         };
                         if let Some(error) = error {
                             result.call_method1("set_exception", (error.value(py),))?;
