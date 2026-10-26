@@ -3,11 +3,15 @@ pkgbase = fastbrowse
 	pkgver = 0.7.1
 	pkgrel = 1
 	url = https://github.com/agent-labs-dev/fastbrowse
-	arch = any
+	arch = x86_64
+	arch = aarch64
 	license = MIT
 	makedepends = python-build
 	makedepends = python-hatchling
 	makedepends = python-installer
+	makedepends = python-maturin
+	makedepends = rust
+	options = !lto
 	depends = python>=3.13
 	depends = python-h2
 	depends = python-httpx>=0.28.1

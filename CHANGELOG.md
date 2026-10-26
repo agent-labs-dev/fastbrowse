@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- The Arch package builds the Rust core from the sdist with cargo and maturin, so it is now one package per architecture (`x86_64`, `aarch64`) rather than `any`.
+
 - **The Rust core is the default.** `run_task`, `connect_cdp`, `fastbrowse`, `fastbrowse serve` and `fastbrowse-mcp` run on it, and the npm packages ship the Rust binary and the Node addon instead of the frozen Python package. On the fixture suites it reaches the same results as the Python core on all 36 tasks, from the same model responses, with 18x less agent CPU, 54x faster startup and 5x less memory ([bench/results/rust-vs-python.md](bench/results/rust-vs-python.md)). `FASTBROWSE_PYTHON_CORE=1` runs the Python core instead, for this release only: 0.9.0 removes it ([ADR 0004](docs/adr/0004-rust-core-by-default.md)). `FASTBROWSE_RUST_CORE` is gone. The fixture eval suites now run through `run_task`, so they measure the core the package runs.
 
 - The `fastbrowse` package on PyPI carries the Rust core as `fastbrowse._native`. It ships as one wheel per platform (macOS arm64 and x64, Linux x64 and arm64, Windows x64), each serving CPython 3.13 and later, instead of one pure-Python wheel, and you no longer install a separate `fastbrowse-native` build. Installing from the sdist needs a Rust toolchain. With `FASTBROWSE_RUST_CORE=1` the `fastbrowse` and `fastbrowse-mcp` commands run the Rust CLI in-process, and `fastbrowse-mcp` then works without the `mcp` extra. The Python core is still the default ([ADR 0004](docs/adr/0004-rust-core-by-default.md)).
