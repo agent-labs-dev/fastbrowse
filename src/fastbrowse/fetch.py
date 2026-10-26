@@ -100,7 +100,8 @@ _WALLS = re.compile(
 # carries far more words than an empty template, and the browser is the only reader of what scripts build.
 _MIN_TEXT_SHARE = 0.01
 _HIDDEN_STYLE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.IGNORECASE)
-_MIN_TEXT_CHARS = 120
+# A page carrying this much text is not a wall telling the reader to turn scripts on.
+_LITTLE_TEXT_CHARS = 480
 # A redirect chain longer than this is a loop or a tracker maze, and the browser is the reader for both.
 _MAX_REDIRECTS = 10
 # The smallest text a fetched document needs before it is treated as the page itself rather than a stub.
@@ -117,6 +118,19 @@ class NeedsBrowser(Unavailable):
     Not a `BrowserError`: that one is a browser that failed, and the loop turns it into a failed step. This
     one ends the run as blocked, because nothing failed and no second attempt helps.
     """
+
+
+def _hidden_classes(rules: str) -> set[str]:
+    """Class names a stylesheet rule hides, such as `.gone { display: none }`.
+
+    Not a renderer: it reads the plain class rules a page uses to keep a template, an alternate layout or a
+    stale value off the screen, and nothing that depends on a cascade it cannot compute.
+    """
+    names: set[str] = set()
+    for selector, declaration in re.findall(r"([^{}]+)\{([^{}]*)\}", rules):
+        if _HIDDEN_STYLE.search(declaration):
+            names.update(re.findall(r"\.([A-Za-z_-][\w-]*)", selector))
+    return names
 
 
 def clean(text: str) -> str:
@@ -173,11 +187,18 @@ class _Reader(HTMLParser):
         self._cell_header = False
         self._header_row: int | None = None
         self._hidden: list[str] = []
+        self._hidden_classes: set[str] = set()
+        self._style: list[str] | None = None
 
     # -- the text of the document ---------------------------------------------------------------------
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = {name: value or "" for name, value in attrs}
+        if tag == "style":
+            # Kept rather than skipped: a rule that hides a class is the page saying a subtree is not shown.
+            self._style = []
+            self._skip += 1
+            return
         if tag in _SKIPPED:
             self._skip += 1
             return
@@ -186,7 +207,11 @@ class _Reader(HTMLParser):
         if tag == "title":
             self._in_title = True
             return
-        if "hidden" in attributes or _HIDDEN_STYLE.search(attributes.get("style", "")):
+        if (
+            "hidden" in attributes
+            or _HIDDEN_STYLE.search(attributes.get("style", ""))
+            or self._hidden_classes.intersection(attributes.get("class", "").split())
+        ):
             # A browser never renders this subtree, so a value it holds is not one the user can see or quote.
             self._hidden.append(tag)
             self._skip += 1
@@ -229,6 +254,11 @@ class _Reader(HTMLParser):
             self._flush()
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "style" and self._style is not None:
+            self._skip = max(0, self._skip - 1)
+            self._hidden_classes.update(_hidden_classes("".join(self._style)))
+            self._style = None
+            return
         if self._hidden and tag == self._hidden[-1]:
             self._hidden.pop()
             self._skip = max(0, self._skip - 1)
@@ -275,6 +305,9 @@ class _Reader(HTMLParser):
             self._flush()
 
     def handle_data(self, data: str) -> None:
+        if self._style is not None:
+            self._style.append(data)
+            return
         if self._in_title:
             self.title += data
             return
@@ -423,6 +456,30 @@ def eligible(url: str, allowed_origins: tuple[str, ...] | None) -> None:
         raise NotFetched(f"{origin_of(url)} is outside the origins this run may read")
 
 
+async def _read(client: httpx.AsyncClient, url: str, seconds: float) -> tuple[httpx.Response, bytes]:
+    """`url`'s response and body, read as it arrives rather than after it has all landed.
+
+    A response past the size bound is refused as soon as it passes it, so a long document, or a body that
+    decodes to far more than it was sent as, cannot fill memory before the refusal is reached.
+    """
+    headers = {"accept": "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8"}
+    # Followed here rather than by the client: a redirect to an origin outside the grant has to be refused
+    # before it is sent, not after the request arrived.
+    async with client.stream("GET", url, follow_redirects=False, timeout=seconds, headers=headers) as response:
+        if response.is_redirect:
+            return response, b""
+        if response.status_code >= 400:
+            raise NotFetched(f"the fetch got HTTP {response.status_code}")
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            if total > _MAX_BYTES:
+                raise NotFetched(f"the document is past {_MAX_BYTES} bytes, more than a text read takes")
+            chunks.append(chunk)
+        return response, b"".join(chunks)
+
+
 async def fetch_capture(
     client: httpx.AsyncClient,
     url: str,
@@ -435,14 +492,7 @@ async def fetch_capture(
     target = url
     try:
         for _hop in range(_MAX_REDIRECTS):
-            response = await client.get(
-                target,
-                # Followed here rather than by the client: a redirect to an origin outside the grant has to be
-                # refused before it is sent, not after the request arrived.
-                follow_redirects=False,
-                timeout=seconds,
-                headers={"accept": "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8"},
-            )
+            response, body = await _read(client, target, seconds)
             location = response.headers.get("location")
             if not response.is_redirect or not location:
                 break
@@ -454,11 +504,6 @@ async def fetch_capture(
         # A name that does not resolve is the caller's address, not an outage; either way the message is
         # all a run may report, and it never carries page text.
         raise NotFetched(f"the fetch failed: {type(exc).__name__}") from exc
-    if response.status_code >= 400:
-        raise NotFetched(f"the fetch got HTTP {response.status_code}")
-    body = response.content
-    if len(body) > _MAX_BYTES:
-        raise NotFetched(f"the document is {len(body)} bytes, past what a text read takes")
     mime = _mime(response)
     final = str(response.url)
     if allowed_origins is not None and origin_of(final) not in allowed_origins:
@@ -475,11 +520,12 @@ async def fetch_capture(
         raise NotFetched(f"{mime or 'the response'} is not a document read as text")
     title, blocks = _blocks(text, final)
     readable = sum(len(found.text) for found in blocks)
-    if _WALLS.search(text[:20_000]) and readable < _MIN_TEXT_CHARS * 4:
+    if _WALLS.search(text[:20_000]) and readable < _LITTLE_TEXT_CHARS:
         raise NotFetched("the page is a bot check or an empty shell that scripts fill")
-    if readable < max(_MIN_TEXT_CHARS, int(len(text) * _MIN_TEXT_SHARE)):
-        # A page whose markup is scripts and styles has nothing to quote: the browser is the only
-        # reader of what they build, and reading the shell as the page would answer from nothing.
+    if not readable or readable < int(len(text) * _MIN_TEXT_SHARE):
+        # A page whose markup is scripts and styles has nothing to quote: the browser is the only reader of
+        # what they build, and reading the shell as the page would answer from nothing. A genuinely short
+        # document passes, because its text is most of its markup however few characters that is.
         raise NotFetched("the page renders its content with scripts, so the markup holds no readable text")
     return _capture(final, response.status_code, title, blocks)
 
@@ -516,8 +562,7 @@ class FetchedPage:
         return ()
 
     async def navigate(self, url: str, *, back_to: str | None = None) -> None:
-        if self._check_access is not None:
-            await self._check_access()
+        await self._gate()
         try:
             capture = await fetch_capture(self._client, url, allowed_origins=self._origins, seconds=self._timeout)
         except NotFetched as exc:
@@ -530,7 +575,13 @@ class FetchedPage:
         self._status = None
         self._generation += 1
 
+    async def _gate(self) -> None:
+        """The caller's gate, asked again: permission can be withdrawn while the run is reading."""
+        if self._check_access is not None:
+            await self._check_access()
+
     async def observe(self) -> Observation:
+        await self._gate()
         capture = self._loaded()
         return Observation(
             url=capture.url,
@@ -551,9 +602,11 @@ class FetchedPage:
         return self._capture is None or self._capture.sha256 != observation.page_key
 
     async def capture(self) -> Capture:
+        await self._gate()
         return self._loaded()
 
     async def act(self, action: Action, observation: Observation) -> ActResult:
+        await self._gate()
         raise NeedsBrowser(
             "this run reads pages over HTTP and has no controls to act on; "
             "run it again without fetch mode to use a browser"
@@ -564,6 +617,7 @@ class FetchedPage:
         return False
 
     async def screenshot(self) -> bytes:
+        await self._gate()
         raise NeedsBrowser("a browserless run renders no pixels, so it has no screenshot to take")
 
     def withhold_frames(self, withheld: bool) -> None:
@@ -578,6 +632,7 @@ class FetchedPage:
         return False
 
     async def address(self) -> str:
+        await self._gate()
         return self._loaded().url
 
     async def response_status(self) -> int | None:

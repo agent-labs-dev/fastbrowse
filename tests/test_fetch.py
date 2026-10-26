@@ -156,3 +156,47 @@ async def test_a_fetched_page_reads_but_cannot_act() -> None:
             await page.act(Action(operation=Operation.CLICK, target_id="1"), observation)
         with pytest.raises(NeedsBrowser, match="no pixels"):
             await page.screenshot()
+
+
+def test_a_class_a_rule_hides_is_not_read() -> None:
+    page = """<html><head><style>.gone { display: none } .kept { color: red }</style></head>
+    <body><p>Shown price: 10.00</p><p class="gone">Old price: 99.00</p><p class="kept">Note: read</p></body></html>"""
+    _title, blocks = _blocks(page, "https://shop.example.com/orders")
+    texts = [block.text for block in blocks]
+
+    assert "Shown price: 10.00" in texts
+    # A template or a stale value the page does not display is not evidence a reader can quote.
+    assert not any("99.00" in text for text in texts)
+    assert any("Note: read" in text for text in texts)
+
+
+async def test_a_genuinely_short_document_is_read() -> None:
+    page = "<html><body><h1>Status</h1><p>All systems are up.</p></body></html>"
+    async with client(page) as http:
+        capture = await fetch_capture(http, "https://status.example.com/")
+    assert "All systems are up." in capture.text
+
+
+async def test_a_body_past_the_size_bound_is_refused_as_it_arrives() -> None:
+    async with client("<html><body>" + "a" * (6 * 1024 * 1024) + "</body></html>") as http:
+        with pytest.raises(NotFetched, match="past"):
+            await fetch_capture(http, "https://shop.example.com/huge")
+
+
+async def test_access_withdrawn_after_the_navigation_stops_the_read() -> None:
+    allowed = True
+
+    async def gate() -> None:
+        if not allowed:
+            raise RuntimeError("withdrawn")
+
+    async with client(PAGE) as http:
+        page = FetchedPage(http, check_access=gate)
+        await page.navigate("https://shop.example.com/orders")
+        assert await page.observe() is not None
+
+        allowed = False
+        with pytest.raises(RuntimeError, match="withdrawn"):
+            await page.observe()
+        with pytest.raises(RuntimeError, match="withdrawn"):
+            await page.capture()
