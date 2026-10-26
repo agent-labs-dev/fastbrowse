@@ -1,10 +1,11 @@
-"""Refuse a release without the Evals run it needs.
+"""Refuse a release without the fixture suites green on the build it ships.
 
-Every release needs the Evals workflow green on its exact commit on the default branch. A release that commits
-`docs/results/<version>.jsonl` claims a measured comparison and needs more: the measured build must be in its
-history and run byte-identical executable code. This runs before the tag creates the GitHub release or PyPI
-publishes the wheel, so agent code cannot ship on a red fixture gate and a comparison cannot be shipped on code
-nobody ran.
+Every release needs the fixture suites green on its exact commit. The release workflow runs them itself on the
+tag and says so with `--evals-ran-here`; a guard run anywhere else looks for a green Evals workflow run on that
+commit instead. A release that commits `docs/results/<version>.jsonl` claims a measured comparison and needs
+more: the measured build must be in its history and run byte-identical executable code. This runs before the
+tag creates the GitHub release or PyPI publishes the wheel, so agent code cannot ship on a red fixture gate and
+a comparison cannot be shipped on code nobody ran.
 
 The comparison's evidence commit may follow the clean build it measures, but only documentation may: the
 measured commit must be an ancestor of the tag and every tracked file that runs, builds or measures the evals
@@ -15,6 +16,7 @@ refuses a dispatch under three repeats and judges every fixture task at 100% bef
 The GitHub queries are read-only and need no repository secret.
 
     GH_TOKEN=... uv run python scripts/release_guard.py 0.5.19
+    uv run python scripts/release_guard.py 0.5.19 --evals-ran-here   # this workflow already ran them
 """
 
 import argparse
@@ -151,7 +153,15 @@ def _publication_problems(version: str, root: Path = ROOT) -> list[str]:
 publication_problems = _publication_problems
 
 
-def problems(version: str, head: str, repository: str, token: str, root: Path = ROOT) -> list[str]:
+def problems(
+    version: str,
+    head: str,
+    repository: str,
+    token: str,
+    root: Path = ROOT,
+    *,
+    evals_ran_here: bool = False,
+) -> list[str]:
     """Every reason this release may not be published; empty when it may."""
     issues: list[str] = []
     # Every release, not only one that publishes a comparison, needs the Evals workflow green on its exact
@@ -159,7 +169,9 @@ def problems(version: str, head: str, repository: str, token: str, root: Path = 
     # not passed. A malformed build fails closed rather than querying a commit that is not a full sha.
     if not _HEX40.fullmatch(head):
         return [f"release build {head!r} is not a full 40-hex commit sha"]
-    if not _evals_green(repository, head, token):
+    # The release workflow runs the suites in a job this guard waits on, so its green result is the fixture
+    # evidence; asking GitHub for a separately dispatched run would refuse a tag that ran them itself.
+    if not evals_ran_here and not _evals_green(repository, head, token):
         issues.append(f"no successful {WORKFLOW} run on the release build {head[:12]}")
     rows = comparison_rows(version, root)
     if rows is None:
@@ -198,18 +210,30 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY", DEFAULT_REPOSITORY))
     parser.add_argument("--token", default=os.environ.get("GH_TOKEN"), help="a read-only token; defaults to GH_TOKEN")
+    parser.add_argument(
+        "--evals-ran-here",
+        action="store_true",
+        help="the fixture suites ran green on this build in this same workflow run, so no earlier run is looked for",
+    )
     args = parser.parse_args(argv)
     if not args.version:
         parser.error("a version is required")
-    # The green Evals run is required for every release, so the commit and token are needed even with no results.
+    # Green fixture suites are required for every release, so the commit is needed even with no results, and so
+    # is a token whenever they have to be looked up rather than reported by the job that just passed them.
     if not args.head:
         print("no release commit: run from the release workflow or pass --head")
         return 1
-    if not args.token:
+    if not args.evals_ran_here and not args.token:
         print("no GitHub token: set GH_TOKEN to read the workflow runs")
         return 1
     try:
-        issues = problems(args.version, args.head, args.repository, args.token)
+        issues = problems(
+            args.version,
+            args.head,
+            args.repository,
+            args.token,
+            evals_ran_here=args.evals_ran_here,
+        )
     except RuntimeError as exc:
         print(str(exc))
         return 1
@@ -217,10 +241,11 @@ def main(argv: list[str] | None = None) -> int:
         print("\n".join(issues))
         print(f"REFUSED the release of {args.version}")
         return 1
+    evidence = "ran the fixture suites green here" if args.evals_ran_here else f"has a successful {WORKFLOW} run"
     if comparison_rows(args.version) is None:
-        print(f"PASS {args.version} has a successful {WORKFLOW} run on the release build")
+        print(f"PASS {args.version} {evidence} on the release build")
         return 0
-    print(f"PASS {args.version} has a successful {WORKFLOW} run on code in its history")
+    print(f"PASS {args.version} {evidence} on code in its history")
     return 0
 
 

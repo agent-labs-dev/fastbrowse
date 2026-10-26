@@ -5,7 +5,9 @@ name: Evals
 # a schedule and on demand, and the job fails when a task regresses.
 #
 # `pull_request` is deliberately absent: a pull request must never be handed the model key. `workflow_dispatch`
-# needs write access to trigger, so it is a maintainer checking their own branch.
+# needs write access to trigger, so it is a maintainer checking their own branch. `workflow_call` is how a tag
+# gets its own run: the release workflow calls this one, so publishing cannot depend on somebody remembering to
+# dispatch it first.
 on:
   workflow_dispatch:
     inputs:
@@ -16,6 +18,17 @@ on:
         default: "3"
       budget:
         description: Approved total model dollars, with no per-task step, time or call ceilings
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      repeat:
+        description: Runs per task (at least 3)
+        type: string
+        default: "3"
+      budget:
+        description: Approved total model dollars, with no per-task step, time or call ceilings
+        type: string
         required: false
         default: ""
   schedule:
