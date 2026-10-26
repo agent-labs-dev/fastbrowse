@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -40,7 +41,7 @@ from fastbrowse.models import (
 )
 from fastbrowse.safety import ScopedSecrets
 from fastbrowse.scripted import ScriptedJev, ScriptedLLM, steps
-from fastbrowse.telemetry import BudgetExceeded
+from fastbrowse.telemetry import BudgetExceeded, traced, transient_seconds
 
 try:
     fastbrowse_native = importlib.import_module("fastbrowse._native")
@@ -500,3 +501,44 @@ def test_the_commands_run_the_rust_cli_without_the_python_one(command: str, core
     assert ran.stdout.startswith(f"usage: {program}")
     imported = {line.rsplit("|", 1)[-1].strip() for line in ran.stderr.splitlines() if line.startswith("import time:")}
     assert core_module not in imported
+
+
+@needs_native
+@pytest.mark.parametrize("core", ["python", "rust"])
+async def test_a_transient_model_failure_reaches_traced_on_its_clock(
+    core: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The fixture runner leaves out time lost to provider retries, read from `traced()`, on either core."""
+    if core == "rust":
+        monkeypatch.setenv("FASTBROWSE_RUST_CORE", "1")
+    else:
+        monkeypatch.delenv("FASTBROWSE_RUST_CORE", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "unused")
+    asked: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "pypi.example":
+            return httpx.Response(200, text=PAGE, headers={"content-type": "text/html; charset=utf-8"})
+        asked.append(request.url.path)
+        if asked.count("/api/v1/chat/completions") == 1:
+            return httpx.Response(503, json={"error": "busy"})
+        plan = json.dumps({"requirements": [], "answer_expected": False})
+        choice = {"index": 0, "message": {"role": "assistant", "content": plan}, "finish_reason": "stop"}
+        usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        return httpx.Response(200, json={"id": "x", "model": "m", "choices": [choice], "usage": usage})
+
+    started = time.monotonic()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        with traced() as events:
+            result = await run_task(
+                "Read the release",
+                start="https://pypi.example/httpx",
+                fetch=True,
+                jev=ScriptedJev(steps("")),
+                http=http,
+            )
+    ended = time.monotonic()
+    assert result.status is Status.COMPLETE, result.error
+    # The first retry waits half a second, and the time lost lies inside the run on this process's clock.
+    assert 0.5 <= transient_seconds(events, started, ended) < ended - started

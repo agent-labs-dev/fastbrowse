@@ -17,6 +17,7 @@ use fastbrowse_cli::runner::Cancel;
 use fastbrowse_clients::http::{Http, Request, Response};
 use fastbrowse_core::models::Event;
 use fastbrowse_core::py::dump::Dump;
+use fastbrowse_core::telemetry::Trace;
 use fastbrowse_core::{citations, origins};
 use fastbrowse_run::RunError;
 use pyo3::exceptions::{PyException, PyValueError};
@@ -100,6 +101,7 @@ struct Run {
     result: Py<PyAny>,
     finished: Py<PyAny>,
     cancel: Cancel,
+    trace: Trace,
 }
 
 #[pymethods]
@@ -111,6 +113,12 @@ impl Run {
     /// Stop the run. It closes its browser, then `finished` resolves.
     fn cancel(&self) {
         self.cancel.trip();
+    }
+
+    /// The trace events the run made so far, as a JSON list; empty unless it was started with `trace=True`. Their
+    /// `began` and `ended` are on this module's `monotonic()` clock.
+    fn trace_events(&self) -> String {
+        serde_json::Value::Array(self.trace.events()).to_string()
     }
 
     /// An asyncio future that resolves with None once the run has returned and its browser is closed.
@@ -172,7 +180,7 @@ fn refused(kind: &str, message: String) -> PyErr {
 #[pyfunction]
 #[pyo3(signature = (
     task, options, *, on_event=None, on_frame=None, until=None, resolve_secret=None, check_access=None, jev=None,
-    llm=None, http=None,
+    llm=None, http=None, trace=false,
 ))]
 #[allow(clippy::too_many_arguments)]
 fn run_task(
@@ -187,6 +195,7 @@ fn run_task(
     jev: Option<Py<PyAny>>,
     llm: Option<Py<PyAny>>,
     http: Option<Py<PyAny>>,
+    trace: bool,
 ) -> PyResult<Run> {
     let mut options: Options =
         serde_json::from_str(options).map_err(|error| PyValueError::new_err(error.to_string()))?;
@@ -264,12 +273,17 @@ fn run_task(
         let call: HostCall<Request, Sent> = host_call(event_loop.clone(), function, request_argument, sent);
         run.http = Some(Http::new(Arc::new(HostTransport { call })));
     }
+    // Kept by the run's model clients, which trace their transient failures as Python's do, for a caller collecting them.
+    let trace = if trace { Trace::collecting() } else { Trace::disabled() };
+    if trace.enabled() {
+        run.http = Some(run.http.take().unwrap_or_else(Http::hyper).with_trace(trace.clone()));
+    }
     let stopped = cancel.clone();
     run.cancel = Some(Arc::new(move || {
         let stopped = stopped.clone();
         Box::pin(async move { stopped.tripped().await })
     }));
-    let handle = Run { result: result.clone().unbind(), finished: finished.clone().unbind(), cancel };
+    let handle = Run { result: result.clone().unbind(), finished: finished.clone().unbind(), cancel, trace };
     let (result, finished) = (result.unbind(), finished.unbind());
     runtime().spawn(async move {
         let outcome = fastbrowse_run::run_task(&task, run).await;
@@ -349,6 +363,12 @@ fn cli_main(py: Python<'_>, program: String, args: Vec<String>) -> i32 {
     })
 }
 
+/// Seconds on the clock the core's trace events are read on.
+#[pyfunction]
+fn monotonic() -> f64 {
+    fastbrowse_core::telemetry::monotonic()
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(origin_of, m)?)?;
@@ -357,6 +377,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_task, m)?)?;
     m.add_function(wrap_pyfunction!(connect_cdp, m)?)?;
     m.add_function(wrap_pyfunction!(cli_main, m)?)?;
+    m.add_function(wrap_pyfunction!(monotonic, m)?)?;
     m.add_class::<connect::Page>()?;
     m.add("PageFailed", m.py().get_type::<connect::PageFailed>())?;
     m.add_class::<Run>()?;

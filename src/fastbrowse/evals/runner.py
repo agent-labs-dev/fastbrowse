@@ -13,7 +13,6 @@ Needs OPENROUTER_API_KEY or AI_GATEWAY_API_KEY; see fastbrowse.clients.environme
 
 import argparse
 import asyncio
-import hashlib
 import json
 import math
 import os
@@ -21,17 +20,14 @@ import sys
 import tempfile
 import time
 from collections import Counter
-from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
 
-import httpx
 from pydantic import Field
 
 from fastbrowse.adapters.local_chrome import local_chrome
 from fastbrowse.artifacts import DirectorySink
 from fastbrowse.clients.environment import load_settings
-from fastbrowse.clients.validation import RETRYABLE_STATUS
 from fastbrowse.config import Config
 from fastbrowse.evals.local import Recorder, fixture_server
 from fastbrowse.evals.mock import mock_site
@@ -186,90 +182,6 @@ def _row(
     } | _efficiency(result.cost)
 
 
-type _Call = tuple[str, str]
-"""A model request by its address and body: a retry sends the same body again, and two calls side by side do not."""
-
-
-class _TransientSpans(httpx.AsyncBaseTransport):
-    """Records what transient provider failures cost the run whose model requests go through it.
-
-    The Rust core retries in its own code, where Python's trace cannot see it, so the failures are read off the wire.
-    A call that failed retryably, at its status or while its body was read, is counted from that attempt to the start
-    of the attempt that is answered, or to the end of the run, as the Python trace counts it. An attempt the core cut
-    off counts only once the call goes out again: that was its deadline, where a call the run no longer wanted is
-    cut off the same way and never sent again.
-    """
-
-    def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
-        self._inner = inner
-        self._failed: dict[_Call, float] = {}
-        self._cut_off: dict[_Call, float] = {}
-        self.spans: list[dict[str, object]] = []
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        call, began = (str(request.url), hashlib.sha256(request.content).hexdigest()), time.monotonic()
-        if call in self._cut_off:
-            self.failed(call, self._cut_off.pop(call))
-        try:
-            response = await self._inner.handle_async_request(request)
-        except httpx.TransportError:
-            self.failed(call, began)
-            raise
-        except asyncio.CancelledError:
-            self.cut_off(call, began)
-            raise
-        if response.status_code in RETRYABLE_STATUS:
-            self.failed(call, began)
-        elif isinstance(response.stream, httpx.AsyncByteStream):
-            response.stream = _Watched(self, call, began, response.stream)
-        return response
-
-    def failed(self, call: _Call, began: float) -> None:
-        self._failed.setdefault(call, began)
-
-    def cut_off(self, call: _Call, began: float) -> None:
-        self._cut_off.setdefault(call, began)
-
-    def answered(self, call: _Call, began: float) -> None:
-        if call in self._failed:
-            self.spans.append({"event": "request_transient", "began": self._failed.pop(call), "ended": began})
-
-    def finish(self, ended: float) -> list[dict[str, object]]:
-        for began in self._failed.values():
-            self.spans.append({"event": "request_transient", "began": began, "ended": ended})
-        self._failed.clear()
-        return self.spans
-
-    async def aclose(self) -> None:
-        await self._inner.aclose()
-
-
-class _Watched(httpx.AsyncByteStream):
-    """A response body that tells `_TransientSpans` whether it arrived, since a body can fail after its status."""
-
-    def __init__(self, spans: _TransientSpans, call: _Call, began: float, inner: httpx.AsyncByteStream) -> None:
-        self._spans, self._call, self._began, self._inner = spans, call, began, inner
-
-    async def __aiter__(self) -> AsyncIterator[bytes]:
-        try:
-            async for chunk in self._inner:
-                yield chunk
-        except httpx.TransportError:
-            self._spans.failed(self._call, self._began)
-            raise
-        except asyncio.CancelledError:
-            self._spans.cut_off(self._call, self._began)
-            raise
-        except GeneratorExit:
-            # A reader that stops early, at its byte bound, still had its answer.
-            self._spans.answered(self._call, self._began)
-            raise
-        self._spans.answered(self._call, self._began)
-
-    async def aclose(self) -> None:
-        await self._inner.aclose()
-
-
 async def _drive(
     task: LocalTask | MockTask,
     start: str,
@@ -280,27 +192,24 @@ async def _drive(
     attachments: tuple[Attachment, ...] = (),
 ) -> tuple[RunResult, float, float]:
     """One run of one task through `run_task`, on whichever core the package runs, returning its result and how long
-    it took, wall and transient."""
-    transport = _TransientSpans(httpx.AsyncHTTPTransport())
+    it took, wall and transient. Either core's model clients trace their transient failures into `traced()`."""
     started = time.monotonic()
     with traced() as events:
-        async with httpx.AsyncClient(transport=transport) as http:
-            result = await run_fastbrowse(
-                task.task,
-                start=start,
-                cdp_url=connection.cdp_url,
-                config=fixture_config(),
-                http=http,
-                secrets=secrets,
-                inputs=task.inputs,
-                attachments=attachments,
-                output_schema=task.output_schema,
-                limits=limits,
-                authorization=task.authorization,
-                downloads=sink.root,
-            )
+        result = await run_fastbrowse(
+            task.task,
+            start=start,
+            cdp_url=connection.cdp_url,
+            config=fixture_config(),
+            secrets=secrets,
+            inputs=task.inputs,
+            attachments=attachments,
+            output_schema=task.output_schema,
+            limits=limits,
+            authorization=task.authorization,
+            downloads=sink.root,
+        )
     ended = time.monotonic()
-    return result, ended - started, transient_seconds([*events, *transport.finish(ended)], started, ended)
+    return result, ended - started, transient_seconds(events, started, ended)
 
 
 async def run_task(
