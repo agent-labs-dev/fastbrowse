@@ -8,8 +8,8 @@
 pub mod fetch;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use fastbrowse_agent::agent::{Agent, HeadStart, RunOptions};
 use fastbrowse_agent::verification::RecordSchema;
@@ -294,10 +294,6 @@ pub async fn connect_cdp(options: ConnectCdp) -> Result<Connected, BrowserError>
     Ok(Connected { session, page, _scratch: scratch })
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 /// Whether DevTools is served from this machine, where a window could be drawn over.
 fn is_loopback(cdp_url: &str) -> bool {
     url::Url::parse(cdp_url)
@@ -306,12 +302,17 @@ fn is_loopback(cdp_url: &str) -> bool {
         .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]"))
 }
 
+/// The run's recording, held outside the run so teardown finishes it however the run ends.
+type Filming = Arc<tokio::sync::Mutex<Option<Recording>>>;
+
 /// Pass each step to the recording as well, which captions it.
-fn captioned(on_event: Option<EventHandler>, recording: &Arc<Mutex<Option<Recording>>>) -> Option<EventHandler> {
+fn captioned(on_event: Option<EventHandler>, recording: &Filming) -> Option<EventHandler> {
     let recording = recording.clone();
     Some(Arc::new(move |event: Event| {
         if let Event::Step(step) = &event
-            && let Some(filming) = lock(&recording).as_mut()
+            // Steps arrive while the agent runs; only the result card, after it, holds the recording longer.
+            && let Ok(mut filming) = recording.try_lock()
+            && let Some(filming) = filming.as_mut()
         {
             filming.caption(&step.step);
         }
@@ -508,7 +509,7 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
     let mut head = Some(head);
     let cancel = options.cancel.take();
     // Kept outside the run so each is closed however the run ends, before the browser is.
-    let recording: Arc<Mutex<Option<Recording>>> = Arc::default();
+    let recording: Filming = Arc::default();
     let mut recording_failed: Option<String> = None;
     let mut feedback: Option<Arc<CursorFeedback>> = None;
     let work = async {
@@ -546,7 +547,7 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
         let page: Arc<dyn Page> = Arc::new(CdpPage::new(opened.clone(), config.clone()).with_cursor(feedback.clone()));
         if let Some(path) = &options.record {
             match Recording::start(opened.clone(), path).await {
-                Ok(started) => *lock(&recording) = Some(started),
+                Ok(started) => *recording.lock().await = Some(started),
                 Err(error) => {
                     recording_failed = Some(error.0.clone());
                     return Err(refused(&error.0));
@@ -573,12 +574,9 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
         let result = agent.run(task, run).await.map_err(|error| refused(&error.to_string()))?;
         // The card is a data: document navigated into the tab, which would replace the caller's own app page; an
         // attached window is theirs and stays where it is.
-        let filming = lock(&recording).take();
-        if let Some(mut filming) = filming {
-            if !attach {
-                let _ = filming.show_result(task, &card(&result)).await;
-            }
-            *lock(&recording) = Some(filming);
+        // Shown while the recording stays in its slot, so a run cancelled during the card still finishes the videos.
+        if !attach && let Some(filming) = recording.lock().await.as_mut() {
+            let _ = filming.show_result(task, &card(&result)).await;
         }
         Ok(result)
     };
@@ -591,7 +589,7 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
         },
     };
     // Read after the run either way: a failed result card still leaves the finished videos.
-    let filming = lock(&recording).take();
+    let filming = recording.lock().await.take();
     let recordings = match filming {
         Some(filming) => filming.finish().await,
         None => Vec::new(),
