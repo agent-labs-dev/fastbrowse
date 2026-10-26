@@ -9,6 +9,7 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::time::{Duration, Instant};
 
 use fastbrowse_browser::session::{AccessRefused, CheckAccess};
 use fastbrowse_cli::embed::{HostCall, HostResolve};
@@ -25,7 +26,8 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 /// Whether a callback failed, which stops the run where it is.
 pub struct Failure {
@@ -185,12 +187,36 @@ impl Context {
     }
 }
 
-/// Closes a [`Context`] when the call that answers it ends, however it ends.
-struct Closing(Arc<Mutex<Option<UnboundedSender<Ask>>>>);
+/// How long a dropped call waits for the client's cancellation cleanup, as Python's `run_task` joins a frame handler.
+const CLEANUP: Duration = Duration::from_secs(2);
 
-impl Drop for Closing {
+/// What answers a [`Context`] and closes it when the call ends. A call dropped while its client had begun spending
+/// (it reserved, recorded or validated) keeps answering until the wrapper says the client's cleanup is done: that is
+/// where a cancelled request records the charge it may have run up, and the ledger is only borrowed until this
+/// returns. A client that had asked nothing yet has nothing to record.
+struct Answering<'a> {
+    slot: Arc<Mutex<Option<UnboundedSender<Ask>>>>,
+    asked: UnboundedReceiver<Ask>,
+    ledger: Option<&'a Ledger>,
+    schema: &'a dyn ResponseSchema,
+    asked_any: bool,
+    returned: bool,
+}
+
+impl Drop for Answering<'_> {
     fn drop(&mut self) {
-        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
+        let deadline = Instant::now() + CLEANUP;
+        while self.asked_any && !self.returned && Instant::now() < deadline {
+            match self.asked.try_recv() {
+                Ok((ask, back)) => {
+                    let _ = back.send(answer(&ask, self.ledger, self.schema));
+                    self.returned = ask.get("op").and_then(Value::as_str) == Some("done");
+                }
+                Err(TryRecvError::Empty) => std::thread::sleep(Duration::from_millis(1)),
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        self.slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
     }
 }
 
@@ -204,6 +230,9 @@ fn budget_reply(outcome: Result<(), BudgetExceeded>) -> Value {
 fn answer(ask: &Value, ledger: Option<&Ledger>, schema: &dyn ResponseSchema) -> Value {
     let number = |key: &str| ask.get(key).and_then(Value::as_f64).unwrap_or(0.0);
     let op = ask.get("op").and_then(Value::as_str).unwrap_or_default();
+    if op == "done" {
+        return Value::Null;
+    }
     if op == "validate" {
         let text = ask.get("text").and_then(Value::as_str).unwrap_or_default();
         return match schema.validate_json(text) {
@@ -223,6 +252,15 @@ fn answer(ask: &Value, ledger: Option<&Ledger>, schema: &dyn ResponseSchema) -> 
         "check_spend" => budget_reply(ledger.check_spend(number("extra_dollars"))),
         "record" => match serde_json::from_value::<Vec<CostLine>>(ask.get("lines").cloned().unwrap_or_default()) {
             Ok(lines) => budget_reply(ledger.record(lines)),
+            Err(error) => json!({"error": error.to_string()}),
+        },
+        // `ledger.lines.extend(...)`: kept without a check, as a cancelled request keeps its unknown receipt without
+        // replacing the cancellation with a budget failure.
+        "append" => match serde_json::from_value::<Vec<CostLine>>(ask.get("lines").cloned().unwrap_or_default()) {
+            Ok(lines) => {
+                ledger.state().lines.extend(lines);
+                Value::Null
+            }
             Err(error) => json!({"error": error.to_string()}),
         },
         "capped" => json!(ledger.capped()),
@@ -255,9 +293,11 @@ impl LLMClient for HostLlm {
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
         Box::pin(async move {
-            let (asks, mut asked) = unbounded_channel::<Ask>();
+            let (asks, asked) = unbounded_channel::<Ask>();
             let slot = Arc::new(Mutex::new(Some(asks)));
-            let _closing = Closing(slot.clone());
+            // Declared before the call, so a dropped call cancels the client before this waits on its cleanup.
+            let mut answering =
+                Answering { slot: slot.clone(), asked, ledger, schema, asked_any: false, returned: false };
             let call = (self.call)(LlmCall {
                 purpose: purpose.as_str().to_string(),
                 messages: messages_json(messages),
@@ -270,11 +310,13 @@ impl LLMClient for HostLlm {
             let answered = loop {
                 tokio::select! {
                     done = &mut call => break done,
-                    Some((ask, back)) = asked.recv() => {
+                    Some((ask, back)) = answering.asked.recv() => {
+                        answering.asked_any = true;
                         let _ = back.send(answer(&ask, ledger, schema));
                     }
                 }
             };
+            answering.returned = true;
             let answered = match answered {
                 Ok(text) => reply::<Generated>(&text),
                 Err(message) => Err(message),

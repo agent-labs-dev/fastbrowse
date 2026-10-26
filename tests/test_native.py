@@ -11,21 +11,25 @@ import inspect
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, ValidationError
 
 from fastbrowse import native, run_task
 from fastbrowse.clients.environment import ConfigurationError
+from fastbrowse.clients.openai_compatible import _ends_mid_json
 from fastbrowse.config import Config
-from fastbrowse.jev import Evaluation, Question
+from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, Evaluation, Question
+from fastbrowse.llm import Generation
 from fastbrowse.models import (
     Attachment,
     BrowserEvent,
     BudgetStop,
+    CostBasis,
     CostComponent,
+    CostLine,
     Limits,
     LLMPurpose,
     LocalChrome,
@@ -297,3 +301,146 @@ async def test_an_llm_client_that_raises_fails_as_that_client_and_the_run_report
             http=counted.http,
         )
     assert (result.status, result.error) == (Status.ERROR, "'not a model error'")
+
+
+@needs_native
+@pytest.mark.usefixtures("rust_core")
+async def test_a_redirect_the_callers_client_would_follow_is_checked_against_the_allowed_origins() -> None:
+    counted = Counted()
+    asked: list[str] = []
+
+    def redirecting(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        if request.url.host == "pypi.example":
+            return httpx.Response(302, headers={"location": "https://evil.example/"})
+        return httpx.Response(200, text=PAGE, headers={"content-type": "text/html; charset=utf-8"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(redirecting), follow_redirects=True) as http:
+        result = await run_task(
+            "Read the release",
+            start="https://pypi.example/httpx",
+            fetch=True,
+            jev=counted.jev,
+            llm=counted.llm,
+            http=http,
+            allowed_origins=["https://pypi.example"],
+        )
+    assert asked == ["https://pypi.example/httpx"]
+    assert result.status is not Status.COMPLETE
+
+
+UNKNOWN = CostLine(component=CostComponent.LLM, basis=CostBasis.UNKNOWN, purpose=LLMPurpose.PLAN)
+
+
+@needs_native
+@pytest.mark.usefixtures("rust_core")
+async def test_receipts_a_client_adds_to_ledger_lines_count_in_the_result() -> None:
+    counted = Counted()
+    generate = counted.llm.generate
+
+    async def unpriced(purpose: LLMPurpose, *args: Any, ledger: Any = None, **kwargs: Any) -> Any:
+        ledger.lines.extend([UNKNOWN])
+        return await generate(purpose, *args, ledger=ledger, **kwargs)
+
+    counted.llm.generate = unpriced  # ty: ignore[invalid-assignment]
+    async with counted.http:
+        result = await run_task(
+            "Read the release",
+            start="https://pypi.example/httpx",
+            fetch=True,
+            jev=counted.jev,
+            llm=counted.llm,
+            http=counted.http,
+        )
+    assert UNKNOWN in result.cost.lines
+
+
+def reading(counted: Counted) -> None:
+    """Jev holds the page as evidence for the plan's one requirement, so the run asks the LLM to read it, inline."""
+    evaluate = counted.jev.evaluate
+
+    async def evidence(state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        evaluation = await evaluate(state, questions)
+        picks = {"read_assessment": "evidence", "req_1": "synthesis"}
+        answers = dict(evaluation.answers)
+        for key, choice in picks.items():
+            if key in answers:
+                options = list(cast(ChoiceQuestion, questions[key]).criteria)
+                probabilities = {option: float(option == choice) for option in options}
+                answers[key] = ChoiceAnswer(choice=choice, probabilities=probabilities, confidence=1.0)
+        return evaluation.model_copy(update={"answers": answers})
+
+    counted.jev.evaluate = evidence  # ty: ignore[invalid-assignment]
+
+
+@needs_native
+@pytest.mark.usefixtures("rust_core")
+async def test_a_cancelled_llm_call_records_its_receipt_before_run_task_raises() -> None:
+    counted = Counted()
+    reading(counted)
+    reading_started = asyncio.Event()
+    cleanup: list[str] = []
+
+    async def hanging(purpose: LLMPurpose, messages: Any, schema: type[BaseModel], *, ledger: Any, **_: Any) -> Any:
+        if purpose is LLMPurpose.PLAN:
+            plan = schema.model_validate({"requirements": [], "answer_expected": True})
+            return Generation(data=plan, cost=CostLine(component=CostComponent.LLM, basis=CostBasis.ESTIMATED))
+        ledger.reserve(CostComponent.LLM)
+        reading_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            # A request's charge is known only once it is cancelled, after a moment on the loop.
+            await asyncio.sleep(0.05)
+            try:
+                ledger.lines.extend([UNKNOWN])
+                cleanup.append("recorded")
+            except RuntimeError as exc:
+                cleanup.append(str(exc))
+            raise
+
+    counted.llm.generate = hanging  # ty: ignore[invalid-assignment]
+    async with counted.http:
+        run = asyncio.create_task(
+            run_task(
+                "Read the version",
+                start="https://pypi.example/httpx",
+                fetch=True,
+                jev=counted.jev,
+                llm=counted.llm,
+                http=counted.http,
+            )
+        )
+        await asyncio.wait_for(reading_started.wait(), 10)
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run
+        assert cleanup == ["recorded"]
+
+
+@needs_native
+@pytest.mark.usefixtures("rust_core")
+async def test_a_response_cut_off_mid_json_fails_validation_as_pydantic_reports_it() -> None:
+    counted = Counted()
+    errors: list[ValidationError] = []
+    generate = counted.llm.generate
+
+    async def truncated(purpose: LLMPurpose, messages: Any, schema: type[BaseModel], **kwargs: Any) -> Any:
+        try:
+            schema.model_validate_json('{"requirements": [')
+        except ValidationError as exc:
+            errors.append(exc)
+        return await generate(purpose, messages, schema, **kwargs)
+
+    counted.llm.generate = truncated  # ty: ignore[invalid-assignment]
+    async with counted.http:
+        await run_task(
+            "Read the release",
+            start="https://pypi.example/httpx",
+            fetch=True,
+            jev=counted.jev,
+            llm=counted.llm,
+            http=counted.http,
+        )
+    assert errors
+    assert _ends_mid_json(errors[0])

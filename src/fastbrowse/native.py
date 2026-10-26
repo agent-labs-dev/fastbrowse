@@ -8,14 +8,15 @@ as the `RunResult` `serve` writes.
 
 import asyncio
 import base64
+import contextlib
 import copy
 import importlib
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Any, ClassVar
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import InitErrorDetails, PydanticCustomError
 
 from fastbrowse.clients.environment import ConfigurationError
@@ -47,6 +48,7 @@ from fastbrowse.telemetry import BudgetExceeded
 
 _EVENT: TypeAdapter[StepEvent | BrowserEvent] = TypeAdapter(StepEvent | BrowserEvent)
 _QUESTIONS: TypeAdapter[dict[str, Question]] = TypeAdapter(dict[str, Question])
+_JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 _PLAIN = (
     "start",
@@ -181,7 +183,7 @@ class _Ledger:
 
     @property
     def lines(self) -> list[CostLine]:
-        return [CostLine.model_validate(line) for line in self._op("lines")]
+        return _Lines(self, (CostLine.model_validate(line) for line in self._op("lines")))
 
     @property
     def capped(self) -> bool:
@@ -203,11 +205,31 @@ class _Ledger:
         return CostBreakdown.model_validate(self._op("breakdown"))
 
 
+class _Lines(list[CostLine]):
+    """`ledger.lines` read from the Rust ledger. Extending it keeps the receipts there, without the check `record`
+    makes, as a client that was cancelled keeps its unknown charge without raising a budget failure instead."""
+
+    def __init__(self, ledger: _Ledger, lines: Iterable[CostLine]) -> None:
+        super().__init__(lines)
+        self._ledger = ledger
+
+    def append(self, line: CostLine) -> None:
+        self.extend((line,))
+
+    def extend(self, lines: Iterable[CostLine]) -> None:
+        added = list(lines)
+        self._ledger._op("append", lines=[line.model_dump(mode="json") for line in added])
+        super().extend(added)
+
+
 def _response_model(name: str, schema: dict[str, Any], context: Any) -> type[BaseModel]:
     """The response model a call asks for, as the class a client expects: its name, its JSON Schema, and validation
     by the Rust core, which raises pydantic's `ValidationError` so a client's repair loop works as before."""
 
     def validated(text: str) -> dict[str, Any]:
+        # Text that is not JSON fails as pydantic fails it, `json_invalid` with where it ended, which is how a client
+        # tells a response cut off at its token cap from one that is wrong.
+        _JSON.validate_json(text)
         answer = json.loads(context.op(json.dumps({"op": "validate", "text": text})))
         if "error" in answer:
             error = PydanticCustomError("response_invalid", "{reason}", {"reason": answer["error"]})
@@ -263,6 +285,10 @@ def _llm(client: LLMClient) -> Callable[..., Awaitable[str]]:
             return _fault("retries_exhausted", exc)
         except LLMError as exc:
             return _fault("failed", exc)
+        finally:
+            # A cancelled call waits for this before it lets the ledger go, so a cancelled request's receipt lands.
+            with contextlib.suppress(RuntimeError):
+                context.op('{"op": "done"}')
         data = generation.data
         return json.dumps(
             {
@@ -284,7 +310,8 @@ def _http(client: httpx.AsyncClient) -> Callable[..., Awaitable[_Sent]]:
         try:
             # The core times each request itself and cancels this call when it runs out.
             request = client.build_request(method, url, headers=headers, content=body or None, timeout=None)
-            response = await client.send(request, stream=True)
+            # The core follows redirects itself, checking each against the run's allowed origins.
+            response = await client.send(request, stream=True, follow_redirects=False)
             try:
                 if max_bytes is None:
                     content = await response.aread()
