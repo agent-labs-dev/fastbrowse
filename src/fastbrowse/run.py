@@ -304,7 +304,7 @@ async def run_task(
     With `FASTBROWSE_RUST_CORE=1` and `fastbrowse_native` installed, the run goes to the Rust core in this process
     whenever its arguments fit the `serve` protocol (`fastbrowse.native`), and to this code otherwise.
     """
-    if os.environ.get("FASTBROWSE_RUST_CORE") == "1":
+    if os.environ.get("FASTBROWSE_RUST_CORE") == "1" and not fetch:
         run_params = native.params(task, locals())
         if run_params is not None:
             return await native.run(run_params, on_event=on_event, on_frame=on_frame, until=until, secrets=secrets)
@@ -471,7 +471,19 @@ async def _fetched(
     A step that would act, download or look at pixels raises `NeedsBrowser`, and that is reported as
     `blocked`: the document was never the problem, and a browser would answer a different task.
     """
-    await check_browser_access(check_access)
+    try:
+        await check_browser_access(check_access)
+    except BrowserError as exc:
+        # The caller's own gate refused the run, which is an error result, not an exception to the embedder.
+        return RunResult(
+            status=Status.ERROR,
+            answer=None,
+            data=None,
+            evidence=(),
+            steps=(),
+            cost=CostBreakdown(lines=()),
+            artifacts=(),
+        ).model_copy(update={"error": type(exc).__name__})
     head = HeadStart.begin(llm, task, start=start, limits=limits)
     page = FetchedPage(
         client,

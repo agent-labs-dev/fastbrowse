@@ -29,6 +29,7 @@ from fastbrowse.page import (
     ActResult,
     Block,
     BlockKind,
+    BrowserError,
     Capture,
     Observation,
     Tab,
@@ -98,7 +99,10 @@ _WALLS = re.compile(
 # A document whose text is under this share of its markup is a shell: a rendered page of any substance
 # carries far more words than an empty template, and the browser is the only reader of what scripts build.
 _MIN_TEXT_SHARE = 0.01
+_HIDDEN_STYLE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.IGNORECASE)
 _MIN_TEXT_CHARS = 120
+# A redirect chain longer than this is a loop or a tracker maze, and the browser is the reader for both.
+_MAX_REDIRECTS = 10
 # The smallest text a fetched document needs before it is treated as the page itself rather than a stub.
 _HTML_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 
@@ -168,6 +172,7 @@ class _Reader(HTMLParser):
         self._cell: list[str] | None = None
         self._cell_header = False
         self._header_row: int | None = None
+        self._hidden: list[str] = []
 
     # -- the text of the document ---------------------------------------------------------------------
 
@@ -180,6 +185,11 @@ class _Reader(HTMLParser):
             return
         if tag == "title":
             self._in_title = True
+            return
+        if "hidden" in attributes or _HIDDEN_STYLE.search(attributes.get("style", "")):
+            # A browser never renders this subtree, so a value it holds is not one the user can see or quote.
+            self._hidden.append(tag)
+            self._skip += 1
             return
         if tag == "br":
             self._add("\n")
@@ -219,6 +229,10 @@ class _Reader(HTMLParser):
             self._flush()
 
     def handle_endtag(self, tag: str) -> None:
+        if self._hidden and tag == self._hidden[-1]:
+            self._hidden.pop()
+            self._skip = max(0, self._skip - 1)
+            return
         if tag in _SKIPPED:
             self._skip = max(0, self._skip - 1)
             return
@@ -418,13 +432,24 @@ async def fetch_capture(
 ) -> Capture:
     """`url` as a `Capture`, read over HTTP, or `NotFetched` with the reason a browser is needed."""
     eligible(url, allowed_origins)
+    target = url
     try:
-        response = await client.get(
-            url,
-            follow_redirects=True,
-            timeout=seconds,
-            headers={"accept": "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8"},
-        )
+        for _hop in range(_MAX_REDIRECTS):
+            response = await client.get(
+                target,
+                # Followed here rather than by the client: a redirect to an origin outside the grant has to be
+                # refused before it is sent, not after the request arrived.
+                follow_redirects=False,
+                timeout=seconds,
+                headers={"accept": "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8"},
+            )
+            location = response.headers.get("location")
+            if not response.is_redirect or not location:
+                break
+            target = urljoin(target, location)
+            eligible(target, allowed_origins)
+        else:
+            raise NotFetched("the page redirects further than this follows")
     except httpx.HTTPError as exc:
         # A name that does not resolve is the caller's address, not an outage; either way the message is
         # all a run may report, and it never carries page text.
@@ -496,6 +521,10 @@ class FetchedPage:
         try:
             capture = await fetch_capture(self._client, url, allowed_origins=self._origins, seconds=self._timeout)
         except NotFetched as exc:
+            if back_to is not None:
+                # This was a guessed address, not the caller's page: the loop falls back to `start` on a
+                # `BrowserError`, and concluding that the task needs a browser here would end the run.
+                raise BrowserError(str(exc)) from exc
             raise NeedsBrowser(str(exc)) from exc
         self._capture = capture
         self._status = None
