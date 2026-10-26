@@ -453,7 +453,7 @@ async def fetch_capture(
     if _WALLS.search(text[:20_000]) and readable < _MIN_TEXT_CHARS * 4:
         raise NotFetched("the page is a bot check or an empty shell that scripts fill")
     if readable < max(_MIN_TEXT_CHARS, int(len(text) * _MIN_TEXT_SHARE)):
-        # A page whose markup is mostly scripts and styles has nothing to quote: the browser is the only
+        # A page whose markup is scripts and styles has nothing to quote: the browser is the only
         # reader of what they build, and reading the shell as the page would answer from nothing.
         raise NotFetched("the page renders its content with scripts, so the markup holds no readable text")
     return _capture(final, response.status_code, title, blocks)
