@@ -788,6 +788,7 @@ def _outputs_grounded(
             repair="Some cited facts are no longer current or collection records are missing. "
             "Use current source quotes and preserve their collection scope; do not cite superseded conclusions.",
         )
+
     # A count, ranking, winner or absence is only as good as the reading of its list: code knows whether every
     # page and chunk was read, so an unfinished one is refused here rather than argued over by a model. A partial
     # comparison read is different: reading the rest of a sorted list records the whole list as its own comparison,

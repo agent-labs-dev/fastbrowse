@@ -406,7 +406,7 @@ async def test_a_partial_comparison_beside_a_complete_one_does_not_leave_the_win
     """A sorted shop list read one page at a time records each partial page as a comparison, and the last read
     records the whole list as one more. The answer's claim carries both, so the earlier partial one must not
     reject the winner while the complete comparison of the same list stands beside it."""
-    from fastbrowse.memory import Fact, Comparison, fact_id
+    from fastbrowse.memory import Comparison, Fact, fact_id
     from fastbrowse.models import FactReader
     from fastbrowse.planner import Requirement, RequirementKind
     from fastbrowse.retrieval import Claim, assemble_answer
@@ -440,10 +440,10 @@ async def test_a_partial_comparison_beside_a_complete_one_does_not_leave_the_win
         requirement_id="r",
         text="The cheapest product in the shop is Paper Filters at GBP 4.60.",
         evidence=None,
-        basis=(fact_id(partial), *( (fact_id(whole),) if finished_list else () )),
+        basis=(fact_id(partial), *((fact_id(whole),) if finished_list else ())),
         reader=FactReader.LLM,
     )
-    notes = Notes((one, two, partial, *( (whole,) if finished_list else () ), conclusion))
+    notes = Notes((one, two, partial, *((whole,) if finished_list else ()), conclusion))
     requirement = Requirement(id="r", text="Find the cheapest product in the shop.", kind=RequirementKind.INFORMATION)
     claim = Claim(text=conclusion.text, evidence_ids=(fact_id(conclusion),))
     answer = assemble_answer((claim,), notes, (requirement,))
