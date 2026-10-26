@@ -68,6 +68,7 @@ from fastbrowse.protocol import (
 )
 from fastbrowse.run import run_task
 from fastbrowse.safety import secret_allowed
+from fastbrowse.telemetry import trace_to
 
 log = logging.getLogger(__name__)
 
@@ -592,4 +593,5 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     transport = stdio_transport()
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING, format="fastbrowse: %(levelname)s %(message)s")
+    trace_to()
     return asyncio.run(Server(transport, runner=args.run_task).serve())

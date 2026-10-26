@@ -11,6 +11,20 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- An answer finishes once code and Jev have checked it, without a second opinion from an LLM. Every quoted answer used to go through LLM source and assertion audits: two calls per answer check, often a second round, and a retry whenever the 512-token verdict ran out mid-reasoning. They were about two thirds of a run's model time, and they turned correct answers into `stuck` or `unverified`: a version cited without the "latest release" label beside it, a table total without proof that its four rows were all the rows.
+
+  Code now checks that every claim cites a current quote, and that a count, ranking, winner or absence rests on a list read to its end. Jev checks each claim against its quotes and against the other quotes still current on the same pages, and asks whether the answer states each of the plan's answer checks and information requirements. An answer that leaves one out names it, so recovery and the composer know what to add. The LLM verifier still looks at the page when Jev doubts that the task is done, and it is no longer skipped on a lookup after a covered or failed action. A requirement the verifier doubts stays open, though the notes cite a quote for it, when Jev also held it unmet, or did not confirm it after such an action: the claim check sees a quote, not which page it came from, and a run whose link an ad covered reported the heading of the page it was still on as the new window's.
+
+  What the audits did catch: an answer of "no results" read off a page that had failed to load. With them gone, earlier runs of this change reported that answer `complete` three times while Google Flights was serving "Oops, something went wrong".
+
+  With this and the changes below, on the 46 head-to-head tasks run twice on each build against `main`, the median run fell from 21.8 to 15.0 seconds, the mean from 26.7 to 19.3, the 90th percentile from 51.2 to 39.2, LLM calls from 11.3 to 4.7 a run, and cost from $2.84 to $1.45. No run reported a wrong answer `complete` on either build. Graded passes went from 92 to 90: a Google Flights run and a new-window run each ended `stuck`.
+
+- A filtered count or a comparison over a list that runs to more pages reads only its first and last pages with the LLM. Each page between is one Jev request, a yes or no for every record shaped like those the first page's reader cited, and code counts the matches or keeps them as the comparison's records. Counting one author's quotes across ten pages went from eleven LLM reads to three. A record Jev is unsure of sends that page back to the LLM reader.
+
+- A guessed opening page that was read and held nothing for the task sends the run back to the caller's start page without asking the recovery model, which chose that every time after a screenshot and 3 to 4 seconds.
+
+- `--trace FILE` writes the run's trace as JSON lines, and `FASTBROWSE_TRACE` does the same for `serve` and the MCP server: each model call with its purpose and timing, which reader answered each read and why, every check's scores and each recovery's reason. Reads now say why the LLM reader was used, and record filters and code-taken recoveries are traced.
+
 ## [0.7.1] - 2026-10-24
 
 - A run ends `needs_login` only when the page itself shows a sign-in to act on: a credential field, or a control that names one. A model that called a page with no such control a sign-in wall, or a page with nothing left to read, no longer makes the run claim the caller is signed out; it ends `stuck` instead.

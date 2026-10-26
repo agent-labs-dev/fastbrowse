@@ -7,7 +7,7 @@ use fastbrowse_core::models::{CostComponent, CostLine, FactReader, UNTRUSTED};
 use fastbrowse_core::page::{Block, BlockKind, Capture};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::dumps;
-use fastbrowse_core::py::text;
+use fastbrowse_core::py::{round, text};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::{IndexMap, IndexSet};
 use serde_json::{Map, Value, json};
@@ -15,6 +15,7 @@ use serde_json::{Map, Value, json};
 use super::chunks::evidence;
 use super::fields::{Candidate, ScalarValue, context, source};
 use super::reading::{block_context, heading_facts};
+use super::route;
 use super::text::{Page, SpanKind, cells, slice, spans, splitlines};
 use crate::batches::evaluate_batches;
 use crate::difflib::unified_diff;
@@ -24,6 +25,7 @@ use crate::planner::Requirement;
 
 // A mistaken choice marks a requirement evidenced; favor the reader whenever selection is uncertain.
 const READ_CONFIDENCE: f64 = 0.90;
+const ABSENT_CONFIDENCE: f64 = 0.90;
 const NO_NEW_EVIDENCE_CONFIDENCE: f64 = 0.80;
 // Long passages belong with the reader; bounded spans keep one batched choice cheaper than generation.
 const READ_SPAN_CHARS: usize = 320;
@@ -308,6 +310,7 @@ pub(crate) async fn read_choices(
     let all: Vec<&Block> = capture.blocks.iter().collect();
     let mut candidates = page_read_candidates(page, &all);
     if candidates.is_empty() && previous.is_empty() && iter_read_candidates(page, &all, Some(1)).is_empty() {
+        route(trace, "llm", "no_bounded_candidate_set", None, Vec::new());
         return Ok(ChoiceRead::default());
     }
     let (mut state, questions) = read_request(page, &requirements, &candidates, None);
@@ -347,6 +350,7 @@ pub(crate) async fn read_choices(
         let (kept, narrowed, spent) = focus(jev, page, &requirements, tokens, ledger, trace).await?;
         costs = spent;
         if kept.is_empty() {
+            route(trace, "llm", "unfocused", None, Vec::new());
             return Ok(ChoiceRead { cost_lines: costs, ..ChoiceRead::default() });
         }
         candidates = narrowed;
@@ -357,6 +361,7 @@ pub(crate) async fn read_choices(
     }
     // Oversized captures should reach the chunked reader without paying for a doomed choice request.
     if !read_fits(&state, &asked, tokens) {
+        route(trace, "llm", "choice_input_too_large", None, Vec::new());
         return Ok(ChoiceRead { cost_lines: costs, ..ChoiceRead::default() });
     }
     if let Some(ledger) = ledger {
@@ -364,6 +369,7 @@ pub(crate) async fn read_choices(
     }
     // An optional shortcut's rejected input or malformed answer must still reach the reader.
     let Ok(evaluation) = jev.evaluate(&state, &asked).await else {
+        route(trace, "llm", "choice_error", None, Vec::new());
         return Ok(ChoiceRead { cost_lines: costs, ..ChoiceRead::default() });
     };
     if let Some(ledger) = ledger {
@@ -376,6 +382,7 @@ pub(crate) async fn read_choices(
         && let Some(Answer::Noul(novelty)) = evaluation.answers.get("novelty")
         && 1.0 - novelty.probability >= NO_NEW_EVIDENCE_CONFIDENCE
     {
+        route(trace, "none", "preserved_evidence", None, Vec::new());
         return Ok(ChoiceRead {
             facts: Vec::new(),
             absent: requirements.iter().map(|r| r.id.clone()).collect(),
@@ -386,17 +393,40 @@ pub(crate) async fn read_choices(
     let mut absent: Vec<String> = Vec::new();
     let groups = read_groups(&candidates);
     for requirement in &requirements {
-        let Some(Answer::Choice(answer)) = evaluation.answers.get(&requirement.id) else { continue };
-        if answer.confidence < READ_CONFIDENCE {
-            continue;
-        }
-        if answer.choice == "absent" {
-            if !focused {
-                absent.push(requirement.id.clone());
+        let id = Some(requirement.id.as_str());
+        let answer = match evaluation.answers.get(&requirement.id) {
+            Some(Answer::Choice(answer))
+                if answer.confidence >= if answer.choice == "absent" { ABSENT_CONFIDENCE } else { READ_CONFIDENCE } =>
+            {
+                answer
             }
+            found => {
+                let choice = match found {
+                    Some(Answer::Choice(answer)) => Some(answer),
+                    _ => None,
+                };
+                let fields = vec![
+                    ("choice", json!(choice.map(|answer| &answer.choice))),
+                    ("confidence", json!(choice.map(|answer| round(answer.confidence, 3)))),
+                ];
+                route(trace, "llm", "uncertain_choice", id, fields);
+                continue;
+            }
+        };
+        if answer.choice == "absent" {
+            if focused {
+                route(trace, "llm", "absent_after_focus", id, Vec::new());
+                continue;
+            }
+            route(trace, "none", "absent", id, Vec::new());
+            absent.push(requirement.id.clone());
             continue;
         }
-        let Some(group) = groups.get(&answer.choice) else { continue };
+        let Some(group) = groups.get(&answer.choice) else {
+            let reason = if answer.choice == "synthesis" { "synthesis" } else { "invalid_choice" };
+            route(trace, "llm", reason, id, vec![("confidence", json!(round(answer.confidence, 3)))]);
+            continue;
+        };
         let selected = &group[0];
         let context: Vec<Fact> = if group.len() > 1 {
             group
@@ -419,6 +449,7 @@ pub(crate) async fn read_choices(
         let basis = unique(context.iter().chain(&headings).map(fact_id));
         facts.extend(context.iter().cloned());
         facts.extend(headings);
+        route(trace, "jev_choice", "scalar_candidate", id, vec![("confidence", json!(round(answer.confidence, 3)))]);
         // The candidate's evidence was cut from this capture by code, so it is kept as selected, not re-found. The text
         // is the value alone: the draft answer states a fact's text, and prefixed with the requirement it answered
         // "Find the latest released version of httpx. httpx 0.28.1". The notes name the requirement.

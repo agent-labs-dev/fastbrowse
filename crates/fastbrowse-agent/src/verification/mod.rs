@@ -6,59 +6,46 @@
 //!
 //! # Concurrency
 //!
-//! Python sends some calls side by side with `asyncio.gather(..., return_exceptions=True)`: the claims check beside
-//! the output audits in `check_claims`, the transaction question beside the claim questions, both output audits
-//! together, and the identity resolution beside Jev's claim selection with speculative audits behind it. A replay keys
-//! each request on its body, so what has to match Python is the set of requests and every decision, not the order they
-//! leave in. Here every such group runs through [`crate::support::join_all`] or [`crate::support::join2`], which poll
-//! every sibling to its end before any error is looked at, so a failure never leaves a request Python sent unsent.
-//! Errors are then raised in the order Python raises them: the claim questions before the transaction question,
-//! the claims check before the output audits, the claim selection before the identities, and within one audit stage
-//! the first failing field in queue order.
-//!
-//! No decision depends on which call finished first. The speculative audits' records into `missing_outputs` and
-//! `corrections` are taken back in Python before anything can run between, so the speculative build here records
-//! nothing in the first place. Python caps the audits at eight in flight with a semaphore; it bounds how many wait at
-//! once, never which are sent, so it is left out. Audit cache entries are written as each audit returns; no two audits
-//! of one pass share a key, so no audit can find another's entry mid-pass, as in Python.
-//!
-//! Python keys the audit cache on `id(llm)` among other things; here the client's address stands in for it. Only
-//! hits matter, and a key is never compared with Python's.
+//! Python sends the transaction question beside the claim questions with `asyncio.gather(..., return_exceptions=True)`.
+//! A replay keys each request on its body, so what has to match Python is the set of requests and every decision, not
+//! the order they leave in. Here such a group runs through [`crate::support::join2`], which polls both to their end
+//! before any error is looked at, so a failure never leaves a request Python sent unsent. Errors are then raised in the
+//! order Python raises them: the claim questions before the transaction question.
 
 mod prompts;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Mutex;
 
 use fastbrowse_core::config::{Config, Thresholds, TokenBudget};
-use fastbrowse_core::jev::{Answer, ChoiceQuestion, JevClient, MAX_CHOICE_OPTIONS, NoulQuestion, Question};
-use fastbrowse_core::llm::{Generation, LLMClient, Message, recorded};
-use fastbrowse_core::models::{Bytes, CostLine, Evidence, FactReader, LLMPurpose, SourceControl, UNTRUSTED};
+use fastbrowse_core::jev::{Answer, JevClient, NoulQuestion, Question};
+use fastbrowse_core::llm::{Generation, LLMClient, Message};
+use fastbrowse_core::models::{Bytes, CostLine, Evidence, LLMPurpose, SourceControl, UNTRUSTED};
 use fastbrowse_core::output_schema::OutputModel;
 use fastbrowse_core::page::{Capture, Control, Observation, cut_text};
-use fastbrowse_core::py::dump::{Dump, exclude, include};
-use fastbrowse_core::py::json::{Style, dumps, write};
+use fastbrowse_core::py::dump::{Dump, include};
+use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::{round, sha256_hex, text};
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use fastbrowse_core::telemetry::{Ledger, Trace};
-use fastbrowse_core::validation::ModelSchema;
 use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::batches::{Answered, evaluate_batches};
+use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
 use crate::memory::{Notes, Standing, fact_id};
-use crate::planner::{FIELD_CATEGORIES, Plan, RequirementKind};
+use crate::planner::{Plan, RequirementKind};
 use crate::policy::HistoryEntry;
 use crate::retrieval::{
-    AnswerCorrection, Claim, ComposedAnswer, ScalarField, Stage, TRANSACTION_CONTRADICTED, UnsupportedField,
-    assemble_answer, choose_candidate, claim_check_questions, field_candidates, field_candidates_from_notes,
-    merge_candidates, propose_text_fields, propose_text_fields_from_notes, transaction_check_question,
+    AnswerCorrection, Claim, ComposedAnswer, OUTPUT_MISSING, ScalarField, Stage, TRANSACTION_CONTRADICTED,
+    UnsupportedField, assemble_answer, choose_candidate, claim_check_questions, field_candidates,
+    field_candidates_from_notes, merge_candidates, propose_text_fields, propose_text_fields_from_notes,
+    transaction_check_question,
 };
-use crate::support::{generate, join_all, join2};
+use crate::support::{generate, join2};
 
-use prompts::{DATED, SHARED_NOTE, STALE_REPAIR, UNGROUNDED};
+use prompts::{STALE_REPAIR, UNFINISHED_REPAIR, UNGROUNDED, UNSTATED_REPAIR};
 
 str_enum! {
     pub enum DoneVerdict {
@@ -644,8 +631,8 @@ fn digest(data: &[u8]) -> Vec<u8> {
 
 /// A digest of the exact request: the prompt and every image byte, in order.
 ///
-/// Two finish attempts whose rendered request is byte-identical cannot need a second audit, so the verdict paid for by
-/// the first is reused.
+/// Two finish attempts whose rendered request is byte-identical cannot need a second verdict, so the verdict paid for
+/// by the first is reused.
 pub fn verify_cache_key(messages: &[Message]) -> String {
     let mut fed = Vec::new();
     for message in messages {
@@ -674,7 +661,7 @@ pub async fn llm_verify(
     Ok(generate::<LLMVerdict>(llm, LLMPurpose::Verify, &messages, VERDICT_TOKENS, options.ledger).await?)
 }
 
-// --- output audits ----------------------------------------------------------------------------------------------
+// --- output checks ----------------------------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 struct OutputSource {
@@ -687,13 +674,6 @@ struct OutputSource {
     control_context: Option<SourceControl>,
 }
 
-impl OutputSource {
-    /// `model_dump(exclude={"page_title"})`.
-    fn untitled(&self) -> Value {
-        exclude(self.dump(), &["page_title"])
-    }
-}
-
 /// The read's place in reading order, from 1: one address can be read in several states.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 struct CollectionReadRef {
@@ -701,8 +681,8 @@ struct CollectionReadRef {
     url_ref: String,
 }
 
-/// A single-page list or a lone group has no pages or standing to show; an empty field there would only tell the
-/// audit about a proof that does not apply.
+/// A single-page list or a lone group has no pages or standing to show; an empty field there would only describe a
+/// proof that does not apply.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 struct OutputCount {
     scope: Option<String>,
@@ -736,18 +716,6 @@ struct OutputClaim {
     compared_records: Vec<OutputComparison>,
 }
 
-impl OutputClaim {
-    /// `model_dump(exclude={"cited_sources": {"__all__": {"page_title"}}})`.
-    fn untitled(&self) -> Value {
-        json!({
-            "text": self.text,
-            "cited_sources": self.cited_sources.iter().map(OutputSource::untitled).collect::<Vec<_>>(),
-            "counted_records": self.counted_records.iter().map(Dump::dump).collect::<Vec<_>>(),
-            "compared_records": self.compared_records.iter().map(Dump::dump).collect::<Vec<_>>(),
-        })
-    }
-}
-
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OutputContext {
@@ -756,46 +724,7 @@ pub struct OutputContext {
     urls: IndexMap<String, String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OutputAuditVerdict {
-    pub judgment: String,
-    pub reason: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct QuotedIdentity {
-    source_ref: String,
-    quote: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct IdentityScope {
-    scope: String,
-    identities: Vec<QuotedIdentity>,
-}
-
-/// What the audit cache holds for one request: an audit's verdict or the identities resolved for an answer.
-#[derive(Debug, Clone, PartialEq)]
-pub enum AuditEntry {
-    Verdict(OutputAuditVerdict),
-    Identities(OutputIdentities),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct OutputIdentities {
-    bindings: IndexMap<String, IdentityScope>,
-}
-
-/// `OutputAuditCache`: repairing one assertion used to repeat audits whose exact sources and question had not changed.
-pub type OutputAuditCache = Mutex<HashMap<String, AuditEntry>>;
-
-/// Jev's agreement that a quoted answer satisfies a criterion, from which the two LLM audits are not sent. The criterion
-/// question is strict, so a correct answer rarely scores high: on a real-Jev probe of 21 correct quoted answers (0.22
-/// to 0.71) and 21 wrong ones (0.04 to 0.13), 0.8 settled none of the correct answers and 0.5 settled 12 with every
-/// wrong one still audited.
-const OUTPUT_SETTLED_FROM: f64 = 0.5;
-
-/// `_output_context`: the claims as the audits see them, each with its cited sources and the counts and comparisons
+/// `_output_context`: the claims as the output check sees them, each with its cited sources and the counts and comparisons
 /// it rests on, or None when a cited fact is no longer current or a record is missing.
 #[doc(hidden)]
 pub fn output_context(composed: &ComposedAnswer, notes: &Notes) -> Option<OutputContext> {
@@ -813,8 +742,8 @@ pub fn output_context(composed: &ComposedAnswer, notes: &Notes) -> Option<Output
         if expanded.iter().any(|key| !notes.current(key)) {
             return None;
         }
-        // A refused quote is dropped from what the audit is shown, so a claim resting on it alone has no source and one
-        // resting on it beside a valid quote is judged against the valid quote only.
+        // A refused quote is dropped from the check, so a claim resting on it alone has no source and one resting on it
+        // beside a valid quote is judged against the valid quote only.
         let known = notes.usable_citations(expanded.iter().map(String::as_str));
         let keys: Vec<&String> = expanded.iter().filter(|key| known.contains_key(*key)).collect();
         if keys.is_empty() {
@@ -911,109 +840,14 @@ pub fn output_context(composed: &ComposedAnswer, notes: &Notes) -> Option<Output
     })
 }
 
-/// `_share_output_sources`: answer claims can cite the same full collection. Share its bytes while preserving each
-/// claim's source membership, collection metadata and counterevidence.
-#[doc(hidden)]
-pub fn share_output_sources(messages: &[Message]) -> Vec<Message> {
-    let last = messages.len() - 1;
-    let mut payload: Value = serde_json::from_str(&messages[last].content).expect("the audit payload is JSON");
-    let mut sources = Map::new();
-    let mut refs: IndexMap<String, String> = IndexMap::new();
-    let mut reference = |source: &Value| -> Value {
-        let key = write(source, Style::DUMPS.sorted());
-        let next = format!("shared_{}", refs.len());
-        let reference = refs.entry(key).or_insert_with(|| {
-            sources.insert(next.clone(), source.clone());
-            next
-        });
-        json!({"source_ref": reference})
-    };
-    if let Some(Value::Object(criteria)) = payload.get_mut("criteria") {
-        for criterion in criteria.values_mut() {
-            let records = if criterion.get("reported_claims").is_some() { "reported_claims" } else { "sources" };
-            if let Some(Value::Array(records)) = criterion.get_mut(records) {
-                for record in records {
-                    let cited: Vec<Value> = record["cited_sources"]
-                        .as_array()
-                        .cloned()
-                        .unwrap_or_default()
-                        .iter()
-                        .map(&mut reference)
-                        .collect();
-                    record["cited_sources"] = Value::Array(cited);
-                }
-            }
-            let against: Vec<Value> = criterion["counterevidence"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default()
-                .iter()
-                .map(&mut reference)
-                .collect();
-            criterion["counterevidence"] = Value::Array(against);
-        }
-    }
-    payload["shared_sources"] = Value::Object(sources);
-    let mut shared: Vec<Message> = messages.to_vec();
-    shared[0].content = format!("{}{SHARED_NOTE}", shared[0].content);
-    shared[last].content = dumps(&payload);
-    shared
-}
-
-/// `_identity_schema(keys)`: an open dictionary permits an empty response even when every requested subject needs a
-/// binding, and the shared identities are a list of keyed entries, since one provider route returns a map with free
-/// keys empty, which leaves every binding without its quote.
-#[doc(hidden)]
-pub fn identity_schema<'a>(keys: impl IntoIterator<Item = &'a str>) -> Ty {
-    let scope = ModelTy::frozen(
-        "_IdentityReferenceScope",
-        vec![
-            Field::required("scope", Ty::literals(&["entities", "subjectless", "unresolved"])),
-            Field::default("identity_ids", Ty::list(Ty::Str), json!([])),
-        ],
-    )
-    .ty();
-    let keyed = ModelTy::frozen(
-        "_KeyedIdentity",
-        vec![Field::required("id", Ty::Str), Field::required("source_ref", Ty::Str), Field::required("quote", Ty::Str)],
-    )
-    .ty();
-    let bindings =
-        ModelTy::frozen("_RequiredBindings", keys.into_iter().map(|key| Field::required(key, scope.clone())).collect())
-            .ty();
-    ModelTy::frozen(
-        "_OutputIdentities",
-        vec![Field::required("identities", Ty::list(keyed)), Field::required("bindings", bindings)],
-    )
-    .ty()
-}
-
-/// `_assessment_schema(key)`: one required judgment, so a response cannot leave the asked field out.
-#[doc(hidden)]
-pub fn assessment_schema(key: &str) -> Ty {
-    let judgments =
-        ModelTy::frozen("_RequiredJudgments", vec![Field::required(key, Ty::literals(&["yes", "no", "uncertain"]))])
-            .ty();
-    ModelTy::frozen(
-        "_OutputAssessment",
-        vec![Field::required("judgments", judgments), Field::required("reason", Ty::Str)],
-    )
-    .ty()
-}
-
 /// The keyword arguments of `check_answer_outputs` and `check_claims`.
 pub struct CheckOptions<'a> {
     pub tokens: TokenBudget,
     pub ledger: Option<&'a Ledger>,
     pub missing_outputs: Option<&'a Mutex<Vec<String>>>,
     pub corrections: Option<&'a Mutex<Vec<AnswerCorrection>>>,
-    pub allow_scalar_jev: bool,
-    pub task: String,
-    pub audit_cache: Option<&'a OutputAuditCache>,
-    pub bounded: bool,
     pub verified_outputs: Option<&'a Mutex<Vec<String>>>,
     pub independent_fields: bool,
-    pub today: Option<String>,
     pub trace: Trace,
     /// `check_claims` only.
     pub transaction_evidence_ids: Vec<String>,
@@ -1030,13 +864,8 @@ impl Default for CheckOptions<'_> {
             ledger: None,
             missing_outputs: None,
             corrections: None,
-            allow_scalar_jev: false,
-            task: String::new(),
-            audit_cache: None,
-            bounded: false,
             verified_outputs: None,
             independent_fields: true,
-            today: None,
             trace: Trace::disabled(),
             transaction_evidence_ids: Vec::new(),
             answer_checks: Vec::new(),
@@ -1049,879 +878,132 @@ fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// `check_answer_outputs`: whether the answer states and evidences every requested output.
-pub async fn check_answer_outputs(
-    jev: &dyn JevClient,
-    llm: Option<&dyn LLMClient>,
+/// Appends each of `found` that `into` does not hold yet.
+fn extend_new(into: &Mutex<Vec<String>>, found: &[String]) {
+    let mut into = locked(into);
+    for check in found {
+        if !into.contains(check) {
+            into.push(check.clone());
+        }
+    }
+}
+
+/// Records a source correction for each criterion that has none yet.
+fn correct(corrections: &Mutex<Vec<AnswerCorrection>>, failed: &[String], claims: &[Claim], reason: &str) {
+    let mut corrections = locked(corrections);
+    let corrected: HashSet<String> =
+        corrections.iter().filter(|c| c.stage == Stage::Source).map(|c| c.criterion.clone()).collect();
+    let added: Vec<AnswerCorrection> = failed
+        .iter()
+        .filter(|criterion| !corrected.contains(*criterion))
+        .map(|criterion| AnswerCorrection {
+            stage: Stage::Source,
+            criterion: criterion.clone(),
+            claims: claims.to_vec(),
+            reason: reason.to_string(),
+        })
+        .collect();
+    corrections.extend(added);
+}
+
+/// Whether code can ground every answer check: each one has a claim, and every claim cites current quotes and the
+/// records its count or comparison rests on.
+///
+/// No model is asked. A second LLM opinion on quoted answers used to follow, and over the 0.7.1 campaign and 27 traced
+/// reruns it never caught a wrong answer while rejecting correct ones (a version cited without the "latest release"
+/// label beside it, a table total without proof the rows were all the rows); it was most of a lookup's wall time.
+/// Whether the claims are supported, contradicted or leave a requirement out is Jev's claim check beside this one.
+pub fn check_answer_outputs(
     composed: &ComposedAnswer,
     notes: &Notes,
     checks: &[String],
     options: &CheckOptions<'_>,
-) -> Result<bool> {
+) -> bool {
     if options.independent_fields
         && let Some(outputs) = &composed.output_claims
     {
         let mut passed: Vec<String> = Vec::new();
-        let obligations: HashSet<&str> = composed.requirements.iter().map(|r| r.text.as_str()).collect();
-        let ordered: Vec<&String> = checks
-            .iter()
-            .filter(|c| !obligations.contains(c.as_str()))
-            .chain(checks.iter().filter(|c| obligations.contains(c.as_str())))
-            .collect();
-        for check in ordered {
-            if obligations.contains(check.as_str())
-                && checks.iter().any(|c| !obligations.contains(c.as_str()) && !passed.contains(c))
-            {
-                continue;
-            }
+        for check in checks {
             let mut indices: Vec<usize> = outputs.get(check).cloned().unwrap_or_default();
             if indices.iter().any(|index| *index >= composed.claims.len()) {
                 indices = Vec::new();
             }
+            // A field with no claim is still checked, so its rejection carries the correction the composer needs.
             let claims: Vec<Claim> = indices.iter().map(|index| composed.claims[*index].clone()).collect();
             let base = assemble_answer(&claims, notes, &composed.requirements, 0);
             let field = base.with_outputs(IndexMap::from([(check.clone(), (0..claims.len()).collect())]));
-            let single = CheckOptions {
-                tokens: options.tokens.clone(),
-                ledger: options.ledger,
-                missing_outputs: options.missing_outputs,
-                corrections: options.corrections,
-                allow_scalar_jev: false,
-                task: options.task.clone(),
-                audit_cache: options.audit_cache,
-                bounded: options.bounded,
-                verified_outputs: None,
-                independent_fields: true,
-                today: options.today.clone(),
-                trace: options.trace.clone(),
-                ..CheckOptions::default()
-            };
-            if Check::new(jev, llm, &field, notes, &single).run(std::slice::from_ref(check)).await? {
+            if outputs_grounded(&field, notes, std::slice::from_ref(check), options) {
                 passed.push(check.clone());
             }
         }
-        let all = passed.len() == checks.len();
         if let Some(verified) = options.verified_outputs {
-            locked(verified).extend(passed);
+            locked(verified).extend(passed.iter().cloned());
         }
-        return Ok(all);
-    }
-    Check::new(jev, llm, composed, notes, options).run(checks).await
-}
-
-enum Identities {
-    Resolved(IndexMap<String, Vec<Value>>),
-    Rejected,
-}
-
-struct Built {
-    fields: IndexMap<String, Value>,
-    source_fields: IndexMap<String, Value>,
-    selected_claims: IndexMap<String, Vec<Claim>>,
-}
-
-type StageResult = Result<(IndexMap<String, String>, IndexMap<String, String>)>;
-
-enum Speculation {
-    Failed(AgentError),
-    Unanswered,
-    Ready { selected: Option<Answered>, audits: Option<Vec<StageResult>> },
-}
-
-struct Check<'a> {
-    jev: &'a dyn JevClient,
-    llm: Option<&'a dyn LLMClient>,
-    composed: &'a ComposedAnswer,
-    notes: &'a Notes,
-    options: &'a CheckOptions<'a>,
-}
-
-impl<'a> Check<'a> {
-    fn new(
-        jev: &'a dyn JevClient,
-        llm: Option<&'a dyn LLMClient>,
-        composed: &'a ComposedAnswer,
-        notes: &'a Notes,
-        options: &'a CheckOptions<'a>,
-    ) -> Check<'a> {
-        Check { jev, llm, composed, notes, options }
-    }
-
-    fn client(&self) -> usize {
-        self.llm.map_or(0, |llm| llm as *const dyn LLMClient as *const () as usize)
-    }
-
-    fn fit(&self, messages: &[Message], schema: &Ty) -> Result<()> {
-        let size: usize = messages.iter().map(|m| text::len(&m.content)).sum::<usize>()
-            + text::len(&dumps(&fastbrowse_core::schema::json_schema(schema)));
-        let room = self.options.tokens.input_chars::<&str>(&[], false);
-        if self.options.bounded && size as i64 > room {
-            return Err(AgentError::NotesTooLarge(format!(
-                "Answer evidence exceeds the {room} character verification budget"
-            )));
+        let missing: Vec<String> = checks.iter().filter(|check| !passed.contains(check)).cloned().collect();
+        if let Some(found) = options.missing_outputs
+            && !missing.is_empty()
+        {
+            extend_new(found, &missing);
         }
-        Ok(())
+        return missing.is_empty();
     }
+    outputs_grounded(composed, notes, checks, options)
+}
 
-    fn reject(&self, failed: &[String], repair: Option<&str>) -> bool {
-        if let Some(missing) = self.options.missing_outputs {
-            locked(missing).extend(failed.iter().cloned());
+/// `_outputs_grounded`.
+fn outputs_grounded(composed: &ComposedAnswer, notes: &Notes, checks: &[String], options: &CheckOptions<'_>) -> bool {
+    let reject = |failed: &[String], repair: &str| -> bool {
+        if let Some(missing) = options.missing_outputs {
+            extend_new(missing, failed);
         }
-        if let (Some(repair), Some(corrections)) = (repair, self.options.corrections) {
-            // Missing identities or outputs can be repaired from uncited notes before browsing again.
-            locked(corrections).extend(failed.iter().map(|criterion| AnswerCorrection {
-                stage: Stage::Source,
-                criterion: criterion.clone(),
-                claims: self.composed.claims.clone(),
-                reason: repair.to_string(),
-            }));
+        if let Some(corrections) = options.corrections {
+            // Missing outputs can be repaired from uncited notes before browsing again.
+            correct(corrections, failed, &composed.claims, repair);
         }
         false
+    };
+    if checks.is_empty() {
+        return true;
     }
-
-    fn counterevidence(&self, context: &OutputContext, claims: &[&OutputClaim]) -> Vec<Value> {
-        let cited: HashSet<String> =
-            claims.iter().flat_map(|claim| &claim.cited_sources).map(|source| source.dump_json()).collect();
-        let locations: HashSet<(&String, &Option<String>)> =
-            claims.iter().flat_map(|claim| &claim.cited_sources).map(|s| (&s.url_ref, &s.frame_id)).collect();
-        let refs: HashMap<&String, &String> = context.urls.iter().map(|(alias, url)| (url, alias)).collect();
-        let mut sources: IndexMap<String, Value> = IndexMap::new();
-        // Selecting a field's quote hid conflicting values retained in another claim or uncited note.
-        for evidence in self.notes.current_evidence(None).values() {
-            let Some(alias) = refs.get(&evidence.url) else { continue };
-            if !locations.contains(&(*alias, &evidence.frame_id)) {
-                continue;
-            }
-            let page = self.notes.captured_page(evidence);
-            let source = OutputSource {
-                url_ref: (*alias).clone(),
-                quote: evidence.quote.clone(),
-                complete_source: evidence.complete_source,
-                source_id: evidence.source_id.clone(),
-                frame_id: evidence.frame_id.clone(),
-                page_title: page.filter(|_| evidence.frame_id.is_none()).map(|page| page.title.clone()),
-                control_context: evidence.control_context.clone(),
-            };
-            let serialized = source.dump_json();
-            if !cited.contains(&serialized) {
-                sources.insert(serialized, source.untitled());
-            }
-        }
-        sources.into_values().collect()
+    if checks.iter().any(|check| text::strip(check).is_empty()) {
+        return false;
     }
-
-    async fn ask_batches(&self, state: &Value, questions: &IndexMap<String, Question>) -> Result<Option<Answered>> {
-        evaluate_batches(self.jev, state, questions, &self.options.tokens, self.options.ledger, None, false).await
+    if let Some(outputs) = &composed.output_claims {
+        let missing: Vec<String> = checks
+            .iter()
+            .filter(|check| {
+                outputs.get(*check).is_none_or(|indices| {
+                    indices.is_empty() || indices.iter().any(|index| *index >= composed.claims.len())
+                })
+            })
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            return reject(&missing, "This field has no claim. Report its value or a supported bounded absence.");
+        }
     }
-
-    async fn run(&self, checks: &[String]) -> Result<bool> {
-        let composed = self.composed;
-        let notes = self.notes;
-        if checks.is_empty() {
-            return Ok(true);
-        }
-        if checks.iter().any(|check| text::strip(check).is_empty()) {
-            return Ok(false);
-        }
-        if let Some(outputs) = &composed.output_claims {
-            let missing: Vec<String> = checks
-                .iter()
-                .filter(|check| {
-                    outputs.get(*check).is_none_or(|indices| {
-                        indices.is_empty() || indices.iter().any(|index| *index >= composed.claims.len())
-                    })
-                })
-                .cloned()
-                .collect();
-            if !missing.is_empty() {
-                return Ok(self.reject(
-                    &missing,
-                    Some("This field has no claim. Report its value or a supported bounded absence."),
-                ));
-            }
-        }
-        let Some(context) = output_context(composed, notes) else {
-            let known: HashSet<String> = notes.facts().iter().map(|fact| fact_id(fact)).collect();
-            let unknown = composed
-                .claims
-                .iter()
-                .flat_map(|claim| notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str)))
-                .any(|key| !known.contains(&key));
-            if unknown {
-                return Ok(false);
-            }
-            return Ok(self.reject(checks, Some(STALE_REPAIR)));
-        };
-        let criteria: IndexMap<String, String> =
-            checks.iter().enumerate().map(|(index, check)| (format!("output_{index}"), check.clone())).collect();
-        let facts = notes.facts_by_id();
-        let mut verbatim = false;
-        if self.options.allow_scalar_jev && composed.claims.len() == 1 {
-            let claim = &composed.claims[0];
-            verbatim = notes.facts().iter().any(|fact| {
-                fact.reader == FactReader::JevChoice
-                    && fact.evidence.is_some()
-                    && claim.evidence_ids == [fact_id(fact)]
-                    && claim.text == fact.text
-            });
-        }
-        // Jev is the first tier for every answer that only restates quotes: a confident vote spares the two serial LLM
-        // audits, which were a third of a lookup's wall time. The claims check beside this one still has to find each
-        // claim supported by its quote. Counts, totals, comparisons and other calculations are derived across records,
-        // the class of answer the LLM audit exists for, so they always reach it. A Jev choice is the exception that is
-        // still a copy: code cut its value from the page, and its basis only lists the other places the same value
-        // appears.
-        let quoted = !composed.is_field_answer()
-            && composed.claims.iter().flat_map(|claim| &claim.evidence_ids).all(|key| {
-                facts.get(key).is_some_and(|fact| {
-                    fact.tally.is_none()
-                        && fact.comparison.is_none()
-                        && (fact.reader == FactReader::JevChoice || (fact.evidence.is_some() && fact.basis.is_empty()))
-                })
-            });
-        let mut scores: IndexMap<String, f64> = IndexMap::new();
-        if verbatim || quoted {
-            let questions: IndexMap<String, Question> = criteria
-                .iter()
-                .map(|(key, criterion)| {
-                    let question = NoulQuestion::new(
-                        prompts::settled(criterion),
-                        Some("Yes, every part is answered and directly evidenced."),
-                        Some("No, a requested output is missing, unsupported, ambiguous or uncertain."),
-                    );
-                    (key.clone(), question.into())
-                })
-                .collect();
-            // The LLM audits see every other quote retained from the cited pages, so a vote that settles in their place
-            // must see them too: a conflicting or condition-dependent value otherwise passes unseen.
-            let mut state = context.dump();
-            let all: Vec<&OutputClaim> = context.claims.iter().collect();
-            let conflicts = self.counterevidence(&context, &all);
-            if !conflicts.is_empty() {
-                state["counterevidence"] = Value::Array(conflicts);
-            }
-            let result = self.ask_batches(&state, &questions).await?;
-            if verbatim
-                && let Some(result) = &result
-                && questions.keys().any(|key| !matches!(result.answers.get(key), Some(Answer::Noul(_))))
-            {
-                return Ok(false);
-            }
-            // An unscored criterion, or an oversized answer Jev could not score, still reaches the LLM audit.
-            scores = questions
-                .keys()
-                .map(|key| (key.clone(), result.as_ref().map_or(0.0, |r| probability(&r.answers, key))))
-                .collect();
-            self.options.trace.event("answer_outputs", || {
-                let mut fields = Map::new();
-                fields.insert("scores".into(), json!(scores));
-                fields
-            });
-        }
-        let uncertain: IndexMap<String, String> = if scores.is_empty() {
-            criteria.clone()
-        } else {
-            scores
-                .iter()
-                .filter(|(_, probability)| **probability < OUTPUT_SETTLED_FROM)
-                .map(|(key, _)| (key.clone(), criteria[key].clone()))
-                .collect()
-        };
-        if uncertain.is_empty() {
-            return Ok(true);
-        }
-        let Some(llm) = self.llm else { return Ok(false) };
-        let mut choices: IndexMap<String, Value> = context
+    let Some(context) = output_context(composed, notes) else {
+        let known: HashSet<String> = notes.facts().iter().map(|fact| fact_id(fact)).collect();
+        let unknown = composed
             .claims
             .iter()
-            .enumerate()
-            .map(|(index, claim)| (format!("claim_{index}"), claim.text.clone().into()))
-            .collect();
-        choices.insert(
-            "all".into(),
-            "The requested output spans multiple claims; no single claim states all of it.".into(),
-        );
-        choices.insert("none".into(), "The requested output is missing from the actual answer.".into());
-        let selecting: IndexMap<String, Question> = uncertain
-            .iter()
-            .map(|(key, criterion)| {
-                (
-                    key.clone(),
-                    ChoiceQuestion::new(prompts::select(&self.options.task, criterion), choices.clone()).into(),
-                )
-            })
-            .collect();
-        let select = || async {
-            // Large list answers exceed Jev's option ceiling; the source and assertion audits still check every claim.
-            if choices.len() > MAX_CHOICE_OPTIONS || composed.is_field_answer() {
-                return Ok(None);
-            }
-            self.ask_batches(&json!({"answer": composed.answer}), &selecting).await
-        };
-        let unanswered = |selected: &Option<Answered>| {
-            selected
-                .as_ref()
-                .is_some_and(|s| selecting.keys().any(|key| !matches!(s.answers.get(key), Some(Answer::Choice(_)))))
-        };
-        // Under a cap each call must see the receipts of the calls it used to follow; see `Ledger.capped`.
-        let together = self.options.ledger.is_none_or(|ledger| !ledger.capped());
-        let dated = if self.options.today.is_some() { DATED } else { "" };
-        // Seeing the reported value let the audit fill gaps in ambiguous quotes; check sources with assertions withheld.
-        let source_messages = vec![Message::system(format!("{}{dated}", prompts::source_audit()))];
-        let assertion_messages = vec![Message::system(format!("{}{dated}", prompts::assertion_audit()))];
-        let mut source_reasons: IndexMap<String, String>;
-        let mut reasons: IndexMap<String, String>;
-        let available: IndexMap<String, String>;
-        let mut generated: Option<IndexMap<String, String>> = None;
-        let built: Built;
-        // Neither audit reads the other's verdict: the source audit withholds the assertions, and the assertion audit
-        // judges them from the same quotes. A source failure still decides first, so the assertion verdict is only
-        // ever used when sources hold. Both settle before either failure propagates.
-        if together {
-            // The identity call was a whole model round trip before any audit could start. The audits are sent beside
-            // it as soon as Jev's claim selection is back, without the subject quotes. They only stand when the
-            // identities then pass code's quote check and every speculative verdict, in both audits, is yes; anything
-            // else is audited again with the checked identities, so a speculative no never rejects an answer.
-            let speculating = async {
-                let selected = match select().await {
-                    Ok(selected) => selected,
-                    Err(error) => return Speculation::Failed(error),
-                };
-                if unanswered(&selected) {
-                    return Speculation::Unanswered;
-                }
-                // A selection that already fails the answer is decided after the identities, as it was when they came
-                // first; the speculative build records nothing, so one failure is never reported twice.
-                let audits = match self.build(&context, &uncertain, selected.as_ref(), &IndexMap::new(), false) {
-                    Ok(speculative) => Some(
-                        self.audit(
-                            &context,
-                            &[
-                                (&source_messages, &speculative.source_fields),
-                                (&assertion_messages, &speculative.fields),
-                            ],
-                        )
-                        .await,
-                    ),
-                    Err(_) => None,
-                };
-                Speculation::Ready { selected, audits }
-            };
-            let (identities, speculation) =
-                join2(self.resolve_identities(llm, &context, &uncertain), speculating).await;
-            let (selected, audits) = match speculation {
-                Speculation::Failed(error) => return Err(error),
-                Speculation::Unanswered => return Ok(false),
-                Speculation::Ready { selected, audits } => (selected, audits),
-            };
-            let identities = match identities? {
-                Identities::Rejected => return Ok(false),
-                Identities::Resolved(identities) => identities,
-            };
-            built = match self.build(&context, &uncertain, selected.as_ref(), &identities, true) {
-                Ok(built) => built,
-                Err(decided) => return Ok(decided),
-            };
-            let no_subjects = identities.values().all(Vec::is_empty);
-            let accepted = match &audits {
-                Some(audits) => no_subjects || settled(audits, &[&built.source_fields, &built.fields]),
-                None => false,
-            };
-            let results = if accepted {
-                // With no subject quotes the speculative fields are the real ones, so their verdicts stand either way.
-                self.options.trace.event("output_audit", || single("speculative", "accepted"));
-                audits.expect("accepted speculation has audits")
-            } else {
-                if audits.is_some() {
-                    self.options.trace.event("output_audit", || single("speculative", "reaudited"));
-                }
-                self.audit(&context, &[(&source_messages, &built.source_fields), (&assertion_messages, &built.fields)])
-                    .await
-            };
-            let mut results = results.into_iter();
-            let (source_result, assertion_result) =
-                (results.next().expect("two stages"), results.next().expect("two stages"));
-            let (judged, judged_reasons) = source_result?;
-            available = judged;
-            source_reasons = judged_reasons;
-            match assertion_result {
-                Ok((judged, judged_reasons)) => {
-                    generated = Some(judged);
-                    reasons = judged_reasons;
-                }
-                Err(error) => {
-                    // Raised only once the sources hold, as Python raises it after the source verdict.
-                    if uncertain.keys().all(|key| available.get(key).map(String::as_str) == Some("yes")) {
-                        return Err(error);
-                    }
-                    reasons = IndexMap::new();
-                }
-            }
-        } else {
-            let identities = match self.resolve_identities(llm, &context, &uncertain).await? {
-                Identities::Rejected => return Ok(false),
-                Identities::Resolved(identities) => identities,
-            };
-            let selected = select().await?;
-            if unanswered(&selected) {
-                return Ok(false);
-            }
-            built = match self.build(&context, &uncertain, selected.as_ref(), &identities, true) {
-                Ok(built) => built,
-                Err(decided) => return Ok(decided),
-            };
-            let mut results = self.audit(&context, &[(&source_messages, &built.source_fields)]).await.into_iter();
-            let (judged, judged_reasons) = results.next().expect("one stage")?;
-            available = judged;
-            source_reasons = judged_reasons;
-            reasons = IndexMap::new();
+            .flat_map(|claim| notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str)))
+            .any(|key| !known.contains(&key));
+        if unknown {
+            return false;
         }
-        let absent: Vec<String> = uncertain
-            .iter()
-            .filter(|(key, _)| available.get(*key).map(String::as_str) != Some("yes"))
-            .map(|(_, criterion)| criterion.clone())
-            .collect();
-        if !absent.is_empty() {
-            if let Some(corrections) = self.options.corrections {
-                // A selected claim can omit a quote already in the notes; rereading cannot repair its citations.
-                let mut corrections = locked(corrections);
-                for (key, criterion) in &uncertain {
-                    if available.get(key).map(String::as_str) != Some("yes") {
-                        corrections.push(AnswerCorrection {
-                            stage: Stage::Source,
-                            criterion: criterion.clone(),
-                            claims: built.selected_claims[key].clone(),
-                            reason: source_reasons.shift_remove(key).unwrap_or_default(),
-                        });
-                    }
-                }
-            }
-            return Ok(self.reject(&absent, None));
-        }
-        let generated = match generated {
-            Some(generated) => generated,
-            None => {
-                let mut results = self.audit(&context, &[(&assertion_messages, &built.fields)]).await.into_iter();
-                let (judged, judged_reasons) = results.next().expect("one stage")?;
-                reasons = judged_reasons;
-                judged
-            }
-        };
-        let failing: Vec<&String> =
-            built.fields.keys().filter(|key| generated.get(*key).map(String::as_str) != Some("yes")).collect();
-        let failed: Vec<String> = failing
-            .iter()
-            .map(|key| match uncertain.get(*key) {
-                Some(criterion) => criterion.clone(),
-                None => {
-                    let index: usize = key.trim_start_matches("claim_only_").parse().unwrap_or_default();
-                    format!("Unsupported answer detail: {}", context.claims[index].text)
-                }
-            })
-            .collect();
-        if !failed.is_empty()
-            && let Some(corrections) = self.options.corrections
-        {
-            let mut corrections = locked(corrections);
-            for key in &failing {
-                corrections.push(AnswerCorrection {
-                    stage: Stage::Assertion,
-                    criterion: built.fields[*key]["criterion"].as_str().unwrap_or_default().to_string(),
-                    claims: built.selected_claims[*key].clone(),
-                    reason: reasons.get(*key).cloned().unwrap_or_default(),
-                });
-            }
-        }
-        Ok(if failed.is_empty() { true } else { self.reject(&failed, None) })
+        return reject(checks, STALE_REPAIR);
+    };
+    // A count, ranking, winner or absence is only as good as the reading of its list: code knows whether every page
+    // and chunk was read, so an unfinished one is refused here rather than argued over by a model.
+    let unfinished = context.claims.iter().any(|claim| {
+        claim.counted_records.iter().any(|record| !record.complete)
+            || claim.compared_records.iter().any(|record| !record.complete)
+    });
+    if unfinished {
+        return reject(checks, UNFINISHED_REPAIR);
     }
-
-    /// Each uncertain criterion's requested subjects as code-checked identifying quotes, or the rejection.
-    async fn resolve_identities(
-        &self,
-        llm: &dyn LLMClient,
-        context: &OutputContext,
-        uncertain: &IndexMap<String, String>,
-    ) -> Result<Identities> {
-        let mut identities: IndexMap<String, Vec<Value>> = IndexMap::new();
-        if context.claims.is_empty() {
-            return Ok(Identities::Resolved(identities));
-        }
-        let mut offered: IndexMap<String, &OutputSource> = IndexMap::new();
-        let mut refs: HashMap<String, String> = HashMap::new();
-        for claim in &context.claims {
-            for source in &claim.cited_sources {
-                let serialized = source.dump_json();
-                if !refs.contains_key(&serialized) {
-                    let reference = format!("q{}", refs.len());
-                    refs.insert(serialized, reference.clone());
-                    offered.insert(reference, source);
-                }
-            }
-        }
-        // The key is the only handle a binding may name. Shown a source's page block id as well, the resolver once filed
-        // a correct quote under "s15729" instead of "q0", and a right answer failed as an identity missing from its
-        // cited sources.
-        let sources: Map<String, Value> = offered
-            .iter()
-            .map(|(reference, source)| (reference.clone(), exclude(source.dump(), &["source_id"])))
-            .collect();
-        let messages = vec![
-            Message::system(prompts::identities()),
-            Message::user(dumps(&json!({
-                "task": self.options.task,
-                "criteria": uncertain,
-                "answer": context.answer,
-                "urls": context.urls,
-                "sources": sources,
-            }))),
-        ];
-        let fingerprint = sha256_hex(
-            write(
-                &json!({
-                    "client": self.client(),
-                    "messages": messages.iter().map(Dump::dump).collect::<Vec<_>>(),
-                    "kind": "identities",
-                }),
-                Style::DUMPS.sorted(),
-            )
-            .as_bytes(),
-        );
-        let cached = self.options.audit_cache.and_then(|cache| match locked(cache).get(&fingerprint) {
-            Some(AuditEntry::Identities(found)) => Some(found.clone()),
-            _ => None,
-        });
-        let resolved = match cached {
-            Some(resolved) => resolved,
-            None => {
-                let schema = identity_schema(uncertain.keys().map(String::as_str));
-                self.fit(&messages, &schema)?;
-                let response = ModelSchema { ty: schema };
-                let generated = recorded(
-                    llm.generate_value(LLMPurpose::Verify, &messages, &response, 8000, self.options.ledger),
-                    self.options.ledger,
-                )
-                .await?;
-                let payload = generated.data;
-                let mut shared: IndexMap<String, QuotedIdentity> = IndexMap::new();
-                for entry in payload["identities"].as_array().into_iter().flatten() {
-                    let identity = QuotedIdentity {
-                        source_ref: entry["source_ref"].as_str().unwrap_or_default().to_string(),
-                        quote: entry["quote"].as_str().unwrap_or_default().to_string(),
-                    };
-                    // One id naming two quotes leaves every binding through it ambiguous.
-                    let id = entry["id"].as_str().unwrap_or_default().to_string();
-                    if *shared.entry(id).or_insert_with(|| identity.clone()) != identity {
-                        let all: Vec<String> = uncertain.values().cloned().collect();
-                        self.reject(&all, None);
-                        return Ok(Identities::Rejected);
-                    }
-                }
-                let mut scopes = IndexMap::new();
-                for (key, value) in payload["bindings"].as_object().into_iter().flatten() {
-                    let ids: Vec<&str> =
-                        value["identity_ids"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-                    if ids.iter().any(|id| !shared.contains_key(*id)) {
-                        self.reject(
-                            std::slice::from_ref(&uncertain[key]),
-                            Some("The requested subject has no valid quoted identity."),
-                        );
-                        return Ok(Identities::Rejected);
-                    }
-                    let mut unique: IndexSet<QuotedIdentity> = IndexSet::new();
-                    unique.extend(ids.iter().map(|id| shared[*id].clone()));
-                    scopes.insert(
-                        key.clone(),
-                        IdentityScope {
-                            scope: value["scope"].as_str().unwrap_or_default().to_string(),
-                            identities: unique.into_iter().collect(),
-                        },
-                    );
-                }
-                let resolved = OutputIdentities { bindings: scopes };
-                if let Some(cache) = self.options.audit_cache {
-                    locked(cache).insert(fingerprint, AuditEntry::Identities(resolved.clone()));
-                }
-                resolved
-            }
-        };
-        for (key, criterion) in uncertain {
-            let criterion_list = std::slice::from_ref(criterion);
-            let scope = resolved.bindings.get(key);
-            let Some(scope) = scope.filter(|scope| scope.scope != "unresolved") else {
-                self.reject(criterion_list, Some("Cite a literal identifying quote for every requested subject."));
-                return Ok(Identities::Rejected);
-            };
-            if scope.scope == "subjectless" {
-                if !scope.identities.is_empty() {
-                    self.reject(criterion_list, Some("The subject binding contradicts its quoted identities."));
-                    return Ok(Identities::Rejected);
-                }
-                continue;
-            }
-            if scope.identities.is_empty() {
-                self.reject(criterion_list, Some("Cite a literal identifying quote for every requested subject."));
-                return Ok(Identities::Rejected);
-            }
-            let mut bound = Vec::new();
-            for binding in &scope.identities {
-                let source = offered.get(&binding.source_ref);
-                let holds = source.is_some_and(|source| {
-                    !text::strip(&binding.quote).is_empty()
-                        && [source.quote.as_str(), source.page_title.as_deref().unwrap_or("")]
-                            .iter()
-                            .any(|written| written.contains(&binding.quote))
-                });
-                let Some(source) = source.filter(|_| holds) else {
-                    self.reject(criterion_list, Some("The requested subject's identity is not in its cited sources."));
-                    return Ok(Identities::Rejected);
-                };
-                let mut identity = Map::new();
-                identity.insert("reference".into(), criterion.clone().into());
-                identity.insert("url_ref".into(), source.url_ref.clone().into());
-                identity.insert("quote".into(), binding.quote.clone().into());
-                if let Some(control) = &source.control_context {
-                    identity.insert("source_id".into(), source.source_id.clone().into());
-                    identity.insert("frame_id".into(), json!(source.frame_id));
-                    identity.insert("control_context".into(), control.dump());
-                }
-                bound.push(Value::Object(identity));
-            }
-            identities.insert(key.clone(), bound);
-        }
-        Ok(Identities::Resolved(identities))
-    }
-
-    /// The audit fields for this claim selection and these subject identities, or the decision when the selection
-    /// already fails the answer. `record` is false for the speculative build, whose rejections Python takes back.
-    fn build(
-        &self,
-        context: &OutputContext,
-        uncertain: &IndexMap<String, String>,
-        selected: Option<&Answered>,
-        identities: &IndexMap<String, Vec<Value>>,
-        record: bool,
-    ) -> std::result::Result<Built, bool> {
-        let composed = self.composed;
-        let mut fields: IndexMap<String, Value> = IndexMap::new();
-        let mut source_fields: IndexMap<String, Value> = IndexMap::new();
-        let mut covered: HashSet<usize> = HashSet::new();
-        let mut selected_claims: IndexMap<String, Vec<Claim>> = IndexMap::new();
-        for (key, criterion) in uncertain {
-            let choice = match selected.and_then(|s| s.answers.get(key)) {
-                Some(Answer::Choice(answer)) => answer.choice.clone(),
-                _ => "all".to_string(),
-            };
-            let claims: Vec<&OutputClaim>;
-            if let Some(outputs) = &composed.output_claims {
-                let indices = &outputs[criterion];
-                selected_claims.insert(key.clone(), indices.iter().map(|i| composed.claims[*i].clone()).collect());
-                claims = indices.iter().map(|i| &context.claims[*i]).collect();
-                covered.extend(indices.iter().copied());
-            } else if choice == "none" {
-                if record {
-                    self.reject(
-                        std::slice::from_ref(criterion),
-                        Some("The answer does not state this requested output. Use retained quotes to answer it."),
-                    );
-                }
-                return Err(false);
-            } else if choice == "all" {
-                selected_claims.insert(key.clone(), composed.claims.clone());
-                claims = context.claims.iter().collect();
-                if claims.len() == 1 {
-                    covered.insert(0);
-                }
-            } else if let Some(index) = choice
-                .strip_prefix("claim_")
-                .and_then(|i| i.parse::<usize>().ok())
-                .filter(|i| *i < context.claims.len() && format!("claim_{i}") == choice)
-            {
-                claims = vec![&context.claims[index]];
-                selected_claims.insert(key.clone(), vec![composed.claims[index].clone()]);
-                covered.insert(index);
-            } else {
-                return Err(false);
-            }
-            let entities = Value::Array(identities.get(key).cloned().unwrap_or_default());
-            let against = Value::Array(self.counterevidence(context, &claims));
-            fields.insert(
-                key.clone(),
-                json!({
-                    "criterion": criterion,
-                    "requested_entities": entities,
-                    "reported_claims": claims.iter().map(|claim| claim.untitled()).collect::<Vec<_>>(),
-                    "counterevidence": against,
-                }),
-            );
-            source_fields.insert(
-                key.clone(),
-                json!({
-                    "criterion": criterion,
-                    "requested_entities": entities,
-                    "sources": claims
-                        .iter()
-                        .map(|claim| json!({
-                            "cited_sources": claim.cited_sources.iter().map(OutputSource::untitled).collect::<Vec<_>>(),
-                            "counted_records": claim.counted_records.iter().map(Dump::dump).collect::<Vec<_>>(),
-                            "compared_records": claim.compared_records.iter().map(Dump::dump).collect::<Vec<_>>(),
-                        }))
-                        .collect::<Vec<_>>(),
-                    "counterevidence": against,
-                }),
-            );
-        }
-        for (index, claim) in context.claims.iter().enumerate() {
-            if !covered.contains(&index) {
-                let key = format!("claim_only_{index}");
-                selected_claims.insert(key.clone(), vec![composed.claims[index].clone()]);
-                fields.insert(
-                    key,
-                    json!({
-                        "criterion": "Every factual assertion is supported by its own cited sources.",
-                        "reported_claims": [claim.untitled()],
-                        "counterevidence": self.counterevidence(context, &[claim]),
-                    }),
-                );
-            }
-        }
-        Ok(Built { fields, source_fields, selected_claims })
-    }
-
-    /// Each stage's judgments and reasons, or the first error that stage raised.
-    ///
-    /// The fields of every stage are queued alternately, one stage's field then the next: queued stage by stage, the
-    /// first stage's fields took every slot of Python's shared cap, and the stage beside it waited behind all of them
-    /// as if the two ran one after the other.
-    async fn audit(
-        &self,
-        context: &OutputContext,
-        stages: &[(&Vec<Message>, &IndexMap<String, Value>)],
-    ) -> Vec<StageResult> {
-        let mut jobs: Vec<(usize, &Vec<Message>, &String, &Value)> = Vec::new();
-        let longest = stages.iter().map(|(_, fields)| fields.len()).max().unwrap_or(0);
-        for row in 0..longest {
-            for (index, (messages, fields)) in stages.iter().enumerate() {
-                if let Some((key, field)) = fields.get_index(row) {
-                    jobs.push((index, messages, key, field));
-                }
-            }
-        }
-        // One field's quoted value cannot answer another field; every receipt settles before an error returns.
-        let futures: Vec<fastbrowse_core::BoxFuture<'_, Result<(String, String, String)>>> = jobs
-            .iter()
-            .map(|(_, messages, key, field)| {
-                Box::pin(self.one(context, messages, key, field)) as fastbrowse_core::BoxFuture<'_, _>
-            })
-            .collect();
-        let assessed = join_all(futures).await;
-        let mut results: Vec<StageResult> = stages.iter().map(|_| Ok((IndexMap::new(), IndexMap::new()))).collect();
-        for ((index, ..), result) in jobs.iter().zip(assessed) {
-            let Ok((judged, reasons)) = &mut results[*index] else { continue };
-            match result {
-                Err(error) => results[*index] = Err(error),
-                Ok((key, judgment, reason)) => {
-                    judged.insert(key.clone(), judgment);
-                    reasons.insert(key, reason);
-                }
-            }
-        }
-        results
-    }
-
-    async fn one(
-        &self,
-        context: &OutputContext,
-        messages: &[Message],
-        key: &str,
-        field: &Value,
-    ) -> Result<(String, String, String)> {
-        let llm = self.llm.expect("audits run with an LLM");
-        let schema = assessment_schema(key);
-        let records = field.get("reported_claims").or_else(|| field.get("sources"));
-        let mut refs: HashSet<String> = HashSet::new();
-        for record in records.and_then(Value::as_array).into_iter().flatten() {
-            for source in record["cited_sources"].as_array().into_iter().flatten() {
-                refs.insert(source["url_ref"].as_str().unwrap_or_default().to_string());
-            }
-            for kind in ["counted_records", "compared_records"] {
-                for metadata in record.get(kind).and_then(Value::as_array).into_iter().flatten() {
-                    for read in metadata.get("pages_read").and_then(Value::as_array).into_iter().flatten() {
-                        refs.insert(read["url_ref"].as_str().unwrap_or_default().to_string());
-                    }
-                }
-            }
-        }
-        for identity in field.get("requested_entities").and_then(Value::as_array).into_iter().flatten() {
-            refs.insert(identity["url_ref"].as_str().unwrap_or_default().to_string());
-        }
-        let urls: Map<String, Value> = context
-            .urls
-            .iter()
-            .filter(|(alias, _)| refs.contains(*alias))
-            .map(|(alias, url)| (alias.clone(), url.clone().into()))
-            .collect();
-        let mut payload = Map::new();
-        payload.insert("task".into(), self.options.task.clone().into());
-        payload.insert("criteria".into(), json!({ key: field }));
-        payload.insert("urls".into(), Value::Object(urls));
-        if let Some(today) = &self.options.today {
-            payload.insert("current_date".into(), today.clone().into());
-        }
-        let mut request: Vec<Message> = messages.to_vec();
-        request.push(Message::user(dumps(&Value::Object(payload))));
-        if self.options.independent_fields && self.composed.is_field_answer() {
-            request[0].content = format!("{}\n\n{FIELD_CATEGORIES}", request[0].content);
-        }
-        if let Err(AgentError::NotesTooLarge(_)) = self.fit(&request, &schema) {
-            request = share_output_sources(&request);
-            self.fit(&request, &schema)?;
-        }
-        let fingerprint = sha256_hex(
-            write(
-                &json!({
-                    "client": self.client(),
-                    "purpose": LLMPurpose::Verify.as_str(),
-                    "messages": request.iter().map(Dump::dump).collect::<Vec<_>>(),
-                    "schema": fastbrowse_core::schema::json_schema(&schema),
-                    "max_output_tokens": 512,
-                }),
-                Style::DUMPS.sorted(),
-            )
-            .as_bytes(),
-        );
-        if let Some(cache) = self.options.audit_cache
-            && let Some(AuditEntry::Verdict(verdict)) = locked(cache).get(&fingerprint)
-        {
-            return Ok((key.to_string(), verdict.judgment.clone(), verdict.reason.clone()));
-        }
-        let response = ModelSchema { ty: schema };
-        let generated = llm.generate_value(LLMPurpose::Verify, &request, &response, 512, self.options.ledger).await?;
-        if let Some(ledger) = self.options.ledger {
-            ledger.record([generated.cost.clone()])?;
-        }
-        let verdict = OutputAuditVerdict {
-            judgment: generated.data["judgments"][key].as_str().unwrap_or_default().to_string(),
-            reason: generated.data["reason"].as_str().unwrap_or_default().to_string(),
-        };
-        if let Some(cache) = self.options.audit_cache {
-            locked(cache).insert(fingerprint, AuditEntry::Verdict(verdict.clone()));
-        }
-        Ok((key.to_string(), verdict.judgment, verdict.reason))
-    }
-}
-
-fn single(key: &str, value: &str) -> Map<String, Value> {
-    let mut fields = Map::new();
-    fields.insert(key.into(), value.into());
-    fields
-}
-
-/// Whether every stage answered and judged every one of its fields yes.
-fn settled(verdicts: &[StageResult], built: &[&IndexMap<String, Value>]) -> bool {
-    verdicts.iter().zip(built).all(|(verdict, fields)| match verdict {
-        Ok((judged, _)) => fields.keys().all(|key| judged.get(key).map(String::as_str) == Some("yes")),
-        Err(_) => false,
-    })
+    true
 }
 
 const OMITTED: &str = "requirement_omitted";
@@ -1950,14 +1032,12 @@ pub async fn check_claims(
     composed: &ComposedAnswer,
     notes: &Notes,
     thresholds: &Thresholds,
-    llm: Option<&dyn LLMClient>,
     options: &CheckOptions<'_>,
 ) -> Result<Option<ComposedAnswer>> {
     let tokens = &options.tokens;
     let ledger = options.ledger;
     let answer_checks = &options.answer_checks;
-    // Explicit output audits replace the omission question; rendering its unused notes can exceed the budget.
-    let mut questions = claim_check_questions(composed, notes, tokens, answer_checks.is_empty())?;
+    let mut questions = claim_check_questions(composed, notes, tokens, true, answer_checks)?;
     // An action-only task can finish without factual claims. Its completion was checked already, and Jev rejects an
     // empty question batch; dropped or uncited answer text still cannot pass.
     if questions.is_empty() && answer_checks.is_empty() {
@@ -1968,6 +1048,7 @@ pub async fn check_claims(
         let Some(transaction) = &transaction else { return ask(jev, composed, &questions, ledger, tokens).await };
         // Asked apart so the committed pages cannot take the omission check's notes budget.
         let checked = IndexMap::from([(TRANSACTION_CONTRADICTED.to_string(), transaction.clone())]);
+        // Both asks finish before either failure propagates, so neither is billed after the check has returned.
         let (claimed, committed) =
             join2(ask(jev, composed, &questions, ledger, tokens), ask(jev, composed, &checked, ledger, tokens)).await;
         let mut claimed = claimed?;
@@ -1980,20 +1061,13 @@ pub async fn check_claims(
         ledger,
         missing_outputs: options.missing_outputs,
         corrections: options.corrections,
-        allow_scalar_jev: options.allow_scalar_jev,
-        task: options.task.clone(),
-        audit_cache: options.audit_cache,
-        bounded: options.bounded,
         verified_outputs: Some(&verified_outputs),
         independent_fields: options.independent_fields,
-        today: options.today.clone(),
         trace: options.trace.clone(),
         ..CheckOptions::default()
     };
-    let (checked, outputs_supported) =
-        join2(claims, check_answer_outputs(jev, llm, composed, notes, answer_checks, &outputs_options)).await;
-    let answers = checked?;
-    let outputs_supported = outputs_supported?;
+    let outputs_supported = check_answer_outputs(composed, notes, answer_checks, &outputs_options);
+    let answers: IndexMap<String, Answer> = claims.await?;
     if let Some(transaction) = transaction {
         questions.insert(TRANSACTION_CONTRADICTED.into(), transaction);
     }
@@ -2030,12 +1104,21 @@ pub async fn check_claims(
         })
         .map(|(_, claim)| claim.clone())
         .collect();
+    let unstated: Vec<String> = answer_checks
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| probability(&answers, &format!("{OUTPUT_MISSING}{index}")) > limit)
+        .map(|(_, check)| check.clone())
+        .collect();
     if let (Some(verified_fields), Some(output_claims)) = (options.verified_fields, &composed.output_claims) {
+        // Fields Jev found stated and supported are kept even when a sibling is missing, so the next compose rewrites
+        // only what failed.
         let verified = locked(&verified_outputs).clone();
         let outputs: IndexMap<&String, &Vec<usize>> = output_claims
             .iter()
             .filter(|(check, indices)| {
                 verified.contains(check)
+                    && !unstated.contains(check)
                     && !indices.is_empty()
                     && indices.iter().all(|i| kept.contains(&composed.claims[*i]))
             })
@@ -2059,6 +1142,16 @@ pub async fn check_claims(
                 .collect();
             locked(verified_fields).push(base.with_outputs(remapped));
         }
+    }
+    if !unstated.is_empty() {
+        // Named, so recovery looks for the missing output and the composer is told what to add.
+        if let Some(missing) = options.missing_outputs {
+            extend_new(missing, &unstated);
+        }
+        if let Some(corrections) = options.corrections {
+            correct(corrections, &unstated, &composed.claims, UNSTATED_REPAIR);
+        }
+        return Ok(None);
     }
     if !outputs_supported {
         return Ok(None);
@@ -2099,20 +1192,19 @@ pub async fn check_claims(
             ledger,
             missing_outputs: options.missing_outputs,
             corrections: options.corrections,
-            allow_scalar_jev: options.allow_scalar_jev,
-            task: options.task.clone(),
-            audit_cache: options.audit_cache,
-            bounded: options.bounded,
             independent_fields: options.independent_fields,
-            today: options.today.clone(),
             trace: options.trace.clone(),
             ..CheckOptions::default()
         };
-        let holds = check_answer_outputs(jev, llm, &pruned, notes, answer_checks, &again).await?;
-        return Ok(holds.then_some(pruned));
+        if !check_answer_outputs(&pruned, notes, answer_checks, &again) {
+            return Ok(None);
+        }
     }
     let mut omission: IndexMap<String, NoulQuestion> =
-        claim_check_questions(&pruned, notes, tokens, true)?.into_iter().filter(|(key, _)| key == OMITTED).collect();
+        claim_check_questions(&pruned, notes, tokens, true, answer_checks)?
+            .into_iter()
+            .filter(|(key, _)| key == OMITTED || key.starts_with(OUTPUT_MISSING))
+            .collect();
     // A grouped requirement can retain citations while pruning one of its requested fields. Check each removed claim
     // against the remaining answer without notes supplying the missing output.
     let information: Vec<String> = composed
@@ -2141,7 +1233,7 @@ pub async fn check_claims(
         let answers = ask(jev, &pruned, &omission, ledger, tokens).await?;
         // Removing a requested field cannot be waved through on an uncertain coverage decision.
         let failed = omission.keys().any(|key| {
-            let bound = if key == OMITTED { limit } else { limit.min(1.0 - limit) };
+            let bound = if key == OMITTED || key.starts_with(OUTPUT_MISSING) { limit } else { limit.min(1.0 - limit) };
             !matches!(answers.get(key), Some(Answer::Noul(_))) || probability(&answers, key) > bound
         });
         if failed {
@@ -2333,28 +1425,6 @@ mod tests {
     }
 
     #[test]
-    fn shared_sources_keep_each_claims_membership() {
-        let payload = json!({
-            "task": "t",
-            "criteria": {"output_0": {
-                "criterion": "c",
-                "reported_claims": [
-                    {"text": "x", "cited_sources": [{"url_ref": "u0", "quote": "q"}]},
-                    {"text": "y", "cited_sources": [{"url_ref": "u0", "quote": "q"}]},
-                ],
-                "counterevidence": [{"quote": "r", "url_ref": "u0"}],
-            }},
-            "urls": {},
-        });
-        let shared = share_output_sources(&[Message::system("S"), Message::user(dumps(&payload))]);
-        assert!(shared[0].content.ends_with(" cited_sources in order. Check every claim and every source."));
-        assert_eq!(
-            shared[1].content,
-            r#"{"task": "t", "criteria": {"output_0": {"criterion": "c", "reported_claims": [{"text": "x", "cited_sources": [{"source_ref": "shared_0"}]}, {"text": "y", "cited_sources": [{"source_ref": "shared_0"}]}], "counterevidence": [{"source_ref": "shared_1"}]}}, "urls": {}, "shared_sources": {"shared_0": {"url_ref": "u0", "quote": "q"}, "shared_1": {"quote": "r", "url_ref": "u0"}}}"#
-        );
-    }
-
-    #[test]
     fn a_failure_beside_a_sibling_waits_for_it() {
         // gather(return_exceptions=True): the sibling that needs two polls still finishes after the other failed.
         let finished = std::sync::atomic::AtomicBool::new(false);
@@ -2376,15 +1446,6 @@ mod tests {
         let (first, second) = block_on(join2(failing, slow));
         assert!(first.is_err() && second.is_ok());
         assert!(finished.load(std::sync::atomic::Ordering::SeqCst));
-    }
-
-    #[test]
-    fn assessment_and_identity_schemas_require_their_keys() {
-        let assessment = fastbrowse_core::schema::json_schema(&assessment_schema("arbitrary-field"));
-        assert_eq!(assessment["$defs"]["_RequiredJudgments"]["required"], json!(["arbitrary-field"]));
-        let identities = fastbrowse_core::schema::json_schema(&identity_schema(["criterion_17", "other"]));
-        assert_eq!(identities["$defs"]["_RequiredBindings"]["required"], json!(["criterion_17", "other"]));
-        assert_eq!(identities["required"], json!(["identities", "bindings"]));
     }
 
     // -- tests/test_accuracy_fixes.py: a browsing step cannot outvote an evidenced answer ------------------------
@@ -2450,7 +1511,7 @@ mod tests {
             "quote": total,
         }))
         .expect("evidence");
-        Notes::new([crate::memory::Fact::read(Some("r2"), total, evidence, FactReader::Llm)])
+        Notes::new([crate::memory::Fact::read(Some("r2"), total, evidence, fastbrowse_core::models::FactReader::Llm)])
     }
 
     fn page() -> Observation {

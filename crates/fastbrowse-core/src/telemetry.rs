@@ -6,6 +6,7 @@
 //! the receipts recorded when it is made, as in Python.
 
 use std::future::Future;
+use std::io::Write;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Instant;
 
@@ -210,11 +211,55 @@ pub fn monotonic() -> f64 {
     EPOCH.get_or_init(Instant::now).elapsed().as_secs_f64()
 }
 
+/// `TRACE_ENV`: where a run writes its trace as JSON lines: `-` or `1` for stderr, otherwise a file path appended to.
+pub const TRACE_ENV: &str = "FASTBROWSE_TRACE";
+
+type Sink = Mutex<Box<dyn std::io::Write + Send>>;
+
+/// The process's trace destination once [`trace_to`] set one: Python's handler on the `fastbrowse.trace` logger.
+static SINK: OnceLock<Sink> = OnceLock::new();
+
+/// `trace_to`: write every trace event as one JSON line, to stderr for `-` or `1` and otherwise appended to the file
+/// named.
+///
+/// The events say why a run went the way it did: each model call with its purpose, schema and timing, which reader
+/// answered a read and why, every check's scores, recoveries and their reasons. They carry ids, verdicts, redacted
+/// addresses, requirement texts and control labels, not page captures; treat the file as you would the task. With no
+/// destination the `FASTBROWSE_TRACE` environment variable is used, and an unset or empty one changes nothing.
+pub fn trace_to(destination: Option<&str>) -> std::io::Result<()> {
+    let destination = match destination {
+        Some(destination) => destination.to_string(),
+        None => std::env::var(TRACE_ENV).unwrap_or_default(),
+    };
+    if destination.is_empty() || SINK.get().is_some() {
+        return Ok(());
+    }
+    let stream: Box<dyn std::io::Write + Send> = if destination == "-" || destination == "1" {
+        Box::new(std::io::stderr())
+    } else {
+        Box::new(std::fs::OpenOptions::new().create(true).append(true).open(&destination)?)
+    };
+    let _ = SINK.set(Mutex::new(stream));
+    Ok(())
+}
+
+/// One event as `_JsonLines` writes it: when it was made, then the event.
+fn write_line(sink: &Sink, record: &Map<String, Value>) {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |at| at.as_secs_f64());
+    let mut line = Map::new();
+    line.insert("at".into(), crate::py::round(now, 3).into());
+    line.extend(record.iter().map(|(key, value)| (key.clone(), value.clone())));
+    let mut stream = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    // A trace that cannot be written is the trace's loss, never the run's, as logging's handleError leaves it.
+    let _ = writeln!(stream, "{}", crate::py::json::dumps(&Value::Object(line))).and_then(|()| stream.flush());
+}
+
 /// Why a run went the way it did, one record per judgement, for evals to keep beside each result: ids, verdicts,
 /// scores and redacted addresses, never page text.
 ///
 /// Python collects these through a logger and a context variable, so runs that overlap keep separate traces. Here a
-/// run owns its `Trace` and hands it to what it calls; a disabled one builds nothing.
+/// run owns its `Trace` and hands it to what it calls; a disabled one builds nothing unless [`trace_to`] set a
+/// destination for the process, which every trace writes to, as every logger record reaches Python's handler.
 #[derive(Debug, Clone, Default)]
 pub struct Trace {
     events: Option<Arc<Mutex<Vec<Value>>>>,
@@ -232,15 +277,22 @@ impl Trace {
     }
 
     pub fn enabled(&self) -> bool {
-        self.events.is_some()
+        self.events.is_some() || SINK.get().is_some()
     }
 
-    /// `trace(event, **fields)`. The fields are built only when the trace keeps them.
+    /// `trace(event, **fields)`. The fields are built only when the trace keeps or writes them.
     pub fn event(&self, event: &str, fields: impl FnOnce() -> Map<String, Value>) {
+        let sink = SINK.get();
+        if self.events.is_none() && sink.is_none() {
+            return;
+        }
+        let mut record = Map::new();
+        record.insert("event".into(), event.into());
+        record.extend(fields());
+        if let Some(sink) = sink {
+            write_line(sink, &record);
+        }
         if let Some(events) = &self.events {
-            let mut record = Map::new();
-            record.insert("event".into(), event.into());
-            record.extend(fields());
             events.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(Value::Object(record));
         }
     }

@@ -1,21 +1,25 @@
 """Recovered answers bind each requested field to its own claims and source scope."""
 
 import json
+from collections.abc import Callable, Mapping
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from pydantic import JsonValue
 
 from fastbrowse.agent import Agent, _follow_recovery, _recovery_routes, _Stop
+from fastbrowse.config import Thresholds
+from fastbrowse.jev import Answer, Evaluation, NoulAnswer, NoulQuestion, Question
 from fastbrowse.memory import Comparison, Fact, Notes, fact_id
 from fastbrowse.models import FactReader, Operation, Status
 from fastbrowse.page import BlockKind, Control, Page
 from fastbrowse.planner import OutputTarget, Plan, Requirement, RequirementKind, partition_plan
 from fastbrowse.policy import Decision, Reduction
-from fastbrowse.retrieval import compose
-from fastbrowse.verification import check_answer_outputs
+from fastbrowse.retrieval import OUTPUT_MISSING, AnswerCorrection, compose
+from fastbrowse.verification import check_answer_outputs, check_claims
 from tests.test_agent import open_outputs, run_state
 from tests.test_answer_repair import RoutingJev
-from tests.test_policy import ScriptedJev, observation
+from tests.test_policy import FREE, ScriptedJev, observation
 from tests.test_retrieval import ScriptedLLM, block_evidence, capture
 
 
@@ -98,37 +102,84 @@ def comments(complete: bool):
     return plan, Notes((*sources, collection))
 
 
-class FieldJudge(ScriptedLLM):
-    async def generate(self, purpose, messages, schema, **kwargs):
-        if schema.__name__ != "_OutputIdentities":
-            key, field = next(iter(json.loads(messages[-1].content)["criteria"].items()))
-            claims = field.get("reported_claims", field.get("sources"))
-            complete = any(c["complete"] for claim in claims for c in claim["compared_records"])
-            explicit = "reported_claims" not in field or any("No author replies" in claim["text"] for claim in claims)
-            self.responses.append(
-                {
-                    "judgments": {key: "yes" if complete and explicit else "no"},
-                    "reason": "Only complete player comments support the bounded absence of author replies.",
-                }
-            )
-        return await super().generate(purpose, messages, schema, **kwargs)
+class DoubtingJev(ScriptedJev):
+    """Answers yes to a claim-check question exactly when `doubt` holds for its key and instructions."""
+
+    def __init__(self, doubt: Callable[[str, str], bool]) -> None:
+        super().__init__({})
+        self.doubt = doubt
+
+    async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        self.requests.append(questions)
+        # An omission question reads the answer from the state, so the doubt sees both.
+        shown = f"\n\n# Answer\n{state['answer']}" if isinstance(state, dict) and "answer" in state else ""
+        answers: dict[str, Answer] = {
+            key: NoulAnswer(probability=float(isinstance(q, NoulQuestion) and self.doubt(key, q.instructions + shown)))
+            for key, q in questions.items()
+        }
+        return Evaluation(model="test", answers=answers, input_tokens=10, cost=FREE)
 
 
-@pytest.mark.parametrize("complete", [True, False])
+def unanswered(answer: str) -> Callable[[str, str], bool]:
+    """Doubts only the output omission questions, and only when the answer lacks `answer`."""
+    return lambda key, text: key.startswith(OUTPUT_MISSING) and answer not in text.split("# Answer", 1)[1]
+
+
 @pytest.mark.parametrize("thanks", [True, False])
-async def test_field_claim_checks_author_identity_and_complete_absence(complete: bool, thanks: bool) -> None:
-    plan, notes = comments(complete)
+async def test_field_claim_that_does_not_report_author_replies_is_rejected_as_omitted(thanks: bool) -> None:
+    plan, notes = comments(True)
     text = "Player Oak: Thanks for the update." if thanks else "No author replies occur in Birch's two comments."
     writer = FieldWriter([{"output_0": [{"text": text, "evidence_ids": ["e3"]}]}])
     answer = (
         await compose(writer, plan.requirements[0].text, plan, notes, preserve_collections=True, field_outputs=True)
     ).data
-    assert await check_answer_outputs(RoutingJev(), FieldJudge([]), answer, notes, plan.answer_checks) is (
-        complete and not thanks
+    assert check_answer_outputs(answer, notes, plan.answer_checks)
+    jev = DoubtingJev(unanswered("No author replies"))
+    missing: list[str] = []
+    corrections: list[AnswerCorrection] = []
+    held = await check_claims(
+        jev,
+        answer,
+        notes,
+        Thresholds(),
+        answer_checks=plan.answer_checks,
+        missing_outputs=missing,
+        corrections=corrections,
     )
+    assert (held is None) is thanks
+    assert any(f"{OUTPUT_MISSING}0" in request for request in jev.requests)
+    # A refusal names the check, so recovery and the composer know what to add.
+    assert missing == (list(plan.answer_checks) if thanks else [])
+    assert [(c.stage, c.criterion) for c in corrections] == ([("source", plan.answer_checks[0])] if thanks else [])
 
 
-async def test_missing_field_cannot_borrow_a_neighbor_claim_even_when_selector_accepts() -> None:
+async def test_an_absence_over_an_unfinished_collection_is_rejected() -> None:
+    plan, notes = comments(False)
+    writer = FieldWriter(
+        [{"output_0": [{"text": "No author replies occur in Birch's two comments.", "evidence_ids": ["e3"]}]}]
+    )
+    answer = (
+        await compose(writer, plan.requirements[0].text, plan, notes, preserve_collections=True, field_outputs=True)
+    ).data
+    missing: list[str] = []
+    corrections: list[AnswerCorrection] = []
+    # Jev doubts nothing: code refuses the absence because the collection was not read to its end.
+    held = await check_claims(
+        DoubtingJev(lambda key, text: False),
+        answer,
+        notes,
+        Thresholds(),
+        answer_checks=plan.answer_checks,
+        missing_outputs=missing,
+        corrections=corrections,
+    )
+    assert held is None
+    assert missing == list(plan.answer_checks)
+    assert [(c.stage, c.criterion) for c in corrections] == [("source", plan.answer_checks[0])]
+    assert "not read to its end" in corrections[0].reason
+
+
+async def test_missing_field_cannot_borrow_a_neighbor_claim() -> None:
     page = capture((BlockKind.RECORD, "Project Birch: Player Elm reports a crash."))
     fact = Fact(text=page.text, requirement_id="r", evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
     notes = Notes((fact,))
@@ -153,20 +204,7 @@ async def test_missing_field_cannot_borrow_a_neighbor_claim_even_when_selector_a
         )
     ).data
     missing = []
-    assert not await check_answer_outputs(
-        RoutingJev(),
-        ScriptedLLM(
-            [
-                {"judgments": {"output_0": "yes"}, "reason": "Selected claim accepted."}
-                for _ in range(2)
-                for i in range(2)
-            ]
-        ),
-        answer,
-        notes,
-        plan.answer_checks,
-        missing_outputs=missing,
-    )
+    assert not check_answer_outputs(answer, notes, plan.answer_checks, missing_outputs=missing)
     assert missing == [plan.answer_checks[1]]
 
 
@@ -199,19 +237,17 @@ async def test_field_decomposition_cannot_discharge_an_omitted_original_obligati
         [{"output_0": [{"text": "No author replies occur in Birch's two comments.", "evidence_ids": ["e3"]}]}]
     )
     answer = (await compose(writer, requirement.text, plan, notes, preserve_collections=True, field_outputs=True)).data
-
-    class MissingLinksJudge(FieldJudge):
-        async def generate(self, purpose, messages, schema, **kwargs):
-            if schema.__name__ != "_OutputIdentities":
-                key, field = next(iter(json.loads(messages[-1].content)["criteria"].items()))
-                if "links" in field["criterion"]:
-                    self.responses.append({"judgments": {key: "no"}, "reason": "No link is reported or quoted."})
-                    return await ScriptedLLM.generate(self, purpose, messages, schema, **kwargs)
-            return await super().generate(purpose, messages, schema, **kwargs)
-
     state = await run_state()
     state.ready_plan, state.notes, state.finish_partitions = plan, notes, (plan,)
-    agent = Agent(Mock(spec=Page), RoutingJev(), MissingLinksJudge([]))
+    # Jev would refuse any omission question shown the original requirement while the answer has no link.
+    jev = DoubtingJev(
+        lambda key, text: (
+            (key == "requirement_omitted" or key.startswith(OUTPUT_MISSING))
+            and requirement.text in text
+            and "link" not in answer.answer
+        )
+    )
+    agent = Agent(Mock(spec=Page), jev, ScriptedLLM([]))
     assert await agent._holds(state, answer) is None
     assert requirement.text in state.open_answer_outputs
 

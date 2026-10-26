@@ -25,6 +25,14 @@ fn report(exit: Exit) -> i32 {
     }
 }
 
+/// `trace_to()`: the trace goes where `FASTBROWSE_TRACE` says, if anywhere.
+fn trace_from_environment(name: &str) -> Result<(), i32> {
+    fastbrowse_core::telemetry::trace_to(None).map_err(|error| {
+        eprintln!("{name}: cannot write the trace: {error}");
+        1
+    })
+}
+
 fn serve_command(argv: &[String]) -> i32 {
     let mut options = vec![Opt::flag("--stdio").required()];
     // Tests that start this command need a run with no model behind it. It is left out of the help because it is no
@@ -62,6 +70,9 @@ fn serve_command(argv: &[String]) -> i32 {
         (default_runner(), fastbrowse_core::protocol::PROTOCOL_VERSION)
     };
     log::init("fastbrowse");
+    if let Err(code) = trace_from_environment("fastbrowse") {
+        return code;
+    }
     runtime().block_on(async move {
         let code = Server::with_protocol(transport, runner, serve::load_settings(), protocol).serve().await;
         #[cfg(feature = "scripted")]
@@ -73,6 +84,9 @@ fn serve_command(argv: &[String]) -> i32 {
 fn mcp_command(argv: &[String]) -> i32 {
     // stdout carries the protocol under stdio, so every log line goes to stderr.
     log::init("fastbrowse-mcp");
+    if let Err(code) = trace_from_environment("fastbrowse-mcp") {
+        return code;
+    }
     let args = match mcp::parse(argv) {
         Ok(args) => args,
         Err(exit) => return report(exit),

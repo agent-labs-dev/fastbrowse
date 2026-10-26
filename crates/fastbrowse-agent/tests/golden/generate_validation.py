@@ -26,7 +26,7 @@ from fastbrowse.retrieval import (
     _TextProposals,
 )
 from fastbrowse.shortcut import Shortcut, StartPage
-from fastbrowse.verification import LLMVerdict, _assessment_schema, _identity_schema
+from fastbrowse.verification import LLMVerdict
 
 HERE = Path(__file__).parent
 
@@ -36,8 +36,6 @@ FIELD_ANSWER_DRAFT = create_model(
     output_0=(tuple[Claim, ...], Field(description="The price of the first item")),
     output_2=(tuple[Claim, ...], Field(description="The name of the seller")),
 )
-IDENTITIES = _identity_schema(["output_0"])
-ASSESSMENT = _assessment_schema("output_0")
 
 CITE = {"first": "main/:1", "last": "main/:2"}
 CLAIM = {"cite": CITE, "text": "The price is $5", "requirement_id": "r1"}
@@ -159,20 +157,6 @@ CASES: dict[type[BaseModel], list[Any]] = {
         {"missing": [], "ungrounded": ["r1"], "complete": True},
         {"missing": "r1", "complete": "unsure"},
         {"complete": True},
-    ],
-    IDENTITIES: [
-        {
-            "identities": [{"id": "i1", "source_ref": "q0", "quote": "Acme"}],
-            "bindings": {"output_0": {"scope": "entities", "identity_ids": ["i1"]}},
-        },
-        {"identities": [], "bindings": {}},
-        {"identities": [{"id": "i1"}], "bindings": {"output_0": {"scope": "everyone"}, "output_1": {}}},
-    ],
-    ASSESSMENT: [
-        {"judgments": {"output_0": "yes"}, "reason": "ok"},
-        {"judgments": {"output_0": "Yes"}, "reason": "ok"},
-        {"judgments": {}, "reason": None},
-        {"judgments": {"output_0": "no", "output_1": "no"}},
     ],
 }
 

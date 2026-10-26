@@ -40,15 +40,28 @@ def project_notes(size: int = 24_000) -> tuple[Plan, Notes]:
 
 
 class FinishJev:
-    def __init__(self):
+    def __init__(self, unsupported: int | None = None):
         self.states = []
+        self.unsupported = unsupported
+        """The project whose claimed reply Jev doubts."""
+        self.withdrawn: str | None = None
+        """A note that, once shown beside a claim, contradicts it."""
+
+    def _doubts(self, key: str, question: object) -> bool:
+        instructions = getattr(question, "instructions", "")
+        if key.startswith("unsupported_"):
+            claim = instructions.split("# Claim\n", 1)[-1].split("\n\n# Evidence", 1)[0]
+            return self.unsupported is not None and f"Project {self.unsupported}:" in claim
+        return self.withdrawn is not None and self.withdrawn in instructions
 
     async def evaluate(self, state, questions):
         self.states.append(state)
         answers = {
             key: ChoiceAnswer(choice="all", probabilities={"all": 1}, confidence=1)
             if isinstance(question, ChoiceQuestion)
-            else NoulAnswer(probability=1 if key in {"complete", "draft_needs_writing"} else 0)
+            else NoulAnswer(
+                probability=1 if key in {"complete", "draft_needs_writing"} or self._doubts(key, question) else 0
+            )
             for key, question in questions.items()
         }
         return Evaluation(
@@ -60,10 +73,11 @@ class FinishJev:
 
 
 class FinishWriter(ScriptedLLM):
-    def __init__(self, unsupported: int | None = None):
+    def __init__(self):
         super().__init__([])
-        self.unsupported = unsupported
         self.composed = []
+        self.unanswered: int | None = None
+        """The project whose grouped field the writer leaves without a claim."""
 
     async def generate(self, purpose, messages, schema, **kwargs):
         content = messages[-1].content
@@ -88,20 +102,15 @@ class FinishWriter(ScriptedLLM):
             projects = re.findall(r"\[(e\d+)\][^\n]*?(Project (\d+): Author says the fix is available\.)", offered)
             assert projects
             self.composed.append(tuple(int(project) for _, _, project in projects))
-            claims: list[JsonValue] = [{"text": text, "evidence_ids": [ref]} for ref, text, _ in projects]
+            claims: list[JsonValue] = [
+                {"text": text, "evidence_ids": [ref]}
+                for ref, text, project in projects
+                if project != str(self.unanswered)
+            ]
             self.responses.append(
                 {key: claims for key in schema.model_fields}
                 if schema.__name__ == "_FieldAnswerDraft"
                 else {"claims": claims}
-            )
-        elif schema.__name__ != "_OutputIdentities":
-            key, field = next(iter(json.loads(content)["criteria"].items()))
-            fails = self.unsupported is not None and f"Project {self.unsupported}" in field["criterion"]
-            self.responses.append(
-                {
-                    "judgments": {key: "no" if fails else "yes"},
-                    "reason": "Requested reply missing." if fails else "Reply quoted.",
-                }
             )
         return await super().generate(purpose, messages, schema, **kwargs)
 
@@ -112,7 +121,7 @@ async def finish_agent(size: int = 24_000, unsupported: int | None = None):
     state.ready_plan, state.notes = project_notes(size)
     page = Mock(spec=Page)
     page.artifacts = ()
-    jev, llm = FinishJev(), FinishWriter(unsupported)
+    jev, llm = FinishJev(unsupported), FinishWriter()
     agent = Agent(page, jev, llm)
     seen = observation(())
     agent._observed = seen
@@ -372,21 +381,14 @@ def test_scoped_comparison_keeps_transitive_records_and_their_identity_quotes() 
 
 
 async def test_new_counterevidence_invalidates_only_its_verified_group() -> None:
-    agent, state, _, llm = await finish_agent()
+    agent, state, jev, llm = await finish_agent()
     assert (await agent._finish(state, None, None)).status is Status.COMPLETE
     page = capture((BlockKind.PARAGRAPH, "Project 2: The author withdrew the reply."), url="https://projects.test/2")
     fact = Fact(text=page.text, evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
     state.notes.add(fact)
-    llm.unsupported = 2
+    jev.withdrawn = "The author withdrew the reply."
     assert await agent._finish(state, None, None) is None
     assert llm.composed[5:] and all(group == (2,) for group in llm.composed[5:])
-    audits = [
-        json.loads(messages[-1].content)
-        for purpose, messages in llm.calls
-        if purpose is LLMPurpose.VERIFY and '"counterevidence"' in messages[-1].content
-    ]
-    assert fact.evidence is not None
-    assert any(fact.evidence.quote in json.dumps(audit) for audit in audits)
     assert state.open_answer_outputs == (state.plan.requirements[2].text,)
     partial = await agent._partial_result(state.notes, state, state.ledger, Status.UNVERIFIED, "Reply withdrawn")
     assert partial.status is Status.UNVERIFIED and "Project 2: Author says" not in partial.answer
@@ -426,7 +428,8 @@ async def test_changed_group_rechecks_its_verified_draft_before_composing_again(
 
 
 async def test_unrelated_new_evidence_does_not_retry_an_unchanged_rejected_group() -> None:
-    agent, state, _, llm = await finish_agent(unsupported=3)
+    agent, state, _, llm = await finish_agent()
+    llm.unanswered = 3
     assert await agent._finish(state, None, None) is None
     composed = len(llm.composed)
     page = capture((BlockKind.PARAGRAPH, "Project 2: Translations are welcome."), url="https://projects.test/2")

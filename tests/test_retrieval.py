@@ -29,6 +29,7 @@ from fastbrowse.page import Block, BlockKind, Capture, Observation
 from fastbrowse.planner import Plan, Requirement, RequirementKind
 from fastbrowse.retrieval import (
     TRANSACTION_CONTRADICTED,
+    AnswerCorrection,
     Claim,
     UnsupportedField,
     _read_message,
@@ -70,17 +71,6 @@ def capture(*parts: tuple[BlockKind, str], url: str = "https://example.test") ->
     )
 
 
-def scripted_identities(messages):
-    payload = json.loads(messages[-1].content)
-    reference, source = next(iter(payload["sources"].items()))
-    return {
-        "identities": [{"id": "i0", "source_ref": reference, "quote": source["quote"]}],
-        "bindings": {
-            key: {"scope": "entities", "identity_ids": ["i0"]} for key, criterion in payload["criteria"].items()
-        },
-    }
-
-
 class ScriptedLLM:
     def __init__(self, responses: Sequence[JsonValue]) -> None:
         self.responses = list(responses)
@@ -104,9 +94,7 @@ class ScriptedLLM:
         # The real client refuses a schema it cannot send strictly; a scripted reply must not hide one.
         strict_schema(schema.model_json_schema())
         return Generation(
-            data=schema.model_validate(
-                scripted_identities(messages) if schema.__name__ == "_OutputIdentities" else self.responses.pop(0)
-            ),
+            data=schema.model_validate(self.responses.pop(0)),
             cost=CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0.001, purpose=purpose),
         )
 
@@ -323,7 +311,7 @@ async def test_short_read_batches_requirements_and_keeps_citations_without_llm()
 
 
 @pytest.mark.parametrize(
-    "answer", [_choice("c1", 0.89), _choice("synthesis"), _choice("invented"), NoulAnswer(probability=1), None]
+    "answer", [_choice("c1", 0.79), _choice("synthesis"), _choice("invented"), NoulAnswer(probability=1), None]
 )
 async def test_short_read_falls_back_only_for_the_unanswered_requirement(answer: Answer | None) -> None:
     page = capture((BlockKind.PARAGRAPH, "Version: 1.2.3"), (BlockKind.PARAGRAPH, "License: MIT"))
@@ -2397,9 +2385,8 @@ async def test_compact_comparison_records_keep_each_quote_once_in_the_answer_bas
 
 
 @pytest.mark.parametrize("gap", [None, "other_open", "earlier_records", "unread_chunk", "more_pages", "known_pager"])
-async def test_comparison_coverage_reaches_answer_audits(gap: str | None) -> None:
+async def test_comparison_coverage_reaches_the_output_context(gap: str | None) -> None:
     from fastbrowse.verification import _output_context, check_answer_outputs
-    from tests.test_answer_repair import RoutingJev
 
     page = capture(
         (BlockKind.RECORD, "Oak $19"),
@@ -2440,12 +2427,14 @@ async def test_comparison_coverage_reaches_answer_audits(gap: str | None) -> Non
     expected = [{"scope": requirement.text, "complete": gap in (None, "other_open"), "record_indices": [0, 1]}]
     assert context.model_dump(mode="json")["claims"][0].get("compared_records") == expected
     assert all(not source.complete_source for source in context.claims[0].cited_sources)
-    audit = ScriptedLLM([{"judgments": {"output_0": "yes"}, "reason": "Read coverage retained."}] * 2)
-    assert await check_answer_outputs(RoutingJev(), audit, answer, notes, (requirement.text,))
-    for _, messages in audit.calls[1:]:
-        field = json.loads(messages[-1].content)["criteria"]["output_0"]
-        records = field.get("sources", field.get("reported_claims"))
-        assert records[0]["compared_records"] == expected
+    # A winner of a comparison whose collection was not read in full is refused and named for recovery.
+    complete = gap in (None, "other_open")
+    missing: list[str] = []
+    corrections: list[AnswerCorrection] = []
+    passed = check_answer_outputs(answer, notes, (requirement.text,), missing_outputs=missing, corrections=corrections)
+    assert passed is complete
+    assert missing == ([] if complete else [requirement.text])
+    assert [(c.stage, c.criterion) for c in corrections] == ([] if complete else [("source", requirement.text)])
 
 
 @pytest.mark.parametrize("bad_record", ["unknown", "reversed", "frame", "overflow"])
@@ -4009,8 +3998,7 @@ async def test_reader_collects_next_project_when_earlier_requirement_evidence_do
 
 @pytest.mark.parametrize("empty_state_shown", [True, False])
 async def test_no_player_reports_is_a_finding_only_with_a_matching_empty_state_quote(empty_state_shown: bool) -> None:
-    from fastbrowse.verification import check_answer_outputs
-    from tests.test_answer_repair import RoutingJev
+    from fastbrowse.verification import _output_context, check_answer_outputs
 
     empty = "Project Quartz comments: No comments yet. Be the first to comment."
     page = capture((BlockKind.PARAGRAPH, empty if empty_state_shown else "Project Quartz comments: Loading..."))
@@ -4033,13 +4021,9 @@ async def test_no_player_reports_is_a_finding_only_with_a_matching_empty_state_q
     plan = Plan(requirements=(requirement,), answer_expected=True)
     answer = draft_answer(plan, notes)
     assert answer is not None and answer.citations[0].quote == empty
-    llm.responses.extend(
-        [{"judgments": {"output_0": "yes"}, "reason": "The quoted page explicitly has no comments."}] * 2
-    )
-    assert await check_answer_outputs(RoutingJev(), llm, answer, notes, (requirement.text,))
-    source_payload = json.loads(llm.calls[2][1][-1].content)
-    sources = source_payload["criteria"]["output_0"]["sources"][0]["cited_sources"]
-    assert sources[0]["quote"] == empty
+    assert check_answer_outputs(answer, notes, (requirement.text,))
+    context = _output_context(answer, notes)
+    assert context is not None and context.claims[0].cited_sources[0].quote == empty
 
 
 async def test_duplicate_prior_packets_do_not_displace_the_novelty_check() -> None:
@@ -4205,105 +4189,6 @@ async def test_a_quoted_count_does_not_repair_another_requirements_missing_recor
     assert not notes.evidenced("names")
 
 
-@pytest.mark.parametrize(
-    ("probability", "judgment", "expected", "llm_calls"),
-    [
-        # A confident Jev vote settles a quoted answer; the LLM audits are never sent.
-        (0.99, "yes", True, 0),
-        (0.99, "no", True, 0),
-        (0.5, "no", True, 0),
-        (0.4, "yes", True, 3),
-        # A speculative round that does not pass is audited again with the checked identities.
-        (0.4, "no", False, 5),
-        (0.4, None, False, 5),
-        (0.01, "yes", True, 3),
-        # An unanswered selection stops after the identity call it ran beside.
-        (None, "yes", False, 1),
-    ],
-)
-async def test_atomic_outputs_reach_the_source_audits_when_jev_is_unsure(
-    probability: float | None,
-    judgment: str | None,
-    expected: bool,
-    llm_calls: int,
-) -> None:
-    from fastbrowse.jev import Evaluation, NoulAnswer
-    from fastbrowse.retrieval import Claim, assemble_answer
-    from fastbrowse.verification import check_answer_outputs
-
-    class Jev:
-        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
-            answers = (
-                {}
-                if probability is None
-                else {
-                    key: ChoiceAnswer(choice="claim_0", probabilities={"claim_0": 1.0}, confidence=1.0)
-                    if isinstance(question, ChoiceQuestion)
-                    else NoulAnswer(probability=probability)
-                    for key, question in questions.items()
-                }
-            )
-            return Evaluation(
-                model="test",
-                answers=answers,
-                input_tokens=1,
-                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
-            )
-
-    page = capture((BlockKind.PARAGRAPH, "Price £12"))
-    notes = Notes((Fact(reader=FactReader.LLM, text="£12", evidence=block_evidence(page, "s0")),))
-    answer = assemble_answer((Claim(text="It costs £12.", evidence_ids=tuple(notes.evidence)),), notes, ())
-    llm = ScriptedLLM([{"judgments": {"output_0": judgment or "uncertain"}, "reason": "test"}] * 4)
-    held = await check_answer_outputs(Jev(), llm, answer, notes, ("Report the price.",))
-    assert held is expected
-    # The source and assertion audits run side by side once a claim is selected, so a rejected source still sent both.
-    assert len(llm.calls) == llm_calls
-
-
-async def test_atomic_output_context_keeps_cited_sources_without_uncited_metadata() -> None:
-    from fastbrowse.jev import Evaluation, NoulAnswer
-    from fastbrowse.retrieval import Claim, assemble_answer
-    from fastbrowse.verification import check_answer_outputs
-
-    shown = []
-
-    class Jev:
-        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
-            shown.append(state)
-            return Evaluation(
-                model="test",
-                answers={
-                    key: _choice("claim_0")
-                    if isinstance(question, ChoiceQuestion)
-                    else NoulAnswer(probability=0.4 if key.startswith("output_") else 0.99)
-                    for key, question in questions.items()
-                },
-                input_tokens=1,
-                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
-            )
-
-    page = capture((BlockKind.PARAGRAPH, "Price £12"), (BlockKind.PARAGRAPH, "Hours 9am"))
-    page = page.model_copy(update={"title": "Complete museum catalog title, member price 9"})
-    notes = Notes()
-    notes.remember_capture(page)
-    notes.remember_capture(page.model_copy(update={"url": "https://other.test", "title": "Unrelated title"}))
-    for block in page.blocks:
-        notes.add(Fact(reader=FactReader.LLM, text=block.source_id, evidence=block_evidence(page, block.source_id)))
-    price, _ = tuple(notes.evidence)
-    answer = assemble_answer((Claim(text="It costs £12.", evidence_ids=(price,)),), notes, ())
-    llm = ScriptedLLM([{"judgments": {"output_0": "yes"}, "reason": "The price is quoted."}] * 2)
-    assert await check_answer_outputs(Jev(), llm, answer, notes, ("Report the price.",))
-    assert "Unrelated title" not in json.dumps(shown)
-    # An uncited quote from the cited page reaches Jev only as counterevidence, never as the answer's own source.
-    cited_only = [{k: v for k, v in s.items() if k != "counterevidence"} if isinstance(s, dict) else s for s in shown]
-    assert "9am" not in json.dumps(cited_only)
-    assert any("9am" in json.dumps(s.get("counterevidence")) for s in shown if isinstance(s, dict))
-    assert "Price £12" in json.dumps(json.loads(llm.calls[1][1][-1].content), ensure_ascii=False)
-
-    assert "page_title" not in json.dumps(llm.calls[1][1][-1].content)
-    assert "member price 9" not in json.dumps(llm.calls[2][1][-1].content)
-
-
 @pytest.mark.parametrize("complete", [False, True])
 def test_atomic_output_context_retains_count_scope_and_cited_record_positions(complete: bool) -> None:
     from fastbrowse.retrieval import Claim, assemble_answer
@@ -4336,87 +4221,32 @@ def test_atomic_output_context_retains_count_scope_and_cited_record_positions(co
 
 
 async def test_atomic_outputs_reject_an_empty_answer_instead_of_skipping_the_check() -> None:
-    from fastbrowse.jev import Evaluation, NoulAnswer
     from fastbrowse.retrieval import assemble_answer
     from fastbrowse.verification import check_claims
-
-    class Jev:
-        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
-            return Evaluation(
-                model="test",
-                answers={key: NoulAnswer(probability=0.01) for key in questions},
-                input_tokens=1,
-                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
-            )
+    from tests.test_policy import ScriptedJev
 
     requirement = Requirement(id="r", text="Report the price.", kind=RequirementKind.INFORMATION)
     notes = Notes()
     answer = assemble_answer((), notes, (requirement,))
-    assert await check_claims(Jev(), answer, notes, Thresholds(), answer_checks=(requirement.text,)) is None
-
-
-@pytest.mark.parametrize("separate", [False, True])
-async def test_output_audits_isolate_fields_and_check_extra_answer_claims(separate: bool) -> None:
-    from fastbrowse.verification import check_answer_outputs
-
-    class Jev:
-        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
-            return Evaluation(
-                model="test",
-                input_tokens=1,
-                answers={
-                    key: _choice("claim_0")
-                    if isinstance(question, ChoiceQuestion)
-                    else NoulAnswer(probability=0.4 if key.startswith("output_") else 0.99)
-                    for key, question in questions.items()
-                },
-                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
-            )
-
-    class AuditLLM(ScriptedLLM):
-        active = 0
-        peak = 0
-        saw_extra = False
-
-        async def generate(self, purpose, messages, schema, **kwargs):
-            if schema.__name__ == "_OutputIdentities":
-                return await super().generate(purpose, messages, schema, **kwargs)
-            payload = json.loads(messages[-1].content)
-            assert payload["task"] == "Report the current price of the selected item."
-            fields = payload["criteria"]
-            assert len(fields) == 1
-            key, field = next(iter(fields.items()))
-            self.active += 1
-            self.peak = max(self.peak, self.active)
-            await asyncio.sleep(0)
-            self.active -= 1
-            actual = field.get("reported_claims", [])
-            self.saw_extra |= any("member price 9" in claim["text"] for claim in actual)
-            judgment = "no" if actual and "member price 9" in json.dumps(actual) else "yes"
-            assert kwargs["max_output_tokens"] == 512
-            return Generation(
-                data=schema.model_validate({"judgments": {key: judgment}, "reason": "test"}),
-                cost=CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0.001, purpose=purpose),
-            )
-
-    page = capture((BlockKind.PARAGRAPH, "Current price 12"))
-    fact = Fact(text=page.text, evidence=block_evidence(page, "s0"), reader=FactReader.LLM)
-    notes = Notes((fact,))
-    claims = [
-        Claim(text="Current price 12" + ("; member price 9" if not separate else ""), evidence_ids=(fact_id(fact),))
-    ]
-    if separate:
-        claims.append(Claim(text="A member price 9 is available", evidence_ids=(fact_id(fact),)))
-    answer = assemble_answer(claims, notes, ())
-    llm = AuditLLM([])
-    checks = tuple(f"Report the current price, criterion {index}" for index in range(7))
-    ledger = Ledger(Limits())
-    assert not await check_answer_outputs(
-        Jev(), llm, answer, notes, checks, ledger=ledger, task="Report the current price of the selected item."
+    # Each answer check is asked of the answer as its own omission question, an empty answer included.
+    jev = ScriptedJev({}, noul=0.01, nouls={"output_missing_0": 0.99})
+    missing: list[str] = []
+    corrections: list[AnswerCorrection] = []
+    assert (
+        await check_claims(
+            jev,
+            answer,
+            notes,
+            Thresholds(),
+            answer_checks=(requirement.text,),
+            missing_outputs=missing,
+            corrections=corrections,
+        )
+        is None
     )
-    assert llm.saw_extra and llm.peak == 8
-    # One identity call, then every audit twice: the speculative round refused, so it ran again with identities.
-    assert sum(line.component is CostComponent.LLM for line in ledger.lines) == 1 + 2 * (14 + int(separate))
+    assert [list(questions) for questions in jev.requests] == [["output_missing_0"]]
+    assert missing == [requirement.text]
+    assert [(c.stage, c.criterion) for c in corrections] == [("source", requirement.text)]
 
 
 def test_output_audit_keeps_every_operand_of_a_quoted_comparison() -> None:
@@ -4467,129 +4297,8 @@ async def test_malformed_output_sources_fail_without_navigation_feedback() -> No
         claims=(Claim(text="It costs £12.", evidence_ids=("unknown",)),),
     )
     missing: list[str] = []
-    assert not await check_answer_outputs(
-        _ReadJev({}), ScriptedLLM([]), answer, Notes(), ("Report the price.",), missing_outputs=missing
-    )
+    assert not check_answer_outputs(answer, Notes(), ("Report the price.",), missing_outputs=missing)
     assert missing == []
-
-
-async def test_output_checks_can_bind_an_unbounded_field_to_multiple_claims() -> None:
-    from fastbrowse.verification import check_answer_outputs
-
-    class Jev:
-        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
-            return Evaluation(
-                model="test",
-                answers={
-                    key: _choice("all") if isinstance(question, ChoiceQuestion) else NoulAnswer(probability=0.4)
-                    for key, question in questions.items()
-                },
-                input_tokens=1,
-                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
-            )
-
-    page = capture((BlockKind.PARAGRAPH, "Book A"), (BlockKind.PARAGRAPH, "Book B"))
-    notes = Notes(
-        Fact(text=block.source_id, evidence=block_evidence(page, block.source_id), reader=FactReader.LLM)
-        for block in page.blocks
-    )
-    answer = assemble_answer(
-        tuple(Claim(text=source.quote, evidence_ids=(key,)) for key, source in notes.evidence.items()), notes, ()
-    )
-    llm = ScriptedLLM(
-        [{"judgments": {"output_0": "yes"}, "reason": "Both titles are quoted."}] * 2
-        + [
-            {"judgments": {f"claim_only_{index}": "yes"}, "reason": "The individual title is quoted."}
-            for index in range(2)
-        ]
-    )
-    assert await check_answer_outputs(Jev(), llm, answer, notes, ("List the title of each matching book.",))
-    claims = json.loads(llm.calls[2][1][-1].content)["criteria"]["output_0"]["reported_claims"]
-    assert len(claims) == 2
-    assert [claim["cited_sources"][0]["quote"] for claim in claims] == ["Book A", "Book B"]
-
-
-@pytest.mark.parametrize("cited", ["quote", "choice", "tally", "basis"])
-async def test_a_confident_jev_vote_skips_the_llm_audit_except_for_derived_answers(cited: str) -> None:
-    from fastbrowse.verification import check_answer_outputs
-
-    page = capture((BlockKind.PARAGRAPH, "Price £12"), (BlockKind.PARAGRAPH, "Price £14"))
-    notes = Notes(
-        Fact(text=block.source_id, evidence=block_evidence(page, block.source_id), reader=FactReader.LLM)
-        for block in page.blocks
-    )
-    first, second = notes.facts
-    match cited:
-        case "quote":
-            text, key = "It costs £12.", fact_id(first)
-        case "tally":
-            tally = notes.add_tally(Tally(requirement_id="r", key="Prices", records=tuple(notes.evidence)))
-            text, key = "There are two prices.", fact_id(tally)
-        case "choice":
-            # A value Jev chose where it appears twice rests on both copies, yet code still copied it from the page.
-            choice = Fact(
-                text="£12", evidence=None, basis=(fact_id(first), fact_id(second)), reader=FactReader.JEV_CHOICE
-            )
-            notes.add(choice)
-            text, key = "It costs £12.", fact_id(choice)
-        case "basis":
-            # A total the reader stored as a plain fact still rests on other quotes.
-            total = Fact(
-                text="Together they cost £26.",
-                evidence=None,
-                basis=(fact_id(first), fact_id(second)),
-                reader=FactReader.LLM,
-            )
-            notes.add(total)
-            text, key = total.text, fact_id(total)
-        case _:
-            raise AssertionError(cited)
-    answer = assemble_answer((Claim(text=text, evidence_ids=(key,)),), notes, ())
-    jev = _ReadJev({"output_0": NoulAnswer(probability=0.99)})
-    # Without an LLM, only an answer that never needed its audit can hold.
-    assert await check_answer_outputs(jev, None, answer, notes, ("Report the price.",)) is (
-        cited in ("quote", "choice")
-    )
-
-
-async def test_source_availability_audit_withholds_reported_values() -> None:
-    from fastbrowse.verification import check_answer_outputs
-
-    page = capture((BlockKind.TABLE, "| Ports | 1 | 3 |"))
-    notes = Notes((Fact(text="Three ports", evidence=block_evidence(page, "s0"), reader=FactReader.LLM),))
-    answer = assemble_answer(
-        (Claim(text="Device Beta has three ports.", evidence_ids=tuple(notes.evidence)),), notes, ()
-    )
-
-    class Jev:
-        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
-            return Evaluation(
-                model="test",
-                answers={
-                    key: _choice("claim_0")
-                    if isinstance(question, ChoiceQuestion)
-                    else NoulAnswer(probability=0.4 if key.startswith("output_") else 0.99)
-                    for key, question in questions.items()
-                },
-                input_tokens=1,
-                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
-            )
-
-    jev = Jev()
-    llm = ScriptedLLM([{"judgments": {"output_0": "no"}, "reason": "The column identity is absent."}] * 4)
-    missing: list[str] = []
-    assert not await check_answer_outputs(
-        jev, llm, answer, notes, ("Report Device Beta's port count.",), missing_outputs=missing
-    )
-    request = json.loads(llm.calls[1][1][-1].content)
-    assert "actual_answer" not in request
-    source = request["criteria"]["output_0"]["sources"][0]
-    assert "text" not in source
-    assert source["cited_sources"][0]["quote"] == "| Ports | 1 | 3 |"
-    assert missing == ["Report Device Beta's port count."]
-    # Identities, then the source audit beside the assertion audit, whose verdict a failed source never uses: once
-    # speculatively and once more with the checked identities.
-    assert len(llm.calls) == 5
 
 
 def test_large_headerless_tables_repeat_real_context_without_inventing_headers() -> None:
@@ -4750,178 +4459,6 @@ def test_inline_citation_stripping_accepts_address_qualified_evidence_ids() -> N
     assert _without_citation_markup(f"Price £12 [{key}](https://example.test)") == "Price £12"
     assert _without_citation_markup("Value [sha:1:2], [derived:abc], [tally:abc]") == "Value , ,"
     assert _without_citation_markup("Use [optional] fields") == "Use [optional] fields"
-
-
-async def test_grouped_output_audit_checks_each_claim_against_its_own_citations() -> None:
-    from fastbrowse.verification import check_answer_outputs
-
-    class Jev:
-        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
-            return Evaluation(
-                model="test",
-                input_tokens=1,
-                answers={
-                    key: _choice("all")
-                    if isinstance(question, ChoiceQuestion)
-                    else NoulAnswer(probability=0.4 if key.startswith("output_") else 0.99)
-                    for key, question in questions.items()
-                },
-                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
-            )
-
-    class AuditLLM(ScriptedLLM):
-        async def generate(self, purpose, messages, schema, **kwargs):
-            if schema.__name__ == "_OutputIdentities":
-                return await super().generate(purpose, messages, schema, **kwargs)
-            key, field = next(iter(json.loads(messages[-1].content)["criteria"].items()))
-            judgment = "yes"
-            if key.startswith("claim_only_"):
-                claim = field["reported_claims"][0]
-                quotes = " ".join(source["quote"] for source in claim["cited_sources"])
-                if "highest" in claim["text"] and "Oak" not in quotes:
-                    judgment = "no"
-            return Generation(
-                data=schema.model_validate({"judgments": {key: judgment}, "reason": "test"}),
-                cost=CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0, purpose=purpose),
-            )
-
-    page = capture((BlockKind.PARAGRAPH, "Pine capacity 10"), (BlockKind.PARAGRAPH, "Oak capacity 7"))
-    facts = [
-        Fact(text=block.source_id, reader=FactReader.LLM, evidence=block_evidence(page, block.source_id))
-        for block in page.blocks
-    ]
-    notes = Notes(facts)
-    answer = assemble_answer(
-        (
-            Claim(text="Pine has the highest capacity.", evidence_ids=(fact_id(facts[0]),)),
-            Claim(text="Oak capacity 7", evidence_ids=(fact_id(facts[1]),)),
-        ),
-        notes,
-        (),
-    )
-    missing: list[str] = []
-    assert not await check_answer_outputs(
-        Jev(), AuditLLM([]), answer, notes, ("Compare capacities and recommend one.",), missing_outputs=missing
-    )
-    assert missing == ["Unsupported answer detail: Pine has the highest capacity."]
-
-
-async def test_expanded_tally_over_jev_state_limit_still_reaches_quoted_source_audit() -> None:
-    from fastbrowse.verification import check_answer_outputs
-
-    page = capture(*[(BlockKind.PARAGRAPH, "Record " + str(index) + " x" * 100) for index in range(100)])
-    notes = Notes(
-        Fact(text=block.source_id, reader=FactReader.LLM, evidence=block_evidence(page, block.source_id))
-        for block in page.blocks
-    )
-    total = notes.add_tally(Tally(requirement_id="r", key="Items", records=tuple(notes.evidence)))
-    answer = assemble_answer((Claim(text="There are 100 items.", evidence_ids=(fact_id(total),)),), notes, ())
-    llm = ScriptedLLM([{"judgments": {"output_0": "yes"}, "reason": "All records are quoted."}] * 2)
-    assert await check_answer_outputs(
-        _ReadJev({}),
-        llm,
-        answer,
-        notes,
-        ("Report the item count.",),
-        tokens=TokenBudget(state_plus_largest_question=100, state_plus_all_questions=100),
-    )
-    sources = json.loads(llm.calls[1][1][-1].content)["criteria"]["output_0"]["sources"]
-    assert len(sources[0]["cited_sources"]) == 100
-
-
-async def test_field_audits_receive_only_the_urls_of_their_selected_citations() -> None:
-    from fastbrowse.verification import check_answer_outputs
-
-    class Jev:
-        async def evaluate(self, state: object, questions: Mapping[str, Question]) -> Evaluation:
-            # Besides the claim selection, only the Jev tier's output criteria are asked.
-            assert all(
-                isinstance(question, ChoiceQuestion) or key.startswith("output_") for key, question in questions.items()
-            )
-            return Evaluation(
-                model="test",
-                input_tokens=1,
-                answers={
-                    key: _choice("claim_0")
-                    if isinstance(question, ChoiceQuestion)
-                    else NoulAnswer(probability=0.4 if key.startswith("output_") else 0.99)
-                    for key, question in questions.items()
-                },
-                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
-            )
-
-    class AuditLLM(ScriptedLLM):
-        async def generate(self, purpose, messages, schema, **kwargs):
-            if schema.__name__ == "_OutputIdentities":
-                return await super().generate(purpose, messages, schema, **kwargs)
-            payload = json.loads(messages[-1].content)
-            key, field = next(iter(payload["criteria"].items()))
-            records = field.get("reported_claims", field.get("sources", []))
-            refs = {source["url_ref"] for record in records for source in record["cited_sources"]}
-            assert set(payload["urls"]) == refs and len(refs) == 1
-            return Generation(
-                data=schema.model_validate({"judgments": {key: "yes"}, "reason": "test"}),
-                cost=CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0, purpose=purpose),
-            )
-
-    facts = []
-    for index in range(2):
-        page = capture((BlockKind.PARAGRAPH, f"Item {index} price 12"))
-        source = block_evidence(page, "s0").model_copy(update={"url": f"https://item{index}.test"})
-        facts.append(Fact(text=source.quote, reader=FactReader.LLM, evidence=source))
-    notes = Notes(facts)
-    answer = assemble_answer(tuple(Claim(text=fact.text, evidence_ids=(fact_id(fact),)) for fact in facts), notes, ())
-    assert await check_answer_outputs(Jev(), AuditLLM([]), answer, notes, ("Report item 0 price.",))
-
-
-@pytest.mark.parametrize("count,reject_last", [(253, False), (254, False), (254, True)])
-async def test_long_answers_respect_choice_limit_and_still_audit_each_claim(count: int, reject_last: bool) -> None:
-    from fastbrowse.jev import MAX_CHOICE_OPTIONS
-    from fastbrowse.verification import check_answer_outputs
-
-    class Jev:
-        calls = 0
-
-        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
-            self.calls += 1
-            assert all(
-                isinstance(q, ChoiceQuestion) and len(q.criteria) <= MAX_CHOICE_OPTIONS for q in questions.values()
-            )
-            return Evaluation(
-                model="test",
-                answers={key: _choice("all") for key in questions},
-                input_tokens=1,
-                cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0),
-            )
-
-    class AuditLLM(ScriptedLLM):
-        def __init__(self) -> None:
-            super().__init__([])
-            self.audited: set[str] = set()
-
-        async def generate(self, purpose, messages, schema, **kwargs):
-            if schema.__name__ == "_OutputIdentities":
-                return await super().generate(purpose, messages, schema, **kwargs)
-            key = next(iter(json.loads(messages[-1].content)["criteria"]))
-            self.audited.add(key)
-            verdict = "no" if reject_last and key == f"claim_only_{count - 1}" else "yes"
-            return Generation(
-                data=schema.model_validate({"judgments": {key: verdict}, "reason": "test"}),
-                cost=CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0, purpose=purpose),
-            )
-
-    page = capture(*((BlockKind.PARAGRAPH, f"Book {index}") for index in range(count)))
-    notes = Notes(
-        Fact(text=block.source_id, evidence=block_evidence(page, block.source_id), reader=FactReader.LLM)
-        for block in page.blocks
-    )
-    answer = assemble_answer(
-        tuple(Claim(text=source.quote, evidence_ids=(key,)) for key, source in notes.evidence.items()), notes, ()
-    )
-    jev, llm = Jev(), AuditLLM()
-    assert await check_answer_outputs(jev, llm, answer, notes, ("List every book title.",)) is (not reject_last)
-    assert jev.calls == (1 if count + 2 <= MAX_CHOICE_OPTIONS else 0)
-    assert llm.audited == {"output_0", *(f"claim_only_{index}" for index in range(count))}
 
 
 @pytest.mark.parametrize("marker,accepted", [("[s1] (paragraph) ", True), ("[unknown] (paragraph) ", False)])

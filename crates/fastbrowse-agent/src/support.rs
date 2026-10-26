@@ -57,32 +57,6 @@ pub(crate) async fn try_join_all<'a, T, E>(futures: Vec<BoxFuture<'a, Result<T, 
     .await
 }
 
-/// `asyncio.gather(..., return_exceptions=True)`: every future runs to its end, whatever its siblings did, and each
-/// result comes back in the order given. A failure in one must not leave a sibling's request unsent or unbilled.
-pub(crate) async fn join_all<'a, T>(futures: Vec<BoxFuture<'a, T>>) -> Vec<T> {
-    let mut pending: Vec<Option<BoxFuture<'a, T>>> = futures.into_iter().map(Some).collect();
-    let mut results: Vec<Option<T>> = pending.iter().map(|_| None).collect();
-    std::future::poll_fn(move |cx| {
-        let mut waiting = false;
-        for (slot, result) in pending.iter_mut().zip(results.iter_mut()) {
-            if let Some(future) = slot {
-                match future.as_mut().poll(cx) {
-                    Poll::Ready(value) => {
-                        *result = Some(value);
-                        *slot = None;
-                    }
-                    Poll::Pending => waiting = true,
-                }
-            }
-        }
-        if waiting {
-            return Poll::Pending;
-        }
-        Poll::Ready(std::mem::take(&mut results).into_iter().flatten().collect())
-    })
-    .await
-}
-
 /// Two futures of different types run side by side to their ends: `gather` of two tasks with `return_exceptions`.
 pub(crate) async fn join2<A, B>(a: impl Future<Output = A>, b: impl Future<Output = B>) -> (A, B) {
     let (mut a, mut b) = (std::pin::pin!(a), std::pin::pin!(b));

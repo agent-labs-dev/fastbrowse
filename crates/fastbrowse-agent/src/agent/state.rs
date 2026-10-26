@@ -22,7 +22,7 @@ use crate::memory::{Fact, Notes};
 use crate::planner::{OutputTarget, Plan};
 use crate::policy::{HistoryEntry, RelevanceCache};
 use crate::retrieval::{AnswerCorrection, ComposedAnswer, TallyReader};
-use crate::verification::{LLMVerdict, OutputAuditCache};
+use crate::verification::LLMVerdict;
 
 /// How many recovery records the next recovery is shown.
 pub(crate) const RECOVERY_RECORDS: usize = 4;
@@ -313,7 +313,6 @@ pub(crate) struct RunState {
     pub verified_answer: Option<ComposedAnswer>,
     pub missing_answer_outputs: Vec<String>,
     pub answer_corrections: Vec<AnswerCorrection>,
-    pub output_audit_cache: OutputAuditCache,
     /// Verifier verdicts by the digest of the exact request that produced them, within this run.
     pub verify_cache: HashMap<String, Generation<LLMVerdict>>,
     /// Bot-check documents this run has already reloaded once, so a challenge that survives is reported.
@@ -338,6 +337,8 @@ pub(crate) struct RunState {
     /// An observed output section must be opened and read before another model chooses an action.
     pub section_read: bool,
     pub recovery_sections: HashSet<String>,
+    /// Guessed opening pages the run already left for the caller's start page, so it leaves each once.
+    pub left_guesses: HashSet<String>,
     /// The commit an authorized run was last refused as unsure it is the one the task means.
     pub unsure_commit: Option<Commit>,
     /// That refused commit once recovery, shown the page and the task, named it as the next step. It covers the next
@@ -495,7 +496,6 @@ impl RunState {
             verified_answer: None,
             missing_answer_outputs: Vec::new(),
             answer_corrections: Vec::new(),
-            output_audit_cache: Default::default(),
             verify_cache: HashMap::new(),
             challenge_reloads: HashSet::new(),
             open_answer_outputs: Vec::new(),
@@ -515,6 +515,7 @@ impl RunState {
             directed: None,
             section_read: false,
             recovery_sections: HashSet::new(),
+            left_guesses: HashSet::new(),
             unsure_commit: None,
             confirmed_commit: None,
             unchanged: 0,

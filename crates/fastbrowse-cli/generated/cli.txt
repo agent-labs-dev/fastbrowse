@@ -5,7 +5,7 @@ usage: fastbrowse [-h] [--version] [--start START] [--cloud | --local]
                   [--authorize] [--secret NAME=ENV_VAR[@ORIGIN]]
                   [--bitwarden ITEM] [--max-steps MAX_STEPS]
                   [--max-dollars MAX_DOLLARS] [--downloads DOWNLOADS] [--json]
-                  [--record FILE] [--cursor]
+                  [--record FILE] [--trace FILE] [--cursor]
                   task
 
 Run one browser task.
@@ -56,6 +56,10 @@ options:
   --json                print the full result as JSON
   --record FILE         save a video of the run, ending on its answer (needs
                         ffmpeg)
+  --trace FILE          append the run's trace to FILE as JSON lines, or - for
+                        stderr: every model call with its purpose and timing,
+                        which reader answered each read and why, and every
+                        check's scores (also FASTBROWSE_TRACE)
   --cursor              draw the agent's cursor over a visible Chrome with the
                         Cua Driver (Linux X11; skipped where unsupported)
 

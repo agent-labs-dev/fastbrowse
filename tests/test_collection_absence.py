@@ -1,22 +1,21 @@
 """An absent member needs the identified collection and every record in its scope."""
 
-import json
-
 import pytest
 from pydantic import JsonValue
 
+from fastbrowse.config import Thresholds
 from fastbrowse.memory import Comparison, Fact, Notes, fact_id
 from fastbrowse.models import FactReader
-from fastbrowse.page import BlockKind
+from fastbrowse.page import BlockKind, Capture
 from fastbrowse.planner import Requirement, RequirementKind
-from fastbrowse.retrieval import Claim, assemble_answer, read
-from fastbrowse.verification import _output_context, check_answer_outputs
-from tests.test_answer_repair import RoutingJev
+from fastbrowse.retrieval import AnswerCorrection, Claim, ComposedAnswer, assemble_answer, read
+from fastbrowse.verification import _output_context, check_answer_outputs, check_claims
+from tests.test_finish_fields import DoubtingJev
 from tests.test_retrieval import ScriptedLLM, block_evidence, capture
 
 
-@pytest.mark.parametrize("gap", [None, "pager", "lost_record", "unread_chunk"])
-async def test_absence_keeps_identified_collection_scope_through_read_and_audit(gap: str | None) -> None:
+async def birch_absence(gap: str | None) -> tuple[Capture, Requirement, Notes, ComposedAnswer]:
+    """An answer of no author replies, read from Birch's comments with `gap` left unread."""
     page = capture(
         (BlockKind.HEADING, "Project Birch comments, 2 comments. Author: Ash."),
         (BlockKind.RECORD, "Player Elm: Please add a compact view."),
@@ -55,34 +54,42 @@ async def test_absence_keeps_identified_collection_scope_through_read_and_audit(
     )
     finding = next(fact for fact in notes.facts if fact.comparison is not None)
     answer = assemble_answer((Claim(text=finding.text, evidence_ids=(fact_id(finding),)),), notes, (requirement,))
+    return page, requirement, notes, answer
+
+
+@pytest.mark.parametrize("gap", [None, "pager", "lost_record", "unread_chunk"])
+async def test_absence_keeps_identified_collection_scope_through_read(gap: str | None) -> None:
+    page, _, notes, answer = await birch_absence(gap)
     context = _output_context(answer, notes)
     assert context is not None
     scope = context.claims[0].compared_records[0]
     assert scope.complete is (gap is None)
     assert len(scope.record_indices) == 3
     assert context.claims[0].cited_sources[0].quote == page.text.split("\n\n")[0]
-
-    class ScopeJudge(ScriptedLLM):
-        async def generate(self, purpose, messages, schema, **kwargs):
-            if schema.__name__ != "_OutputIdentities":
-                field = json.loads(messages[-1].content)["criteria"]["output_0"]
-                claims = field.get("sources", field.get("reported_claims"))
-                complete = claims[0]["compared_records"][0]["complete"]
-                self.responses.append(
-                    {
-                        "judgments": {"output_0": "yes" if complete else "no"},
-                        "reason": "Absence requires the complete identified collection.",
-                    }
-                )
-            return await super().generate(purpose, messages, schema, **kwargs)
-
-    assert bool(await check_answer_outputs(RoutingJev(), ScopeJudge([]), answer, notes, (requirement.text,))) is (
-        gap is None
-    )
     if gap is None:
         assert "collection_for=" not in notes.render(10_000)
         rendered = notes.render_with_ids(10_000, preserve_collections=True).text
         assert "collection_for=r complete=true" in rendered
+
+
+@pytest.mark.parametrize("gap", [None, "pager", "lost_record", "unread_chunk"])
+async def test_absence_over_an_unfinished_collection_is_rejected(gap: str | None) -> None:
+    _, requirement, notes, answer = await birch_absence(gap)
+    missing: list[str] = []
+    corrections: list[AnswerCorrection] = []
+    passed = check_answer_outputs(answer, notes, (requirement.text,), missing_outputs=missing, corrections=corrections)
+    assert passed is (gap is None)
+    if gap is None:
+        assert not missing and not corrections
+    else:
+        assert missing == [requirement.text]
+        assert [(c.stage, c.criterion) for c in corrections] == [("source", requirement.text)]
+        assert "not read to its end" in corrections[0].reason
+    # Jev doubts nothing, so only code can refuse the unfinished collection.
+    verified = await check_claims(
+        DoubtingJev(lambda key, text: False), answer, notes, Thresholds(), answer_checks=(requirement.text,)
+    )
+    assert (verified is not None) is (gap is None)
 
 
 @pytest.mark.parametrize("retired_source", [False, True])
@@ -176,9 +183,7 @@ async def test_retired_known_sources_report_outputs_for_repair() -> None:
     notes._retired.add(fact_id(source))
     answer = assemble_answer((Claim(text=source.text, evidence_ids=(fact_id(source),)),), notes, ())
     missing = []
-    assert not await check_answer_outputs(
-        RoutingJev(), ScriptedLLM([]), answer, notes, ("Report feedback.",), missing_outputs=missing
-    )
+    assert not check_answer_outputs(answer, notes, ("Report feedback.",), missing_outputs=missing)
     assert missing == ["Report feedback."]
 
 

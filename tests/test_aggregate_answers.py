@@ -14,13 +14,11 @@ from pathlib import Path
 import pytest
 
 from fastbrowse.config import Config
-from fastbrowse.llm import Generation
 from fastbrowse.memory import Comparison, Fact, Notes, Tally, fact_id
-from fastbrowse.models import CostBasis, CostComponent, CostLine, Evidence, FactReader
+from fastbrowse.models import Evidence, FactReader
 from fastbrowse.planner import Requirement, RequirementKind
-from fastbrowse.retrieval import Claim, assemble_answer, claim_check_questions, partial_answer
+from fastbrowse.retrieval import AnswerCorrection, Claim, assemble_answer, claim_check_questions, partial_answer
 from fastbrowse.verification import _output_context, check_answer_outputs
-from tests.test_answer_repair import RoutingJev
 from tests.test_retrieval import ScriptedLLM
 
 QUOTES = json.loads((Path(__file__).parent / "data" / "quotes_toscrape_records.json").read_text())["records"]
@@ -158,42 +156,27 @@ def test_a_single_group_has_no_standing() -> None:
     assert "standing" not in context.claims[0].model_dump()["counted_records"][0]
 
 
+@pytest.mark.parametrize("continued", [False, True])
 @pytest.mark.parametrize("complete", [True, False])
-async def test_the_rank_audit_receives_code_counts_and_their_completeness(complete: bool) -> None:
-    notes, tallies = counted_authors(complete=complete)
+def test_the_rank_check_receives_code_counts_and_their_completeness(complete: bool, continued: bool) -> None:
+    """A rank stands on complete code counts, never on an incomplete one: code refuses a rank over a collection it
+    did not count to its end, and Jev's claim check is shown the standing it judges the rank against."""
+    notes, tallies = counted_authors(complete=complete, continued=continued)
     check = "Report the author with the second most quotes and the count."
     claim = Claim(
         text="J.K. Rowling ranks second with 9 quotes.", evidence_ids=(fact_id(tallies["J.K. Rowling"]),), ranks=True
     )
     answer = assemble_answer((claim,), notes, (AUTHORS,))
-    seen: list[dict] = []
-
-    class RankJudge(ScriptedLLM):
-        """Answers as the audit's rules read: a rank stands on complete code counts, never on an incomplete one."""
-
-        async def generate(self, purpose, messages, schema, **kwargs):
-            if schema.__name__ != "_OutputIdentities":
-                payload = json.loads(messages[-1].content)
-                ((key, field),) = payload["criteria"].items()
-                seen.append(field)
-                claims = field.get("sources", field.get("reported_claims"))
-                standing = claims[0]["counted_records"][0].get("standing")
-                ranked = standing is not None and standing["complete"] and standing["rank"] == 2
-                self.responses.append({"judgments": {key: "yes" if ranked else "no"}, "reason": "Code counts."})
-            return await super().generate(purpose, messages, schema, **kwargs)
-
     missing: list[str] = []
-    passed = await check_answer_outputs(RoutingJev(), RankJudge([]), answer, notes, (check,), missing_outputs=missing)
+    corrections: list[AnswerCorrection] = []
 
-    assert passed is complete
+    assert check_answer_outputs(answer, notes, (check,), missing_outputs=missing, corrections=corrections) is complete
     assert missing == ([] if complete else [check])
-    standing = seen[0]["sources"][0]["counted_records"][0]["standing"]
-    assert standing["group_count"] > 3 and standing["groups"][0] == {
-        "rank": 1,
-        "group": "Albert Einstein",
-        "count": 10,
-        "complete": complete,
-    }
+    assert [(c.stage, c.criterion) for c in corrections] == ([] if complete else [("source", check)])
+    # Even a continued list, whose records are also a comparison's operands, shows the rank its standing.
+    question = claim_check_questions(answer, notes, check_omission=False)["unsupported_0"].instructions
+    standing = json.dumps({"rank": 1, "group": "Albert Einstein", "count": 10, "complete": complete})
+    assert '"standing": {"rank": 2' in question and standing in question
 
 
 def test_the_claim_check_sees_a_tallys_standing() -> None:
@@ -240,7 +223,7 @@ def cheapest_five_star(*, pages: bool) -> tuple[Notes, Fact]:
 
 
 @pytest.mark.parametrize("pages", [True, False])
-async def test_a_page_with_no_matching_record_still_counts_as_read(pages: bool) -> None:
+def test_a_page_with_no_matching_record_still_counts_as_read(pages: bool) -> None:
     notes, winner = cheapest_five_star(pages=pages)
     claim = Claim(text="Agnostic: A Spirited Manifesto is the cheapest at 12.51.", evidence_ids=(fact_id(winner),))
     answer = assemble_answer((claim,), notes, (CHEAPEST,))
@@ -254,19 +237,8 @@ async def test_a_page_with_no_matching_record_still_counts_as_read(pages: bool) 
         list(enumerate((NONFICTION + page for page in FIVE_STAR), 1)) if pages else []
     )
 
-    sent: list[dict] = []
-
-    class Recording(ScriptedLLM):
-        async def generate(self, purpose, messages, schema, **kwargs):
-            if schema.__name__ != "_OutputIdentities":
-                payload = json.loads(messages[-1].content)
-                sent.append(payload)
-                self.responses.append({"judgments": {k: "yes" for k in payload["criteria"]}, "reason": "Read."})
-            return await super().generate(purpose, messages, schema, **kwargs)
-
-    await check_answer_outputs(RoutingJev(), Recording([]), answer, notes, ("Report the cheapest five-star book.",))
-    # The audit resolves the page refs to addresses, the page without a match among them.
-    assert (NONFICTION + "page-4.html" in sent[0]["urls"].values()) is pages
+    # Code closed the comparison over every page, the one without a match among them, so it is not refused.
+    assert check_answer_outputs(answer, notes, ("Report the cheapest five-star book.",))
 
 
 def test_scoped_notes_keep_their_requirements_pages() -> None:
@@ -486,30 +458,16 @@ def test_a_low_ranked_groups_standing_stays_bounded() -> None:
     assert len(question["unsupported_0"].instructions) < 6000
 
 
-@pytest.mark.parametrize(("stated", "passes"), [(401, True), (400, False)])
-async def test_a_low_ranked_claim_is_judged_on_its_exact_rank(stated: int, passes: bool) -> None:
+@pytest.mark.parametrize("stated", [401, 400])
+def test_a_low_ranked_claim_is_judged_on_its_exact_rank(stated: int) -> None:
+    """Code leaves a stated rank to Jev's claim check, which is shown the standing's code-computed rank."""
     notes, tallies = many_groups()
     claim = Claim(text=f"Group 499 ranks {stated} with 1 entry.", evidence_ids=(fact_id(tallies[-1]),), ranks=True)
     answer = assemble_answer((claim,), notes, (MANY,))
-    check = "Report the rank of Group 499."
 
-    class RankJudge(ScriptedLLM):
-        """Answers as the audit's rules read: the stated rank must be the standing's code-computed rank."""
-
-        async def generate(self, purpose, messages, schema, **kwargs):
-            if schema.__name__ != "_OutputIdentities":
-                payload = json.loads(messages[-1].content)
-                ((key, field),) = payload["criteria"].items()
-                if "reported_claims" in field:
-                    reported = field["reported_claims"][0]
-                    standing = reported["counted_records"][0]["standing"]
-                    holds = standing["complete"] and f"ranks {standing['rank']} " in reported["text"]
-                else:
-                    holds = field["sources"][0]["counted_records"][0]["standing"]["complete"]
-                self.responses.append({"judgments": {key: "yes" if holds else "no"}, "reason": "Code rank."})
-            return await super().generate(purpose, messages, schema, **kwargs)
-
-    assert await check_answer_outputs(RoutingJev(), RankJudge([]), answer, notes, (check,)) is passes
+    assert check_answer_outputs(answer, notes, ("Report the rank of Group 499.",))
+    question = claim_check_questions(answer, notes, check_omission=False)["unsupported_0"].instructions
+    assert f"ranks {stated} with" in question and '"rank": 401, "tied": 99' in question
 
 
 def test_a_count_alone_carries_no_standing() -> None:
@@ -522,45 +480,6 @@ def test_a_count_alone_carries_no_standing() -> None:
     assert "standing" not in context.claims[0].model_dump()["counted_records"][0]
     question = claim_check_questions(answer, notes, check_omission=False)["unsupported_0"].instructions
     assert '"standing"' not in question and '"count": 1' in question
-
-
-async def test_identity_resolution_sees_only_the_source_keys_it_may_name() -> None:
-    """A live resolver filed a correct quote under the cited record's page block id instead of its source key, and
-    a right answer failed as an identity missing from its cited sources. The block id is no longer shown; a reply
-    that still names something other than a key is refused, as before."""
-    notes, tallies = many_groups()
-    last = tallies[-1]
-    assert last.tally is not None
-    claim = Claim(text="Group 499 ranks 401 with 1 entry.", evidence_ids=(fact_id(last),), ranks=True)
-    answer = assemble_answer((claim,), notes, (MANY,))
-    block_ids = {notes.evidence[key].source_id for key in last.basis}
-    shown: list[dict] = []
-
-    class BlockIdResolver(ScriptedLLM):
-        async def generate(self, purpose, messages, schema, **kwargs):
-            payload = json.loads(messages[-1].content)
-            if schema.__name__ == "_OutputIdentities":
-                shown.append(payload["sources"])
-                identities = [{"id": "i0", "source_ref": next(iter(block_ids)), "quote": "Group 499"}]
-                bindings = {key: {"scope": "entities", "identity_ids": ["i0"]} for key in payload["criteria"]}
-                return Generation(
-                    data=schema.model_validate({"identities": identities, "bindings": bindings}),
-                    cost=CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0.0),
-                )
-            self.responses.append({"judgments": {k: "yes" for k in payload["criteria"]}, "reason": "Read."})
-            return await super().generate(purpose, messages, schema, **kwargs)
-
-    missing: list[str] = []
-    check = "Report the rank of Group 499."
-    passed = await check_answer_outputs(
-        RoutingJev(), BlockIdResolver([]), answer, notes, (check,), missing_outputs=missing
-    )
-
-    sources = shown[0]
-    assert sources and all(ref.startswith("q") for ref in sources)
-    assert not any("source_id" in source for source in sources.values())
-    assert not block_ids & {value for source in sources.values() for value in source.values() if isinstance(value, str)}
-    assert passed is False and missing == [check]
 
 
 def test_a_count_and_a_page_read_off_a_refused_guess_take_no_part_in_a_ranking() -> None:

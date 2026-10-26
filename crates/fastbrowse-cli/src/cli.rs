@@ -18,6 +18,7 @@ use fastbrowse_core::models::{Authorization, Event, Limits, LocalChrome, SecretV
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{self, Style};
 use fastbrowse_core::safety::{ScopedSecrets, origin_of};
+use fastbrowse_core::telemetry::{TRACE_ENV, trace_to};
 use indexmap::IndexMap;
 
 use crate::argparse::{Exit, Opt, Parsed, Parser, py_float, py_int};
@@ -100,6 +101,7 @@ pub fn parser() -> Parser {
             Opt::value("--downloads"),
             Opt::flag("--json"),
             Opt::value("--record"),
+            Opt::value("--trace"),
             Opt::flag("--cursor"),
         ],
         positional: Some("task"),
@@ -130,6 +132,8 @@ pub struct Args {
     pub downloads: Option<PathBuf>,
     pub json: bool,
     pub record: Option<PathBuf>,
+    /// Where the run's trace is appended as JSON lines, or `-` for stderr.
+    pub trace: Option<String>,
     pub cursor: bool,
 }
 
@@ -173,6 +177,7 @@ pub fn parse(argv: &[String]) -> Result<Args, Exit> {
         downloads: path("--downloads"),
         json: parsed.flag("--json"),
         record: path("--record"),
+        trace: text("--trace"),
         cursor: parsed.flag("--cursor"),
     })
 }
@@ -388,6 +393,13 @@ pub async fn main(argv: &[String], context: &Context) -> i32 {
             return 2;
         }
     };
+    let destination = args.trace.as_deref().or(context.environ.get(TRACE_ENV).map(String::as_str));
+    if let Some(destination) = destination
+        && let Err(error) = trace_to(Some(destination))
+    {
+        context.streams.eprint(&format!("fastbrowse: cannot write the trace to {destination}: {error}"));
+        return 1;
+    }
     match run(&args, context).await {
         Ok(code) => code,
         Err(error) => {

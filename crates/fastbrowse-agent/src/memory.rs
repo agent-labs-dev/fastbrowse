@@ -59,7 +59,7 @@ pub struct Standing {
 }
 
 // A standing shows the leading groups and a few either side of the cited one. Listing every group above a low-ranked
-// one put hundreds of labels into each audit question, past the LLM's and Jev's input budgets.
+// one put hundreds of labels into each claim question, past the LLM's and Jev's input budgets.
 const LEADING_GROUPS: usize = 3;
 const NEIGHBOUR_GROUPS: usize = 2;
 const GROUP_LABEL_CHARS: usize = 160;
@@ -666,7 +666,7 @@ impl Notes {
 
     /// Every read of a list that went on past one page, in reading order, matching records or not.
     ///
-    /// A page with no matching record leaves no quote, so an audit that judged coverage from the cited records alone
+    /// A page with no matching record leaves no quote, so a check that judged coverage from the cited records alone
     /// took that page for unread and refused a comparison code had closed over every page of the list.
     pub fn collection_pages(&self, requirement_id: &str) -> Vec<CollectionRead> {
         // A read whose rows for this collection are held was read off a refused guess: shown as read, it would stand
@@ -696,8 +696,8 @@ impl Notes {
     /// Where a counted group ranks among every group counted for its requirement; None for a lone group.
     ///
     /// A rank is decided by every other group's count. A ranking claim that cites only its own group's tally shows the
-    /// audit that group's records and nothing they beat, and citing every group's records instead can overflow the
-    /// audit's budget. Each count here is code's, over records `add_tally` checked were captured spans.
+    /// claim check that group's records and nothing they beat, and citing every group's records instead can overflow
+    /// its budget. Each count here is code's, over records `add_tally` checked were captured spans.
     pub fn standing(&self, tally: &Tally) -> Option<Standing> {
         let mut tallies: Vec<(&Tally, bool)> = self
             .facts

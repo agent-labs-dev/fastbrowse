@@ -46,16 +46,6 @@ from fastbrowse.telemetry import Ledger
 HERE = Path(__file__).parent
 
 
-def scripted_identities(messages: Sequence[Message]) -> JsonValue:
-    """tests/test_retrieval.py's answer for the identity audit: every criterion bound to the first quoted source."""
-    payload = json.loads(messages[-1].content)
-    reference, source = next(iter(payload["sources"].items()))
-    return {
-        "identities": [{"id": "i0", "source_ref": reference, "quote": source["quote"]}],
-        "bindings": {key: {"scope": "entities", "identity_ids": ["i0"]} for key in payload["criteria"]},
-    }
-
-
 NOW = "2026-09-26T20:00:00Z"
 FREE_JEV = CostLine(component=CostComponent.JEV, basis=CostBasis.ESTIMATED, dollars=0.0)
 
@@ -245,12 +235,6 @@ class RecordingLLM:
         if ledger is not None:
             ledger.reserve(CostComponent.LLM)
         queue = self.replies.get(schema.__name__)
-        if schema.__name__ == "_OutputIdentities":
-            queue = [scripted_identities(messages)]
-        elif schema.__name__ == "_OutputAssessment" and not queue:
-            # Every audited output judged supported by its quotes.
-            keys = schema.model_json_schema()["$defs"]["_RequiredJudgments"]["properties"]
-            queue = [{"judgments": dict.fromkeys(keys, "yes"), "reason": "The quotes state it."}]
         if not queue:
             raise AssertionError(f"no scripted {schema.__name__} for {purpose.value}")
         data = queue.pop(0) if len(queue) > 1 else queue[0]

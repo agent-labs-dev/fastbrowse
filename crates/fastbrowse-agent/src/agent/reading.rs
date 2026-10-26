@@ -4,12 +4,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use fastbrowse_core::effects::{state_key, step_key};
+use fastbrowse_core::jev::JevClient;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{CostLine, Decider, Operation, StepOutcome, StepResult};
 use fastbrowse_core::page::{Capture, Control, Observation};
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::origin_of;
-use fastbrowse_core::telemetry::Ledger;
+use fastbrowse_core::telemetry::{Ledger, Trace};
 use serde_json::{Map, json};
 
 use super::Agent;
@@ -24,7 +25,7 @@ use crate::error::AgentError;
 use crate::memory::{Notes, fact_id};
 use crate::planner::{Requirement, RequirementKind};
 use crate::policy::HistoryEntry;
-use crate::retrieval::{ReadOptions, ReadOutcome, TallyReader, read, read_tallies};
+use crate::retrieval::{ReadOptions, ReadOutcome, TallyReader, filter_tallies, read, read_tallies};
 
 /// A page of a list captured and being read while the browser moves on.
 struct PageRead {
@@ -42,10 +43,14 @@ fn sorted(values: impl IntoIterator<Item = String>) -> Vec<String> {
 }
 
 /// Read `capture`'s records for `wanted` alone, as a page in a run of pages is read: from a counted field when the
-/// reader set one up, else by the reader, retried once on a saved capture that lost a record.
+/// reader set one up, else by Jev's record filter, else by the reader, retried once on a saved capture that lost a
+/// record.
+#[allow(clippy::too_many_arguments)]
 async fn page_records(
+    jev: Arc<dyn JevClient>,
     llm: Arc<dyn LLMClient>,
     ledger: Arc<Ledger>,
+    trace: Trace,
     capture: Capture,
     wanted: Vec<Requirement>,
     question: String,
@@ -57,6 +62,11 @@ async fn page_records(
         && let Some(counted) = read_tallies(&capture, readers, &ids)?
     {
         return Ok(counted);
+    }
+    if let Some(readers) = &tally_readers
+        && let Some(matched) = filter_tallies(&*jev, &capture, readers, &ids, &tokens, Some(&ledger), &trace).await?
+    {
+        return Ok(matched);
     }
     let mut costs: Vec<CostLine> = Vec::new();
     let mut retried = false;
@@ -244,7 +254,8 @@ impl Agent {
         let outcome = read(&*self.llm, &capture, &question, &wanted_ids, &mut state.notes, &options).await?;
         for requirement in &wanted {
             // The first page of a list that goes on, each later page and the closing read all belong to that
-            // requirement's collection. Another requirement read alongside it does not.
+            // requirement's collection, whether or not they held a matching record. Another requirement read alongside it
+            // does not: its check would be told these pages were its own and held no match.
             if outcome.continues.contains(&requirement.id) || state.continuing.contains(&requirement.id) {
                 state.notes.add_collection_page(&requirement.id, &capture.url, &capture.sha256);
             }
@@ -252,7 +263,7 @@ impl Agent {
         let mut context_added = false;
         if state.oversized_answer && !state.open_answer_outputs.is_empty() {
             // A field read can return context while another field or collection is still open. Its quotes must reach
-            // that target's audit even when the reader cannot bind the whole requirement.
+            // that target's check even when the reader cannot bind the whole requirement.
             let added: Vec<String> = outcome.facts.iter().map(fact_id).collect();
             context_added =
                 state.notes.retain_for(wanted.iter().map(|r| r.id.as_str()), added.iter().map(String::as_str));
@@ -363,8 +374,10 @@ impl Agent {
         state.lineage.read(&capture.sha256, &sources(capture), state.guessing);
         let question = read_question(&state.task, wanted, state.first_url.as_deref());
         Spawned::spawn(page_records(
+            self.jev.clone(),
             self.llm.clone(),
             state.ledger.clone(),
+            self.trace.clone(),
             capture.clone(),
             wanted.to_vec(),
             question,
@@ -380,13 +393,15 @@ impl Agent {
         page: &PageRead,
         wanted: &[Requirement],
         collecting: &[String],
+        last: bool,
     ) -> Step<Option<ReadOutcome>> {
         let outcome = match page.task.wait().await.unwrap_or_else(|| Err(super::state::cancelled())) {
             Ok(outcome) => outcome,
             Err(error) if Flow::from(error.clone()).is_llm() => {
                 // The browser has moved on, so retry the saved capture, never the page now on screen.
                 state.paging_failed = true;
-                let retry = self.start_page(state, &page.capture, wanted, true);
+                // The last page is read by the LLM, which closes the list; a retry keeps that.
+                let retry = self.start_page(state, &page.capture, wanted, !last);
                 match retry.wait().await.unwrap_or_else(|| Err(super::state::cancelled())) {
                     Ok(outcome) => outcome,
                     Err(error) if Flow::from(error.clone()).is_llm() => {
@@ -620,7 +635,7 @@ impl Agent {
                 other => other?,
             }
             for (index, page) in pending.iter().enumerate() {
-                let outcome = self.join_page(state, page, &wanted, &collecting).await?;
+                let outcome = self.join_page(state, page, &wanted, &collecting, Some(index) == last_records).await?;
                 if Some(index) == last_records
                     && let Some(outcome) = outcome
                 {
