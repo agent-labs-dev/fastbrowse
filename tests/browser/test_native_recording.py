@@ -97,9 +97,9 @@ async def test_a_run_cancelled_during_the_result_card_still_writes_both_videos(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     if core == "rust":
-        monkeypatch.setenv("FASTBROWSE_RUST_CORE", "1")
+        monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
     else:
-        monkeypatch.delenv("FASTBROWSE_RUST_CORE", raising=False)
+        monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "1")
     finished = asyncio.Event()
     jev = ScriptedJev(steps(""))
     evaluate = jev.evaluate
