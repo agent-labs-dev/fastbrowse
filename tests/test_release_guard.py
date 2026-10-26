@@ -112,14 +112,10 @@ def test_cli_requires_a_token_even_without_a_comparison(
     assert "no GitHub token" in capsys.readouterr().out
 
 
-def test_the_release_workflow_reports_its_own_green_eval_job(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_the_release_workflow_reports_its_own_green_eval_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A tag runs the suites itself, so the guard must not demand a separately dispatched run as well."""
     monkeypatch.setattr(release_guard, "_evals_green", lambda *_: pytest.fail("looked for an earlier run"))
-    assert (
-        release_guard.problems("0.5.19", "b" * 40, "org/repo", "token", root=tmp_path, evals_ran_here=True) == []
-    )
+    assert release_guard.problems("0.5.19", "b" * 40, "org/repo", "token", root=tmp_path, evals_ran_here=True) == []
 
 
 def test_the_cli_takes_its_own_eval_run_as_the_evidence_without_a_token(
