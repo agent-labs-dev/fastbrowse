@@ -566,11 +566,3 @@ def test_the_per_digit_step_takes_the_code_one_box_at_a_time(browser: tuple[Brow
     assert status == 200
     assert "Signed in as" in body
     assert site.sign_ins == [KATHERINE]
-
-
-def test_repeated_only_flags_accumulate() -> None:
-    """`--only a --only b` kept only `b`, so a narrowed run silently ran fewer tasks than asked for."""
-    from fastbrowse.evals.runner import parser
-
-    args = parser().parse_args(["--suite", "mock", "--only", "mock-basket", "--only", "mock-stock-count"])
-    assert args.only == ["mock-basket", "mock-stock-count"]

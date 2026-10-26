@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- `--fetch` reads a task's pages over HTTP and starts no browser: the document is turned into the same capture blocks a browser capture produces, so reads, quotes and citations are unchanged, and a step that would click, fill, download or screenshot ends the run `blocked` naming why rather than failing a step. It is for a task that only has to read a page. On six public pages the read took a median 0.21s against 1.12s for starting Chrome, navigating and capturing the same page; a page whose text is a sliver of its markup, or that answers with a challenge, is refused as needing the browser, which is what Wikipedia did (HTTP 403) where Chrome passed.
+- A benchmark row now carries the input and output token counts behind its model throughput, alongside the LLM and Jev call counts. They are what lets a comparison show speed and cost on a fixed, published basis, so a slow page or a provider's margin cannot move it. A row from a build that did not record them omits them and reads as not recorded, never as the measured wall clock or billed charge they replace.
 
 ## [0.7.2] - 2026-10-26
 
@@ -33,8 +33,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - A run ends `needs_login` only when the page itself shows a sign-in to act on: a credential field, or a control that names one. A model that called a page with no such control a sign-in wall, or a page with nothing left to read, no longer makes the run claim the caller is signed out; it ends `stuck` instead.
 - A verifier keeps the screenshot on a page whose state is a picture. An observation now reports a visible chart, image, drawing or video even where the page offers no control for it, so a text-rich page is no longer judged from its text alone. A control-less bot-check interstitial is reloaded once per address rather than once per document, so a challenge that survives its reload is reported as blocked instead of looping. And the run's own verifier caps its verdict at 400 output tokens, the bound the standalone `llm_verify` already applied.
-
-- A benchmark row now carries the input and output token counts behind its model throughput, alongside the LLM and Jev call counts. They are what lets a comparison show speed and cost on a fixed, published basis, so a slow page or a provider's margin cannot move it. A row from a build that did not record them omits them and reads as not recorded, never as the measured wall clock or billed charge they replace.
 
 ## [0.7.0] - 2026-10-24
 

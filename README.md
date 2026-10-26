@@ -107,7 +107,6 @@ Steps go to stderr; the status, cost, step count, the reason a run stopped short
 | `--start URL` | the page to open first; worked out from the task when omitted |
 | `--cloud` | force cloud Chrome even when `FASTBROWSE_PROFILE` or `FASTBROWSE_HEADED` is set |
 | `--local` | use local Chrome instead of a Browser Use Cloud browser. Cloud is the default: it passes bot checks a fresh Chrome fails, and prints a URL to watch the run live |
-| `--fetch` | read pages over HTTP and start no browser at all, for a task that only has to read one and needs no clicking, forms or screenshots |
 | `--headed` | show the local Chrome window (implies `--local`) |
 | `--profile DIR` | keep the local Chrome profile in `DIR`, so a site signed into there stays signed in (implies `--local`) |
 | `--cloud-profile ID` | run on a Browser Use Cloud profile, signed in as whoever set it up |
