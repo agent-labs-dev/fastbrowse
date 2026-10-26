@@ -510,9 +510,9 @@ async def test_a_transient_model_failure_reaches_traced_on_its_clock(
 ) -> None:
     """The fixture runner leaves out time lost to provider retries, read from `traced()`, on either core."""
     if core == "rust":
-        monkeypatch.setenv("FASTBROWSE_RUST_CORE", "1")
+        monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
     else:
-        monkeypatch.delenv("FASTBROWSE_RUST_CORE", raising=False)
+        monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "1")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("OPENROUTER_API_KEY", "unused")
     asked: list[str] = []
