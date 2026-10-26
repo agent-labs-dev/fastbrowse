@@ -196,17 +196,18 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
 2. `uv version <x.y.z>`, then `uv run python scripts/npm_versions.py --write`, which gives the SDK's manifest
    and the Rust workspace the same number. Open a `chore: <x.y.z>` PR. CI fails if the version has no entry or
    npm or Cargo disagrees with it.
-3. After it merges, `gh workflow run evals.yml --ref main -f repeat=3`. Wait for a successful Evals run on the
-   exact commit that will be tagged.
-4. `git tag v<x.y.z> <tested-sha> && git push origin v<x.y.z>`.
-5. Once the tag's workflow has published, `uv run python scripts/aur_package.py --write` moves the Arch package
+3. `git tag v<x.y.z> <sha> && git push origin v<x.y.z>`. The tag's workflow runs the fixture suites on that
+   commit itself, alongside the build, and publishes nothing until they pass.
+4. Once the tag's workflow has published, `uv run python scripts/aur_package.py --write` moves the Arch package
    to the release. Open a `build: AUR <x.y.z>` PR with it, then push the same two files to the AUR:
    [docs/agents/aur.md](docs/agents/aur.md) has the commands and how the package is built and checked. The
    weekly AUR workflow fails while `packaging/aur` is older than the PyPI release, so a missed bump shows there.
 
-Every release needs the fixture suites green on its exact commit on `main`; `.github/workflows/evals.yml`
-fails on any failed attempt or incomplete repeat coverage. A release that publishes a head-to-head figure also
-needs the comparison re-run on that same build.
+Every release needs the fixture suites green on its exact commit: `.github/workflows/release.yml` calls
+`.github/workflows/evals.yml` on the tag and holds the publish jobs behind that job, and the eval workflow fails
+on any failed attempt or incomplete repeat coverage. `scripts/release_guard.py` is told the run happened
+(`--evals-ran-here`); run by hand without that flag, it looks for a dispatched Evals run on the same commit
+instead. A release that publishes a head-to-head figure also needs the comparison re-run on that same build.
 
 One tag publishes one version to PyPI and npm (`.github/workflows/release.yml`). It first builds the wheel and the
 five binaries and smoke-tests each. The macOS two are signed ad hoc

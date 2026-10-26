@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - `--fetch` reads a task's pages over HTTP and starts no browser: the document is turned into the same capture blocks a browser capture produces, so reads, quotes and citations are unchanged, and a step that would click, fill, download or screenshot ends the run `blocked` naming why rather than failing a step. It is for a task that only has to read a page. On six public pages the read took a median 0.21s against 1.12s for starting Chrome, navigating and capturing the same page; a page whose text is a sliver of its markup, or that answers with a challenge, is refused as needing the browser, which is what Wikipedia did (HTTP 403) where Chrome passed.
 
+## [0.7.2] - 2026-10-26
+
 - An answer finishes once code and Jev have checked it, without a second opinion from an LLM. Every quoted answer used to go through LLM source and assertion audits: two calls per answer check, often a second round, and a retry whenever the 512-token verdict ran out mid-reasoning. They were about two thirds of a run's model time, and they turned correct answers into `stuck` or `unverified`: a version cited without the "latest release" label beside it, a table total without proof that its four rows were all the rows.
 
   Code now checks that every claim cites a current quote, and that a count, ranking, winner or absence rests on a list read to its end. Jev checks each claim against its quotes and against the other quotes still current on the same pages, and asks whether the answer states each of the plan's answer checks and information requirements. An answer that leaves one out names it, so recovery and the composer know what to add. The LLM verifier still looks at the page when Jev doubts that the task is done, and it is no longer skipped on a lookup after a covered or failed action. A requirement the verifier doubts stays open, though the notes cite a quote for it, when Jev also held it unmet, or did not confirm it after such an action: the claim check sees a quote, not which page it came from, and a run whose link an ad covered reported the heading of the page it was still on as the new window's.
@@ -1539,7 +1541,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.7.1...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.2
 [0.7.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.1
 [0.7.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.0
 [0.6.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.6.0
