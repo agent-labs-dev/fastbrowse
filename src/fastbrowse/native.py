@@ -465,8 +465,7 @@ class NativePage:
         return ActResult.model_validate_json(await self._call(acted))
 
     async def navigate(self, url: str, load_timeout_seconds: float = 15.0, *, back_to: str | None = None) -> None:
-        # The Rust page bounds a load with its own settle rules, so `load_timeout_seconds` is the one it always used.
-        await self._call(self._page.navigate(url, back_to))
+        await self._call(self._page.navigate(url, load_timeout_seconds, back_to))
 
     async def screenshot(self) -> bytes:
         return await self._call(self._page.screenshot())

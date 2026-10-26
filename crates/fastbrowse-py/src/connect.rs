@@ -132,10 +132,18 @@ impl Page {
         })
     }
 
-    #[pyo3(signature = (url, back_to=None))]
-    fn navigate<'py>(&self, py: Python<'py>, url: String, back_to: Option<String>) -> PyResult<Bound<'py, PyAny>> {
+    #[pyo3(signature = (url, load_timeout_seconds=15.0, back_to=None))]
+    fn navigate<'py>(
+        &self,
+        py: Python<'py>,
+        url: String,
+        load_timeout_seconds: f64,
+        back_to: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let connected = self.connected.clone();
-        awaitable(py, async move { connected.page.navigate(&url, back_to.as_deref()).await }, |py, done| {
+        let navigating =
+            async move { connected.page.navigate_within(&url, load_timeout_seconds, back_to.as_deref()).await };
+        awaitable(py, navigating, |py, done| {
             done.map_err(failed)?;
             Ok(py.None())
         })
