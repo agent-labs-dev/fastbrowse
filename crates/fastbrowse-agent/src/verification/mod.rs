@@ -996,9 +996,19 @@ fn outputs_grounded(composed: &ComposedAnswer, notes: &Notes, checks: &[String],
     };
     // A count, ranking, winner or absence is only as good as the reading of its list: code knows whether every page
     // and chunk was read, so an unfinished one is refused here rather than argued over by a model.
+    // A partial comparison read is superseded by a complete comparison of the same list: reading the rest of a
+    // sorted list records the whole list as its own comparison, and a claim carrying both rests on the list read to
+    // its end. Only a partial comparison no complete one of the same scope covers leaves the claim unfinished.
     let unfinished = context.claims.iter().any(|claim| {
         claim.counted_records.iter().any(|record| !record.complete)
-            || claim.compared_records.iter().any(|record| !record.complete)
+            || claim.compared_records.iter().any(|record| {
+                !record.complete
+                    && !claim.compared_records.iter().any(|other| {
+                        other.complete
+                            && other.scope == record.scope
+                            && record.record_indices.iter().all(|index| other.record_indices.contains(index))
+                    })
+            })
     });
     if unfinished {
         return reject(checks, UNFINISHED_REPAIR);

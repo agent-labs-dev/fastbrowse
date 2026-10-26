@@ -285,23 +285,30 @@ def _tasks(only: list[str], suites: list[str]) -> tuple[list[tuple[str, LocalTas
     return chosen, missing
 
 
+def parser() -> argparse.ArgumentParser:
+    argument = argparse.ArgumentParser()
+    argument.add_argument("--suite", nargs="+", choices=["local", "mock"], default=["local", "mock"])
+    # Repeated flags accumulate: `--only a --only b` used to keep only `b`, so a narrowed run silently ran fewer
+    # tasks than asked for.
+    argument.add_argument("--only", nargs="*", action="extend", default=[])
+    argument.add_argument("--repeat", type=int, default=1)
+    argument.add_argument("--out", type=Path, default=Path("artifacts/evals/local.jsonl"))
+    argument.add_argument("--budget", type=float, help="approved total model dollars for the fixture campaign")
+    return argument
+
+
 async def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--suite", nargs="+", choices=["local", "mock"], default=["local", "mock"])
-    parser.add_argument("--only", nargs="*", default=[])
-    parser.add_argument("--repeat", type=int, default=1)
-    parser.add_argument("--out", type=Path, default=Path("artifacts/evals/local.jsonl"))
-    parser.add_argument("--budget", type=float, help="approved total model dollars for the fixture campaign")
-    args = parser.parse_args(argv)
+    arguments = parser()
+    args = arguments.parse_args(argv)
     chosen, missing = _tasks(args.only, args.suite)
     if missing:
-        parser.error(f"--only names no task: {', '.join(missing)}")
+        arguments.error(f"--only names no task: {', '.join(missing)}")
     if args.repeat < 1:
-        parser.error("--repeat must be positive")
+        arguments.error("--repeat must be positive")
     if args.budget is not None and (not math.isfinite(args.budget) or args.budget <= 0):
-        parser.error("--budget must be finite and positive")
+        arguments.error("--budget must be finite and positive")
     if args.budget is not None and args.out.exists():
-        parser.error("budgeted fixture output already exists; reconcile its receipts before another campaign")
+        arguments.error("budgeted fixture output already exists; reconcile its receipts before another campaign")
     settings = load_settings()
     lock = load_lock()
     stamps = {

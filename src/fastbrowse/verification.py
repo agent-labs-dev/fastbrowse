@@ -789,10 +789,24 @@ def _outputs_grounded(
             "Use current source quotes and preserve their collection scope; do not cite superseded conclusions.",
         )
     # A count, ranking, winner or absence is only as good as the reading of its list: code knows whether every
-    # page and chunk was read, so an unfinished one is refused here rather than argued over by a model.
-    if any(
-        not record.complete for claim in context.claims for record in (*claim.counted_records, *claim.compared_records)
-    ):
+    # page and chunk was read, so an unfinished one is refused here rather than argued over by a model. A partial
+    # comparison read is different: reading the rest of a sorted list records the whole list as its own comparison,
+    # and a claim that carries that complete one beside the earlier partial one rests on the list read to its end.
+    # Only a partial comparison no complete comparison of the same scope covers leaves the claim unfinished.
+    def unfinished(claim: _OutputClaim) -> bool:
+        if any(not record.complete for record in claim.counted_records):
+            return True
+        finished = [record for record in claim.compared_records if record.complete]
+        return any(
+            not record.complete
+            and not any(
+                other.scope == record.scope and set(record.record_indices) <= set(other.record_indices)
+                for other in finished
+            )
+            for record in claim.compared_records
+        )
+
+    if any(unfinished(claim) for claim in context.claims):
         return reject(
             checks,
             repair="A count, ranking, winner or absence rests on a list that was not read to its end. Read the rest "
