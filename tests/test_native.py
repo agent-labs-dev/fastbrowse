@@ -1,4 +1,4 @@
-"""`fastbrowse.native`: `run_task` on the Rust core in this process, when FASTBROWSE_RUST_CORE=1.
+"""`fastbrowse.native`: `run_task` on the Rust core in this process, the default since 0.8.0.
 
 The options are checked here without the module. The runs need `fastbrowse._native`, which `uv sync` builds.
 """
@@ -110,7 +110,7 @@ def test_every_run_task_argument_crosses() -> None:
 
 @pytest.fixture
 def rust_core(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("FASTBROWSE_RUST_CORE", "1")
+    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
     # A checkout's `.env` would hand the run a real key.
     monkeypatch.chdir(tmp_path)
     for name in ("OPENROUTER_API_KEY", "AI_GATEWAY_API_KEY", "TYPESAFE_API_KEY", "BROWSER_USE_API_KEY"):
@@ -494,7 +494,7 @@ def test_the_commands_run_the_rust_cli_without_the_python_one(command: str, core
         [sys.executable, "-X", "importtime", "-c", script],
         capture_output=True,
         text=True,
-        env={**os.environ, "FASTBROWSE_RUST_CORE": "1"},
+        env={**os.environ, "FASTBROWSE_PYTHON_CORE": "0"},
         timeout=30,
     )
     assert ran.returncode == 0, ran.stderr

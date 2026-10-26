@@ -48,9 +48,9 @@ async def test_both_cores_read_and_act_alike(
     chrome_connection: BrowserConnection, main_site: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     url = f"{main_site}/index.html"
-    monkeypatch.delenv("FASTBROWSE_RUST_CORE", raising=False)
+    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "1")
     python = await read(chrome_connection.cdp_url, url)
-    monkeypatch.setenv("FASTBROWSE_RUST_CORE", "1")
+    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
     rust = await read(chrome_connection.cdp_url, url)
     assert python["typed"] is StepOutcome.EXECUTED
     assert python["png"] == b"\x89PNG\r\n\x1a\n"
@@ -60,7 +60,7 @@ async def test_both_cores_read_and_act_alike(
 async def test_a_page_outside_the_allowed_origins_raises_origin_not_allowed(
     chrome_connection: BrowserConnection, main_site: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("FASTBROWSE_RUST_CORE", "1")
+    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
     async with connect_cdp(
         cdp_url=chrome_connection.cdp_url, attach=False, allowed_origins=["https://elsewhere.example"]
     ) as page:
@@ -71,7 +71,7 @@ async def test_a_page_outside_the_allowed_origins_raises_origin_not_allowed(
 async def test_check_access_refusing_raises_browser_error_naming_its_type(
     chrome_connection: BrowserConnection, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("FASTBROWSE_RUST_CORE", "1")
+    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
 
     async def refused() -> None:
         raise PermissionError("revoked for jane@example.com")
@@ -86,7 +86,7 @@ async def test_check_access_refusing_raises_browser_error_naming_its_type(
 async def test_a_download_goes_to_the_callers_artifact_sink(
     chrome_connection: BrowserConnection, main_site: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("FASTBROWSE_RUST_CORE", "1")
+    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
     sink = RecordingArtifactSink()
     async with connect_cdp(cdp_url=chrome_connection.cdp_url, attach=False, artifact_sink=sink) as page:
         await page.navigate(f"{main_site}/index.html")

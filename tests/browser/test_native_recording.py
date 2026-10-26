@@ -36,9 +36,9 @@ async def test_a_recorded_run_reports_both_videos(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     if core == "rust":
-        monkeypatch.setenv("FASTBROWSE_RUST_CORE", "1")
+        monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
     else:
-        monkeypatch.delenv("FASTBROWSE_RUST_CORE", raising=False)
+        monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "1")
     record = tmp_path / "run.mp4"
     result = await run_task(
         "Open the dispatch page",
@@ -56,7 +56,7 @@ async def test_a_recorded_run_reports_both_videos(
 async def test_a_recording_that_cannot_start_raises_recording_error_on_the_rust_core(
     chrome_connection: BrowserConnection, main_site: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("FASTBROWSE_RUST_CORE", "1")
+    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
     monkeypatch.setenv("PATH", str(tmp_path))
     with pytest.raises(RecordingError, match="ffmpeg"):
         await run_task(
@@ -72,7 +72,7 @@ async def test_a_recording_that_cannot_start_raises_recording_error_on_the_rust_
 async def test_cursor_runs_on_the_rust_core_and_draws_nothing_where_it_cannot(
     chrome_connection: BrowserConnection, main_site: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("FASTBROWSE_RUST_CORE", "1")
+    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
     # No cua-driver on PATH, so there is nothing to draw with and the run goes on without it, as on Python.
     monkeypatch.setenv("PATH", "")
     result = await run_task(

@@ -25,7 +25,7 @@ Issues = "https://github.com/agent-labs-dev/fastbrowse/issues"
 [project.optional-dependencies]
 browser-use = ["browser-use-sdk==3.12.1"]
 eval-data = ["pyyaml>=6,<7"]
-# The MCP server, `fastbrowse-mcp`.
+# The Python core's MCP server, which `fastbrowse-mcp` runs with FASTBROWSE_PYTHON_CORE=1; the Rust one needs nothing.
 # mcp 2.x renamed FastMCP to MCPServer and changed other APIs; migrating the server is its own change.
 mcp = ["mcp>=1.20,<2"]
 
