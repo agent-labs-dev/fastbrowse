@@ -314,6 +314,7 @@ impl LLMClient for HostLlm {
                     done = &mut call => break done,
                     Some((ask, back)) = answering.asked.recv() => {
                         answering.asked_any = true;
+                        answering.returned |= ask.get("op").and_then(Value::as_str) == Some("done");
                         let _ = back.send(answer(&ask, ledger, schema));
                     }
                 }
