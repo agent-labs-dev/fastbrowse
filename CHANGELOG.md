@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- With `FASTBROWSE_RUST_CORE=1`, every `run_task` call runs on the Rust core. It used to fall back to Python whenever an argument had no field in the `serve` protocol: your own `jev` or `llm` client, an `http` client, `check_access`, a non-default `Config`, a cloud key, `allowed_origins`, cloud options or `fetch`. Those objects now stay in Python and the core calls back into them, so they behave as they did on Python. A client's ledger reservations count against the run's limits, and a response it validates is checked against the core's own schema. There is one difference: an exception from your Jev, LLM or HTTP client that is not one of their own errors now fails only that call, as any client failure does, rather than propagating out of `run_task`. A call the run had started but no longer waits on, such as the plan begun while a browser was failing to start, can no longer end the run. This is the first step toward running Rust by default ([ADR 0004](docs/adr/0004-rust-core-by-default.md)).
 
 
 ## [0.7.3] - 2026-10-26

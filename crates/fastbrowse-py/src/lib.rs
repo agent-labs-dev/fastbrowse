@@ -5,22 +5,33 @@
 //!
 //! Strings cross as USVStrings, the way WebIDL hands them to a URL parser.
 
-use std::sync::{Arc, Mutex, OnceLock};
+mod bridge;
+mod host;
+mod options;
 
-use fastbrowse_cli::embed::{Embedded, Host, HostCall, HostResolve};
+use std::sync::Arc;
+
+use fastbrowse_cli::embed::{HostCall, HostResolve};
 use fastbrowse_cli::runner::Cancel;
+use fastbrowse_clients::http::{Http, Request, Response};
+use fastbrowse_core::models::Event;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::{citations, origins};
+use fastbrowse_run::RunError;
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCFunction, PyString, PyTuple};
-use tokio::sync::oneshot;
+
+use crate::bridge::{Context, Failure, HostJev, HostLlm, HostSecrets, HostTransport, LlmCall, Sent};
+use crate::host::{host_call, runtime};
+use crate::options::Options;
 
 pyo3::create_exception!(
     fastbrowse_native,
     RunRefused,
     PyException,
-    "A run refused before it began, as `serve` refuses it: `args` is the protocol's error code and the message."
+    "A run that ended without a result: `args` is why (`invalid`, `configuration`, `cancelled` or `callback`) and \
+     the message."
 );
 
 /// The string as a USVString: each lone surrogate becomes one U+FFFD (PyO3's lossy conversion makes three).
@@ -46,94 +57,6 @@ fn parse_origin(value: &Bound<'_, PyString>) -> PyResult<String> {
 #[pyfunction]
 fn text_fragment(url: &Bound<'_, PyString>, text: &Bound<'_, PyString>) -> PyResult<String> {
     citations::text_fragment(&usv(url)?, &usv(text)?).map_err(|e| PyValueError::new_err(e.to_string()))
-}
-
-/// The module's own runtime. Its threads run the agent while the event loop's thread runs Python.
-fn runtime() -> &'static tokio::runtime::Runtime {
-    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("fastbrowse")
-            .enable_all()
-            .build()
-            .expect("a tokio runtime starts")
-    })
-}
-
-/// What a raised exception says: `str(exc)`, or its type's name when that is empty.
-fn message_of(py: Python<'_>, error: &PyErr) -> String {
-    let value = error.value(py);
-    match value.str().map(|text| text.to_string_lossy().into_owned()) {
-        Ok(text) if !text.is_empty() => text,
-        _ => value.get_type().name().map(|name| name.to_string()).unwrap_or_else(|_| "exception".into()),
-    }
-}
-
-/// A concurrent future the run is waiting on, cancelled if the run stops waiting: a callback still running when its
-/// run is cancelled is cancelled with it, as it would be inside Python's own `run_task`.
-struct Pending(Option<Py<PyAny>>);
-
-impl Drop for Pending {
-    fn drop(&mut self) {
-        if let Some(future) = self.0.take() {
-            Python::attach(|py| {
-                let _ = future.bind(py).call_method0("cancel");
-            });
-        }
-    }
-}
-
-/// Call `function` with the GIL held. A coroutine it returns is run on `event_loop` and awaited from here.
-fn host_call<A, R>(
-    event_loop: Arc<Py<PyAny>>,
-    function: Py<PyAny>,
-    arguments: fn(Python<'_>, A) -> PyResult<Bound<'_, PyTuple>>,
-    answer: fn(&Bound<'_, PyAny>) -> PyResult<R>,
-) -> HostCall<A, R>
-where
-    A: Send + 'static,
-    R: Send + 'static,
-{
-    let function = Arc::new(function);
-    Arc::new(move |value: A| {
-        let (event_loop, function) = (event_loop.clone(), function.clone());
-        Box::pin(async move {
-            let (sender, receiver) = oneshot::channel::<Result<R, String>>();
-            let sender = Arc::new(Mutex::new(Some(sender)));
-            let started = Python::attach(|py| -> Result<Option<Py<PyAny>>, String> {
-                let call = || -> PyResult<Option<Py<PyAny>>> {
-                    let returned = function.bind(py).call1(arguments(py, value)?)?;
-                    let asyncio = py.import("asyncio")?;
-                    if !asyncio.call_method1("iscoroutine", (&returned,))?.is_truthy()? {
-                        let done = answer(&returned);
-                        if let Some(sender) = sender.lock().unwrap_or_else(|p| p.into_inner()).take() {
-                            let _ = sender.send(done.map_err(|error| message_of(py, &error)));
-                        }
-                        return Ok(None);
-                    }
-                    let future = asyncio.call_method1("run_coroutine_threadsafe", (returned, event_loop.bind(py)))?;
-                    let settle = sender.clone();
-                    let on_done = PyCFunction::new_closure(py, None, None, move |args: &Bound<'_, PyTuple>, _| {
-                        let py = args.py();
-                        let done = args.get_item(0).and_then(|future| future.call_method0("result"));
-                        let done = match done {
-                            Ok(returned) => answer(&returned).map_err(|error| message_of(py, &error)),
-                            Err(error) => Err(message_of(py, &error)),
-                        };
-                        if let Some(sender) = settle.lock().unwrap_or_else(|p| p.into_inner()).take() {
-                            let _ = sender.send(done);
-                        }
-                    })?;
-                    future.call_method1("add_done_callback", (on_done,))?;
-                    Ok(Some(future.unbind()))
-                };
-                call().map_err(|error| message_of(py, &error))
-            });
-            let _pending = Pending(started?);
-            receiver.await.unwrap_or_else(|_| Err("the callback was cancelled".into()))
-        })
-    })
 }
 
 fn json_argument(py: Python<'_>, value: serde_json::Value) -> PyResult<Bound<'_, PyTuple>> {
@@ -196,21 +119,78 @@ impl Run {
     }
 }
 
-/// Start a run on the running event loop. `params` is a `run` request's params as JSON, the shape `serve` reads.
+fn pair_argument(py: Python<'_>, (first, second): (String, String)) -> PyResult<Bound<'_, PyTuple>> {
+    PyTuple::new(py, [first, second])
+}
+
+fn no_argument(py: Python<'_>, (): ()) -> PyResult<Bound<'_, PyTuple>> {
+    Ok(PyTuple::empty(py))
+}
+
+fn llm_argument(py: Python<'_>, call: LlmCall) -> PyResult<Bound<'_, PyTuple>> {
+    let context = Bound::new(py, call.context)?;
+    (call.purpose, call.messages, call.name, call.schema, call.max_output_tokens, context).into_pyobject(py)
+}
+
+fn request_argument(py: Python<'_>, request: Request) -> PyResult<Bound<'_, PyTuple>> {
+    let body = PyBytes::new(py, &request.body);
+    (request.method.as_str(), request.url, request.headers, body, request.max_bytes).into_pyobject(py)
+}
+
+fn text(answer: &Bound<'_, PyAny>) -> PyResult<String> {
+    answer.extract()
+}
+
+fn kind(answer: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
+    answer.extract()
+}
+
+/// `("ok", status, headers, body)`, or `(kind, exception type name)` for what the client raised.
+fn sent(answer: &Bound<'_, PyAny>) -> PyResult<Sent> {
+    let tag: String = answer.get_item(0)?.extract()?;
+    if tag != "ok" {
+        return Ok(Sent::Failed(tag, answer.get_item(1)?.extract()?));
+    }
+    let (_, status, headers, body): (String, u16, Vec<(String, String)>, Vec<u8>) = answer.extract()?;
+    let mut response = Response::new(status, body);
+    response.headers = headers;
+    Ok(Sent::Response(response))
+}
+
+fn refused(kind: &str, message: String) -> PyErr {
+    RunRefused::new_err((kind.to_string(), message))
+}
+
+/// Start a run on the running event loop. `options` is `run_task`'s data arguments as JSON (`fastbrowse.native`
+/// writes them), and each callback is a Python function: `on_event` gets each event as JSON, `on_frame` each JPEG as
+/// bytes, `until` the final URL, `resolve_secret` a name and an origin. `check_access`, `jev`, `llm` and `http` are the
+/// caller's own objects wrapped by `fastbrowse.native` into functions that answer JSON (see `bridge`).
 ///
-/// `on_event` gets each event as JSON, `on_frame` each JPEG as bytes, `until` the final URL, and `resolve_secret`
-/// a name and an origin. Each is called with the GIL held, and a coroutine one returns is run on the loop and awaited.
-/// A callback that raises ends the run, whose result is then status `error`, as `serve` ends it.
+/// Each is called with the GIL held, and a coroutine one returns is run on the loop and awaited. An event, frame,
+/// until or secret callback that raises stops the run, which then refuses with `callback`.
 #[pyfunction]
-#[pyo3(signature = (params, *, on_event=None, on_frame=None, until=None, resolve_secret=None))]
+#[pyo3(signature = (
+    task, options, *, on_event=None, on_frame=None, until=None, resolve_secret=None, check_access=None, jev=None,
+    llm=None, http=None,
+))]
+#[allow(clippy::too_many_arguments)]
 fn run_task(
     py: Python<'_>,
-    params: String,
+    task: String,
+    options: &str,
     on_event: Option<Py<PyAny>>,
     on_frame: Option<Py<PyAny>>,
     until: Option<Py<PyAny>>,
     resolve_secret: Option<Py<PyAny>>,
+    check_access: Option<Py<PyAny>>,
+    jev: Option<Py<PyAny>>,
+    llm: Option<Py<PyAny>>,
+    http: Option<Py<PyAny>>,
 ) -> PyResult<Run> {
+    let mut options: Options =
+        serde_json::from_str(options).map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let refs = options.secrets.take();
+    let mut run = options.task().map_err(PyValueError::new_err)?;
     let event_loop = py.import("asyncio")?.call_method0("get_running_loop")?;
     let result = event_loop.call_method0("create_future")?;
     let finished = event_loop.call_method0("create_future")?;
@@ -225,29 +205,92 @@ fn run_task(
     })?;
     result.call_method1("add_done_callback", (on_cancelled,))?;
     let event_loop = Arc::new(event_loop.unbind());
-    let host = Host {
-        on_event: on_event.map(|f| host_call(event_loop.clone(), f, json_argument, nothing)),
-        on_frame: on_frame.map(|f| host_call(event_loop.clone(), f, bytes_argument, nothing)),
-        until: until.map(|f| host_call(event_loop.clone(), f, str_argument, strict_bool)),
-        resolve_secret: resolve_secret.map(|f| resolver(event_loop.clone(), f)),
-    };
-    let run = Run { result: result.clone().unbind(), finished: finished.clone().unbind(), cancel: cancel.clone() };
+    let failure = Arc::new(Failure::new(cancel.clone()));
+    if let Some(function) = on_event {
+        let (call, failure) = (host_call(event_loop.clone(), function, json_argument, nothing), failure.clone());
+        run.on_event = Some(Arc::new(move |event: Event| {
+            let (call, failure) = (call.clone(), failure.clone());
+            Box::pin(async move {
+                if call(event.dump()).await.is_err() {
+                    failure.fail();
+                }
+            })
+        }));
+    }
+    if let Some(function) = on_frame {
+        let (call, failure) = (host_call(event_loop.clone(), function, bytes_argument, nothing), failure.clone());
+        run.on_frame = Some(Arc::new(move |frame: Vec<u8>| {
+            let (call, failure) = (call.clone(), failure.clone());
+            Box::pin(async move {
+                if call(frame).await.is_err() {
+                    failure.fail();
+                }
+            })
+        }));
+    }
+    if let Some(function) = until {
+        let (call, failure) = (host_call(event_loop.clone(), function, str_argument, strict_bool), failure.clone());
+        run.until = Some(Arc::new(move |url: String| {
+            let (call, failure) = (call.clone(), failure.clone());
+            Box::pin(async move {
+                call(url).await.unwrap_or_else(|_| {
+                    failure.fail();
+                    false
+                })
+            })
+        }));
+    }
+    match (refs, resolve_secret) {
+        (None, _) => {}
+        (Some(refs), Some(function)) => {
+            let resolve = resolver(event_loop.clone(), function);
+            run.secrets = Some(Arc::new(HostSecrets { refs, resolve, failure: failure.clone() }));
+        }
+        (Some(_), None) => return Err(PyValueError::new_err("secrets are named and no resolver was given")),
+    }
+    if let Some(function) = check_access {
+        run.check_access = Some(bridge::check_access(host_call(event_loop.clone(), function, no_argument, kind)));
+    }
+    if let Some(function) = jev {
+        let call: HostCall<(String, String), String> = host_call(event_loop.clone(), function, pair_argument, text);
+        run.jev = Some(Arc::new(HostJev { call }));
+    }
+    if let Some(function) = llm {
+        let call: HostCall<LlmCall, String> = host_call(event_loop.clone(), function, llm_argument, text);
+        run.llm = Some(Arc::new(HostLlm { call }));
+    }
+    if let Some(function) = http {
+        let call: HostCall<Request, Sent> = host_call(event_loop.clone(), function, request_argument, sent);
+        run.http = Some(Http::new(Arc::new(HostTransport { call })));
+    }
+    let stopped = cancel.clone();
+    run.cancel = Some(Arc::new(move || {
+        let stopped = stopped.clone();
+        Box::pin(async move { stopped.tripped().await })
+    }));
+    let handle = Run { result: result.clone().unbind(), finished: finished.clone().unbind(), cancel };
     let (result, finished) = (result.unbind(), finished.unbind());
     runtime().spawn(async move {
-        let outcome = Embedded::new(Vec::new()).run(&params, host, cancel).await;
+        let outcome = fastbrowse_run::run_task(&task, run).await;
         Python::attach(|py| {
             let settle =
                 PyCFunction::new_closure(py, None, None, move |args: &Bound<'_, PyTuple>, _| -> PyResult<()> {
                     let py = args.py();
                     let result = result.bind(py);
                     if !result.call_method0("done")?.is_truthy()? {
-                        match &outcome {
-                            Ok(answered) => result.call_method1("set_result", (answered.dump_json(),))?,
-                            Err(refused) => {
-                                let error = RunRefused::new_err((refused.code.code(), refused.message.clone()));
-                                result.call_method1("set_exception", (error.value(py),))?
+                        let error = match &outcome {
+                            Ok(answered) => {
+                                result.call_method1("set_result", (answered.dump_json(),))?;
+                                None
                             }
+                            Err(_) if failure.failed() => Some(refused("callback", String::new())),
+                            Err(RunError::Cancelled) => Some(refused("cancelled", "the run was cancelled".into())),
+                            Err(RunError::Invalid(message)) => Some(refused("invalid", message.clone())),
+                            Err(RunError::Configuration(message)) => Some(refused("configuration", message.clone())),
                         };
+                        if let Some(error) = error {
+                            result.call_method1("set_exception", (error.value(py),))?;
+                        }
                     }
                     let finished = finished.bind(py);
                     if !finished.call_method0("done")?.is_truthy()? {
@@ -261,7 +304,7 @@ fn run_task(
             }
         });
     });
-    Ok(run)
+    Ok(handle)
 }
 
 #[pymodule]
@@ -271,6 +314,7 @@ fn fastbrowse_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(text_fragment, m)?)?;
     m.add_function(wrap_pyfunction!(run_task, m)?)?;
     m.add_class::<Run>()?;
+    m.add_class::<Context>()?;
     m.add("RunRefused", m.py().get_type::<RunRefused>())?;
     m.add("PROTOCOL_VERSION", fastbrowse_core::protocol::PROTOCOL_VERSION)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

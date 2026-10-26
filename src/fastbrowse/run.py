@@ -301,13 +301,11 @@ async def run_task(
     is refused as needing a browser. Browser, recording, download and cursor options mean nothing here and
     are an error rather than ignored.
 
-    With `FASTBROWSE_RUST_CORE=1` and `fastbrowse_native` installed, the run goes to the Rust core in this process
-    whenever its arguments fit the `serve` protocol (`fastbrowse.native`), and to this code otherwise.
+    With `FASTBROWSE_RUST_CORE=1` and `fastbrowse_native` installed, the run goes to the Rust core in this process,
+    every argument with it (`fastbrowse.native`).
     """
-    if os.environ.get("FASTBROWSE_RUST_CORE") == "1" and not fetch:
-        run_params = native.params(task, locals())
-        if run_params is not None:
-            return await native.run(run_params, on_event=on_event, on_frame=on_frame, until=until, secrets=secrets)
+    if os.environ.get("FASTBROWSE_RUST_CORE") == "1":
+        return await native.run(task, locals())
     config = config or Config()
     settings = load_settings()
     origins = None if allowed_origins is None else parse_origins(allowed_origins)

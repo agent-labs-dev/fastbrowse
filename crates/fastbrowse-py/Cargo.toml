@@ -10,10 +10,16 @@ name = "fastbrowse_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-fastbrowse-core = { path = "../fastbrowse-core" }
-# `run_task` with the rules `serve` applies to a run's params, without the stand-in runs the binary's tests use.
+fastbrowse-agent = { path = "../fastbrowse-agent" }
+fastbrowse-browser = { path = "../fastbrowse-browser" }
+# The run's stop signal and the host-call shapes the Node addon shares, without the binary's stand-in runs.
 fastbrowse-cli = { path = "../fastbrowse-cli", default-features = false }
+fastbrowse-clients = { path = "../fastbrowse-clients" }
+fastbrowse-core = { path = "../fastbrowse-core" }
+fastbrowse-run = { path = "../fastbrowse-run" }
+indexmap = { version = "2", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
 # abi3: one wheel per platform serves every CPython from 3.13 on.
 pyo3 = { version = "0.30", features = ["extension-module", "abi3-py313"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
-tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
