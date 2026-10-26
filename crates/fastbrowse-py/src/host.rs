@@ -95,3 +95,51 @@ where
         })
     })
 }
+
+/// Run `work` on the module's runtime and return an asyncio future on the running loop that resolves with what
+/// `settle` makes of its output. Cancelling the future stops the work.
+pub fn awaitable<'py, T, W, S>(py: Python<'py>, work: W, settle: S) -> PyResult<Bound<'py, PyAny>>
+where
+    T: Send + 'static,
+    W: std::future::Future<Output = T> + Send + 'static,
+    S: FnOnce(Python<'_>, T) -> PyResult<Py<PyAny>> + Send + 'static,
+{
+    let event_loop = py.import("asyncio")?.call_method0("get_running_loop")?;
+    let future = event_loop.call_method0("create_future")?;
+    let (target, event_loop) = (future.clone().unbind(), event_loop.unbind());
+    let task = runtime().spawn(async move {
+        let output = work.await;
+        // A Python callable may be called more than once, as far as its type says, so the output is taken once.
+        let pending = Mutex::new(Some((settle, output)));
+        Python::attach(|py| {
+            let settle =
+                PyCFunction::new_closure(py, None, None, move |args: &Bound<'_, PyTuple>, _| -> PyResult<()> {
+                    let py = args.py();
+                    let future = target.bind(py);
+                    let taken = pending.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
+                    let Some((settle, output)) = taken else { return Ok(()) };
+                    if future.call_method0("done")?.is_truthy()? {
+                        return Ok(());
+                    }
+                    match settle(py, output) {
+                        Ok(value) => future.call_method1("set_result", (value,))?,
+                        Err(error) => future.call_method1("set_exception", (error.value(py),))?,
+                    };
+                    Ok(())
+                });
+            // A loop that has closed has nobody left to tell.
+            if let Ok(settle) = settle {
+                let _ = event_loop.bind(py).call_method1("call_soon_threadsafe", (settle,));
+            }
+        });
+    });
+    let abort = task.abort_handle();
+    let on_cancelled = PyCFunction::new_closure(py, None, None, move |args: &Bound<'_, PyTuple>, _| -> PyResult<()> {
+        if args.get_item(0)?.call_method0("cancelled")?.is_truthy()? {
+            abort.abort();
+        }
+        Ok(())
+    })?;
+    future.call_method1("add_done_callback", (on_cancelled,))?;
+    Ok(future)
+}

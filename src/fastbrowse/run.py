@@ -93,7 +93,7 @@ async def connect_cdp(
     config: Config | None = None,
     artifact_sink: ArtifactSink | None = None,
     downloads: Path | None = None,
-) -> AsyncGenerator[CdpPage]:
+) -> AsyncGenerator[CdpPage | native.NativePage]:
     """A page on a browser or Electron app that is already running, for driving it without the agent.
 
     Pass `port` to look the websocket URL up from `http://<host>:<port>/json/version`, or `cdp_url` directly.
@@ -102,8 +102,13 @@ async def connect_cdp(
     Chrome itself activates a visible window whose front tab receives a pointer press. `allowed_origins` limits
     the page to those exact origins and `check_access` is awaited before every browser read and action (both
     described on `run_task`). Downloads go to `artifact_sink`, else to `downloads`, else to a scratch directory
-    removed on exit.
+    removed on exit. With `FASTBROWSE_RUST_CORE=1` the page is the Rust core's (`fastbrowse.native.NativePage`),
+    with the same methods.
     """
+    if os.environ.get("FASTBROWSE_RUST_CORE") == "1":
+        async with native.connect_cdp(locals()) as page:
+            yield page
+        return
     await check_browser_access(check_access)
     if port is not None and cdp_url is not None:
         raise BrowserError("port and cdp_url both name a browser to attach to; pass one")

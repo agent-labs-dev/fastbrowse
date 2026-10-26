@@ -1238,5 +1238,6 @@ async def test_connect_cdp_reads_the_port_and_attaches(monkeypatch: pytest.Monke
         {"targetInfos": [{"targetId": "app_win", "type": "page", "url": "app://main", "title": "App Window"}]}
     ]
     async with connect_cdp(cdp_url="ws://127.0.0.1:9333/devtools/browser/abc") as page:
+        assert isinstance(page, CdpPage)  # the Python core's page, which this fake DevTools transport stands under
         assert [tab.id for tab in page._session.tabs()] == ["app_win"]
     assert "Target.closeTarget" not in transport.calls
