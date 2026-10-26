@@ -587,6 +587,9 @@ class _OutputCount(_CollectionMetadata):
 
 class _OutputComparison(_CollectionMetadata):
     scope: str | None
+    requirement: str
+    """The comparison's code-owned requirement id: two different lists can share a heading, so the scope text the
+    reader wrote cannot identify a collection on its own."""
     complete: bool
     record_indices: tuple[int, ...]
     pages_read: tuple[_CollectionRead, ...] = ()
@@ -666,6 +669,7 @@ def _output_context(composed: ComposedAnswer, notes: Notes) -> _OutputContext | 
                         scope=fact.scope
                         if isinstance(fact, CollectionFact)
                         else requirements.get(comparison.requirement_id),
+                        requirement=comparison.requirement_id,
                         complete=comparison.complete
                         and (
                             isinstance(fact, CollectionFact)
@@ -801,7 +805,9 @@ def _outputs_grounded(
         return any(
             not record.complete
             and not any(
-                other.scope == record.scope and set(record.record_indices) <= set(other.record_indices)
+                other.requirement == record.requirement
+                and other.scope == record.scope
+                and set(record.record_indices) <= set(other.record_indices)
                 for other in finished
             )
             for record in claim.compared_records

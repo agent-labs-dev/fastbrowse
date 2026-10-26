@@ -701,6 +701,9 @@ struct OutputCount {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 struct OutputComparison {
     scope: Option<String>,
+    /// The comparison's code-owned requirement id: two different lists can share a heading, so the scope text the
+    /// reader wrote cannot identify a collection on its own.
+    requirement: String,
     complete: bool,
     record_indices: Vec<usize>,
     /// Every read code made of this collection, in order, including reads with no compared record.
@@ -798,6 +801,7 @@ pub fn output_context(composed: &ComposedAnswer, notes: &Notes) -> Option<Output
                         } else {
                             requirements.get(comparison.requirement_id.as_str()).map(|t| t.to_string())
                         },
+                        requirement: comparison.requirement_id.clone(),
                         complete: comparison.complete
                             && (fact.is_collection()
                                 || notes.fact_requirements(&key).contains(&comparison.requirement_id)),
@@ -1005,6 +1009,7 @@ fn outputs_grounded(composed: &ComposedAnswer, notes: &Notes, checks: &[String],
                 !record.complete
                     && !claim.compared_records.iter().any(|other| {
                         other.complete
+                            && other.requirement == record.requirement
                             && other.scope == record.scope
                             && record.record_indices.iter().all(|index| other.record_indices.contains(index))
                     })
