@@ -390,8 +390,9 @@ async def test_a_cancelled_llm_call_records_its_receipt_before_run_task_raises()
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
-            # A request's charge is known only once it is cancelled, after a moment on the loop.
-            await asyncio.sleep(0.05)
+            # A request's charge is known only once it is cancelled, which may take a while: the run waits, as
+            # Python's `run_task` joins a cancelled client, for as long as it takes.
+            await asyncio.sleep(2.1)
             try:
                 ledger.lines.extend([UNKNOWN])
                 cleanup.append("recorded")

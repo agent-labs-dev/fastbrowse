@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use fastbrowse_browser::session::{AccessRefused, CheckAccess};
 use fastbrowse_cli::embed::{HostCall, HostResolve};
@@ -187,13 +187,11 @@ impl Context {
     }
 }
 
-/// How long a dropped call waits for the client's cancellation cleanup, as Python's `run_task` joins a frame handler.
-const CLEANUP: Duration = Duration::from_secs(2);
-
 /// What answers a [`Context`] and closes it when the call ends. A call dropped while its client had begun spending
 /// (it reserved, recorded or validated) keeps answering until the wrapper says the client's cleanup is done: that is
 /// where a cancelled request records the charge it may have run up, and the ledger is only borrowed until this
-/// returns. A client that had asked nothing yet has nothing to record.
+/// returns. Python's `run_task` joins a cancelled client the same way, with no time limit. A client that had asked
+/// nothing yet has nothing to record.
 struct Answering<'a> {
     slot: Arc<Mutex<Option<UnboundedSender<Ask>>>>,
     asked: UnboundedReceiver<Ask>,
@@ -205,16 +203,20 @@ struct Answering<'a> {
 
 impl Drop for Answering<'_> {
     fn drop(&mut self) {
-        let deadline = Instant::now() + CLEANUP;
-        while self.asked_any && !self.returned && Instant::now() < deadline {
-            match self.asked.try_recv() {
-                Ok((ask, back)) => {
-                    let _ = back.send(answer(&ask, self.ledger, self.schema));
-                    self.returned = ask.get("op").and_then(Value::as_str) == Some("done");
+        if self.asked_any && !self.returned {
+            // A drop cannot await, so the wait leaves this worker to the runtime's other tasks while it lasts.
+            tokio::task::block_in_place(|| {
+                while !self.returned {
+                    match self.asked.try_recv() {
+                        Ok((ask, back)) => {
+                            let _ = back.send(answer(&ask, self.ledger, self.schema));
+                            self.returned = ask.get("op").and_then(Value::as_str) == Some("done");
+                        }
+                        Err(TryRecvError::Empty) => std::thread::sleep(Duration::from_millis(1)),
+                        Err(TryRecvError::Disconnected) => break,
+                    }
                 }
-                Err(TryRecvError::Empty) => std::thread::sleep(Duration::from_millis(1)),
-                Err(TryRecvError::Disconnected) => break,
-            }
+            });
         }
         self.slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
     }
