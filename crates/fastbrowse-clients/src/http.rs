@@ -40,6 +40,9 @@ pub struct Request {
     /// In the order they were given; names as the client wrote them.
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+    /// Stop reading the body once it passes this many bytes, as a streamed `httpx` read can: the response then holds
+    /// one byte more than the bound, so a caller sees it was passed without the rest landing in memory.
+    pub max_bytes: Option<usize>,
 }
 
 impl Request {
@@ -168,13 +171,30 @@ impl Http {
             url: url.to_string(),
             headers: all,
             body: write(body, Style::HTTPX).into(),
+            max_bytes: None,
         };
         self.send(request, seconds).await
     }
 
     pub async fn get(&self, url: &str, headers: &[(String, String)], seconds: f64) -> Result<Response, TransportError> {
-        let request =
-            Request { method: Method::Get, url: url.to_string(), headers: headers.to_vec(), body: Vec::new() };
+        self.get_bounded(url, headers, seconds, None).await
+    }
+
+    /// [`Http::get`] reading at most one byte past `max_bytes` of the body; see [`Request::max_bytes`].
+    pub async fn get_bounded(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        seconds: f64,
+        max_bytes: Option<usize>,
+    ) -> Result<Response, TransportError> {
+        let request = Request {
+            method: Method::Get,
+            url: url.to_string(),
+            headers: headers.to_vec(),
+            body: Vec::new(),
+            max_bytes,
+        };
         self.send(request, seconds).await
     }
 
@@ -227,6 +247,7 @@ impl Transport for HyperTransport {
                 Method::Get => hyper::Method::GET,
                 Method::Post => hyper::Method::POST,
             };
+            let request_max = request.max_bytes;
             let mut builder = hyper::Request::builder().method(method).uri(uri);
             for (name, value) in &request.headers {
                 builder = builder.header(name.as_str(), value.as_str());
@@ -248,8 +269,21 @@ impl Transport for HyperTransport {
                     (name.as_str().to_string(), String::from_utf8_lossy(value.as_bytes()).into_owned())
                 })
                 .collect();
-            let body = response.into_body().collect().await.map_err(|_| TransportError::Transient("ReadError"))?;
-            Ok(Response { status, headers, body: body.to_bytes().to_vec(), credential: String::new() })
+            let mut incoming = response.into_body();
+            let mut body = Vec::new();
+            while let Some(frame) = incoming.frame().await {
+                let frame = frame.map_err(|_| TransportError::Transient("ReadError"))?;
+                if let Some(chunk) = frame.data_ref() {
+                    body.extend_from_slice(chunk);
+                }
+                if let Some(max) = request_max
+                    && body.len() > max
+                {
+                    body.truncate(max + 1);
+                    break;
+                }
+            }
+            Ok(Response { status, headers, body, credential: String::new() })
         })
     }
 }

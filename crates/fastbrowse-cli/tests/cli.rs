@@ -124,6 +124,29 @@ async fn test_cdp_url_hands_run_task_the_url_and_no_cloud_key() {
 }
 
 #[tokio::test]
+async fn test_fetch_starts_no_browser_and_asks_for_no_cloud_key() {
+    let ran = cli(&["t", "--start", "https://example.com", "--fetch"]).await;
+    assert_eq!(ran.code, 0, "{}", ran.err);
+    let call = ran.call.unwrap();
+    assert!(call.fetch);
+    assert!(call.chrome.is_none() && call.browser_api_key.is_none());
+}
+
+#[tokio::test]
+async fn test_fetch_refuses_flags_that_shape_a_browser() {
+    for flag in [&["--local"][..], &["--headed"], &["--cdp-port", "9222"], &["--cursor"], &["--downloads", "/tmp/d"]] {
+        let mut argv = vec!["t", "--start", "https://example.com", "--fetch"];
+        argv.extend_from_slice(flag);
+        let ran = cli(&argv).await;
+        assert!(ran.call.is_none());
+        assert_eq!(
+            ran.err,
+            format!("fastbrowse: --fetch starts no browser, so it cannot be combined with {}\n", flag[0])
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_cdp_url_refuses_flags_that_shape_a_started_browser() {
     for flag in [
         &["--local"][..],
