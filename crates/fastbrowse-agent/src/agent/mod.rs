@@ -18,6 +18,7 @@ mod reading;
 mod recovery;
 mod sign_in;
 pub(crate) mod state;
+
 #[cfg(test)]
 mod tests;
 
@@ -313,10 +314,15 @@ impl Agent {
                 None => Some(body.await),
             };
             let mut loop_returned = false;
+            let mut needs_browser = false;
             let mut result = match outcome {
                 Some(Ok(result)) => {
                     loop_returned = true;
                     result
+                }
+                Some(Err(Flow::Browser(BrowserError::NeedsBrowser(message)))) => {
+                    needs_browser = true;
+                    blocked_without_browser(message)
                 }
                 Some(Err(flow)) => self.stopped(flow, slot.as_mut(), &ledger).await,
                 None => {
@@ -359,9 +365,15 @@ impl Agent {
                 // First observation can fail before the completed plan is consumed, but its receipt still bills.
                 ledger.state().lines.push(planned.cost);
             }
-            (result, loop_returned)
+            (result, loop_returned, needs_browser)
         });
-        let (mut result, mut loop_returned) = scoped.await;
+        let (mut result, mut loop_returned, needs_browser) = scoped.await;
+        if needs_browser {
+            // Python's `NeedsBrowser` leaves `Agent.run` as an exception once the head start is settled, and `run_task`
+            // reports it with what the ledger spent and nothing else: no budget check and no ending frame.
+            result.cost = ledger.breakdown();
+            return Ok(result);
+        }
         // Startup calls can settle during teardown, after the loop has made its last budget check.
         if let Err(error) = ledger.check_spend(0.0) {
             if result.budget.as_ref().is_none_or(|budget| budget.resource != BudgetResource::Seconds) {
@@ -929,4 +941,25 @@ pub fn breakdown(lines: Vec<CostLine>) -> CostBreakdown {
 /// Python's `json.dumps` of a list of strings, as the recovery prompt lists addresses.
 fn dumps_strings(values: &[String]) -> String {
     dumps(&Value::from(values.to_vec()))
+}
+
+/// A run whose page has no browser behind it reached a step only a browser can take. The document was never the
+/// problem and a second attempt cannot help, so it ends `blocked` with the reason, carrying nothing it read.
+fn blocked_without_browser(message: String) -> RunResult {
+    RunResult {
+        status: Status::Blocked,
+        budget: None,
+        answer: None,
+        data: Value::Null,
+        evidence: Vec::new(),
+        steps: Vec::new(),
+        cost: CostBreakdown { lines: Vec::new() },
+        artifacts: Vec::new(),
+        citations: Vec::new(),
+        error: Some(message),
+        final_url: None,
+        final_frame: None,
+        would_fire: Vec::new(),
+        recordings: Vec::new(),
+    }
 }
