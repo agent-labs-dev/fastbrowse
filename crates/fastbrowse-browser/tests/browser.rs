@@ -452,6 +452,27 @@ async fn test_download_becomes_artifact_with_checksum() {
     h.close().await;
 }
 
+/// The orders-report shape: a link whose target is a file, which Chrome downloads instead of navigating. The tab keeps
+/// its page, so the click must count the download as its effect, and the next observation must carry its rows.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_click_that_downloads_is_a_page_change_not_a_dead_click() {
+    let _gate = gate().await;
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h,
+        "document.body.innerHTML = \"<p>Download the <a href='/report.csv?short'>Orders report</a>.</p>\";",
+    )
+    .await;
+    let obs = observe_until(&h.page, "Orders report").await;
+    let result = act(&h.page, click(find(&obs, "Orders report")), &obs).await;
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    assert!(result.page_changed, "a click that downloaded a file moved the run, not the page");
+    let landed = h.observe().await;
+    assert!(landed.viewport_text.contains("139.79"));
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_cross_origin_iframe_control_is_observed_and_clickable() {
     let _gate = gate().await;

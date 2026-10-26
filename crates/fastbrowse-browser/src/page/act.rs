@@ -33,6 +33,9 @@ const SUGGESTION_SECONDS: f64 = 1.2;
 /// A lazily built menu or dialog arrived 0.15-0.7s after the click on the pages this was measured on. Paid only by a
 /// control that advertised a popup and had not opened one yet.
 const POPUP_SECONDS: f64 = 1.2;
+/// A download's bytes are taken off the paused response in a task of its own, which normally finishes before the
+/// click's settle does. Paid only by a click whose own input began a navigation and left the page unchanged.
+const DOWNLOAD_SETTLE_SECONDS: f64 = 1.5;
 /// Types whose committed value is the type's own ISO shape, set through the value setter, not typed keystrokes.
 const DATE_INPUT_TYPES: [&str; 5] = ["date", "datetime-local", "month", "week", "time"];
 const CHANGED: &str = "control changed before keyboard use";
@@ -232,7 +235,8 @@ impl CdpPage {
             self.input_mark().await
         };
         let window_opens = self.session.window_opens();
-        let (outcome, detail) = match self.dispatch(action, target.as_ref(), point, drawn).await {
+        let downloads_before = self.session.downloads_captured();
+        let (outcome, mut detail) = match self.dispatch(action, target.as_ref(), point, drawn).await {
             Ok(dispatched) => dispatched,
             Err(error) if !action.form_fill => return Err(error),
             // An input handler can navigate before retention is checked. Its next field needs a fresh decision.
@@ -257,7 +261,7 @@ impl CdpPage {
         let input_settling = action.operation == Operation::Fill
             || (!matches!(action.operation, Operation::Back | Operation::SwitchTab | Operation::Dialog)
                 && target.as_ref().is_none_or(|t| Some(&t.0) == active_now.as_ref()));
-        let changed = self.changed_since(&before_fingerprint, input_settling).await?;
+        let mut changed = self.changed_since(&before_fingerprint, input_settling).await?;
         if matches!(action.operation, Operation::Click | Operation::Enter)
             && self.session.follow_popup(&popups, opens || self.session.window_opens() != window_opens).await?.is_some()
         {
@@ -268,6 +272,15 @@ impl CdpPage {
                 form_unchanged: false,
                 moved: true,
             });
+        }
+        let moved = self.moved_by_input(document);
+        if !changed && moved && self.download_landed(downloads_before).await {
+            // A link whose target is a file downloads it: Chrome aborts the document navigation and the tab keeps
+            // the page it was on, so nothing on the page changed. The download is the action's whole effect, and
+            // the text it carries is only read by the next observation, so the run must not be told the click did
+            // nothing and must not observe before the captured file is there to read.
+            changed = true;
+            detail = detail.or_else(|| Some("downloaded the file the link points at".into()));
         }
         let mut unchanged = false;
         if action.form_fill
@@ -282,8 +295,16 @@ impl CdpPage {
             page_changed: changed,
             detail,
             form_unchanged: unchanged,
-            moved: self.moved_by_input(document),
+            moved,
         })
+    }
+
+    /// Whether a download landed since `since`, waiting the capture's own task out briefly.
+    ///
+    /// Bounded and only asked after an input the run made began a navigation that left the page unchanged, so a
+    /// plain click that only redrew its page pays nothing for it. A download already captured returns at once.
+    async fn download_landed(&self, since: u32) -> bool {
+        self.session.downloads_captured() > since || self.session.download_settled(since, DOWNLOAD_SETTLE_SECONDS).await
     }
 
     /// How many moves the run's input had made before an action, as the input watch reports them.
