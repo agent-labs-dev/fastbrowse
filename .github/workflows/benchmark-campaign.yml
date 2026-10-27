@@ -1,0 +1,330 @@
+name: Benchmark campaign
+
+# Runs the live browser benchmark campaign (Parallax) for one fastbrowse build and stages the
+# sanitized publication candidate the site reads. Dispatch only: every run drives a real Browser
+# Use Cloud browser and real model calls, so it spends money and is never triggered by a push or a
+# pull request. The candidate it stages is not publication: docs/results/benchmark-candidate.json
+# is reviewed and approved by the maintainer through publish-evals.yml, and only then does the
+# site read the approved bytes.
+#
+# The campaign code lives in agent-labs-dev/parallax (parallax.browser_use), pinned by
+# `parallax_sha`. The fastbrowse repo does not depend on parallax, so this workflow checks the
+# pinned parallax out beside fastbrowse using the agent-labs-pr-bot App, which must be installed on
+# agent-labs-dev/parallax with contents: read.
+#
+# Repository configuration this file needs (checked before any paid call):
+#   secrets: AGENT_LABS_PR_BOT_APP_ID, AGENT_LABS_PR_BOT_PRIVATE_KEY
+#            BROWSER_USE_API_KEY, OPENROUTER_API_KEY, AI_GATEWAY_API_KEY, PARALLAX_JUDGE_API_KEY
+#            PARALLAX_POOL_URL, PARALLAX_POOL_TOKEN (only when the pool comparisons run)
+#   vars:    PARALLAX_JUDGE_BASE_URL, PARALLAX_JUDGE_MODELS
+#
+# While the hosted browser pool is out of service, dispatch with `groups: fastbrowse` so only the
+# fastbrowse-only internal group runs; it needs neither the pool nor the hosted Browser Use agent.
+# The `all` selection adds the three head-to-head comparisons (C1 agent-against-agent,
+# C2 backend-against-backend, C3 Ultrafast) and needs every secret above.
+
+on:
+  workflow_dispatch:
+    inputs:
+      campaign_id:
+        description: Campaign name recorded in the candidate, e.g. release-0.7.0-<short sha>
+        required: true
+        type: string
+      fastbrowse_ref:
+        description: The fastbrowse commit the arms measure (a release tag or full sha)
+        required: true
+        type: string
+      parallax_sha:
+        description: Full 40 character commit SHA of agent-labs-dev/parallax to run
+        required: true
+        type: string
+      groups:
+        description: Which publication groups to run
+        required: true
+        type: choice
+        options: [fastbrowse, all]
+        default: fastbrowse
+      repeat:
+        description: Runs per task (at least 3; a published comparison rests on three)
+        required: true
+        default: "3"
+      budget:
+        description: Approved total model dollars for each comparison, with no per-run ceilings
+        required: true
+        default: "100"
+      suites:
+        description: Space separated Parallax suites
+        required: true
+        default: "core dev heldout stretch-dev stretch-heldout"
+
+permissions: {}
+
+# One campaign at a time: the comparisons share the approved spend and the cloud browser quota.
+concurrency:
+  group: benchmark-campaign
+  cancel-in-progress: false
+
+env:
+  UV_PYTHON: "3.13"
+  SUITES: ${{ inputs.suites }}
+  REPEAT: ${{ inputs.repeat }}
+  BUDGET: ${{ inputs.budget }}
+
+jobs:
+  resolve:
+    name: Resolve the pins and the credentials
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    outputs:
+      fastbrowse_sha: ${{ steps.pins.outputs.fastbrowse_sha }}
+      parallax_sha: ${{ steps.pins.outputs.parallax_sha }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {fetch-depth: 0, persist-credentials: false}
+      # A quick dispatch cannot be the run a published comparison points at: fewer than three
+      # repeats is not a rate. This fails before the credential check and before any paid call.
+      - name: Require the full comparison protocol
+        run: |
+          case "$REPEAT" in
+            ''|*[!0-9]*) echo "repeat must be an integer, got '$REPEAT'"; exit 1 ;;
+          esac
+          test "$REPEAT" -ge 3 || { echo "repeat must be at least 3, got $REPEAT"; exit 1; }
+          case "$BUDGET" in
+            ''|*[!0-9.]*) echo "budget must be a number, got '$BUDGET'"; exit 1 ;;
+          esac
+      - name: Resolve the pins
+        id: pins
+        env:
+          FASTBROWSE_REF: ${{ inputs.fastbrowse_ref }}
+          PARALLAX_SHA: ${{ inputs.parallax_sha }}
+        run: |
+          fastbrowse_sha="$(git rev-parse "${FASTBROWSE_REF}^{commit}")"
+          printf '%s' "$fastbrowse_sha" | grep -Eq '^[0-9a-f]{40}$' \
+            || { echo "::error::fastbrowse_ref did not resolve to a commit"; exit 1; }
+          printf '%s' "$PARALLAX_SHA" | grep -Eq '^[0-9a-f]{40}$' \
+            || { echo "::error::parallax_sha must be a full 40 character lowercase commit SHA"; exit 1; }
+          {
+            echo "fastbrowse_sha=$fastbrowse_sha"
+            echo "parallax_sha=$PARALLAX_SHA"
+          } >> "$GITHUB_OUTPUT"
+      - name: Check the credentials
+        env:
+          BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+          PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
+          PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
+          PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
+          # GitHub does not export a secret into a step on its own, so a pool comparison exited as missing
+          # configuration even with both secrets set.
+          PARALLAX_POOL_URL: ${{ secrets.PARALLAX_POOL_URL }}
+          PARALLAX_POOL_TOKEN: ${{ secrets.PARALLAX_POOL_TOKEN }}
+          GROUP_SET: ${{ inputs.groups }}
+        run: |
+          # shellcheck disable=SC2128
+          missing=""
+          need() { test -n "$2" || missing="$missing $1"; }
+          need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"
+          need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
+          need AI_GATEWAY_API_KEY "$AI_GATEWAY_API_KEY"
+          need PARALLAX_JUDGE_API_KEY "$PARALLAX_JUDGE_API_KEY"
+          need PARALLAX_JUDGE_BASE_URL "$PARALLAX_JUDGE_BASE_URL"
+          need PARALLAX_JUDGE_MODELS "$PARALLAX_JUDGE_MODELS"
+          if test "$GROUP_SET" = all; then
+            need PARALLAX_POOL_URL "$PARALLAX_POOL_URL"
+            need PARALLAX_POOL_TOKEN "$PARALLAX_POOL_TOKEN"
+          fi
+          if test -n "$missing"; then
+            echo "::error::missing repository configuration:$missing"
+            exit 1
+          fi
+      - name: Build the comparison matrix
+        id: matrix
+        env:
+          GROUP_SET: ${{ inputs.groups }}
+        run: |
+          # shellcheck disable=SC2128
+          fastbrowse_only='[{"label":"internal-fastbrowse","key":"internal","arms":"fastbrowse","out":"internal-fastbrowse.jsonl"}]'
+          all_groups='[{"label":"C1 agent against agent","key":"c1","arms":"fastbrowse browser-use","out":"c1-agent.jsonl"},{"label":"C2 backend against backend","key":"c2","arms":"fastbrowse fastbrowse-pool","out":"c2-backend.jsonl"},{"label":"C3 Ultrafast","key":"c3","arms":"fastbrowse-pool jev-ultrafast","out":"c3-ultrafast.jsonl"},{"label":"internal-fastbrowse","key":"internal","arms":"fastbrowse","out":"internal-fastbrowse.jsonl"}]'
+          case "$GROUP_SET" in
+            all) include="$all_groups" ;;
+            *) include="$fastbrowse_only" ;;
+          esac
+          echo "matrix=$include" >> "$GITHUB_OUTPUT"
+
+  campaign:
+    name: ${{ matrix.label }}
+    needs: resolve
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    # A full campaign is hours, not minutes, but a stuck cloud browser must not hold a runner for a day.
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.fastbrowse_sha }}
+          path: fastbrowse
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with: {python-version: "3.13"}
+      # The pr-bot App reads the private parallax source; it is installed on that repo, not on this one.
+      - name: Mint the pr-bot token
+        id: app
+        uses: actions/create-github-app-token@5d869da34e18e7287c1daad50e0b8ea0f506ce69 # v2
+        with:
+          app-id: ${{ secrets.AGENT_LABS_PR_BOT_APP_ID }}
+          private-key: ${{ secrets.AGENT_LABS_PR_BOT_PRIVATE_KEY }}
+          owner: agent-labs-dev
+          repositories: parallax
+      - name: Check out the pinned parallax
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: agent-labs-dev/parallax
+          ref: ${{ needs.resolve.outputs.parallax_sha }}
+          path: parallax
+          token: ${{ steps.app.outputs.token }}
+          persist-credentials: false
+      - name: Install parallax and fastbrowse
+        run: |
+          cd parallax
+          uv sync --locked --extra browser --extra track
+          # Measure this fastbrowse build, not the one parallax pins.
+          uv pip install "$GITHUB_WORKSPACE/fastbrowse"
+          uv run python -c "import fastbrowse, parallax"
+      - name: Export the catalog
+        run: |
+          cd parallax
+          uv run --extra browser parallax browser catalog "$GITHUB_WORKSPACE/catalog.json"
+      - name: Run the comparison
+        env:
+          BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+          PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
+          PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
+          PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
+          PARALLAX_POOL_URL: ${{ secrets.PARALLAX_POOL_URL }}
+          PARALLAX_POOL_TOKEN: ${{ secrets.PARALLAX_POOL_TOKEN }}
+        run: |
+          cd parallax
+          mkdir -p "$GITHUB_WORKSPACE/ledgers"
+          read -ra arms <<< "${{ matrix.arms }}"
+          read -ra suites <<< "$SUITES"
+          uv run --extra browser parallax browser internal \
+            --arms "${arms[@]}" \
+            --suite "${suites[@]}" \
+            --repeat "$REPEAT" \
+            --budget "$BUDGET" \
+            --out "$GITHUB_WORKSPACE/ledgers/${{ matrix.out }}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: ledger-${{ matrix.key }}
+          path: ledgers/
+          if-no-files-found: warn
+          retention-days: 30
+
+  stage:
+    name: Stage the candidate
+    needs: [resolve, campaign]
+    if: ${{ success() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.fastbrowse_sha }}
+          path: fastbrowse
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with: {python-version: "3.13"}
+      - uses: actions/create-github-app-token@5d869da34e18e7287c1daad50e0b8ea0f506ce69 # v2
+        id: app
+        with:
+          app-id: ${{ secrets.AGENT_LABS_PR_BOT_APP_ID }}
+          private-key: ${{ secrets.AGENT_LABS_PR_BOT_PRIVATE_KEY }}
+          owner: agent-labs-dev
+          repositories: parallax
+      - name: Check out the pinned parallax
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: agent-labs-dev/parallax
+          ref: ${{ needs.resolve.outputs.parallax_sha }}
+          path: parallax
+          token: ${{ steps.app.outputs.token }}
+          persist-credentials: false
+      - name: Install parallax and fastbrowse
+        run: |
+          cd parallax
+          uv sync --locked --extra browser --extra track
+          uv pip install "$GITHUB_WORKSPACE/fastbrowse"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: {path: ledgers, merge-multiple: true}
+      - name: Export the catalog
+        run: |
+          cd parallax
+          uv run --extra browser parallax browser catalog "$GITHUB_WORKSPACE/catalog.json"
+      - name: Publish the candidate
+        # The publication gate refuses a ledger whose recorded arms differ from its group's, so a
+        # group with no ledger is simply not selected. --fixture-run binds the candidate to the
+        # passing Evals workflow on the measured build.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CAMPAIGN_ID: ${{ inputs.campaign_id }}
+          # The measured build, not the commit this workflow ran from: a campaign dispatched at a ref
+          # other than the build it measures would otherwise look for the fixture run on its own commit.
+          FIXTURE_SHA: ${{ needs.resolve.outputs.fastbrowse_sha }}
+        run: |
+          cd parallax
+          args=()
+          for spec in \
+            "internal:$GITHUB_WORKSPACE/ledgers/internal-fastbrowse.jsonl:--internal-fastbrowse" \
+            "c1:$GITHUB_WORKSPACE/ledgers/c1-agent.jsonl:--hosted" \
+            "c2:$GITHUB_WORKSPACE/ledgers/c2-backend.jsonl:--backend" \
+            "c3:$GITHUB_WORKSPACE/ledgers/c3-ultrafast.jsonl:--ultrafast"; do
+            rest="${spec#*:}"; path="${rest%%:*}"; flag="${rest##*:}"
+            test -f "$path" && args+=("$flag" "$path")
+          done
+          test "${#args[@]}" -gt 0 || { echo "::error::no comparison ledger was produced"; exit 1; }
+          # The same event the publication gate accepts: evals.yml also runs on a schedule, and a newer
+          # scheduled success would be picked here and then refused downstream.
+          fixture_run="$(gh run list --repo agent-labs-dev/fastbrowse --workflow evals.yml \
+            --commit "$FIXTURE_SHA" --event workflow_dispatch --status success --limit 1 \
+            --json databaseId --jq '.[0].databaseId')"
+          test -n "$fixture_run" || { echo "::error::no passing Evals run on the measured build"; exit 1; }
+          uv run --extra browser parallax browser publish-candidate \
+            --campaign-id "$CAMPAIGN_ID" \
+            --out "$GITHUB_WORKSPACE/fastbrowse/docs/results/benchmark-candidate.json" \
+            --catalog "$GITHUB_WORKSPACE/catalog.json" \
+            --fixture-run "$fixture_run" \
+            "${args[@]}"
+      - name: Open the staging pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CAMPAIGN_ID: ${{ inputs.campaign_id }}
+        run: |
+          cd fastbrowse
+          git config user.name "agent-labs-pr-bot"
+          git config user.email "pr-bot@agent-labs.dev"
+          git checkout -b "campaign/$CAMPAIGN_ID"
+          git add docs/results/benchmark-candidate.json
+          git commit -m "docs: stage the $CAMPAIGN_ID benchmark candidate"
+          git push origin "campaign/$CAMPAIGN_ID"
+          gh pr create --base main \
+            --title "docs: stage the $CAMPAIGN_ID benchmark candidate" \
+            --body "Staged by the Benchmark campaign workflow for \`$CAMPAIGN_ID\`. Review the figures, then approve with publish-evals.yml. This PR does not publish anything."
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: benchmark-candidate
+          path: fastbrowse/docs/results/benchmark-candidate.json
+          if-no-files-found: error
+          retention-days: 30
