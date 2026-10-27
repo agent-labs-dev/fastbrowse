@@ -129,7 +129,11 @@ async def connect_cdp(
     with TemporaryDirectory() as scratch:
         sink = artifact_sink or DirectorySink(downloads or Path(scratch))
         async with BrowserSession(
-            connection, sink, refuse_cookie_banners=config.refuse_cookie_banners, check_access=check_access
+            connection,
+            sink,
+            max_download_bytes=config.max_download_bytes,
+            refuse_cookie_banners=config.refuse_cookie_banners,
+            check_access=check_access,
         ) as session:
             yield CdpPage(session, config)
 
@@ -391,6 +395,7 @@ async def run_task(
                     session = BrowserSession(
                         connection,
                         sink,
+                        max_download_bytes=config.max_download_bytes,
                         refuse_cookie_banners=config.refuse_cookie_banners,
                         on_frame=on_frame,
                         check_access=check_access,

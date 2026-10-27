@@ -230,6 +230,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -440,6 +441,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -641,6 +643,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -877,6 +880,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -1113,6 +1117,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -1347,6 +1352,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -1868,6 +1874,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -2445,6 +2452,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -2752,6 +2760,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -3094,6 +3103,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -4273,6 +4283,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -4779,6 +4790,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -5063,6 +5075,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -6256,6 +6269,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -9482,6 +9496,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -10722,6 +10737,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -11224,6 +11240,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -11398,6 +11415,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -11659,6 +11677,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -11905,6 +11924,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -12140,6 +12160,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -12382,6 +12403,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -12616,6 +12638,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -13907,6 +13930,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -15406,6 +15430,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -16907,6 +16932,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -18410,6 +18436,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -19722,6 +19749,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -20911,6 +20939,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -21554,6 +21583,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -21862,6 +21892,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -22414,6 +22445,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -22978,6 +23010,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -23506,6 +23539,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     },
@@ -23857,6 +23891,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -24414,6 +24449,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     },
@@ -24630,6 +24666,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -25214,6 +25251,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     },
@@ -25430,6 +25468,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -26014,6 +26053,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     },
@@ -26230,6 +26270,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -26814,6 +26855,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     },
@@ -27032,6 +27074,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -27616,6 +27659,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     },
@@ -27832,6 +27876,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -28406,6 +28451,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     },
@@ -28622,6 +28668,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -29206,6 +29253,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     },
@@ -29422,6 +29470,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -29882,6 +29931,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -30088,6 +30138,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -30296,6 +30347,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -30502,6 +30554,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -30673,6 +30726,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -30872,6 +30926,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -31078,6 +31133,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -31425,6 +31481,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -31751,6 +31808,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -32088,6 +32146,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -32459,6 +32518,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -32830,6 +32890,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -33130,6 +33191,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -33325,6 +33387,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -33508,6 +33571,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -33658,6 +33722,7 @@
       "refuse_cookie_banners": true,
       "step_frames": false,
       "max_upload_bytes": 26214400,
+      "max_download_bytes": 536870912,
       "max_pages": 12
      }
     }
@@ -33786,6 +33851,7 @@
     "refuse_cookie_banners": true,
     "step_frames": false,
     "max_upload_bytes": 26214400,
+    "max_download_bytes": 536870912,
     "max_pages": 12
    },
    "compact": false,
@@ -33898,6 +33964,7 @@
     "refuse_cookie_banners": true,
     "step_frames": false,
     "max_upload_bytes": 26214400,
+    "max_download_bytes": 536870912,
     "max_pages": 12
    },
    "compact": true,

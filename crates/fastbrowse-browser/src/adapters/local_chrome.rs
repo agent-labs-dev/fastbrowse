@@ -457,8 +457,22 @@ fn tail(log: &mut File) -> String {
 mod tests {
     use super::*;
 
+    /// A directory of this test's own.
+    ///
+    /// `temp_dir()` itself is shared by every test in this module, several of which write a stand-in `chrome`
+    /// into it and then run it. Two tests running at once then trip over each other twice: a script is
+    /// truncated under a test that is already executing it, and a child forked by the other test inherits the
+    /// open-for-write descriptor, so this test's own `spawn` fails with `ETXTBSY` ("Text file busy"). One test
+    /// also deletes the directory when it finishes, taking the others' scripts with it.
     fn scratch() -> PathBuf {
-        temp_dir().unwrap()
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = temp_dir().unwrap().join(format!(
+            "fastbrowse-chrome-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[cfg(unix)]
