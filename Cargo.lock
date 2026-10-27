@@ -231,9 +231,15 @@ dependencies = [
 name = "fastbrowse-py"
 version = "0.7.3"
 dependencies = [
+ "fastbrowse-agent",
+ "fastbrowse-browser",
  "fastbrowse-cli",
+ "fastbrowse-clients",
  "fastbrowse-core",
+ "fastbrowse-run",
+ "indexmap",
  "pyo3",
+ "serde",
  "serde_json",
  "tokio",
 ]

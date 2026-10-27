@@ -1,85 +1,108 @@
 """`run_task` on the Rust core (crates/fastbrowse-py), in this process, when `FASTBROWSE_RUST_CORE=1`.
 
-The arguments become the `run` request's params that `fastbrowse serve` reads, and the result comes back as the
-`RunResult` it writes, so the two cores are compared through the same models. A call whose arguments the protocol
-has no field for (a client of the caller's own, a cloud key, an origin scope, a non-default `Config`) runs on
-Python as before.
+Every argument crosses. Data goes as JSON. The caller's own objects (its Jev and LLM clients, its HTTP client, its
+access check and its secrets) stay here and the core calls them back: each is wrapped below into a function that
+takes and answers JSON, so the core sees its own types and the caller's objects see theirs. The result comes back
+as the `RunResult` `serve` writes.
 """
 
 import asyncio
 import base64
+import contextlib
+import copy
 import importlib
 import json
-import uuid
-from collections.abc import Awaitable, Callable
-from pathlib import Path
-from typing import Any
+from collections.abc import Awaitable, Callable, Iterable
+from typing import Any, ClassVar
 
-from pydantic import TypeAdapter
+import httpx
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic_core import InitErrorDetails, PydanticCustomError
 
 from fastbrowse.clients.environment import ConfigurationError
-from fastbrowse.config import Config
-from fastbrowse.models import BrowserEvent, EventHandler, FrameHandler, RunResult, SecretResolver, StepEvent, UntilCheck
-from fastbrowse.protocol import ErrorCode, RunAttachment, RunParams
+from fastbrowse.jev import (
+    JevClient,
+    JevError,
+    JevInputTooLarge,
+    JevRetriesExhausted,
+    JevTransportFailed,
+    Question,
+)
+from fastbrowse.llm import LLMClient, LLMError, LLMRetriesExhausted, Message
+from fastbrowse.models import (
+    BrowserEvent,
+    BudgetStop,
+    CostBreakdown,
+    CostComponent,
+    CostLine,
+    EventHandler,
+    FrameHandler,
+    Limits,
+    LLMPurpose,
+    RunResult,
+    SecretResolver,
+    StepEvent,
+    UntilCheck,
+)
+from fastbrowse.telemetry import BudgetExceeded
 
 _EVENT: TypeAdapter[StepEvent | BrowserEvent] = TypeAdapter(StepEvent | BrowserEvent)
+_QUESTIONS: TypeAdapter[dict[str, Question]] = TypeAdapter(dict[str, Question])
+_JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
-_RUN_TASK_DEFAULTS: dict[str, Any] = {
-    "browser_api_key": None,
-    "cloud_profile": None,
-    "allowed_origins": None,
-    "check_access": None,
-    "cloud_timeout_minutes": 15,
-    "jev": None,
-    "llm": None,
-}
-"""The `run_task` arguments the protocol has no field for, at the values that let a call cross anyway. The cloud
-options among them belong to a browser started with a key, and the server reads its key from the environment."""
+_PLAIN = (
+    "start",
+    "browser_api_key",
+    "cloud_profile",
+    "cdp_url",
+    "cdp_port",
+    "attach",
+    "target_match",
+    "foreground",
+    "proxy_country",
+    "cloud_allow_resizing",
+    "cloud_timeout_minutes",
+    "cursor",
+    "fetch",
+)
+"""`run_task` arguments that are JSON already."""
 
 
-def params(task: str, arguments: dict[str, Any]) -> RunParams | None:
-    """`run_task`'s arguments as `run` params, or None when one of them has no field to cross in."""
-    if arguments["cloud_extensions"] or any(arguments[name] != default for name, default in _RUN_TASK_DEFAULTS.items()):
-        return None
-    config = arguments["config"]
-    if config is not None and config != Config():
-        return None
-    handed_over = arguments["cdp_url"] is not None or arguments["cdp_port"] is not None
-    output_schema = arguments["output_schema"]
+def _dumped(value: BaseModel | None) -> Any:
+    return None if value is None else value.model_dump(mode="json")
+
+
+def options(arguments: dict[str, Any]) -> str:
+    """`run_task`'s data arguments, as the JSON `fastbrowse_native.run_task` reads."""
+    output_schema: type[BaseModel] | None = arguments["output_schema"]
     secrets: SecretResolver | None = arguments["secrets"]
-    downloads: Path | None = arguments["downloads"]
-    record: Path | None = arguments["record"]
-    return RunParams(
-        run_id=uuid.uuid4().hex,
-        task=task,
-        start=arguments["start"],
-        inputs=None if arguments["inputs"] is None else dict(arguments["inputs"]),
-        attachments=tuple(
-            RunAttachment(name=a.name, mime_type=a.mime_type, content=base64.b64encode(a.content))
-            for a in arguments["attachments"]
-        ),
-        limits=arguments["limits"],
-        authorization=arguments["authorization"],
-        output_schema=None if output_schema is None else output_schema.model_json_schema(),
-        secrets=() if secrets is None else tuple(secrets.available()),
-        frames=arguments["on_frame"] is not None,
-        until=arguments["until"] is not None,
-        downloads=downloads,
-        record=record,
-        cursor=arguments["cursor"],
-        # Without a key `run_task` runs local Chrome, and the server would start a cloud browser.
-        local=not handed_over,
-        chrome=arguments["chrome"],
-        cdp_url=arguments["cdp_url"],
-        cdp_port=arguments["cdp_port"],
-        attach=arguments["attach"],
-        target_match=arguments["target_match"],
-        foreground=arguments["foreground"],
+    origins, viewport, inputs = arguments["allowed_origins"], arguments["viewport"], arguments["inputs"]
+    return json.dumps(
+        {
+            **{name: arguments[name] for name in _PLAIN},
+            "allowed_origins": None if origins is None else list(origins),
+            "viewport": None if viewport is None else list(viewport),
+            "inputs": None if inputs is None else dict(inputs),
+            "chrome": _dumped(arguments["chrome"]),
+            "cloud_extensions": list(arguments["cloud_extensions"]),
+            "output_schema": None if output_schema is None else output_schema.model_json_schema(),
+            "attachments": [
+                {"name": a.name, "mime_type": a.mime_type, "content": base64.b64encode(a.content).decode("ascii")}
+                for a in arguments["attachments"]
+            ],
+            "limits": _dumped(arguments["limits"]),
+            "authorization": _dumped(arguments["authorization"]),
+            "secrets": None if secrets is None else [ref.model_dump(mode="json") for ref in secrets.available()],
+            "downloads": None if arguments["downloads"] is None else str(arguments["downloads"]),
+            "record": None if arguments["record"] is None else str(arguments["record"]),
+            "config": _dumped(arguments["config"]),
+        }
     )
 
 
 class _Raised:
-    """The first exception a callback raised. `run_task` on Python lets it through, so this one does too."""
+    """The first exception a callback raised. When it stopped the run, `run_task` on Python lets it through, so this
+    one does too."""
 
     def __init__(self) -> None:
         self.first: BaseException | None = None
@@ -104,44 +127,271 @@ def _event(payload: str) -> StepEvent | BrowserEvent:
     return _EVENT.validate_python(event)
 
 
-async def run(
-    run_params: RunParams,
-    *,
-    on_event: EventHandler | None,
-    on_frame: FrameHandler | None,
-    until: UntilCheck | None,
-    secrets: SecretResolver | None,
-) -> RunResult:
-    """Run `run_params` on the Rust core and return its result as Python's `run_task` returns one."""
+def _fault(kind: str, exc: BaseException, **details: Any) -> str:
+    return json.dumps({"error": {"kind": kind, "message": str(exc), **details}})
+
+
+def _budget(exc: BudgetExceeded) -> str:
+    return _fault("budget", exc, budget=exc.budget.model_dump(mode="json"))
+
+
+def _jev(client: JevClient) -> Callable[[str, str], Awaitable[str]]:
+    async def evaluate(state: str, questions: str) -> str:
+        try:
+            evaluation = await client.evaluate(json.loads(state), _QUESTIONS.validate_json(questions))
+        except BudgetExceeded as exc:
+            return _budget(exc)
+        except JevInputTooLarge as exc:
+            return _fault("input_too_large", exc)
+        except JevTransportFailed as exc:
+            return _fault("transport_failed", exc)
+        except JevRetriesExhausted as exc:
+            return _fault(
+                "retries_exhausted",
+                exc,
+                seconds=exc.seconds,
+                unaccounted_requests=exc.unaccounted_requests,
+                requests=exc.requests,
+                answered=[answered.model_dump(mode="json") for answered in exc.answered],
+                last=exc.last,
+            )
+        except JevError as exc:
+            return _fault("failed", exc)
+        return json.dumps({"ok": evaluation.model_dump(mode="json")})
+
+    return evaluate
+
+
+class _Ledger:
+    """The run's ledger, which the Rust core keeps, for the length of one LLM call."""
+
+    def __init__(self, context: Any) -> None:
+        self._context = context
+
+    def _op(self, op: str, **request: Any) -> Any:
+        answer = json.loads(self._context.op(json.dumps({"op": op, **request})))
+        if isinstance(answer, dict) and "error" in answer:
+            raise RuntimeError(answer["error"])
+        if isinstance(answer, dict) and "budget" in answer:
+            refused = answer["budget"]
+            raise BudgetExceeded(refused["reason"], budget=BudgetStop.model_validate(refused["budget"]))
+        return answer
+
+    @property
+    def limits(self) -> Limits:
+        return Limits.model_validate(self._op("limits"))
+
+    @property
+    def lines(self) -> list[CostLine]:
+        return _Lines(self, (CostLine.model_validate(line) for line in self._op("lines")))
+
+    @property
+    def capped(self) -> bool:
+        return bool(self._op("capped"))
+
+    def reserve(self, component: CostComponent, estimate_dollars: float = 0.0, calls: int = 1) -> None:
+        self._op("reserve", component=CostComponent(component).value, estimate_dollars=estimate_dollars, calls=calls)
+
+    def check(self, extra_dollars: float = 0.0) -> None:
+        self._op("check", extra_dollars=extra_dollars)
+
+    def check_spend(self, extra_dollars: float = 0.0) -> None:
+        self._op("check_spend", extra_dollars=extra_dollars)
+
+    def record(self, *lines: CostLine) -> None:
+        self._op("record", lines=[line.model_dump(mode="json") for line in lines])
+
+    def breakdown(self) -> CostBreakdown:
+        return CostBreakdown.model_validate(self._op("breakdown"))
+
+
+class _Lines(list[CostLine]):
+    """`ledger.lines` read from the Rust ledger. Extending it keeps the receipts there, without the check `record`
+    makes, as a client that was cancelled keeps its unknown charge without raising a budget failure instead."""
+
+    def __init__(self, ledger: _Ledger, lines: Iterable[CostLine]) -> None:
+        super().__init__(lines)
+        self._ledger = ledger
+
+    def append(self, line: CostLine) -> None:
+        self.extend((line,))
+
+    def extend(self, lines: Iterable[CostLine]) -> None:
+        added = list(lines)
+        self._ledger._op("append", lines=[line.model_dump(mode="json") for line in added])
+        super().extend(added)
+
+
+def _response_model(name: str, schema: dict[str, Any], context: Any) -> type[BaseModel]:
+    """The response model a call asks for, as the class a client expects: its name, its JSON Schema, and validation
+    by the Rust core, which raises pydantic's `ValidationError` so a client's repair loop works as before."""
+
+    def validated(text: str) -> dict[str, Any]:
+        # Text that is not JSON fails as pydantic fails it, `json_invalid` with where it ended, which is how a client
+        # tells a response cut off at its token cap from one that is wrong.
+        _JSON.validate_json(text)
+        answer = json.loads(context.op(json.dumps({"op": "validate", "text": text})))
+        if "error" in answer:
+            error = PydanticCustomError("response_invalid", "{reason}", {"reason": answer["error"]})
+            raise ValidationError.from_exception_data(name, [InitErrorDetails(type=error, loc=(), input=text)])
+        return answer["ok"]
+
+    class Response(BaseModel):
+        model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
+        @classmethod
+        def model_json_schema(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return copy.deepcopy(schema)
+
+        @classmethod
+        def model_validate_json(cls, json_data: str | bytes | bytearray, *args: Any, **kwargs: Any) -> "Response":
+            text = json_data if isinstance(json_data, str) else bytes(json_data).decode()
+            return cls.model_construct(**validated(text))
+
+        @classmethod
+        def model_validate(cls, obj: Any, *args: Any, **kwargs: Any) -> "Response":
+            if isinstance(obj, BaseModel):
+                obj = obj.model_dump(mode="json")
+            return cls.model_construct(**validated(json.dumps(obj)))
+
+    Response.__name__ = Response.__qualname__ = name
+    return Response
+
+
+def _messages(payload: str) -> list[Message]:
+    return [
+        Message(
+            role=message["role"],
+            content=message["content"],
+            images=tuple(base64.b64decode(image) for image in message["images"]),
+        )
+        for message in json.loads(payload)
+    ]
+
+
+def _llm(client: LLMClient) -> Callable[..., Awaitable[str]]:
+    async def generate(
+        purpose: str, messages: str, name: str, schema: str, max_output_tokens: int, context: Any
+    ) -> str:
+        ledger: Any = _Ledger(context) if context.ledger else None
+        model = _response_model(name, json.loads(schema), context)
+        try:
+            generation = await client.generate(
+                LLMPurpose(purpose), _messages(messages), model, max_output_tokens=max_output_tokens, ledger=ledger
+            )
+        except BudgetExceeded as exc:
+            return _budget(exc)
+        except LLMRetriesExhausted as exc:
+            return _fault("retries_exhausted", exc)
+        except LLMError as exc:
+            return _fault("failed", exc)
+        finally:
+            # A cancelled call waits for this before it lets the ledger go, so a cancelled request's receipt lands.
+            with contextlib.suppress(RuntimeError):
+                context.op('{"op": "done"}')
+        data = generation.data
+        return json.dumps(
+            {
+                "ok": {
+                    "data": data.model_dump(mode="json") if isinstance(data, BaseModel) else data,
+                    "cost": generation.cost.model_dump(mode="json"),
+                }
+            }
+        )
+
+    return generate
+
+
+type _Sent = tuple[str, int, list[tuple[str, str]], bytes] | tuple[str, str]
+
+
+def _http(client: httpx.AsyncClient) -> Callable[..., Awaitable[_Sent]]:
+    async def send(method: str, url: str, headers: list[tuple[str, str]], body: bytes, max_bytes: int | None) -> _Sent:
+        try:
+            # The core times each request itself and cancels this call when it runs out.
+            request = client.build_request(method, url, headers=headers, content=body or None, timeout=None)
+            # The core follows redirects itself, checking each against the run's allowed origins.
+            response = await client.send(request, stream=True, follow_redirects=False)
+            try:
+                if max_bytes is None:
+                    content = await response.aread()
+                else:
+                    # One byte past the bound shows the core it was passed, without the rest landing in memory.
+                    read = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        read.extend(chunk)
+                        if len(read) > max_bytes:
+                            break
+                    content = bytes(read[: max_bytes + 1])
+            finally:
+                await response.aclose()
+        except httpx.TimeoutException as exc:
+            return ("timeout", type(exc).__name__)
+        except (httpx.NetworkError, httpx.RemoteProtocolError, httpx.ProxyError, httpx.DecodingError) as exc:
+            return ("transient", type(exc).__name__)
+        except httpx.HTTPError as exc:
+            return ("fatal", type(exc).__name__)
+        return ("ok", response.status_code, list(response.headers.multi_items()), content)
+
+    return send
+
+
+def _check(check_access: Callable[[], Awaitable[None]]) -> Callable[[], Awaitable[str | None]]:
+    async def checked() -> str | None:
+        try:
+            await check_access()
+        except Exception as exc:
+            # The run names only the exception's type, never its text.
+            return type(exc).__name__
+        return None
+
+    return checked
+
+
+async def run(task: str, arguments: dict[str, Any]) -> RunResult:
+    """Run `task` with `run_task`'s `arguments` on the Rust core, and return its result as Python's returns one."""
     # Built from crates/fastbrowse-py and installed apart from this package, so the checker has no types for it.
     fastbrowse_native: Any = importlib.import_module("fastbrowse_native")
 
     raised = _Raised()
+    on_event: EventHandler | None = arguments["on_event"]
+    on_frame: FrameHandler | None = arguments["on_frame"]
+    until: UntilCheck | None = arguments["until"]
+    secrets: SecretResolver | None = arguments["secrets"]
+    check_access: Callable[[], Awaitable[None]] | None = arguments["check_access"]
+    jev: JevClient | None = arguments["jev"]
+    llm: LLMClient | None = arguments["llm"]
+    http: httpx.AsyncClient | None = arguments["http"]
 
     async def event(payload: str) -> None:
         if on_event is not None:
             await on_event(_event(payload))
 
     native = fastbrowse_native.run_task(
-        run_params.model_dump_json(),
-        on_event=raised.wrap(event) if on_event is not None else None,
+        task,
+        options(arguments),
+        on_event=None if on_event is None else raised.wrap(event),
         on_frame=None if on_frame is None else raised.wrap(on_frame),
         until=None if until is None else raised.wrap(until),
         resolve_secret=None if secrets is None else raised.wrap(secrets.resolve),
+        check_access=None if check_access is None else _check(check_access),
+        jev=None if jev is None else _jev(jev),
+        llm=None if llm is None else _llm(llm),
+        http=None if http is None else _http(http),
     )
     try:
         payload = await native
     except fastbrowse_native.RunRefused as exc:
-        code, message = exc.args
-        if code == ErrorCode.CONFIGURATION:
+        kind, message = exc.args
+        if kind == "configuration":
             raise ConfigurationError(message) from None
-        if code == ErrorCode.CANCELLED:
+        if kind == "cancelled":
             raise asyncio.CancelledError(message) from None
+        if kind == "callback" and raised.first is not None:
+            raise raised.first from None
         raise ValueError(message) from None
     except asyncio.CancelledError:
         # Python's `run_task` closes its browser before the cancellation reaches its caller, and so does this.
         await asyncio.shield(native.finished)
         raise
-    if raised.first is not None:
-        raise raised.first
     return RunResult.model_validate_json(payload)
