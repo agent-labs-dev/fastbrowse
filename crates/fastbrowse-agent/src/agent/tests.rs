@@ -15,7 +15,9 @@ use fastbrowse_core::models::{
     Artifact, Authorization, CostBasis, CostComponent, CostLine, Evidence, FactReader, Limits, Operation, Status,
     StepOutcome,
 };
-use fastbrowse_core::page::{ActResult, Action, BlockKind, Capture, Control, Observation, Page, PageResult};
+use fastbrowse_core::page::{
+    ActResult, Action, BlockKind, BrowserError, Capture, Control, Observation, Page, PageResult,
+};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::safety::Redactor;
 use fastbrowse_core::telemetry::Ledger;
@@ -1277,4 +1279,71 @@ fn test_a_shortcut_is_worth_proposing_only_from_a_sites_entry_point() {
     ] {
         assert_eq!(super::shortcut_worth_proposing(start), worth, "{start}");
     }
+}
+
+/// A page with no browser behind it, which cannot open the address it is given.
+struct Unfetchable;
+
+impl Page for Unfetchable {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        Box::pin(async { Err(BrowserError::NeedsBrowser("no page has been fetched yet".into())) })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(true) })
+    }
+
+    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        Box::pin(async { Err(BrowserError::NeedsBrowser("the page renders its content with scripts".into())) })
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        Box::pin(async { Err(BrowserError::NeedsBrowser("no page has been fetched yet".into())) })
+    }
+
+    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        unreachable!("no page opened, so no step acts")
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        Box::pin(async { Err(BrowserError::NeedsBrowser("no pixels".into())) })
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        Box::pin(async { Err(BrowserError::NeedsBrowser("no page has been fetched yet".into())) })
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { false })
+    }
+}
+
+#[tokio::test]
+async fn test_a_page_that_needs_a_browser_ends_the_run_blocked_with_its_reason() {
+    let agent = Agent::new(Arc::new(Unfetchable), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let options = super::RunOptions { start: Some("https://example.test/".into()), ..Default::default() };
+    let result = agent.run("Read the price", options).await.expect("a result, not an error");
+    assert_eq!(result.status, Status::Blocked);
+    assert_eq!(result.error.as_deref(), Some("the page renders its content with scripts"));
+    assert!(result.steps.is_empty() && result.evidence.is_empty() && result.final_url.is_none());
+    // The plan was asked for before the page, and what it spent is still reported.
+    assert!(!result.cost.lines.is_empty());
 }

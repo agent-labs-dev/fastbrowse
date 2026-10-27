@@ -189,7 +189,8 @@ def test_a_directory_with_something_in_it_is_not_written_over(tmp_path: Path) ->
 
 
 def test_the_targets_are_the_ones_built_and_the_ones_the_sdk_depends_on() -> None:
-    built = re.findall(r"\{target: ([\w-]+), runner:", (REPO / ".github/workflows/binaries.yml").read_text())
+    # Each job of the workflow builds every target: the frozen and Rust executables, and the wheel.
+    built = set(re.findall(r"\{target: ([\w-]+),", (REPO / ".github/workflows/binaries.yml").read_text()))
     sdk = json.loads((REPO / "packages/sdk/package.json").read_text())
 
     assert sorted(built) == sorted(TARGETS)

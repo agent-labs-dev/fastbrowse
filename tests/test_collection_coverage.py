@@ -399,3 +399,108 @@ async def test_an_unopened_frame_outside_a_list_leaves_its_finding_of_none_suppo
     context = _output_context(answer, notes)
     assert context is not None and context.claims[0].compared_records[0].complete
     assert check_answer_outputs(answer, notes, (check,))
+
+
+@pytest.mark.parametrize("finished_list", [True, False])
+async def test_a_partial_comparison_beside_a_complete_one_does_not_leave_the_winner_unverified(finished_list):
+    """A sorted shop list read one page at a time records each partial page as a comparison, and the last read
+    records the whole list as one more. The answer's claim carries both, so the earlier partial one must not
+    reject the winner while the complete comparison of the same list stands beside it."""
+    from fastbrowse.memory import Comparison, Fact, fact_id
+    from fastbrowse.models import FactReader
+    from fastbrowse.planner import Requirement, RequirementKind
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import check_answer_outputs
+    from tests.test_retrieval import block_evidence
+
+    page = capture(
+        (BlockKind.LIST_ITEM, "Paper Filters - GBP 4.60"),
+        (BlockKind.LIST_ITEM, "Drum Roaster - GBP 210.00"),
+    )
+    first, second = block_evidence(page, "s0"), block_evidence(page, "s1")
+    one = Fact(text="Paper Filters - GBP 4.60", evidence=first, reader=FactReader.LLM)
+    two = Fact(text="Drum Roaster - GBP 210.00", evidence=second, reader=FactReader.LLM)
+    partial = CollectionFact(
+        text="Shop, page 1 of 3.",
+        scope="Find the cheapest product in the shop.",
+        evidence=None,
+        basis=(fact_id(one),),
+        reader=FactReader.LLM,
+        comparison=Comparison(requirement_id="r", records=(fact_id(one),), complete=False),
+    )
+    whole = Fact(
+        requirement_id="r",
+        comparison=Comparison(requirement_id="r", records=(fact_id(one), fact_id(two)), complete=True),
+        text="Cheapest 1:\nPaper Filters: 4.60",
+        evidence=None,
+        basis=(fact_id(one), fact_id(two)),
+        reader=FactReader.LLM,
+    )
+    conclusion = Fact(
+        requirement_id="r",
+        text="The cheapest product in the shop is Paper Filters at GBP 4.60.",
+        evidence=None,
+        basis=(fact_id(partial), *((fact_id(whole),) if finished_list else ())),
+        reader=FactReader.LLM,
+    )
+    notes = Notes((one, two, partial, *((whole,) if finished_list else ()), conclusion))
+    requirement = Requirement(id="r", text="Find the cheapest product in the shop.", kind=RequirementKind.INFORMATION)
+    claim = Claim(text=conclusion.text, evidence_ids=(fact_id(conclusion),))
+    answer = assemble_answer((claim,), notes, (requirement,))
+    check = "Name of the cheapest product in the shop"
+    missing: list[str] = []
+    passed = check_answer_outputs(answer, notes, (check,), missing_outputs=missing)
+    assert passed is finished_list
+    assert missing == ([] if finished_list else [check])
+
+
+async def test_a_complete_list_under_another_requirement_does_not_settle_a_partial_one():
+    """Two lists can share the reader's scope text ("Products"), so the complete comparison that settles a
+    partial one must be of the same requirement, identified by code, not by the heading a model wrote."""
+    from fastbrowse.memory import Comparison, Fact, fact_id
+    from fastbrowse.models import FactReader
+    from fastbrowse.planner import Requirement, RequirementKind
+    from fastbrowse.retrieval import Claim, assemble_answer
+    from fastbrowse.verification import check_answer_outputs
+    from tests.test_retrieval import block_evidence
+
+    page = capture(
+        (BlockKind.LIST_ITEM, "Paper Filters - GBP 4.60"),
+        (BlockKind.LIST_ITEM, "Drum Roaster - GBP 210.00"),
+    )
+    first, second = block_evidence(page, "s0"), block_evidence(page, "s1")
+    one = Fact(text="Paper Filters - GBP 4.60", evidence=first, reader=FactReader.LLM)
+    two = Fact(text="Drum Roaster - GBP 210.00", evidence=second, reader=FactReader.LLM)
+    partial = CollectionFact(
+        text="Shop, page 1 of 3.",
+        scope="Products",
+        evidence=None,
+        basis=(fact_id(one),),
+        reader=FactReader.LLM,
+        comparison=Comparison(requirement_id="r", records=(fact_id(one),), complete=False),
+    )
+    # A different requirement's list that happens to carry the same heading, read to its end.
+    elsewhere = CollectionFact(
+        text="Other shop, page 1 of 1.",
+        scope="Products",
+        evidence=None,
+        basis=(fact_id(one), fact_id(two)),
+        reader=FactReader.LLM,
+        comparison=Comparison(requirement_id="r2", records=(fact_id(one), fact_id(two)), complete=True),
+    )
+    conclusion = Fact(
+        requirement_id="r",
+        text="The cheapest product in the shop is Paper Filters at GBP 4.60.",
+        evidence=None,
+        basis=(fact_id(partial), fact_id(elsewhere)),
+        reader=FactReader.LLM,
+    )
+    notes = Notes((one, two, partial, elsewhere, conclusion))
+    requirement = Requirement(id="r", text="Find the cheapest product in the shop.", kind=RequirementKind.INFORMATION)
+    claim = Claim(text=conclusion.text, evidence_ids=(fact_id(conclusion),))
+    answer = assemble_answer((claim,), notes, (requirement,))
+    check = "Name of the cheapest product in the shop"
+    missing: list[str] = []
+    passed = check_answer_outputs(answer, notes, (check,), missing_outputs=missing)
+    assert passed is False
+    assert missing == [check]

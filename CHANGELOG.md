@@ -11,7 +11,26 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-## [0.7.2] - 2026-10-26
+- **A download the run cannot keep is now reported, and the ceiling is the caller's.** Downloads arrive whole over the DevTools socket, so a run keeps them up to `Config.max_download_bytes` (512 MiB by default) and used to drop anything larger without a word: no artifact, no count, no error, so a run that clicked a large export reported success with no file. Over the ceiling the response's stated `Content-Length` is refused before the body is fetched, the refusal is recorded, and the observation says `[Download not kept: ... nothing was saved]` once so the run reports the file as not downloaded. A caller that knows the size of the file it asked for, such as a workspace export or a database dump, raises the limit deliberately. The file's name now comes from the response's `filename*` (RFC 5987, including a language tag) with a safe fallback to the URL's path segment, so a signed query string no longer becomes part of the name on disk. `responseHeaders` is read in either shape CDP delivers it in.
+
+- The Arch package builds the Rust core from the sdist with cargo and maturin, so it is now one package per architecture (`x86_64`, `aarch64`) rather than `any`.
+
+- **The Rust core is the default.** `run_task`, `connect_cdp`, `fastbrowse`, `fastbrowse serve` and `fastbrowse-mcp` run on it, and the npm packages ship the Rust binary and the Node addon instead of the frozen Python package. On the fixture suites it reaches the same results as the Python core on all 36 tasks, from the same model responses, with 18x less agent CPU, 54x faster startup and 5x less memory ([bench/results/rust-vs-python.md](bench/results/rust-vs-python.md)). `FASTBROWSE_PYTHON_CORE=1` runs the Python core instead, for this release only: 0.9.0 removes it ([ADR 0004](docs/adr/0004-rust-core-by-default.md)). `FASTBROWSE_RUST_CORE` is gone. The fixture eval suites now run through `run_task`, so they measure the core the package runs.
+
+- The `fastbrowse` package on PyPI carries the Rust core as `fastbrowse._native`. It ships as one wheel per platform (macOS arm64 and x64, Linux x64 and arm64, Windows x64), each serving CPython 3.13 and later, instead of one pure-Python wheel, and you no longer install a separate `fastbrowse-native` build. Installing from the sdist needs a Rust toolchain. With `FASTBROWSE_RUST_CORE=1` the `fastbrowse` and `fastbrowse-mcp` commands run the Rust CLI in-process, and `fastbrowse-mcp` then works without the `mcp` extra. The Python core is still the default ([ADR 0004](docs/adr/0004-rust-core-by-default.md)).
+
+- `connect_cdp` runs on the Rust core with `FASTBROWSE_RUST_CORE=1`. The page it yields has the Python page's methods (`observe`, `capture`, `act`, `navigate`, `screenshot`, `address`, `origin`, `document_changed`, `response_status`, `artifacts`, `withhold_frames`), takes and returns the same models, and raises the same browser errors. `check_access` and an `artifact_sink` of your own cross as they do for `run_task`.
+
+- A run on the Rust core that is cancelled now stops the plan and shortcut it began at startup, and waits for them, before the cancellation reaches the caller, as the Python core does. Before, once the run was under way, those calls ran on to the end, paid for, after `run_task` had returned.
+
+- `record` and `cursor` work on the Rust core. It used to refuse both with "record and cursor are not built into this binary". Now a recorded run writes the plain and the captioned video, ends on the result card, and reports both in `recordings`, as the Python core does. A recording that cannot start, for example with no ffmpeg on `PATH`, raises `RecordingError`. `cursor` draws through the Cua Driver where it can and is a no-op elsewhere.
+
+- With `FASTBROWSE_RUST_CORE=1`, every `run_task` call runs on the Rust core. It used to fall back to Python whenever an argument had no field in the `serve` protocol: your own `jev` or `llm` client, an `http` client, `check_access`, a non-default `Config`, a cloud key, `allowed_origins`, cloud options or `fetch`. Those objects now stay in Python and the core calls back into them, so they behave as they did on Python. A client's ledger reservations count against the run's limits, and a response it validates is checked against the core's own schema. There is one difference: an exception from your Jev, LLM or HTTP client that is not one of their own errors now fails only that call, as any client failure does, rather than propagating out of `run_task`. A call the run had started but no longer waits on, such as the plan begun while a browser was failing to start, can no longer end the run. This is the first step toward running Rust by default ([ADR 0004](docs/adr/0004-rust-core-by-default.md)).
+
+
+## [0.7.3] - 2026-10-26
+
+- `--fetch` reads a task's pages over HTTP and starts no browser: the document is turned into the same capture blocks a browser capture produces, so reads, quotes and citations are unchanged, and a step that would click, fill, download or screenshot ends the run `blocked` naming why rather than failing a step. It is for a task that only has to read a page. On six public pages the read took a median 0.21s against 1.12s for starting Chrome, navigating and capturing the same page; a page whose text is a sliver of its markup, or that answers with a challenge, is refused as needing the browser, which is what Wikipedia did (HTTP 403) where Chrome passed.
 
 - An answer finishes once code and Jev have checked it, without a second opinion from an LLM. Every quoted answer used to go through LLM source and assertion audits: two calls per answer check, often a second round, and a retry whenever the 512-token verdict ran out mid-reasoning. They were about two thirds of a run's model time, and they turned correct answers into `stuck` or `unverified`: a version cited without the "latest release" label beside it, a table total without proof that its four rows were all the rows.
 
@@ -1539,8 +1558,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.7.2...HEAD
-[0.7.2]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.2
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.3
 [0.7.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.1
 [0.7.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.0
 [0.6.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.6.0

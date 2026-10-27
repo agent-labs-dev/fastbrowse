@@ -1,0 +1,3028 @@
+[
+ {
+  "name": "benchmarks/sites/calendar.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Calendar</title><link rel=\"stylesheet\" href=\"base.css\">\n<style>\n.month { display: inline-block; width: 300px; height: 200px; overflow: hidden; vertical-align: top; }\n.month .title { display: block; height: 20px; }\n.month a { display: inline-block; width: 60px; height: 20px; }\ntable { border-collapse: collapse; table-layout: fixed; width: 280px; }\nth, td { width: 40px; height: 20px; overflow: hidden; }\ntd button { width: 40px; height: 20px; }\n</style>\n</head>\n<body>\n<!-- Date pickers: twin Prev and Next anchors with no destination, and day buttons whose weekday only the\n     table's column header names. Size it with ?n=. -->\n<main id=\"main\"></main>\n<script>\nconst n = Number(new URLSearchParams(location.search).get('n') || 2);\nconst days = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];\nconst parts = [];\nfor (let m = 0; m < n; m++) {\n  const rows = [];\n  for (let w = 0; w < 6; w++) {\n    const cells = [];\n    for (let d = 0; d < 7; d++) {\n      const day = w * 7 + d - (m % 7) + 1;\n      cells.push(day >= 1 && day <= 30 ? `<td><button>${day}</button></td>` : '<td></td>');\n    }\n    rows.push(`<tr>${cells.join('')}</tr>`);\n  }\n  parts.push(`<div class=\"month\">\n    <span class=\"title\">Month ${m + 1} 2026</span>\n    <a data-handler=\"prev\" data-event=\"click\">Prev</a><a data-handler=\"next\" data-event=\"click\">Next</a>\n    <table><thead><tr>${days.map(d => `<th scope=\"col\" abbr=\"${d}day\">${d}</th>`).join('')}</tr></thead>\n    <tbody>${rows.join('')}</tbody></table>\n  </div>`);\n}\ndocument.getElementById('main').innerHTML = parts.join('');\n</script>\n</body>\n</html>\n",
+  "title": "Calendar",
+  "blocks": []
+ },
+ {
+  "name": "benchmarks/sites/cards.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Cards</title><link rel=\"stylesheet\" href=\"base.css\">\n<style>\n.card { display: inline-block; width: 300px; height: 120px; overflow: hidden; vertical-align: top; }\n.card h3, .card .price, .card .caption, .card h4 { display: block; height: 20px; overflow: hidden; white-space: nowrap; }\n.card button, .card a { display: inline-block; width: 90px; height: 20px; overflow: hidden; white-space: nowrap; }\n.card .caption { display: none; }\n.card:hover .caption { display: block; }\n</style>\n</head>\n<body>\n<!-- A shop's results: twin \"Add to cart\" buttons, an unnamed icon button per card, and a caption only the\n     pointer reveals. Size it with ?n=. -->\n<svg width=\"0\" height=\"0\" style=\"position: absolute\"><symbol id=\"trash-2\"><path d=\"M0 0h1v1H0z\"/></symbol></svg>\n<main id=\"main\"></main>\n<script>\nconst n = Number(new URLSearchParams(location.search).get('n') || 8);\nconst parts = [];\nfor (let i = 0; i < n; i++) {\n  // The second half of the results sits below the viewport.\n  if (i === Math.floor(n / 2)) parts.push('<div style=\"height: 900px\"></div>');\n  parts.push(`<div class=\"card\">\n    <h3>Product ${i}</h3>\n    <span class=\"price\">$${(i * 7) % 90}.99</span>\n    <span class=\"caption\">Ships in ${i % 5} days</span>\n    <button>Add to cart</button>\n    <button><svg class=\"lucide-trash-2\" width=\"12\" height=\"12\"><use href=\"#trash-2\"/></svg></button>\n    <a href=\"/product/${i}\">Details</a>\n    <h4>Options</h4>\n  </div>`);\n}\ndocument.getElementById('main').innerHTML = parts.join('');\n</script>\n</body>\n</html>\n",
+  "title": "Cards",
+  "blocks": []
+ },
+ {
+  "name": "benchmarks/sites/forms.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Forms</title><link rel=\"stylesheet\" href=\"base.css\">\n<style>\nform, .group { display: inline-block; width: 400px; height: 220px; overflow: hidden; vertical-align: top; }\nlabel, legend, h2 { display: block; height: 20px; overflow: hidden; white-space: nowrap; }\ninput, select, button { display: block; width: 200px; height: 20px; }\ninput[type=\"checkbox\"], input[type=\"radio\"] { display: inline-block; width: 16px; height: 16px; }\n</style>\n</head>\n<body>\n<!-- Forms that submit, block on required fields and hold date pickers, and a script-built group of fields\n     with no form element at all. Size it with ?n=. -->\n<main id=\"main\"></main>\n<script>\nconst n = Number(new URLSearchParams(location.search).get('n') || 4);\nconst parts = [];\nfor (let i = 0; i < n; i++) {\n  parts.push(`<form action=\"/submit/${i}\" method=\"post\">\n    <h2>Booking ${i}</h2>\n    <label for=\"name-${i}\">Name</label><input id=\"name-${i}\" name=\"name\" autocomplete=\"name\" required>\n    <label>Email <input type=\"email\" name=\"email\" value=\"guest${i}@example.com\"></label>\n    <label for=\"when-${i}\">Start Date</label><input id=\"when-${i}\" type=\"date\" name=\"when\">\n    <select name=\"room\" aria-label=\"Room\"><option>Single</option><option>Double</option><option disabled>Suite</option></select>\n    <input type=\"checkbox\" id=\"news-${i}\" name=\"news\"><label for=\"news-${i}\">Newsletter</label>\n    <input type=\"password\" name=\"secret\" aria-label=\"Password\" value=\"hunter${i}\">\n    <button type=\"submit\">Book</button>\n  </form>`);\n  parts.push(`<div class=\"group\">\n    <h2>Filter ${i}</h2>\n    <input aria-label=\"Minimum price\" type=\"number\"><input aria-label=\"Maximum price\" type=\"number\">\n    <div role=\"button\" tabindex=\"0\">Apply</div>\n  </div>`);\n}\ndocument.getElementById('main').innerHTML = parts.join('');\n</script>\n</body>\n</html>\n",
+  "title": "Forms",
+  "blocks": []
+ },
+ {
+  "name": "benchmarks/sites/frame-inner.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Inner list</title><link rel=\"stylesheet\" href=\"base.css\"></head>\n<body>\n<main id=\"main\"></main>\n<script>\nconst n = Number(new URLSearchParams(location.search).get('n') || 6);\ndocument.getElementById('main').innerHTML = Array.from(\n  { length: n },\n  (_, i) => `<a class=\"cell\" href=\"/inner/${i}\">Inner ${i}</a><button class=\"cell\">Remove</button>`,\n).join('');\n</script>\n</body>\n</html>\n",
+  "title": "Inner list",
+  "blocks": []
+ },
+ {
+  "name": "benchmarks/sites/frames.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Frames</title><link rel=\"stylesheet\" href=\"base.css\">\n<style>\n.widget { display: inline-block; width: 300px; height: 40px; vertical-align: top; }\niframe { display: block; width: 1200px; height: 200px; border: 0; }\n</style>\n</head>\n<body>\n<!-- Controls the snapshot reaches only by walking into open shadow roots and a same-origin frame.\n     Size it with ?n=; the frame takes the same size. -->\n<main id=\"main\"></main>\n<script>\nconst n = Number(new URLSearchParams(location.search).get('n') || 6);\nconst main = document.getElementById('main');\nfor (let i = 0; i < n; i++) {\n  const host = document.createElement('div');\n  host.className = 'widget';\n  const root = host.attachShadow({ mode: 'open' });\n  root.innerHTML = `<link rel=\"stylesheet\" href=\"base.css\"><span class=\"cell\">Widget ${i}</span>\n    <button class=\"cell\">Open</button><input class=\"cell\" aria-label=\"Quantity ${i}\" type=\"number\">`;\n  main.append(host);\n}\nconst frame = document.createElement('iframe');\nframe.src = `frame-inner.html?n=${n}`;\nframe.title = 'Inner list';\nmain.append(frame);\n</script>\n</body>\n</html>\n",
+  "title": "Frames",
+  "blocks": []
+ },
+ {
+  "name": "benchmarks/sites/links.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Links</title><link rel=\"stylesheet\" href=\"base.css\"></head>\n<body>\n<!-- An article of links, as on a long reference page. One in twenty is a button-styled link, and the\n     last is the list's next page. Size it with ?n=. -->\n<main id=\"main\"></main>\n<script>\nconst n = Number(new URLSearchParams(location.search).get('n') || 40);\nconst parts = [];\nfor (let i = 0; i < n; i++) {\n  if (i % 6 === 0) parts.push(`<p class=\"row\">Section ${i / 6} of the article, between its links</p>`);\n  const label = `Topic ${i % 50}`;\n  // Past the viewport, so the list's tail is reported offscreen with a distance.\n  if (i === n - 1) parts.push(`<div class=\"row\" style=\"height: 900px\"></div><a class=\"cell\" href=\"/page/2\" rel=\"next\">Next</a>`);\n  else if (i % 20 === 19) parts.push(`<a class=\"cell\" href=\"/topic/${i}\"><button>${label}</button></a>`);\n  else parts.push(`<a class=\"cell\" href=\"/topic/${i}\" title=\"About ${label}\">${label}</a>`);\n}\ndocument.getElementById('main').innerHTML = parts.join('');\n</script>\n</body>\n</html>\n",
+  "title": "Links",
+  "blocks": []
+ },
+ {
+  "name": "crates/fastbrowse-probe/bench/sites/alert-on-load.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!DOCTYPE html>\n<html>\n<head><title>Alert on load</title></head>\n<body>\n  <script>alert('Welcome');</script>\n  <button id=\"after\">After the alert</button>\n</body>\n</html>\n",
+  "title": "Alert on load",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "After the alert",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "crates/fastbrowse-probe/bench/sites/dialog.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!DOCTYPE html>\n<html>\n<head><title>Dialog fixture</title></head>\n<body>\n  <h1>Dialogs</h1>\n  <button id=\"alert\" onclick=\"alert('Saved'); this.textContent = 'Alerted'\">Save</button>\n  <button id=\"confirm\" onclick=\"this.textContent = confirm('Delete?') ? 'Deleted' : 'Kept'\">Delete</button>\n  <input id=\"name\" placeholder=\"Name\">\n</body>\n</html>\n",
+  "title": "Dialog fixture",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Dialogs",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Save\nDelete",
+    "heading_path": [
+     "Dialogs"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "crates/fastbrowse-probe/bench/sites/slow.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!DOCTYPE html>\n<html>\n<head><title>Still loading</title></head>\n<body>\n  <!-- A loading indicator that never clears, so a snapshot spends page.py's whole 3s loading wait. -->\n  <div class=\"spinner\">Loading...</div>\n  <button id=\"go\">Go</button>\n</body>\n</html>\n",
+  "title": "Still loading",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "Loading...",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Go",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "src/fastbrowse/audit/fixtures/bot-check.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html><title>Security check</title><h1>Verify you are human</h1><p>Complete the CAPTCHA security check to continue. Automated access is blocked.</p>\n",
+  "title": "Security check",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Verify you are human",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Complete the CAPTCHA security check to continue. Automated access is blocked.",
+    "heading_path": [
+     "Verify you are human"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "src/fastbrowse/audit/fixtures/download.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html><html><head><title>Download page</title></head><body>\n<h1>Download page</h1>\n<p>Download the report from the link below.</p>\n<a id=\"dl\" href=\"/audit-report.csv\" download>Download the report</a>\n</body></html>\n",
+  "title": "Download page",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Download page",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Download the report from the link below.",
+    "heading_path": [
+     "Download page"
+    ],
+    "href": null
+   },
+   {
+    "kind": "link",
+    "text": "Download the report",
+    "heading_path": [
+     "Download page"
+    ],
+    "href": "https://shop.example.com/audit-report.csv"
+   }
+  ]
+ },
+ {
+  "name": "src/fastbrowse/evals/fixtures/account.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html><html><head><title>Sign in</title></head><body>\n<h1>Sign in to see your orders</h1>\n<form action=\"/submit/login\" method=\"post\">\n  <p><label for=\"user\">Email</label> <input id=\"user\" name=\"user\" type=\"email\"></p>\n  <p><label for=\"pw\">Password</label> <input id=\"pw\" name=\"pw\" type=\"password\"></p>\n  <button type=\"submit\">Sign in</button>\n</form></body></html>\n",
+  "title": "Sign in",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Sign in to see your orders",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Email",
+    "heading_path": [
+     "Sign in to see your orders"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Password",
+    "heading_path": [
+     "Sign in to see your orders"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Sign in",
+    "heading_path": [
+     "Sign in to see your orders"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "src/fastbrowse/evals/fixtures/cities.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html><html><head><title>French cities</title></head><body>\n<h1>Largest cities in France</h1>\n<table><thead><tr><th>City</th><th>Region</th><th>Population</th></tr></thead><tbody>\n<tr><td>Paris</td><td>\u00cele-de-France</td><td>2,102,650</td></tr>\n<tr><td>Marseille</td><td>Provence-Alpes-C\u00f4te d'Azur</td><td>873,076</td></tr>\n<tr><td>Lyon</td><td>Auvergne-Rh\u00f4ne-Alpes</td><td>522,250</td></tr>\n<tr><td>Toulouse</td><td>Occitanie</td><td>504,078</td></tr>\n</tbody></table></body></html>\n",
+  "title": "French cities",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Largest cities in France",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| City | Region | Population |",
+    "heading_path": [
+     "Largest cities in France"
+    ],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| --- | --- | --- |",
+    "heading_path": [
+     "Largest cities in France"
+    ],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| Paris | \u00cele-de-France | 2,102,650 |",
+    "heading_path": [
+     "Largest cities in France"
+    ],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| Marseille | Provence-Alpes-C\u00f4te d'Azur | 873,076 |",
+    "heading_path": [
+     "Largest cities in France"
+    ],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| Lyon | Auvergne-Rh\u00f4ne-Alpes | 522,250 |",
+    "heading_path": [
+     "Largest cities in France"
+    ],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| Toulouse | Occitanie | 504,078 |",
+    "heading_path": [
+     "Largest cities in France"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "src/fastbrowse/evals/fixtures/contact.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html><html><head><title>Contact support</title></head><body>\n<h1>Contact support</h1>\n<form action=\"/submit/contact\" method=\"post\">\n  <p><label for=\"name\">Your name</label> <input id=\"name\" name=\"name\" required></p>\n  <p><label for=\"email\">Email</label> <input id=\"email\" name=\"email\" type=\"email\" required></p>\n  <p><label for=\"topic\">Topic</label> <select id=\"topic\" name=\"topic\"><option>General</option><option>Damaged item</option><option>Billing</option></select></p>\n  <p><label for=\"message\">Message</label> <textarea id=\"message\" name=\"message\" required></textarea></p>\n  <button type=\"submit\">Send message</button>\n</form></body></html>\n",
+  "title": "Contact support",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Contact support",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Your name",
+    "heading_path": [
+     "Contact support"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Email",
+    "heading_path": [
+     "Contact support"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Topic GeneralDamaged itemBilling",
+    "heading_path": [
+     "Contact support"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Message",
+    "heading_path": [
+     "Contact support"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Send message",
+    "heading_path": [
+     "Contact support"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "src/fastbrowse/evals/fixtures/drafts.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html><html><head><title>Drafts</title></head><body>\n<h1>Your drafts</h1>\n<ul><li id=\"d1\">Holiday post <button onclick=\"if (confirm('Delete Holiday post permanently?')) { fetch('/submit/delete', {method: 'POST', body: 'draft=holiday'}).then(() => { document.getElementById('d1').remove(); document.getElementById('status').textContent = 'Draft deleted.'; }); }\">Delete</button></li>\n<li>Recipe notes <button>Delete</button></li></ul>\n<p id=\"status\"></p></body></html>\n",
+  "title": "Drafts",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Your drafts",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "list_item",
+    "text": "Holiday post Delete",
+    "heading_path": [
+     "Your drafts"
+    ],
+    "href": null
+   },
+   {
+    "kind": "list_item",
+    "text": "Recipe notes Delete",
+    "heading_path": [
+     "Your drafts"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "src/fastbrowse/evals/fixtures/product.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html><html><head><title>Product</title></head><body>\n<h1 id=\"name\"></h1><p>Price: <strong id=\"price\"></strong></p><p>In stock. Ships in 2 days.</p>\n<script>const s = new URLSearchParams(location.search); document.getElementById(\"name\").textContent = s.get(\"name\"); document.getElementById(\"price\").textContent = s.get(\"price\");</script>\n</body></html>\n",
+  "title": "Product",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "Price:",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "In stock. Ships in 2 days.",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "src/fastbrowse/evals/fixtures/results.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html><html><head><title>Results</title></head><body>\n<h1>Search results</h1>\n<p id=\"none\" hidden>No products match.</p>\n<ul id=\"list\"></ul>\n<script>\nconst items = [[\"Red Kettle\", \"\u00a329.00\"], [\"Blue Kettle\", \"\u00a334.50\"], [\"Steel Kettle\", \"\u00a341.99\"], [\"Blue Teapot\", \"\u00a318.25\"]];\nconst q = (new URLSearchParams(location.search).get(\"q\") || \"\").toLowerCase();\nconst hits = items.filter(([n]) => q && q.split(/\\s+/).every(w => n.toLowerCase().includes(w)));\nfor (const [n, p] of hits) { const li = document.createElement(\"li\"); li.innerHTML = `<a href=\"/product.html?name=${encodeURIComponent(n)}&price=${encodeURIComponent(p)}\">${n}</a>`; list.append(li); }\ndocument.getElementById(\"none\").hidden = hits.length > 0;\n</script></body></html>\n",
+  "title": "Results",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Search results",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "src/fastbrowse/evals/fixtures/shop.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html><html><head><title>Kettle Shop</title></head><body>\n<h1>Kettle Shop</h1>\n<form action=\"/results.html\" method=\"get\" role=\"search\">\n  <label for=\"q\">Search products</label> <input id=\"q\" name=\"q\" type=\"search\">\n  <button type=\"submit\">Search</button>\n</form>\n<nav><a href=\"/about.html\">About us</a> \u00b7 <a href=\"/contact.html\">Contact</a></nav>\n</body></html>\n",
+  "title": "Kettle Shop",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Kettle Shop",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Search products\nSearch",
+    "heading_path": [
+     "Kettle Shop"
+    ],
+    "href": null
+   },
+   {
+    "kind": "link",
+    "text": "About us",
+    "heading_path": [
+     "Kettle Shop"
+    ],
+    "href": "https://shop.example.com/about.html"
+   },
+   {
+    "kind": "paragraph",
+    "text": "\u00b7 Contact",
+    "heading_path": [
+     "Kettle Shop"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/iframe/iframe.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!DOCTYPE html>\n<html>\n<head><title>Cross-origin frame</title></head>\n<body>\n  <h1>Inside the frame</h1>\n  <button id=\"frame-button\">Frame button</button>\n  <input id=\"frame-input\" placeholder=\"Frame field\">\n  <script>\n    document.getElementById('frame-button').addEventListener('click', () => {\n      document.getElementById('frame-button').textContent = 'Clicked';\n    });\n  </script>\n</body>\n</html>\n",
+  "title": "Cross-origin frame",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Inside the frame",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Frame button",
+    "heading_path": [
+     "Inside the frame"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/iframe/interstitial.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!DOCTYPE html>\n<html>\n<head><title>Interstitial</title></head>\n<body>\n  <a id=\"offer\" href=\"#offer\">Shop the spring offer</a>\n  <button id=\"close\" onclick=\"window.closed = true\">Close ad</button>\n</body>\n</html>\n",
+  "title": "Interstitial",
+  "blocks": [
+   {
+    "kind": "link",
+    "text": "Shop the spring offer",
+    "heading_path": [],
+    "href": "https://shop.example.com/a/page.html#offer"
+   },
+   {
+    "kind": "paragraph",
+    "text": "Close ad",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/alert-on-load.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!DOCTYPE html>\n<html>\n<head><title>Alert on load</title></head>\n<body>\n  <p>Loaded</p>\n  <script>alert('Welcome back');</script>\n</body>\n</html>\n",
+  "title": "Alert on load",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "Loaded",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/animated.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html><head><title>Animated menu</title></head>\n<body>\n  <button id=\"open\" aria-haspopup=\"listbox\" aria-expanded=\"false\">Trip type</button>\n  <ul id=\"menu\" role=\"listbox\" style=\"opacity: 0\"><li role=\"option\" tabindex=\"-1\">One way</li></ul>\n  <script>\n    // Menu libraries show a menu on the next animation frame, which a background tab never draws.\n    document.getElementById('open').addEventListener('click', () => {\n      document.getElementById('open').setAttribute('aria-expanded', 'true');\n      requestAnimationFrame(() => { document.getElementById('menu').style.opacity = '1'; });\n    });\n  </script>\n</body></html>\n",
+  "title": "Animated menu",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "Trip type",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "list_item",
+    "text": "One way",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/challenge.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!DOCTYPE html>\n<html>\n<head><title>Client Challenge</title></head>\n<body>\n  <p>Enter the characters seen in the image below:</p>\n  <button>Play audio CAPTCHA</button>\n  <input type=\"text\" placeholder=\"Answer\" />\n  <button>Submit</button>\n</body>\n</html>\n",
+  "title": "Client Challenge",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "Enter the characters seen in the image below:",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Play audio CAPTCHA\n\nSubmit",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/comments-empty.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!DOCTYPE html>\n<html>\n<head><title>Birch comments</title></head>\n<body>\n  <h1>Project Birch</h1>\n  <h2>Comments</h2>\n  <p>Be the first to post a comment and get the discussion started.</p>\n  <form aria-label=\"Reply\">\n    <textarea placeholder=\"Write a reply\" disabled></textarea>\n    <button type=\"button\">Log in to reply</button>\n  </form>\n</body>\n</html>\n",
+  "title": "Birch comments",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Project Birch",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Comments",
+    "heading_path": [
+     "Project Birch"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Be the first to post a comment and get the discussion started.",
+    "heading_path": [
+     "Project Birch",
+     "Comments"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Log in to reply",
+    "heading_path": [
+     "Project Birch",
+     "Comments"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/dispatch.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html><head><title>Dispatch races</title>\n<style>\n  #target, #decoy, #cover { position:absolute; left:60px; top:80px; width:180px; height:40px; }\n  #target { z-index:1; }\n  #cover { z-index:2; background:white; display:none; }\n</style></head><body>\n<button id=\"decoy\">Decoy</button>\n<button id=\"target\" role=\"option\" aria-selected=\"false\">One way</button>\n<div id=\"cover\"></div>\n<script>\n  const mode = location.search.slice(1);\n  let target = document.getElementById('target');\n  window.presses = [];\n  window.pressPositions = [];\n  window.clicks = [];\n  document.addEventListener('mousedown', e => {\n    presses.push(e.target.id);\n    pressPositions.push(e.target.getBoundingClientRect().left);\n  });\n  document.addEventListener('click', e => clicks.push(e.target.id));\n  if (mode.startsWith('replace')) {\n    const input = document.createElement('input');\n    input.id = 'target';\n    input.setAttribute('aria-label', 'Origin');\n    target.replaceWith(input);\n    target = input;\n    target.addEventListener('click', () => {\n      const copy = target.cloneNode();\n      target.replaceWith(copy);\n      if (mode === 'replace-decoy') copy.style.left = '400px';\n      if (mode === 'replace-late') setTimeout(() => copy.focus(), 180);\n      else copy.focus();\n    }, {once:true});\n  } else {\n    target.addEventListener('pointerenter', () => {\n      if (mode === 'move' || mode === 'animate') {\n        if (mode === 'animate') target.style.transition = 'left 180ms linear';\n        target.style.left = '400px';\n      } else if (mode === 'cover') document.getElementById('cover').style.display = 'block';\n      else if (mode === 'relabel') target.textContent = 'Delete reservation';\n    }, {once:true});\n    target.addEventListener('click', () => target.setAttribute('aria-selected', 'true'));\n  }\n</script>\n</body></html>\n",
+  "title": "Dispatch races",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "Decoy\nOne way",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/frame-left.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html><html><body><p>Left pane</p></body></html>\n",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "Left pane",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/frame-right.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html><html><body><p>Right pane</p></body></html>\n",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "Right pane",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/frames.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html><head><title>Frames</title></head>\n<frameset cols=\"50%,50%\">\n  <frame src=\"/frame-left.html\" name=\"left\">\n  <frame src=\"/frame-right.html\" name=\"right\">\n</frameset>\n</html>\n",
+  "title": "Frames",
+  "blocks": []
+ },
+ {
+  "name": "tests/browser/sites/main/gallery.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html><head><title>Gallery</title>\n<style>.card { display: inline-block; width: 160px; margin: 8px; } .card img { width: 160px; height: 90px; }\n.thumb { display: block; } .card button, .card [role=button] { display: inline-block; width: 32px; height: 32px; }</style></head>\n<body>\n  <svg style=\"display:none\"><symbol id=\"icon-trash\" viewBox=\"0 0 16 16\"><path d=\"M2 4h12\"/></symbol></svg>\n  <h1>Gallery</h1>\n  <p>Icon-only controls name their action in markup only: a sprite reference, an icon font class, an svg title.</p>\n  <div id=\"cards\">\n    <div class=\"card\" id=\"c1\"><a class=\"thumb\" href=\"/gallery/101/edit\"><img src=\"data:,\" alt=\"\"></a>\n      <p>old-banner.png</p>\n      <button type=\"button\" class=\"btn btn-sm\"><svg aria-hidden=\"true\"><use href=\"#icon-trash\"></use></svg></button></div>\n    <div class=\"card\" id=\"c2\"><a class=\"thumb\" href=\"/gallery/102/edit\"><img src=\"data:,\" alt=\"\"></a>\n      <p>new-banner.png</p>\n      <button type=\"button\" class=\"btn btn-sm\"><svg aria-hidden=\"true\"><use href=\"#icon-trash\"></use></svg></button></div>\n    <div class=\"card\" id=\"c3\"><a class=\"thumb\" href=\"/gallery/103/edit\"><img src=\"data:,\" alt=\"\"></a>\n      <p>old-logo.png</p>\n      <a href=\"#\" role=\"button\"><i class=\"fa-solid fa-trash-can\" aria-hidden=\"true\"></i></a></div>\n    <div class=\"card\" id=\"c4\"><a class=\"thumb\" href=\"/gallery/104/edit\"><img src=\"data:,\" alt=\"\"></a>\n      <p>new-logo.png</p>\n      <button type=\"button\"><svg><title>Delete image</title><path d=\"M2 4h12\"/></svg></button></div>\n    <div class=\"card\" id=\"c5\"><a class=\"thumb\" href=\"/gallery/105/edit\"><img src=\"data:,\" alt=\"\"></a>\n      <p>old-icon.png</p>\n      <button type=\"button\"><span class=\"material-symbols-outlined\" aria-hidden=\"true\">delete</span></button></div>\n    <div class=\"card\" id=\"c6\"><a class=\"thumb\" href=\"/gallery/106/edit\"><img src=\"data:,\" alt=\"\"></a>\n      <p>new-icon.png</p>\n      <button type=\"button\" class=\"remove\" aria-describedby=\"remove-hint\"></button></div>\n    <div class=\"card\" id=\"c7\"><a class=\"thumb\" href=\"/gallery/107/edit\"><img src=\"data:,\" alt=\"\"></a>\n      <div class=\"actions\"><span>Actions</span>\n        <button type=\"button\"><svg class=\"bi bi-x-circle\" aria-hidden=\"true\"></svg></button></div>\n      <p>Alpha</p></div>\n  </div>\n  <p id=\"remove-hint\" hidden>Remove from gallery</p>\n  <p id=\"status\"></p>\n  <script>\n    for (const control of document.querySelectorAll('.card [type=button], .card [role=button]')) {\n      control.addEventListener('click', event => {\n        event.preventDefault();\n        const card = control.closest('.card');\n        if (!confirm('Delete ' + card.querySelector('p:last-of-type').textContent + '?')) return;\n        card.remove();\n        document.getElementById('status').textContent = 'Deleted ' + card.id;\n      });\n    }\n  </script>\n</body></html>\n",
+  "title": "Gallery",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Gallery",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Icon-only controls name their action in markup only: a sprite reference, an icon font class, an svg title.",
+    "heading_path": [
+     "Gallery"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "old-banner.png",
+    "heading_path": [
+     "Gallery"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "new-banner.png",
+    "heading_path": [
+     "Gallery"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "old-logo.png",
+    "heading_path": [
+     "Gallery"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "new-logo.png",
+    "heading_path": [
+     "Gallery"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "old-icon.png",
+    "heading_path": [
+     "Gallery"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "delete",
+    "heading_path": [
+     "Gallery"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "new-icon.png",
+    "heading_path": [
+     "Gallery"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Actions",
+    "heading_path": [
+     "Gallery"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Alpha",
+    "heading_path": [
+     "Gallery"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/hovers.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html>\n<head>\n<title>Hovers</title>\n<style>\n  .figure { display: inline-block; margin: 20px; }\n  .figcaption { display: none; }\n  .figure:hover .figcaption { display: block; }\n  nav li > ul { display: none; }\n  nav li:hover > ul { display: block; }\n  a:hover { color: red; }\n</style>\n</head>\n<body>\n<h1>Team</h1>\n<div class=\"figure\"><img src=\"data:image/gif;base64,R0lGODlhAQABAAAAACw=\" width=\"80\" height=\"80\" alt=\"User Avatar\">\n  <div class=\"figcaption\"><h5>name: ada</h5><a href=\"/users/1\">View profile</a></div></div>\n<div class=\"figure\"><img src=\"data:image/gif;base64,R0lGODlhAQABAAAAACw=\" width=\"80\" height=\"80\" alt=\"User Avatar\">\n  <div class=\"figcaption\"><h5>name: grace</h5><a href=\"/users/2\">View profile</a></div></div>\n<nav><ul><li>Products<ul><li><a href=\"/pricing\">Pricing</a></li></ul></li></ul></nav>\n<p><a href=\"/about\">About</a></p>\n</body>\n</html>\n",
+  "title": "Hovers",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Team",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "[User Avatar]",
+    "heading_path": [
+     "Team"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "[User Avatar]",
+    "heading_path": [
+     "Team"
+    ],
+    "href": null
+   },
+   {
+    "kind": "list_item",
+    "text": "Products",
+    "heading_path": [
+     "Team"
+    ],
+    "href": null
+   },
+   {
+    "kind": "link",
+    "text": "Pricing",
+    "heading_path": [
+     "Team"
+    ],
+    "href": "https://shop.example.com/pricing"
+   },
+   {
+    "kind": "link",
+    "text": "About",
+    "heading_path": [
+     "Team"
+    ],
+    "href": "https://shop.example.com/about"
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/icons.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html><head><title>Icons</title><style>.glyph::before { content: \"\\2691\"; }</style></head>\n<body>\n  <table>\n    <tr><th>Film</th><th>Winner</th><th>Seen</th></tr>\n    <tr><td>First</td><td><i class=\"glyph glyphicon glyphicon-flag\"></i></td><td><img src=\"data:,\" alt=\"yes\" width=\"8\" height=\"8\"></td></tr>\n    <tr><td>Second</td><td></td><td><i class=\"fa-solid fa-lg fa-xmark\"></i></td></tr>\n  </table>\n</body></html>\n",
+  "title": "Icons",
+  "blocks": [
+   {
+    "kind": "table",
+    "text": "| Film | Winner | Seen |",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| --- | --- | --- |",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| First |  | [yes] |",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| Second |  |  |",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/index.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!DOCTYPE html>\n<html>\n<head><title>Main site</title></head>\n<body>\n  <h1>Fastbrowse fixture</h1>\n  <p>An introductory paragraph with some prose text.</p>\n\n  <h2>Login</h2>\n  <form id=\"login\">\n    <input id=\"username\" name=\"username\" type=\"text\" placeholder=\"Username\" />\n    <input id=\"password\" name=\"password\" type=\"password\" placeholder=\"Password\" />\n    <button id=\"submit-login\" type=\"submit\">Sign in</button>\n  </form>\n  <p id=\"login-result\"></p>\n\n  <h2>Notes</h2>\n  <ul>\n    <li>First item</li>\n    <li>Second item</li>\n  </ul>\n\n  <h2>Table</h2>\n  <table>\n    <tr><th>Name</th><th>Score</th></tr>\n    <tr><td>Ada</td><td>10</td></tr>\n    <tr><td>Grace</td><td>9</td></tr>\n  </table>\n\n  <h2>Code</h2>\n  <pre>def f(x):\\n    return x + 1</pre>\n\n  <h2>Reference</h2>\n  <p><a href=\"https://example.com/docs\">See the docs</a></p>\n\n  <h2>Modal</h2>\n  <button id=\"open-modal\">Open modal</button>\n  <button id=\"covered-target\">Covered target</button>\n  <div id=\"modal\" style=\"display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);\"></div>\n\n  <h2>Catalogue</h2>\n  <div id=\"catalogue\">\n    <div class=\"product\">\n      <div class=\"name\">Brass Kettle</div>\n      <div class=\"price\">$29.99<button class=\"add\">Add to cart</button></div>\n    </div>\n    <div class=\"product\">\n      <div class=\"name\">Copper Pan</div>\n      <div class=\"price\">$15.99<button class=\"add\">Add to cart</button></div>\n    </div>\n  </div>\n\n  <h2>Lazy menu</h2>\n  <button id=\"open-lazy\" aria-haspopup=\"menu\" aria-expanded=\"false\" aria-controls=\"lazy-menu\">Search or jump to</button>\n  <div id=\"lazy-menu\" hidden></div>\n\n  <h2>Swap</h2>\n  <button id=\"swap-target\">Swap target</button>\n  <button id=\"swap-trigger\">Trigger swap</button>\n\n  <h2>Hydrating field</h2>\n  <input id=\"hydrating\" type=\"text\" placeholder=\"Hydrating field\" />\n\n  <h2>Rejecting field</h2>\n  <input id=\"rejecting\" type=\"text\" placeholder=\"Rejecting field\" />\n  <input id=\"decoy\" type=\"text\" placeholder=\"Decoy field\" value=\"godel\" />\n\n  <h2>Upload</h2>\n  <input id=\"file-input\" type=\"file\" />\n  <pre id=\"upload-sha\"></pre>\n\n  <h2>Download</h2>\n  <a id=\"download-link\" href=\"/download\">Download attachment</a>\n\n  <h2>Cross-origin iframe</h2>\n  <iframe id=\"cross-frame\" src=\"__IFRAME_ORIGIN__/iframe.html\"></iframe>\n\n  <h2>Shadow DOM</h2>\n  <div id=\"shadow-host\"></div>\n\n  <h2>Popup</h2>\n  <button id=\"open-popup\">Open popup</button>\n\n  <h2>Dialog</h2>\n  <button id=\"open-dialog\">Confirm</button>\n  <p id=\"dialog-result\"></p>\n\n  <section id=\"capture-records\">\n    <h2>Quotations</h2>\n    <div id=\"quote-cards\">\n      <div class=\"quote card\">\n        <blockquote>Measure twice, cut once.</blockquote>\n        <div>by Ada <a href=\"/authors/ada\">(about)</a></div>\n        <div>Tags: <a href=\"/tags/craft\">craft</a> <a href=\"/tags/care\">care</a></div>\n      </div>\n      <div class=\"card quote\">\n        <blockquote>Leave room for a second idea.</blockquote>\n        <div>by Grace <a href=\"/authors/grace\">(about)</a></div>\n        <div>Tags: <a href=\"/tags/ideas\">ideas</a> <a href=\"/tags/work\">work</a></div>\n      </div>\n      <div class=\"quote card\">\n        <h3>A thought for today</h3>\n        <blockquote>Ask what the evidence says.</blockquote>\n        <div>by Katherine <a href=\"/authors/katherine\">(about)</a></div>\n        <div>Tags: <a href=\"/tags/science\">science</a> <a href=\"/tags/care\">care</a></div>\n      </div>\n    </div>\n    <p>After the quotations.</p>\n    <div id=\"standalone\">\n      <p>A standalone first paragraph.</p>\n      <p>A standalone second paragraph.</p>\n    </div>\n    <h2>Rankings</h2>\n    <table id=\"record-table\">\n      <thead><tr><th>Team</th><th>Points</th></tr></thead>\n      <tbody>\n        <tr><td>North</td><td>12</td></tr>\n        <tr><td>East</td><td>11</td></tr>\n        <tr><td>West</td><td>10</td></tr>\n      </tbody>\n    </table>\n  </section>\n\n  <script>\n    document.getElementById('login').addEventListener('submit', e => {\n      e.preventDefault();\n      document.getElementById('login-result').textContent = 'signed in as ' + document.getElementById('username').value;\n    });\n    document.getElementById('open-lazy').addEventListener('click', () => {\n      // The header reacts at once; the menu's own markup arrives later, as a lazily loaded bundle's would.\n      document.getElementById('open-lazy').dataset.pressed = 'true';\n      setTimeout(() => {\n        const menu = document.getElementById('lazy-menu');\n        menu.innerHTML = '<button id=\"lazy-item\">Jump to a repository</button>';\n        menu.hidden = false;\n        document.getElementById('open-lazy').setAttribute('aria-expanded', 'true');\n      }, 400);\n    });\n    document.getElementById('open-modal').addEventListener('click', () => {\n      document.getElementById('modal').style.display = 'block';\n    });\n    document.getElementById('covered-target').addEventListener('click', () => {\n      document.getElementById('covered-target').dataset.clicked = 'true';\n    });\n    document.getElementById('swap-trigger').addEventListener('click', () => {\n      const old = document.getElementById('swap-target');\n      const fresh = document.createElement('button');\n      fresh.id = 'swap-target';\n      fresh.textContent = 'Replaced target';\n      old.replaceWith(fresh);\n    });\n    document.getElementById('hydrating').addEventListener('input', e => {\n      // A component that re-renders on first input, detaching the very node that was typed into.\n      const old = e.target;\n      if (old.dataset.hydrated) return;\n      const fresh = old.cloneNode();\n      fresh.removeAttribute('id');  // as Wikipedia's does, so identity cannot rest on the id\n      fresh.dataset.hydrated = 'true';\n      fresh.value = old.value;\n      old.replaceWith(fresh);\n      fresh.focus();\n    });\n    document.getElementById('rejecting').addEventListener('beforeinput', e => {\n      // Refuses the value, replaces itself with an empty copy, and focuses a field already holding it.\n      e.preventDefault();\n      const old = e.target;\n      const fresh = old.cloneNode();\n      old.replaceWith(fresh);\n      document.getElementById('decoy').focus();\n    });\n    document.getElementById('file-input').addEventListener('change', async e => {\n      const file = e.target.files[0];\n      if (!file) return;\n      const buf = await file.arrayBuffer();\n      const digest = await crypto.subtle.digest('SHA-256', buf);\n      document.getElementById('upload-sha').textContent = [...new Uint8Array(digest)]\n        .map(b => b.toString(16).padStart(2, '0')).join('');\n    });\n    const host = document.getElementById('shadow-host').attachShadow({mode: 'open'});\n    host.innerHTML = '<button id=\"shadow-button\">Shadow button</button>';\n    document.getElementById('shadow-host').shadowRoot.getElementById('shadow-button')\n      .addEventListener('click', () => { window.__shadowClicked = true; });\n    document.getElementById('open-popup').addEventListener('click', () => {\n      window.open(location.origin + '/popup.html', '_blank');\n    });\n    document.getElementById('open-dialog').addEventListener('click', () => {\n      const ok = confirm('Proceed?');\n      document.getElementById('dialog-result').textContent = ok ? 'confirmed' : 'cancelled';\n    });\n  </script>\n</body>\n</html>\n",
+  "title": "Main site",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Fastbrowse fixture",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "An introductory paragraph with some prose text.",
+    "heading_path": [
+     "Fastbrowse fixture"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Login",
+    "heading_path": [
+     "Fastbrowse fixture"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Sign in",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Login"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Notes",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Login"
+    ],
+    "href": null
+   },
+   {
+    "kind": "list_item",
+    "text": "First item",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Notes"
+    ],
+    "href": null
+   },
+   {
+    "kind": "list_item",
+    "text": "Second item",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Notes"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Table",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Notes"
+    ],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| Name | Score |",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Table"
+    ],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| --- | --- |",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Table"
+    ],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| Ada | 10 |",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Table"
+    ],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| Grace | 9 |",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Table"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Code",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Table"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "def f(x):\\n return x + 1",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Code"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Reference",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Code"
+    ],
+    "href": null
+   },
+   {
+    "kind": "link",
+    "text": "See the docs",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Reference"
+    ],
+    "href": "https://example.com/docs"
+   },
+   {
+    "kind": "heading",
+    "text": "Modal",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Reference"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Open modal\nCovered target",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Modal"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Catalogue",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Modal"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Brass Kettle",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Catalogue"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "$29.99Add to cart",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Catalogue"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Copper Pan",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Catalogue"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "$15.99Add to cart",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Catalogue"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Lazy menu",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Catalogue"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Search or jump to",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Lazy menu"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Swap",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Lazy menu"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Swap target\nTrigger swap",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Swap"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Hydrating field",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Swap"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Rejecting field",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Hydrating field"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Upload",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Rejecting field"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Download",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Upload"
+    ],
+    "href": null
+   },
+   {
+    "kind": "link",
+    "text": "Download attachment",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Download"
+    ],
+    "href": "https://shop.example.com/download"
+   },
+   {
+    "kind": "heading",
+    "text": "Cross-origin iframe",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Download"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Shadow DOM",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Cross-origin iframe"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Popup",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Shadow DOM"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Open popup",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Popup"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Dialog",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Popup"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Confirm",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Dialog"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Quotations",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Dialog"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Measure twice, cut once.",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Quotations"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "by Ada (about)",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Quotations"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Tags: craft care",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Quotations"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Leave room for a second idea.",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Quotations"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "by Grace (about)",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Quotations"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Tags: ideas work",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Quotations"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "A thought for today",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Quotations"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Ask what the evidence says.",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Quotations",
+     "A thought for today"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "by Katherine (about)",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Quotations",
+     "A thought for today"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Tags: science care",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Quotations",
+     "A thought for today"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "After the quotations.",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Quotations",
+     "A thought for today"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "A standalone first paragraph.",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Quotations",
+     "A thought for today"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "A standalone second paragraph.",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Quotations",
+     "A thought for today"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Rankings",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Quotations",
+     "A thought for today"
+    ],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| Team | Points |",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Rankings"
+    ],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| --- | --- |",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Rankings"
+    ],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| North | 12 |",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Rankings"
+    ],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| East | 11 |",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Rankings"
+    ],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| West | 10 |",
+    "heading_path": [
+     "Fastbrowse fixture",
+     "Rankings"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/inner.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<title>Inner document</title>\n<p>Same-origin evidence</p>\n<input placeholder=\"Inner field\">\n<button onclick=\"this.textContent = 'Inner clicked'\">Inner button</button>\n<div id=\"shadow\"></div>\n<script>\n  document.getElementById('shadow').attachShadow({mode: 'open'}).innerHTML = '<p>Shadow evidence</p>';\n</script>\n",
+  "title": "Inner document",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "Same-origin evidence",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Inner button",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/loading.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html>\n  <head><title>Loading fixture</title></head>\n  <body>\n    <h1>Dynamic loading</h1>\n    <div id=\"loading\">Loading...</div>\n    <div id=\"finish\" hidden><h4>Hello World!</h4></div>\n    <script>\n      // Longer than an action's 1.5s spinner budget, as the-internet's dynamic loading example is.\n      setTimeout(() => {\n        document.getElementById(\"loading\").hidden = true;\n        document.getElementById(\"finish\").hidden = false;\n      }, 2500);\n    </script>\n  </body>\n</html>\n",
+  "title": "Loading fixture",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Dynamic loading",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Loading...",
+    "heading_path": [
+     "Dynamic loading"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/long-list.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!DOCTYPE html>\n<html>\n<head><title>Long list</title></head>\n<body>\n<h1>Catalogue, page 1</h1>\n<ul>\n  <li><a href=\"/book-1.html\">Book 1</a></li>\n  <li><a href=\"/book-2.html\">Book 2</a></li>\n  <li><a href=\"/book-3.html\">Book 3</a></li>\n  <li><a href=\"/book-4.html\">Book 4</a></li>\n  <li><a href=\"/book-5.html\">Book 5</a></li>\n  <li><a href=\"/book-6.html\">Book 6</a></li>\n  <li><a href=\"/book-7.html\">Book 7</a></li>\n  <li><a href=\"/book-8.html\">Book 8</a></li>\n  <li><a href=\"/book-9.html\">Book 9</a></li>\n  <li><a href=\"/book-10.html\">Book 10</a></li>\n  <li><a href=\"/book-11.html\">Book 11</a></li>\n  <li><a href=\"/book-12.html\">Book 12</a></li>\n  <li><a href=\"/book-13.html\">Book 13</a></li>\n  <li><a href=\"/book-14.html\">Book 14</a></li>\n  <li><a href=\"/book-15.html\">Book 15</a></li>\n  <li><a href=\"/book-16.html\">Book 16</a></li>\n  <li><a href=\"/book-17.html\">Book 17</a></li>\n  <li><a href=\"/book-18.html\">Book 18</a></li>\n  <li><a href=\"/book-19.html\">Book 19</a></li>\n  <li><a href=\"/book-20.html\">Book 20</a></li>\n  <li><a href=\"/book-21.html\">Book 21</a></li>\n  <li><a href=\"/book-22.html\">Book 22</a></li>\n  <li><a href=\"/book-23.html\">Book 23</a></li>\n  <li><a href=\"/book-24.html\">Book 24</a></li>\n  <li><a href=\"/book-25.html\">Book 25</a></li>\n  <li><a href=\"/book-26.html\">Book 26</a></li>\n  <li><a href=\"/book-27.html\">Book 27</a></li>\n  <li><a href=\"/book-28.html\">Book 28</a></li>\n  <li><a href=\"/book-29.html\">Book 29</a></li>\n  <li><a href=\"/book-30.html\">Book 30</a></li>\n  <li><a href=\"/book-31.html\">Book 31</a></li>\n  <li><a href=\"/book-32.html\">Book 32</a></li>\n  <li><a href=\"/book-33.html\">Book 33</a></li>\n  <li><a href=\"/book-34.html\">Book 34</a></li>\n  <li><a href=\"/book-35.html\">Book 35</a></li>\n  <li><a href=\"/book-36.html\">Book 36</a></li>\n  <li><a href=\"/book-37.html\">Book 37</a></li>\n  <li><a href=\"/book-38.html\">Book 38</a></li>\n  <li><a href=\"/book-39.html\">Book 39</a></li>\n  <li><a href=\"/book-40.html\">Book 40</a></li>\n  <li><a href=\"/book-41.html\">Book 41</a></li>\n  <li><a href=\"/book-42.html\">Book 42</a></li>\n  <li><a href=\"/book-43.html\">Book 43</a></li>\n  <li><a href=\"/book-44.html\">Book 44</a></li>\n  <li><a href=\"/book-45.html\">Book 45</a></li>\n  <li><a href=\"/book-46.html\">Book 46</a></li>\n  <li><a href=\"/book-47.html\">Book 47</a></li>\n  <li><a href=\"/book-48.html\">Book 48</a></li>\n  <li><a href=\"/book-49.html\">Book 49</a></li>\n  <li><a href=\"/book-50.html\">Book 50</a></li>\n  <li><a href=\"/book-51.html\">Book 51</a></li>\n  <li><a href=\"/book-52.html\">Book 52</a></li>\n  <li><a href=\"/book-53.html\">Book 53</a></li>\n  <li><a href=\"/book-54.html\">Book 54</a></li>\n  <li><a href=\"/book-55.html\">Book 55</a></li>\n  <li><a href=\"/book-56.html\">Book 56</a></li>\n  <li><a href=\"/book-57.html\">Book 57</a></li>\n  <li><a href=\"/book-58.html\">Book 58</a></li>\n  <li><a href=\"/book-59.html\">Book 59</a></li>\n  <li><a href=\"/book-60.html\">Book 60</a></li>\n  <li><a href=\"/book-61.html\">Book 61</a></li>\n  <li><a href=\"/book-62.html\">Book 62</a></li>\n  <li><a href=\"/book-63.html\">Book 63</a></li>\n  <li><a href=\"/book-64.html\">Book 64</a></li>\n  <li><a href=\"/book-65.html\">Book 65</a></li>\n  <li><a href=\"/book-66.html\">Book 66</a></li>\n  <li><a href=\"/book-67.html\">Book 67</a></li>\n  <li><a href=\"/book-68.html\">Book 68</a></li>\n  <li><a href=\"/book-69.html\">Book 69</a></li>\n  <li><a href=\"/book-70.html\">Book 70</a></li>\n  <li><a href=\"/book-71.html\">Book 71</a></li>\n  <li><a href=\"/book-72.html\">Book 72</a></li>\n  <li><a href=\"/book-73.html\">Book 73</a></li>\n  <li><a href=\"/book-74.html\">Book 74</a></li>\n  <li><a href=\"/book-75.html\">Book 75</a></li>\n  <li><a href=\"/book-76.html\">Book 76</a></li>\n  <li><a href=\"/book-77.html\">Book 77</a></li>\n  <li><a href=\"/book-78.html\">Book 78</a></li>\n  <li><a href=\"/book-79.html\">Book 79</a></li>\n  <li><a href=\"/book-80.html\">Book 80</a></li>\n  <li><a href=\"/book-81.html\">Book 81</a></li>\n  <li><a href=\"/book-82.html\">Book 82</a></li>\n  <li><a href=\"/book-83.html\">Book 83</a></li>\n  <li><a href=\"/book-84.html\">Book 84</a></li>\n  <li><a href=\"/book-85.html\">Book 85</a></li>\n  <li><a href=\"/book-86.html\">Book 86</a></li>\n  <li><a href=\"/book-87.html\">Book 87</a></li>\n  <li><a href=\"/book-88.html\">Book 88</a></li>\n  <li><a href=\"/book-89.html\">Book 89</a></li>\n  <li><a href=\"/book-90.html\">Book 90</a></li>\n  <li><a href=\"/book-91.html\">Book 91</a></li>\n  <li><a href=\"/book-92.html\">Book 92</a></li>\n  <li><a href=\"/book-93.html\">Book 93</a></li>\n  <li><a href=\"/book-94.html\">Book 94</a></li>\n  <li><a href=\"/book-95.html\">Book 95</a></li>\n  <li><a href=\"/book-96.html\">Book 96</a></li>\n  <li><a href=\"/book-97.html\">Book 97</a></li>\n  <li><a href=\"/book-98.html\">Book 98</a></li>\n  <li><a href=\"/book-99.html\">Book 99</a></li>\n  <li><a href=\"/book-100.html\">Book 100</a></li>\n  <li><a href=\"/book-101.html\">Book 101</a></li>\n  <li><a href=\"/book-102.html\">Book 102</a></li>\n  <li><a href=\"/book-103.html\">Book 103</a></li>\n  <li><a href=\"/book-104.html\">Book 104</a></li>\n  <li><a href=\"/book-105.html\">Book 105</a></li>\n  <li><a href=\"/book-106.html\">Book 106</a></li>\n  <li><a href=\"/book-107.html\">Book 107</a></li>\n  <li><a href=\"/book-108.html\">Book 108</a></li>\n  <li><a href=\"/book-109.html\">Book 109</a></li>\n  <li><a href=\"/book-110.html\">Book 110</a></li>\n  <li><a href=\"/book-111.html\">Book 111</a></li>\n  <li><a href=\"/book-112.html\">Book 112</a></li>\n  <li><a href=\"/book-113.html\">Book 113</a></li>\n  <li><a href=\"/book-114.html\">Book 114</a></li>\n  <li><a href=\"/book-115.html\">Book 115</a></li>\n  <li><a href=\"/book-116.html\">Book 116</a></li>\n  <li><a href=\"/book-117.html\">Book 117</a></li>\n  <li><a href=\"/book-118.html\">Book 118</a></li>\n  <li><a href=\"/book-119.html\">Book 119</a></li>\n  <li><a href=\"/book-120.html\">Book 120</a></li>\n</ul>\n<button type=\"button\">Show more books</button>\n<ul class=\"pager\"><li><a href=\"/long-list-2.html\">next</a></li></ul>\n</body>\n</html>\n",
+  "title": "Long list",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Catalogue, page 1",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "link",
+    "text": "Book 1",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-1.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 2",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-2.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 3",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-3.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 4",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-4.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 5",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-5.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 6",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-6.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 7",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-7.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 8",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-8.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 9",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-9.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 10",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-10.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 11",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-11.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 12",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-12.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 13",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-13.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 14",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-14.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 15",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-15.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 16",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-16.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 17",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-17.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 18",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-18.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 19",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-19.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 20",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-20.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 21",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-21.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 22",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-22.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 23",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-23.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 24",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-24.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 25",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-25.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 26",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-26.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 27",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-27.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 28",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-28.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 29",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-29.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 30",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-30.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 31",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-31.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 32",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-32.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 33",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-33.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 34",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-34.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 35",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-35.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 36",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-36.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 37",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-37.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 38",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-38.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 39",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-39.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 40",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-40.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 41",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-41.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 42",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-42.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 43",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-43.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 44",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-44.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 45",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-45.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 46",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-46.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 47",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-47.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 48",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-48.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 49",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-49.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 50",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-50.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 51",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-51.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 52",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-52.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 53",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-53.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 54",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-54.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 55",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-55.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 56",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-56.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 57",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-57.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 58",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-58.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 59",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-59.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 60",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-60.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 61",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-61.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 62",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-62.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 63",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-63.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 64",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-64.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 65",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-65.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 66",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-66.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 67",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-67.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 68",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-68.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 69",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-69.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 70",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-70.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 71",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-71.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 72",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-72.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 73",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-73.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 74",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-74.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 75",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-75.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 76",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-76.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 77",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-77.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 78",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-78.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 79",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-79.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 80",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-80.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 81",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-81.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 82",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-82.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 83",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-83.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 84",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-84.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 85",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-85.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 86",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-86.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 87",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-87.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 88",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-88.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 89",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-89.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 90",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-90.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 91",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-91.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 92",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-92.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 93",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-93.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 94",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-94.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 95",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-95.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 96",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-96.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 97",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-97.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 98",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-98.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 99",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-99.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 100",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-100.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 101",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-101.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 102",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-102.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 103",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-103.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 104",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-104.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 105",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-105.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 106",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-106.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 107",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-107.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 108",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-108.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 109",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-109.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 110",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-110.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 111",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-111.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 112",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-112.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 113",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-113.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 114",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-114.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 115",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-115.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 116",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-116.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 117",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-117.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 118",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-118.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 119",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-119.html"
+   },
+   {
+    "kind": "link",
+    "text": "Book 120",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/book-120.html"
+   },
+   {
+    "kind": "paragraph",
+    "text": "Show more books",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": null
+   },
+   {
+    "kind": "link",
+    "text": "next",
+    "heading_path": [
+     "Catalogue, page 1"
+    ],
+    "href": "https://shop.example.com/long-list-2.html"
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/menu.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html>\n<head><title>Menu</title></head>\n<body style=\"margin:0\">\n<div style=\"height:600px\"></div>\n<button id=\"trip\" aria-haspopup=\"listbox\" aria-expanded=\"false\">Round trip</button>\n<ul id=\"list\" role=\"listbox\" hidden style=\"margin:0;padding:0;list-style:none\">\n  <li role=\"option\" aria-selected=\"true\">Round trip</li>\n  <li role=\"option\" aria-selected=\"false\">One way</li>\n</ul>\n<div style=\"height:3000px\"></div>\n<script>\n  const trip = document.getElementById(\"trip\");\n  const list = document.getElementById(\"list\");\n  const close = () => { list.hidden = true; trip.setAttribute(\"aria-expanded\", \"false\"); };\n  trip.addEventListener(\"click\", () => { list.hidden = false; trip.setAttribute(\"aria-expanded\", \"true\"); });\n  // Like many menu widgets, a scroll dismisses the open list.\n  addEventListener(\"scroll\", close);\n  for (const option of list.children) {\n    option.addEventListener(\"click\", () => { trip.textContent = option.textContent; close(); });\n  }\n</script>\n</body>\n</html>\n",
+  "title": "Menu",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "Round trip",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/offscreen-loading.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html>\n  <head><title>Offscreen loading fixture</title></head>\n  <body>\n    <h1>Repository</h1>\n    <p>License: BSD-3-Clause</p>\n    <!-- GitHub's shapes: an empty fixed progress bar, and a lazy skeleton that loads only once scrolled to. -->\n    <span class=\"progress-pjax-loader\" style=\"position: fixed; top: 0; left: 0; width: 0; height: 2px\"></span>\n    <div class=\"Skeleton Skeleton--text\" style=\"margin-top: 4000px; height: 1em\">&nbsp;</div>\n  </body>\n</html>\n",
+  "title": "Offscreen loading fixture",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Repository",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "License: BSD-3-Clause",
+    "heading_path": [
+     "Repository"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/overlay.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html>\n<head><title>Overlay editor</title></head>\n<body>\n<div style=\"position:relative;width:300px;margin:40px\">\n  <input id=\"from\" aria-label=\"Where from?\" role=\"combobox\" aria-expanded=\"false\">\n  <div id=\"editor\" hidden style=\"position:absolute;left:-10px;top:-4px;background:#fff;border:1px solid #888\">\n    <input id=\"typed\" aria-label=\"Where from?\" role=\"combobox\" aria-expanded=\"true\" aria-controls=\"places\" style=\"width:320px\">\n    <ul id=\"places\" role=\"listbox\"></ul>\n  </div>\n</div>\n<script>\n  const from = document.getElementById(\"from\");\n  const editor = document.getElementById(\"editor\");\n  const typed = document.getElementById(\"typed\");\n  const places = document.getElementById(\"places\");\n  // Clicking the field opens an editor over it and moves focus there a moment later; only that editor suggests places.\n  const open = () => { editor.hidden = false; typed.value = \"Houston\"; typed.focus(); typed.select(); };\n  if (location.search === \"?late\") {\n    // Here the editor opens only once typing starts, prefilled, and the keystroke that opened it is lost.\n    from.addEventListener(\"input\", () => { from.value = \"\"; open(); }, {once: true});\n  } else {\n    from.addEventListener(\"click\", () => { editor.hidden = false; setTimeout(() => typed.focus(), 50); });\n  }\n  typed.addEventListener(\"input\", () => {\n    places.innerHTML = \"\";\n    for (const place of [\"London\", \"Londonderry\"].filter(p => typed.value && p.startsWith(typed.value))) {\n      const li = document.createElement(\"li\");\n      li.setAttribute(\"role\", \"option\");\n      li.textContent = place;\n      places.append(li);\n    }\n  });\n</script>\n</body>\n</html>\n",
+  "title": "Overlay editor",
+  "blocks": []
+ },
+ {
+  "name": "tests/browser/sites/main/popup.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!DOCTYPE html>\n<html>\n<head><title>Popup</title></head>\n<body>\n  <h1>Popup tab</h1>\n  <button id=\"popup-button\">Popup button</button>\n</body>\n</html>\n",
+  "title": "Popup",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Popup tab",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Popup button",
+    "heading_path": [
+     "Popup tab"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/pypi-challenge.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html>\n<head><title>Client Challenge</title></head>\n<body>\n  <h1>Client Challenge</h1>\n  <p>A required part of this site couldn't load. Checking your browser.</p>\n  <script>\n    // A self-clearing challenge, as PyPI's: its script works for a moment, then replaces it with the page asked for.\n    setTimeout(() => location.replace(\"/release.html\"), 2000);\n  </script>\n</body>\n</html>\n",
+  "title": "Client Challenge",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Client Challenge",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "A required part of this site couldn't load. Checking your browser.",
+    "heading_path": [
+     "Client Challenge"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/release.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html>\n<head><title>Release 2.1.0</title></head>\n<body>\n  <h1>Release 2.1.0</h1>\n  <p>Supports game version 11.0.2.</p>\n  <p><a href=\"/files/addon-2.1.0.zip\">Download 2.1.0</a></p>\n  <p><a href=\"/export-report\" download>Export changelog</a></p>\n</body>\n</html>\n",
+  "title": "Release 2.1.0",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Release 2.1.0",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Supports game version 11.0.2.",
+    "heading_path": [
+     "Release 2.1.0"
+    ],
+    "href": null
+   },
+   {
+    "kind": "link",
+    "text": "Download 2.1.0",
+    "heading_path": [
+     "Release 2.1.0"
+    ],
+    "href": "https://shop.example.com/files/addon-2.1.0.zip"
+   },
+   {
+    "kind": "link",
+    "text": "Export changelog",
+    "heading_path": [
+     "Release 2.1.0"
+    ],
+    "href": "https://shop.example.com/export-report"
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/safety.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<title>Safety fixtures</title>\n<form id=\"delete\" onsubmit=\"event.preventDefault(); document.body.dataset.submitted = 'delete'\">\n  <input id=\"account\" placeholder=\"Account name\" value=\"account\">\n  <button>Delete account</button>\n</form>\n<input id=\"other\" placeholder=\"Other field\">\n<p>Count: 3</p>\n<button id=\"echo\" onclick=\"prompt(document.getElementById('other').value, document.getElementById('other').value)\">Echo prompt</button>\n<select aria-label=\"Destination\"><option>First</option><option>Second</option></select>\n<input type=\"file\" aria-label=\"Attachment\">\n<button id=\"confirm\" onclick=\"document.body.dataset.accepted = String(confirm('Delete account?'))\">Continue</button>\n<iframe id=\"same\" src=\"/inner.html\"></iframe>\n<div id=\"cover\" style=\"display:none;position:fixed;inset:0;background:white;z-index:100\"></div>\n",
+  "title": "Safety fixtures",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "Delete account",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Count: 3",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Echo prompt\nFirstSecond\n\nContinue",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/signin.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!DOCTYPE html>\n<html>\n<head><title>Sign in</title></head>\n<body>\n  <h1>Sign in to continue</h1>\n  <input type=\"text\" placeholder=\"Username\" />\n  <input type=\"password\" placeholder=\"Password\" />\n  <button>Sign in</button>\n</body>\n</html>\n",
+  "title": "Sign in",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Sign in to continue",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Sign in",
+    "heading_path": [
+     "Sign in to continue"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/todos.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<html><head><title>Todos</title>\n<style>\n  li { position: relative; list-style: none; height: 48px; }\n  .toggle { opacity: 0; width: 32px; height: 32px; }\n</style></head><body>\n<ul>\n  <li><input class=\"toggle\" type=\"checkbox\" aria-label=\"Toggle Todo\"><label>buy oat milk</label></li>\n  <li><input class=\"toggle\" type=\"checkbox\" aria-label=\"Toggle Todo\"><label>walk the dog</label></li>\n  <li><input class=\"toggle\" type=\"checkbox\" aria-label=\"Toggle Todo\"><label>ship fastbrowse 0.5</label></li>\n</ul>\n</body></html>\n",
+  "title": "Todos",
+  "blocks": [
+   {
+    "kind": "list_item",
+    "text": "buy oat milk",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "list_item",
+    "text": "walk the dog",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "list_item",
+    "text": "ship fastbrowse 0.5",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "tests/browser/sites/main/token.html",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<!doctype html>\n<title>Token</title>\n<h1>Token</h1>\n<form onsubmit=\"event.preventDefault(); fetch('/saved', {method: 'POST', body: document.getElementById('token').value}).then(() => { document.getElementById('state').textContent = 'Saved'; })\">\n  <input id=\"token\" type=\"password\" placeholder=\"Token\">\n  <button>Save</button>\n</form>\n<p id=\"state\">Not saved</p>\n",
+  "title": "Token",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Token",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Save",
+    "heading_path": [
+     "Token"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "Not saved",
+    "heading_path": [
+     "Token"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "unclosed-tag",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<p>kept</p><p>dropped <a href='x",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "kept",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "dropped",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "unclosed-comment",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<p>kept</p><!-- never closed <p>gone</p>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "kept",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "bogus-end",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<p>a</ p>b</>c</ 3>d</p>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "abcd",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "raw-text",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<script>if (a<b) document.write('</div>')</script ><p>after</p><xmp><b>shown</b></xmp>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "after",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "<b>shown</b>",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "title-escapes",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<title>A &amp; <b>B</b></title><p>x</p>",
+  "title": "A & <b>B</b>",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "x",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "references",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<p>&copy 2026 &amp;&amp &notit; &notin; &#x41;&#66;&#0;&#x110000; &#128; &unknown;</p>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "\u00a9 2026 && \u00acit; \u2209 AB\ufffd\ufffd \u20ac &unknown;",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "attribute-references",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<a href='/q?a=1&amp;b=2&ampc=3&amp=4&lt;'>q</a>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "link",
+    "text": "q",
+    "heading_path": [],
+    "href": "https://shop.example.com/q?a=1&b=2&ampc=3&amp=4<"
+   }
+  ]
+ },
+ {
+  "name": "self-closing",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<p>a<br/>b<div/>c</p><h2/>d",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "a\nb",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "c",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "d",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "hidden",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<div hidden>no</div><p style='DISPLAY : none'>no</p><p style='visibility:hidden'>no</p><p>yes</p>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "yes",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "hidden-void",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<p>yes</p><input hidden><p>after a hidden void element</p>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "yes",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "nested-table",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<table><tr><th>a</th><td>b<table><tr><td>c</td></tr></table></td></tr><tr><td>x|y</td></tr></table>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "table",
+    "text": "| a | bc |",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| --- | --- |",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| x\\|y |",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "table-no-header",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<h3>T</h3><table><tr><td>1</td><td><img alt=' flag  '></td></tr></table>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "T",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| 1 | [flag] |",
+    "heading_path": [
+     "T"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "headings",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<h1>One</h1><p>a</p><h3>Three</h3><p>b</p><h2>Two</h2><p>c</p><h2></h2><p>d</p>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "One",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "a",
+    "heading_path": [
+     "One"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Three",
+    "heading_path": [
+     "One"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "b",
+    "heading_path": [
+     "One",
+     "Three"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "Two",
+    "heading_path": [
+     "One",
+     "Three"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "c",
+    "heading_path": [
+     "One",
+     "Two"
+    ],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "d",
+    "heading_path": [
+     "One",
+     "Two"
+    ],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "pre",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<pre>\n\n  line one\n    line two  \n\n</pre><pre>   </pre>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "line one\nline two",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "links",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<p>see <a href='/x'>x</a></p><a href='https://other.example/y'> whole </a><a href=''>empty</a>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "see x",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "link",
+    "text": "whole",
+    "heading_path": [],
+    "href": "https://other.example/y"
+   },
+   {
+    "kind": "paragraph",
+    "text": "empty",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "whitespace",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<p>  a \t b\r\n\n\n\n c \u00a0 d  </p>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "a b\n\nc \u00a0 d",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "uppercase",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<DIV CLASS=gone>x</DIV><STYLE>.GONE{display:none}</STYLE><P CLASS=GONE>hidden</P>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "x",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "attributes-odd",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<p class=\"a\"title='t'data-x = 1 / >odd</p><p =x>eq</p><p \"q\">quoted</p>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "odd",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "eq",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "quoted",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "lone-lt",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<p>1 < 2 and 3 <3 4 <</p>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "1 < 2 and 3 <3 4 <",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "cdata",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<p>a<![CDATA[ x > y ]]>b</p><!doctype html><?pi x?>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "ab",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "style-in-hidden",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<div hidden><style>.k{display:none}</style></div><p class=k>k</p><p>after</p>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "after",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "list-in-block",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<div>Before<ul></ul>After</div><plaintext><b>kept</b></plaintext>tail",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "Before",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "After",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "<b>kept</b></plaintext>tail",
+    "heading_path": [],
+    "href": null
+   }
+  ]
+ },
+ {
+  "name": "unicode",
+  "url": "https://shop.example.com/a/page.html",
+  "html": "<h1>Caf\u00e9 \u2615</h1><p>na\u00efve \u2014 \u201cquoted\u201d \ud835\udd18</p>",
+  "title": "",
+  "blocks": [
+   {
+    "kind": "heading",
+    "text": "Caf\u00e9 \u2615",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "na\u00efve \u2014 \u201cquoted\u201d \ud835\udd18",
+    "heading_path": [
+     "Caf\u00e9 \u2615"
+    ],
+    "href": null
+   }
+  ]
+ }
+]

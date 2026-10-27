@@ -1,6 +1,6 @@
 """Where the Rust core (WHATWG URL, UTS #46) and the Python modules (urlsplit, IDNA 2003) disagree, by cause.
 
-An opt-in report, not a test: the two are meant to differ. Needs `fastbrowse_native` installed.
+An opt-in report, not a test: the two are meant to differ. Needs the `fastbrowse._native` module `uv sync` builds.
 
     uv run --inexact python scripts/rust_core_diff.py [--examples N]
 
@@ -20,14 +20,15 @@ from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
-import fastbrowse_native as native
+from fastbrowse import _native as native  # ty: ignore[unresolved-import]
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "fastbrowse"
 
 
 def python_module(name: str) -> ModuleType:
-    """The module as Python wrote it, whatever FASTBROWSE_RUST_CORE says."""
-    previous = os.environ.pop("FASTBROWSE_RUST_CORE", None)
+    """The module as Python wrote it, whatever FASTBROWSE_PYTHON_CORE says."""
+    previous = os.environ.get("FASTBROWSE_PYTHON_CORE")
+    os.environ["FASTBROWSE_PYTHON_CORE"] = "1"
     try:
         spec = importlib.util.spec_from_file_location(f"_python_{name}", SRC / f"{name}.py")
         assert spec is not None and spec.loader is not None
@@ -36,8 +37,10 @@ def python_module(name: str) -> ModuleType:
         spec.loader.exec_module(module)
         return module
     finally:
-        if previous is not None:
-            os.environ["FASTBROWSE_RUST_CORE"] = previous
+        if previous is None:
+            os.environ.pop("FASTBROWSE_PYTHON_CORE", None)
+        else:
+            os.environ["FASTBROWSE_PYTHON_CORE"] = previous
 
 
 py_origins = python_module("origins")

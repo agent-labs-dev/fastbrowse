@@ -6,6 +6,11 @@ fastbrowse splits a browser agent into three owners:
 - **An LLM reads and writes.** Proposing a direct address for the task while the start page loads, planning checkable requirements from the task alone, reading page content for answers when Jev cannot pick a short fact from quoted spans, writing non-secret field text, recovering when Jev is unsure, verifying completion in the uncertain band, composing the final answer.
 - **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, budgets, and the definition of success: only `COMPLETE`, which requires every requirement evidenced.
 
+That loop runs in Rust, in [crates/](../crates): `fastbrowse-agent` holds the run loop, `fastbrowse-browser`
+the page and its indexing, `fastbrowse-clients` the Jev and LLM clients, and `fastbrowse-py` builds them as
+`fastbrowse._native` into the wheel. The Python modules are the same design in the fallback core that
+`FASTBROWSE_PYTHON_CORE=1` selects until 0.9.0 ([ADR 0004](adr/0004-rust-core-by-default.md)).
+
 ## Authorization
 
 Jev judges every model-selected click, including links, navigation to a caller-supplied address, every Enter press and acceptance of
@@ -142,6 +147,13 @@ Verified with `cdp-use==1.4.5` against local headless Chrome and a Browser Use c
 | Cross-origin iframe | `Target.setAutoAttach(flatten)` on the page session, evaluate in the iframe session | pass | pass |
 | Popup ownership | `Target.targetCreated.openerId` equals our target | pass | pass |
 | Dialogs | `Page.javascriptDialogOpening` + `Page.handleJavaScriptDialog` | pass | pass |
+
+Downloads arrive whole over the DevTools socket, so a session keeps them up to `Config.max_download_bytes`
+(512 MiB by default) and refuses a response whose stated `Content-Length` is larger without reading it.
+A refusal is reported once in the observation (`[Download not kept: ...]`) rather than dropped, so a run
+that clicked an export it could not hold says the file was not saved instead of reporting success. The
+kept name is the response's `filename*` (RFC 5987), else the URL's path segment without its query, reduced
+to one safe path segment.
 
 The cloud browser ignores `Browser.setDownloadBehavior(deny)`, so bytes come from response interception, never from the remote filesystem. Host-path `DOM.setFileInputFiles` is only valid for a browser on the same machine.
 

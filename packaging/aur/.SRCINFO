@@ -3,11 +3,14 @@ pkgbase = fastbrowse
 	pkgver = 0.7.1
 	pkgrel = 1
 	url = https://github.com/agent-labs-dev/fastbrowse
-	arch = any
+	arch = x86_64
+	arch = aarch64
 	license = MIT
 	makedepends = python-build
 	makedepends = python-hatchling
 	makedepends = python-installer
+	makedepends = python-maturin
+	makedepends = rust
 	depends = python>=3.13
 	depends = python-h2
 	depends = python-httpx>=0.28.1
@@ -18,6 +21,7 @@ pkgbase = fastbrowse
 	depends = python-websockets>=15.0.1
 	optdepends = chromium: a local browser for --local
 	optdepends = google-chrome: a local browser for --local
+	options = !lto
 	source = https://files.pythonhosted.org/packages/source/f/fastbrowse/fastbrowse-0.7.1.tar.gz
 	source = https://files.pythonhosted.org/packages/source/c/cdp-use/cdp_use-1.4.5.tar.gz
 	sha256sums = 5362cc6ca1c29ce4dbc95394175000e2e4dd146bf02baedf498596654b8a8186

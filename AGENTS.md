@@ -16,7 +16,7 @@ assumption checked against Typesafe's documentation.
 ## Commands
 
 ```sh
-uv sync --all-extras          # the browser-use SDK and the mcp extra too, which ty checks
+uv sync --all-extras          # the browser-use SDK and the mcp extra too, which ty checks; builds the Rust core (cargo)
 uv run fastbrowse "..." --start https://example.com/
 uv run fastbrowse-mcp         # the MCP server, stdio
 uv run fastbrowse serve --stdio   # JSON-RPC for another process; the JavaScript SDK starts this
@@ -30,6 +30,7 @@ uv run ty check                                     # ty, not pyright
 uv run python scripts/changelog.py --check "$(uv version --short)"
 uv run python scripts/npm_versions.py               # the npm and Rust versions are the Python one
 uv run python scripts/no_slop.py
+uv run python scripts/docs_sync.py                  # the docs name flags, settings, statuses and links the code has
 uv run vale sync && uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs skills src scripts tests
 uv run python -m fastbrowse.evals.storage --manifest docs/results/evidence.manifest.json --check
 uv run pytest -q
@@ -41,7 +42,7 @@ npm run check:sdk                                   # starts `fastbrowse serve` 
 uv run actionlint
 uv run python .sift/agents.py check
 uv run python .sift/gate.py --base origin/main
-just rust                                           # the Rust workspace (docs/adr/0001); needs cargo and just
+just rust                                           # the Rust workspace (docs/adr/0001, 0004); needs cargo and just
 ```
 
 `uv run pre-commit install` runs ruff and ty before each commit; the hook versions and the pinned tools move
@@ -74,7 +75,12 @@ reading them back before removing local evidence. Public results contain only th
 
 ## Architecture
 
-The run loop is `src/fastbrowse/agent.py`, and everything else is a seam it calls.
+The core runs in Rust by default ([ADR 0004](docs/adr/0004-rust-core-by-default.md)): the crates in [crates/](crates)
+port the Python modules below one for one, and the `fastbrowse` wheel carries them as `fastbrowse._native`.
+[native.py](src/fastbrowse/native.py) hands `run_task`, `connect_cdp` and the commands to it. The Python modules stay
+as the fallback `FASTBROWSE_PYTHON_CORE=1` selects until 0.9.0, so until then a behaviour change lands in both cores.
+
+The run loop is `src/fastbrowse/agent.py` (`crates/fastbrowse-agent`), and everything else is a seam it calls.
 
 - **[run.py](src/fastbrowse/run.py)** opens the browser and builds the Jev and LLM clients from `Settings`, then hands control to
   the loop. This is the embedding API: `run_task(...)`. The browser is one of three, in this order: one the
@@ -103,8 +109,8 @@ The run loop is `src/fastbrowse/agent.py`, and everything else is a seam it call
   models in [protocol.py](src/fastbrowse/protocol.py); [output_schema.py](src/fastbrowse/output_schema.py) turns a caller's JSON Schema into an `output_schema`.
 - **[packages/sdk](packages/sdk)** is the TypeScript SDK, `fastbrowse` on npm. It starts `serve` and knows the agent by
   the protocol alone; [its types](packages/sdk/src/protocol.ts) are generated from the Python models (`npm run generate:sdk`).
-  What it starts is the package frozen by [packaging/fastbrowse.spec](packaging/fastbrowse.spec), without the MCP server, shipped as one
-  `@fastbrowse/<os>-<arch>` npm package per platform.
+  What it starts is the Rust `fastbrowse` binary ([crates/fastbrowse-cli](crates/fastbrowse-cli)), with the Node addon beside it
+  for `inProcess`, shipped as one `@fastbrowse/<os>-<arch>` npm package per platform.
 
 ## Rules and invariants
 
@@ -166,10 +172,18 @@ a tracked text file (write a hyphen, a comma, or two sentences); Vale owns wordi
 comments and docstrings, and rejects weasel words, cliches and marketing verbs. This applies to commit
 messages and PR descriptions in spirit, and to everything in the repository by check.
 
-**The docs move with the code.** A user-visible change updates what describes it in the same PR: `README.md`,
-`docs/`, `skills/fastbrowse/`, `packages/sdk/README.md` and the changelog entry. fastbrowse.ai builds its docs,
-skill and `llms` pages from those files, so a stale sentence here is stale on the site too. Write and review
-prose with the [copywriting skill](https://github.com/cjber/skills/blob/main/copywriting/SKILL.md) and its
+**The docs move with the code, and never fall behind it.** This is a standing rule for this repository and
+for every public surface its prose reaches, not a task to schedule later. A user-visible change updates what
+describes it in the same PR: `README.md`, `docs/`, `skills/fastbrowse/`, `packages/sdk/README.md`,
+`.env.example` and the changelog entry. A doc that trails the code is a bug fixed on its own, not a follow-up
+note on the next change. fastbrowse.ai builds its docs, skill and `llms` pages from these files and the PyPI
+page renders `README.md`, so a stale sentence here is stale in both places; `fastbrowse-hosted` and the
+marketing site hold to the same rule for the copy they own.
+
+`uv run python scripts/docs_sync.py` is the mechanical half: it fails when a documented flag, setting, status,
+exit code or relative link is not in the code, or when the version in `pyproject.toml` has no `CHANGELOG.md`
+entry. CI runs it on every pull request. Write and review prose with the
+[copywriting skill](https://github.com/cjber/skills/blob/main/copywriting/SKILL.md) and its
 [docs and interface guidance](https://github.com/cjber/skills/blob/main/copywriting/references/docs-and-ui.md):
 check each claim against the code, put the useful point first, and keep prerequisites, limits and recovery
 steps. The checks above catch punctuation and wording; the skill covers whether the sentence is true.

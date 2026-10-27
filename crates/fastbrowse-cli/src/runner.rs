@@ -45,6 +45,7 @@ pub struct RunArgs {
     pub until: Option<UntilCheck>,
     pub record: Option<PathBuf>,
     pub cursor: bool,
+    pub fetch: bool,
     /// Tripped when the caller stops the run. Python cancels the task; a Rust run watches this instead, closes its
     /// browser and returns [`RunError::Cancelled`].
     pub cancel: Cancel,
@@ -78,6 +79,7 @@ impl RunArgs {
             until: None,
             record: None,
             cursor: false,
+            fetch: false,
             cancel: Cancel::default(),
         }
     }
@@ -175,6 +177,7 @@ pub async fn run_task_with(
     fastbrowse_run::run_task(&args.task, options).await.map_err(|error| match error {
         fastbrowse_run::RunError::Invalid(message) => RunError::Failed(format!("ValueError: {message}")),
         fastbrowse_run::RunError::Configuration(message) => RunError::Configuration(message),
+        fastbrowse_run::RunError::Recording(message) => RunError::Failed(format!("RecordingError: {message}")),
         fastbrowse_run::RunError::Cancelled => RunError::Cancelled,
     })
 }
@@ -218,6 +221,7 @@ fn run_options(args: &RunArgs) -> Result<fastbrowse_run::RunTask, RunError> {
         until: args.until.clone(),
         record: args.record.clone(),
         cursor: args.cursor,
+        fetch: args.fetch,
         ..fastbrowse_run::RunTask::default()
     })
 }

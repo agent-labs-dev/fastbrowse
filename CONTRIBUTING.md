@@ -22,6 +22,9 @@ uv sync --all-extras
 uv run pre-commit install
 ```
 
+`uv sync` builds the package's Rust core, `fastbrowse._native`, so it needs a Rust toolchain: install
+[rustup](https://rustup.rs), and it reads the pinned version from `rust-toolchain.toml`.
+
 Run the gate before you push. CI runs the same checks, and `main` requires them:
 
 ```sh
@@ -30,6 +33,7 @@ uv run ty check
 uv run python scripts/changelog.py --check "$(uv version --short)"
 uv run python scripts/npm_versions.py
 uv run python scripts/no_slop.py
+uv run python scripts/docs_sync.py
 uv run vale sync && uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs skills src scripts tests
 uv run python -m fastbrowse.evals.storage --manifest docs/results/evidence.manifest.json --check
 uv run pytest -q
@@ -58,7 +62,10 @@ The npm packages are published at the Python package's version, and the Rust bin
 own entries in `Cargo.lock`.
 
 Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for anything a user would notice, saying
-what changed and why.
+what changed and why. The docs move with the code in the same PR: update the README, `docs/`,
+`skills/fastbrowse/` or `packages/sdk/README.md` wherever they describe what you changed.
+`scripts/docs_sync.py` fails the gate on a documented flag, setting, status, exit code or link the code does
+not have.
 
 ## Changes to how the agent behaves
 

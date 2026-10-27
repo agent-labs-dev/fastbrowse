@@ -1,15 +1,15 @@
 import json
-import os
 
 import pytest
 
 from fastbrowse.browser.page import _capped, _same_http_origin
+from fastbrowse.core import python_core
 from fastbrowse.models import BrowserConnection, Operation
 from fastbrowse.origins import OriginGrant, parse_origin, parse_origins
 from fastbrowse.page import Control, cut_text, pager_link, pages_forward
 
 # The Rust core parses URLs as WHATWG does, so it resolves these to the origin Chrome would load.
-RUST_CORE = os.environ.get("FASTBROWSE_RUST_CORE") == "1"
+RUST_CORE = not python_core()
 
 
 def link(label: str, *, next_page: bool | None = None, i: int = 0) -> Control:

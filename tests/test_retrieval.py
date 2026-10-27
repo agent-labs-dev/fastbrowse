@@ -2424,7 +2424,14 @@ async def test_comparison_coverage_reaches_the_output_context(gap: str | None) -
     answer = assemble_answer((Claim(text=winner.text, evidence_ids=(fact_id(winner),)),), notes, (requirement,))
     context = _output_context(answer, notes)
     assert context is not None
-    expected = [{"scope": requirement.text, "complete": gap in (None, "other_open"), "record_indices": [0, 1]}]
+    expected = [
+        {
+            "scope": requirement.text,
+            "requirement": requirement.id,
+            "complete": gap in (None, "other_open"),
+            "record_indices": [0, 1],
+        }
+    ]
     assert context.model_dump(mode="json")["claims"][0].get("compared_records") == expected
     assert all(not source.complete_source for source in context.claims[0].cited_sources)
     # A winner of a comparison whose collection was not read in full is refused and named for recovery.
@@ -3542,7 +3549,12 @@ def test_numeric_comparison_uses_decimal_values_and_preserves_every_source(order
     context = _output_context(draft, notes)
     assert context is not None
     assert context.model_dump(mode="json")["claims"][0]["compared_records"] == [
-        {"scope": requirement.text, "complete": True, "record_indices": [0, 1]}
+        {
+            "scope": requirement.text,
+            "requirement": requirement.id,
+            "complete": True,
+            "record_indices": [0, 1],
+        }
     ]
 
 

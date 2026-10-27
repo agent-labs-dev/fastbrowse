@@ -8,6 +8,7 @@ pub mod argparse;
 pub mod bitwarden;
 pub mod cli;
 pub mod embed;
+pub mod entry;
 pub mod mcp;
 pub mod options;
 pub mod pyjson;

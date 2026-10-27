@@ -5,6 +5,8 @@
 //! definition. An embedder gets the parts that are easy to forget: the cloud browser's own cost folded into the
 //! result, downloads kept when a directory is given, and owned tabs closed on every path out.
 
+pub mod fetch;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -13,8 +15,10 @@ use fastbrowse_agent::agent::{Agent, HeadStart, RunOptions};
 use fastbrowse_agent::verification::RecordSchema;
 use fastbrowse_browser::adapters::browser_use_cloud::{BrowserUseCloudBrowser, BrowserUseCloudOptions};
 use fastbrowse_browser::adapters::local_chrome::LocalChromeProcess;
+use fastbrowse_browser::cursor::{CursorFeedback, cursor_feedback};
 use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::page::CdpPage;
+use fastbrowse_browser::recording::{CardCitation, Recording, ResultCard};
 use fastbrowse_browser::session::{BrowserSession, CheckAccess, SessionOptions, check_browser_access};
 use fastbrowse_clients::environment::{ConfigurationError, Settings};
 use fastbrowse_clients::http::Http;
@@ -38,6 +42,8 @@ pub enum RunError {
     /// Python's `ValueError` from `run_task`'s own checks.
     Invalid(String),
     Configuration(String),
+    /// Python's `RecordingError`: `record` could not start, so the run stopped with its browser closed.
+    Recording(String),
     /// [`RunTask::cancel`] resolved; the browser was closed before this returned.
     Cancelled,
 }
@@ -45,7 +51,9 @@ pub enum RunError {
 impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RunError::Invalid(message) | RunError::Configuration(message) => f.write_str(message),
+            RunError::Invalid(message) | RunError::Configuration(message) | RunError::Recording(message) => {
+                f.write_str(message)
+            }
             RunError::Cancelled => f.write_str("the run was cancelled"),
         }
     }
@@ -95,6 +103,8 @@ pub struct RunTask {
     pub http: Option<Http>,
     pub record: Option<PathBuf>,
     pub cursor: bool,
+    /// Read every page over HTTP and start no browser; see [`fetch`].
+    pub fetch: bool,
     /// Makes a future that resolves when the caller stops the run. Python cancels the task and its `finally` closes
     /// the browser; here the run stops where it is, closes what it opened, then returns [`RunError::Cancelled`].
     pub cancel: Option<Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>>,
@@ -136,6 +146,7 @@ impl Default for RunTask {
             http: None,
             record: None,
             cursor: false,
+            fetch: false,
             cancel: None,
         }
     }
@@ -273,6 +284,7 @@ pub async fn connect_cdp(options: ConnectCdp) -> Result<Connected, BrowserError>
         connection,
         artifacts,
         SessionOptions {
+            max_download_bytes: config.max_download_bytes as usize,
             refuse_cookie_banners: config.refuse_cookie_banners,
             check_access: options.check_access,
             ..SessionOptions::default()
@@ -281,6 +293,57 @@ pub async fn connect_cdp(options: ConnectCdp) -> Result<Connected, BrowserError>
     session.open().await?;
     let page = CdpPage::new(session.clone(), config);
     Ok(Connected { session, page, _scratch: scratch })
+}
+
+/// Whether DevTools is served from this machine, where a window could be drawn over.
+fn is_loopback(cdp_url: &str) -> bool {
+    url::Url::parse(cdp_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]"))
+}
+
+/// The run's recording, held outside the run so teardown finishes it however the run ends.
+type Filming = Arc<tokio::sync::Mutex<Option<Recording>>>;
+
+/// Pass each step to the recording as well, which captions it.
+fn captioned(on_event: Option<EventHandler>, recording: &Filming) -> Option<EventHandler> {
+    let recording = recording.clone();
+    Some(Arc::new(move |event: Event| {
+        if let Event::Step(step) = &event
+            // Steps arrive while the agent runs; only the result card, after it, holds the recording longer.
+            && let Ok(mut filming) = recording.try_lock()
+            && let Some(filming) = filming.as_mut()
+        {
+            filming.caption(&step.step);
+        }
+        let on_event = on_event.clone();
+        Box::pin(async move {
+            if let Some(on_event) = on_event {
+                on_event(event).await;
+            }
+        })
+    }))
+}
+
+/// What the closing card shows of `result`.
+fn card(result: &RunResult) -> ResultCard {
+    ResultCard {
+        status: result.status.as_str().to_string(),
+        answer: result.answer.clone(),
+        error: result.error.clone(),
+        citations: result
+            .citations
+            .iter()
+            .map(|cited| CardCitation {
+                id: u32::try_from(cited.id).unwrap_or_default(),
+                url: cited.url.clone(),
+                quote: cited.quote.clone(),
+            })
+            .collect(),
+        steps: result.steps.len(),
+        known_dollars: result.cost.known_dollars(),
+    }
 }
 
 /// A browser the run drives, and what stopping it needs.
@@ -399,10 +462,30 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
             "record shows whatever the tab shows, so it cannot be combined with allowed_origins".into(),
         ));
     }
-    if options.record.is_some() || options.cursor {
-        // Recording and the cursor overlay are behind the browser crate's `recording` and `cursor` features, which
-        // this crate does not build yet.
-        return Err(RunError::Invalid("record and cursor are not built into this binary".into()));
+    if options.fetch {
+        // None of these names anything a browserless run has, and accepting one would report a browser that was never
+        // started, a file that was never written or a cursor nobody saw.
+        for (flag, given) in [
+            ("browser_api_key", options.browser_api_key.is_some()),
+            ("chrome", options.chrome.is_some()),
+            ("cloud_profile", options.cloud_profile.is_some()),
+            ("cdp_url", options.cdp_url.is_some()),
+            ("cdp_port", options.cdp_port.is_some()),
+            ("target_match", options.target_match.is_some()),
+            ("downloads", options.downloads.is_some()),
+            ("record", options.record.is_some()),
+        ] {
+            if given {
+                return Err(RunError::Invalid(format!(
+                    "fetch mode starts no browser, so it cannot be combined with {flag}"
+                )));
+            }
+        }
+        if options.attach || options.cursor {
+            return Err(RunError::Invalid(
+                "fetch mode starts no browser, so it cannot be combined with attach or cursor".into(),
+            ));
+        }
     }
     let http = options.http.take().unwrap_or_else(Http::hyper);
     let jev: Arc<dyn JevClient> = match options.jev.take() {
@@ -413,16 +496,24 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
         Some(llm) => llm,
         None => Arc::from(settings.llm(&http)?),
     };
+    if options.fetch {
+        return fetched(task, options, config, http, jev, llm, origins).await;
+    }
     let chrome = options.chrome.clone().unwrap_or_else(|| settings.local_chrome());
     let mut browser_cost: Vec<CostLine> = Vec::new();
     // Begun before the browser, which takes 2 to 3 seconds to start and open a tab, so the shortcut is ready to open
     // when the tab is.
     let head = HeadStart::begin(llm.clone(), task, options.start.as_deref(), options.limits.clone());
+    let head_stop = head.stopper();
     let scratch = Scratch::new().map_err(|error| RunError::Invalid(error.to_string()))?;
     let mut session: Option<BrowserSession> = None;
     let mut owned: Option<Owned> = None;
     let mut head = Some(head);
     let cancel = options.cancel.take();
+    // Kept outside the run so each is closed however the run ends, before the browser is.
+    let recording: Filming = Arc::default();
+    let mut recording_failed: Option<String> = None;
+    let mut feedback: Option<Arc<CursorFeedback>> = None;
     let work = async {
         check_browser_access(options.check_access.as_ref()).await?;
         let (connection, started) = browser(&options, &chrome, &http).await?;
@@ -441,19 +532,34 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
             connection,
             sink(options.downloads.as_deref(), &scratch)?,
             SessionOptions {
+                max_download_bytes: config.max_download_bytes as usize,
                 refuse_cookie_banners: config.refuse_cookie_banners,
                 on_frame: options.on_frame.clone(),
                 check_access: options.check_access.clone(),
-                ..SessionOptions::default()
             },
         );
         session = Some(opened.clone());
         opened.open().await?;
-        let page: Arc<dyn Page> = Arc::new(CdpPage::new(opened.clone(), config.clone()));
+        // A cloud or headless browser has no window on this machine to draw over.
+        let shown = options.cursor
+            && options.browser_api_key.is_none()
+            && is_loopback(&opened.connection().cdp_url)
+            && (options.cdp_url.is_some() || options.cdp_port.is_some() || chrome.headed);
+        feedback = cursor_feedback(shown).await.map(Arc::new);
+        let page: Arc<dyn Page> = Arc::new(CdpPage::new(opened.clone(), config.clone()).with_cursor(feedback.clone()));
+        if let Some(path) = &options.record {
+            match Recording::start(opened.clone(), path).await {
+                Ok(started) => *recording.lock().await = Some(started),
+                Err(error) => {
+                    recording_failed = Some(error.0.clone());
+                    return Err(refused(&error.0));
+                }
+            }
+        }
         let agent = Agent::new(page, jev.clone(), llm.clone())
             .with_config(config.clone())
             .with_secrets(options.secrets.clone())
-            .with_events(options.on_event.clone());
+            .with_events(captioned(options.on_event.clone(), &recording));
         let run = RunOptions {
             start: options.start.clone(),
             // With no page named, the first address is worked out from the task, unless attaching to an existing
@@ -467,7 +573,14 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
             until: options.until.clone(),
             head_start: head.take(),
         };
-        agent.run(task, run).await.map_err(|error| refused(&error.to_string()))
+        let result = agent.run(task, run).await.map_err(|error| refused(&error.to_string()))?;
+        // The card is a data: document navigated into the tab, which would replace the caller's own app page; an
+        // attached window is theirs and stays where it is.
+        // Shown while the recording stays in its slot, so a run cancelled during the card still finishes the videos.
+        if !attach && let Some(filming) = recording.lock().await.as_mut() {
+            let _ = filming.show_result(task, &card(&result)).await;
+        }
+        Ok(result)
     };
     let outcome: Option<Result<RunResult, Refused>> = match cancel {
         None => Some(work.await),
@@ -477,6 +590,15 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
             done = work => Some(done),
         },
     };
+    // Read after the run either way: a failed result card still leaves the finished videos.
+    let filming = recording.lock().await.take();
+    let recordings = match filming {
+        Some(filming) => filming.finish().await,
+        None => Vec::new(),
+    };
+    if let Some(feedback) = feedback.take() {
+        feedback.close().await;
+    }
     if let Some(session) = &session {
         let _ = session.close().await;
     }
@@ -485,9 +607,8 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
     }
     let mut result = match outcome {
         None => {
-            if let Some(head) = &head {
-                head.discard().await;
-            }
+            // The agent may hold the head start by now, and was dropped with it still running.
+            head_stop.discard().await;
             return Err(RunError::Cancelled);
         }
         Some(Ok(result)) => result,
@@ -520,6 +641,80 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
     if let Some(head) = &head {
         head.discard().await;
     }
+    if let Some(message) = recording_failed {
+        return Err(RunError::Recording(message));
+    }
     result.cost.lines.extend(browser_cost);
+    result.recordings = recordings;
     Ok(result)
+}
+
+/// `task` read over HTTP, with no browser started at all.
+///
+/// A step that would act, download or look at pixels ends the run `blocked`: the document was never the problem, and a
+/// browser would answer a different task.
+async fn fetched(
+    task: &str,
+    mut options: RunTask,
+    config: Config,
+    http: Http,
+    jev: Arc<dyn JevClient>,
+    llm: Arc<dyn LLMClient>,
+    origins: Option<Vec<String>>,
+) -> Result<RunResult, RunError> {
+    if check_browser_access(options.check_access.as_ref()).await.is_err() {
+        // The caller's own gate refused the run, which is an error result, not an error to the embedder. Python reports
+        // the exception's class name.
+        return Ok(RunResult {
+            status: Status::Error,
+            budget: None,
+            answer: None,
+            data: Value::Null,
+            evidence: Vec::new(),
+            steps: Vec::new(),
+            cost: CostBreakdown { lines: Vec::new() },
+            artifacts: Vec::new(),
+            citations: Vec::new(),
+            error: Some("BrowserError".into()),
+            final_url: None,
+            final_frame: None,
+            would_fire: Vec::new(),
+            recordings: Vec::new(),
+        });
+    }
+    let head = HeadStart::begin(llm.clone(), task, options.start.as_deref(), options.limits.clone());
+    let head_stop = head.stopper();
+    let viewport_chars = usize::try_from(config.observation.viewport_text_chars).unwrap_or_default();
+    let page: Arc<dyn Page> =
+        Arc::new(fetch::FetchedPage::new(http, origins, viewport_chars, options.check_access.clone()));
+    let agent = Agent::new(page, jev, llm)
+        .with_config(config)
+        .with_secrets(options.secrets.clone())
+        .with_events(options.on_event.clone());
+    let run = RunOptions {
+        start: options.start.clone(),
+        // With no page named, the first address is worked out from the task, the same way a browser run with no
+        // `start` begins.
+        choose_start: options.start.is_none(),
+        inputs: options.inputs.clone(),
+        attachments: options.attachments.clone(),
+        output_schema: options.output_schema.clone(),
+        limits: None,
+        authorization: options.authorization.clone(),
+        until: options.until.clone(),
+        head_start: Some(head),
+    };
+    let work = agent.run(task, run);
+    let outcome = match options.cancel.take() {
+        None => work.await,
+        Some(cancel) => tokio::select! {
+            biased;
+            () = cancel() => {
+                head_stop.discard().await;
+                return Err(RunError::Cancelled);
+            }
+            done = work => done,
+        },
+    };
+    outcome.map_err(|error| RunError::Invalid(error.to_string()))
 }

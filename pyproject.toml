@@ -1,6 +1,6 @@
 [project]
 name = "fastbrowse"
-version = "0.7.2"
+version = "0.7.3"
 description = "Browser automation with cited answers, structured output and code-controlled credentials and authorization."
 readme = "README.md"
 license = "MIT"
@@ -25,26 +25,39 @@ Issues = "https://github.com/agent-labs-dev/fastbrowse/issues"
 [project.optional-dependencies]
 browser-use = ["browser-use-sdk==3.12.1"]
 eval-data = ["pyyaml>=6,<7"]
-# The MCP server, `fastbrowse-mcp`.
+# The Python core's MCP server, which `fastbrowse-mcp` runs with FASTBROWSE_PYTHON_CORE=1; the Rust one needs nothing.
 # mcp 2.x renamed FastMCP to MCPServer and changed other APIs; migrating the server is its own change.
 mcp = ["mcp>=1.20,<2"]
 
 [project.scripts]
-fastbrowse = "fastbrowse.cli:main"
-fastbrowse-mcp = "fastbrowse.mcp_server:main"
+fastbrowse = "fastbrowse.commands:fastbrowse"
+fastbrowse-mcp = "fastbrowse.commands:fastbrowse_mcp"
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/fastbrowse"]
+# One abi3 wheel per platform: the Python package with the Rust core beside it as `fastbrowse._native`
+# (docs/adr/0004). The sdist carries the crates it is built from, so installing from it needs a Rust toolchain.
+[tool.maturin]
+manifest-path = "crates/fastbrowse-py/Cargo.toml"
+module-name = "fastbrowse._native"
+python-source = "src"
+python-packages = ["fastbrowse"]
 
-[tool.hatch.build.targets.sdist]
-exclude = [
-    ".sift", ".agents", "package.json", "package-lock.json", "biome.json", "packages", "packaging",
-    # The Rust workspace; the wheel and sdist stay pure Python until the core ships in them (docs/adr/0001).
-    "crates", "Cargo.toml", "Cargo.lock", "rustfmt.toml",
+[tool.uv]
+# The environment's own build is a debug one, minutes faster than the LTO release profile; the published wheels are
+# built by the release workflow with maturin directly.
+config-settings = { build-args = "--profile=dev" }
+# The project is a compiled extension too, so a change to the Rust core reinstalls it on the next `uv sync`.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "Cargo.lock" },
+    { file = "rust-toolchain.toml" },
+    { file = "crates/**/*.rs" },
+    { file = "crates/**/Cargo.toml" },
+    { file = "src/**/*.js" },
 ]
 
 [dependency-groups]

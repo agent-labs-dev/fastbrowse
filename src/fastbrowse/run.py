@@ -6,7 +6,6 @@ an embedder gets the parts that are easy to forget: the cloud browser's own cost
 downloads kept when a directory is given, and owned tabs closed on every path out.
 """
 
-import os
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
@@ -27,6 +26,8 @@ from fastbrowse.browser.recording import Recording
 from fastbrowse.browser.session import check_browser_access
 from fastbrowse.clients.environment import load_settings
 from fastbrowse.config import Config
+from fastbrowse.core import python_core
+from fastbrowse.fetch import FetchedPage, NeedsBrowser
 from fastbrowse.jev import JevClient
 from fastbrowse.llm import LLMClient
 from fastbrowse.models import (
@@ -92,7 +93,7 @@ async def connect_cdp(
     config: Config | None = None,
     artifact_sink: ArtifactSink | None = None,
     downloads: Path | None = None,
-) -> AsyncGenerator[CdpPage]:
+) -> AsyncGenerator[CdpPage | native.NativePage]:
     """A page on a browser or Electron app that is already running, for driving it without the agent.
 
     Pass `port` to look the websocket URL up from `http://<host>:<port>/json/version`, or `cdp_url` directly.
@@ -101,8 +102,13 @@ async def connect_cdp(
     Chrome itself activates a visible window whose front tab receives a pointer press. `allowed_origins` limits
     the page to those exact origins and `check_access` is awaited before every browser read and action (both
     described on `run_task`). Downloads go to `artifact_sink`, else to `downloads`, else to a scratch directory
-    removed on exit.
+    removed on exit. The page is the Rust core's (`fastbrowse.native.NativePage`), with the same methods as the
+    Python core's `CdpPage`, which `FASTBROWSE_PYTHON_CORE=1` gives instead.
     """
+    if not python_core():
+        async with native.connect_cdp(locals()) as page:
+            yield page
+        return
     await check_browser_access(check_access)
     if port is not None and cdp_url is not None:
         raise BrowserError("port and cdp_url both name a browser to attach to; pass one")
@@ -123,7 +129,11 @@ async def connect_cdp(
     with TemporaryDirectory() as scratch:
         sink = artifact_sink or DirectorySink(downloads or Path(scratch))
         async with BrowserSession(
-            connection, sink, refuse_cookie_banners=config.refuse_cookie_banners, check_access=check_access
+            connection,
+            sink,
+            max_download_bytes=config.max_download_bytes,
+            refuse_cookie_banners=config.refuse_cookie_banners,
+            check_access=check_access,
         ) as session:
             yield CdpPage(session, config)
 
@@ -232,6 +242,7 @@ async def run_task(
     http: httpx.AsyncClient | None = None,
     record: Path | None = None,
     cursor: bool = False,
+    fetch: bool = False,
 ) -> RunResult:
     """Open `start`, pursue `task`, and return what the run could prove.
 
@@ -291,19 +302,61 @@ async def run_task(
     exactly, including with no `cua-driver` installed, no display, a headless or cloud browser. It implies
     `foreground`, since the cursor lies over the window's front tab.
 
-    With `FASTBROWSE_RUST_CORE=1` and `fastbrowse_native` installed, the run goes to the Rust core in this process
-    whenever its arguments fit the `serve` protocol (`fastbrowse.native`), and to this code otherwise.
+    `fetch` reads every page over HTTP and starts no browser at all, for a task that only has to read: the
+    document becomes the same `Capture` blocks a browser capture produces, so reads, quotes and citations
+    are unchanged. A step that would click, fill, download or look at pixels has nothing to act on, so the
+    run ends `blocked` with the reason instead of failing a step or answering from a page it never saw. What
+    a page builds with scripts is not there either: a document whose readable text is a sliver of its markup
+    is refused as needing a browser. Browser, recording, download and cursor options mean nothing here and
+    are an error rather than ignored.
+
+    The run goes to the Rust core in this process, every argument with it (`fastbrowse.native`), unless
+    `FASTBROWSE_PYTHON_CORE=1` keeps it on the Python core.
     """
-    if os.environ.get("FASTBROWSE_RUST_CORE") == "1":
-        run_params = native.params(task, locals())
-        if run_params is not None:
-            return await native.run(run_params, on_event=on_event, on_frame=on_frame, until=until, secrets=secrets)
+    if not python_core():
+        return await native.run(task, locals())
     config = config or Config()
     settings = load_settings()
     origins = None if allowed_origins is None else parse_origins(allowed_origins)
     handed_over = cdp_url is not None or cdp_port is not None
     if origins is not None and record is not None:
         raise ValueError("record shows whatever the tab shows, so it cannot be combined with allowed_origins")
+    if fetch:
+        # None of these names anything a browserless run has, and accepting one would report a browser that
+        # was never started, a file that was never written or a cursor nobody saw.
+        for flag, value in (
+            ("browser_api_key", browser_api_key),
+            ("chrome", chrome),
+            ("cloud_profile", cloud_profile),
+            ("cdp_url", cdp_url),
+            ("cdp_port", cdp_port),
+            ("target_match", target_match),
+            ("downloads", downloads),
+            ("record", record),
+        ):
+            if value is not None and value is not False:
+                raise ValueError(f"fetch mode starts no browser, so it cannot be combined with {flag}")
+        if attach or cursor:
+            raise ValueError("fetch mode starts no browser, so it cannot be combined with attach or cursor")
+        async with httpx.AsyncClient(timeout=60) if http is None else _borrowed(http) as client:
+            return await _fetched(
+                task,
+                start=start,
+                client=client,
+                jev=jev or settings.jev(client),
+                llm=llm or settings.llm(client),
+                config=config,
+                secrets=secrets,
+                on_event=on_event,
+                origins=origins,
+                check_access=check_access,
+                output_schema=output_schema,
+                inputs=inputs,
+                attachments=attachments,
+                authorization=authorization,
+                limits=limits,
+                until=until,
+            )
     browser_cost: list[CostLine] = []
     with TemporaryDirectory() as scratch:
         sink = DirectorySink(downloads or Path(scratch))
@@ -342,6 +395,7 @@ async def run_task(
                     session = BrowserSession(
                         connection,
                         sink,
+                        max_download_bytes=config.max_download_bytes,
                         refuse_cookie_banners=config.refuse_cookie_banners,
                         on_frame=on_frame,
                         check_access=check_access,
@@ -399,6 +453,81 @@ async def run_task(
                 result = result.model_copy(update={"recordings": recording.outputs})
     assert result is not None
     return result.model_copy(update={"cost": CostBreakdown(lines=(*result.cost.lines, *browser_cost))})
+
+
+async def _fetched(
+    task: str,
+    *,
+    start: str | None,
+    client: httpx.AsyncClient,
+    jev: JevClient,
+    llm: LLMClient,
+    config: Config,
+    secrets: SecretResolver | None,
+    on_event: EventHandler | None,
+    origins: tuple[str, ...] | None,
+    check_access: Callable[[], Awaitable[None]] | None,
+    output_schema: type[BaseModel] | None,
+    inputs: Mapping[str, str] | None,
+    attachments: Sequence[Attachment],
+    authorization: Authorization | None,
+    limits: Limits | None,
+    until: UntilCheck | None,
+) -> RunResult:
+    """`task` read over HTTP, with no browser started at all.
+
+    A step that would act, download or look at pixels raises `NeedsBrowser`, and that is reported as
+    `blocked`: the document was never the problem, and a browser would answer a different task.
+    """
+    try:
+        await check_browser_access(check_access)
+    except BrowserError as exc:
+        # The caller's own gate refused the run, which is an error result, not an exception to the embedder.
+        return RunResult(
+            status=Status.ERROR,
+            answer=None,
+            data=None,
+            evidence=(),
+            steps=(),
+            cost=CostBreakdown(lines=()),
+            artifacts=(),
+        ).model_copy(update={"error": type(exc).__name__})
+    head = HeadStart.begin(llm, task, start=start, limits=limits)
+    page = FetchedPage(
+        client,
+        allowed_origins=origins,
+        viewport_text_chars=config.observation.viewport_text_chars,
+        check_access=check_access,
+    )
+    agent = Agent(page, jev, llm, config=config, secrets=secrets, on_event=on_event)
+    try:
+        result = await agent.run(
+            task,
+            start=start,
+            # With no page named, the first address is worked out from the task, the same way a browser run
+            # with no `--start` begins.
+            choose_start=start is None,
+            output_schema=output_schema,
+            inputs=inputs,
+            attachments=attachments,
+            authorization=authorization,
+            until=until,
+            head_start=head,
+        )
+    except NeedsBrowser as exc:
+        result = RunResult(
+            status=Status.BLOCKED,
+            answer=None,
+            data=None,
+            evidence=(),
+            steps=(),
+            # The plan and the shortcut were asked for before the first page, and what they spent is real.
+            cost=CostBreakdown(lines=await head.abandon()),
+            artifacts=(),
+        ).model_copy(update={"error": str(exc)})
+    finally:
+        await head.discard()
+    return result
 
 
 def _captioned(on_event: EventHandler | None, recording: Recording | None) -> EventHandler | None:

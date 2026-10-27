@@ -316,8 +316,8 @@ async def drive(agent: AgentProcess, params: dict[str, Any], secrets: dict[str, 
 
 
 IN_PROCESS = "in-process"
-"""`--agent in-process`: `fastbrowse.run_task` in the harness's own process, on the Rust core when
-FASTBROWSE_RUST_CORE=1 (`fastbrowse.native`) and on Python otherwise. Startup is not measured, and CPU and peak RSS
+"""`--agent in-process`: `fastbrowse.run_task` in the harness's own process, on the Rust core
+(`fastbrowse.native`), or on Python with FASTBROWSE_PYTHON_CORE=1. Startup is not measured, and CPU and peak RSS
 are the harness's own."""
 
 
@@ -332,10 +332,10 @@ class Usage:
 def in_process_environment(env: dict[str, str], cwd: Path) -> Generator[None]:
     """`env` as this process's environment and `cwd` as its directory, as the agent process would have had them.
 
-    FASTBROWSE_RUST_CORE stays as the harness was started with it, since it picks the core under test.
+    FASTBROWSE_PYTHON_CORE stays as the harness was started with it, since it picks the core under test.
     """
     saved, directory = dict(os.environ), Path.cwd()
-    core = {name: value for name, value in saved.items() if name == "FASTBROWSE_RUST_CORE"}
+    core = {name: value for name, value in saved.items() if name == "FASTBROWSE_PYTHON_CORE"}
     os.environ.clear()
     os.environ.update(env | core)
     os.chdir(cwd)

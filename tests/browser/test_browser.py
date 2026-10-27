@@ -266,8 +266,7 @@ async def test_a_click_that_downloads_is_a_page_change_not_a_dead_click(
     await eval_value(
         browser_session,
         browser_session.active_session_id,
-        "const link = document.createElement('a'); link.id = 'report-link'; link.href = '/report.csv?short'; "
-        "link.textContent = 'Orders report'; document.body.appendChild(link);",
+        "document.body.innerHTML = \"<p>Download the <a href='/report.csv?short'>Orders report</a>.</p>\";",
     )
     observation = await observe_until(page, "Orders report")
     result = await page.act(
