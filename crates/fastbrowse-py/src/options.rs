@@ -17,6 +17,7 @@ use serde_json::Value;
 #[serde(deny_unknown_fields)]
 pub struct Options {
     pub start: Option<String>,
+    pub context: Option<String>,
     pub browser_api_key: Option<String>,
     pub chrome: Option<LocalChrome>,
     pub cloud_profile: Option<String>,
@@ -69,6 +70,7 @@ impl Options {
         };
         Ok(RunTask {
             start: self.start,
+            context: self.context,
             browser_api_key: self.browser_api_key,
             chrome: self.chrome,
             cloud_profile: self.cloud_profile,

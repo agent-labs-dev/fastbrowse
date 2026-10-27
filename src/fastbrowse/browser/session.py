@@ -407,6 +407,8 @@ class BrowserSession:
         """(session, context id) -> unique id, for each world named `STATUS_WORLD` Chrome reported creating."""
         """Popup target id -> (opener target id, whether it was adopted), in the order they opened."""
         self._active_target_id = ""
+        self._activated: list[str] = []
+        """Tab target ids, least recently active first: where a closed active tab with no opener hands over to."""
         # A scoped run casts nothing: a frame is pixels of whatever the tab shows, and the browser's reports of
         # where it is can trail the screen, so no ordering of events makes a delivered frame provably in the grant.
         self._on_frame = None if self._grant is not None else on_frame
@@ -887,6 +889,10 @@ class BrowserSession:
 
     def _set_active_target(self, target_id: str) -> None:
         self._active_target_id = target_id
+        if target_id:
+            if target_id in self._activated:
+                self._activated.remove(target_id)
+            self._activated.append(target_id)
         if self._pending_frame is not None:
             self._ack(self._pending_frame)
             self._pending_frame = None
@@ -1126,11 +1132,25 @@ class BrowserSession:
 
     def _on_target_destroyed(self, event: TargetDestroyedEvent, session_id: str | None) -> None:
         target_id = event["targetId"]
-        self._tabs.pop(target_id, None)
+        closed = self._tabs.pop(target_id, None)
         self._keepers.pop(target_id, None)
         self._owned.discard(target_id)
+        if target_id in self._activated:
+            self._activated.remove(target_id)
         if target_id == self._active_target_id:
-            self._set_active_target(next(iter(self._tabs), ""))
+            self._set_active_target(self._successor(closed))
+
+    def _successor(self, closed: _TabState | None) -> str:
+        """The tab a run is on once its active tab closes: the opener, else the tab it was on last.
+
+        An OAuth popup closes itself once it has signed the run in, and handing over to the first tab put the run
+        back on a page it had left tabs ago instead of the one waiting for the sign-in to finish.
+        """
+        opener = None if closed is None else closed.opener_id
+        if opener is not None and opener in self._tabs:
+            return opener
+        recent = (t for t in reversed(self._activated) if t in self._tabs)
+        return next(recent, next(iter(self._tabs), ""))
 
     # -- Live frames ---------------------------------------------------------------------------------
 

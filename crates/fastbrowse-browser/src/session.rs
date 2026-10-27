@@ -216,9 +216,11 @@ pub(crate) struct Popup {
 
 #[derive(Default)]
 pub(crate) struct State {
-    /// Insertion ordered, as Python's dict: `tabs()` lists them in this order and a closed active tab hands over to
-    /// the first.
+    /// Insertion ordered, as Python's dict: `tabs()` lists them in this order, and a closed active tab with neither
+    /// an opener nor an earlier active tab still open hands over to the first.
     pub(crate) tabs: Vec<TabState>,
+    /// Tab target ids, least recently active first: where a closed active tab with no opener hands over to.
+    pub(crate) activated: Vec<String>,
     pub(crate) owned: HashSet<String>,
     /// Tab target id -> the session whose cast keeps that tab painting, in a background run.
     pub(crate) keepers: HashMap<String, String>,
@@ -1066,6 +1068,20 @@ impl State {
             .ok_or_else(|| BrowserError::Unavailable("active browser tab closed; no owned tab remains".into()))
     }
 
+    /// The tab a run is on once its active tab closes: the opener, else the tab it was on last.
+    ///
+    /// An OAuth popup closes itself once it has signed the run in, and handing over to the first tab put the run back
+    /// on a page it had left several tabs ago instead of the one waiting for the sign-in to finish.
+    fn successor(&self, closed: Option<&TabState>) -> String {
+        if let Some(opener) = closed.and_then(|t| t.opener_id.as_deref())
+            && self.has_tab(opener)
+        {
+            return opener.to_owned();
+        }
+        let recent = self.activated.iter().rev().find(|t| self.has_tab(t));
+        recent.or_else(|| self.tabs.first().map(|t| &t.target_id)).cloned().unwrap_or_default()
+    }
+
     fn frame_sessions_of_active(&self) -> Vec<(String, String)> {
         let Ok(active) = self.active_session_id() else { return vec![] };
         let belongs = |session_id: &str| {
@@ -1130,6 +1146,10 @@ impl Shared {
     fn set_active_target(self: &Arc<Self>, target_id: &str) {
         let mut state = self.state.lock().unwrap();
         state.active_target_id = target_id.to_owned();
+        if !target_id.is_empty() {
+            state.activated.retain(|t| t != target_id);
+            state.activated.push(target_id.to_owned());
+        }
         if let Some(frame) = state.pending_frame.take() {
             self.ack(&mut state, frame);
         }
@@ -1194,11 +1214,12 @@ impl Shared {
                 let target_id = str_of(&params["targetId"]);
                 let next = {
                     let mut state = self.state.lock().unwrap();
-                    state.tabs.retain(|t| t.target_id != target_id);
+                    let closed =
+                        state.tabs.iter().position(|t| t.target_id == target_id).map(|at| state.tabs.remove(at));
                     state.keepers.remove(&target_id);
                     state.owned.remove(&target_id);
-                    (target_id == state.active_target_id)
-                        .then(|| state.tabs.first().map(|t| t.target_id.clone()).unwrap_or_default())
+                    state.activated.retain(|t| *t != target_id);
+                    (target_id == state.active_target_id).then(|| state.successor(closed.as_ref()))
                 };
                 if let Some(next) = next {
                     self.set_active_target(&next);

@@ -22,6 +22,8 @@ use tokio::sync::Notify;
 pub struct RunArgs {
     pub task: String,
     pub start: Option<String>,
+    /// Background the run may use and never reads as the task.
+    pub context: Option<String>,
     pub browser_api_key: Option<String>,
     pub chrome: Option<LocalChrome>,
     pub cloud_profile: Option<String>,
@@ -56,6 +58,7 @@ impl RunArgs {
         RunArgs {
             task: task.into(),
             start: None,
+            context: None,
             browser_api_key: None,
             chrome: None,
             cloud_profile: None,
@@ -195,6 +198,7 @@ fn run_options(args: &RunArgs) -> Result<fastbrowse_run::RunTask, RunError> {
         .transpose()?;
     Ok(fastbrowse_run::RunTask {
         start: args.start.clone(),
+        context: args.context.clone(),
         browser_api_key: args.browser_api_key.clone(),
         chrome: args.chrome.clone(),
         cloud_profile: args.cloud_profile.clone(),

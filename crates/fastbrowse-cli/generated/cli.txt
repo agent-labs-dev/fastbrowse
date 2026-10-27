@@ -1,11 +1,12 @@
-usage: fastbrowse [-h] [--version] [--start START] [--cloud | --local]
-                  [--headed] [--profile PROFILE] [--cloud-profile ID]
-                  [--cdp-url URL] [--cdp-port PORT] [--attach]
-                  [--target-match PATTERN] [--foreground] [--proxy-country CC]
-                  [--authorize] [--secret NAME=ENV_VAR[@ORIGIN]]
-                  [--bitwarden ITEM] [--max-steps MAX_STEPS]
-                  [--max-dollars MAX_DOLLARS] [--downloads DOWNLOADS] [--json]
-                  [--record FILE] [--fetch] [--trace FILE] [--cursor]
+usage: fastbrowse [-h] [--version] [--start START] [--context CONTEXT]
+                  [--cloud | --local] [--headed] [--profile PROFILE]
+                  [--cloud-profile ID] [--cdp-url URL] [--cdp-port PORT]
+                  [--attach] [--target-match PATTERN] [--foreground]
+                  [--proxy-country CC] [--authorize]
+                  [--secret NAME=ENV_VAR[@ORIGIN]] [--bitwarden ITEM]
+                  [--max-steps MAX_STEPS] [--max-dollars MAX_DOLLARS]
+                  [--downloads DOWNLOADS] [--json] [--record FILE] [--fetch]
+                  [--trace FILE] [--cursor]
                   task
 
 Run one browser task.
@@ -18,6 +19,8 @@ options:
   --version             show program's version number and exit
   --start START         URL to open before the task starts; worked out from
                         the task if omitted
+  --context CONTEXT     background the run may use but never treats as part of
+                        the task, such as where the request came from
   --cloud               use cloud Chrome, overriding local environment
                         defaults
   --local               use local Chrome instead of a Browser Use Cloud

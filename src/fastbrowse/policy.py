@@ -171,6 +171,8 @@ class StepContext(Frozen):
     start_landing_url: str | None = None
     recovery_memory: str = ""
     """Recent reasons, diagnoses and subgoals, separate from actions actually taken."""
+    background: str | None = None
+    """The caller's background, which Jev reads beside the task and never as a requirement."""
 
 
 class Decision(Frozen):
@@ -772,6 +774,8 @@ def _state(observation: Observation, controls: Sequence[Control], context: StepC
         "recent_actions": [entry.model_dump(mode="json", exclude_none=True) for entry in context.history],
         "elements": [_element(c, compact=compact) for c in controls],
     }
+    if background := (context.background or "").strip():
+        state["background"] = background
     if context.recovery_memory:
         state["recovery_memory"] = context.recovery_memory
     if context.secrets:

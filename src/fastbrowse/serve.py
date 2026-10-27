@@ -478,6 +478,7 @@ class Server:
             "proxy_country": options.proxy_country(proxy_country),
             "viewport": params.viewport,
             "cloud_allow_resizing": params.cloud_allow_resizing,
+            "context": params.context,
             "inputs": params.inputs,
             "attachments": tuple(
                 Attachment(name=attachment.name, mime_type=attachment.mime_type, content=attachment.content)

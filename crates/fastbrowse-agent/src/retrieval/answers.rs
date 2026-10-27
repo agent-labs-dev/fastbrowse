@@ -6,7 +6,7 @@ use fastbrowse_core::citations::text_fragment;
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::jev::NoulQuestion;
 use fastbrowse_core::llm::{Generation, LLMClient, Message};
-use fastbrowse_core::models::{Citation, LLMPurpose, UNTRUSTED};
+use fastbrowse_core::models::{Citation, LLMPurpose, UNTRUSTED, background_section};
 use fastbrowse_core::page::cut_text;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{Style, dumped_len, dumps, write};
@@ -291,6 +291,8 @@ pub struct ComposeOptions<'a> {
     pub verified: Option<ComposedAnswer>,
     /// Defaults to true, as Python's keyword does; see [`ComposeOptions::new`].
     pub independent_fields: bool,
+    /// The caller's background, shown after the task as context and never as an output to answer.
+    pub background: Option<String>,
 }
 
 impl ComposeOptions<'_> {
@@ -398,7 +400,8 @@ pub async fn compose(
     if !repair.is_empty() && complete_collections.is_empty() {
         repair = cut_text(&repair, 8000, false);
     }
-    let prefix = format!("# Task\n{task}\n\n# Plan\n{}\n\n{transaction}", plan.dump_json());
+    let background = background_section(options.background.as_deref(), "#");
+    let prefix = format!("# Task\n{task}{background}\n\n# Plan\n{}\n\n{transaction}", plan.dump_json());
     let mut system = format!("{COMPOSER}{UNTRUSTED}");
     if options.preserve_collections {
         system.push_str(if fields.is_empty() {

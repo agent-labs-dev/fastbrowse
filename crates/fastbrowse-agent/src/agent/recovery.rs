@@ -3,7 +3,9 @@
 use std::collections::HashSet;
 
 use fastbrowse_core::llm::Message;
-use fastbrowse_core::models::{Bytes, Decider, LLMPurpose, Operation, Status, StepOutcome, StepResult, UNTRUSTED};
+use fastbrowse_core::models::{
+    Bytes, Decider, LLMPurpose, Operation, Status, StepOutcome, StepResult, UNTRUSTED, background_section,
+};
 use fastbrowse_core::navigation::{navigation_urls, same_address};
 use fastbrowse_core::page::Observation;
 use fastbrowse_core::safety::{origin_of, starts_download};
@@ -309,7 +311,8 @@ impl Agent {
             },
         );
         content += &field_corrections(state);
-        content += &format!("## Task\n{}\n\n## Problem\n{reason}", state.task);
+        let background = background_section(state.context.as_deref(), "##");
+        content += &format!("## Task\n{}{background}\n\n## Problem\n{reason}", state.task);
         let images: Vec<Bytes> = self.screenshots().await?.into_iter().map(Bytes).collect();
         let messages = vec![Message::system(system), Message { images, ..Message::user(content) }];
         let generation =

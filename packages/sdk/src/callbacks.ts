@@ -141,5 +141,6 @@ function endedBy(failure: string): RunResult {
     final_url: null,
     would_fire: [],
     recordings: [],
+    wall: null,
   };
 }
