@@ -561,9 +561,15 @@ def test_a_repeat_download_is_not_an_effect() -> None:
     """
     from fastbrowse.browser.session import BrowserSession
 
-    keys = [("https://example.test/a.csv", "d1"), ("https://example.test/a.csv", "d1")]
+    saved = ("https://example.test/a.csv", "d1")
     session = BrowserSession.__new__(BrowserSession)
-    session._download_keys = keys  # type: ignore[attr-defined]
-    session._downloads_captured = 2  # type: ignore[attr-defined]
+    session._download_keys = [saved, saved]  # type: ignore[attr-defined]
     assert session.repeated_download(1) is True
     assert session.repeated_download(0) is False
+    assert session.repeated_download(2) is False
+    # A refusal settles a download without saving one, so it counts toward `since` and never repeats a save.
+    session._download_keys = [None, saved, saved]  # type: ignore[attr-defined]
+    assert session.repeated_download(2) is True
+    assert session.repeated_download(1) is False
+    session._download_keys = [saved, None]  # type: ignore[attr-defined]
+    assert session.repeated_download(1) is False

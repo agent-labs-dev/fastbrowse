@@ -415,7 +415,11 @@ fn combine_page_keys(mut keys: Vec<String>) -> String {
 }
 
 pub(crate) fn sha256_hex(text: &str) -> String {
-    HEXLOWER.encode(digest(&SHA256, text.as_bytes()).as_ref())
+    sha256_bytes(text.as_bytes())
+}
+
+pub(crate) fn sha256_bytes(bytes: &[u8]) -> String {
+    HEXLOWER.encode(digest(&SHA256, bytes).as_ref())
 }
 
 fn parse<T: DeserializeOwned>(raw: Value, shape: &str) -> Result<T, BrowserError> {
