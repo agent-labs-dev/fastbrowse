@@ -34,7 +34,7 @@ use fastbrowse_core::models::{
 use fastbrowse_core::origins::parse_origins;
 use fastbrowse_core::page::Page;
 use indexmap::IndexMap;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// Why a run could not even be assembled: the arguments contradict each other, or the clients cannot be built.
 #[derive(Debug, Clone, PartialEq)]
@@ -492,6 +492,10 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
         }
     }
     let http = options.http.take().unwrap_or_else(Http::hyper);
+    // The providers this run calls, for an eval to keep beside its result. A caller's own clients are not described.
+    if options.jev.is_none() && options.llm.is_none() {
+        http.trace.event("route", || Map::from_iter([("providers".into(), Value::from(settings.providers()))]));
+    }
     let jev: Arc<dyn JevClient> = match options.jev.take() {
         Some(jev) => jev,
         None => Arc::from(settings.jev(&http)?),

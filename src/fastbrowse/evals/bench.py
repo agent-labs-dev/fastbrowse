@@ -49,11 +49,10 @@ from typing import Any
 
 import httpx
 from packaging.requirements import Requirement
-from pydantic import SecretStr, ValidationError
+from pydantic import ValidationError
 
-from fastbrowse.adapters.local_chrome import find_chrome, local_chrome
-from fastbrowse.clients.environment import DEFAULT_LLM, DEFAULT_REASONING, FIELD_TEXT_LLM, JevSource, load_settings
-from fastbrowse.evals.judge import judge
+from fastbrowse.evals.harness import TaskSecrets, chrome, find_chrome, origin_of
+from fastbrowse.evals.judge import OPENROUTER_MODEL, Jev, judge
 from fastbrowse.evals.local import fixture_server
 from fastbrowse.evals.mock import mock_site
 from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
@@ -62,9 +61,8 @@ from fastbrowse.evals.replay import JEV_MOUNT, LLM_MOUNT, Cassette, Latency, Pro
 from fastbrowse.evals.runner import LOCAL_LIMITS, MOCK_LIMITS
 from fastbrowse.evals.tasks import TASKS as LOCAL_TASKS
 from fastbrowse.evals.tasks import LocalTask
-from fastbrowse.models import LocalChrome, RunResult, SecretRef
+from fastbrowse.models import RunResult, SecretRef
 from fastbrowse.protocol import PROTOCOL_VERSION
-from fastbrowse.safety import ScopedSecrets, origin_of
 
 ROOT = Path(__file__).resolve().parents[3]
 CASSETTES = ROOT / "bench" / "cassettes"
@@ -86,6 +84,12 @@ AGENT_ENV_DROPPED = ("OPENROUTER_API_KEY", "AI_GATEWAY_API_KEY", "TYPESAFE_API_K
 """Never handed to the agent: its model traffic goes to the proxy, and only the proxy holds a real key."""
 
 PLACEHOLDER_KEY = "bench-placeholder-key"
+
+LLM = "google/gemini-3.8-flash"
+FIELD_TEXT_LLM = "google/gemini-3.5-flash-lite"
+REASONING = "low"
+"""The models and reasoning effort the cassettes were recorded with: the defaults a run keyed with
+OPENROUTER_API_KEY used then (README, Models). Pinned here, since a replay asking other models misses."""
 
 
 def default_agent() -> str:
@@ -111,10 +115,10 @@ def agent_environment(proxy: str) -> dict[str, str]:
         "FASTBROWSE_JEV_BASE_URL": proxy + JEV_MOUNT,
         "FASTBROWSE_LLM_BASE_URL": proxy + LLM_MOUNT,
         "FASTBROWSE_LLM_API_KEY": PLACEHOLDER_KEY,
-        "FASTBROWSE_LLM_MODEL": DEFAULT_LLM,
+        "FASTBROWSE_LLM_MODEL": LLM,
         "FASTBROWSE_LLM_MODEL_FIELD_TEXT": FIELD_TEXT_LLM,
         "FASTBROWSE_LLM_MODEL_SHORTCUT": FIELD_TEXT_LLM,
-        "FASTBROWSE_LLM_REASONING": DEFAULT_REASONING.value,
+        "FASTBROWSE_LLM_REASONING": REASONING,
     }
 
 
@@ -140,21 +144,14 @@ def corpus(port_base: int = PORT_BASE) -> list[BenchTask]:
 type Grader = Callable[[RunResult], Awaitable[tuple[str | None, dict[str, Any]]]]
 
 
-def _jev_client(proxy: str) -> Any:
+def _jev(http: httpx.AsyncClient, proxy: str) -> Jev:
     """Jev as the grader's judge, aimed at the benchmark proxy so its calls are recorded and replayed like the run's.
 
     The harness environment holds the real provider key, and grading must not spend it: a `replay` that reached
     the provider would leave a benchmark irreproducible from its cassette, and one with no key in the environment
     would fail grading outright. A placeholder key and the proxy's Jev mount keep the judge inside the cassette.
     """
-    settings = load_settings().model_copy(
-        update={
-            "jev_source": JevSource.OPENROUTER,
-            "jev_base_url": proxy + JEV_MOUNT,
-            "openrouter_api_key": SecretStr(PLACEHOLDER_KEY),
-        }
-    )
-    return settings.jev(httpx.AsyncClient())
+    return Jev(http, api_key=PLACEHOLDER_KEY, base_url=proxy + JEV_MOUNT, model=OPENROUTER_MODEL)
 
 
 def _submitted(submissions: dict[str, list[dict[str, str]]]) -> dict[str, str]:
@@ -177,14 +174,15 @@ def fixture_site(task: BenchTask, proxy: str) -> Generator[tuple[str, Grader]]:
             async def grade_local(result: RunResult) -> tuple[str | None, dict[str, Any]]:
                 failure = local.check(result, recorder.snapshot())
                 if failure is None and local.claims:
-                    failure = await judge(
-                        _jev_client(proxy),
-                        task=local.task,
-                        answer=result.answer,
-                        data=result.data,
-                        submitted=_submitted(recorder.snapshot()),
-                        claims=local.claims,
-                    )
+                    async with httpx.AsyncClient(timeout=60.0) as http:
+                        failure = await judge(
+                            _jev(http, proxy),
+                            task=local.task,
+                            answer=result.answer,
+                            data=result.data,
+                            submitted=_submitted(recorder.snapshot()),
+                            claims=local.claims,
+                        )
                 return failure, {}
 
             yield base_url, grade_local
@@ -200,9 +198,10 @@ def fixture_site(task: BenchTask, proxy: str) -> Generator[tuple[str, Grader]]:
             }
             failure = mock.check(result, site)
             if failure is None and mock.claims:
-                failure = await judge(
-                    _jev_client(proxy), task=mock.task, answer=result.answer, data=result.data, claims=mock.claims
-                )
+                async with httpx.AsyncClient(timeout=60.0) as http:
+                    failure = await judge(
+                        _jev(http, proxy), task=mock.task, answer=result.answer, data=result.data, claims=mock.claims
+                    )
             return failure, extra
 
         yield base_url, grade_mock
@@ -393,7 +392,7 @@ def in_process_environment(env: dict[str, str], cwd: Path) -> Generator[None]:
 
 async def drive_in_process(task: BenchTask, base_url: str, cdp_url: str, seconds: float) -> Drive:
     """Run one task through `run_task` in this process, with the arguments its `run` params stand for."""
-    from fastbrowse.run import run_task
+    from fastbrowse import run_task
 
     spec = task.task
     events = resolved = 0
@@ -404,7 +403,7 @@ async def drive_in_process(task: BenchTask, base_url: str, cdp_url: str, seconds
 
     secrets = None
     if isinstance(spec, MockTask) and spec.secrets:
-        held = ScopedSecrets(spec.secrets, origin_of(base_url))
+        held = TaskSecrets(spec.secrets, base_url)
 
         class Counted:
             def available(self) -> tuple[SecretRef, ...]:
@@ -473,23 +472,22 @@ async def bench_task(
     agent_argv: list[str],
     proxy: Proxy,
     logs: Path,
-    chrome: LocalChrome,
 ) -> dict[str, Any]:
     """One task end to end: site, Chrome, proxy, agent, grade."""
     with (
         proxy as proxy_url,
         fixture_site(task, proxy_url) as (base_url, grade),
-        local_chrome(chrome) as connection,
+        chrome() as cdp_url,
         tempfile.TemporaryDirectory(prefix="fastbrowse-bench-") as cwd,
     ):
-        params = run_params(task, base_url, connection.cdp_url, f"bench-{task.id}")
+        params = run_params(task, base_url, cdp_url, f"bench-{task.id}")
         secrets = dict(task.task.secrets) if isinstance(task.task, MockTask) else {}
         exit_code: int | None
         usage: Any
         if agent_argv == [IN_PROCESS]:
             before = resource.getrusage(resource.RUSAGE_SELF)
             with in_process_environment(agent_environment(proxy_url), Path(cwd)):
-                driven = await drive_in_process(task, base_url, connection.cdp_url, TASK_SECONDS)
+                driven = await drive_in_process(task, base_url, cdp_url, TASK_SECONDS)
             after = resource.getrusage(resource.RUSAGE_SELF)
             exit_code = None
             usage = Usage(after.ru_utime - before.ru_utime, after.ru_stime - before.ru_stime, after.ru_maxrss)
@@ -541,8 +539,8 @@ async def bench_task(
     return entry
 
 
-def _chrome_version(chrome: LocalChrome) -> str | None:
-    binary = find_chrome(chrome.binary)
+def _chrome_version() -> str | None:
+    binary = find_chrome()
     if binary is None:
         return None
     try:
@@ -551,7 +549,7 @@ def _chrome_version(chrome: LocalChrome) -> str | None:
         return None
 
 
-def _meta(mode: str, agent: str, latency: Latency | None, chrome: LocalChrome) -> dict[str, Any]:
+def _meta(mode: str, agent: str, latency: Latency | None) -> dict[str, Any]:
     return {
         "mode": mode,
         "agent": agent,
@@ -561,7 +559,7 @@ def _meta(mode: str, agent: str, latency: Latency | None, chrome: LocalChrome) -
         "platform": f"{platform.system()} {platform.release()} {platform.machine()}",
         "cpu_count": os.cpu_count(),
         "python": platform.python_version(),
-        "chrome": _chrome_version(chrome),
+        "chrome": _chrome_version(),
     }
 
 
@@ -596,9 +594,8 @@ async def run_suite(args: argparse.Namespace) -> int:
             raise SystemExit(f"{mode} needs OPENROUTER_API_KEY in the environment; only the proxy is given it")
         forward = openrouter_forward(key)
     latency = Latency.ZERO if mode == "record" else args.latency
-    chrome = LocalChrome()
     tasks = _select(args.only, args.port_base)
-    run: dict[str, Any] = {"meta": _meta(mode, args.agent, None if mode == "record" else latency, chrome), "tasks": []}
+    run: dict[str, Any] = {"meta": _meta(mode, args.agent, None if mode == "record" else latency), "tasks": []}
     logs = args.out.with_suffix("") / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     spent = 0.0
@@ -613,7 +610,7 @@ async def run_suite(args: argparse.Namespace) -> int:
                 meta={
                     "recorded_at": datetime.now(UTC).date().isoformat(),
                     "agent_fastbrowse": version("fastbrowse"),
-                    "models": {"llm": DEFAULT_LLM, "llm_field_text": FIELD_TEXT_LLM, "jev": "openrouter"},
+                    "models": {"llm": LLM, "llm_field_text": FIELD_TEXT_LLM, "jev": "openrouter"},
                     "port": task.port,
                 },
             )
@@ -628,7 +625,7 @@ async def run_suite(args: argparse.Namespace) -> int:
         passes = args.passes if mode == "fill" else 1
         for done in range(1, passes + 1):
             proxy = Proxy(cassette, forward=forward, replay=mode != "record", latency=latency)
-            entry = await bench_task(task, agent_argv=shlex.split(args.agent), proxy=proxy, logs=logs, chrome=chrome)
+            entry = await bench_task(task, agent_argv=shlex.split(args.agent), proxy=proxy, logs=logs)
             if forward is not None and (mode == "record" or proxy.forwarded):
                 cassette.save(path)
             if mode == "fill":

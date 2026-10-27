@@ -96,6 +96,10 @@ against `dev` only**, and `heldout` is run before and after a round and never de
 task versions, Parallax benchmark ownership and publishing rules are in [docs/agents/evals.md](docs/agents/evals.md); read it before changing
 agent behaviour or a task.
 
+The harness (`src/fastbrowse/evals`, `tests/evals`) reaches fastbrowse only as an embedder does: the `fastbrowse`
+package's exports, `fastbrowse.models`, `fastbrowse.config`, `fastbrowse.protocol`, `serve --stdio` and the trace.
+That way it measures whichever core the package runs; `tests/evals/test_public_only.py` fails on anything else.
+
 Store detailed eval runs and validation in the dedicated Langfuse project. Keep local logs in an ignored
 artifacts directory; Git keeps manifests, source hashes and compact publication baselines. Verify uploads by
 reading them back before removing local evidence. Public results contain only the sanitized projection.

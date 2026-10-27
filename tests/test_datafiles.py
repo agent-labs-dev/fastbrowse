@@ -39,9 +39,7 @@ def test_every_reader_loads_its_scripts_from_the_bundle_when_frozen(tmp_path: Pa
         "import sys\n"
         f"sys.frozen, sys._MEIPASS = True, {str(tmp_path)!r}\n"
         "from fastbrowse.browser import page, session\n"
-        "from fastbrowse.evals import observe\n"
-        "print(session._SNAPSHOT_JS, page._CAPTURE_JS, session._REFUSE_COOKIES_JS,\n"
-        "      observe.FINAL_SCRIPTS['snapshot'], sep='\\n')\n"
+        "print(session._SNAPSHOT_JS, page._CAPTURE_JS, session._REFUSE_COOKIES_JS, sep='\\n')\n"
     )
 
     loaded = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True).stdout
@@ -50,5 +48,4 @@ def test_every_reader_loads_its_scripts_from_the_bundle_when_frozen(tmp_path: Pa
         "bundled-snapshot",
         "bundled-capture",
         "bundled-autoconsent",
-        "bundled-snapshot('snapshot')",
     ]

@@ -8,7 +8,8 @@ posted, whether an order was placed or a password changed.
 
 Each mock task gets a site of its own, so one task's session, basket or order can never decide another's grade.
 
-Needs OPENROUTER_API_KEY or AI_GATEWAY_API_KEY; see fastbrowse.clients.environment for provider routing.
+Needs OPENROUTER_API_KEY or AI_GATEWAY_API_KEY; the README's Models section describes provider routing. A task
+with claims is graded by the harness's own Jev judge, which needs OPENROUTER_API_KEY or TYPESAFE_API_KEY.
 """
 
 import argparse
@@ -26,11 +27,11 @@ from typing import cast
 import httpx
 from pydantic import Field
 
-from fastbrowse.adapters.local_chrome import local_chrome
-from fastbrowse.artifacts import DirectorySink
-from fastbrowse.clients.environment import load_settings
+from fastbrowse import run_task as run_fastbrowse
+from fastbrowse import traced
 from fastbrowse.config import Config
-from fastbrowse.evals.judge import judge
+from fastbrowse.evals.harness import TaskSecrets, chrome, providers, transient_seconds
+from fastbrowse.evals.judge import jev_from_environment, judge
 from fastbrowse.evals.local import Recorder, fixture_server
 from fastbrowse.evals.mock import mock_site
 from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
@@ -40,16 +41,12 @@ from fastbrowse.evals.tasks import TASKS, LocalTask
 from fastbrowse.evals.versions import load_lock, provenance, suite_version, task_version
 from fastbrowse.models import (
     Attachment,
-    BrowserConnection,
     CostBreakdown,
     CostComponent,
     Frozen,
     Limits,
     RunResult,
 )
-from fastbrowse.run import run_task as run_fastbrowse
-from fastbrowse.safety import ScopedSecrets, origin_of
-from fastbrowse.telemetry import traced, transient_seconds
 
 MOCK_LIMITS = Limits(max_steps=40)
 """A mock task signs in, walks to a page and acts, which is more steps than the local suite's single form needs."""
@@ -198,7 +195,7 @@ async def _judge_claims(task: LocalTask | MockTask, result: RunResult, submitted
     """Why the run's output does not state every claim, or None when it states them all."""
     async with httpx.AsyncClient(timeout=60.0) as http:
         return await judge(
-            load_settings().jev(http),
+            jev_from_environment(http),
             task=task.task,
             answer=result.answer,
             data=result.data,
@@ -210,20 +207,20 @@ async def _judge_claims(task: LocalTask | MockTask, result: RunResult, submitted
 async def _drive(
     task: LocalTask | MockTask,
     start: str,
-    connection: BrowserConnection,
-    sink: DirectorySink,
-    secrets: ScopedSecrets | None,
+    cdp_url: str,
+    downloads: Path,
+    secrets: TaskSecrets | None,
     limits: Limits,
     attachments: tuple[Attachment, ...] = (),
-) -> tuple[RunResult, float, float]:
-    """One run of one task through `run_task`, on whichever core the package runs, returning its result and how long
-    it took, wall and transient. Either core's model clients trace their transient failures into `traced()`."""
+) -> tuple[RunResult, float, float, str | None]:
+    """One run of one task through `run_task`, on whichever core the package runs, returning its result, how long
+    it took, wall and transient, and the providers it called, the last two read from the run's trace."""
     started = time.monotonic()
     with traced() as events:
         result = await run_fastbrowse(
             task.task,
             start=start,
-            cdp_url=connection.cdp_url,
+            cdp_url=cdp_url,
             config=fixture_config(),
             secrets=secrets,
             inputs=task.inputs,
@@ -231,44 +228,44 @@ async def _drive(
             output_schema=task.output_schema,
             limits=limits,
             authorization=task.authorization,
-            downloads=sink.root,
+            downloads=downloads,
         )
     ended = time.monotonic()
-    return result, ended - started, transient_seconds(events, started, ended)
+    return result, ended - started, transient_seconds(events, started, ended), providers(events)
 
 
 async def run_task(
     task: LocalTask,
     base_url: str,
     recorder: Recorder,
-    connection: BrowserConnection,
-    sink: DirectorySink,
+    cdp_url: str,
+    downloads: Path,
     *,
     limits: Limits = LOCAL_LIMITS,
 ) -> dict[str, object]:
     recorder.clear()
-    result, seconds, lost = await _drive(task, base_url + task.start, connection, sink, None, limits)
+    result, seconds, lost, route = await _drive(task, base_url + task.start, cdp_url, downloads, None, limits)
     submitted = recorder.snapshot()
     failure = task.check(result, submitted)
     if failure is None and task.claims:
         failure = await _judge_claims(task, result, _submitted(submitted))
-    return {"arm": "fastbrowse", "category": "fixture", "suite": "local"} | _row(
+    return {"arm": "fastbrowse", "category": "fixture", "suite": "local", "providers": route} | _row(
         result, task_id=task.id, failure=failure, seconds=seconds, lost=lost, limit=limits.max_steps
     )
 
 
 async def run_mock_task(
     task: MockTask,
-    connection: BrowserConnection,
-    sink: DirectorySink,
+    cdp_url: str,
+    downloads: Path,
     *,
     limits: Limits = MOCK_LIMITS,
 ) -> dict[str, object]:
     """A site of this task's own, so nothing it does can be read by, or decided by, another task's run."""
     with mock_site() as (base_url, site):
-        secrets = ScopedSecrets(task.secrets, origin_of(base_url)) if task.secrets else None
-        result, seconds, lost = await _drive(
-            task, base_url + task.start, connection, sink, secrets, limits, task.attachments
+        secrets = TaskSecrets(task.secrets, base_url) if task.secrets else None
+        result, seconds, lost, route = await _drive(
+            task, base_url + task.start, cdp_url, downloads, secrets, limits, task.attachments
         )
         failure = task.check(result, site)
         if failure is None and task.claims:
@@ -278,7 +275,13 @@ async def run_mock_task(
             "posts": [path for path, _ in site.posts],
             "orders_placed": len(site.orders_placed),
         }
-        return {"arm": "fastbrowse", "category": "mock", "suite": "mock", "expected_status": task.expect.value} | (
+        return {
+            "arm": "fastbrowse",
+            "category": "mock",
+            "suite": "mock",
+            "expected_status": task.expect.value,
+            "providers": route,
+        } | (
             _row(
                 result,
                 task_id=task.id,
@@ -324,12 +327,11 @@ async def main(argv: list[str]) -> int:
         arguments.error("--budget must be finite and positive")
     if args.budget is not None and args.out.exists():
         arguments.error("budgeted fixture output already exists; reconcile its receipts before another campaign")
-    settings = load_settings()
     lock = load_lock()
     stamps = {
         name: suite_version((t.id for t in tasks), lock) for name, tasks in (("local", TASKS), ("mock", MOCK_TASKS))
     }
-    run = provenance(providers=settings.providers(), argv=list(argv))
+    run = provenance(argv=list(argv))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     if args.budget is not None:
         os.umask(0o077)
@@ -337,7 +339,7 @@ async def main(argv: list[str]) -> int:
     rows: list[dict[str, object]] = []
     with (
         fixture_server() as (base_url, recorder),
-        local_chrome(settings.local_chrome()) as connection,
+        chrome() as cdp_url,
         tempfile.TemporaryDirectory() as downloads,
         args.out.open("a", encoding="utf-8") as out,
     ):
@@ -355,16 +357,17 @@ async def main(argv: list[str]) -> int:
                     if campaign is not None
                     else (LOCAL_LIMITS if suite == "local" else MOCK_LIMITS)
                 )
-                sink = DirectorySink(Path(downloads))
                 if suite == "local":
                     assert isinstance(task, LocalTask)
-                    row = await run_task(task, base_url, recorder, connection, sink, limits=limits)
+                    row = await run_task(task, base_url, recorder, cdp_url, Path(downloads), limits=limits)
                 else:
                     assert isinstance(task, MockTask)
-                    row = await run_mock_task(task, connection, sink, limits=limits)
+                    row = await run_mock_task(task, cdp_url, Path(downloads), limits=limits)
                 row |= {
                     "run": run
                     | {
+                        # Read from the run itself, so the route recorded is the one the core took.
+                        "providers": row.pop("providers"),
                         "agent_limits": limits.model_dump(mode="json"),
                         "budget_usd": args.budget,
                         "budget_policy": "remaining-campaign-v1" if campaign is not None else "fixture-default-v1",

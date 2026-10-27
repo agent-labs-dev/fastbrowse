@@ -34,17 +34,16 @@ from typing import Any, Self
 
 import httpx
 
-from fastbrowse.clients.environment import LLM_OPENROUTER_URL
-from fastbrowse.clients.openai_compatible import OPENROUTER_PROVIDER_ROUTING
-from fastbrowse.clients.typesafe import OPENROUTER_URL
-
 CASSETTE_VERSION = 1
 
 JEV_MOUNT = "/jev"
 LLM_MOUNT = "/llm"
 
-UPSTREAMS = {JEV_MOUNT: OPENROUTER_URL, LLM_MOUNT: LLM_OPENROUTER_URL}
+UPSTREAMS = {JEV_MOUNT: "https://openrouter.ai/api", LLM_MOUNT: "https://openrouter.ai/api/v1"}
 """Where `record` sends each mount: the hosts a run with only OPENROUTER_API_KEY set would call."""
+
+OPENROUTER_PROVIDER_ROUTING = {"require_parameters": True, "sort": "latency"}
+"""The OpenRouter routing a run keyed with OPENROUTER_API_KEY sends, which one aimed at the proxy leaves out."""
 
 MISS_STATUS = 404
 """Not a status the clients retry, so a miss ends the call at once instead of costing a backoff."""

@@ -16,7 +16,6 @@ import pytest
 
 from fastbrowse.evals.mock import ACCOUNTS, ORDERS, PRODUCTS, Site, code_for, mock_site
 from fastbrowse.evals.mock_tasks import ADA, GRACE, KATHERINE, KATHERINE_PASSWORD, TASKS, MockTask
-from fastbrowse.jev import Evaluation, NoulAnswer, Question
 from fastbrowse.models import JsonValue, RunResult, Status
 
 ADA_PASSWORD = ACCOUNTS[ADA]
@@ -35,17 +34,12 @@ class ScriptedJev:
         self.asked: list[str] = []
         self.states: list[JsonValue] = []
 
-    async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
-        from fastbrowse.models import CostBasis, CostComponent, CostLine
-
+    async def evaluate(self, state: JsonValue, questions: Mapping[str, JsonValue]) -> Mapping[str, float]:
         self.states.append(state)
-        self.asked.extend(question.instructions for question in questions.values())
-        return Evaluation(
-            model="scripted",
-            answers={name: NoulAnswer(probability=1.0 if self.holds else 0.0) for name in questions},
-            input_tokens=0,
-            cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
+        self.asked.extend(
+            str(question["instructions"]) for question in questions.values() if isinstance(question, dict)
         )
+        return {name: 1.0 if self.holds else 0.0 for name in questions}
 
 
 class Browser:

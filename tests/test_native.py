@@ -24,6 +24,7 @@ from fastbrowse import native, run_task
 from fastbrowse.clients.environment import ConfigurationError
 from fastbrowse.clients.openai_compatible import _ends_mid_json
 from fastbrowse.config import Config
+from fastbrowse.evals.harness import providers, transient_seconds
 from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, Evaluation, Question
 from fastbrowse.llm import Generation
 from fastbrowse.models import (
@@ -41,7 +42,7 @@ from fastbrowse.models import (
 )
 from fastbrowse.safety import ScopedSecrets
 from fastbrowse.scripted import ScriptedJev, ScriptedLLM, steps
-from fastbrowse.telemetry import BudgetExceeded, traced, transient_seconds
+from fastbrowse.telemetry import BudgetExceeded, traced
 
 try:
     fastbrowse_native = importlib.import_module("fastbrowse._native")
@@ -542,3 +543,30 @@ async def test_a_transient_model_failure_reaches_traced_on_its_clock(
     assert result.status is Status.COMPLETE, result.error
     # The first retry waits half a second, and the time lost lies inside the run on this process's clock.
     assert 0.5 <= transient_seconds(events, started, ended) < ended - started
+
+
+@needs_native
+@pytest.mark.parametrize("core", ["python", "rust"])
+async def test_a_run_names_the_providers_it_calls_in_its_trace(
+    core: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The fixture runner records the route each run took from the run's own trace, on either core."""
+    from fastbrowse.clients.environment import load_settings
+
+    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "1" if core == "python" else "0")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "unused")
+    for name in [name for name in os.environ if name.startswith(("FASTBROWSE_LLM", "FASTBROWSE_JEV"))]:
+        monkeypatch.delenv(name)
+    refused = httpx.MockTransport(lambda _: httpx.Response(401, json={"error": "no"}))
+    async with httpx.AsyncClient(transport=refused) as http:
+        with traced() as events:
+            result = await run_task("Read the release", start="https://pypi.example/httpx", fetch=True, http=http)
+        with traced() as own:
+            await run_task(
+                "Read the release", start="https://pypi.example/httpx", fetch=True, http=http, jev=ScriptedJev([])
+            )
+    assert result.status is not Status.COMPLETE
+    assert providers(events) == load_settings().providers()
+    # A caller's own clients are theirs to describe.
+    assert providers(own) is None

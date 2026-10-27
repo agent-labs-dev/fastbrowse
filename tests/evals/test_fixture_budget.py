@@ -95,13 +95,13 @@ async def test_fixture_campaign_admission_uses_exact_cost_and_stops_on_unknown(
         "failure": None,
         "steps": 1,
         "cost": charge.model_dump(mode="json"),
+        "providers": "Jev test; LLM test",
     }
     drive = AsyncMock(side_effect=[row.copy(), row.copy()])
     monkeypatch.setattr(runner, "run_task", drive)
-    monkeypatch.setattr(runner, "load_settings", lambda: Mock(providers=lambda: {}, local_chrome=lambda: None))
     monkeypatch.setattr(runner, "provenance", lambda **_: {})
     monkeypatch.setattr(runner, "fixture_server", lambda: nullcontext(("https://example.test", Mock())))
-    monkeypatch.setattr(runner, "local_chrome", lambda _: nullcontext(Mock()))
+    monkeypatch.setattr(runner, "chrome", lambda: nullcontext("ws://unused"))
     output = tmp_path / "rows.jsonl"
     previous_mask = os.umask(0o077)
     try:
@@ -116,6 +116,7 @@ async def test_fixture_campaign_admission_uses_exact_cost_and_stops_on_unknown(
     first_limits = drive.await_args_list[0].kwargs["limits"]
     assert first_limits.max_dollars == 2 and first_limits.max_steps is None
     assert rows[0]["run"]["agent_limits"] == first_limits.model_dump(mode="json")
+    assert rows[0]["run"]["providers"] == "Jev test; LLM test"
     assert rows[0]["cost"]["lines"][0]["dollars"] == 0.0000049
     if not unknown:
         assert drive.await_args_list[1].kwargs["limits"].max_dollars == 2 - 0.0000049

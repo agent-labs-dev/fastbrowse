@@ -7,8 +7,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl
 
-from fastbrowse.adapters.local_chrome import free_port
-
 FIXTURES = Path(__file__).with_name("fixtures")
 
 
@@ -61,7 +59,7 @@ def _handler(recorder: Recorder) -> type[BaseHTTPRequestHandler]:
 def fixture_server(port: int = 0) -> Generator[tuple[str, Recorder]]:
     """`port` 0 takes a free one; the benchmark names its own, since the address reaches the model's prompts."""
     recorder = Recorder()
-    server = ThreadingHTTPServer(("127.0.0.1", port or free_port()), _handler(recorder))
+    server = ThreadingHTTPServer(("127.0.0.1", port), _handler(recorder))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         yield f"http://127.0.0.1:{server.server_port}", recorder
