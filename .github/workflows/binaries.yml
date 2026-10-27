@@ -225,7 +225,7 @@ jobs:
       # A module or data file missing from the wheel (snapshot.js is read at import) fails here, not on a user's machine.
       - run: uv run --no-project python scripts/smoke_binary.py "$WHEEL_BIN/fastbrowse"
       - run: uv run --no-project python scripts/smoke_binary.py "$WHEEL_BIN/fastbrowse"
-        env: {FASTBROWSE_RUST_CORE: "1"}
+        env: {FASTBROWSE_PYTHON_CORE: "1"}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheel-${{ matrix.target }}

@@ -183,10 +183,10 @@ jobs:
       # leaves npm untouched.
       - name: Assemble the platform packages
         env:
-          # What the platform packages carry: `pyinstaller`, the frozen Python package, or `rust`, the Rust
-          # binary and the Node addon (docs/adr/0001). The binaries workflow builds and smoke-tests both, so
-          # either way is this one word.
-          NPM_BUILD: pyinstaller
+          # What the platform packages carry: `rust`, the Rust binary and the Node addon (docs/adr/0004), or
+          # `pyinstaller`, the frozen Python package. The binaries workflow builds and smoke-tests both until 0.9.0,
+          # so going back is this one word.
+          NPM_BUILD: rust
         run: |
           for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-x64; do
             if [ "$NPM_BUILD" = rust ]; then

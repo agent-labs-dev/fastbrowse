@@ -6,7 +6,6 @@ an embedder gets the parts that are easy to forget: the cloud browser's own cost
 downloads kept when a directory is given, and owned tabs closed on every path out.
 """
 
-import os
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
@@ -27,6 +26,7 @@ from fastbrowse.browser.recording import Recording
 from fastbrowse.browser.session import check_browser_access
 from fastbrowse.clients.environment import load_settings
 from fastbrowse.config import Config
+from fastbrowse.core import python_core
 from fastbrowse.fetch import FetchedPage, NeedsBrowser
 from fastbrowse.jev import JevClient
 from fastbrowse.llm import LLMClient
@@ -102,10 +102,10 @@ async def connect_cdp(
     Chrome itself activates a visible window whose front tab receives a pointer press. `allowed_origins` limits
     the page to those exact origins and `check_access` is awaited before every browser read and action (both
     described on `run_task`). Downloads go to `artifact_sink`, else to `downloads`, else to a scratch directory
-    removed on exit. With `FASTBROWSE_RUST_CORE=1` the page is the Rust core's (`fastbrowse.native.NativePage`),
-    with the same methods.
+    removed on exit. The page is the Rust core's (`fastbrowse.native.NativePage`), with the same methods as the
+    Python core's `CdpPage`, which `FASTBROWSE_PYTHON_CORE=1` gives instead.
     """
-    if os.environ.get("FASTBROWSE_RUST_CORE") == "1":
+    if not python_core():
         async with native.connect_cdp(locals()) as page:
             yield page
         return
@@ -306,10 +306,10 @@ async def run_task(
     is refused as needing a browser. Browser, recording, download and cursor options mean nothing here and
     are an error rather than ignored.
 
-    With `FASTBROWSE_RUST_CORE=1`, the run goes to the Rust core in this process,
-    every argument with it (`fastbrowse.native`).
+    The run goes to the Rust core in this process, every argument with it (`fastbrowse.native`), unless
+    `FASTBROWSE_PYTHON_CORE=1` keeps it on the Python core.
     """
-    if os.environ.get("FASTBROWSE_RUST_CORE") == "1":
+    if not python_core():
         return await native.run(task, locals())
     config = config or Config()
     settings = load_settings()

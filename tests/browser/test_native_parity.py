@@ -40,9 +40,9 @@ async def replayed(task: BenchTask, logs: Path) -> dict[str, Any]:
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("task", [task for task in corpus() if task.id in TASKS], ids=lambda task: task.id)
 async def test_both_cores_reach_the_same_result(task: BenchTask, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    monkeypatch.delenv("FASTBROWSE_RUST_CORE", raising=False)
+    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "1")
     python = await replayed(task, tmp_path)
-    monkeypatch.setenv("FASTBROWSE_RUST_CORE", "1")
+    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
     rust = await replayed(task, tmp_path)
     assert python["grade"]["passed"], python
     assert rust == python

@@ -74,7 +74,12 @@ reading them back before removing local evidence. Public results contain only th
 
 ## Architecture
 
-The run loop is `src/fastbrowse/agent.py`, and everything else is a seam it calls.
+The core runs in Rust by default ([ADR 0004](docs/adr/0004-rust-core-by-default.md)): the crates in [crates/](crates)
+port the Python modules below one for one, and the `fastbrowse` wheel carries them as `fastbrowse._native`.
+[native.py](src/fastbrowse/native.py) hands `run_task`, `connect_cdp` and the commands to it. The Python modules stay
+as the fallback `FASTBROWSE_PYTHON_CORE=1` selects until 0.9.0, so until then a behaviour change lands in both cores.
+
+The run loop is `src/fastbrowse/agent.py` (`crates/fastbrowse-agent`), and everything else is a seam it calls.
 
 - **[run.py](src/fastbrowse/run.py)** opens the browser and builds the Jev and LLM clients from `Settings`, then hands control to
   the loop. This is the embedding API: `run_task(...)`. The browser is one of three, in this order: one the
@@ -103,8 +108,8 @@ The run loop is `src/fastbrowse/agent.py`, and everything else is a seam it call
   models in [protocol.py](src/fastbrowse/protocol.py); [output_schema.py](src/fastbrowse/output_schema.py) turns a caller's JSON Schema into an `output_schema`.
 - **[packages/sdk](packages/sdk)** is the TypeScript SDK, `fastbrowse` on npm. It starts `serve` and knows the agent by
   the protocol alone; [its types](packages/sdk/src/protocol.ts) are generated from the Python models (`npm run generate:sdk`).
-  What it starts is the package frozen by [packaging/fastbrowse.spec](packaging/fastbrowse.spec), without the MCP server, shipped as one
-  `@fastbrowse/<os>-<arch>` npm package per platform.
+  What it starts is the Rust `fastbrowse` binary ([crates/fastbrowse-cli](crates/fastbrowse-cli)), with the Node addon beside it
+  for `inProcess`, shipped as one `@fastbrowse/<os>-<arch>` npm package per platform.
 
 ## Rules and invariants
 

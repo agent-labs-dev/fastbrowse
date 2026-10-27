@@ -1,4 +1,4 @@
-"""`run_task` on the Rust core (crates/fastbrowse-py), in this process, when `FASTBROWSE_RUST_CORE=1`.
+"""`run_task`, `connect_cdp` and the commands on the Rust core (crates/fastbrowse-py), in this process.
 
 Every argument crosses. Data goes as JSON. The caller's own objects (its Jev and LLM clients, its HTTP client, its
 access check and its secrets) stay here and the core calls them back: each is wrapped below into a function that

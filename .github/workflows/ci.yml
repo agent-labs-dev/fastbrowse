@@ -130,7 +130,7 @@ jobs:
       - run: uv sync --locked --all-extras
       # The browser suites go last and together: pytest collecting a file outside tests/browser between two inside it
       # loses the fixtures tests/browser/conftest.py gives the later one.
-      - env: {FASTBROWSE_RUST_CORE: "1"}
+      - env: {FASTBROWSE_PYTHON_CORE: "0"}
         run: >-
           uv run --no-sync pytest -q tests/test_citations.py tests/test_page.py tests/test_safety.py
           tests/test_retrieval.py tests/test_agent.py tests/test_native.py
