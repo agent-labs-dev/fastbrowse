@@ -1,6 +1,6 @@
 [project]
 name = "fastbrowse"
-version = "0.7.3"
+version = "0.7.4"
 description = "Browser automation with cited answers, structured output and code-controlled credentials and authorization."
 readme = "README.md"
 license = "MIT"
@@ -65,9 +65,9 @@ dev = [
     "pytest>=8.4,<10",
     "pytest-asyncio>=1,<2",
     "ruff>=0.14,<1",
-    "vale==3.22.0.0",
+    "vale==3.25.1.0",
     "pytest-timeout>=2.3,<3",
-    "ty==0.0.86",          # preview: pinned, and moved with the pre-commit hook
+    "ty==0.0.92",          # preview: pinned, and moved with the pre-commit hook
     "pre-commit>=4.6.2",
     "actionlint-py==1.7.12.25",
 ]

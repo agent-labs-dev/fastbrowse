@@ -26,6 +26,8 @@ Guessed addresses, readings and holds keep to these invariants; `_Lineage`, `Age
   and nothing else. A requirement is answered again only from readings that are not held.
 """
 
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import json

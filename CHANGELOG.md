@@ -16,6 +16,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   anyway, and the run ended `needs_input` naming a secret the page could never get. It now ends
   `needs_login`, which tells the caller a login for that site is what is missing.
 
+## [0.7.4] - 2026-10-27
+
+- Every dependency this release builds, tests and ships with is at its latest release: `pydantic` 2.14.1, `pydantic-settings` 2.16.1, `websockets` 17.3, `ruff` 0.17.3, `pytest` 9.1.1, `pre-commit` 4.7.0, `Biome` 2.6.3 and `@types/node` 26.6.5 among them. `ty`, the preview type checker the gate runs, moved to 0.0.92, which evaluates annotations at runtime on Python 3.13; the five modules that annotate with pydantic's `JsonValue` now import `from __future__ import annotations`, so their `JsonValue | None` annotations resolve as types rather than as an unsupported `|` at import.
+
+
 - **A click that only redraws a page already read no longer buys another read.** Sorting a list, closing a banner, opening a tab or expanding a row set the run owing a full reader call, which re-read facts the notes already held. The run now compares the page with what it has read from that document: a block it never read, or a quoted value the page no longer shows, still sends the read, and a pending order or a control the reader named is always read. The reader is also sent only the guidance its page can use, so a page with no records or pager no longer carries the tally, ranking and paging instructions. A click that saves the same file an earlier click saved is reported as changing nothing, so a run stops clicking one export link over and over. Both cores carry the change.
 
 - A `connect_cdp` on the Rust core that is cancelled while it opens now closes the tab and DevTools session it opened. Before, a cancellation that landed as the page was arriving left both open in the browser.
@@ -1567,7 +1572,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.7.3...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.7.4...HEAD
+[0.7.4]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.4
 [0.7.3]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.3
 [0.7.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.1
 [0.7.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.0
