@@ -39,7 +39,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Generator
+from collections.abc import Awaitable, Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -47,11 +47,13 @@ from importlib.metadata import PackageNotFoundError, distribution, version
 from pathlib import Path
 from typing import Any
 
+import httpx
 from packaging.requirements import Requirement
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from fastbrowse.adapters.local_chrome import find_chrome, local_chrome
-from fastbrowse.clients.environment import DEFAULT_LLM, DEFAULT_REASONING, FIELD_TEXT_LLM
+from fastbrowse.clients.environment import DEFAULT_LLM, DEFAULT_REASONING, FIELD_TEXT_LLM, JevSource, load_settings
+from fastbrowse.evals.judge import judge
 from fastbrowse.evals.local import fixture_server
 from fastbrowse.evals.mock import mock_site
 from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
@@ -135,31 +137,73 @@ def corpus(port_base: int = PORT_BASE) -> list[BenchTask]:
     ]
 
 
-type Grader = Callable[[RunResult], tuple[str | None, dict[str, Any]]]
+type Grader = Callable[[RunResult], Awaitable[tuple[str | None, dict[str, Any]]]]
+
+
+def _jev_client(proxy: str) -> Any:
+    """Jev as the grader's judge, aimed at the benchmark proxy so its calls are recorded and replayed like the run's.
+
+    The harness environment holds the real provider key, and grading must not spend it: a `replay` that reached
+    the provider would leave a benchmark irreproducible from its cassette, and one with no key in the environment
+    would fail grading outright. A placeholder key and the proxy's Jev mount keep the judge inside the cassette.
+    """
+    settings = load_settings().model_copy(
+        update={
+            "jev_source": JevSource.OPENROUTER,
+            "jev_base_url": proxy + JEV_MOUNT,
+            "openrouter_api_key": SecretStr(PLACEHOLDER_KEY),
+        }
+    )
+    return settings.jev(httpx.AsyncClient())
+
+
+def _submitted(submissions: dict[str, list[dict[str, str]]]) -> dict[str, str]:
+    """The fields the last post to each path carried, flattened for the judge to read."""
+    return {
+        f"{path} {name}": value
+        for path, posts in submissions.items()
+        for post in posts[-1:]
+        for name, value in post.items()
+    }
 
 
 @contextmanager
-def fixture_site(task: BenchTask) -> Generator[tuple[str, Grader]]:
+def fixture_site(task: BenchTask, proxy: str) -> Generator[tuple[str, Grader]]:
     """The task's site on its own port, and the suite's grader bound to what that site records."""
     if isinstance(task.task, LocalTask):
         local = task.task
         with fixture_server(task.port) as (base_url, recorder):
 
-            def grade_local(result: RunResult) -> tuple[str | None, dict[str, Any]]:
-                return local.check(result, recorder.snapshot()), {}
+            async def grade_local(result: RunResult) -> tuple[str | None, dict[str, Any]]:
+                failure = local.check(result, recorder.snapshot())
+                if failure is None and local.claims:
+                    failure = await judge(
+                        _jev_client(proxy),
+                        task=local.task,
+                        answer=result.answer,
+                        data=result.data,
+                        submitted=_submitted(recorder.snapshot()),
+                        claims=local.claims,
+                    )
+                return failure, {}
 
             yield base_url, grade_local
         return
     mock = task.task
     with mock_site(task.port) as (base_url, site):
 
-        def grade_mock(result: RunResult) -> tuple[str | None, dict[str, Any]]:
+        async def grade_mock(result: RunResult) -> tuple[str | None, dict[str, Any]]:
             extra = {
                 "signed_in": list(site.sign_ins),
                 "posts": [path for path, _ in site.posts],
                 "orders_placed": len(site.orders_placed),
             }
-            return mock.check(result, site), extra
+            failure = mock.check(result, site)
+            if failure is None and mock.claims:
+                failure = await judge(
+                    _jev_client(proxy), task=mock.task, answer=result.answer, data=result.data, claims=mock.claims
+                )
+            return failure, extra
 
         yield base_url, grade_mock
 
@@ -433,9 +477,9 @@ async def bench_task(
 ) -> dict[str, Any]:
     """One task end to end: site, Chrome, proxy, agent, grade."""
     with (
-        fixture_site(task) as (base_url, grade),
-        local_chrome(chrome) as connection,
         proxy as proxy_url,
+        fixture_site(task, proxy_url) as (base_url, grade),
+        local_chrome(chrome) as connection,
         tempfile.TemporaryDirectory(prefix="fastbrowse-bench-") as cwd,
     ):
         params = run_params(task, base_url, connection.cdp_url, f"bench-{task.id}")
@@ -465,7 +509,7 @@ async def bench_task(
                 driven.error = {"message": f"the run reply is not a RunResult: {exc.error_count()} problems"}
         if result is not None:
             try:
-                failure, extra = grade(result)
+                failure, extra = await grade(result)
             except Exception as exc:
                 failure = f"check raised {type(exc).__name__}: {exc}"
         else:

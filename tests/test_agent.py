@@ -1870,6 +1870,92 @@ async def test_an_owed_read_of_unchanged_text_finishes_rather_than_recovering() 
     assert [purpose for purpose, _ in llm.calls] == [LLMPurpose.READ]
 
 
+async def test_an_interaction_that_redraws_a_read_page_is_not_read_again() -> None:
+    """A tab or a dropdown redraws the page with the text already read off it.
+
+    `owes_read` is set by any interaction that changed the DOM, and the loop answered it with a full read, so a
+    click that opened nothing new bought back every fact the notes already held. The page is compared with what
+    this run has read of the document instead, and a redraw that says nothing new spends no reader call.
+    """
+    agent, page, state, llm = await _filtered_fares(answer_expected=True)
+    page.capture.return_value = capture((BlockKind.PARAGRAPH, "$320 1 stop"))
+    state.owes_read = True
+    assert "$320 1 stop" in await _finished(agent, state)
+    assert [purpose for purpose, _ in llm.calls] == [LLMPurpose.READ]
+    assert [entry.operation for entry in state.history] == [Operation.CLICK]
+
+
+async def test_an_interaction_that_drops_a_read_value_is_read_again() -> None:
+    """The notes quote a fare the redrawn page no longer shows, so they no longer describe it and the read is owed."""
+    agent, page, state, llm = await _filtered_fares(answer_expected=True)
+    page.capture.return_value = capture((BlockKind.PARAGRAPH, "No fares match"))
+    state.owes_read = True
+    await _finished(agent, state)
+    assert [purpose for purpose, _ in llm.calls] == [LLMPurpose.READ, LLMPurpose.READ]
+
+
+async def test_a_direction_the_reader_named_is_read_for_even_over_a_page_the_notes_describe() -> None:
+    """A control the reader named behind the page is carried out, not traded for the notes of the page naming it.
+
+    The owed read is taken as a step, which the read itself may then find has nothing new; the shortcut would have
+    finished from the click without one."""
+    agent, page, state, _ = await _filtered_fares(answer_expected=True)
+    page.capture.return_value = capture((BlockKind.PARAGRAPH, "$320 1 stop"))
+    state.owes_read = True
+    state.directed = (Operation.CLICK, "nonstop only")
+    await _finished(agent, state)
+    assert [entry.operation for entry in state.history] == [Operation.CLICK, Operation.READ]
+
+
+async def test_a_pending_transaction_reads_its_page_even_when_the_notes_describe_it() -> None:
+    """A review page's totals may not reappear after submit, so its read is never answered from the notes."""
+    review = capture((BlockKind.PARAGRAPH, "Total GBP 4.60"))
+    here = observation((_button("Place order"),)).model_copy(update={"document_key": "review"})
+    page = Mock(spec=Page)
+    page.capture = AsyncMock(return_value=review)
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="a1", text="Place the order", kind=RequirementKind.ACTION),), answer_expected=False
+    )
+    state.transaction_candidates.append(
+        agent_module._TransactionCandidate(
+            question=NoulQuestion(instructions="Commit", true="yes", false="no"), from_url="https://shop.test"
+        )
+    )
+    state.read_coverage["review"] = " Total GBP 4.60"
+    state.read_shas["review"] = {review.sha256}
+    assert agent._covered(state, here, review)
+    agent._step = AsyncMock(return_value=False)
+    assert await agent._read_before_interaction(state, here, _code_decision(Operation.CLICK, here.controls[0]))
+    agent._step.assert_awaited_once()
+
+
+async def test_a_page_is_held_only_while_the_notes_still_describe_it() -> None:
+    """The comparison an owed read is answered from: a block never read, or a quoted value the page dropped,
+    means the notes no longer describe the page and a read is worth buying."""
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"")
+    page.artifacts = ()
+    page.capture = AsyncMock(return_value=capture((BlockKind.PARAGRAPH, "Stoneware Mug 29.00")))
+    here = observation(()).model_copy(update={"document_key": "product"})
+    agent = Agent(page, ScriptedJev({}), ScriptedLLM([]))
+    state = await run_state()
+    state.ready_plan = Plan(
+        requirements=(Requirement(id="r1", text="The mug's price", kind=RequirementKind.INFORMATION),),
+        answer_expected=True,
+    )
+    await agent._read(state, await page.capture(), here)
+    held = capture((BlockKind.PARAGRAPH, "Stoneware Mug 29.00"))
+    assert agent._covered(state, here, held)
+    # A block this run has never read is something new the page has to say.
+    assert not agent._covered(
+        state, here, capture((BlockKind.PARAGRAPH, "Stoneware Mug 29.00"), (BlockKind.PARAGRAPH, "In stock"))
+    )
+    # A value the notes quote that the page no longer shows makes them out of date.
+    assert not agent._covered(state, here, capture((BlockKind.PARAGRAPH, "Stoneware Mug 31.00")))
+
+
 async def test_a_finish_after_an_interaction_reads_what_it_drew() -> None:
     """A run clicked a filter and called itself done on notes read off the list before the filter applied."""
     agent, _, state, llm = await _filtered_fares(answer_expected=True)

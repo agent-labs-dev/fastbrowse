@@ -19,6 +19,7 @@ use fastbrowse_core::page::{
     ActResult, Action, BlockKind, BrowserError, Capture, Control, Observation, Page, PageResult,
 };
 use fastbrowse_core::py::dump::Dump;
+use fastbrowse_core::py::text;
 use fastbrowse_core::safety::Redactor;
 use fastbrowse_core::telemetry::Ledger;
 use indexmap::IndexMap;
@@ -31,6 +32,7 @@ use super::helpers::{
     next_page_control, next_value, plan_ids, record, try_unsure, unread, unread_output_section, verified, visited,
     without_missing,
 };
+use super::reading::covered;
 use super::state::{RunState, Spawned};
 use crate::memory::{Fact, Notes, Tally, fact_id};
 use crate::planner::{OutputTarget, Plan, Requirement, RequirementKind};
@@ -1279,6 +1281,35 @@ fn test_a_shortcut_is_worth_proposing_only_from_a_sites_entry_point() {
     ] {
         assert_eq!(super::shortcut_worth_proposing(start), worth, "{start}");
     }
+}
+
+/// The comparison an owed read is answered from: a block never read, or a quoted value the page dropped, means the
+/// notes no longer describe the page and a read is worth buying.
+#[tokio::test]
+async fn test_a_page_is_held_only_while_the_notes_still_describe_it() {
+    let read = capture(&[(BlockKind::Paragraph, "Stoneware Mug 29.00")]);
+    let here = Observation { document_key: "product".into(), ..observation(&[]) };
+    let mut state = run_state().await;
+    // Nothing of this document has been read, so the first read of it is always paid.
+    assert!(!covered(&state, &here, &read));
+    state.read_coverage.insert("product".into(), format!(" {}", text::squash(&read.text)));
+    state.read_shas.insert("product".into(), HashSet::from([read.sha256.clone()]));
+    state.notes.add(Fact::read(Some("r1"), "The mug costs 29.00", block_evidence(&read, "s0"), FactReader::Llm));
+    assert!(covered(&state, &here, &capture(&[(BlockKind::Paragraph, "Stoneware Mug 29.00")])));
+    // A DOM observation is the page reporting its own change, not text the notes could hold.
+    let noted = capture(&[(BlockKind::Paragraph, "Stoneware Mug 29.00"), (BlockKind::Observation, "Sorted")]);
+    assert!(covered(&state, &here, &noted));
+    // A block this run has never read is something new the page has to say.
+    let added = capture(&[(BlockKind::Paragraph, "Stoneware Mug 29.00"), (BlockKind::Paragraph, "In stock")]);
+    assert!(!covered(&state, &here, &added));
+    // A value the notes quote that the page no longer shows makes them out of date, even when every block on it
+    // was read before: the page went back to a price an earlier read saw.
+    let repriced = capture(&[(BlockKind::Paragraph, "Stoneware Mug 31.00")]);
+    state.read_coverage.get_mut("product").unwrap().push_str(" Stoneware Mug 31.00");
+    assert!(!covered(&state, &here, &repriced));
+    // Another document's reading says nothing about this one.
+    let elsewhere = Observation { document_key: "basket".into(), ..here };
+    assert!(!covered(&state, &elsewhere, &read));
 }
 
 /// A page with no browser behind it, which cannot open the address it is given.

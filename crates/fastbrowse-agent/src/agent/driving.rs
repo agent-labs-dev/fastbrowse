@@ -20,6 +20,7 @@ use super::helpers::{
     redrawn_read, scheme_of, seen, signature, site_action, stale_link_key, try_unsure, unread, without_failed_links,
     without_missing,
 };
+use super::reading::covered;
 use super::state::{Flow, HttpFailure, RunState, Step, Stop, TransactionCandidate, Unsure};
 use super::{
     Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS, REPEATS_BEFORE_CYCLE, REVERSAL_WINDOW, SHORTCUT_WAIT_SECONDS,
@@ -294,13 +295,34 @@ impl Agent {
                 // Notes that evidence every requirement can still describe the page before the last interaction
                 // redrew it, so an answer owed after one is read off what it drew. A plan that only acts has nothing
                 // to read, and finishes without waiting.
-                if unread(&plan, &state.notes) || (state.owes_read && plan.page_answer_expected()) {
+                let unread_plan = unread(&plan, &state.notes);
+                let mut reading_owed = unread_plan || (state.owes_read && plan.page_answer_expected());
+                // Only the interaction's own claim is in question here: an unread requirement needs a read whatever the
+                // page shows, and a direction the reader named behind a control is carried out rather than traded for
+                // a read of the page that named it.
+                let capture = if reading_owed && !unread_plan && state.directed.is_none() {
+                    Some(self.capture().await?)
+                } else {
+                    None
+                };
+                if capture.as_ref().is_some_and(|capture| covered(state, &observation, capture)) {
+                    // The interaction redrew the page and the notes still describe it: everything they quote is still
+                    // shown and nothing on it is unread. A read would re-buy what they hold.
+                    state.owes_read = false;
+                    state.read_here = true;
+                    self.event("read_not_owed", || {
+                        Map::from_iter([("url".into(), self.redact(&observation.url).into())])
+                    });
+                    reading_owed = false;
+                }
+                if reading_owed {
                     let reading = Decision { operation: Operation::Read, target: None, ..decision.clone() };
                     // A read that ran spends the direction it was sent on, but may leave one of its own. A skipped
                     // read spends nothing.
                     let held = state.directed.take();
                     let recoveries = state.recoveries;
-                    if !Box::pin(self.step(state, &observation, &reading, decided_by, StepOptions::default())).await? {
+                    let options = StepOptions { capture, ..StepOptions::default() };
+                    if !Box::pin(self.step(state, &observation, &reading, decided_by, options)).await? {
                         if !(lookup(&plan)
                             && state.open_answer_outputs.is_empty()
                             && answered(&plan, &state.notes)
