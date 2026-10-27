@@ -171,7 +171,7 @@ jobs:
           path: fastbrowse
           fetch-depth: 0
           persist-credentials: false
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with: {python-version: "3.13"}
       # The pr-bot App reads the private parallax source; it is installed on that repo, not on this one.
       - name: Mint the pr-bot token
@@ -245,7 +245,7 @@ jobs:
           ref: ${{ needs.resolve.outputs.fastbrowse_sha }}
           path: fastbrowse
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with: {python-version: "3.13"}
       - uses: actions/create-github-app-token@5d869da34e18e7287c1daad50e0b8ea0f506ce69 # v2
         id: app
@@ -267,7 +267,7 @@ jobs:
           cd parallax
           uv sync --locked --extra browser --extra track
           uv pip install "$GITHUB_WORKSPACE/fastbrowse"
-      - uses: actions/download-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: {path: ledgers, merge-multiple: true}
       - name: Export the catalog
         run: |
@@ -319,7 +319,7 @@ jobs:
           git add docs/results/benchmark-candidate.json
           git commit -m "docs: stage the $CAMPAIGN_ID benchmark candidate"
           git push origin "campaign/$CAMPAIGN_ID"
-          gh pr create --fill --base main \
+          gh pr create --base main \
             --title "docs: stage the $CAMPAIGN_ID benchmark candidate" \
             --body "Staged by the Benchmark campaign workflow for \`$CAMPAIGN_ID\`. Review the figures, then approve with publish-evals.yml. This PR does not publish anything."
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
