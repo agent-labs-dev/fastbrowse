@@ -177,6 +177,7 @@ pub async fn run_task_with(
     fastbrowse_run::run_task(&args.task, options).await.map_err(|error| match error {
         fastbrowse_run::RunError::Invalid(message) => RunError::Failed(format!("ValueError: {message}")),
         fastbrowse_run::RunError::Configuration(message) => RunError::Configuration(message),
+        fastbrowse_run::RunError::Recording(message) => RunError::Failed(format!("RecordingError: {message}")),
         fastbrowse_run::RunError::Cancelled => RunError::Cancelled,
     })
 }

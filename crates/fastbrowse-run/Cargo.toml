@@ -8,7 +8,8 @@ description = "Port of src/fastbrowse/run.py: one task end to end, from the brow
 
 [dependencies]
 fastbrowse-agent = { path = "../fastbrowse-agent" }
-fastbrowse-browser = { path = "../fastbrowse-browser" }
+# `record` films the tab through ffmpeg and `cursor` draws through the Cua Driver: child processes, no extra crates.
+fastbrowse-browser = { path = "../fastbrowse-browser", features = ["recording", "cursor"] }
 fastbrowse-clients = { path = "../fastbrowse-clients" }
 fastbrowse-core = { path = "../fastbrowse-core" }
 # The HTML5 character reference tables `html.unescape` decodes a fetched document with.

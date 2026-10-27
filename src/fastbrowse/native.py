@@ -19,6 +19,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import InitErrorDetails, PydanticCustomError
 
+from fastbrowse.browser.recording import RecordingError
 from fastbrowse.clients.environment import ConfigurationError
 from fastbrowse.jev import (
     JevClient,
@@ -385,6 +386,8 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
         kind, message = exc.args
         if kind == "configuration":
             raise ConfigurationError(message) from None
+        if kind == "recording":
+            raise RecordingError(message) from None
         if kind == "cancelled":
             raise asyncio.CancelledError(message) from None
         if kind == "callback" and raised.first is not None:
