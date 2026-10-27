@@ -6,6 +6,11 @@ fastbrowse splits a browser agent into three owners:
 - **An LLM reads and writes.** Proposing a direct address for the task while the start page loads, planning checkable requirements from the task alone, reading page content for answers when Jev cannot pick a short fact from quoted spans, writing non-secret field text, recovering when Jev is unsure, verifying completion in the uncertain band, composing the final answer.
 - **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, budgets, and the definition of success: only `COMPLETE`, which requires every requirement evidenced.
 
+That loop runs in Rust, in [crates/](../crates): `fastbrowse-agent` holds the run loop, `fastbrowse-browser`
+the page and its indexing, `fastbrowse-clients` the Jev and LLM clients, and `fastbrowse-py` builds them as
+`fastbrowse._native` into the wheel. The Python modules are the same design in the fallback core that
+`FASTBROWSE_PYTHON_CORE=1` selects until 0.9.0 ([ADR 0004](adr/0004-rust-core-by-default.md)).
+
 ## Authorization
 
 Jev judges every model-selected click, including links, navigation to a caller-supplied address, every Enter press and acceptance of

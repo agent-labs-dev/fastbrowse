@@ -94,7 +94,8 @@ To work on fastbrowse itself:
 
 ```sh
 git clone https://github.com/agent-labs-dev/fastbrowse.git && cd fastbrowse
-uv sync --all-extras   # the extras carry mcp and browser_use_sdk, which the tests and evals import
+uv sync --all-extras   # the extras carry mcp and browser_use_sdk, which the tests and evals import;
+                       # this also builds the Rust core, so it needs cargo, which rustup installs at the version rust-toolchain.toml pins
 cp .env.example .env   # then fill in the keys, BROWSER_USE_API_KEY included, or pass --local
 uv run fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
@@ -287,6 +288,13 @@ causes and the next step.
 The LLM plans, reads and writes. Code owns the gates: irreversible actions stop without
 `--authorize`, secrets reach models by name only, and supported cookie banners are refused through autoconsent.
 More in [docs/design.md](docs/design.md).
+
+The core that runs the loop is Rust, in [crates/](crates), and 0.8.0 runs it by default: `run_task`,
+`fastbrowse`, `fastbrowse serve` and `fastbrowse-mcp` hand their work to it, and the `fastbrowse` wheel
+carries it as `fastbrowse._native`. `FASTBROWSE_PYTHON_CORE=1` runs the Python modules instead, so a
+behaviour change lands in both cores until 0.9.0 removes them. The two reach the same result on all 36
+fixture tasks, and the Rust core uses 18x less agent CPU, starts 54x faster and peaks at 5.4x less memory
+([measurements](bench/results/rust-vs-python.md)).
 
 ## How it compares
 
