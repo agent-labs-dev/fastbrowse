@@ -1072,8 +1072,13 @@ class CdpPage(Page):
             # the page it was on, so nothing on the page changed. The download is the action's whole effect, and
             # the text it carries is only read by the next observation, so the run must not be told the click did
             # nothing and must not observe before the captured file is there to read.
-            changed = True
-            detail = detail or "downloaded the file the link points at"
+            # Saving a file an earlier click already saved is not an effect: an exports page whose one link
+            # was clicked four times, each time rewriting the same CSV, kept the run's click loop going.
+            if self._session.repeated_download(downloads_before):
+                detail = detail or "saved the same file again, which changes nothing"
+            else:
+                changed = True
+                detail = detail or "downloaded the file the link points at"
         unchanged = False
         if action.form_fill and not changed and target is not None and not action.secret:
             unchanged = await self._form_unchanged(target, action.text or "")

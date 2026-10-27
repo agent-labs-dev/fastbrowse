@@ -25,6 +25,7 @@ use super::helpers::{
     caller_link, code_decision, describe, dialog_question, lookup, misfit, navigation_question, next_value,
     only_typed_since_read, read_exhausted, record, seen, unread, unread_transaction,
 };
+use super::reading::covered;
 use super::sign_in::shows_sign_in;
 use super::state::{FieldText, Flow, RunState, Step, Stop, Unsure};
 use super::{Agent, GENERATE};
@@ -996,9 +997,19 @@ impl Agent {
         if !transaction_pending && !unread(&plan, &state.notes) {
             return Ok(false);
         }
-        // An interaction can remove evidence, so read first and reconsider before authorizing the next action.
+        // An interaction can remove evidence, so read first and reconsider before authorizing the next action. But an
+        // interaction that only redrew what the notes hold, such as a tab opened on text already read or a row
+        // expanded over it, leaves nothing to preserve, and reading it again spends a model call on nothing.
+        let capture = self.capture().await?;
+        if !transaction_pending && covered(state, observation, &capture) {
+            self.event("read_not_owed", || Map::from_iter([("url".into(), self.redact(&observation.url).into())]));
+            state.owes_read = false;
+            state.read_here = true;
+            return Ok(false);
+        }
         let reading = Decision { operation: Operation::Read, target: None, ..decision.clone() };
-        let skipped = Box::pin(self.step(state, observation, &reading, decided_by, StepOptions::default())).await?;
+        let options = StepOptions { capture: Some(capture), ..StepOptions::default() };
+        let skipped = Box::pin(self.step(state, observation, &reading, decided_by, options)).await?;
         Ok(transaction_pending || !skipped)
     }
 
