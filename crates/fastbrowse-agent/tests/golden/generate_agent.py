@@ -1498,6 +1498,20 @@ def scenarios() -> list[dict[str, Any]]:
     )
 
     scenario(
+        "a password field no stored secret may reach stops needs_login",
+        "Log in to acme.test",
+        {
+            "start": "blank",
+            "screens": {"blank": screen("about:blank", "", ""), "login": signin},
+            "urls": {"https://acme.test/login": "login"},
+        },
+        {"Plan": [plan(("a1", "Log in", "action"), answer=False)]},
+        start="https://acme.test/login",
+        jev={"pick": {"operation": "fill"}, "noul": 0.1},
+        secrets={"vault_password": ["kept", ["https://shop.test"]]},
+    )
+
+    scenario(
         "a download the task asks for is dispatched after one question, and the step limit ends the run",
         "Download version 2.0 from files.test",
         {
