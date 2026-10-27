@@ -231,8 +231,9 @@ limit. It stops rather than guess.
 - A file is larger than `Config.max_upload_bytes` (25 MiB by default): `<name> exceeds the upload size limit`.
 - A password change without a replacement secret: `A replacement password requires --secret
   new_password=ENV_VAR@https://host; set ENV_VAR to the new value instead of putting it in the task.`
-- A secret declared for another origin than the one the run is typing on:
-  `secret <name> is not available for <origin>`.
+- A secret declared for the origin that resolves to nothing, such as a password manager item that changed
+  during the run: `secret <name> is not available for <origin>`. A secret declared for another origin ends
+  `needs_login` instead, see [needs_login](#needs_login-exit-4).
 - A drag with nowhere to drop: `the page offers no drop target for the drag`.
 - An address the run would open contains a resolved secret: `navigation address contains a resolved secret`.
 
