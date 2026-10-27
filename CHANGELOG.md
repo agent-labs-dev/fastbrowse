@@ -11,6 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A field is offered only the secrets its own origin may receive, on both cores.** A password manager offers
+  its names across every site it holds, so a sign-in on a site none of them covers used to offer those names
+  anyway, and the run ended `needs_input` naming a secret the page could never get. It now ends
+  `needs_login`, which tells the caller a login for that site is what is missing.
+
 - **A click that only redraws a page already read no longer buys another read.** Sorting a list, closing a banner, opening a tab or expanding a row set the run owing a full reader call, which re-read facts the notes already held. The run now compares the page with what it has read from that document: a block it never read, or a quoted value the page no longer shows, still sends the read, and a pending order or a control the reader named is always read. The reader is also sent only the guidance its page can use, so a page with no records or pager no longer carries the tally, ranking and paging instructions. A click that saves the same file an earlier click saved is reported as changing nothing, so a run stops clicking one export link over and over. Both cores carry the change.
 
 - **A download the run cannot keep is now reported, and the ceiling is the caller's.** Downloads arrive whole over the DevTools socket, so a run keeps them up to `Config.max_download_bytes` (512 MiB by default) and used to drop anything larger without a word: no artifact, no count, no error, so a run that clicked a large export reported success with no file. Over the ceiling the response's stated `Content-Length` is refused before the body is fetched, the refusal is recorded, and the observation says `[Download not kept: ... nothing was saved]` once so the run reports the file as not downloaded. A caller that knows the size of the file it asked for, such as a workspace export or a database dump, raises the limit deliberately. The file's name now comes from the response's `filename*` (RFC 5987, including a language tag) with a safe fallback to the URL's path segment, so a signed query string no longer becomes part of the name on disk. `responseHeaders` is read in either shape CDP delivers it in.

@@ -399,9 +399,11 @@ impl Agent {
     }
 
     async fn text(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Step<String> {
-        let secrets: Vec<String> =
-            self.secrets.as_ref().map_or_else(Vec::new, |s| s.available().into_iter().map(|r| r.name).collect());
         let origin = self.target_origin(target);
+        // Only what this field's own frame may receive: a password manager offers its names across every site it
+        // holds, and offering one that cannot be typed here ended a sign-in at needs_input, naming a secret the
+        // page was never going to get, where needs_login says what the caller can fix.
+        let secrets = self.secret_names(&origin);
         if target.sensitive {
             return self.sensitive_text(state, observation, target, secrets, &origin).await;
         }
