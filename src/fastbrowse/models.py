@@ -1,5 +1,7 @@
 """Run-level contracts: what a caller passes in and what a run returns."""
 
+from __future__ import annotations
+
 import base64
 from collections.abc import Awaitable, Callable, Iterable
 from datetime import datetime
@@ -211,7 +213,7 @@ class LLMPurpose(StrEnum):
     SHORTCUT = "shortcut"
 
 
-def combined_basis(lines: Iterable["CostLine"]) -> CostBasis:
+def combined_basis(lines: Iterable[CostLine]) -> CostBasis:
     """The basis of a sum of lines: the weakest claim among them. A bound plus an estimate is an estimate, since
     the estimate may be under its charge."""
     bases = {line.basis for line in lines}

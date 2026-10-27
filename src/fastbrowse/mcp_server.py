@@ -18,6 +18,8 @@ Model keys come from the environment as for the CLI. An MCP client starts this p
 its own choosing, so pass them in the client's `env` block rather than relying on a `.env` file.
 """
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import hmac
