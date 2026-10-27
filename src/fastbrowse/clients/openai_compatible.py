@@ -1,5 +1,7 @@
 """Structured chat completions with one schema repair and complete usage accounting."""
 
+from __future__ import annotations
+
 import asyncio
 import base64
 from collections.abc import Mapping, Sequence

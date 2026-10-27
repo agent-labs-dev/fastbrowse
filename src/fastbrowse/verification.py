@@ -4,6 +4,8 @@ Jev checks completion, individual action requirements and draft quality. An LLM 
 when those answers leave completion uncertain.
 """
 
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import json
