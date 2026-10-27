@@ -2,7 +2,11 @@
 
 import asyncio
 import importlib
+import json
+import time
 from pathlib import Path
+from urllib.parse import urlsplit
+from urllib.request import urlopen
 
 import pytest
 
@@ -99,3 +103,56 @@ async def test_a_download_goes_to_the_callers_artifact_sink(
             await asyncio.sleep(0.05)
         assert [artifact.uri for artifact in page.artifacts] == [artifact.uri for artifact in sink.artifacts]
     assert len(sink.artifacts) == 1
+
+
+def pages(cdp_url: str) -> set[str]:
+    """The ids of the pages Chrome has open, read from its HTTP endpoint without a session of our own."""
+    address = urlsplit(cdp_url)
+    with urlopen(f"http://{address.netloc}/json/list", timeout=5) as response:
+        return {target["id"] for target in json.load(response) if target["type"] == "page"}
+
+
+def hold_until_open(cdp_url: str, before: set[str]) -> None:
+    """Block the event loop until `connect_cdp` has opened a tab and returned, so its answer waits on the loop."""
+    deadline = time.monotonic() + 10
+    while not pages(cdp_url) - before and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert pages(cdp_url) - before, "connect_cdp opened no tab"
+    time.sleep(1)  # The tab is set up within milliseconds of appearing; this lets the open return.
+
+
+async def cancelled_once_open(cdp_url: str, *, after_settling: bool) -> set[str]:
+    """Cancel `connect_cdp` once its tab is open, and answer the pages it left behind.
+
+    The loop is held while the core finishes opening, so its answer is queued behind the hold: the cancel lands either
+    before the answer settles the core's future, or after it settled but before the waiting task resumed.
+    """
+    before = pages(cdp_url)
+
+    async def enter() -> None:
+        async with connect_cdp(cdp_url=cdp_url, attach=False):
+            pytest.fail("a cancelled open yielded its page")
+
+    task = asyncio.create_task(enter())
+    await asyncio.sleep(0)
+    hold_until_open(cdp_url, before)
+    if after_settling:
+        asyncio.get_running_loop().call_soon(task.cancel)
+    else:
+        task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    for _ in range(100):
+        if not pages(cdp_url) - before:
+            break
+        await asyncio.sleep(0.05)
+    return pages(cdp_url) - before
+
+
+@pytest.mark.timeout(60)
+@pytest.mark.parametrize("after_settling", [False, True], ids=["before-the-page-arrives", "as-the-page-arrives"])
+async def test_a_cancelled_open_closes_the_tab_it_opened(
+    chrome_connection: BrowserConnection, monkeypatch: pytest.MonkeyPatch, after_settling: bool
+) -> None:
+    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
+    assert await cancelled_once_open(chrome_connection.cdp_url, after_settling=after_settling) == set()
