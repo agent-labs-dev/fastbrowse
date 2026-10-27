@@ -278,12 +278,14 @@ fn run_task(
                     let py = args.py();
                     let result = result.bind(py);
                     if !result.call_method0("done")?.is_truthy()? {
+                        // A callback that failed stopped the run, though the run may have ended on its own in the
+                        // same moment; the callback's exception is what the caller hears either way.
                         let error = match &outcome {
+                            _ if failure.failed() => Some(refused("callback", String::new())),
                             Ok(answered) => {
                                 result.call_method1("set_result", (answered.dump_json(),))?;
                                 None
                             }
-                            Err(_) if failure.failed() => Some(refused("callback", String::new())),
                             Err(RunError::Cancelled) => Some(refused("cancelled", "the run was cancelled".into())),
                             Err(RunError::Invalid(message)) => Some(refused("invalid", message.clone())),
                             Err(RunError::Configuration(message)) => Some(refused("configuration", message.clone())),
