@@ -23,7 +23,7 @@ env:
 jobs:
   select:
     permissions: {issues: write, pull-requests: read}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     # One selection at a time: an issue is labelled before this job ends, so the next run never picks it again.
     concurrency:
       group: claude-issue-pr-select
@@ -87,7 +87,7 @@ jobs:
     needs: select
     if: needs.select.outputs.issues != '[]'
     permissions: {contents: read, issues: read}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -177,7 +177,7 @@ jobs:
     needs: [select, implement]
     if: always() && needs.select.outputs.issues != '[]'
     permissions: {contents: write, pull-requests: write}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     concurrency:
       group: claude-issue-pr-publish
       cancel-in-progress: false

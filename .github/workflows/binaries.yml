@@ -22,15 +22,17 @@ jobs:
       fail-fast: false
       matrix:
         # PyInstaller cannot build for another platform, and pydantic-core is compiled, so each target is built
-        # on a runner of its own kind. The labels name an image and never `-latest`: the oldest still offered
-        # per target, since a build runs on the system it was built on and on newer ones. `macos-15-intel` is
-        # the last Intel image GitHub offers besides `macos-26-intel`.
+        # on a runner of its own kind. macOS on Apple silicon and Windows run on Blacksmith, whose GitHub-hosted
+        # counterparts queued for most of a run. The Linux builds stay on GitHub's Ubuntu 22.04, the oldest glibc
+        # offered, since a build runs on the system it was built on and on newer ones, and every Blacksmith Linux
+        # image is 24.04. `macos-15-intel` is the last Intel image GitHub offers besides `macos-26-intel`, and
+        # Blacksmith has no Intel Macs.
         include:
-          - {target: darwin-arm64, runner: macos-14}
+          - {target: darwin-arm64, runner: blacksmith-6vcpu-macos-26}
           - {target: darwin-x64, runner: macos-15-intel}
           - {target: linux-x64, runner: ubuntu-22.04}
           - {target: linux-arm64, runner: ubuntu-22.04-arm}
-          - {target: win32-x64, runner: windows-2022}
+          - {target: win32-x64, runner: blacksmith-8vcpu-windows-2025}
     env:
       TARGET: ${{ matrix.target }}
       # `uv sync` takes the image's own Python when the image already has the version asked for, and the freeze
@@ -107,14 +109,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Each target on a runner of its own kind, the images the PyInstaller job uses, so no cross linker is
+        # Each target on a runner of its own kind, the ones the PyInstaller job uses, so no cross linker is
         # needed and the Linux builds link the glibc of Ubuntu 22.04, as the PyInstaller ones do.
         include:
-          - {target: darwin-arm64, triple: aarch64-apple-darwin, runner: macos-14, addon: libfastbrowse_node.dylib}
+          - {target: darwin-arm64, triple: aarch64-apple-darwin, runner: blacksmith-6vcpu-macos-26, addon: libfastbrowse_node.dylib}
           - {target: darwin-x64, triple: x86_64-apple-darwin, runner: macos-15-intel, addon: libfastbrowse_node.dylib}
           - {target: linux-x64, triple: x86_64-unknown-linux-gnu, runner: ubuntu-22.04, addon: libfastbrowse_node.so}
           - {target: linux-arm64, triple: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm, addon: libfastbrowse_node.so}
-          - {target: win32-x64, triple: x86_64-pc-windows-msvc, runner: windows-2022, addon: fastbrowse_node.dll}
+          - {target: win32-x64, triple: x86_64-pc-windows-msvc, runner: blacksmith-8vcpu-windows-2025, addon: fastbrowse_node.dll}
     env:
       TARGET: ${{ matrix.target }}
       TRIPLE: ${{ matrix.triple }}

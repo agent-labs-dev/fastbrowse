@@ -25,7 +25,7 @@ on:
 permissions: {}
 jobs:
   package:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read}
     # The push to the AUR authenticates over SSH rather than with this job's token. A step `if` may not read
     # `secrets`, so the key is read once into the environment and every step tests that instead.
