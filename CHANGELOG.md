@@ -11,6 +11,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-27
+
+- **0.8 is the Rust-core release: the Rust core is what runs, and the Python core is the way back for one more
+  release.** `run_task`, `connect_cdp`, the `fastbrowse` and `fastbrowse-mcp` commands all run on the Rust core
+  that has been the default since 0.7.4, and the npm packages ship the Rust binary and the Node addon.
+  `FASTBROWSE_PYTHON_CORE=1` still runs the Python core, and 0.9.0 removes it ([ADR 0004](docs/adr/0004-rust-core-by-default.md)).
+
 - **A field is offered only the secrets its own origin may receive, on both cores.** A password manager offers
   its names across every site it holds, so a sign-in on a site none of them covers used to offer those names
   anyway, and the run ended `needs_input` naming a secret the page could never get. It now ends
@@ -1572,7 +1579,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.7.4...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.0
 [0.7.4]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.4
 [0.7.3]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.3
 [0.7.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.1
