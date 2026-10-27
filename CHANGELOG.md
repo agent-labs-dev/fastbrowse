@@ -9,6 +9,8 @@ Added/Fixed lists: what matters about a browser agent's release is why a behavio
 Released entries describe the corresponding package on PyPI; `Unreleased` describes changes awaiting a
 release. Older entries are kept verbatim rather than rewritten as the product moves.
 
+## [Unreleased]
+
 ## [0.8.0] - 2026-10-27
 
 - **A sign-in field whose secret cannot be produced ends `needs_login`, not `needs_input`.** A credential field offered a secret declared for its origin that the resolver then could not produce, such as a locked vault or an item removed during the run, ended `needs_input` with `secret <name> is not available for <origin>`, asking the caller for a value it had already given. It now stops `needs_login` with `sign-in required at <origin>: secret <name> is not available there` and `RunResult.wall` set. A field that takes no credential still ends `needs_input`. Both cores carry the change.
