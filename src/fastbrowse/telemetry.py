@@ -177,6 +177,12 @@ class _Collect(logging.Handler):
             self.events.append(getattr(record, "trace", record.getMessage()))
 
 
+def collecting() -> list[object] | None:
+    """The list `traced()` is collecting into in this context, if one is, for events made outside this process's
+    logger: the Rust core's, which `fastbrowse.native` adds."""
+    return _trace_events.get()
+
+
 @contextmanager
 def traced() -> Generator[list[object]]:
     """Trace records from this context and its child tasks only, so runs that overlap keep separate traces."""

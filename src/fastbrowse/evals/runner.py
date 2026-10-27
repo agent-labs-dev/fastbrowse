@@ -23,14 +23,11 @@ from collections import Counter
 from pathlib import Path
 from typing import cast
 
-import httpx
 from pydantic import Field
 
 from fastbrowse.adapters.local_chrome import local_chrome
-from fastbrowse.agent import Agent
 from fastbrowse.artifacts import DirectorySink
-from fastbrowse.browser import BrowserSession, CdpPage
-from fastbrowse.clients.environment import Settings, load_settings
+from fastbrowse.clients.environment import load_settings
 from fastbrowse.config import Config
 from fastbrowse.evals.local import Recorder, fixture_server
 from fastbrowse.evals.mock import mock_site
@@ -48,6 +45,7 @@ from fastbrowse.models import (
     Limits,
     RunResult,
 )
+from fastbrowse.run import run_task as run_fastbrowse
 from fastbrowse.safety import ScopedSecrets, origin_of
 from fastbrowse.telemetry import traced, transient_seconds
 
@@ -188,29 +186,28 @@ async def _drive(
     task: LocalTask | MockTask,
     start: str,
     connection: BrowserConnection,
-    http: httpx.AsyncClient,
     sink: DirectorySink,
-    settings: Settings,
     secrets: ScopedSecrets | None,
     limits: Limits,
     attachments: tuple[Attachment, ...] = (),
 ) -> tuple[RunResult, float, float]:
-    """One run of one task, returning its result and how long it took, wall and transient."""
-    config = fixture_config()
-    jev, llm = settings.jev(http), settings.llm(http)
+    """One run of one task through `run_task`, on whichever core the package runs, returning its result and how long
+    it took, wall and transient. Either core's model clients trace their transient failures into `traced()`."""
     started = time.monotonic()
     with traced() as events:
-        async with BrowserSession(connection, sink, refuse_cookie_banners=config.refuse_cookie_banners) as session:
-            page = CdpPage(session, config)
-            result = await Agent(page, jev, llm, config=config, secrets=secrets).run(
-                task.task,
-                start=start,
-                inputs=task.inputs,
-                attachments=attachments,
-                output_schema=task.output_schema,
-                limits=limits,
-                authorization=task.authorization,
-            )
+        result = await run_fastbrowse(
+            task.task,
+            start=start,
+            cdp_url=connection.cdp_url,
+            config=fixture_config(),
+            secrets=secrets,
+            inputs=task.inputs,
+            attachments=attachments,
+            output_schema=task.output_schema,
+            limits=limits,
+            authorization=task.authorization,
+            downloads=sink.root,
+        )
     ended = time.monotonic()
     return result, ended - started, transient_seconds(events, started, ended)
 
@@ -220,14 +217,12 @@ async def run_task(
     base_url: str,
     recorder: Recorder,
     connection: BrowserConnection,
-    http: httpx.AsyncClient,
     sink: DirectorySink,
-    settings: Settings,
     *,
     limits: Limits = LOCAL_LIMITS,
 ) -> dict[str, object]:
     recorder.clear()
-    result, seconds, lost = await _drive(task, base_url + task.start, connection, http, sink, settings, None, limits)
+    result, seconds, lost = await _drive(task, base_url + task.start, connection, sink, None, limits)
     failure = task.check(result, recorder.snapshot())
     return {"arm": "fastbrowse", "category": "fixture", "suite": "local"} | _row(
         result, task_id=task.id, failure=failure, seconds=seconds, lost=lost, limit=limits.max_steps
@@ -237,9 +232,7 @@ async def run_task(
 async def run_mock_task(
     task: MockTask,
     connection: BrowserConnection,
-    http: httpx.AsyncClient,
     sink: DirectorySink,
-    settings: Settings,
     *,
     limits: Limits = MOCK_LIMITS,
 ) -> dict[str, object]:
@@ -247,15 +240,7 @@ async def run_mock_task(
     with mock_site() as (base_url, site):
         secrets = ScopedSecrets(task.secrets, origin_of(base_url)) if task.secrets else None
         result, seconds, lost = await _drive(
-            task,
-            base_url + task.start,
-            connection,
-            http,
-            sink,
-            settings,
-            secrets,
-            limits,
-            task.attachments,
+            task, base_url + task.start, connection, sink, secrets, limits, task.attachments
         )
         failure = task.check(result, site)
         extra = {
@@ -326,57 +311,56 @@ async def main(argv: list[str]) -> int:
         tempfile.TemporaryDirectory() as downloads,
         args.out.open("a", encoding="utf-8") as out,
     ):
-        async with httpx.AsyncClient(timeout=60) as http:
-            for repeat in range(args.repeat):
-                for suite, task in chosen:
-                    if campaign is not None and (
-                        campaign.receipt.remaining <= 0
-                        or campaign.receipt.unknown_reserved_usd
-                        or campaign.receipt.unknown_cost
-                    ):
-                        print("Fixture campaign budget is committed; no further run admitted", flush=True)
-                        return 1
-                    limits = (
-                        campaign.reserve(task.id, repeat)
-                        if campaign is not None
-                        else (LOCAL_LIMITS if suite == "local" else MOCK_LIMITS)
-                    )
-                    sink = DirectorySink(Path(downloads))
-                    if suite == "local":
-                        assert isinstance(task, LocalTask)
-                        row = await run_task(task, base_url, recorder, connection, http, sink, settings, limits=limits)
-                    else:
-                        assert isinstance(task, MockTask)
-                        row = await run_mock_task(task, connection, http, sink, settings, limits=limits)
-                    row |= {
-                        "run": run
-                        | {
-                            "agent_limits": limits.model_dump(mode="json"),
-                            "budget_usd": args.budget,
-                            "budget_policy": "remaining-campaign-v1" if campaign is not None else "fixture-default-v1",
-                        },
-                        "suite_version": stamps[suite],
-                        "task_version": task_version(task.id, lock),
-                        "repeat": repeat,
-                    }
-                    rows.append(row)
-                    out.write(json.dumps(row) + "\n")
-                    out.flush()
-                    if campaign is not None:
-                        campaign.settle(CostBreakdown.model_validate(row["cost"]))
-                    mark = "PASS" if row["passed"] else "FAIL"
+        for repeat in range(args.repeat):
+            for suite, task in chosen:
+                if campaign is not None and (
+                    campaign.receipt.remaining <= 0
+                    or campaign.receipt.unknown_reserved_usd
+                    or campaign.receipt.unknown_cost
+                ):
+                    print("Fixture campaign budget is committed; no further run admitted", flush=True)
+                    return 1
+                limits = (
+                    campaign.reserve(task.id, repeat)
+                    if campaign is not None
+                    else (LOCAL_LIMITS if suite == "local" else MOCK_LIMITS)
+                )
+                sink = DirectorySink(Path(downloads))
+                if suite == "local":
+                    assert isinstance(task, LocalTask)
+                    row = await run_task(task, base_url, recorder, connection, sink, limits=limits)
+                else:
+                    assert isinstance(task, MockTask)
+                    row = await run_mock_task(task, connection, sink, limits=limits)
+                row |= {
+                    "run": run
+                    | {
+                        "agent_limits": limits.model_dump(mode="json"),
+                        "budget_usd": args.budget,
+                        "budget_policy": "remaining-campaign-v1" if campaign is not None else "fixture-default-v1",
+                    },
+                    "suite_version": stamps[suite],
+                    "task_version": task_version(task.id, lock),
+                    "repeat": repeat,
+                }
+                rows.append(row)
+                out.write(json.dumps(row) + "\n")
+                out.flush()
+                if campaign is not None:
+                    campaign.settle(CostBreakdown.model_validate(row["cost"]))
+                mark = "PASS" if row["passed"] else "FAIL"
+                print(
+                    f"{mark} {suite:5} {task.id:26} {row['status']:20} {row['seconds']:>6}s ${row['dollars']!s:<8}",
+                    row["failure"] or "",
+                    flush=True,
+                )
+                used = cast("int", row["steps"])
+                budget = limits.max_steps
+                if budget is not None and used > HEADROOM * budget:
                     print(
-                        f"{mark} {suite:5} {task.id:26} {row['status']:20} {row['seconds']:>6}s ${row['dollars']!s:<8}",
-                        row["failure"] or "",
-                        flush=True,
+                        f"WARN  {suite:5} {task.id:26} {used} of {budget} steps used "
+                        f"({used / budget:.0%} of the budget)"
                     )
-                    used = cast("int", row["steps"])
-                    budget = limits.max_steps
-                    if budget is not None and used > HEADROOM * budget:
-                        print(
-                            f"WARN  {suite:5} {task.id:26} {used} of {budget} steps used "
-                            f"({used / budget:.0%} of the budget)"
-                        )
     passed = sum(bool(r["passed"]) for r in rows)
     print(f"{passed}/{len(rows)} passed")
     return 0 if passed == len(rows) else 1

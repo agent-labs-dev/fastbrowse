@@ -10,6 +10,10 @@ class DirectorySink:
     def __init__(self, root: Path) -> None:
         self._root = root.resolve()
 
+    @property
+    def root(self) -> Path:
+        return self._root
+
     async def put(self, kind: ArtifactKind, name: str, mime_type: str, content: bytes) -> Artifact:
         digest = hashlib.sha256(content).hexdigest()
         # Content-addressed so a hostile filename can neither escape the root nor overwrite another artifact.

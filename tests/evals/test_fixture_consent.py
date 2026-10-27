@@ -4,9 +4,9 @@ import asyncio
 from pathlib import Path
 from unittest.mock import Mock
 
-import httpx
 import pytest
 
+from fastbrowse import run
 from fastbrowse.adapters.local_chrome import find_chrome, local_chrome
 from fastbrowse.artifacts import DirectorySink
 from fastbrowse.browser import BrowserSession, CdpPage
@@ -58,13 +58,14 @@ async def test_fixture_session_leaves_the_scripted_banner_for_the_agent(
                 artifacts=(),
             )
 
-    monkeypatch.setattr(runner, "Agent", Observer)
+    # The agent `run_task` builds on the Python core; its model clients are built and never asked anything.
+    monkeypatch.setattr(run, "Agent", Observer)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "unused")
     task = next(task for task in TASKS if task.id == "mock-support-portal")
     with mock_site() as (base, _site), local_chrome(LocalChrome()) as browser:
-        async with httpx.AsyncClient() as http:
-            result, _, _ = await runner._drive(
-                task, base + task.start, browser, http, DirectorySink(tmp_path), Mock(), None, runner.MOCK_LIMITS
-            )
+        result, _, _ = await runner._drive(
+            task, base + task.start, browser, DirectorySink(tmp_path), None, runner.MOCK_LIMITS
+        )
     assert isinstance(result.data, list)
     assert "Accept all" in result.data
     assert "Dismiss" in result.data

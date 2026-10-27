@@ -14,6 +14,7 @@ import importlib
 import json
 import signal
 import sys
+import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from typing import Any, ClassVar, NoReturn
@@ -65,7 +66,7 @@ from fastbrowse.page import (
     ScreenshotsUnavailable,
     SiteUnreachable,
 )
-from fastbrowse.telemetry import BudgetExceeded
+from fastbrowse.telemetry import BudgetExceeded, collecting
 
 _EVENT: TypeAdapter[StepEvent | BrowserEvent] = TypeAdapter(StepEvent | BrowserEvent)
 _QUESTIONS: TypeAdapter[dict[str, Question]] = TypeAdapter(dict[str, Question])
@@ -388,6 +389,8 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
         if on_event is not None:
             await on_event(_event(payload))
 
+    # A `traced()` block collecting this run's events gets the core's too, as it gets the Python core's.
+    events = collecting()
     native = core.run_task(
         task,
         options(arguments),
@@ -399,6 +402,7 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
         jev=None if jev is None else _jev(jev),
         llm=None if llm is None else _llm(llm),
         http=None if http is None else _http(http),
+        trace=events is not None,
     )
     try:
         payload = await native
@@ -417,7 +421,18 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
         # Python's `run_task` closes its browser before the cancellation reaches its caller, and so does this.
         await asyncio.shield(native.finished)
         raise
+    finally:
+        if events is not None:
+            events.extend(_on_this_clock(json.loads(native.trace_events()), time.monotonic() - core.monotonic()))
     return RunResult.model_validate_json(payload)
+
+
+def _on_this_clock(events: list[dict[str, Any]], offset: float) -> list[dict[str, Any]]:
+    """The core's trace events with their times moved onto `time.monotonic()`, which Python's are read on."""
+    return [
+        event | {name: event[name] + offset for name in ("began", "ended") if isinstance(event.get(name), int | float)}
+        for event in events
+    ]
 
 
 _PAGE_ERRORS: dict[str, type[BrowserError]] = {
