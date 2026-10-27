@@ -22,6 +22,17 @@ def test_a_documented_flag_the_parser_has_passes() -> None:
     assert check_flags(copy, 'Opt::value("--real")') == []
 
 
+def test_a_flag_named_only_in_prose_is_not_a_declared_flag() -> None:
+    copy = {"README.md": "| `--gone` | removed |\n"}
+    code = 'parser.add_argument("--kept")\nraise ValueError("--gone was removed")'
+    assert check_flags(copy, code) == ["README.md: `--gone` is documented but no parser defines it"]
+
+
+def test_an_argparse_declaration_defines_a_flag() -> None:
+    copy = {"README.md": "| `--kept` | kept |\n"}
+    assert check_flags(copy, 'parser.add_argument(\n        "--kept", action="store_true")') == []
+
+
 def test_a_prose_mention_of_a_flag_is_not_a_table_claim() -> None:
     copy = {"README.md": "Pass the debugging flag to Chrome.\n"}
     assert check_flags(copy, "") == []
@@ -72,6 +83,17 @@ def test_an_exit_code_that_drifted_from_the_cli_is_reported(tmp_path: Path) -> N
         "docs/troubleshooting.md": "## stuck (exit 9)\n",
     }
     assert check_statuses(root, copy) == ["README.md: `stuck` exits 8, but the CLI exits 9"]
+
+
+def test_a_status_with_no_exit_code_is_reported(tmp_path: Path) -> None:
+    root = _status_repo(tmp_path)
+    cli = root / "src" / "fastbrowse" / "cli.py"
+    cli.write_text("EXIT_CODES = {\n    Status.COMPLETE: 0,\n}\n", encoding="utf-8")
+    copy = {
+        "README.md": "| `complete` | 0 |\n| `stuck` | 9 |\n",
+        "docs/troubleshooting.md": "## stuck (exit 9)\n",
+    }
+    assert check_statuses(root, copy) == ["src/fastbrowse/cli.py: `stuck` has no exit code in EXIT_CODES"]
 
 
 def test_a_troubleshooting_section_that_drifted_is_reported(tmp_path: Path) -> None:

@@ -40,8 +40,13 @@ COPY = (
 MEDIA_RECORD = "docs/assets/media.json"
 
 CODE = ("src", "crates")
+# Installed or built trees: what a dependency reads is not a setting this package has.
+NOT_OURS = {".git", ".venv", "node_modules", "target", "dist", "build"}
 
 FLAG = re.compile(r"--[a-z0-9][a-z0-9-]*")
+# A flag exists when a parser declares it: argparse's `add_argument("--x", ...)` or the Rust CLI's
+# `Opt::flag("--x")`. A flag named only in a docstring or an error message does not count.
+FLAG_DECLARATION = re.compile(r'(?:add_argument\(\s*(?:"-[a-z]",\s*)?|Opt::[a-z]+\(\s*)"(--[a-z0-9][a-z0-9-]*)"')
 ENV = re.compile(r"FASTBROWSE_[A-Z0-9_]+")
 LINK = re.compile(r"\]\(([^)\s]+)")
 STATUS_ROW = re.compile(r"^\| `([a-z_]+)` \| (\d+) \|", re.MULTILINE)
@@ -64,10 +69,13 @@ def code_text(root: Path) -> str:
     return "\n".join(parts)
 
 
-def repo_text(root: Path) -> str:
+def implementation_text(root: Path) -> str:
+    """Everything that could read a setting: code, scripts, configuration and workflows, but no prose."""
     parts = []
     for path in root.rglob("*"):
-        if path.is_file() and path.suffix in {".py", ".rs", ".toml", ".md", ".sh", ".yml"}:
+        if NOT_OURS.intersection(path.relative_to(root).parts):
+            continue
+        if path.is_file() and path.suffix in {".py", ".rs", ".toml", ".sh", ".yml", ".ts", ".js"}:
             parts.append(read(path))
     return "\n".join(parts)
 
@@ -86,7 +94,7 @@ def exit_codes(root: Path) -> dict[str, str]:
 
 def check_flags(copy: dict[str, str], code: str) -> list[str]:
     """A flag in a README table is a flag the command line or the MCP server parses."""
-    known = set(FLAG.findall(code))
+    known = set(FLAG_DECLARATION.findall(code))
     problems = []
     for name, text in copy.items():
         for line in text.splitlines():
@@ -98,9 +106,9 @@ def check_flags(copy: dict[str, str], code: str) -> list[str]:
     return problems
 
 
-def check_env(copy: dict[str, str], everything: str) -> list[str]:
+def check_env(copy: dict[str, str], implementation: str) -> list[str]:
     """A documented setting is one the package reads."""
-    known = set(ENV.findall(everything))
+    known = set(ENV.findall(implementation))
     problems = []
     for name, text in copy.items():
         for setting in sorted(set(ENV.findall(text))):
@@ -113,7 +121,11 @@ def check_statuses(root: Path, copy: dict[str, str]) -> list[str]:
     """The status table in the README and the troubleshooting headings name every status, with its exit code."""
     names = set(statuses(root).values())
     codes = exit_codes(root)
-    problems = []
+    problems = [
+        f"src/fastbrowse/cli.py: `{name}` has no exit code in EXIT_CODES"
+        for member, name in statuses(root).items()
+        if member not in codes
+    ]
 
     readme = copy.get("README.md", "")
     rows = {name: code for name, code in STATUS_ROW.findall(readme)}
@@ -230,7 +242,9 @@ def check(root: Path = ROOT) -> list[str]:
     problems = [f"{name}: listed as product copy but not in the repository" for name in missing]
     problems += check_links(root, copy)
     problems += check_flags(copy, code_text(root))
-    problems += check_env(copy, repo_text(root))
+    # The changelog keeps old entries verbatim, so it still names settings a release removed.
+    current = {name: text for name, text in copy.items() if name != "CHANGELOG.md"}
+    problems += check_env(current, implementation_text(root))
     problems += check_statuses(root, copy)
     problems += check_changelog(root, copy)
     problems += check_media(root, copy)
