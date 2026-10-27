@@ -8,6 +8,8 @@ one catches a doc that has drifted from the code.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import sys
 from pathlib import Path
@@ -35,12 +37,15 @@ COPY = (
     "skills/fastbrowse/references/browser-access.md",
 )
 
+MEDIA_RECORD = "docs/assets/media.json"
+
 CODE = ("src", "crates")
 
 FLAG = re.compile(r"--[a-z0-9][a-z0-9-]*")
 ENV = re.compile(r"FASTBROWSE_[A-Z0-9_]+")
 LINK = re.compile(r"\]\(([^)\s]+)")
 STATUS_ROW = re.compile(r"^\| `([a-z_]+)` \| (\d+) \|", re.MULTILINE)
+MEDIA = re.compile(r'!\[[^\]]*\]\(([^)\s]+)|<(?:img|video|source)[^>]*\bsrc(?:set)?="([^"]+)"')
 TROUBLE_HEADING = re.compile(r"^## ([a-z_]+) \(exit (\d+)\)", re.MULTILINE)
 STATUS_MEMBER = re.compile(r'^\s+([A-Z_]+) = "([a-z_]+)"', re.MULTILINE)
 EXIT_ENTRY = re.compile(r"Status\.([A-Z_]+): (\d+),")
@@ -162,6 +167,63 @@ def check_changelog(root: Path, copy: dict[str, str]) -> list[str]:
     return []
 
 
+def media_references(sources: dict[str, str]) -> dict[str, list[str]]:
+    """Each local media file the copy shows, with the files that show it."""
+    found: dict[str, list[str]] = {}
+    for name, text in sources.items():
+        for markdown, html in MEDIA.findall(text):
+            target = markdown or html
+            if not target or target.startswith(("http://", "https://", "data:")):
+                continue
+            for part in target.split(","):
+                path = part.strip().split(" ")[0].split("#")[0]
+                if path:
+                    found.setdefault(path, []).append(name)
+    return found
+
+
+def surface(root: Path) -> str:
+    """A fingerprint of the user-visible command line: the flags, statuses and exit codes a recording shows."""
+    code = code_text(root)
+    parts = sorted(set(FLAG.findall(code)))
+    parts += sorted(f"{member}={name}" for member, name in statuses(root).items())
+    parts += sorted(f"{member}:{code}" for member, code in exit_codes(root).items())
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+
+def check_media(root: Path, copy: dict[str, str]) -> list[str]:
+    """Every asset the copy shows exists, is not empty, and was recorded against the surface we ship now."""
+    problems = []
+    referenced = media_references(copy)
+    for path, sources in sorted(referenced.items()):
+        asset = root / path
+        if not asset.exists():
+            problems.append(f"{', '.join(sorted(set(sources)))}: `{path}` is shown but not in the repository")
+        elif asset.stat().st_size == 0:
+            problems.append(f"{path}: the file is empty")
+
+    record = root / MEDIA_RECORD
+    if referenced and not record.exists():
+        problems.append(f"{MEDIA_RECORD}: media is shown in the copy, but no record says what it shows")
+        return problems
+
+    recorded = json.loads(read(record)).get("assets", {}) if record.exists() else {}
+    now = surface(root)
+    for path in sorted(referenced):
+        entry = recorded.get(path)
+        if entry is None:
+            problems.append(f"{MEDIA_RECORD}: no record for `{path}`")
+            continue
+        if entry.get("surface") != now:
+            problems.append(
+                f"{MEDIA_RECORD}: `{path}` was recorded against a different command line or status set, "
+                "so it shows a product we no longer ship. Re-record it and run --write"
+            )
+    for path in sorted(set(recorded) - set(referenced)):
+        problems.append(f"{MEDIA_RECORD}: `{path}` is recorded but no copy shows it")
+    return problems
+
+
 def check(root: Path = ROOT) -> list[str]:
     copy = {name: read(root / name) for name in COPY if (root / name).exists()}
     missing = [name for name in COPY if not (root / name).exists()]
@@ -171,10 +233,29 @@ def check(root: Path = ROOT) -> list[str]:
     problems += check_env(copy, repo_text(root))
     problems += check_statuses(root, copy)
     problems += check_changelog(root, copy)
+    problems += check_media(root, copy)
     return problems
 
 
+def write_record(root: Path = ROOT) -> None:
+    """Record what each shown asset is, and the surface it was recorded against."""
+    copy = {name: read(root / name) for name in COPY if (root / name).exists()}
+    record = root / MEDIA_RECORD
+    existing = json.loads(read(record)).get("assets", {}) if record.exists() else {}
+    assets = {}
+    for path in sorted(media_references(copy)):
+        entry = existing.get(path, {})
+        entry["surface"] = surface(root)
+        assets[path] = entry
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(json.dumps({"assets": assets}, indent=2) + "\n", encoding="utf-8")
+    print(f"{MEDIA_RECORD}: {len(assets)} assets recorded")
+
+
 def main() -> int:
+    if "--write" in sys.argv:
+        write_record()
+        return 0
     problems = check()
     if problems:
         print("The docs disagree with the code:")

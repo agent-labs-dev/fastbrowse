@@ -7,6 +7,7 @@ from scripts.docs_sync import (
     check_env,
     check_flags,
     check_links,
+    check_media,
     check_statuses,
 )
 
@@ -102,3 +103,29 @@ def test_a_version_with_no_changelog_entry_is_reported(tmp_path: Path) -> None:
     assert check_changelog(tmp_path, copy) == [
         "CHANGELOG.md: no `## [1.2.3]` entry for the version pyproject.toml declares"
     ]
+
+
+def test_a_shown_asset_missing_from_the_repository_is_reported(tmp_path: Path) -> None:
+    copy = {"README.md": "![a demo](docs/assets/demo.gif)\n"}
+    problems = check_media(tmp_path, copy)
+    assert any("docs/assets/demo.gif" in problem and "not in the repository" in problem for problem in problems)
+
+
+def test_media_without_a_record_is_reported(tmp_path: Path) -> None:
+    (tmp_path / "docs/assets").mkdir(parents=True)
+    (tmp_path / "docs/assets/demo.gif").write_bytes(b"GIF89a")
+    copy = {"README.md": "![a demo](docs/assets/demo.gif)\n"}
+    problems = check_media(tmp_path, copy)
+    assert any("no record" in problem for problem in problems)
+
+
+def test_a_recording_of_a_surface_we_no_longer_ship_is_reported(tmp_path: Path) -> None:
+    (tmp_path / "docs/assets").mkdir(parents=True)
+    (tmp_path / "docs/assets/demo.gif").write_bytes(b"GIF89a")
+    (tmp_path / "docs/assets/media.json").write_text('{"assets": {"docs/assets/demo.gif": {"surface": "old"}}}\n')
+    (tmp_path / "src/fastbrowse").mkdir(parents=True)
+    (tmp_path / "src/fastbrowse/models.py").write_text('class Status(StrEnum):\n    COMPLETE = "complete"\n')
+    (tmp_path / "src/fastbrowse/cli.py").write_text("EXIT = {Status.COMPLETE: 0}\n")
+    copy = {"README.md": "![a demo](docs/assets/demo.gif)\n"}
+    problems = check_media(tmp_path, copy)
+    assert any("Re-record it" in problem for problem in problems)

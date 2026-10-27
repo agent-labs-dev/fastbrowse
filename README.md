@@ -24,7 +24,7 @@ cited answers or schema-validated data. Code controls credentials, authorization
 fastbrowse indexes the page into candidates and has [Jev](https://typesafe.ai), a choice model, **pick one**, so it cannot click
 something that was never on the page. Factual claims in a complete answer cite verbatim quotes from the page.
 
-![fastbrowse signing in to a shop, adding two products, filling the shipping form and placing the order](docs/assets/demo.gif)
+![fastbrowse signing in to a shop, adding two products, filling the shipping form, placing the order and reporting the total with its quotes](docs/assets/demo.gif)
 
 Recorded on local Chrome: 13 steps, 20.9s and $0.0034 in model calls. Playback is 1.4x faster with pauses cut.
 
