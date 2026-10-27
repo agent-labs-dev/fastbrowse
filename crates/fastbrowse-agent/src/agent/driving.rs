@@ -515,6 +515,7 @@ impl Agent {
         .await;
         let (landed, status) = match landed {
             Ok((landed, status)) => (Some(landed), status),
+            Err(error) if error.needs_browser() => return Err(error.into()),
             Err(_) => (None, None),
         };
         let Some(landed) = landed.filter(|landed| origin_of(landed) == origin_of(start)) else {
@@ -543,8 +544,10 @@ impl Agent {
         }
         self.event("challenge_reload", || Map::from_iter([("url".into(), challenge.url.clone().into())]));
         let back_to = if state.invented.contains(&challenge.url) { state.started_url.clone() } else { None };
-        if self.page.navigate(&challenge.url, back_to.as_deref()).await.is_err() {
-            return Ok(false);
+        match self.page.navigate(&challenge.url, back_to.as_deref()).await {
+            Err(error) if error.needs_browser() => return Err(error.into()),
+            Err(_) => return Ok(false),
+            Ok(()) => {}
         }
         if self.outwait(challenge).await? {
             return Ok(true);

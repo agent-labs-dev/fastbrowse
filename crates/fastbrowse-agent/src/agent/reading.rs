@@ -607,7 +607,7 @@ impl Agent {
         let walked = walked.await;
         let result = async {
             match walked {
-                Err(Flow::Browser(error)) => {
+                Err(Flow::Browser(error)) if !error.needs_browser() => {
                     state.paging_failed = true;
                     state.next_page = false;
                     let hint = self

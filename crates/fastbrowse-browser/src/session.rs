@@ -128,6 +128,18 @@ fn keep_painting() -> Value {
 
 /// The error a caller's `check_access` returns; the session reports only that it refused, never its message.
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+/// A `check_access` refusal that names the exception type a host language raised, which the report may repeat.
+#[derive(Debug)]
+pub struct AccessRefused(pub String);
+
+impl std::fmt::Display for AccessRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for AccessRefused {}
 /// `check_access`: the caller's live permission, awaited before browser startup and every read and action.
 pub type CheckAccess = Arc<dyn Fn() -> BoxFuture<'static, Result<(), BoxError>> + Send + Sync>;
 /// Sees every `Page.screencastFrame` after the session has handled it, as a recording does.
@@ -136,9 +148,10 @@ pub type FrameTap = Arc<dyn Fn(&Event) + Send + Sync>;
 /// `check_browser_access`: check a caller's live permission without exposing its error's details.
 pub async fn check_browser_access(check: Option<&CheckAccess>) -> Result<(), BrowserError> {
     let Some(check) = check else { return Ok(()) };
-    check()
-        .await
-        .map_err(|_| BrowserError::Failed("check_access refused the browser (Exception, caller supplied)".into()))
+    check().await.map_err(|error| {
+        let kind = error.downcast_ref::<AccessRefused>().map_or("Exception", |refused| refused.0.as_str());
+        BrowserError::Failed(format!("check_access refused the browser ({kind}, caller supplied)"))
+    })
 }
 
 pub struct SessionOptions {

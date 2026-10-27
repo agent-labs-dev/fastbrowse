@@ -17,7 +17,7 @@ from fastbrowse.evals.replay import Cassette, Latency, Proxy
 from fastbrowse.models import LocalChrome
 
 try:
-    fastbrowse_native = importlib.import_module("fastbrowse_native")
+    fastbrowse_native = importlib.import_module("fastbrowse._native")
 
     NATIVE = hasattr(fastbrowse_native, "run_task")
 except ImportError:
@@ -25,7 +25,7 @@ except ImportError:
 
 pytestmark = [
     pytest.mark.skipif(find_chrome(None) is None, reason="Chrome is not installed"),
-    pytest.mark.skipif(not NATIVE, reason="fastbrowse_native with run_task is not installed"),
+    pytest.mark.skipif(not NATIVE, reason="fastbrowse._native with run_task is not installed"),
 ]
 
 TASKS = ("table-extract", "mock-sign-in", "mock-upload-document")
@@ -40,9 +40,9 @@ async def replayed(task: BenchTask, logs: Path) -> dict[str, Any]:
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("task", [task for task in corpus() if task.id in TASKS], ids=lambda task: task.id)
 async def test_both_cores_reach_the_same_result(task: BenchTask, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    monkeypatch.delenv("FASTBROWSE_RUST_CORE", raising=False)
+    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "1")
     python = await replayed(task, tmp_path)
-    monkeypatch.setenv("FASTBROWSE_RUST_CORE", "1")
+    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
     rust = await replayed(task, tmp_path)
     assert python["grade"]["passed"], python
     assert rust == python

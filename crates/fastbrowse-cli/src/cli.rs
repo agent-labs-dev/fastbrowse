@@ -101,6 +101,7 @@ pub fn parser() -> Parser {
             Opt::value("--downloads"),
             Opt::flag("--json"),
             Opt::value("--record"),
+            Opt::flag("--fetch"),
             Opt::value("--trace"),
             Opt::flag("--cursor"),
         ],
@@ -132,6 +133,7 @@ pub struct Args {
     pub downloads: Option<PathBuf>,
     pub json: bool,
     pub record: Option<PathBuf>,
+    pub fetch: bool,
     /// Where the run's trace is appended as JSON lines, or `-` for stderr.
     pub trace: Option<String>,
     pub cursor: bool,
@@ -177,6 +179,7 @@ pub fn parse(argv: &[String]) -> Result<Args, Exit> {
         downloads: path("--downloads"),
         json: parsed.flag("--json"),
         record: path("--record"),
+        fetch: parsed.flag("--fetch"),
         trace: text("--trace"),
         cursor: parsed.flag("--cursor"),
     })
@@ -284,6 +287,32 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     if args.cloud && (args.headed || args.profile.is_some()) {
         return Err(ConfigurationError("--cloud cannot be combined with --headed or --profile".into()));
     }
+    if args.fetch {
+        // No browser is started, so the flags that shape one are refused rather than resolved: a cloud key demanded for
+        // a browserless run would be a key never used.
+        for (flag, asked) in [
+            ("--cloud", args.cloud),
+            ("--local", args.local),
+            ("--headed", args.headed),
+            ("--profile", args.profile.is_some()),
+            ("--cloud-profile", args.cloud_profile.is_some()),
+            ("--cdp-url", args.cdp_url.is_some()),
+            ("--cdp-port", args.cdp_port.is_some()),
+            ("--attach", args.attach),
+            ("--target-match", args.target_match.is_some()),
+            ("--foreground", args.foreground),
+            ("--proxy-country", args.proxy_country.is_some()),
+            ("--record", args.record.is_some()),
+            ("--cursor", args.cursor),
+            ("--downloads", args.downloads.is_some()),
+        ] {
+            if asked {
+                return Err(ConfigurationError(format!(
+                    "--fetch starts no browser, so it cannot be combined with {flag}"
+                )));
+            }
+        }
+    }
     let chrome = if args.cloud {
         LocalChrome::default()
     } else {
@@ -300,7 +329,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         cloud_profile: args.cloud_profile.as_deref(),
         proxy_country: args.proxy_country.as_deref(),
     })?;
-    let browser_api_key = if handed_over {
+    let browser_api_key = if args.fetch || handed_over {
         None
     } else {
         let on_cloud =
@@ -310,7 +339,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     let mut call = RunArgs::new(args.task.clone());
     call.start = args.start.clone();
     call.browser_api_key = browser_api_key;
-    call.chrome = Some(chrome);
+    call.chrome = (!args.fetch).then_some(chrome);
     call.cloud_profile = args.cloud_profile.clone();
     call.cdp_url = args.cdp_url.clone();
     call.cdp_port = args.cdp_port;
@@ -325,6 +354,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     call.on_event = Some(progress(context.streams.clone()));
     call.record = args.record.clone();
     call.cursor = args.cursor;
+    call.fetch = args.fetch;
     let mut result = match context.runner.run(call).await {
         Ok(result) => result,
         Err(RunError::Configuration(message)) => return Err(ConfigurationError(message)),

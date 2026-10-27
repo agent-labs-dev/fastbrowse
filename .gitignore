@@ -23,3 +23,8 @@ node_modules/
 # Cargo output and the locally built Node addon.
 /target/
 crates/fastbrowse-node/*.node
+
+# The Rust core an editable install builds into the package.
+src/fastbrowse/_native*.so
+src/fastbrowse/_native*.pyd
+wheels/

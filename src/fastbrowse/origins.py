@@ -5,9 +5,10 @@ It scopes documents, not the network: images, scripts and requests a granted pag
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterable
 from urllib.parse import urlsplit
+
+from fastbrowse.core import python_core
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -72,7 +73,6 @@ class OriginGrant:
         return origin_of(url) in self.origins
 
 
-# The Rust core (crates/fastbrowse-py) in place of the two parsers above, while the port is checked against
-# these tests; the default stays Python.
-if os.environ.get("FASTBROWSE_RUST_CORE") == "1":
-    from fastbrowse_native import origin_of, parse_origin  # ty: ignore[unresolved-import]
+# The Rust core (crates/fastbrowse-py) in place of the two parsers above, unless FASTBROWSE_PYTHON_CORE=1.
+if not python_core():
+    from fastbrowse._native import origin_of, parse_origin  # ty: ignore[unresolved-import]

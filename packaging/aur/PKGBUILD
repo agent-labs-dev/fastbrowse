@@ -12,11 +12,16 @@ pkgrel=1
 # to a new Python minor version.
 _cdp_use=1.4.5
 pkgdesc="Browser automation with cited answers, structured output and code-controlled credentials and authorization"
-arch=('any')
+# The wheel carries the Rust core as `fastbrowse._native`, compiled here from the sdist, so the package is one per
+# architecture (docs/adr/0004).
+arch=('x86_64' 'aarch64')
+# makepkg's LTO flags compile ring's C and assembly into bitcode the Rust link does not pull in, which leaves the
+# module with undefined ring symbols at import.
+options=('!lto')
 url="https://github.com/agent-labs-dev/fastbrowse"
 license=('MIT')
-# Everything else fastbrowse and cdp-use import is in the official repositories. python-mcp serves
-# fastbrowse-mcp, which the same wheel ships.
+# Everything else fastbrowse and cdp-use import is in the official repositories. python-mcp serves the Python
+# core's fastbrowse-mcp, which FASTBROWSE_PYTHON_CORE=1 runs until 0.9.0; the Rust one needs nothing.
 depends=(
   'python>=3.13'
   'python-h2'
@@ -27,7 +32,8 @@ depends=(
   'python-typing_extensions>=4.12.2'
   'python-websockets>=15.0.1'
 )
-makedepends=('python-build' 'python-hatchling' 'python-installer')
+# maturin and cargo build fastbrowse and its Rust core; hatchling builds cdp-use.
+makedepends=('python-build' 'python-hatchling' 'python-installer' 'python-maturin' 'rust')
 optdepends=(
   'chromium: a local browser for --local'
   'google-chrome: a local browser for --local'

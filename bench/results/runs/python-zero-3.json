@@ -1,15 +1,15 @@
 {
  "meta": {
   "mode": "replay",
-  "agent": "/Users/jnsdls/fastbrowse/.claude/worktrees/agent-af7576a2383dac2f6/.venv/bin/fastbrowse serve --stdio",
+  "agent": "/Users/jnsdls/.t3/worktrees/fastbrowse/t3-203a84e5/.venv/bin/fastbrowse serve --stdio",
   "latency": "zero",
-  "started": "2026-10-25T02:27:25+00:00",
-  "harness_fastbrowse": "0.7.1",
+  "started": "2026-10-26T16:47:18+00:00",
+  "harness_fastbrowse": "0.7.3",
   "platform": "Darwin 27.0.0 arm64",
   "cpu_count": 16,
   "python": "3.13.13",
   "chrome": "Google Chrome 155.0.8059.86",
-  "finished": "2026-10-25T02:29:47+00:00"
+  "finished": "2026-10-26T16:49:34+00:00"
  },
  "tasks": [
   {
@@ -18,17 +18,17 @@
    "port": 47300,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2128,
-    "wall_s": 2.5752,
-    "cpu_user_s": 0.3027,
-    "cpu_sys_s": 0.0473,
-    "cpu_s": 0.35,
-    "rss_bytes": 78135296,
+    "startup_s": 0.2095,
+    "wall_s": 2.5964,
+    "cpu_user_s": 0.3129,
+    "cpu_sys_s": 0.0499,
+    "cpu_s": 0.3629,
+    "rss_bytes": 76660736,
     "steps": 5,
     "events": 6,
-    "model_requests": 14
+    "model_requests": 13
    },
-   "cost_usd": 0.002594,
+   "cost_usd": 0.002575,
    "result": {
     "status": "complete",
     "answer": "Price: £34.50 [1](<http://127.0.0.1:47300/product.html?name=Blue%20Kettle&price=%C2%A334.50#:~:text=Blue%20Kettle>) [2](<http://127.0.0.1:47300/product.html?name=Blue%20Kettle&price=%C2%A334.50#:~:text=Price%3A%20%C2%A334.50>)",
@@ -87,7 +87,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 7
+   "unused_responses": 9
   },
   {
    "task": "contact-form",
@@ -95,12 +95,12 @@
    "port": 47301,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2201,
-    "wall_s": 2.2997,
-    "cpu_user_s": 0.316,
-    "cpu_sys_s": 0.0505,
-    "cpu_s": 0.3665,
-    "rss_bytes": 78118912,
+    "startup_s": 0.2162,
+    "wall_s": 2.2621,
+    "cpu_user_s": 0.3126,
+    "cpu_sys_s": 0.0526,
+    "cpu_s": 0.3652,
+    "rss_bytes": 76480512,
     "steps": 5,
     "events": 6,
     "model_requests": 8
@@ -161,12 +161,12 @@
    "port": 47302,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.206,
-    "wall_s": 1.936,
-    "cpu_user_s": 0.2814,
-    "cpu_sys_s": 0.0439,
-    "cpu_s": 0.3253,
-    "rss_bytes": 78217216,
+    "startup_s": 0.2188,
+    "wall_s": 2.0272,
+    "cpu_user_s": 0.3225,
+    "cpu_sys_s": 0.0522,
+    "cpu_s": 0.3747,
+    "rss_bytes": 76922880,
     "steps": 5,
     "events": 6,
     "model_requests": 7
@@ -227,17 +227,17 @@
    "port": 47303,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2093,
-    "wall_s": 0.6106,
-    "cpu_user_s": 0.2799,
-    "cpu_sys_s": 0.0421,
-    "cpu_s": 0.322,
-    "rss_bytes": 78315520,
+    "startup_s": 0.2001,
+    "wall_s": 0.6057,
+    "cpu_user_s": 0.2631,
+    "cpu_sys_s": 0.0398,
+    "cpu_s": 0.3029,
+    "rss_bytes": 76529664,
     "steps": 1,
     "events": 2,
-    "model_requests": 8
+    "model_requests": 7
    },
-   "cost_usd": 0.002704,
+   "cost_usd": 0.002683,
    "result": {
     "status": "complete",
     "answer": "522,250 [1](<http://127.0.0.1:47303/cities.html#:~:text=Largest%20cities%20in%20France>) [2](<http://127.0.0.1:47303/cities.html#:~:text=%7C%20City%20%7C%20Region%20%7C%20Population%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20Lyon%20%7C%20Auvergne%2DRh%C3%B4ne%2DAlpes%20%7C%20522%2C250>)",
@@ -275,7 +275,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 11
+   "unused_responses": 13
   },
   {
    "task": "login-wall",
@@ -283,12 +283,12 @@
    "port": 47304,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2119,
-    "wall_s": 0.5918,
-    "cpu_user_s": 0.2736,
-    "cpu_sys_s": 0.0417,
-    "cpu_s": 0.3153,
-    "rss_bytes": 77938688,
+    "startup_s": 0.199,
+    "wall_s": 0.5804,
+    "cpu_user_s": 0.2553,
+    "cpu_sys_s": 0.0392,
+    "cpu_s": 0.2944,
+    "rss_bytes": 76382208,
     "steps": 0,
     "events": 1,
     "model_requests": 2
@@ -318,12 +318,12 @@
    "port": 47305,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2091,
-    "wall_s": 0.8779,
-    "cpu_user_s": 0.2742,
-    "cpu_sys_s": 0.0422,
-    "cpu_s": 0.3164,
-    "rss_bytes": 77447168,
+    "startup_s": 0.201,
+    "wall_s": 0.8769,
+    "cpu_user_s": 0.2767,
+    "cpu_sys_s": 0.0412,
+    "cpu_s": 0.3179,
+    "rss_bytes": 76431360,
     "steps": 2,
     "events": 3,
     "model_requests": 6
@@ -366,17 +366,17 @@
    "port": 47306,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2175,
-    "wall_s": 14.209,
-    "cpu_user_s": 0.3488,
-    "cpu_sys_s": 0.0525,
-    "cpu_s": 0.4013,
-    "rss_bytes": 78643200,
+    "startup_s": 0.1933,
+    "wall_s": 14.1355,
+    "cpu_user_s": 0.3087,
+    "cpu_sys_s": 0.0455,
+    "cpu_s": 0.3542,
+    "rss_bytes": 76578816,
     "steps": 5,
     "events": 6,
-    "model_requests": 22
+    "model_requests": 14
    },
-   "cost_usd": 0.016887,
+   "cost_usd": 0.007806,
    "result": {
     "status": "complete",
     "answer": "The order listed on the orders page has reference G-2001 and item Paper Filters. [1](<http://127.0.0.1:47306/account/orders#:~:text=Your%20orders>) [2](<http://127.0.0.1:47306/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20G%2D2001%20%7C%20Paper%20Filters%20%7C%20GBP%204.60%20%7C>)",
@@ -442,7 +442,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 10
+   "unused_responses": 19
   },
   {
    "task": "mock-supplied-sign-in-route",
@@ -450,17 +450,17 @@
    "port": 47307,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2066,
-    "wall_s": 14.4413,
-    "cpu_user_s": 0.349,
-    "cpu_sys_s": 0.053,
-    "cpu_s": 0.402,
-    "rss_bytes": 78790656,
+    "startup_s": 0.2168,
+    "wall_s": 14.4748,
+    "cpu_user_s": 0.3446,
+    "cpu_sys_s": 0.0542,
+    "cpu_s": 0.3988,
+    "rss_bytes": 76496896,
     "steps": 6,
     "events": 7,
-    "model_requests": 25
+    "model_requests": 17
    },
-   "cost_usd": 0.018136,
+   "cost_usd": 0.007966,
    "result": {
     "status": "complete",
     "answer": "The order on the orders page has reference G-2001 and item Paper Filters. [1](<http://127.0.0.1:47307/account/orders#:~:text=Your%20orders>) [2](<http://127.0.0.1:47307/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20G%2D2001%20%7C%20Paper%20Filters%20%7C%20GBP%204.60%20%7C>)",
@@ -532,7 +532,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 24
+   "unused_responses": 33
   },
   {
    "task": "mock-sign-in",
@@ -540,17 +540,17 @@
    "port": 47308,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2074,
-    "wall_s": 2.0285,
-    "cpu_user_s": 0.3517,
-    "cpu_sys_s": 0.0531,
-    "cpu_s": 0.4048,
-    "rss_bytes": 78708736,
+    "startup_s": 0.2054,
+    "wall_s": 2.0291,
+    "cpu_user_s": 0.3277,
+    "cpu_sys_s": 0.0508,
+    "cpu_s": 0.3785,
+    "rss_bytes": 76775424,
     "steps": 5,
     "events": 6,
-    "model_requests": 22
+    "model_requests": 14
    },
-   "cost_usd": 0.01711,
+   "cost_usd": 0.007727,
    "result": {
     "status": "complete",
     "answer": "The order listed on the Your orders page has reference G-2001 and item Paper Filters. [1](<http://127.0.0.1:47308/account/orders#:~:text=Your%20orders>) [2](<http://127.0.0.1:47308/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20G%2D2001%20%7C%20Paper%20Filters%20%7C%20GBP%204.60%20%7C>)",
@@ -616,7 +616,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 8
+   "unused_responses": 17
   },
   {
    "task": "mock-sign-in-two-step",
@@ -624,17 +624,17 @@
    "port": 47309,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2026,
-    "wall_s": 3.2666,
-    "cpu_user_s": 0.3928,
-    "cpu_sys_s": 0.0592,
-    "cpu_s": 0.452,
-    "rss_bytes": 78872576,
+    "startup_s": 0.2,
+    "wall_s": 3.0329,
+    "cpu_user_s": 0.364,
+    "cpu_sys_s": 0.0548,
+    "cpu_s": 0.4188,
+    "rss_bytes": 77037568,
     "steps": 10,
     "events": 11,
-    "model_requests": 32
+    "model_requests": 24
    },
-   "cost_usd": 0.026345,
+   "cost_usd": 0.014241,
    "result": {
     "status": "complete",
     "answer": "The orders listed are Blue Kettle (GBP 34.50), Burr Grinder (GBP 89.99), and Serving Jug (GBP 15.30). The most expensive order is the Burr Grinder with a total of GBP 89.99. [3](<http://127.0.0.1:47309/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1001%20%7C%20Blue%20Kettle%20%7C%20GBP%2034.50%20%7C>) [4](<http://127.0.0.1:47309/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1002%20%7C%20Burr%20Grinder%20%7C%20GBP%2089.99%20%7C>) [5](<http://127.0.0.1:47309/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1003%20%7C%20Serving%20Jug%20%7C%20GBP%2015.30%20%7C>)",
@@ -736,7 +736,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 80
+   "unused_responses": 89
   },
   {
    "task": "mock-sign-in-code-given",
@@ -744,17 +744,17 @@
    "port": 47310,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2061,
-    "wall_s": 2.7223,
-    "cpu_user_s": 0.3625,
-    "cpu_sys_s": 0.0539,
-    "cpu_s": 0.4164,
-    "rss_bytes": 78921728,
+    "startup_s": 0.2009,
+    "wall_s": 2.7224,
+    "cpu_user_s": 0.341,
+    "cpu_sys_s": 0.0522,
+    "cpu_s": 0.3932,
+    "rss_bytes": 77086720,
     "steps": 7,
     "events": 8,
-    "model_requests": 25
+    "model_requests": 19
    },
-   "cost_usd": 0.015611,
+   "cost_usd": 0.008712,
    "result": {
     "status": "complete",
     "answer": "The reference of the first order listed on the orders page is A-1001. [1](<http://127.0.0.1:47310/account/orders#:~:text=Your%20orders>) [2](<http://127.0.0.1:47310/account/orders#:~:text=%7C%20Reference%20%7C%20Item%20%7C%20Total%20%7C%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%2D%2D%2D%20%7C%20%7C%20A%2D1001%20%7C%20Blue%20Kettle%20%7C%20GBP%2034.50%20%7C>)",
@@ -833,7 +833,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 23
+   "unused_responses": 30
   },
   {
    "task": "mock-sign-out",
@@ -841,12 +841,12 @@
    "port": 47311,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2071,
-    "wall_s": 2.0744,
-    "cpu_user_s": 0.3272,
-    "cpu_sys_s": 0.048,
-    "cpu_s": 0.3752,
-    "rss_bytes": 78430208,
+    "startup_s": 0.2019,
+    "wall_s": 1.9988,
+    "cpu_user_s": 0.3177,
+    "cpu_sys_s": 0.0486,
+    "cpu_s": 0.3664,
+    "rss_bytes": 76611584,
     "steps": 5,
     "events": 6,
     "model_requests": 15
@@ -920,17 +920,17 @@
    "port": 47312,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.236,
-    "wall_s": 3.6319,
-    "cpu_user_s": 0.4185,
-    "cpu_sys_s": 0.0637,
-    "cpu_s": 0.4821,
-    "rss_bytes": 78921728,
+    "startup_s": 0.1994,
+    "wall_s": 3.4689,
+    "cpu_user_s": 0.3806,
+    "cpu_sys_s": 0.0553,
+    "cpu_s": 0.4359,
+    "rss_bytes": 77447168,
     "steps": 11,
     "events": 12,
-    "model_requests": 28
+    "model_requests": 27
    },
-   "cost_usd": 0.015915,
+   "cost_usd": 0.015892,
    "result": {
     "status": "complete",
     "answer": "With both the Blue Kettle and the Stoneware Mug in the basket, the subtotal is GBP 43.25. [4](<http://127.0.0.1:47312/cart#:~:text=Your%20basket%20Home%20%7C%20Shop%20%7C%20Account%20%7C%20Phone%20Blue%20Kettle%20Remove%20Stoneware%20Mug%20Remove%20Subtotal%3A%20GBP%2043.25>)",
@@ -1029,7 +1029,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 43
+   "unused_responses": 45
   },
   {
    "task": "mock-order-validation",
@@ -1037,12 +1037,12 @@
    "port": 47313,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.208,
-    "wall_s": 4.7506,
-    "cpu_user_s": 0.4567,
-    "cpu_sys_s": 0.0655,
-    "cpu_s": 0.5222,
-    "rss_bytes": 79101952,
+    "startup_s": 0.2052,
+    "wall_s": 4.8174,
+    "cpu_user_s": 0.4382,
+    "cpu_sys_s": 0.0652,
+    "cpu_s": 0.5034,
+    "rss_bytes": 77725696,
     "steps": 19,
     "events": 20,
     "model_requests": 32
@@ -1197,12 +1197,12 @@
    "port": 47314,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2066,
-    "wall_s": 3.6489,
-    "cpu_user_s": 0.3736,
-    "cpu_sys_s": 0.0592,
-    "cpu_s": 0.4328,
-    "rss_bytes": 78282752,
+    "startup_s": 0.1966,
+    "wall_s": 3.6857,
+    "cpu_user_s": 0.367,
+    "cpu_sys_s": 0.0582,
+    "cpu_s": 0.4252,
+    "rss_bytes": 76857344,
     "steps": 10,
     "events": 11,
     "model_requests": 19
@@ -1301,12 +1301,12 @@
    "port": 47315,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2034,
-    "wall_s": 3.1259,
-    "cpu_user_s": 0.3591,
-    "cpu_sys_s": 0.0552,
-    "cpu_s": 0.4143,
-    "rss_bytes": 78594048,
+    "startup_s": 0.2033,
+    "wall_s": 3.1386,
+    "cpu_user_s": 0.3545,
+    "cpu_sys_s": 0.0514,
+    "cpu_s": 0.4059,
+    "rss_bytes": 77021184,
     "steps": 9,
     "events": 10,
     "model_requests": 16
@@ -1399,12 +1399,12 @@
    "port": 47316,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.206,
-    "wall_s": 2.8171,
-    "cpu_user_s": 0.3381,
-    "cpu_sys_s": 0.0521,
-    "cpu_s": 0.3902,
-    "rss_bytes": 78200832,
+    "startup_s": 0.1981,
+    "wall_s": 2.816,
+    "cpu_user_s": 0.3385,
+    "cpu_sys_s": 0.05,
+    "cpu_s": 0.3885,
+    "rss_bytes": 77119488,
     "steps": 8,
     "events": 9,
     "model_requests": 14
@@ -1490,17 +1490,17 @@
    "port": 47317,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2103,
-    "wall_s": 1.1709,
-    "cpu_user_s": 0.3231,
-    "cpu_sys_s": 0.0467,
-    "cpu_s": 0.3698,
-    "rss_bytes": 79249408,
+    "startup_s": 0.1998,
+    "wall_s": 1.1505,
+    "cpu_user_s": 0.3037,
+    "cpu_sys_s": 0.0427,
+    "cpu_s": 0.3463,
+    "rss_bytes": 77234176,
     "steps": 5,
     "events": 6,
-    "model_requests": 21
+    "model_requests": 13
    },
-   "cost_usd": 0.033944,
+   "cost_usd": 0.019862,
    "result": {
     "status": "complete",
     "answer": "Lowest 1:\nPaper Filters: 4.60 [1](<http://127.0.0.1:47317/shop#:~:text=Blue%20Kettle%20%2D%20GBP%2034.50>) [2](<http://127.0.0.1:47317/shop#:~:text=Chrome%20Toaster%20%2D%20GBP%2041.00>) [3](<http://127.0.0.1:47317/shop#:~:text=Stoneware%20Mug%20%2D%20GBP%208.75>) [4](<http://127.0.0.1:47317/shop#:~:text=Burr%20Grinder%20%2D%20GBP%2089.99>) [5](<http://127.0.0.1:47317/shop#:~:text=Kitchen%20Scale%20%2D%20GBP%2019.20>) [6](<http://127.0.0.1:47317/shop#:~:text=Milk%20Thermometer%20%2D%20GBP%2012.40>) [7](<http://127.0.0.1:47317/shop?page=2&sort=#:~:text=French%20Press%20%2D%20GBP%2027.00>) [8](<http://127.0.0.1:47317/shop?page=2&sort=#:~:text=Paper%20Filters%20%2D%20GBP%204.60>) [9](<http://127.0.0.1:47317/shop?page=2&sort=#:~:text=House%20Beans%20%2D%20GBP%2011.50>) [10](<http://127.0.0.1:47317/shop?page=2&sort=#:~:text=Drum%20Roaster%20%2D%20GBP%20210.00>) [11](<http://127.0.0.1:47317/shop?page=2&sort=#:~:text=Serving%20Jug%20%2D%20GBP%2015.30>) [12](<http://127.0.0.1:47317/shop?page=2&sort=#:~:text=Drip%20Tray%20%2D%20GBP%209.95>) [13](<http://127.0.0.1:47317/shop?page=3&sort=#:~:text=Shop>) [14](<http://127.0.0.1:47317/shop?page=3&sort=#:~:text=Page%203%20of%203.%20Sort%20by%20price%20or%20price%20descending.>) [15](<http://127.0.0.1:47317/shop?page=3&sort=#:~:text=Bar%20Cloth%20%2D%20GBP%206.20>) [16](<http://127.0.0.1:47317/shop?page=3&sort=#:~:text=Water%20Tap%20%2D%20GBP%2052.75>)",
@@ -1635,7 +1635,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 14
+   "unused_responses": 23
   },
   {
    "task": "mock-priciest-product",
@@ -1643,17 +1643,17 @@
    "port": 47318,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2059,
-    "wall_s": 1.3869,
-    "cpu_user_s": 0.3331,
-    "cpu_sys_s": 0.0456,
-    "cpu_s": 0.3787,
-    "rss_bytes": 79364096,
+    "startup_s": 0.1951,
+    "wall_s": 1.39,
+    "cpu_user_s": 0.3309,
+    "cpu_sys_s": 0.045,
+    "cpu_s": 0.3759,
+    "rss_bytes": 77381632,
     "steps": 8,
     "events": 9,
-    "model_requests": 21
+    "model_requests": 14
    },
-   "cost_usd": 0.042825,
+   "cost_usd": 0.025795,
    "result": {
     "status": "complete",
     "answer": "The most expensive product in the shop is Drum Roaster at GBP 210.00. [3](<http://127.0.0.1:47318/shop#:~:text=Blue%20Kettle%20%2D%20GBP%2034.50>) [4](<http://127.0.0.1:47318/shop#:~:text=Chrome%20Toaster%20%2D%20GBP%2041.00>) [5](<http://127.0.0.1:47318/shop#:~:text=Stoneware%20Mug%20%2D%20GBP%208.75>) [6](<http://127.0.0.1:47318/shop#:~:text=Burr%20Grinder%20%2D%20GBP%2089.99>) [7](<http://127.0.0.1:47318/shop#:~:text=Kitchen%20Scale%20%2D%20GBP%2019.20>) [8](<http://127.0.0.1:47318/shop#:~:text=Milk%20Thermometer%20%2D%20GBP%2012.40>) [9](<http://127.0.0.1:47318/shop?page=1&sort=price-desc#:~:text=Shop>) [10](<http://127.0.0.1:47318/shop?page=1&sort=price-desc#:~:text=Drum%20Roaster%20%2D%20GBP%20210.00>) [11](<http://127.0.0.1:47318/shop?page=1&sort=price-desc#:~:text=Burr%20Grinder%20%2D%20GBP%2089.99>) [12](<http://127.0.0.1:47318/shop?page=1&sort=price-desc#:~:text=Water%20Tap%20%2D%20GBP%2052.75>) [13](<http://127.0.0.1:47318/shop?page=1&sort=price-desc#:~:text=Chrome%20Toaster%20%2D%20GBP%2041.00>) [14](<http://127.0.0.1:47318/shop?page=1&sort=price-desc#:~:text=Blue%20Kettle%20%2D%20GBP%2034.50>) [15](<http://127.0.0.1:47318/shop?page=1&sort=price-desc#:~:text=French%20Press%20%2D%20GBP%2027.00>) [18](<http://127.0.0.1:47318/shop?page=2&sort=price-desc#:~:text=Kitchen%20Scale%20%2D%20GBP%2019.20>) [19](<http://127.0.0.1:47318/shop?page=2&sort=price-desc#:~:text=Serving%20Jug%20%2D%20GBP%2015.30>) [20](<http://127.0.0.1:47318/shop?page=2&sort=price-desc#:~:text=Milk%20Thermometer%20%2D%20GBP%2012.40>) [21](<http://127.0.0.1:47318/shop?page=2&sort=price-desc#:~:text=House%20Beans%20%2D%20GBP%2011.50>) [22](<http://127.0.0.1:47318/shop?page=2&sort=price-desc#:~:text=Drip%20Tray%20%2D%20GBP%209.95>) [23](<http://127.0.0.1:47318/shop?page=2&sort=price-desc#:~:text=Stoneware%20Mug%20%2D%20GBP%208.75>) [26](<http://127.0.0.1:47318/shop?page=3&sort=price-desc#:~:text=Bar%20Cloth%20%2D%20GBP%206.20>) [27](<http://127.0.0.1:47318/shop?page=3&sort=price-desc#:~:text=Paper%20Filters%20%2D%20GBP%204.60>)",
@@ -1828,7 +1828,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 27
+   "unused_responses": 40
   },
   {
    "task": "mock-stock-count",
@@ -1836,17 +1836,17 @@
    "port": 47319,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2346,
-    "wall_s": 0.669,
-    "cpu_user_s": 0.3158,
-    "cpu_sys_s": 0.051,
-    "cpu_s": 0.3668,
-    "rss_bytes": 78315520,
+    "startup_s": 0.1986,
+    "wall_s": 0.5908,
+    "cpu_user_s": 0.2638,
+    "cpu_sys_s": 0.0384,
+    "cpu_s": 0.3022,
+    "rss_bytes": 76447744,
     "steps": 1,
     "events": 2,
-    "model_requests": 7
+    "model_requests": 6
    },
-   "cost_usd": 0.00262,
+   "cost_usd": 0.002599,
    "result": {
     "status": "complete",
     "answer": "The page states that there are 14 products in stock. [1](<http://127.0.0.1:47319/js#:~:text=Stock%20report>) [2](<http://127.0.0.1:47319/js#:~:text=In%20stock%3A%2014%20products>)",
@@ -1884,7 +1884,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 11
+   "unused_responses": 13
   },
   {
    "task": "mock-sign-in-per-digit",
@@ -1892,17 +1892,17 @@
    "port": 47320,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2244,
-    "wall_s": 4.9423,
-    "cpu_user_s": 0.4093,
-    "cpu_sys_s": 0.0613,
-    "cpu_s": 0.4706,
-    "rss_bytes": 79740928,
+    "startup_s": 0.1945,
+    "wall_s": 4.9142,
+    "cpu_user_s": 0.3665,
+    "cpu_sys_s": 0.0552,
+    "cpu_s": 0.4217,
+    "rss_bytes": 77168640,
     "steps": 15,
     "events": 16,
-    "model_requests": 29
+    "model_requests": 23
    },
-   "cost_usd": 0.023597,
+   "cost_usd": 0.017402,
    "result": {
     "status": "complete",
     "answer": "The account is signed in as katherine@example.com. [3](<http://127.0.0.1:47320/account#:~:text=Your%20account>) [4](<http://127.0.0.1:47320/account#:~:text=Signed%20in%20as%20katherine%40example.com.>)",
@@ -2029,7 +2029,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 69
+   "unused_responses": 76
   },
   {
    "task": "mock-iframe-note",
@@ -2037,12 +2037,12 @@
    "port": 47321,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2354,
-    "wall_s": 1.7104,
-    "cpu_user_s": 0.3126,
-    "cpu_sys_s": 0.0519,
-    "cpu_s": 0.3645,
-    "rss_bytes": 78315520,
+    "startup_s": 0.1984,
+    "wall_s": 1.6621,
+    "cpu_user_s": 0.2907,
+    "cpu_sys_s": 0.0432,
+    "cpu_s": 0.3338,
+    "rss_bytes": 76562432,
     "steps": 2,
     "events": 3,
     "model_requests": 7
@@ -2090,12 +2090,12 @@
    "port": 47322,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2344,
-    "wall_s": 1.5227,
-    "cpu_user_s": 0.32,
-    "cpu_sys_s": 0.0514,
-    "cpu_s": 0.3714,
-    "rss_bytes": 78741504,
+    "startup_s": 0.193,
+    "wall_s": 1.451,
+    "cpu_user_s": 0.2773,
+    "cpu_sys_s": 0.0406,
+    "cpu_s": 0.3179,
+    "rss_bytes": 76267520,
     "steps": 2,
     "events": 3,
     "model_requests": 7
@@ -2143,17 +2143,17 @@
    "port": 47323,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2382,
-    "wall_s": 1.1852,
-    "cpu_user_s": 0.4051,
-    "cpu_sys_s": 0.0591,
-    "cpu_s": 0.4643,
-    "rss_bytes": 80756736,
+    "startup_s": 0.2027,
+    "wall_s": 1.0449,
+    "cpu_user_s": 0.3227,
+    "cpu_sys_s": 0.0454,
+    "cpu_s": 0.3681,
+    "rss_bytes": 78168064,
     "steps": 6,
     "events": 7,
-    "model_requests": 23
+    "model_requests": 17
    },
-   "cost_usd": 0.045678,
+   "cost_usd": 0.026493,
    "result": {
     "status": "complete",
     "answer": "The total count of items in the feed is 60. [4](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%201>) [5](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%202>) [6](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%203>) [7](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%204>) [8](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%205>) [9](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%206>) [10](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%207>) [11](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%208>) [12](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%209>) [13](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2010>) [14](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2011>) [15](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2012>) [16](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2013>) [17](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2014>) [18](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2015>) [19](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2016>) [20](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2017>) [21](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2018>) [22](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2019>) [23](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2020>) [24](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2021>) [25](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2022>) [26](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2023>) [27](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2024>) [28](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2025>) [29](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2026>) [30](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2027>) [31](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2028>) [32](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2029>) [33](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2030>) [34](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2031>) [35](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2032>) [36](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2033>) [37](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2034>) [38](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2035>) [39](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2036>) [40](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2037>) [41](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2038>) [42](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2039>) [43](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2040>) [87](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2041>) [88](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2042>) [89](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2043>) [90](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2044>) [91](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2045>) [92](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2046>) [93](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2047>) [94](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2048>) [95](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2049>) [96](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2050>) [97](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2051>) [98](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2052>) [99](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2053>) [100](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2054>) [101](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2055>) [102](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2056>) [103](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2057>) [104](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2058>) [105](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2059>) [106](<http://127.0.0.1:47323/feed#:~:text=Feed%20item%2060>) [107](<http://127.0.0.1:47323/feed#:~:text=Feed>) [109](<http://127.0.0.1:47323/feed#:~:text=End%20of%20list.%2060%20items.>)",
@@ -2521,7 +2521,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 32
+   "unused_responses": 45
   },
   {
    "task": "mock-support-portal",
@@ -2529,12 +2529,12 @@
    "port": 47324,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2319,
-    "wall_s": 2.7492,
-    "cpu_user_s": 0.4228,
-    "cpu_sys_s": 0.0592,
-    "cpu_s": 0.4821,
-    "rss_bytes": 79577088,
+    "startup_s": 0.2087,
+    "wall_s": 2.7507,
+    "cpu_user_s": 0.4141,
+    "cpu_sys_s": 0.0608,
+    "cpu_s": 0.4749,
+    "rss_bytes": 77398016,
     "steps": 21,
     "events": 22,
     "model_requests": 41
@@ -2719,7 +2719,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 271
+   "unused_responses": 301
   },
   {
    "task": "mock-compare-prices",
@@ -2727,17 +2727,17 @@
    "port": 47325,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.219,
-    "wall_s": 1.5504,
-    "cpu_user_s": 0.3523,
-    "cpu_sys_s": 0.0498,
-    "cpu_s": 0.4021,
-    "rss_bytes": 78954496,
+    "startup_s": 0.2074,
+    "wall_s": 1.443,
+    "cpu_user_s": 0.325,
+    "cpu_sys_s": 0.0481,
+    "cpu_s": 0.3731,
+    "rss_bytes": 77201408,
     "steps": 5,
     "events": 6,
-    "model_requests": 19
+    "model_requests": 13
    },
-   "cost_usd": 0.019666,
+   "cost_usd": 0.012351,
    "result": {
     "status": "complete",
     "answer": "Clerkenwell Coffee sells the Burr Grinder cheaper (GBP 84.99) than Bermondsey Beans (GBP 92.50). [1](<http://127.0.0.1:47325/compare/a#:~:text=Clerkenwell%20Coffee%20Home%20%7C%20Shop%20%7C%20Account%20%7C%20Phone%20Burr%20Grinder%20%2D%20GBP%2084.99>) [2](<http://127.0.0.1:47325/compare/b#:~:text=Bermondsey%20Beans%20Home%20%7C%20Shop%20%7C%20Account%20%7C%20Phone%20Burr%20Grinder%20%2D%20GBP%2092.50>)",
@@ -2799,7 +2799,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 24
+   "unused_responses": 31
   },
   {
    "task": "mock-pagination-exhaustion",
@@ -2807,17 +2807,17 @@
    "port": 47326,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2587,
-    "wall_s": 1.3066,
-    "cpu_user_s": 0.3713,
-    "cpu_sys_s": 0.0667,
-    "cpu_s": 0.438,
-    "rss_bytes": 79642624,
+    "startup_s": 0.1956,
+    "wall_s": 1.1454,
+    "cpu_user_s": 0.314,
+    "cpu_sys_s": 0.0442,
+    "cpu_s": 0.3582,
+    "rss_bytes": 77119488,
     "steps": 5,
     "events": 6,
-    "model_requests": 19
+    "model_requests": 12
    },
-   "cost_usd": 0.031942,
+   "cost_usd": 0.019314,
    "result": {
     "status": "complete",
     "answer": "The shop listing spans three pages. [7](<http://127.0.0.1:47326/shop?page=1#:~:text=Shop>) [8](<http://127.0.0.1:47326/shop?page=1#:~:text=Page%201%20of%203.%20Sort%20by%20price%20or%20price%20descending.>) [15](<http://127.0.0.1:47326/shop?page=2&sort=#:~:text=Shop>) [16](<http://127.0.0.1:47326/shop?page=2&sort=#:~:text=Page%202%20of%203>) [19](<http://127.0.0.1:47326/shop?page=3&sort=#:~:text=Shop>) [20](<http://127.0.0.1:47326/shop?page=3&sort=#:~:text=Page%203%20of%203.%20Sort%20by%20price%20or%20price%20descending.>)\n\nAcross all pages of the shop, there are a total of 14 products listed. [1](<http://127.0.0.1:47326/shop?page=1#:~:text=Blue%20Kettle%20%2D%20GBP%2034.50>) [2](<http://127.0.0.1:47326/shop?page=1#:~:text=Chrome%20Toaster%20%2D%20GBP%2041.00>) [3](<http://127.0.0.1:47326/shop?page=1#:~:text=Stoneware%20Mug%20%2D%20GBP%208.75>) [4](<http://127.0.0.1:47326/shop?page=1#:~:text=Burr%20Grinder%20%2D%20GBP%2089.99>) [5](<http://127.0.0.1:47326/shop?page=1#:~:text=Kitchen%20Scale%20%2D%20GBP%2019.20>) [6](<http://127.0.0.1:47326/shop?page=1#:~:text=Milk%20Thermometer%20%2D%20GBP%2012.40>) [9](<http://127.0.0.1:47326/shop?page=2&sort=#:~:text=French%20Press%20%2D%20GBP%2027.00>) [10](<http://127.0.0.1:47326/shop?page=2&sort=#:~:text=Paper%20Filters%20%2D%20GBP%204.60>) [11](<http://127.0.0.1:47326/shop?page=2&sort=#:~:text=House%20Beans%20%2D%20GBP%2011.50>) [12](<http://127.0.0.1:47326/shop?page=2&sort=#:~:text=Drum%20Roaster%20%2D%20GBP%20210.00>) [13](<http://127.0.0.1:47326/shop?page=2&sort=#:~:text=Serving%20Jug%20%2D%20GBP%2015.30>) [14](<http://127.0.0.1:47326/shop?page=2&sort=#:~:text=Drip%20Tray%20%2D%20GBP%209.95>) [17](<http://127.0.0.1:47326/shop?page=3&sort=#:~:text=Bar%20Cloth%20%2D%20GBP%206.20>) [18](<http://127.0.0.1:47326/shop?page=3&sort=#:~:text=Water%20Tap%20%2D%20GBP%2052.75>)",
@@ -2969,7 +2969,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 23
+   "unused_responses": 31
   },
   {
    "task": "mock-report-total",
@@ -2977,17 +2977,17 @@
    "port": 47327,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2271,
-    "wall_s": 0.9381,
-    "cpu_user_s": 0.3402,
-    "cpu_sys_s": 0.0484,
-    "cpu_s": 0.3886,
-    "rss_bytes": 78413824,
+    "startup_s": 0.1944,
+    "wall_s": 0.8707,
+    "cpu_user_s": 0.2795,
+    "cpu_sys_s": 0.0411,
+    "cpu_s": 0.3205,
+    "rss_bytes": 76644352,
     "steps": 2,
     "events": 3,
-    "model_requests": 16
+    "model_requests": 10
    },
-   "cost_usd": 0.017122,
+   "cost_usd": 0.008937,
    "result": {
     "status": "complete",
     "answer": "The total of the orders in the orders report is 139.79. [1](<http://127.0.0.1:47327/download/report.csv#:~:text=reference%2Citem%2Ctotal%20A%2D1001%2CBlue%20Kettle%2C34.50>) [2](<http://127.0.0.1:47327/download/report.csv#:~:text=reference%2Citem%2Ctotal%20A%2D1001%2CBlue%20Kettle%2C34.50%20A%2D1002%2CBurr%20Grinder%2C89.99>) [3](<http://127.0.0.1:47327/download/report.csv#:~:text=reference%2Citem%2Ctotal%20A%2D1001%2CBlue%20Kettle%2C34.50%20A%2D1002%2CBurr%20Grinder%2C89.99%20A%2D1003%2CServing%20Jug%2C15.30>)",
@@ -3016,7 +3016,7 @@
       "operation": "click",
       "target": "orders report",
       "outcome": "executed",
-      "detail": null
+      "detail": "downloaded the file the link points at"
      },
      {
       "operation": "read",
@@ -3036,7 +3036,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 17
+   "unused_responses": 25
   },
   {
    "task": "mock-drag-card",
@@ -3044,17 +3044,17 @@
    "port": 47328,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2511,
-    "wall_s": 1.15,
-    "cpu_user_s": 0.3394,
-    "cpu_sys_s": 0.0659,
-    "cpu_s": 0.4053,
-    "rss_bytes": 78888960,
+    "startup_s": 0.2053,
+    "wall_s": 1.1024,
+    "cpu_user_s": 0.3029,
+    "cpu_sys_s": 0.0451,
+    "cpu_s": 0.3479,
+    "rss_bytes": 76529664,
     "steps": 2,
     "events": 3,
-    "model_requests": 15
+    "model_requests": 9
    },
-   "cost_usd": 0.014022,
+   "cost_usd": 0.00798,
    "result": {
     "status": "complete",
     "answer": "Card A is in the Done column. [1](<http://127.0.0.1:47328/board#:~:text=Board>) [2](<http://127.0.0.1:47328/board#:~:text=Card%20A%20is%20in%20Done.>)",
@@ -3100,7 +3100,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 35
+   "unused_responses": 42
   },
   {
    "task": "mock-new-tab-story",
@@ -3108,17 +3108,17 @@
    "port": 47329,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2251,
-    "wall_s": 1.0083,
-    "cpu_user_s": 0.3337,
-    "cpu_sys_s": 0.0476,
-    "cpu_s": 0.3813,
-    "rss_bytes": 79577088,
+    "startup_s": 0.2076,
+    "wall_s": 0.9153,
+    "cpu_user_s": 0.3003,
+    "cpu_sys_s": 0.0432,
+    "cpu_s": 0.3436,
+    "rss_bytes": 76611584,
     "steps": 2,
     "events": 3,
-    "model_requests": 8
+    "model_requests": 7
    },
-   "cost_usd": 0.002034,
+   "cost_usd": 0.002013,
    "result": {
     "status": "complete",
     "answer": "The roastery reopens on Monday at 08:00. [1](<http://127.0.0.1:47329/news/extra#:~:text=Full%20story>) [2](<http://127.0.0.1:47329/news/extra#:~:text=The%20roastery%20reopens%20on%20Monday%20at%2008%3A00.>)",
@@ -3162,7 +3162,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 11
+   "unused_responses": 13
   },
   {
    "task": "mock-book-table",
@@ -3170,17 +3170,17 @@
    "port": 47330,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2307,
-    "wall_s": 1.3743,
-    "cpu_user_s": 0.3563,
-    "cpu_sys_s": 0.0537,
-    "cpu_s": 0.41,
-    "rss_bytes": 78561280,
+    "startup_s": 0.2013,
+    "wall_s": 1.3271,
+    "cpu_user_s": 0.3052,
+    "cpu_sys_s": 0.0463,
+    "cpu_s": 0.3515,
+    "rss_bytes": 76824576,
     "steps": 3,
     "events": 4,
-    "model_requests": 18
+    "model_requests": 12
    },
-   "cost_usd": 0.016319,
+   "cost_usd": 0.008286,
    "result": {
     "status": "complete",
     "answer": "The site confirmed that the table is booked for 2027-03-04. [1](<http://127.0.0.1:47330/booking#:~:text=Table%20booked>) [2](<http://127.0.0.1:47330/booking#:~:text=Your%20table%20is%20booked%20for%202027%2D03%2D04.>)",
@@ -3232,7 +3232,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 22
+   "unused_responses": 29
   },
   {
    "task": "mock-newsletter-gate",
@@ -3240,17 +3240,17 @@
    "port": 47331,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2531,
-    "wall_s": 1.3804,
-    "cpu_user_s": 0.3445,
-    "cpu_sys_s": 0.0561,
-    "cpu_s": 0.4005,
-    "rss_bytes": 78479360,
+    "startup_s": 0.2058,
+    "wall_s": 1.3297,
+    "cpu_user_s": 0.3042,
+    "cpu_sys_s": 0.044,
+    "cpu_s": 0.3482,
+    "rss_bytes": 76922880,
     "steps": 3,
     "events": 4,
-    "model_requests": 11
+    "model_requests": 10
    },
-   "cost_usd": 0.007351,
+   "cost_usd": 0.007331,
    "result": {
     "status": "complete",
     "answer": "After signing up, the site displays the heading \"Signed up\" and the confirmation message \"Thanks. You are on the newsletter list.\" [1](<http://127.0.0.1:47331/gate#:~:text=Signed%20up%20Home%20%7C%20Shop%20%7C%20Account%20%7C%20Phone%20Thanks.%20You%20are%20on%20the%20newsletter%20list.>)",
@@ -3297,7 +3297,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 18
+   "unused_responses": 20
   },
   {
    "task": "mock-invoice-export",
@@ -3305,43 +3305,28 @@
    "port": 47332,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.225,
-    "wall_s": 3.2828,
-    "cpu_user_s": 0.423,
-    "cpu_sys_s": 0.0633,
-    "cpu_s": 0.4863,
-    "rss_bytes": 79675392,
-    "steps": 12,
-    "events": 13,
-    "model_requests": 37
+    "startup_s": 0.1962,
+    "wall_s": 3.2271,
+    "cpu_user_s": 0.4024,
+    "cpu_sys_s": 0.0571,
+    "cpu_s": 0.4595,
+    "rss_bytes": 77676544,
+    "steps": 13,
+    "events": 14,
+    "model_requests": 32
    },
-   "cost_usd": 0.031407,
+   "cost_usd": 0.031214,
    "result": {
     "status": "complete",
-    "answer": "The total amount of the invoices in the invoice export is 175.00. [1](<http://127.0.0.1:47332/download/invoices.csv#:~:text=invoice%2Camount%20INV%2D01%2C120.00>) [2](<http://127.0.0.1:47332/download/invoices.csv#:~:text=invoice%2Camount%20INV%2D01%2C120.00%20INV%2D02%2C45.50>) [3](<http://127.0.0.1:47332/download/invoices.csv#:~:text=invoice%2Camount%20INV%2D01%2C120.00%20INV%2D02%2C45.50%20INV%2D03%2C9.50>) [4](<http://127.0.0.1:47332/download/invoices.csv#:~:text=invoice%2Camount%20INV%2D01%2C120.00%20INV%2D02%2C45.50%20INV%2D03%2C9.50>)",
+    "answer": "The total amount of the invoices in the invoice export is 175.00. [5](<http://127.0.0.1:47332/download/invoices.csv#:~:text=invoice%2Camount%20INV%2D01%2C120.00%20INV%2D02%2C45.50%20INV%2D03%2C9.50>)",
     "data": null,
     "error": null,
     "final_url": "http://127.0.0.1:47332/account/export",
     "citations": [
      {
       "url": "http://127.0.0.1:47332/download/invoices.csv",
-      "quote": "invoice,amount\nINV-01,120.00",
-      "text": "Invoice INV-01 has an amount of 120.00."
-     },
-     {
-      "url": "http://127.0.0.1:47332/download/invoices.csv",
-      "quote": "invoice,amount\nINV-01,120.00\nINV-02,45.50",
-      "text": "Invoice INV-02 has an amount of 45.50."
-     },
-     {
-      "url": "http://127.0.0.1:47332/download/invoices.csv",
-      "quote": "invoice,amount\nINV-01,120.00\nINV-02,45.50\nINV-03,9.50",
-      "text": "Invoice INV-03 has an amount of 9.50."
-     },
-     {
-      "url": "http://127.0.0.1:47332/download/invoices.csv",
       "quote": "invoice,amount\nINV-01,120.00\nINV-02,45.50\nINV-03,9.50\n",
-      "text": "The total amount of the invoices in the invoice export (INV-01 for 120.00, INV-02 for 45.50, and INV-03 for 9.50) is 175.00."
+      "text": "The invoice export lists three invoices: INV-01 with amount 120.00, INV-02 with amount 45.50, and INV-03 with amount 9.50, giving a total amount of 175.00."
      }
     ],
     "steps": [
@@ -3373,37 +3358,19 @@
       "operation": "click",
       "target": "invoice export",
       "outcome": "executed",
-      "detail": null
+      "detail": "downloaded the file the link points at"
      },
      {
       "operation": "read",
       "target": null,
       "outcome": "executed",
       "detail": "Read this content."
-     },
-     {
-      "operation": "escalate",
-      "target": null,
-      "outcome": "executed",
-      "detail": "click invoice export already did nothing here\nThe user successfully signed in, downloaded and read the invoice export, and noted all invoices and total (175.00). The sign-in requirement is fulfilled in the history, but needs citation or we can finish if all answers are ready. Wait, 'Still to find: Sign in as grace@example.com using the saved password.' Let's check Account page or login confirmation, or maybe read account page. Let's click Account link (index 2) to show the signed-in state explicitly.\nClick Account link to confirm signed-in status."
-     },
-     {
-      "operation": "click",
-      "target": "Account",
-      "outcome": "executed",
-      "detail": null
-     },
-     {
-      "operation": "click",
-      "target": "Export invoices",
-      "outcome": "executed",
-      "detail": null
      },
      {
       "operation": "click",
       "target": "invoice export",
       "outcome": "executed",
-      "detail": null
+      "detail": "downloaded the file the link points at"
      },
      {
       "operation": "read",
@@ -3412,10 +3379,34 @@
       "detail": "Read this content."
      },
      {
+      "operation": "click",
+      "target": "invoice export",
+      "outcome": "executed",
+      "detail": "downloaded the file the link points at"
+     },
+     {
+      "operation": "read",
+      "target": null,
+      "outcome": "executed",
+      "detail": "Read this content."
+     },
+     {
+      "operation": "click",
+      "target": "invoice export",
+      "outcome": "executed",
+      "detail": "downloaded the file the link points at"
+     },
+     {
       "operation": "escalate",
       "target": null,
       "outcome": "executed",
-      "detail": "click invoice export already did nothing here\nThe user requested the total of the invoices in the invoice export after signing in. The notes already contain the downloaded invoice export and verified the total is 175.00 (INV-01: 120.00, INV-02: 45.50, INV-03: 9.50). All requirements have been satisfied.\nFinish the task with the total from the invoice export notes."
+      "detail": "no_progress (3)\nThe task requirements have already been completely fulfilled; the invoice export was downloaded, read, and the total amount (175.00) is recorded in notes. The agent has been redundantly clicking the download link and reading the page.\nFinish the task as all requirements are satisfied and notes contain the total invoice amount."
+     },
+     {
+      "operation": "read",
+      "target": null,
+      "outcome": "executed",
+      "detail": "Read this content."
      }
     ],
     "grade": {
@@ -3433,7 +3424,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 32
+   "unused_responses": 53
   },
   {
    "task": "mock-upload-document",
@@ -3441,17 +3432,17 @@
    "port": 47333,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2306,
-    "wall_s": 1.2597,
-    "cpu_user_s": 0.3486,
-    "cpu_sys_s": 0.0568,
-    "cpu_s": 0.4054,
-    "rss_bytes": 78872576,
+    "startup_s": 0.2023,
+    "wall_s": 1.1873,
+    "cpu_user_s": 0.3078,
+    "cpu_sys_s": 0.0493,
+    "cpu_s": 0.3571,
+    "rss_bytes": 77594624,
     "steps": 4,
     "events": 5,
-    "model_requests": 18
+    "model_requests": 12
    },
-   "cost_usd": 0.015554,
+   "cost_usd": 0.009208,
    "result": {
     "status": "complete",
     "answer": "The site received the file named stocktake.txt. [1](<http://127.0.0.1:47333/upload#:~:text=Document%20received>) [2](<http://127.0.0.1:47333/upload#:~:text=Received%20stocktake.txt%20%2834%20bytes%29.>)",
@@ -3509,7 +3500,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 23
+   "unused_responses": 30
   },
   {
    "task": "mock-false-success",
@@ -3517,12 +3508,12 @@
    "port": 47334,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2227,
-    "wall_s": 13.7914,
-    "cpu_user_s": 0.3306,
-    "cpu_sys_s": 0.0501,
-    "cpu_s": 0.3807,
-    "rss_bytes": 78577664,
+    "startup_s": 0.2009,
+    "wall_s": 13.7507,
+    "cpu_user_s": 0.303,
+    "cpu_sys_s": 0.0448,
+    "cpu_s": 0.3478,
+    "rss_bytes": 76595200,
     "steps": 6,
     "events": 7,
     "model_requests": 10
@@ -3594,17 +3585,17 @@
    "port": 47335,
    "exit_code": 0,
    "metrics": {
-    "startup_s": 0.2165,
-    "wall_s": 0.6334,
-    "cpu_user_s": 0.3039,
-    "cpu_sys_s": 0.0466,
-    "cpu_s": 0.3504,
-    "rss_bytes": 78348288,
+    "startup_s": 0.2025,
+    "wall_s": 0.5961,
+    "cpu_user_s": 0.2703,
+    "cpu_sys_s": 0.0406,
+    "cpu_s": 0.3109,
+    "rss_bytes": 76742656,
     "steps": 1,
     "events": 2,
-    "model_requests": 13
+    "model_requests": 7
    },
-   "cost_usd": 0.013565,
+   "cost_usd": 0.007365,
    "result": {
     "status": "complete",
     "answer": "The roastery is open Tuesday to Saturday, from 08:00 to 18:00. [1](<http://127.0.0.1:47335/notice#:~:text=Roastery%20notice>) [2](<http://127.0.0.1:47335/notice#:~:text=The%20roastery%20is%20open%20Tuesday%20to%20Saturday%2C%2008%3A00%20to%2018%3A00.>)",
@@ -3642,7 +3633,7 @@
    },
    "misses": [],
    "forwarded": 0,
-   "unused_responses": 12
+   "unused_responses": 19
   }
  ]
 }
