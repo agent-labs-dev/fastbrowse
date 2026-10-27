@@ -38,8 +38,11 @@ variable; credentials in task text are not used.`
 Over MCP, the server's operator adds the secret with `--secret` or `--bitwarden`, or signs in once in the
 server's `--profile`.
 
-A secret declared for a different origin than the one the run is typing on does not end `needs_login`: the
-run ends `needs_input` with `secret <name> is not available for <origin>`. Fix the origin in `--secret`.
+A field is offered only the secrets declared for the origin of the frame it sits in. When none is, a sign-in
+field ends `needs_login` with `'<label>' wants a secret and none is stored`, so a secret declared for the
+wrong origin reads the same as no secret: check the origin in `--secret` against the address the form is on.
+A secret that is declared for the origin but resolves to nothing, such as a password manager item that
+changed during the run, ends `needs_input` with `secret <name> is not available for <origin>`.
 
 ## blocked (exit 6)
 
@@ -228,8 +231,9 @@ limit. It stops rather than guess.
 - A file is larger than `Config.max_upload_bytes` (25 MiB by default): `<name> exceeds the upload size limit`.
 - A password change without a replacement secret: `A replacement password requires --secret
   new_password=ENV_VAR@https://host; set ENV_VAR to the new value instead of putting it in the task.`
-- A secret declared for another origin than the one the run is typing on:
-  `secret <name> is not available for <origin>`.
+- A secret declared for the origin that resolves to nothing, such as a password manager item that changed
+  during the run: `secret <name> is not available for <origin>`. A secret declared for another origin ends
+  `needs_login` instead, see [needs_login](#needs_login-exit-4).
 - A drag with nowhere to drop: `the page offers no drop target for the drag`.
 - An address the run would open contains a resolved secret: `navigation address contains a resolved secret`.
 

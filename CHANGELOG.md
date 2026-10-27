@@ -11,6 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A field is offered only the secrets its own origin may receive, on both cores.** A password manager offers
+  its names across every site it holds, so a sign-in on a site none of them covers used to offer those names
+  anyway, and the run ended `needs_input` naming a secret the page could never get. It now ends
+  `needs_login`, which tells the caller a login for that site is what is missing.
+
 ## [0.7.4] - 2026-10-27
 
 - Every dependency this release builds, tests and ships with is at its latest release: `pydantic` 2.14.1, `pydantic-settings` 2.16.1, `websockets` 17.3, `ruff` 0.17.3, `pytest` 9.1.1, `pre-commit` 4.7.0, `Biome` 2.6.3 and `@types/node` 26.6.5 among them. `ty`, the preview type checker the gate runs, moved to 0.0.92, which evaluates annotations at runtime on Python 3.13; the five modules that annotate with pydantic's `JsonValue` now import `from __future__ import annotations`, so their `JsonValue | None` annotations resolve as types rather than as an unsupported `|` at import.
