@@ -95,6 +95,7 @@ from fastbrowse.navigation import navigation_urls, same_address, task_urls
 from fastbrowse.page import (
     Action,
     ActResult,
+    BlockKind,
     BrowserError,
     Capture,
     Control,
@@ -580,6 +581,13 @@ class _RunState:
     An error at an address removes it until a later successful observation."""
     observed_links: dict[str, _ObservedLink] = field(default_factory=dict)
     read_urls: set[str] = field(default_factory=set)
+    read_coverage: dict[str, str] = field(default_factory=dict[str, str])
+    """By document, the text of every capture a full read has already read there, whitespace-normalised. A page
+    that redraws within one document can carry nothing this does not already hold, which is what tells an owed
+    read that the notes still describe the page."""
+    read_shas: dict[str, set[str]] = field(default_factory=dict[str, set[str]])
+    """By document, the captures whose text is in `read_coverage`: how a fact cut from one is known to be a
+    reading of this document, and so whether the page still shows it."""
     redecided: bool = False
     """A decision was dropped because the page redrew under it, so nothing is watched until an action is taken."""
     missing: set[tuple[str, str | None]] = field(default_factory=set[tuple[str, str | None]])
@@ -1129,14 +1137,29 @@ class Agent:
                 # Notes that evidence every requirement can still describe the page before the last interaction
                 # redrew it, so an answer owed after one is read off what it drew. A plan that only acts has
                 # nothing to read, and finishes without waiting.
-                if _unread(plan, state.notes) or (state.owes_read and plan.page_answer_expected):
+                unread = _unread(plan, state.notes)
+                reading_owed = unread or (state.owes_read and plan.page_answer_expected)
+                # Only the interaction's own claim is in question here: an unread requirement needs a read whatever
+                # the page shows, and a direction the reader named behind a control is carried out rather than
+                # traded for a read of the page that named it.
+                check = reading_owed and not unread and state.directed is None
+                capture = await self._capture() if check else None
+                if capture is not None and self._covered(state, observation, capture):
+                    # The interaction redrew the page and the notes still describe it: everything they quote is
+                    # still shown and nothing on it is unread. A read would re-buy what they hold, which is what
+                    # made a sort click or a closed banner cost a full read before deciding on the same page.
+                    state.owes_read = False
+                    state.read_here = True
+                    trace("read_not_owed", url=self._redactor.redact(observation.url))
+                    reading_owed = False
+                if reading_owed:
                     reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
                     # A read that ran spends the direction it was sent on, but may leave one of its own: the control
                     # the reader named to show more was cleared right after the read that named it, and Flights
                     # runs went to recovery without clicking View more flights. A skipped read spends nothing.
                     held, state.directed = state.directed, None
                     recoveries = state.recoveries
-                    if not await self._step(state, observation, reading, decided_by):
+                    if not await self._step(state, observation, reading, decided_by, capture=capture):
                         if not (
                             _lookup(plan)
                             and not state.open_answer_outputs
@@ -2747,9 +2770,47 @@ class Agent:
         if not transaction_pending and not _unread(plan, state.notes):
             return False
         # An interaction can remove evidence, so read first and reconsider before authorizing the next action.
+        # But an interaction that only redrew what the notes hold, such as a tab opened on text already read or a
+        # row expanded over it, leaves nothing to preserve, and reading it again spends a model call on nothing.
+        capture = await self._capture()
+        if not transaction_pending and self._covered(state, observation, capture):
+            trace("read_not_owed", url=self._redactor.redact(observation.url))
+            state.owes_read = False
+            state.read_here = True
+            return False
         reading = decision.model_copy(update={"operation": Operation.READ, "target": None})
-        skipped = await self._step(state, observation, reading, decided_by)
+        skipped = await self._step(state, observation, reading, decided_by, capture=capture)
         return transaction_pending or not skipped
+
+    def _covered(self, state: _RunState, observation: Observation, capture: Capture) -> bool:
+        """Whether the notes already describe this capture of a page, so that reading it again adds nothing.
+
+        `owes_read` says an interaction changed the page. That is a claim about the DOM, not about the notes:
+        sorting a list, closing a banner or expanding a row redraws a page without changing one thing the run read
+        from it, and the read that follows re-buys facts the notes already hold. So this capture is compared with
+        what this run has already read of the document. A block it has never read means the page has something new
+        to say; a value the notes quote that the page no longer shows means they are out of date. Either one makes
+        a read worth paying for. Neither, and the notes still describe the page.
+        """
+        read = state.read_coverage.get(observation.document_key, "")
+        if not read:
+            return False
+        for block in capture.blocks:
+            if block.kind is BlockKind.OBSERVATION:
+                continue
+            text = _flat(capture.text[block.start : block.end])
+            if text and text not in read:
+                return False
+        shas = state.read_shas.get(observation.document_key)
+        if not shas:
+            # Coverage without an identity is not a reading this run can attribute a quote to, so the page may
+            # have dropped one: not held.
+            return False
+        return not any(
+            not shows(capture.text, fact.evidence.quote)
+            for fact in state.notes.facts
+            if fact.evidence is not None and fact.evidence.capture_sha256 in shas
+        )
 
     async def _reread_if_changed(self, state: _RunState, observation: Observation) -> bool:
         """Read a page state again when what an earlier read of it evidenced is no longer on it; whether it read.
@@ -2988,6 +3049,10 @@ class Agent:
             uncovered=outcome.uncovered,
         )
         state.read_urls.add(capture.url)
+        if observation is not None:
+            document = observation.document_key
+            state.read_coverage[document] = f"{state.read_coverage.get(document, '')} {' '.join(capture.text.split())}"
+            state.read_shas.setdefault(document, set()).add(capture.sha256)
         spent(progressed)
         if observation is not None:
             state.read_at[state_key(observation)] = capture.sha256
@@ -5064,6 +5129,11 @@ def _next_value(values: Sequence[str], history: Sequence[HistoryEntry], label: s
         if e.operation is Operation.FILL and e.outcome is StepOutcome.EXECUTED and e.target == label:
             done += done < len(values) and e.text == values[done]
     return values[min(done, len(values) - 1)]
+
+
+def _flat(text: str) -> str:
+    """A block's text with its whitespace flattened, the way `read_coverage` holds every text it has read."""
+    return " ".join(text.split())
 
 
 def _seen(observation: Observation) -> str:

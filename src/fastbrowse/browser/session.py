@@ -425,6 +425,13 @@ class BrowserSession:
         """Captured downloads by count: a navigation that aborts on one is not a navigation that failed."""
         self._download_texts: list[DownloadText] = []
         """A captured download's readable text, oldest first: kept as evidence for a capture, not consumed."""
+        self._download_keys: list[tuple[str, str]] = []
+        """Every captured download's identity (address, body digest), oldest first, whether or not it is readable.
+
+        A link that only downloads is the one action whose effect never changes the page, so the same click taken
+        again looks productive every time: an exports page was clicked four times in a row, each saving the same
+        file. Identity is what tells the second save from the first.
+        """
         self._download_texts_shown = 0
         """How many of them an observation has already shown, so each is shown to the run once."""
         self._download_refusals: list[DownloadRefused] = []
@@ -573,6 +580,17 @@ class BrowserSession:
                 return False
             await asyncio.sleep(0.05)
         return True
+
+    def repeated_download(self, since: int) -> bool:
+        """Whether every download captured since `since` saves a file an earlier action already saved.
+
+        A page that offers the same export twice has not moved the run forward the second time, so the click that
+        saved it again must not be recorded as one that changed something.
+        """
+        if self._downloads_captured <= since:
+            return False
+        earlier = set(self._download_keys[:since])
+        return all(key in earlier for key in self._download_keys[since:])
 
     def download_texts(self) -> tuple[DownloadText, ...]:
         """Every readable download captured so far, oldest first.
@@ -1334,6 +1352,7 @@ class BrowserSession:
         )
         self._artifacts.append(artifact)
         self._downloads_captured += 1
+        self._download_keys.append((url, hashlib.sha256(raw).hexdigest()))
         if text := _readable_text(mime, raw):
             self._download_texts.append(
                 DownloadText(

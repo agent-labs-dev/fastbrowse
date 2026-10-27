@@ -551,3 +551,19 @@ async def test_navigation_headings_do_not_identify_main_content(
     help_text = next(block for block in capture.blocks if capture.text[block.start : block.end] == "Use arrow keys.")
     assert price.heading_path == ("Catalog",)
     assert help_text.heading_path == ("Catalog", "Keyboard help")
+
+
+def test_a_repeat_download_is_not_an_effect() -> None:
+    """Saving the file an earlier click already saved changes nothing, so the click that saved it again is idle.
+
+    The exports fixture offers one link, and clicking it four times wrote the same CSV four times while the run
+    read each save as progress. Identity is what tells the second save from the first.
+    """
+    from fastbrowse.browser.session import BrowserSession
+
+    keys = [("https://example.test/a.csv", "d1"), ("https://example.test/a.csv", "d1")]
+    session = BrowserSession.__new__(BrowserSession)
+    session._download_keys = keys  # type: ignore[attr-defined]
+    session._downloads_captured = 2  # type: ignore[attr-defined]
+    assert session.repeated_download(1) is True
+    assert session.repeated_download(0) is False
