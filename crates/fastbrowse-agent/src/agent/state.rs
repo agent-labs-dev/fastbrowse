@@ -436,6 +436,13 @@ pub(crate) struct RunState {
     pub visited: IndexMap<String, ()>,
     pub observed_links: IndexMap<String, ObservedLink>,
     pub read_urls: HashSet<String>,
+    /// By document, the text of every capture a full read has already read there, whitespace-normalised. A page that
+    /// redraws within one document can carry nothing this does not already hold, which is what tells an owed read
+    /// that the notes still describe the page.
+    pub read_coverage: HashMap<String, String>,
+    /// By document, the captures whose text is in `read_coverage`: how a fact cut from one is known to be a reading of
+    /// this document, and so whether the page still shows it.
+    pub read_shas: HashMap<String, HashSet<String>>,
     /// A decision was dropped because the page redrew under it, so nothing is watched until an action is taken.
     pub redecided: bool,
     /// Fields the task gives no value for, which recovery has been told about once, by label and context.
@@ -572,6 +579,8 @@ impl RunState {
             visited: IndexMap::new(),
             observed_links: IndexMap::new(),
             read_urls: HashSet::new(),
+            read_coverage: HashMap::new(),
+            read_shas: HashMap::new(),
             redecided: false,
             missing: HashSet::new(),
             continuing: HashSet::new(),

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel
 
+from fastbrowse.evals.judge import Claim
 from fastbrowse.models import Authorization, RunResult, Status
 
 type Submissions = Mapping[str, list[dict[str, str]]]
@@ -28,21 +29,16 @@ class LocalTask:
     authorization: Authorization = field(default_factory=Authorization)
     inputs: Mapping[str, str] = field(default_factory=dict[str, str])
     output_schema: type[BaseModel] | None = None
+    claims: tuple[Claim, ...] = ()
+    """What the run's own output must state, judged by Jev: never matched as text, which grades the wording."""
 
 
 def _status(result: RunResult, expected: Status) -> str | None:
     return None if result.status is expected else f"status {result.status.value}, expected {expected.value}"
 
 
-def _answer_has(result: RunResult, *needles: str) -> str | None:
-    if problem := _status(result, Status.COMPLETE):
-        return problem
-    missing = [n for n in needles if n not in (result.answer or "")]
-    return f"answer lacks {missing}: {result.answer!r}" if missing else None
-
-
 def _price(result: RunResult, _: Submissions) -> str | None:
-    return _answer_has(result, "34.50")
+    return _status(result, Status.COMPLETE)
 
 
 def _contact(result: RunResult, submissions: Submissions) -> str | None:
@@ -52,8 +48,8 @@ def _contact(result: RunResult, submissions: Submissions) -> str | None:
     post = posts[0]
     if post.get("name") != "Ada Lovelace" or post.get("email") != "ada@example.com":
         return f"wrong sender fields: {post}"
-    if post.get("topic") != "Damaged item" or "broken" not in post.get("message", "").lower():
-        return f"wrong topic or message: {post}"
+    if post.get("topic") != "Damaged item":
+        return f"wrong topic: {post}"
     return _status(result, Status.COMPLETE)
 
 
@@ -84,13 +80,20 @@ def _delete(result: RunResult, submissions: Submissions) -> str | None:
 AUTHORIZED = Authorization(irreversible_actions=True)
 
 TASKS: tuple[LocalTask, ...] = (
-    LocalTask("search-price", "/shop.html", "What is the price of the Blue Kettle?", _price),
+    LocalTask(
+        "search-price",
+        "/shop.html",
+        "What is the price of the Blue Kettle?",
+        _price,
+        claims=(Claim("The answer states the Blue Kettle costs 34.50."),),
+    ),
     LocalTask(
         "contact-form",
         "/contact.html",
         "Tell support, as Ada Lovelace (ada@example.com), that my kettle arrived broken. Use the damaged item topic.",
         _contact,
         authorization=AUTHORIZED,
+        claims=(Claim("The message submitted to /submit/contact says the kettle arrived broken."),),
     ),
     LocalTask(
         "contact-needs-confirmation",

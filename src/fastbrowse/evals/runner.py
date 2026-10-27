@@ -23,12 +23,14 @@ from collections import Counter
 from pathlib import Path
 from typing import cast
 
+import httpx
 from pydantic import Field
 
 from fastbrowse.adapters.local_chrome import local_chrome
 from fastbrowse.artifacts import DirectorySink
 from fastbrowse.clients.environment import load_settings
 from fastbrowse.config import Config
+from fastbrowse.evals.judge import judge
 from fastbrowse.evals.local import Recorder, fixture_server
 from fastbrowse.evals.mock import mock_site
 from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
@@ -182,6 +184,29 @@ def _row(
     } | _efficiency(result.cost)
 
 
+def _submitted(submissions: dict[str, list[dict[str, str]]]) -> dict[str, str]:
+    """The fields the last post to each path carried, flattened for the judge to read."""
+    return {
+        f"{path} {name}": value
+        for path, posts in submissions.items()
+        for post in posts[-1:]
+        for name, value in post.items()
+    }
+
+
+async def _judge_claims(task: LocalTask | MockTask, result: RunResult, submitted: dict[str, str] | None) -> str | None:
+    """Why the run's output does not state every claim, or None when it states them all."""
+    async with httpx.AsyncClient(timeout=60.0) as http:
+        return await judge(
+            load_settings().jev(http),
+            task=task.task,
+            answer=result.answer,
+            data=result.data,
+            submitted=submitted,
+            claims=task.claims,
+        )
+
+
 async def _drive(
     task: LocalTask | MockTask,
     start: str,
@@ -223,7 +248,10 @@ async def run_task(
 ) -> dict[str, object]:
     recorder.clear()
     result, seconds, lost = await _drive(task, base_url + task.start, connection, sink, None, limits)
-    failure = task.check(result, recorder.snapshot())
+    submitted = recorder.snapshot()
+    failure = task.check(result, submitted)
+    if failure is None and task.claims:
+        failure = await _judge_claims(task, result, _submitted(submitted))
     return {"arm": "fastbrowse", "category": "fixture", "suite": "local"} | _row(
         result, task_id=task.id, failure=failure, seconds=seconds, lost=lost, limit=limits.max_steps
     )
@@ -243,6 +271,8 @@ async def run_mock_task(
             task, base_url + task.start, connection, sink, secrets, limits, task.attachments
         )
         failure = task.check(result, site)
+        if failure is None and task.claims:
+            failure = await _judge_claims(task, result, None)
         extra = {
             "signed_in": list(site.sign_ins),
             "posts": [path for path, _ in site.posts],

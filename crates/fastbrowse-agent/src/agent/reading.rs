@@ -7,7 +7,7 @@ use fastbrowse_core::effects::{state_key, step_key};
 use fastbrowse_core::jev::JevClient;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{CostLine, Decider, Operation, StepOutcome, StepResult};
-use fastbrowse_core::page::{Capture, Control, Observation};
+use fastbrowse_core::page::{BlockKind, Capture, Control, Observation};
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::origin_of;
 use fastbrowse_core::telemetry::{Ledger, Trace};
@@ -22,7 +22,7 @@ use super::helpers::{
 use super::state::{Flow, ReadKey, RunState, Spawned, Step};
 use crate::comparison::complete_comparison;
 use crate::error::AgentError;
-use crate::memory::{Notes, fact_id};
+use crate::memory::{Notes, fact_id, shows};
 use crate::planner::{Requirement, RequirementKind};
 use crate::policy::HistoryEntry;
 use crate::retrieval::{ReadOptions, ReadOutcome, TallyReader, filter_tallies, read, read_tallies};
@@ -34,6 +34,34 @@ struct PageRead {
     task: Spawned<ReadOutcome>,
     started: Instant,
     frame: Option<Vec<u8>>,
+}
+
+/// Whether the notes already describe this capture of a page, so that reading it again adds nothing.
+///
+/// `owes_read` says an interaction changed the page. That is a claim about the DOM, not about the notes: sorting a
+/// list, closing a banner or expanding a row redraws a page without changing one thing the run read from it. So this
+/// capture is compared with what this run has already read of the document. A block it has never read means the page
+/// has something new to say; a value the notes quote that the page no longer shows means they are out of date.
+/// Neither, and the notes still describe the page.
+pub(super) fn covered(state: &RunState, observation: &Observation, capture: &Capture) -> bool {
+    let Some(read) = state.read_coverage.get(&observation.document_key).filter(|read| !read.is_empty()) else {
+        return false;
+    };
+    let unread_block = capture.blocks.iter().any(|block| {
+        let flat = text::squash(capture.block_text(block));
+        block.kind != BlockKind::Observation && !flat.is_empty() && !read.contains(&flat)
+    });
+    if unread_block {
+        return false;
+    }
+    // Coverage without an identity is not a reading this run can attribute a quote to, so the page may have dropped
+    // one: not held.
+    let Some(shas) = state.read_shas.get(&observation.document_key).filter(|shas| !shas.is_empty()) else {
+        return false;
+    };
+    state.notes.facts().iter().all(|fact| {
+        fact.evidence.as_ref().is_none_or(|e| !shas.contains(&e.capture_sha256) || shows(&capture.text, &e.quote))
+    })
 }
 
 fn sorted(values: impl IntoIterator<Item = String>) -> Vec<String> {
@@ -340,6 +368,13 @@ impl Agent {
             ])
         });
         state.read_urls.insert(capture.url.clone());
+        if let Some(observation) = observation {
+            let document = &observation.document_key;
+            let read = state.read_coverage.entry(document.clone()).or_default();
+            read.push(' ');
+            read.push_str(&text::squash(&capture.text));
+            state.read_shas.entry(document.clone()).or_default().insert(capture.sha256.clone());
+        }
         spent(state, progressed);
         if let Some(observation) = observation {
             state.read_at.insert(state_key(observation), capture.sha256.clone());

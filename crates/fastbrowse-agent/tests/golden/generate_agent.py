@@ -805,6 +805,75 @@ def scenarios() -> list[dict[str, Any]]:
         },
     )
 
+    # A sort redraws the fare list within its document. When the redraw shows only what the run read, the read it
+    # owes is answered from the notes; when it drops the fare the notes quote, the read is paid for.
+    fares_url = "https://air.test/fares"
+    unsorted = screen(
+        fares_url,
+        "Fares",
+        "Fares\n\n$320 1 stop",
+        [control("sort", "button", "Sort by price", "click")],
+        document_key="fares",
+    )
+    sorted_fares = screen(
+        fares_url,
+        "Fares",
+        "Fares\n\n$320 1 stop",
+        [control("sort", "button", "Sorted by price", "click")],
+        document_key="fares",
+    )
+    emptied = screen(
+        fares_url,
+        "Fares",
+        "Fares\n\nNo fares match",
+        [control("sort", "button", "Sorted by price", "click")],
+        document_key="fares",
+    )
+    fare_read = {
+        "claims": [{"requirement_id": "r1", "text": "The fare is $320 1 stop", "cite": {"first": "s1", "last": "s1"}}],
+        "answered": True,
+    }
+    for name, redrawn in (
+        ("a click that redraws only what the run read owes no second read", sorted_fares),
+        ("a click that drops a fare the notes quote is read again", emptied),
+    ):
+        scenario(
+            name,
+            "Find the fare on https://air.test/fares",
+            {
+                "start": "blank",
+                "screens": {"blank": screen("about:blank", "", ""), "fares": unsorted, "sorted": redrawn},
+                "urls": {fares_url: "fares"},
+                "actions": [{"screen": "fares", "operation": "click", "target": "sort", "next": "sorted"}],
+            },
+            {
+                "Plan": [
+                    plan(
+                        ("r1", "Find the fare", "information"),
+                        ("a1", "Sort the fares by price", "action"),
+                        checks=["the fare"],
+                    )
+                ],
+                "_ReadResponse": [fare_read, {"claims": [], "answered": False}],
+                "LLMVerdict": [{"missing": [], "complete": True}],
+            },
+            start=fares_url,
+            jev={
+                "pick": {"operation": ["read", "click", "done"], "click_target": "sort", "r1": "synthesis"},
+                "noul": 0.95,
+                "nouls": {
+                    "draft_needs_writing": 0.0,
+                    "unmet_r1": 0.0,
+                    "unsupported_0": 0.0,
+                    "contradicted_0": 0.0,
+                    "output_missing_0": 0.0,
+                    "output_missing_1": 0.0,
+                },
+            },
+            authorization={"irreversible_actions": True},
+            limits={"max_steps": 6},
+        )
+
     first = screen(
         "https://shop.test/list?page=1",
         "Mugs",

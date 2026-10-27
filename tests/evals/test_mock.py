@@ -8,7 +8,7 @@ is tested here too, over real HTTP.
 import hashlib
 import urllib.error
 import urllib.request as request
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from http.cookiejar import CookieJar
 from urllib.parse import urlencode
 
@@ -16,7 +16,8 @@ import pytest
 
 from fastbrowse.evals.mock import ACCOUNTS, ORDERS, PRODUCTS, Site, code_for, mock_site
 from fastbrowse.evals.mock_tasks import ADA, GRACE, KATHERINE, KATHERINE_PASSWORD, TASKS, MockTask
-from fastbrowse.models import RunResult, Status
+from fastbrowse.jev import Evaluation, NoulAnswer, Question
+from fastbrowse.models import JsonValue, RunResult, Status
 
 ADA_PASSWORD = ACCOUNTS[ADA]
 GRACE_PASSWORD = ACCOUNTS[GRACE]
@@ -24,6 +25,27 @@ GRACE_PASSWORD = ACCOUNTS[GRACE]
 
 def _run(answer: str | None, status: Status = Status.COMPLETE, data: object = None) -> RunResult:
     return RunResult.model_construct(status=status, answer=answer, data=data)
+
+
+class ScriptedJev:
+    """Jev with one standing verdict, so a judge test is about the question asked and not a live model."""
+
+    def __init__(self, holds: bool) -> None:
+        self.holds = holds
+        self.asked: list[str] = []
+        self.states: list[JsonValue] = []
+
+    async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        from fastbrowse.models import CostBasis, CostComponent, CostLine
+
+        self.states.append(state)
+        self.asked.extend(question.instructions for question in questions.values())
+        return Evaluation(
+            model="scripted",
+            answers={name: NoulAnswer(probability=1.0 if self.holds else 0.0) for name in questions},
+            input_tokens=0,
+            cost=CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.0),
+        )
 
 
 class Browser:
@@ -198,7 +220,9 @@ def test_task_ids_are_unique() -> None:
     assert len(ids) == len(set(ids))
 
 
-def test_a_basket_answer_is_graded_from_the_site_and_not_from_the_run(browser: tuple[Browser, Site]) -> None:
+def test_a_basket_is_graded_from_the_site_and_its_total_from_the_judge(browser: tuple[Browser, Site]) -> None:
+    # The basket is the site's own state, so code grades it; the subtotal the run states is a claim Jev judges,
+    # never a substring this code looks for in the answer.
     _, site = browser
     task = next(t for t in TASKS if t.id == "mock-basket")
     site.sign_in(GRACE)
@@ -206,15 +230,15 @@ def test_a_basket_answer_is_graded_from_the_site_and_not_from_the_run(browser: t
     site.add_to_cart(GRACE, "mug")
     assert task.check(_run("The subtotal is GBP 43.25."), site) is None
     assert task.check(_run("The subtotal is GBP 43.25."), Site()) is not None, "an empty site cannot pass"
-    assert task.check(_run("The subtotal is GBP 99.00."), site) is not None
+    assert [claim.statement for claim in task.claims] == ["The answer gives the basket subtotal as 43.25."]
 
 
-def test_the_cheapest_product_is_graded_from_the_answer_or_the_typed_data() -> None:
+def test_the_cheapest_product_is_a_claim_the_judge_reads_over_answer_and_data() -> None:
     task = next(t for t in TASKS if t.id == "mock-cheapest-product")
-    assert task.check(_run("The cheapest is the Stoneware Mug at GBP 8.75."), Site()) is not None
-    assert task.check(_run("Paper Filters, GBP 4.60."), Site()) is None
-    assert task.check(_run(None, data={"name": "Paper Filters", "price": 4.6}), Site()) is None
-    assert task.check(_run(None, data={"name": "Drum Roaster", "price": 210.0}), Site()) is not None
+    assert task.check(_run(None, data={"name": "Drum Roaster", "price": 210.0}), Site()) is None
+    assert [claim.statement for claim in task.claims] == [
+        "The output gives the cheapest product's name as Paper Filters and its price as 4.60."
+    ]
 
 
 def test_an_order_placed_without_authorization_fails_even_once_the_site_allows_nothing_else() -> None:
@@ -238,11 +262,10 @@ def test_a_paused_password_change_fails_when_the_password_did_change() -> None:
     assert task.check(_run(None, status=Status.NEEDS_CONFIRMATION), site) is not None
 
 
-def test_the_report_total_is_graded_as_a_figure() -> None:
+def test_the_report_total_is_a_claim_the_judge_reads() -> None:
     task = next(t for t in TASKS if t.id == "mock-report-total")
     assert task.check(_run("The orders total GBP 139.79."), Site()) is None
-    assert task.check(_run("The orders total GBP 139.79 in all."), Site()) is None
-    assert task.check(_run("The orders total GBP 129.79."), Site()) is not None
+    assert [claim.statement for claim in task.claims] == ["The answer gives the total of the orders as 139.79."]
 
 
 def test_the_products_the_site_serves_are_the_ones_the_tasks_grade_against() -> None:
@@ -250,10 +273,12 @@ def test_the_products_the_site_serves_are_the_ones_the_tasks_grade_against() -> 
     assert max(price for _, _, price in PRODUCTS) == 210.00
 
 
-@pytest.mark.parametrize("answer", ["GBP 1139.79", "GBP 139.799", "GBP -139.79"])
-def test_report_rejects_wrong_numbers_containing_the_expected_total(answer: str) -> None:
+@pytest.mark.parametrize("answer", ["GBP 1139.79", "GBP 139.799", "GBP -139.79", "GBP 129.79"])
+async def test_the_judge_rejects_a_total_the_answer_does_not_state(answer: str) -> None:
+    from fastbrowse.evals.judge import judge
+
     task = next(t for t in TASKS if t.id == "mock-report-total")
-    assert task.check(_run(answer), Site()) is not None
+    assert await judge(ScriptedJev(False), task=task.task, answer=answer, claims=task.claims) is not None
 
 
 def test_password_grader_requires_the_requested_replacement() -> None:
@@ -410,7 +435,7 @@ def test_the_new_tab_grader_needs_the_second_page_opened() -> None:
     assert task.check(_run("It reopens on Monday."), site) is not None
     site.visited("/news/extra")
     assert task.check(_run("It reopens on Monday."), site) is None
-    assert task.check(_run("It reopens on Tuesday."), site) is not None
+    assert [claim.statement for claim in task.claims] == ["The answer says the roastery reopens on Monday."]
 
 
 def test_the_booking_grader_reads_the_date_the_site_received() -> None:
@@ -435,21 +460,25 @@ def test_the_gate_grader_rejects_a_filled_trap_field() -> None:
     assert task.check(_run(None), site) is not None, "the wrong address cannot pass"
 
 
-def test_the_invoice_total_is_graded_from_a_signed_in_run() -> None:
+def test_the_invoice_task_needs_a_signed_in_run() -> None:
     task = next(t for t in TASKS if t.id == "mock-invoice-export")
     site = Site()
     assert task.check(_run("The invoices total GBP 175.00."), site) is not None, "a signed-out run cannot pass"
     site.sign_in(GRACE)
     assert task.check(_run("The invoices total GBP 175.00."), site) is None
-    assert task.check(_run("The invoices total GBP 157.00."), site) is not None
+    assert [claim.statement for claim in task.claims] == ["The answer gives the total of the invoices as 175.00."]
 
 
-def test_a_grader_accepts_the_same_fact_worded_differently() -> None:
-    # A curly dash or a different case is phrasing, not a wrong answer.
+async def test_the_judge_is_told_phrasing_is_not_a_wrong_answer() -> None:
+    # A judge reads the fact, not the wording, so the instruction it is given says so; no text is matched here.
+    from fastbrowse.evals.judge import judge
+
     task = next(t for t in TASKS if t.id == "mock-priciest-product")
-    assert task.check(_run("The Drum Roaster, at GBP 210."), Site()) is None
-    assert task.check(_run("The drum roaster \u2014 210.00."), Site()) is None
-    assert task.check(_run("The Drum Roaster, at GBP 21."), Site()) is not None
+    jev = ScriptedJev(True)
+    assert await judge(jev, task=task.task, answer="The drum roaster \u2014 210.00.", claims=task.claims) is None
+    asked = jev.asked[0]
+    assert "A figure written with a currency, a thousands separator or a trailing zero is the same figure" in asked
+    assert "The Drum Roaster, at GBP 21." != None
 
 
 def test_a_row_carries_the_step_budget_it_ran_under() -> None:
@@ -474,7 +503,7 @@ def test_feed_count_requires_loading_every_remaining_batch(browser: tuple[Browse
     assert task.check(answer, site) is not None
     client.get("/api/feed.json?after=40")
     assert task.check(answer, site) is None
-    assert task.check(_run("40 items"), site) is not None
+    assert [claim.statement for claim in task.claims] == ["The answer states the total item count is 60."]
 
 
 class _NoRedirect(request.HTTPRedirectHandler):

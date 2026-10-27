@@ -247,6 +247,10 @@ pub(crate) struct State {
     pub(crate) download_texts: Vec<DownloadText>,
     /// How many of them an observation has already shown, so each is shown to the run once.
     pub(crate) download_texts_shown: usize,
+    /// Every settled download's identity (address, body digest), oldest first, indexed as `downloads_settled` counts.
+    /// A refused one has no identity: nothing was saved. A link that only downloads never changes the page, so the
+    /// same click taken again looks productive every time; identity is what tells the second save from the first.
+    pub(crate) download_keys: Vec<Option<(String, String)>>,
     /// Downloads turned away by the ceiling, oldest first: evidence the file was offered, not kept.
     pub(crate) download_refusals: Vec<DownloadRefused>,
     /// How many of them an observation has already reported, so each refusal is reported once.
@@ -602,6 +606,15 @@ impl BrowserSession {
     pub fn downloads_settled(&self) -> u32 {
         let state = self.0.state.lock().unwrap();
         state.downloads_captured + state.download_refusals.len() as u32
+    }
+
+    /// Whether every download settled since `since` saves a file an earlier action already saved.
+    ///
+    /// `since` is a `downloads_settled` count. A page that offers the same export twice has not moved the run forward
+    /// the second time, so the click that saved it again must not be recorded as one that changed something.
+    pub fn repeated_download(&self, since: u32) -> bool {
+        let state = self.0.state.lock().unwrap();
+        repeated(&state.download_keys, since as usize)
     }
 
     pub fn denials(&self) -> u32 {
@@ -1594,6 +1607,7 @@ async fn capture_download(
     let mut state = shared.state.lock().unwrap();
     state.artifacts.push(artifact);
     state.downloads_captured += 1;
+    state.download_keys.push(Some((url.to_owned(), crate::page::sha256_bytes(&raw))));
     if let Some(text) = readable {
         state.download_texts.push(DownloadText {
             mime: kind,
@@ -1652,12 +1666,19 @@ fn download_filename(disposition: &str, url: &str) -> String {
 
 fn refuse_download(shared: &Arc<Shared>, name: String, url: &str, size_bytes: u64) {
     let mut state = shared.state.lock().unwrap();
+    state.download_keys.push(None);
     state.download_refusals.push(DownloadRefused {
         name,
         url: url.to_owned(),
         size_bytes,
         limit_bytes: shared.max_download_bytes as u64,
     });
+}
+
+fn repeated(keys: &[Option<(String, String)>], since: usize) -> bool {
+    let later = keys.get(since..).unwrap_or_default();
+    let earlier: HashSet<&(String, String)> = keys[..since.min(keys.len())].iter().flatten().collect();
+    !later.is_empty() && later.iter().all(|key| key.as_ref().is_some_and(|key| earlier.contains(key)))
 }
 
 /// The name the response states, preferring the one it states exactly.
@@ -1892,6 +1913,21 @@ mod tests {
         assert!(!is_download("text/html", ""));
         assert_eq!(filename_from_disposition("attachment; filename=\"report.CSV\"").as_deref(), Some("report.CSV"));
         assert_eq!(filename_from_disposition("inline"), None);
+    }
+
+    /// Saving the file an earlier click already saved changes nothing, so the click that saved it again is idle.
+    #[test]
+    fn a_repeat_download_is_not_an_effect() {
+        let saved = Some(("https://example.test/a.csv".to_owned(), "d1".to_owned()));
+        let keys = [saved.clone(), saved.clone()];
+        assert!(repeated(&keys, 1));
+        assert!(!repeated(&keys, 0));
+        assert!(!repeated(&keys, 2));
+        // A refusal settles a download without saving one, so it counts toward `since` and never repeats a save.
+        let keys = [None, saved.clone(), saved.clone()];
+        assert!(repeated(&keys, 2));
+        assert!(!repeated(&keys, 1));
+        assert!(!repeated(&[saved, None], 1));
     }
 
     #[test]
