@@ -22,6 +22,10 @@ uv sync --all-extras
 uv run pre-commit install
 ```
 
+`uv run pre-commit install` rewrites `.git/hooks`, including the hooks Entire installs when you capture agent
+sessions: run `entire enable` after it if you use Entire ([AGENTS.md](AGENTS.md#agent-session-capture) has the
+commands).
+
 `uv sync` builds the package's Rust core, `fastbrowse._native`, so it needs a Rust toolchain: install
 [rustup](https://rustup.rs), and it reads the pinned version from `rust-toolchain.toml`.
 
