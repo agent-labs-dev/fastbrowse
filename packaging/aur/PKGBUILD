@@ -1,6 +1,6 @@
 # Maintainer: Agent Labs <https://github.com/agent-labs-dev/fastbrowse/issues>
 #
-# Written from the PyPI release by scripts/aur_package.py, which sets pkgver, _cdp_use and sha256sums.
+# Written from the PyPI release by scripts/aur_package.py, which sets pkgver, _cdp_use, _mcp and sha256sums.
 
 pkgname=fastbrowse
 pkgver=0.7.4

@@ -5,9 +5,10 @@
 
     uv run python scripts/aur_package.py --publish   # after the package has built, put it on the AUR
 
-`packaging/aur/PKGBUILD` builds two source distributions from PyPI by checksum: fastbrowse, and the one exact
-cdp-use version that fastbrowse release requires. Both checksums exist only once PyPI holds the release, so this runs
-after a tag has published and not in the pull request that sets the version.
+`packaging/aur/PKGBUILD` builds three source distributions from PyPI by checksum: fastbrowse, the one exact
+cdp-use version that fastbrowse release requires, and the mcp 1.x pinned in `MCP` below. fastbrowse's checksum
+exists only once PyPI holds the release, so this runs after a tag has published and not in the pull request that
+sets the version.
 
 A release used to fail here after PyPI had accepted the upload but before its file host served the file: the
 checksums were right and the Arch build's download was a 404. `--wait` therefore waits for the file itself, not
@@ -145,7 +146,7 @@ def _source_sum(record: dict) -> str:
 
 
 def published(version: str, wait: float = 0) -> Release:
-    """The release as PyPI holds it: the cdp-use version it requires, and both sources' checksums."""
+    """The release as PyPI holds it: the cdp-use version it requires, and all three sources' checksums."""
     record = _pypi("fastbrowse", version, wait)
     requires = record["info"]["requires_dist"] or []
     pins = [match[1] for line in requires if (match := re.fullmatch(r"cdp-use==(\S+)", line))]
@@ -231,14 +232,17 @@ def main() -> int:
         print(f"the AUR package is fastbrowse {new.version} with cdp-use {new.cdp_use} and mcp {new.mcp}")
         return 0
     if not args.write:
-        print(f"packaging/aur is fastbrowse {old.version} with cdp-use {old.cdp_use}, and PyPI has:", file=sys.stderr)
+        print(
+            f"packaging/aur is fastbrowse {old.version} with cdp-use {old.cdp_use} and mcp {old.mcp}, and PyPI has:",
+            file=sys.stderr,
+        )
         print(f"  fastbrowse {new.version} with cdp-use {new.cdp_use} and mcp {new.mcp}", file=sys.stderr)
         print("run scripts/aur_package.py --write", file=sys.stderr)
         return 1
     for name in FILES:
         path = directory / name
         path.write_text(rewrite(path.read_text(encoding="utf-8"), old, new), encoding="utf-8")
-    print(f"the AUR package is now fastbrowse {new.version} with cdp-use {new.cdp_use}")
+    print(f"the AUR package is now fastbrowse {new.version} with cdp-use {new.cdp_use} and mcp {new.mcp}")
     return 0
 
 
