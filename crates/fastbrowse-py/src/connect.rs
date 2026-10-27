@@ -21,7 +21,7 @@ use pyo3::types::PyBytes;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use crate::host::awaitable;
+use crate::host::{awaitable, runtime};
 
 pyo3::create_exception!(
     fastbrowse._native,
@@ -99,11 +99,29 @@ pub fn connect(
         artifact_sink,
         downloads: options.downloads,
     };
-    let opened = awaitable(py, fastbrowse_run::connect_cdp(connect), |py, connected| {
-        let page = Page { connected: Arc::new(connected.map_err(failed)?) };
+    let opening = async { fastbrowse_run::connect_cdp(connect).await.map(|connected| Unclaimed(Some(connected))) };
+    let opened = awaitable(py, opening, |py, connected| {
+        let page = Page { connected: Arc::new(connected.map_err(failed)?.claim()) };
         Ok(Bound::new(py, page)?.into_any().unbind())
     })?;
     Ok(opened.unbind())
+}
+
+/// An open page on its way to the caller, closed if the caller stopped waiting before it arrived.
+struct Unclaimed(Option<Connected>);
+
+impl Unclaimed {
+    fn claim(mut self) -> Connected {
+        self.0.take().expect("a page is claimed once")
+    }
+}
+
+impl Drop for Unclaimed {
+    fn drop(&mut self) {
+        if let Some(connected) = self.0.take() {
+            runtime().spawn(connected.close());
+        }
+    }
 }
 
 /// A page `connect_cdp` opened. `close` closes its session; an attached window is left open.

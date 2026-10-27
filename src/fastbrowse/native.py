@@ -526,14 +526,20 @@ async def connect_cdp(arguments: dict[str, Any]) -> AsyncGenerator[NativePage]:
         "downloads": None if downloads is None else str(downloads),
     }
     check_access, sink = arguments["check_access"], arguments["artifact_sink"]
+    opening = core.connect_cdp(
+        json.dumps(options),
+        check_access=None if check_access is None else _check(check_access),
+        artifact_sink=None if sink is None else _sink(sink),
+    )
     try:
-        page = await core.connect_cdp(
-            json.dumps(options),
-            check_access=None if check_access is None else _check(check_access),
-            artifact_sink=None if sink is None else _sink(sink),
-        )
+        page = await opening
     except core.PageFailed as exc:
         raise _page_error(exc) from None
+    except asyncio.CancelledError:
+        # Cancelled after the page arrived but before this resumed: nobody else will close it.
+        if opening.done() and not opening.cancelled() and opening.exception() is None:
+            await opening.result().close()
+        raise
     try:
         yield NativePage(page, core.PageFailed)
     finally:
