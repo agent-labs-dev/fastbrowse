@@ -7,7 +7,7 @@ permissions: {}
 jobs:
   secrets:
     permissions: {contents: read}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -22,7 +22,7 @@ jobs:
         run: gitleaks detect --source . --no-banner --redact --log-opts=HEAD
   gate:
     permissions: {contents: read, actions: read}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       fail-fast: false
       matrix:
@@ -66,7 +66,7 @@ jobs:
         run: uv run python -m fastbrowse.evals.publication --check-diff "origin/$BASE"
 
   sift:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -88,7 +88,7 @@ jobs:
         run: uvx zizmor==1.30.1 --offline .github/workflows
 
   sdk:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -113,7 +113,7 @@ jobs:
   # The Rust core (docs/adr/0001): its own checks, then the Python suites that cover it run against it, and the
   # Node addon against cases taken from those suites.
   rust:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     permissions: {contents: read}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -147,7 +147,7 @@ jobs:
   # packs and starts it with. The eval and audit packages are not in the executable.
   # Every push to `main` builds, so a change the filter misjudged is still caught before a release.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read}
     outputs:
       binaries: ${{ steps.frozen.outputs.binaries }}
@@ -195,7 +195,7 @@ jobs:
   # It passes only when the Python matrix, secret scan, sift, SDK and Rust checks pass, and the binaries and the
   # Arch package each either passed or were left unbuilt by a change that could not alter them.
   check:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     needs: [gate, sift, sdk, rust, secrets, changes, binaries, aur]
     if: always()
     steps:

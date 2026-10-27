@@ -24,7 +24,7 @@ on:
 permissions: {}
 jobs:
   approve:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read, actions: read}
     steps:
       - name: Require the maintainer on main

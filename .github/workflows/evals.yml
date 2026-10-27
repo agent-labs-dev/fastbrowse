@@ -40,7 +40,7 @@ jobs:
   fixtures:
     # Without the key there is nothing to run, and a fork or a mirror should not fail a schedule it cannot serve.
     if: github.repository == 'agent-labs-dev/fastbrowse'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read}
     # A full mock repeat is minutes, not hours, but a stuck cloud browser must not hold a runner for a day.
     timeout-minutes: 90
