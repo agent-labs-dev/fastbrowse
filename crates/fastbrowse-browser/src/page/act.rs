@@ -235,7 +235,7 @@ impl CdpPage {
             self.input_mark().await
         };
         let window_opens = self.session.window_opens();
-        let downloads_before = self.session.downloads_captured();
+        let downloads_before = self.session.downloads_settled();
         let (outcome, mut detail) = match self.dispatch(action, target.as_ref(), point, drawn).await {
             Ok(dispatched) => dispatched,
             Err(error) if !action.form_fill => return Err(error),
@@ -304,7 +304,7 @@ impl CdpPage {
     /// Bounded and only asked after an input the run made began a navigation that left the page unchanged, so a
     /// plain click that only redrew its page pays nothing for it. A download already captured returns at once.
     async fn download_landed(&self, since: u32) -> bool {
-        self.session.downloads_captured() > since || self.session.download_settled(since, DOWNLOAD_SETTLE_SECONDS).await
+        self.session.downloads_settled() > since || self.session.download_settled(since, DOWNLOAD_SETTLE_SECONDS).await
     }
 
     /// How many moves the run's input had made before an action, as the input watch reports them.

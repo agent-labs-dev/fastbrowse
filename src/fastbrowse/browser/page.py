@@ -702,9 +702,24 @@ class CdpPage(Page):
         title = main.raw.title if main else ""
         url = main.raw.url if main else await self._origin_once()
         viewport_text = main.raw.viewport_text if main else ""
+        notices = ""
         for download in self._session.pending_download_texts():
-            viewport_text += f"\n\n[Downloaded file: {download.name} from {download.url}]\n{download.text}"
-        if len(viewport_text) > limits.viewport_text_chars:
+            notices += f"\n\n[Downloaded file: {download.name} from {download.url}]\n{download.text}"
+        for refused in self._session.pending_download_refusals():
+            notices += (
+                f"\n\n[Download not kept: {refused.name} from {refused.url}] "
+                f"The file is {_bytes_of(refused.size_bytes)} and this run keeps downloads up to "
+                f"{_bytes_of(refused.limit_bytes)}; nothing was saved. Report the file as not downloaded."
+            )
+        if notices:
+            # The notice is the only evidence that a file was offered and not kept, and it is marked as shown here,
+            # so it is given its room before the page text is cut: appended after a full page it was truncated
+            # away and never reported again.
+            budget = max(0, limits.viewport_text_chars - len(notices))
+            if len(viewport_text) > budget:
+                viewport_text = viewport_text[:budget] + cut_marker(len(viewport_text) - budget)
+            viewport_text += notices
+        elif len(viewport_text) > limits.viewport_text_chars:
             omitted_chars = len(viewport_text) - limits.viewport_text_chars
             viewport_text = viewport_text[: limits.viewport_text_chars] + cut_marker(omitted_chars)
         return Observation(
@@ -1023,7 +1038,7 @@ class CdpPage(Page):
         else:
             document = await self._input_mark()
         window_opens = self._session.window_opens
-        downloads_before = self._session.downloads_captured
+        downloads_before = self._session.downloads_settled
         try:
             outcome, detail = await self._dispatch(action, target, point, drawn=drawn)
         except BrowserError:
@@ -1076,7 +1091,7 @@ class CdpPage(Page):
         Bounded and only asked after an input the run made began a navigation that left the page unchanged, so a
         plain click that only redrew its page pays nothing for it. A download already captured returns at once.
         """
-        if self._session.downloads_captured > since:
+        if self._session.downloads_settled > since:
             return True
         return await self._session.download_settled(since, timeout_seconds=_DOWNLOAD_SETTLE_SECONDS)
 
@@ -2154,7 +2169,7 @@ class CdpPage(Page):
         for attempt in range(_NAVIGATE_ATTEMPTS):
             if attempt:
                 await asyncio.sleep(_NAVIGATE_RETRY_SECONDS * 2 ** (attempt - 1))
-            downloads_before = self._session.downloads_captured
+            downloads_before = self._session.downloads_settled
             denials_before = self._session.denials
             result = await self._session.client.send.Page.navigate(params={"url": url}, session_id=session_id)
             if self._session.denials != denials_before:
@@ -2469,6 +2484,16 @@ def _control_from_raw(control_id: str, frame_id: str | None, c: _SnapshotControl
         next_page=c.next_page,
         download=c.download,
     )
+
+
+def _bytes_of(count: int) -> str:
+    """A byte count in the unit a person reads it in."""
+    size = float(count)
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if size < 1024 or unit == "GiB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GiB"
 
 
 def _combine_page_keys(keys: list[str]) -> str:

@@ -231,6 +231,10 @@ pub struct Config {
     /// Uploads move as bytes over the DevTools socket; larger files return NEEDS_INPUT with a reason.
     #[serde(deserialize_with = "lax::int_gt0")]
     pub max_upload_bytes: i64,
+    /// Largest download kept as an artifact. A body over it is refused and reported, never silently dropped.
+    /// Downloads arrive whole over the DevTools socket, so this bounds a run's memory as much as a file's size.
+    #[serde(deserialize_with = "lax::int_gt0")]
+    pub max_download_bytes: i64,
     /// Next pages of a list code opens and reads by itself in one run; further pages are left to Jev's choice.
     /// Walking a list is the one thing the loop does without asking a model each time, so a catalogue of fifty pages
     /// would otherwise spend the caller's paging allowance before anything noticed.
@@ -248,6 +252,7 @@ impl Default for Config {
             refuse_cookie_banners: true,
             step_frames: false,
             max_upload_bytes: 25 * 1024 * 1024,
+            max_download_bytes: 512 * 1024 * 1024,
             max_pages: 12,
         }
     }

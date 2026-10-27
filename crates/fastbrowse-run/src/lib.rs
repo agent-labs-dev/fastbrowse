@@ -284,6 +284,7 @@ pub async fn connect_cdp(options: ConnectCdp) -> Result<Connected, BrowserError>
         connection,
         artifacts,
         SessionOptions {
+            max_download_bytes: config.max_download_bytes as usize,
             refuse_cookie_banners: config.refuse_cookie_banners,
             check_access: options.check_access,
             ..SessionOptions::default()
@@ -531,10 +532,10 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
             connection,
             sink(options.downloads.as_deref(), &scratch)?,
             SessionOptions {
+                max_download_bytes: config.max_download_bytes as usize,
                 refuse_cookie_banners: config.refuse_cookie_banners,
                 on_frame: options.on_frame.clone(),
                 check_access: options.check_access.clone(),
-                ..SessionOptions::default()
             },
         );
         session = Some(opened.clone());

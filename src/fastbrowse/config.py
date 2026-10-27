@@ -121,6 +121,13 @@ class Config(Frozen):
     """
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
     """Uploads move as bytes over the DevTools socket; larger files return NEEDS_INPUT with a reason."""
+    max_download_bytes: int = Field(default=512 * 1024 * 1024, gt=0)
+    """Largest download kept as an artifact. A body over it is refused and reported, never silently dropped.
+
+    Downloads arrive whole over the DevTools socket, so this bounds a run's memory as much as a file's size.
+    A caller that knows the size of the file it asked for, such as a workspace export, sets it deliberately;
+    the run reports the size it saw and the limit it hit rather than losing the file without a word.
+    """
     max_pages: int = Field(default=12, ge=0)
     """Next pages of a list code opens and reads by itself in one run; further pages are left to Jev's choice.
 
