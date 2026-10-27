@@ -610,14 +610,15 @@ impl CdpPage {
                 None => self.origin_once().await?,
             };
             let mut viewport_text = main.map(|m| m.raw.viewport_text.clone()).unwrap_or_default();
+            let mut notices = String::new();
             for download in self.session.pending_download_texts() {
-                viewport_text.push_str(&format!(
+                notices.push_str(&format!(
                     "\n\n[Downloaded file: {} from {}]\n{}",
                     download.name, download.url, download.text
                 ));
             }
             for refused in self.session.pending_download_refusals() {
-                viewport_text.push_str(&format!(
+                notices.push_str(&format!(
                     "\n\n[Download not kept: {} from {}] The file is {} and this run keeps downloads up to {}; \
                      nothing was saved. Report the file as not downloaded.",
                     refused.name,
@@ -626,10 +627,22 @@ impl CdpPage {
                     bytes_of(refused.limit_bytes)
                 ));
             }
-            let length = text::len(&viewport_text);
             let budget = limit(limits.viewport_text_chars);
-            if length > budget {
-                viewport_text = text::prefix(&viewport_text, budget).to_owned() + &cut_marker(length - budget);
+            if notices.is_empty() {
+                let length = text::len(&viewport_text);
+                if length > budget {
+                    viewport_text = text::prefix(&viewport_text, budget).to_owned() + &cut_marker(length - budget);
+                }
+            } else {
+                // The notice is the only evidence that a file was offered and not kept, and it is marked as shown
+                // here, so it is given its room before the page text is cut: appended after a full page it was
+                // truncated away and never reported again.
+                let reserved = budget.saturating_sub(text::len(&notices));
+                let length = text::len(&viewport_text);
+                if length > reserved {
+                    viewport_text = text::prefix(&viewport_text, reserved).to_owned() + &cut_marker(length - reserved);
+                }
+                viewport_text.push_str(&notices);
             }
             let response_status = match main {
                 Some(main) if main.raw.url == document.url && main.raw.document_key == document.document_key => {
@@ -1232,7 +1245,7 @@ impl CdpPage {
             if attempt > 0 {
                 sleep(secs(NAVIGATE_RETRY_SECONDS * f64::from(1u32 << (attempt - 1)))).await;
             }
-            let downloads_before = self.session.downloads_captured();
+            let downloads_before = self.session.downloads_settled();
             let denials_before = self.session.denials();
             let result = self.session.send("Page.navigate", json!({"url": url}), Some(&session_id)).await?;
             if self.session.denials() != denials_before {

@@ -594,6 +594,16 @@ impl BrowserSession {
         self.0.state.lock().unwrap().downloads_captured
     }
 
+    /// Downloads resolved since the session opened, kept or refused.
+    ///
+    /// A navigation that resolves straight to a file aborts with `net::ERR_ABORTED`, and the abort is that
+    /// navigation doing its job whether the file was kept or refused. Counting only the kept ones made a refused
+    /// direct download retry and fail the navigation, so the run never observed the refusal it had recorded.
+    pub fn downloads_settled(&self) -> u32 {
+        let state = self.0.state.lock().unwrap();
+        state.downloads_captured + state.download_refusals.len() as u32
+    }
+
     pub fn denials(&self) -> u32 {
         self.0.state.lock().unwrap().denials
     }
@@ -609,7 +619,7 @@ impl BrowserSession {
     /// racing that task; a download that never came is not this kind of abort.
     pub async fn download_settled(&self, since: u32, timeout_seconds: f64) -> bool {
         let deadline = Instant::now() + secs(timeout_seconds);
-        while self.downloads_captured() <= since {
+        while self.downloads_settled() <= since {
             if Instant::now() >= deadline {
                 return false;
             }
@@ -1664,7 +1674,11 @@ fn filename_from_disposition(disposition: &str) -> Option<String> {
         let value = value.trim().trim_matches('"');
         match key.as_str() {
             "filename*" => {
-                let (charset, encoded) = value.split_once("''").unwrap_or(("utf-8", value));
+                // RFC 5987 states charset, an optional language, then the value: `UTF-8'en'caf%C3%A9.zip`.
+                let (charset, encoded) = match value.split_once('\'') {
+                    Some((charset, rest)) => (charset, rest.split_once('\'').map_or(rest, |(_, encoded)| encoded)),
+                    None => ("utf-8", value),
+                };
                 star = Some(percent_decode(encoded, charset));
             }
             "filename" if !value.is_empty() => plain = Some(value.to_owned()),

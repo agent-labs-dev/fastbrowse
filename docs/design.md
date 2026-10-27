@@ -148,6 +148,13 @@ Verified with `cdp-use==1.4.5` against local headless Chrome and a Browser Use c
 | Popup ownership | `Target.targetCreated.openerId` equals our target | pass | pass |
 | Dialogs | `Page.javascriptDialogOpening` + `Page.handleJavaScriptDialog` | pass | pass |
 
+Downloads arrive whole over the DevTools socket, so a session keeps them up to `Config.max_download_bytes`
+(512 MiB by default) and refuses a response whose stated `Content-Length` is larger without reading it.
+A refusal is reported once in the observation (`[Download not kept: ...]`) rather than dropped, so a run
+that clicked an export it could not hold says the file was not saved instead of reporting success. The
+kept name is the response's `filename*` (RFC 5987), else the URL's path segment without its query, reduced
+to one safe path segment.
+
 The cloud browser ignores `Browser.setDownloadBehavior(deny)`, so bytes come from response interception, never from the remote filesystem. Host-path `DOM.setFileInputFiles` is only valid for a browser on the same machine.
 
 ### Foreground and background

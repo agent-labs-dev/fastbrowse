@@ -152,6 +152,19 @@ async def test_headers_arriving_as_a_mapping_are_read_too() -> None:
     assert [artifact.name for artifact in sink.artifacts] == ["x.zip"]
 
 
+async def test_a_refused_download_settles_the_navigation_that_resolved_to_it() -> None:
+    """A direct link to an archive aborts its navigation; the abort is the download, kept or refused."""
+    sink, fetch = _Sink(), _Fetch(b"PK" * 4096)
+    session = _session(sink, fetch, max_download_bytes=1024)
+    since = session.downloads_settled
+
+    await session._handle_paused(_event(*ARCHIVE_HEADERS, ("Content-Length", "8192")), "sid")
+
+    assert session.downloads_captured == 0
+    assert session.downloads_settled == since + 1
+    assert await session.download_settled(since, timeout_seconds=0.2) is True
+
+
 async def test_a_refusal_is_reported_once_and_kept_as_evidence() -> None:
     sink, fetch = _Sink(), _Fetch(b"PK" * 4096)
     session = _session(sink, fetch, max_download_bytes=1024)
@@ -184,6 +197,7 @@ def test_the_url_fallback_is_the_path_segment_and_never_the_signed_query(url: st
         ('attachment; filename="plain.zip"', "plain.zip"),
         ('attachment; filename="has;semicolon.zip"', "has;semicolon.zip"),
         ("attachment; filename*=iso-8859-1''caf%E9.zip", "café.zip"),
+        ("attachment; filename*=UTF-8'en'caf%C3%A9%20export.zip", "café export.zip"),
         ("attachment", None),
     ],
 )

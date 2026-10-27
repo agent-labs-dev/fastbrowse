@@ -540,6 +540,16 @@ class BrowserSession:
         )
 
     @property
+    def downloads_settled(self) -> int:
+        """Downloads resolved since the session opened, kept or refused.
+
+        A navigation that resolves straight to a file aborts with `net::ERR_ABORTED`, and the abort is that
+        navigation doing its job whether the file was kept or refused. Counting only the kept ones made a refused
+        direct download retry and fail the navigation, so the run never observed the refusal it had recorded.
+        """
+        return self._downloads_captured + len(self._download_refusals)
+
+    @property
     def downloads_refused(self) -> tuple[DownloadRefused, ...]:
         """Every download the ceiling turned away, oldest first: kept as evidence, not consumed."""
         return tuple(self._download_refusals)
@@ -558,7 +568,7 @@ class BrowserSession:
         without racing that task; a download that never came is not this kind of abort.
         """
         deadline = asyncio.get_event_loop().time() + timeout_seconds
-        while self._downloads_captured <= since:
+        while self.downloads_settled <= since:
             if asyncio.get_event_loop().time() >= deadline:
                 return False
             await asyncio.sleep(0.05)
@@ -1403,7 +1413,12 @@ def _filename_from_disposition(disposition: str) -> str | None:
         key = parameter.strip().lower()
         value = value.strip().strip('"')
         if key == "filename*":
-            charset, _, encoded = value.partition("''")
+            # RFC 5987 states charset, an optional language, then the value: `UTF-8'en'caf%C3%A9.zip`.
+            charset, separator, rest = value.partition("'")
+            if separator:
+                _, _, encoded = rest.partition("'")
+            else:
+                charset, encoded = "utf-8", value
             names[key] = unquote(encoded, encoding=charset or "utf-8", errors="replace")
         elif key == "filename" and value:
             names[key] = value
