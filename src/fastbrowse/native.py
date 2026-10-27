@@ -12,14 +12,17 @@ import contextlib
 import copy
 import importlib
 import json
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
+from contextlib import asynccontextmanager
 from typing import Any, ClassVar
 
 import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import InitErrorDetails, PydanticCustomError
 
+from fastbrowse.browser.page import _ScriptError
 from fastbrowse.browser.recording import RecordingError
+from fastbrowse.browser.session import BrowserUnresponsive, OriginNotAllowed, PageUnresponsive
 from fastbrowse.clients.environment import ConfigurationError
 from fastbrowse.jev import (
     JevClient,
@@ -31,6 +34,9 @@ from fastbrowse.jev import (
 )
 from fastbrowse.llm import LLMClient, LLMError, LLMRetriesExhausted, Message
 from fastbrowse.models import (
+    Artifact,
+    ArtifactKind,
+    ArtifactSink,
     BrowserEvent,
     BudgetStop,
     CostBreakdown,
@@ -44,6 +50,18 @@ from fastbrowse.models import (
     SecretResolver,
     StepEvent,
     UntilCheck,
+)
+from fastbrowse.page import (
+    Action,
+    ActResult,
+    BrowserError,
+    BrowserUnavailable,
+    Capture,
+    ContextLost,
+    NavigationTimeout,
+    Observation,
+    ScreenshotsUnavailable,
+    SiteUnreachable,
 )
 from fastbrowse.telemetry import BudgetExceeded
 
@@ -398,3 +416,108 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
         await asyncio.shield(native.finished)
         raise
     return RunResult.model_validate_json(payload)
+
+
+_PAGE_ERRORS: dict[str, type[BrowserError]] = {
+    error.__name__: error
+    for error in (
+        BrowserError,
+        ContextLost,
+        BrowserUnavailable,
+        ScreenshotsUnavailable,
+        NavigationTimeout,
+        SiteUnreachable,
+        BrowserUnresponsive,
+        PageUnresponsive,
+        _ScriptError,
+    )
+}
+
+
+def _page_error(failed: Exception) -> BrowserError:
+    kind, message = failed.args
+    if kind == OriginNotAllowed.__name__:
+        return OriginNotAllowed()
+    return _PAGE_ERRORS.get(kind, BrowserError)(message)
+
+
+class NativePage:
+    """`CdpPage`'s methods, on a page the Rust core drives."""
+
+    def __init__(self, page: Any, failed: type[Exception]) -> None:
+        self._page = page
+        self._failed = failed
+
+    async def _call[T](self, awaiting: Awaitable[T]) -> T:
+        try:
+            return await awaiting
+        except self._failed as exc:
+            raise _page_error(exc) from None
+
+    async def observe(self) -> Observation:
+        return Observation.model_validate_json(await self._call(self._page.observe()))
+
+    async def capture(self) -> Capture:
+        return Capture.model_validate_json(await self._call(self._page.capture()))
+
+    async def act(self, action: Action, observation: Observation) -> ActResult:
+        acted = self._page.act(action.model_dump_json(), observation.model_dump_json())
+        return ActResult.model_validate_json(await self._call(acted))
+
+    async def navigate(self, url: str, load_timeout_seconds: float = 15.0, *, back_to: str | None = None) -> None:
+        await self._call(self._page.navigate(url, load_timeout_seconds, back_to))
+
+    async def screenshot(self) -> bytes:
+        return await self._call(self._page.screenshot())
+
+    async def origin(self) -> str:
+        return await self._call(self._page.origin())
+
+    async def address(self) -> str:
+        return await self._call(self._page.address())
+
+    async def document_changed(self, observation: Observation) -> bool:
+        return await self._call(self._page.document_changed(observation.model_dump_json()))
+
+    async def response_status(self) -> int | None:
+        return await self._call(self._page.response_status())
+
+    @property
+    def artifacts(self) -> tuple[Artifact, ...]:
+        return tuple(Artifact.model_validate(artifact) for artifact in json.loads(self._page.artifacts()))
+
+    def withhold_frames(self, withheld: bool) -> None:
+        self._page.withhold_frames(withheld)
+
+
+def _sink(sink: ArtifactSink) -> Callable[[str, str, str, bytes], Awaitable[str]]:
+    async def put(kind: str, name: str, mime_type: str, content: bytes) -> str:
+        return (await sink.put(ArtifactKind(kind), name, mime_type, content)).model_dump_json()
+
+    return put
+
+
+@asynccontextmanager
+async def connect_cdp(arguments: dict[str, Any]) -> AsyncGenerator[NativePage]:
+    """`connect_cdp` with its `arguments` on the Rust core."""
+    fastbrowse_native: Any = importlib.import_module("fastbrowse_native")
+    origins, downloads = arguments["allowed_origins"], arguments["downloads"]
+    options = {
+        **{name: arguments[name] for name in ("port", "cdp_url", "host", "target_match", "attach", "foreground")},
+        "allowed_origins": None if origins is None else list(origins),
+        "config": _dumped(arguments["config"]),
+        "downloads": None if downloads is None else str(downloads),
+    }
+    check_access, sink = arguments["check_access"], arguments["artifact_sink"]
+    try:
+        page = await fastbrowse_native.connect_cdp(
+            json.dumps(options),
+            check_access=None if check_access is None else _check(check_access),
+            artifact_sink=None if sink is None else _sink(sink),
+        )
+    except fastbrowse_native.PageFailed as exc:
+        raise _page_error(exc) from None
+    try:
+        yield NativePage(page, fastbrowse_native.PageFailed)
+    finally:
+        await page.close()

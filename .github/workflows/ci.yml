@@ -137,6 +137,7 @@ jobs:
           uv run --no-sync pytest -q tests/test_citations.py tests/test_page.py tests/test_safety.py
           tests/test_retrieval.py tests/test_agent.py tests/test_native.py
           tests/browser/test_safety.py tests/browser/test_native_parity.py tests/browser/test_native_recording.py
+          tests/browser/test_native_connect.py
       - run: cargo build -p fastbrowse-node --release --locked
       - run: cp target/release/libfastbrowse_node.so crates/fastbrowse-node/fastbrowse.node
       - run: node --test crates/fastbrowse-node/test/core.test.ts

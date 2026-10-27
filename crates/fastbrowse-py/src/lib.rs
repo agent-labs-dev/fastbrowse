@@ -6,6 +6,7 @@
 //! Strings cross as USVStrings, the way WebIDL hands them to a URL parser.
 
 mod bridge;
+mod connect;
 mod host;
 mod options;
 
@@ -310,12 +311,41 @@ fn run_task(
     Ok(handle)
 }
 
+/// Open a page on a browser that is already running: `connect_cdp`'s data arguments as JSON, and the caller's own
+/// `check_access` and `ArtifactSink` wrapped by `fastbrowse.native`. Awaiting it gives a `Page`.
+#[pyfunction]
+#[pyo3(signature = (options, *, check_access=None, artifact_sink=None))]
+fn connect_cdp(
+    py: Python<'_>,
+    options: &str,
+    check_access: Option<Py<PyAny>>,
+    artifact_sink: Option<Py<PyAny>>,
+) -> PyResult<Py<PyAny>> {
+    let event_loop = Arc::new(py.import("asyncio")?.call_method0("get_running_loop")?.unbind());
+    let check_access =
+        check_access.map(|function| bridge::check_access(host_call(event_loop.clone(), function, no_argument, kind)));
+    let artifact_sink = artifact_sink.map(|function| -> Arc<dyn fastbrowse_core::models::ArtifactSink> {
+        Arc::new(connect::HostSink { call: host_call(event_loop.clone(), function, artifact_argument, text) })
+    });
+    connect::connect(py, options, check_access, artifact_sink)
+}
+
+fn artifact_argument(
+    py: Python<'_>,
+    (kind, name, mime_type, content): (String, String, String, Vec<u8>),
+) -> PyResult<Bound<'_, PyTuple>> {
+    (kind, name, mime_type, PyBytes::new(py, &content)).into_pyobject(py)
+}
+
 #[pymodule]
 fn fastbrowse_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(origin_of, m)?)?;
     m.add_function(wrap_pyfunction!(parse_origin, m)?)?;
     m.add_function(wrap_pyfunction!(text_fragment, m)?)?;
     m.add_function(wrap_pyfunction!(run_task, m)?)?;
+    m.add_function(wrap_pyfunction!(connect_cdp, m)?)?;
+    m.add_class::<connect::Page>()?;
+    m.add("PageFailed", m.py().get_type::<connect::PageFailed>())?;
     m.add_class::<Run>()?;
     m.add_class::<Context>()?;
     m.add("RunRefused", m.py().get_type::<RunRefused>())?;

@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- `connect_cdp` runs on the Rust core with `FASTBROWSE_RUST_CORE=1`. The page it yields has the Python page's methods (`observe`, `capture`, `act`, `navigate`, `screenshot`, `address`, `origin`, `document_changed`, `response_status`, `artifacts`, `withhold_frames`), takes and returns the same models, and raises the same browser errors. `check_access` and an `artifact_sink` of your own cross as they do for `run_task`.
+
 - A run on the Rust core that is cancelled now stops the plan and shortcut it began at startup, and waits for them, before the cancellation reaches the caller, as the Python core does. Before, once the run was under way, those calls ran on to the end, paid for, after `run_task` had returned.
 
 - `record` and `cursor` work on the Rust core. It used to refuse both with "record and cursor are not built into this binary". Now a recorded run writes the plain and the captioned video, ends on the result card, and reports both in `recordings`, as the Python core does. A recording that cannot start, for example with no ffmpeg on `PATH`, raises `RecordingError`. `cursor` draws through the Cua Driver where it can and is a no-op elsewhere.
