@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- The `fastbrowse` package on PyPI carries the Rust core as `fastbrowse._native`. It ships as one wheel per platform (macOS arm64 and x64, Linux x64 and arm64, Windows x64), each serving CPython 3.13 and later, instead of one pure-Python wheel, and you no longer install a separate `fastbrowse-native` build. Installing from the sdist needs a Rust toolchain. With `FASTBROWSE_RUST_CORE=1` the `fastbrowse` and `fastbrowse-mcp` commands run the Rust CLI in-process, and `fastbrowse-mcp` then works without the `mcp` extra. The Python core is still the default ([ADR 0004](docs/adr/0004-rust-core-by-default.md)).
+
 - `connect_cdp` runs on the Rust core with `FASTBROWSE_RUST_CORE=1`. The page it yields has the Python page's methods (`observe`, `capture`, `act`, `navigate`, `screenshot`, `address`, `origin`, `document_changed`, `response_status`, `artifacts`, `withhold_frames`), takes and returns the same models, and raises the same browser errors. `check_access` and an `artifact_sink` of your own cross as they do for `run_task`.
 
 - A run on the Rust core that is cancelled now stops the plan and shortcut it began at startup, and waits for them, before the cancellation reaches the caller, as the Python core does. Before, once the run was under way, those calls ran on to the end, paid for, after `run_task` had returned.

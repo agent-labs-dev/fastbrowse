@@ -25,4 +25,4 @@ def text_fragment(url: str, text: str) -> str:
 # The Rust core (crates/fastbrowse-py) in place of the function above, while the port is checked against
 # these tests; the default stays Python.
 if os.environ.get("FASTBROWSE_RUST_CORE") == "1":
-    from fastbrowse_native import text_fragment  # ty: ignore[unresolved-import]  # noqa: F401
+    from fastbrowse._native import text_fragment  # ty: ignore[unresolved-import]  # noqa: F401

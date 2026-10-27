@@ -5,7 +5,7 @@ name: Binaries
 # Each target leaves one artifact, `fastbrowse-<target>`, holding `fastbrowse-<target>.tar.gz`. The archive
 # unpacks to `fastbrowse/`, the executable with `_internal/` beside it. It is an archive because an uploaded
 # artifact loses file modes, and the executable bit with them. The `rust` job builds the Rust binary beside it,
-# as `fastbrowse-rust-<target>`.
+# as `fastbrowse-rust-<target>`, and the `wheel` job the PyPI wheel, as `wheel-<target>`.
 on:
   workflow_call:
   workflow_dispatch:
@@ -179,4 +179,55 @@ jobs:
           path: |
             fastbrowse-rust-${{ matrix.target }}.tar.gz
             fastbrowse.node
+          if-no-files-found: error
+
+  # The PyPI wheel per target: the Python package with the Rust core in it as `fastbrowse._native` (docs/adr/0004),
+  # abi3 so one wheel serves every CPython from 3.13 on. Installed alone into an empty environment, its commands then
+  # pass the smoke test on each core.
+  wheel:
+    name: wheel ${{ matrix.target }}
+    permissions: {contents: read}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The runners the jobs above use, so the Linux wheels link the glibc of Ubuntu 22.04 as the binaries do.
+        include:
+          - {target: darwin-arm64, runner: blacksmith-6vcpu-macos-26}
+          - {target: darwin-x64, runner: macos-15-intel}
+          - {target: linux-x64, runner: ubuntu-22.04}
+          - {target: linux-arm64, runner: ubuntu-22.04-arm}
+          - {target: win32-x64, runner: blacksmith-8vcpu-windows-2025}
+    env:
+      TARGET: ${{ matrix.target }}
+      UV_PYTHON_PREFERENCE: only-managed
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with: {python-version: "3.13"}
+      # rustup reads rust-toolchain.toml and installs the pinned toolchain on first use.
+      - run: uvx maturin==1.15.0 build --release --locked --out wheels
+      - name: Install the wheel alone
+        run: |
+          uv venv --no-project "$RUNNER_TEMP/wheel"
+          uv pip install --python "$RUNNER_TEMP/wheel" wheels/*.whl
+          bin="$RUNNER_TEMP/wheel/bin"
+          if [ "$TARGET" = win32-x64 ]; then bin="$RUNNER_TEMP/wheel/Scripts"; fi
+          echo "WHEEL_BIN=$bin" >> "$GITHUB_ENV"
+      - name: Install Chromium
+        if: matrix.target == 'linux-arm64'
+        run: |
+          npx --yes playwright@1.63.0 install --with-deps chromium
+          chrome="$(find "$HOME/.cache/ms-playwright" -type f -name chrome -path '*chromium-*' | head -n 1)"
+          test -x "$chrome"
+          echo "FASTBROWSE_CHROME=$chrome" >> "$GITHUB_ENV"
+      # A module or data file missing from the wheel (snapshot.js is read at import) fails here, not on a user's machine.
+      - run: uv run --no-project python scripts/smoke_binary.py "$WHEEL_BIN/fastbrowse"
+      - run: uv run --no-project python scripts/smoke_binary.py "$WHEEL_BIN/fastbrowse"
+        env: {FASTBROWSE_RUST_CORE: "1"}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheel-${{ matrix.target }}
+          path: wheels/*.whl
           if-no-files-found: error

@@ -1,7 +1,6 @@
 """`fastbrowse.native`: `run_task` on the Rust core in this process, when FASTBROWSE_RUST_CORE=1.
 
-The options are checked here without the module. The runs need `fastbrowse_native` built with `run_task`
-(`just rust` installs it) and skip without it.
+The options are checked here without the module. The runs need `fastbrowse._native`, which `uv sync` builds.
 """
 
 import asyncio
@@ -9,6 +8,9 @@ import base64
 import importlib
 import inspect
 import json
+import os
+import subprocess
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -41,12 +43,12 @@ from fastbrowse.scripted import ScriptedJev, ScriptedLLM, steps
 from fastbrowse.telemetry import BudgetExceeded
 
 try:
-    fastbrowse_native = importlib.import_module("fastbrowse_native")
+    fastbrowse_native = importlib.import_module("fastbrowse._native")
 
     NATIVE = hasattr(fastbrowse_native, "run_task")
 except ImportError:
     NATIVE = False
-needs_native = pytest.mark.skipif(not NATIVE, reason="fastbrowse_native with run_task is not installed")
+needs_native = pytest.mark.skipif(not NATIVE, reason="fastbrowse._native with run_task is not installed")
 
 
 class Release(BaseModel):
@@ -481,3 +483,20 @@ async def test_cancelling_a_run_stops_the_plan_it_began_before_run_task_raises()
             await run
         # Python's `run_task` cancels the plan it began and joins it before the cancellation reaches the caller.
         assert stopped == ["plan"]
+
+
+@pytest.mark.parametrize(("command", "core_module"), [("fastbrowse", "fastbrowse.cli"), ("fastbrowse_mcp", "mcp")])
+def test_the_commands_run_the_rust_cli_without_the_python_one(command: str, core_module: str) -> None:
+    program = command.replace("_", "-")
+    script = f"import sys; sys.argv = [{program!r}, '--help']; from fastbrowse import commands; commands.{command}()"
+    ran = subprocess.run(
+        [sys.executable, "-X", "importtime", "-c", script],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "FASTBROWSE_RUST_CORE": "1"},
+        timeout=30,
+    )
+    assert ran.returncode == 0, ran.stderr
+    assert ran.stdout.startswith(f"usage: {program}")
+    imported = {line.rsplit("|", 1)[-1].strip() for line in ran.stderr.splitlines() if line.startswith("import time:")}
+    assert core_module not in imported

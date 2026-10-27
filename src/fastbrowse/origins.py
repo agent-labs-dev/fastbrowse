@@ -75,4 +75,4 @@ class OriginGrant:
 # The Rust core (crates/fastbrowse-py) in place of the two parsers above, while the port is checked against
 # these tests; the default stays Python.
 if os.environ.get("FASTBROWSE_RUST_CORE") == "1":
-    from fastbrowse_native import origin_of, parse_origin  # ty: ignore[unresolved-import]
+    from fastbrowse._native import origin_of, parse_origin  # ty: ignore[unresolved-import]

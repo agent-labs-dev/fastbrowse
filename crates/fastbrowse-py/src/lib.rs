@@ -1,4 +1,4 @@
-//! `fastbrowse_native`: the Rust core in-process for Python.
+//! `fastbrowse._native`: the Rust core in-process for Python.
 //!
 //! `origin_of`, `parse_origin` and `text_fragment` stand in for their namesakes in `fastbrowse.origins` and
 //! `fastbrowse.citations` when `FASTBROWSE_RUST_CORE=1`; `run_task` stands in for `fastbrowse.run_task` then.
@@ -28,7 +28,7 @@ use crate::host::{host_call, runtime};
 use crate::options::Options;
 
 pyo3::create_exception!(
-    fastbrowse_native,
+    fastbrowse._native,
     RunRefused,
     PyException,
     "A run that ended without a result: `args` is why (`invalid`, `configuration`, `recording`, `cancelled` or `callback`) and \
@@ -337,13 +337,26 @@ fn artifact_argument(
     (kind, name, mime_type, PyBytes::new(py, &content)).into_pyobject(py)
 }
 
+/// Run the `fastbrowse` command (or `fastbrowse-mcp`, by `program`'s name) with `args` and return its exit code. The
+/// command writes to this process's own stdout and stderr and reads its stdin, as the binary does.
+#[pyfunction]
+fn cli_main(py: Python<'_>, program: String, args: Vec<String>) -> i32 {
+    py.detach(move || {
+        let code = fastbrowse_cli::entry::main(&program, &args);
+        // The binary's `process::exit` flushes what it printed; Python exits without asking this side to.
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        code
+    })
+}
+
 #[pymodule]
-fn fastbrowse_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(origin_of, m)?)?;
     m.add_function(wrap_pyfunction!(parse_origin, m)?)?;
     m.add_function(wrap_pyfunction!(text_fragment, m)?)?;
     m.add_function(wrap_pyfunction!(run_task, m)?)?;
     m.add_function(wrap_pyfunction!(connect_cdp, m)?)?;
+    m.add_function(wrap_pyfunction!(cli_main, m)?)?;
     m.add_class::<connect::Page>()?;
     m.add("PageFailed", m.py().get_type::<connect::PageFailed>())?;
     m.add_class::<Run>()?;

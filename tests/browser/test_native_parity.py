@@ -17,7 +17,7 @@ from fastbrowse.evals.replay import Cassette, Latency, Proxy
 from fastbrowse.models import LocalChrome
 
 try:
-    fastbrowse_native = importlib.import_module("fastbrowse_native")
+    fastbrowse_native = importlib.import_module("fastbrowse._native")
 
     NATIVE = hasattr(fastbrowse_native, "run_task")
 except ImportError:
@@ -25,7 +25,7 @@ except ImportError:
 
 pytestmark = [
     pytest.mark.skipif(find_chrome(None) is None, reason="Chrome is not installed"),
-    pytest.mark.skipif(not NATIVE, reason="fastbrowse_native with run_task is not installed"),
+    pytest.mark.skipif(not NATIVE, reason="fastbrowse._native with run_task is not installed"),
 ]
 
 TASKS = ("table-extract", "mock-sign-in", "mock-upload-document")

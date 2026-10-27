@@ -17,11 +17,11 @@ from fastbrowse.models import BrowserConnection, Status
 from fastbrowse.scripted import ScriptedJev, ScriptedLLM, steps
 
 try:
-    NATIVE = hasattr(importlib.import_module("fastbrowse_native"), "run_task")
+    NATIVE = hasattr(importlib.import_module("fastbrowse._native"), "run_task")
 except ImportError:
     NATIVE = False
 
-pytestmark = pytest.mark.skipif(not NATIVE, reason="fastbrowse_native with run_task is not installed")
+pytestmark = pytest.mark.skipif(not NATIVE, reason="fastbrowse._native with run_task is not installed")
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="recording needs ffmpeg")
 
 

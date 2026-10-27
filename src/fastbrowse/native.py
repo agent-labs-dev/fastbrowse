@@ -12,9 +12,11 @@ import contextlib
 import copy
 import importlib
 import json
+import signal
+import sys
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
-from typing import Any, ClassVar
+from typing import Any, ClassVar, NoReturn
 
 import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
@@ -92,7 +94,7 @@ def _dumped(value: BaseModel | None) -> Any:
 
 
 def options(arguments: dict[str, Any]) -> str:
-    """`run_task`'s data arguments, as the JSON `fastbrowse_native.run_task` reads."""
+    """`run_task`'s data arguments, as the JSON `fastbrowse._native.run_task` reads."""
     output_schema: type[BaseModel] | None = arguments["output_schema"]
     secrets: SecretResolver | None = arguments["secrets"]
     origins, viewport, inputs = arguments["allowed_origins"], arguments["viewport"], arguments["inputs"]
@@ -369,8 +371,8 @@ def _check(check_access: Callable[[], Awaitable[None]]) -> Callable[[], Awaitabl
 
 async def run(task: str, arguments: dict[str, Any]) -> RunResult:
     """Run `task` with `run_task`'s `arguments` on the Rust core, and return its result as Python's returns one."""
-    # Built from crates/fastbrowse-py and installed apart from this package, so the checker has no types for it.
-    fastbrowse_native: Any = importlib.import_module("fastbrowse_native")
+    # The Rust core, built from crates/fastbrowse-py into this package; compiled, so the checker has no types for it.
+    core: Any = importlib.import_module("fastbrowse._native")
 
     raised = _Raised()
     on_event: EventHandler | None = arguments["on_event"]
@@ -386,7 +388,7 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
         if on_event is not None:
             await on_event(_event(payload))
 
-    native = fastbrowse_native.run_task(
+    native = core.run_task(
         task,
         options(arguments),
         on_event=None if on_event is None else raised.wrap(event),
@@ -400,7 +402,7 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
     )
     try:
         payload = await native
-    except fastbrowse_native.RunRefused as exc:
+    except core.RunRefused as exc:
         kind, message = exc.args
         if kind == "configuration":
             raise ConfigurationError(message) from None
@@ -500,7 +502,7 @@ def _sink(sink: ArtifactSink) -> Callable[[str, str, str, bytes], Awaitable[str]
 @asynccontextmanager
 async def connect_cdp(arguments: dict[str, Any]) -> AsyncGenerator[NativePage]:
     """`connect_cdp` with its `arguments` on the Rust core."""
-    fastbrowse_native: Any = importlib.import_module("fastbrowse_native")
+    core: Any = importlib.import_module("fastbrowse._native")
     origins, downloads = arguments["allowed_origins"], arguments["downloads"]
     options = {
         **{name: arguments[name] for name in ("port", "cdp_url", "host", "target_match", "attach", "foreground")},
@@ -510,14 +512,23 @@ async def connect_cdp(arguments: dict[str, Any]) -> AsyncGenerator[NativePage]:
     }
     check_access, sink = arguments["check_access"], arguments["artifact_sink"]
     try:
-        page = await fastbrowse_native.connect_cdp(
+        page = await core.connect_cdp(
             json.dumps(options),
             check_access=None if check_access is None else _check(check_access),
             artifact_sink=None if sink is None else _sink(sink),
         )
-    except fastbrowse_native.PageFailed as exc:
+    except core.PageFailed as exc:
         raise _page_error(exc) from None
     try:
-        yield NativePage(page, fastbrowse_native.PageFailed)
+        yield NativePage(page, core.PageFailed)
     finally:
         await page.close()
+
+
+def command(program: str) -> NoReturn:
+    """Run the Rust core's `program` command in this process with this process's arguments, then exit with its code."""
+    core: Any = importlib.import_module("fastbrowse._native")
+    # Ctrl-C ends the command as it ends the binary; Python's own handler would wait for the core to return first.
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    sys.stdout.flush()
+    sys.exit(core.cli_main(program, sys.argv[1:]))
