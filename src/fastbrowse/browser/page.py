@@ -704,6 +704,12 @@ class CdpPage(Page):
         viewport_text = main.raw.viewport_text if main else ""
         for download in self._session.pending_download_texts():
             viewport_text += f"\n\n[Downloaded file: {download.name} from {download.url}]\n{download.text}"
+        for refused in self._session.pending_download_refusals():
+            viewport_text += (
+                f"\n\n[Download not kept: {refused.name} from {refused.url}] "
+                f"The file is {_bytes_of(refused.size_bytes)} and this run keeps downloads up to "
+                f"{_bytes_of(refused.limit_bytes)}; nothing was saved. Report the file as not downloaded."
+            )
         if len(viewport_text) > limits.viewport_text_chars:
             omitted_chars = len(viewport_text) - limits.viewport_text_chars
             viewport_text = viewport_text[: limits.viewport_text_chars] + cut_marker(omitted_chars)
@@ -2469,6 +2475,16 @@ def _control_from_raw(control_id: str, frame_id: str | None, c: _SnapshotControl
         next_page=c.next_page,
         download=c.download,
     )
+
+
+def _bytes_of(count: int) -> str:
+    """A byte count in the unit a person reads it in."""
+    size = float(count)
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if size < 1024 or unit == "GiB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GiB"
 
 
 def _combine_page_keys(keys: list[str]) -> str:

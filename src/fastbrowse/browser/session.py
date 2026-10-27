@@ -16,6 +16,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Self, cast
+from urllib.parse import unquote, urlsplit
 
 from cdp_use.cdp.fetch.events import RequestPausedEvent
 from cdp_use.cdp.fetch.types import RequestPattern
@@ -316,6 +317,25 @@ class DownloadText(Frozen):
     complete: bool = False
 
 
+class DownloadRefused(Frozen):
+    """A file the site offered and the run did not keep, because its body is over the ceiling.
+
+    Recorded rather than dropped: a download that silently never arrives looks exactly like a click that never
+    started one, so a migration would report success while holding no archive. `size_bytes` is what the response
+    stated, or what arrived when it stated nothing usable.
+    """
+
+    name: str
+    url: str
+    size_bytes: int
+    limit_bytes: int
+
+
+MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
+"""Largest download a session keeps by default. Bodies arrive whole over the DevTools socket, so this is a
+memory ceiling as much as a size limit; `Config.max_download_bytes` is how a caller that knows the size of the
+file it asked for raises it."""
+
 _DOWNLOAD_TEXT_BYTES = 16_384
 _DOWNLOAD_TEXT_TOTAL = 65_536
 
@@ -355,7 +375,7 @@ class BrowserSession:
         self,
         connection: BrowserConnectionModel,
         artifact_sink: ArtifactSink,
-        max_download_bytes: int = 200 * 1024 * 1024,
+        max_download_bytes: int = MAX_DOWNLOAD_BYTES,
         *,
         refuse_cookie_banners: bool = True,
         on_frame: FrameHandler | None = None,
@@ -407,6 +427,10 @@ class BrowserSession:
         """A captured download's readable text, oldest first: kept as evidence for a capture, not consumed."""
         self._download_texts_shown = 0
         """How many of them an observation has already shown, so each is shown to the run once."""
+        self._download_refusals: list[DownloadRefused] = []
+        """Downloads turned away by the ceiling, oldest first: evidence the file was offered, not kept."""
+        self._download_refusals_shown = 0
+        """How many of them an observation has already reported, so each refusal is reported once."""
         self._dialogs: dict[str, Dialog] = {}
         self._dialog_urls: dict[str, str] = {}
         self._input_navigations = 0
@@ -504,6 +528,27 @@ class BrowserSession:
     @property
     def downloads_captured(self) -> int:
         return self._downloads_captured
+
+    def _refuse_download(self, name: str, url: str, size_bytes: int) -> None:
+        self._download_refusals.append(
+            DownloadRefused(
+                name=name,
+                url=url,
+                size_bytes=size_bytes,
+                limit_bytes=self._max_download_bytes,
+            )
+        )
+
+    @property
+    def downloads_refused(self) -> tuple[DownloadRefused, ...]:
+        """Every download the ceiling turned away, oldest first: kept as evidence, not consumed."""
+        return tuple(self._download_refusals)
+
+    def pending_download_refusals(self) -> tuple[DownloadRefused, ...]:
+        """Refusals the run has not been told about yet, and now marked as told."""
+        pending = tuple(self._download_refusals[self._download_refusals_shown :])
+        self._download_refusals_shown = len(self._download_refusals)
+        return pending
 
     async def download_settled(self, since: int, *, timeout_seconds: float = 3.0) -> bool:
         """Whether a download landed since `since`, waiting briefly for the intercept's own task.
@@ -1232,7 +1277,7 @@ class BrowserSession:
     async def _handle_paused(self, event: RequestPausedEvent, session_id: str) -> None:
         request_id = event["requestId"]
         try:
-            headers = {h["name"].lower(): h["value"] for h in event.get("responseHeaders", [])}
+            headers = _response_headers(event.get("responseHeaders"))
             disposition = headers.get("content-disposition", "")
             mime = headers.get("content-type", "")
             if _is_download(mime, disposition):
@@ -1243,6 +1288,7 @@ class BrowserSession:
                     disposition,
                     mime,
                     complete=event.get("responseStatusCode") == 200 and "content-range" not in headers,
+                    content_length=_content_length(headers.get("content-length")),
                 )
         finally:
             # Never leave a request paused, even if capture above raised. The request/session may
@@ -1251,13 +1297,28 @@ class BrowserSession:
                 await self.client.send.Fetch.continueRequest(params={"requestId": request_id}, session_id=session_id)
 
     async def _capture_download(
-        self, request_id: str, session_id: str, url: str, disposition: str, mime: str, *, complete: bool
+        self,
+        request_id: str,
+        session_id: str,
+        url: str,
+        disposition: str,
+        mime: str,
+        *,
+        complete: bool,
+        content_length: int | None = None,
     ) -> None:
+        name = _download_filename(disposition, url)
+        # A response that states its size over the ceiling is refused without being read: pulling gigabytes through
+        # the DevTools socket only to discard them costs the run memory and time for nothing.
+        if content_length is not None and content_length > self._max_download_bytes:
+            self._refuse_download(name, url, content_length)
+            return
         body = await self.client.send.Fetch.getResponseBody(params={"requestId": request_id}, session_id=session_id)
         raw = base64.b64decode(body["body"]) if body["base64Encoded"] else body["body"].encode()
         if len(raw) > self._max_download_bytes:
-            return  # bounded size: refuse to hold an oversized body in memory as an artifact
-        name = _filename_from_disposition(disposition) or url.rsplit("/", 1)[-1] or "download"
+            # Bounded size: refuse to hold an oversized body in memory as an artifact, and say that it was refused.
+            self._refuse_download(name, url, len(raw))
+            return
         artifact = await self._artifact_sink.put(
             ArtifactKind.DOWNLOAD, name, _response_mime(mime) or "application/octet-stream", raw
         )
@@ -1289,12 +1350,94 @@ async def _together(*commands: Coroutine[Any, Any, object]) -> None:
         raise errors.exceptions[0] from errors
 
 
+def _response_headers(raw: object) -> dict[str, str]:
+    """A response's headers, keyed lowercase, from either shape CDP delivers them in.
+
+    `Fetch.requestPaused` carries `responseHeaders` as a list of name/value pairs; a client that normalises them
+    hands over a mapping instead. Reading only the list shape raised on the mapping one, and the exception was
+    swallowed with the paused request, so the download vanished. A header repeated keeps every value, because
+    `content-range` is read as a presence test and `content-length` takes its first.
+    """
+    headers: dict[str, str] = {}
+    if isinstance(raw, dict):
+        pairs = ((str(name), str(value)) for name, value in raw.items())
+    else:
+        pairs = (
+            (str(header.get("name", "")), str(header.get("value", "")))
+            for header in (raw if isinstance(raw, list) else ())
+            if isinstance(header, dict)
+        )
+    for name, value in pairs:
+        key = name.strip().lower()
+        if key:
+            headers[key] = f"{headers[key]}, {value}" if key in headers else value
+    return headers
+
+
+def _content_length(value: str | None) -> int | None:
+    """A response's stated size, when it states one this run can compare to its ceiling."""
+    if not value:
+        return None
+    try:
+        size = int(value.split(",", 1)[0].strip())
+    except ValueError:
+        return None
+    return size if size >= 0 else None
+
+
+def _download_filename(disposition: str, url: str) -> str:
+    """The name a kept file carries: the response's own, else its address's last path segment."""
+    return _safe_filename(_filename_from_disposition(disposition) or _path_filename(url) or "download")
+
+
 def _filename_from_disposition(disposition: str) -> str | None:
-    for part in disposition.split(";"):
-        part = part.strip()
-        if part.lower().startswith("filename="):
-            return part.split("=", 1)[1].strip('"')
-    return None
+    """The name the response states, preferring the one it states exactly.
+
+    `filename*` (RFC 5987) carries a percent-encoded name in a stated charset and wins over the bare `filename`,
+    which is the approximation every non-ASCII name falls back to. Parameters are split outside quotes so a name
+    holding a semicolon survives.
+    """
+    names: dict[str, str] = {}
+    for part in _disposition_parameters(disposition):
+        parameter, _, value = part.partition("=")
+        key = parameter.strip().lower()
+        value = value.strip().strip('"')
+        if key == "filename*":
+            charset, _, encoded = value.partition("''")
+            names[key] = unquote(encoded, encoding=charset or "utf-8", errors="replace")
+        elif key == "filename" and value:
+            names[key] = value
+    return names.get("filename*") or names.get("filename") or None
+
+
+def _disposition_parameters(disposition: str) -> list[str]:
+    """The `;`-separated parameters of a header value, which a quoted parameter may not split."""
+    parts: list[str] = []
+    current: list[str] = []
+    quoted = False
+    for char in disposition:
+        if char == '"':
+            quoted = not quoted
+        if char == ";" and not quoted:
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(char)
+    parts.append("".join(current))
+    return [part for part in (part.strip() for part in parts) if part]
+
+
+def _path_filename(url: str) -> str | None:
+    """The last path segment of an address: its query is a signed credential and is part of no filename."""
+    return unquote(urlsplit(url).path.rsplit("/", 1)[-1]) or None
+
+
+def _safe_filename(name: str) -> str:
+    """A name safe to keep on disk: one path segment, of printable characters only."""
+    segment = name.replace("\\", "/").rsplit("/", 1)[-1]
+    cleaned = "".join(char for char in segment if char.isprintable() and char not in '"<>|:*?').strip()
+    cleaned = cleaned.strip(".")
+    return cleaned[:120] or "download"
 
 
 # Chrome hands these to the download manager rather than rendering them as a document, so a document
@@ -1324,7 +1467,7 @@ def _response_mime(mime: str) -> str:
 def _is_download(mime: str, disposition: str) -> bool:
     """Whether this response is a file Chrome downloads rather than a document it renders."""
     lowered = disposition.lower()
-    if "attachment" in lowered or "filename=" in lowered:
+    if "attachment" in lowered or "filename=" in lowered or "filename*=" in lowered:
         return True
     return _response_mime(mime) in _DOWNLOAD_MIME_TYPES
 

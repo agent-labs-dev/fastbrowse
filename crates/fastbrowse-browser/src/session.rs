@@ -107,6 +107,10 @@ pub const STATUS_WORLD: &str = "fastbrowse-status";
 const ENABLE_DOMAINS: [&str; 3] = ["Page", "Runtime", "DOM"];
 const DOWNLOAD_TEXT_BYTES: usize = 16_384;
 const DOWNLOAD_TEXT_TOTAL: usize = 65_536;
+/// Largest download a session keeps by default. Bodies arrive whole over the DevTools socket, so this bounds a
+/// run's memory as much as a file's size; `Config.max_download_bytes` is how a caller that knows the size of the
+/// file it asked for raises it.
+pub const MAX_DOWNLOAD_BYTES: usize = 512 * 1024 * 1024;
 
 /// Response-stage interception is enough: fastbrowse only needs the bytes of a save-as download, never to rewrite a
 /// request. Chrome also classifies download-attribute anchors as Document; intercepting Other needlessly pauses
@@ -163,7 +167,7 @@ pub struct SessionOptions {
 
 impl Default for SessionOptions {
     fn default() -> Self {
-        Self { max_download_bytes: 200 * 1024 * 1024, refuse_cookie_banners: true, on_frame: None, check_access: None }
+        Self { max_download_bytes: MAX_DOWNLOAD_BYTES, refuse_cookie_banners: true, on_frame: None, check_access: None }
     }
 }
 
@@ -183,6 +187,18 @@ pub struct DownloadText {
     pub url: String,
     pub text: String,
     pub complete: bool,
+}
+
+/// A file the site offered and the run did not keep, because its body is over the ceiling. Recorded rather than
+/// dropped: a download that silently never arrives looks exactly like a click that never started one, so a
+/// migration would report success while holding no archive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadRefused {
+    pub name: String,
+    pub url: String,
+    /// What the response stated its size to be, or what arrived when it stated nothing usable.
+    pub size_bytes: u64,
+    pub limit_bytes: u64,
 }
 
 #[derive(Clone)]
@@ -231,6 +247,10 @@ pub(crate) struct State {
     pub(crate) download_texts: Vec<DownloadText>,
     /// How many of them an observation has already shown, so each is shown to the run once.
     pub(crate) download_texts_shown: usize,
+    /// Downloads turned away by the ceiling, oldest first: evidence the file was offered, not kept.
+    pub(crate) download_refusals: Vec<DownloadRefused>,
+    /// How many of them an observation has already reported, so each refusal is reported once.
+    pub(crate) download_refusals_shown: usize,
     /// Pending JS dialog per tab session id; cleared once handled.
     pub(crate) dialogs: HashMap<String, Dialog>,
     /// The address of the document each pending dialog came from, which `Dialog` does not carry.
@@ -609,6 +629,20 @@ impl BrowserSession {
         let mut state = self.0.state.lock().unwrap();
         let pending = state.download_texts[state.download_texts_shown.min(state.download_texts.len())..].to_vec();
         state.download_texts_shown = state.download_texts.len();
+        pending
+    }
+
+    /// Every download the ceiling turned away, oldest first: kept as evidence, not consumed.
+    pub fn downloads_refused(&self) -> Vec<DownloadRefused> {
+        self.0.state.lock().unwrap().download_refusals.clone()
+    }
+
+    /// Refusals the run has not been told about yet, and now marked as told.
+    pub fn pending_download_refusals(&self) -> Vec<DownloadRefused> {
+        let mut state = self.0.state.lock().unwrap();
+        let shown = state.download_refusals_shown.min(state.download_refusals.len());
+        let pending = state.download_refusals[shown..].to_vec();
+        state.download_refusals_shown = state.download_refusals.len();
         pending
     }
 
@@ -1497,16 +1531,15 @@ pub(crate) async fn deliver_frames(shared: &Arc<Shared>) {
 
 async fn handle_paused(shared: &Arc<Shared>, event: Value, session_id: String) {
     let request_id = str_of(&event["requestId"]);
-    let mut headers: HashMap<String, String> = HashMap::new();
-    for header in event["responseHeaders"].as_array().into_iter().flatten() {
-        headers.insert(str_of(&header["name"]).to_lowercase(), str_of(&header["value"]));
-    }
+    let headers = response_headers(&event["responseHeaders"]);
     let disposition = headers.get("content-disposition").cloned().unwrap_or_default();
     let mime = headers.get("content-type").cloned().unwrap_or_default();
     if is_download(&mime, &disposition) {
         let complete = event["responseStatusCode"] == 200 && !headers.contains_key("content-range");
         let url = str_of(&event["request"]["url"]);
-        let _ = capture_download(shared, &request_id, &session_id, &url, &disposition, &mime, complete).await;
+        let content_length = headers.get("content-length").and_then(|value| content_length(value));
+        let _ = capture_download(shared, &request_id, &session_id, &url, &disposition, &mime, complete, content_length)
+            .await;
     }
     // Never leave a request paused, even if capture above failed. The request or session may already be gone
     // (navigation, tab close), which is fine to swallow here.
@@ -1514,6 +1547,7 @@ async fn handle_paused(shared: &Arc<Shared>, event: Value, session_id: String) {
     shared.state.lock().unwrap().paused.remove(&(request_id, session_id));
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn capture_download(
     shared: &Arc<Shared>,
     request_id: &str,
@@ -1522,18 +1556,26 @@ async fn capture_download(
     disposition: &str,
     mime: &str,
     complete: bool,
+    content_length: Option<u64>,
 ) -> Result<(), BoxError> {
+    let name = download_filename(disposition, url);
+    // A response that states its size over the ceiling is refused without being read: pulling gigabytes through the
+    // DevTools socket only to discard them costs the run memory and time for nothing.
+    if let Some(stated) = content_length
+        && stated > shared.max_download_bytes as u64
+    {
+        refuse_download(shared, name, url, stated);
+        return Ok(());
+    }
     let body =
         shared.session().send("Fetch.getResponseBody", json!({"requestId": request_id}), Some(session_id)).await?;
     let text = body["body"].as_str().unwrap_or_default();
     let raw = if body["base64Encoded"] == true { BASE64.decode(text.as_bytes())? } else { text.as_bytes().to_vec() };
     if raw.len() > shared.max_download_bytes {
-        // Bounded size: refuse to hold an oversized body in memory as an artifact.
+        // Bounded size: refuse to hold an oversized body in memory as an artifact, and say that it was refused.
+        refuse_download(shared, name, url, raw.len() as u64);
         return Ok(());
     }
-    let name = filename_from_disposition(disposition)
-        .or_else(|| url.rsplit('/').next().filter(|s| !s.is_empty()).map(str::to_owned))
-        .unwrap_or_else(|| "download".into());
     let kind = response_mime(mime);
     let stored_mime = if kind.is_empty() { "application/octet-stream".to_owned() } else { kind.clone() };
     let readable = readable_text(mime, &raw);
@@ -1564,12 +1606,132 @@ pub async fn together(commands: Vec<FBoxFuture<'_, Result<(), BrowserError>>>) -
     try_join_all(commands).await.map(drop)
 }
 
+/// A response's headers, keyed lowercase, from either shape CDP delivers them in.
+///
+/// `Fetch.requestPaused` carries `responseHeaders` as name/value pairs; a client that normalises them hands over an
+/// object instead. Reading only the array shape dropped the download without a word, so both are read. A header
+/// repeated keeps every value, because `content-range` is read as a presence test and `content-length` takes its first.
+fn response_headers(raw: &Value) -> HashMap<String, String> {
+    let mut headers: HashMap<String, String> = HashMap::new();
+    let pairs: Vec<(String, String)> = match raw {
+        Value::Array(items) => items.iter().map(|h| (str_of(&h["name"]), str_of(&h["value"]))).collect(),
+        Value::Object(map) => map.iter().map(|(name, value)| (name.clone(), str_of(value))).collect(),
+        _ => Vec::new(),
+    };
+    for (name, value) in pairs {
+        let key = name.trim().to_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        headers.entry(key).and_modify(|seen| seen.push_str(", ")).or_default().push_str(&value);
+    }
+    headers
+}
+
+/// A response's stated size, when it states one this run can compare to its ceiling.
+fn content_length(value: &str) -> Option<u64> {
+    value.split(',').next()?.trim().parse::<u64>().ok()
+}
+
+/// The name a kept file carries: the response's own, else its address's last path segment.
+fn download_filename(disposition: &str, url: &str) -> String {
+    let name =
+        filename_from_disposition(disposition).or_else(|| path_filename(url)).unwrap_or_else(|| "download".to_owned());
+    safe_filename(&name)
+}
+
+fn refuse_download(shared: &Arc<Shared>, name: String, url: &str, size_bytes: u64) {
+    let mut state = shared.state.lock().unwrap();
+    state.download_refusals.push(DownloadRefused {
+        name,
+        url: url.to_owned(),
+        size_bytes,
+        limit_bytes: shared.max_download_bytes as u64,
+    });
+}
+
+/// The name the response states, preferring the one it states exactly.
+///
+/// `filename*` (RFC 5987) carries a percent-encoded name in a stated charset and wins over the bare `filename`,
+/// which is the approximation every non-ASCII name falls back to. Parameters are split outside quotes so a name
+/// holding a semicolon survives.
 fn filename_from_disposition(disposition: &str) -> Option<String> {
-    disposition
-        .split(';')
-        .map(str::trim)
-        .find(|part| part.to_lowercase().starts_with("filename="))
-        .map(|part| part.split_once('=').map(|(_, v)| v).unwrap_or_default().trim_matches('"').to_owned())
+    let mut star: Option<String> = None;
+    let mut plain: Option<String> = None;
+    for part in disposition_parameters(disposition) {
+        let (parameter, value) = part.split_once('=').unwrap_or((part.as_str(), ""));
+        let key = parameter.trim().to_lowercase();
+        let value = value.trim().trim_matches('"');
+        match key.as_str() {
+            "filename*" => {
+                let (charset, encoded) = value.split_once("''").unwrap_or(("utf-8", value));
+                star = Some(percent_decode(encoded, charset));
+            }
+            "filename" if !value.is_empty() => plain = Some(value.to_owned()),
+            _ => {}
+        }
+    }
+    star.or(plain)
+}
+
+/// The `;`-separated parameters of a header value, which a quoted parameter may not split.
+fn disposition_parameters(disposition: &str) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    for char in disposition.chars() {
+        if char == '"' {
+            quoted = !quoted;
+        }
+        if char == ';' && !quoted {
+            parts.push(std::mem::take(&mut current));
+            continue;
+        }
+        current.push(char);
+    }
+    parts.push(current);
+    parts.into_iter().map(|part| part.trim().to_owned()).filter(|part| !part.is_empty()).collect()
+}
+
+fn percent_decode(encoded: &str, charset: &str) -> String {
+    let bytes = encoded.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let Ok(byte) = u8::from_str_radix(&encoded[index + 1..index + 3], 16)
+        {
+            out.push(byte);
+            index += 3;
+            continue;
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    if charset.eq_ignore_ascii_case("iso-8859-1") || charset.eq_ignore_ascii_case("latin1") {
+        out.iter().map(|byte| char::from(*byte)).collect()
+    } else {
+        String::from_utf8_lossy(&out).into_owned()
+    }
+}
+
+/// The last path segment of an address: its query is a signed credential and is part of no filename.
+fn path_filename(url: &str) -> Option<String> {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let segment = path.rsplit('/').next().unwrap_or_default();
+    let name = percent_decode(segment, "utf-8");
+    (!name.is_empty()).then_some(name)
+}
+
+/// A name safe to keep on disk: one path segment, of printable characters only.
+fn safe_filename(name: &str) -> String {
+    let segment = name.replace('\\', "/");
+    let segment = segment.rsplit('/').next().unwrap_or_default();
+    let cleaned: String = segment.chars().filter(|char| !char.is_control() && !"\"<>|:*?".contains(*char)).collect();
+    let cleaned = cleaned.trim().trim_matches('.').to_owned();
+    let cleaned: String = cleaned.chars().take(120).collect();
+    if cleaned.is_empty() { "download".to_owned() } else { cleaned }
 }
 
 /// Chrome hands these to the download manager rather than rendering them as a document, so a document navigation to
@@ -1596,7 +1758,7 @@ fn response_mime(mime: &str) -> String {
 /// Whether this response is a file Chrome downloads rather than a document it renders.
 fn is_download(mime: &str, disposition: &str) -> bool {
     let lowered = disposition.to_lowercase();
-    if lowered.contains("attachment") || lowered.contains("filename=") {
+    if lowered.contains("attachment") || lowered.contains("filename=") || lowered.contains("filename*=") {
         return true;
     }
     DOWNLOAD_MIME_TYPES.contains(&response_mime(mime).as_str())
@@ -1716,6 +1878,60 @@ mod tests {
         assert!(!is_download("text/html", ""));
         assert_eq!(filename_from_disposition("attachment; filename=\"report.CSV\"").as_deref(), Some("report.CSV"));
         assert_eq!(filename_from_disposition("inline"), None);
+    }
+
+    #[test]
+    fn a_disposition_naming_the_file_only_in_filename_star_is_still_a_download() {
+        assert!(is_download("text/plain", "attachment; filename*=UTF-8''report.txt"));
+    }
+
+    #[test]
+    fn the_name_the_response_states_exactly_wins() {
+        let disposition = "attachment; filename=\"fallback.zip\"; filename*=UTF-8''caf%C3%A9%20export.zip";
+        assert_eq!(filename_from_disposition(disposition).as_deref(), Some("caf\u{e9} export.zip"));
+        assert_eq!(
+            filename_from_disposition("attachment; filename=\"has;semicolon.zip\"").as_deref(),
+            Some("has;semicolon.zip")
+        );
+        assert_eq!(
+            filename_from_disposition("attachment; filename*=iso-8859-1''caf%E9.zip").as_deref(),
+            Some("caf\u{e9}.zip")
+        );
+        assert_eq!(filename_from_disposition("attachment"), None);
+    }
+
+    #[test]
+    fn the_url_fallback_is_the_path_segment_and_never_the_signed_query() {
+        let url = "https://files.slack.com/files-pri/T1-F1/acme_slack_export.zip?X-Amz-Signature=deadbeef";
+        assert_eq!(download_filename("", url), "acme_slack_export.zip");
+        assert_eq!(download_filename("", "https://files.slack.com/files-pri/T1-F1/caf%C3%A9.zip#f"), "caf\u{e9}.zip");
+        assert_eq!(download_filename("", "https://files.slack.com/files-pri/T1-F1/"), "download");
+    }
+
+    #[test]
+    fn a_kept_name_is_one_safe_path_segment() {
+        assert_eq!(safe_filename("../../etc/passwd"), "passwd");
+        assert_eq!(safe_filename("..\\..\\windows\\system32\\config"), "config");
+        assert_eq!(safe_filename("  .hidden.  "), "hidden");
+        assert_eq!(safe_filename(""), "download");
+        assert_eq!(safe_filename(&"a".repeat(500)).chars().count(), 120);
+    }
+
+    #[test]
+    fn headers_are_read_in_either_shape_and_keyed_lowercase() {
+        let listed = json!([{"name": "Content-Length", "value": "12"}, {"name": "content-length", "value": "12"}]);
+        assert_eq!(response_headers(&listed).get("content-length").map(String::as_str), Some("12, 12"));
+        let mapped = json!({"Content-Type": "application/zip"});
+        assert_eq!(response_headers(&mapped).get("content-type").map(String::as_str), Some("application/zip"));
+        assert!(response_headers(&json!(null)).is_empty());
+    }
+
+    #[test]
+    fn a_stated_size_is_read_only_when_it_is_one() {
+        assert_eq!(content_length("8192"), Some(8192));
+        assert_eq!(content_length("8192, 8192"), Some(8192));
+        assert_eq!(content_length("chunked"), None);
+        assert_eq!(content_length("-1"), None);
     }
 
     #[test]

@@ -396,6 +396,19 @@ fn control_from_raw(
     }
 }
 
+/// A byte count in the unit a person reads it in.
+fn bytes_of(count: u64) -> String {
+    let units = ["B", "KiB", "MiB", "GiB"];
+    let mut size = count as f64;
+    for (index, unit) in units.iter().enumerate() {
+        if size < 1024.0 || index == units.len() - 1 {
+            return if index == 0 { format!("{size:.0} {unit}") } else { format!("{size:.1} {unit}") };
+        }
+        size /= 1024.0;
+    }
+    format!("{size:.1} GiB")
+}
+
 fn combine_page_keys(mut keys: Vec<String>) -> String {
     keys.sort();
     sha256_hex(&keys.join("|"))
@@ -601,6 +614,16 @@ impl CdpPage {
                 viewport_text.push_str(&format!(
                     "\n\n[Downloaded file: {} from {}]\n{}",
                     download.name, download.url, download.text
+                ));
+            }
+            for refused in self.session.pending_download_refusals() {
+                viewport_text.push_str(&format!(
+                    "\n\n[Download not kept: {} from {}] The file is {} and this run keeps downloads up to {}; \
+                     nothing was saved. Report the file as not downloaded.",
+                    refused.name,
+                    refused.url,
+                    bytes_of(refused.size_bytes),
+                    bytes_of(refused.limit_bytes)
                 ));
             }
             let length = text::len(&viewport_text);
