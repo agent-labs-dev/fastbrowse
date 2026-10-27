@@ -261,6 +261,7 @@ pub fn error_result(error: impl Into<String>) -> RunResult {
         final_frame: None,
         would_fire: Vec::new(),
         recordings: Vec::new(),
+        wall: None,
     }
 }
 

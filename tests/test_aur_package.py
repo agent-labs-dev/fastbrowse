@@ -10,7 +10,7 @@ assert _spec and _spec.loader
 aur_package = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(aur_package)
 
-NEW = aur_package.Release("9.9.9", "8.8.8", ("a" * 64, "b" * 64))
+NEW = aur_package.Release("9.9.9", "8.8.8", "6.6.6", ("a" * 64, "b" * 64, "c" * 64))
 
 
 def _committed(name: str) -> str:
@@ -23,6 +23,7 @@ def test_both_files_pin_the_same_release() -> None:
 
     assert f"\tpkgver = {old.version}\n" in srcinfo
     assert f"/cdp_use-{old.cdp_use}.tar.gz" in srcinfo
+    assert f"/mcp-{old.mcp}.tar.gz" in srcinfo
     assert [line.split(" = ")[1] for line in srcinfo.splitlines() if "sha256sums" in line] == list(old.sums)
 
 
@@ -34,11 +35,12 @@ def test_a_new_release_moves_every_pin_in_both_files() -> None:
 
     assert aur_package.pinned(pkgbuild) == NEW
     for text in (pkgbuild, srcinfo):
-        assert old.sums[0] not in text and old.sums[1] not in text
+        assert old.sums[0] not in text and old.sums[1] not in text and old.sums[2] not in text
     assert "\tpkgver = 9.9.9\n" in srcinfo
     assert "/fastbrowse-9.9.9.tar.gz" in srcinfo
     assert "/cdp_use-8.8.8.tar.gz" in srcinfo
-    assert old.version not in srcinfo and old.cdp_use not in srcinfo
+    assert "/mcp-6.6.6.tar.gz" in srcinfo
+    assert old.version not in srcinfo and old.cdp_use not in srcinfo and old.mcp not in srcinfo
 
 
 def test_a_new_release_starts_from_its_first_build() -> None:
@@ -50,12 +52,13 @@ def test_a_new_release_starts_from_its_first_build() -> None:
 
 def test_equal_version_numbers_stay_with_their_own_wheel() -> None:
     old = aur_package.pinned(_committed("PKGBUILD"))
-    same = aur_package.Release("7.7.7", "7.7.7", NEW.sums)
+    same = aur_package.Release("7.7.7", "7.7.7", NEW.mcp, NEW.sums)
 
     moved = aur_package.rewrite(aur_package.rewrite(_committed(".SRCINFO"), old, same), same, NEW)
 
     assert "/fastbrowse-9.9.9.tar.gz" in moved
     assert "/cdp_use-8.8.8.tar.gz" in moved
+    assert "/mcp-6.6.6.tar.gz" in moved
 
 
 def test_a_source_is_named_by_the_stable_url_the_package_fetches() -> None:
@@ -67,6 +70,10 @@ def test_a_source_is_named_by_the_stable_url_the_package_fetches() -> None:
     assert (
         aur_package.source_url("cdp-use", "cdp_use-1.4.5.tar.gz")
         == "https://files.pythonhosted.org/packages/source/c/cdp-use/cdp_use-1.4.5.tar.gz"
+    )
+    assert (
+        aur_package.source_url("mcp", "mcp-1.30.0.tar.gz")
+        == "https://files.pythonhosted.org/packages/source/m/mcp/mcp-1.30.0.tar.gz"
     )
 
 

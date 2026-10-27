@@ -53,6 +53,10 @@ export type Status =
   | 'unavailable'
   | 'error';
 export type Tripwire = 'no_progress' | 'action_repetition' | 'plan_stagnation';
+/**
+ * What a sign-in or bot wall asks of the person who has to get the run past it.
+ */
+export type WallKind = 'password' | 'one_time_code' | 'sign_in' | 'bot_check';
 export interface Artifact {
   kind: ArtifactKind;
   name: string;
@@ -316,6 +320,7 @@ export interface RunParams {
   run_id: string;
   task: string;
   start?: string | null;
+  context?: string | null;
   inputs?: {
     [k: string]: string;
   } | null;
@@ -373,6 +378,28 @@ export interface RunResult {
    * The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed.
    */
   recordings: string[];
+  /**
+   * The sign-in or bot wall a `needs_login` or `blocked` run stopped at, when the page showed one.
+   */
+  wall: Wall | null;
+}
+/**
+ * The wall a `needs_login` or `blocked` run stopped at, typed so a caller can route it without parsing `error`.
+ */
+export interface Wall {
+  kind: WallKind;
+  /**
+   * The origin of the page that showed the wall.
+   */
+  origin: string;
+  /**
+   * The visible labels of the fields it asked for, redacted as the error is.
+   */
+  fields: string[];
+  /**
+   * When the run stopped at it, in UTC epoch milliseconds.
+   */
+  seen_at_ms: number;
 }
 /**
  * The params of `run/until`: the address a run ended on. The reply is a boolean, and false keeps the run

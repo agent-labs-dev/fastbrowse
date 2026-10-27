@@ -82,6 +82,7 @@ pub fn parser() -> Parser {
         options: vec![
             Opt::version(),
             Opt::value("--start"),
+            Opt::value("--context"),
             Opt::flag("--cloud"),
             Opt::flag("--local"),
             Opt::flag("--headed"),
@@ -114,6 +115,7 @@ pub fn parser() -> Parser {
 pub struct Args {
     pub task: String,
     pub start: Option<String>,
+    pub context: Option<String>,
     pub cloud: bool,
     pub local: bool,
     pub headed: bool,
@@ -160,6 +162,7 @@ pub fn parse(argv: &[String]) -> Result<Args, Exit> {
     Ok(Args {
         task: parsed.positional.clone().unwrap_or_default(),
         start: text("--start"),
+        context: text("--context"),
         cloud: parsed.flag("--cloud"),
         local: parsed.flag("--local"),
         headed: parsed.flag("--headed"),
@@ -338,6 +341,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     };
     let mut call = RunArgs::new(args.task.clone());
     call.start = args.start.clone();
+    call.context = args.context.clone();
     call.browser_api_key = browser_api_key;
     call.chrome = (!args.fetch).then_some(chrome);
     call.cloud_profile = args.cloud_profile.clone();

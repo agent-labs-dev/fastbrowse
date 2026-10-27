@@ -88,6 +88,9 @@ pub struct RunTask {
     pub jev: Option<Arc<dyn JevClient>>,
     pub llm: Option<Arc<dyn LLMClient>>,
     pub output_schema: Option<Arc<RecordSchema>>,
+    /// What the caller knows about the task: background for the planner, recovery, the composer and Jev, never a
+    /// requirement.
+    pub context: Option<String>,
     pub inputs: IndexMap<String, String>,
     pub attachments: Vec<Attachment>,
     pub limits: Option<Limits>,
@@ -132,6 +135,7 @@ impl Default for RunTask {
             jev: None,
             llm: None,
             output_schema: None,
+            context: None,
             inputs: IndexMap::new(),
             attachments: Vec::new(),
             limits: None,
@@ -503,7 +507,13 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
     let mut browser_cost: Vec<CostLine> = Vec::new();
     // Begun before the browser, which takes 2 to 3 seconds to start and open a tab, so the shortcut is ready to open
     // when the tab is.
-    let head = HeadStart::begin(llm.clone(), task, options.start.as_deref(), options.limits.clone());
+    let head = HeadStart::begin(
+        llm.clone(),
+        task,
+        options.start.as_deref(),
+        options.context.as_deref(),
+        options.limits.clone(),
+    );
     let head_stop = head.stopper();
     let scratch = Scratch::new().map_err(|error| RunError::Invalid(error.to_string()))?;
     let mut session: Option<BrowserSession> = None;
@@ -565,6 +575,7 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
             // With no page named, the first address is worked out from the task, unless attaching to an existing
             // window where the page is preserved.
             choose_start: options.start.is_none() && !attach,
+            context: options.context.clone(),
             inputs: options.inputs.clone(),
             attachments: options.attachments.clone(),
             output_schema: options.output_schema.clone(),
@@ -634,6 +645,7 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
                 final_frame: None,
                 would_fire: Vec::new(),
                 recordings: Vec::new(),
+                wall: None,
             }
         }
     };
@@ -680,9 +692,16 @@ async fn fetched(
             final_frame: None,
             would_fire: Vec::new(),
             recordings: Vec::new(),
+            wall: None,
         });
     }
-    let head = HeadStart::begin(llm.clone(), task, options.start.as_deref(), options.limits.clone());
+    let head = HeadStart::begin(
+        llm.clone(),
+        task,
+        options.start.as_deref(),
+        options.context.as_deref(),
+        options.limits.clone(),
+    );
     let head_stop = head.stopper();
     let viewport_chars = usize::try_from(config.observation.viewport_text_chars).unwrap_or_default();
     let page: Arc<dyn Page> =
@@ -696,6 +715,7 @@ async fn fetched(
         // With no page named, the first address is worked out from the task, the same way a browser run with no
         // `start` begins.
         choose_start: options.start.is_none(),
+        context: options.context.clone(),
         inputs: options.inputs.clone(),
         attachments: options.attachments.clone(),
         output_schema: options.output_schema.clone(),

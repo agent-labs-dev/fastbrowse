@@ -63,6 +63,8 @@ export type PerRun<Options> = { [Name in keyof Options]?: Options[Name] | null }
 export interface RunOptions extends PerRun<BrowserOptions> {
   /** The address to start on. Without one, the first address is proposed from the task. */
   start?: string;
+  /** Background the run may use but never treats as the task, such as where the request came from. */
+  context?: string;
   inputs?: Record<string, string>;
   /** Files the run may upload. */
   attachments?: Attachment[];
@@ -145,6 +147,7 @@ export function runParams(runId: string, task: string, defaults: Partial<RunPara
     ...held<RunParams>({ ...defaults, ...browserFields(options) }),
     ...held<RunParams>({
       start: options.start,
+      context: options.context,
       inputs: options.inputs,
       attachments: options.attachments?.map(attachment => ({
         name: attachment.name,
